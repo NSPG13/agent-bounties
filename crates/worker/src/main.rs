@@ -7,11 +7,12 @@ use std::{
 use tokio::time::sleep;
 use worker::{
     dispatch_discovery_webhooks_once, indexer_error_is_retryable,
-    poll_autonomous_indexer_once_with_heartbeat, redact_operational_error,
-    run_regression_sandbox_request, snapshot_directory, stage_regression_input,
-    validate_regression_candidate, AutonomousIndexerConfig, DiscoveryWebhookConfig,
-    IndexerRecoveryDecision, IndexerRecoveryPolicy, RegressionCandidateValidationRequest,
-    RegressionInputKind, RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
+    poll_autonomous_indexer_once_with_heartbeat, poll_open_competition_indexer_once_with_heartbeat,
+    redact_operational_error, run_regression_sandbox_request, snapshot_directory,
+    stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
+    DiscoveryWebhookConfig, IndexerRecoveryDecision, IndexerRecoveryPolicy,
+    OpenCompetitionIndexerConfig, RegressionCandidateValidationRequest, RegressionInputKind,
+    RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
     REGRESSION_SANDBOX_STAGING_ROOT_ENV,
 };
 
@@ -111,8 +112,11 @@ async fn main() -> anyhow::Result<()> {
         .trim()
         .to_ascii_lowercase();
 
+    if protocol == "open-competition-v1" {
+        return run_open_competition_indexer(&store, once).await;
+    }
     if protocol != "autonomous-v1" {
-        anyhow::bail!("BASE_INDEXER_PROTOCOL must be autonomous-v1");
+        anyhow::bail!("BASE_INDEXER_PROTOCOL must be autonomous-v1 or open-competition-v1");
     }
     let config = AutonomousIndexerConfig::from_env()?;
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?;
@@ -169,6 +173,66 @@ async fn main() -> anyhow::Result<()> {
                     IndexerRecoveryDecision::ExitForSupervisorRestart { .. } => {
                         anyhow::bail!(
                             "autonomous Base indexer exhausted its bounded recovery budget; inspect the redacted failure heartbeat"
+                        );
+                    }
+                    IndexerRecoveryDecision::HaltForOperatorInvestigation { .. } => loop {
+                        if wait_or_shutdown(86_400).await? {
+                            return Ok(());
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
+async fn run_open_competition_indexer(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = OpenCompetitionIndexerConfig::from_env()?;
+    let recovery_policy = IndexerRecoveryPolicy::from_env()?;
+    let mut consecutive_failures = 0_u32;
+    loop {
+        match poll_open_competition_indexer_once_with_heartbeat(store, &config).await {
+            Ok(report) => {
+                consecutive_failures = 0;
+                println!("{}", serde_json::to_string(&report)?);
+                if once {
+                    return Ok(());
+                }
+                if wait_or_shutdown(config.poll_seconds).await? {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let decision = recovery_policy
+                    .decision(consecutive_failures, indexer_error_is_retryable(&error));
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "schema": "agent-bounties/open-competition-v1-indexer-recovery-v1",
+                        "protocol_version": "agent-bounties/open-competition-v1",
+                        "network": config.network,
+                        "factory_contract": config.factory_contract,
+                        "deployment_block": config.deployment_block,
+                        "error": redact_operational_error(&error.to_string()),
+                        "decision": decision,
+                        "evidence_boundary": "Recovery resumes only from the versioned factory cursor. It cannot alter historical bounty rows or create payment evidence."
+                    }))?
+                );
+                if once {
+                    anyhow::bail!("open-competition Base indexer poll failed");
+                }
+                match decision {
+                    IndexerRecoveryDecision::RetryFromPersistedCursor {
+                        backoff_seconds, ..
+                    } => {
+                        if wait_or_shutdown(backoff_seconds).await? {
+                            return Ok(());
+                        }
+                    }
+                    IndexerRecoveryDecision::ExitForSupervisorRestart { .. } => {
+                        anyhow::bail!(
+                            "open-competition Base indexer exhausted its recovery budget"
                         );
                     }
                     IndexerRecoveryDecision::HaltForOperatorInvestigation { .. } => loop {

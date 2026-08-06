@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "4d34aa292860c9631be25a6184ef2d1706f75b47fa8983acb41a2ac34b0049f6",
+  "normalized_descriptors_sha256": "27b09fd9e8ebac3a39764803fb404e0d58e89f9bb211420ee7ea402663d9d67a",
   "tools": [
     "route_blocked_goal",
     "plan_objective_creation",
@@ -61,6 +61,8 @@
     "fund_bounty_with_x402",
     "get_x402_relay_status",
     "prepare_agent_to_earn",
+    "list_open_competition_verifiers",
+    "prepare_open_competition_creation",
     "get_open_competition_readiness",
     "prepare_open_competition_commit",
     "prepare_open_competition_reveal",

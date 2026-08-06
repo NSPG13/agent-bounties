@@ -168,6 +168,15 @@ pub struct DiscoveryEndpoints {
     pub autonomous_expire_submission_plan: String,
     pub autonomous_cancel_plan: String,
     pub autonomous_refund_withdrawal_plan: String,
+    pub open_competition_verifiers: String,
+    pub open_competition_creation_preparation: String,
+    pub open_competition_authorized_creation_preparation: String,
+    pub open_competition_state: String,
+    pub open_competition_readiness: String,
+    pub open_competition_commit_preparation: String,
+    pub open_competition_reveal_preparation: String,
+    pub open_competition_status: String,
+    pub open_competition_bond_withdrawal_preparation: String,
     pub objective_collection: String,
     pub objective_creation_plan: String,
     pub objective_action_plan: String,
@@ -757,6 +766,29 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_refund_withdrawal_plan: format!(
             "{api}/v1/base/autonomous-bounties/refund-withdrawal-plan"
         ),
+        open_competition_verifiers: format!(
+            "{api}/v1/base/open-competition-v1/verifiers"
+        ),
+        open_competition_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v1/creation-preparation"
+        ),
+        open_competition_authorized_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v1/authorized-creation-preparation"
+        ),
+        open_competition_state: format!("{api}/v1/base/open-competition-v1/state"),
+        open_competition_readiness: format!(
+            "{api}/v1/base/open-competition-v1/readiness"
+        ),
+        open_competition_commit_preparation: format!(
+            "{api}/v1/base/open-competition-v1/commit-preparation"
+        ),
+        open_competition_reveal_preparation: format!(
+            "{api}/v1/base/open-competition-v1/reveal-preparation"
+        ),
+        open_competition_status: format!("{api}/v1/base/open-competition-v1/status"),
+        open_competition_bond_withdrawal_preparation: format!(
+            "{api}/v1/base/open-competition-v1/bond-withdrawal-preparation"
+        ),
         objective_collection: format!("{api}/v1/objectives"),
         objective_creation_plan: format!("{api}/v1/objectives/creation-plans"),
         objective_action_plan: format!("{api}/v1/objectives/{{objective_id}}/action-plans"),
@@ -794,6 +826,13 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "crowdfunding_allowed": true,
             "external_contract_policy": "discoverable as untrusted but never canonical",
             "payout_authority": "confirmed canonical BountySettled event",
+            "additive_modes": [{
+                "version": "agent-bounties/open-competition-v1",
+                "scope": "approved deterministic verifier profiles only",
+                "deployment_state": "source_only_not_ready_to_earn",
+                "entry_action": "enter competition",
+                "winner_rule": "lowest confirmed passing reveal sequence"
+            }],
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
@@ -852,6 +891,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_expire_submission",
             "plan_autonomous_cancel",
             "plan_autonomous_refund_withdrawal",
+            "list_open_competition_verifiers",
+            "prepare_open_competition_creation",
+            "prepare_open_competition_commit",
+            "prepare_open_competition_reveal",
+            "get_open_competition_status",
+            "withdraw_open_competition_bond",
             "list_autonomous_bounty_events",
             "decode_autonomous_bounty_events",
             "plan_objective_creation",

@@ -68,10 +68,13 @@ solution, waits one block, and reveals. The first confirmed reveal whose
 immutable deterministic module passes settles atomically. This means first
 valid onchain reveal, not first offchain discovery or fastest verifier.
 
-Call `get_open_competition_readiness`,
+Call `list_open_competition_verifiers`, generate and privately save the local
+commitment recovery artifact, call `get_open_competition_readiness`,
 `prepare_open_competition_commit`, and then
 `prepare_open_competition_reveal`; generic `agent_native_claim` refuses this
-mode. See [Open Competition V1](docs/open-competition-v1.md) and its
+mode. Hosted inventory recognizes only exact catalog-pinned verifier bytecode
+and configuration. See [Open Competition V1](docs/open-competition-v1.md), its
+[release runbook](docs/open-competition-v1-release-runbook.md), and its
 [threat model](docs/security/open-competition-v1-threat-model.md).
 
 ## Objective Coordination

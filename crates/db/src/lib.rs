@@ -1,4 +1,7 @@
-use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
+use chain_base::{
+    AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
+    OpenCompetitionEventKind,
+};
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentStatus, AgentWebhookEventType,
@@ -54,6 +57,8 @@ pub const BOUNTY_IMAGE_ASSETS_MIGRATION: &str =
     include_str!("../../../migrations/0017_bounty_image_assets.sql");
 pub const SOLVE_ACTION_RENAME_MIGRATION: &str =
     include_str!("../../../migrations/0018_rename_compete_action_to_solve.sql");
+pub const OPEN_COMPETITION_V1_MIGRATION: &str =
+    include_str!("../../../migrations/0019_open_competition_v1.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -150,6 +155,8 @@ pub enum DbError {
     AudienceConflict(String),
     #[error("conflicting autonomous submission evidence replay: {0}")]
     AutonomousEvidenceConflict(String),
+    #[error("conflicting open-competition event replay: {0}")]
+    OpenCompetitionEventConflict(String),
     #[error("conflicting x402 relay replay: {0}")]
     X402RelayConflict(String),
     #[error("x402 hosted relay quota exceeded: {0}")]
@@ -824,6 +831,7 @@ impl PostgresStore {
                 CHATGPT_ACTION_INTENTS_MIGRATION,
                 BOUNTY_IMAGE_ASSETS_MIGRATION,
                 SOLVE_ACTION_RENAME_MIGRATION,
+                OPEN_COMPETITION_V1_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -4734,6 +4742,159 @@ impl PostgresStore {
         Ok(())
     }
 
+    pub async fn upsert_open_competition_event(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        event: &OpenCompetitionEvent,
+    ) -> DbResult<()> {
+        let kind = serde_json::to_value(event.kind)?
+            .as_str()
+            .ok_or_else(|| DbError::InvalidEnum("open competition event kind".to_string()))?
+            .to_string();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO open_competition_events
+              (id, protocol_version, log_key, network, factory_contract, tx_hash,
+               block_number, log_index, contract_address, bounty_id, kind, data, occurred_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (log_key) DO UPDATE SET
+              tx_hash = EXCLUDED.tx_hash,
+              block_number = EXCLUDED.block_number,
+              log_index = EXCLUDED.log_index,
+              contract_address = EXCLUDED.contract_address,
+              bounty_id = EXCLUDED.bounty_id,
+              kind = EXCLUDED.kind,
+              data = EXCLUDED.data,
+              occurred_at = CASE
+                WHEN open_competition_events.block_time_verified
+                  THEN open_competition_events.occurred_at
+                ELSE EXCLUDED.occurred_at
+              END
+            WHERE open_competition_events.protocol_version = EXCLUDED.protocol_version
+              AND open_competition_events.network = EXCLUDED.network
+              AND open_competition_events.factory_contract = EXCLUDED.factory_contract
+            "#,
+        )
+        .bind(event.id)
+        .bind(&event.protocol_version)
+        .bind(&event.log_key)
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(&event.tx_hash)
+        .bind(i64_from_u64(event.block_number)?)
+        .bind(i64_from_u64(event.log_index)?)
+        .bind(normalize_key_address(&event.contract_address))
+        .bind(&event.bounty_id)
+        .bind(kind)
+        .bind(&event.data)
+        .bind(event.occurred_at)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(DbError::OpenCompetitionEventConflict(event.log_key.clone()));
+        }
+        Ok(())
+    }
+
+    pub async fn list_open_competition_events(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_event_from_row)
+            .collect()
+    }
+
+    pub async fn list_canonical_open_competition_contracts(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<String>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT data->>'bounty_contract' AS bounty_contract
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2
+              AND kind = 'canonical_competition_created'
+              AND data ? 'bounty_contract'
+            ORDER BY bounty_contract
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let address: String = row.try_get("bounty_contract")?;
+                Ok(normalize_key_address(&address))
+            })
+            .collect()
+    }
+
+    pub async fn list_unverified_open_competition_event_blocks(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        limit: u32,
+    ) -> DbResult<Vec<u64>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT block_number
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2 AND block_time_verified = FALSE
+            ORDER BY block_number
+            LIMIT $3
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| u64_from_i64(row.try_get("block_number")?))
+            .collect()
+    }
+
+    pub async fn confirm_open_competition_event_block_time(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        block_number: u64,
+        occurred_at: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE open_competition_events
+            SET occurred_at = $4, block_time_verified = TRUE
+            WHERE network = $1 AND factory_contract = $2 AND block_number = $3
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(i64_from_u64(block_number)?)
+        .bind(occurred_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn list_autonomous_bounty_events(
         &self,
         network: &str,
@@ -6404,6 +6565,24 @@ fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     let kind: AutonomousBountyEventKind = serde_json::from_value(kind_value)?;
     Ok(AutonomousBountyEvent {
         id: row.try_get("id")?,
+        log_key: row.try_get("log_key")?,
+        tx_hash: row.try_get("tx_hash")?,
+        block_number: u64_from_i64(row.try_get("block_number")?)?,
+        log_index: u64_from_i64(row.try_get("log_index")?)?,
+        contract_address: row.try_get("contract_address")?,
+        bounty_id: row.try_get("bounty_id")?,
+        kind,
+        data: row.try_get("data")?,
+        occurred_at: row.try_get("occurred_at")?,
+    })
+}
+
+fn open_competition_event_from_row(row: PgRow) -> DbResult<OpenCompetitionEvent> {
+    let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
+    let kind: OpenCompetitionEventKind = serde_json::from_value(kind_value)?;
+    Ok(OpenCompetitionEvent {
+        id: row.try_get("id")?,
+        protocol_version: row.try_get("protocol_version")?,
         log_key: row.try_get("log_key")?,
         tx_hash: row.try_get("tx_hash")?,
         block_number: u64_from_i64(row.try_get("block_number")?)?,

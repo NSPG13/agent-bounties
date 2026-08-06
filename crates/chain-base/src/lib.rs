@@ -112,7 +112,7 @@ pub enum ChainBaseError {
     RelayerProvider(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmTransactionIntent {
     pub from: Option<String>,
     pub to: String,
@@ -2727,7 +2727,11 @@ where
     })
 }
 
-fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, ChainBaseError> {
+pub(crate) fn rpc_result(
+    value: Value,
+    request_id: u64,
+    method: &str,
+) -> Result<Value, ChainBaseError> {
     let object = value.as_object().ok_or_else(|| {
         ChainBaseError::InvalidRpcResponse(format!("{method} response is not an object"))
     })?;
@@ -2754,7 +2758,7 @@ fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, Chai
     })
 }
 
-async fn fetch_account_code_hash<T>(
+pub(crate) async fn fetch_account_code_hash<T>(
     rpc_url: &str,
     address: &str,
     block: &str,
@@ -2791,7 +2795,7 @@ where
     )
 }
 
-async fn fetch_contract_word<T>(
+pub(crate) async fn fetch_contract_word<T>(
     rpc_url: &str,
     contract: &str,
     data: &str,
@@ -5737,7 +5741,7 @@ fn normalize_topic(topic: &str) -> Result<String, ChainBaseError> {
     Ok(word_hex(word))
 }
 
-fn normalize_hash(hash: &str) -> Result<String, ChainBaseError> {
+pub(crate) fn normalize_hash(hash: &str) -> Result<String, ChainBaseError> {
     normalize_topic(hash)
 }
 
@@ -5770,7 +5774,7 @@ fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
-fn parse_rpc_quantity(value: &str) -> Result<u64, ChainBaseError> {
+pub(crate) fn parse_rpc_quantity(value: &str) -> Result<u64, ChainBaseError> {
     let trimmed = value.strip_prefix("0x").ok_or_else(|| {
         ChainBaseError::InvalidRpcQuantity("quantity must have 0x prefix".to_string())
     })?;
@@ -5821,7 +5825,7 @@ fn word_to_u128(word: [u8; 32]) -> Result<u128, ChainBaseError> {
     Ok(u128::from_be_bytes(value))
 }
 
-fn address_from_word(word: [u8; 32]) -> String {
+pub(crate) fn address_from_word(word: [u8; 32]) -> String {
     format!("0x{}", hex::encode(&word[12..]))
 }
 
@@ -5850,7 +5854,7 @@ fn normalize_address(address: impl AsRef<str>) -> Result<String, ChainBaseError>
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
-fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
     if trimmed.len() != 64
         || !trimmed
@@ -5887,7 +5891,7 @@ fn eip712_field(name: &str, field_type: &str) -> Eip712TypeField {
     }
 }
 
-fn eip3009_typed_data(
+pub(crate) fn eip3009_typed_data(
     network: &BaseNetworkDescriptor,
     from: &str,
     to: &str,
@@ -6543,7 +6547,7 @@ fn autonomous_bounty_id(
     Ok(Keccak256::digest(encoded).into())
 }
 
-fn predict_minimal_proxy_address(
+pub(crate) fn predict_minimal_proxy_address(
     factory: &str,
     implementation: &str,
     salt: [u8; 32],
@@ -6569,7 +6573,7 @@ fn predict_minimal_proxy_address(
     Ok(format!("0x{}", hex::encode(&hash[12..])))
 }
 
-fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
+pub(crate) fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
     let mut bytes = selector(signature).to_vec();
     for word in words {
         bytes.extend_from_slice(&word);
@@ -6744,14 +6748,14 @@ fn encode_attestation_array_call(attestations: &[EncodedAutonomousAttestation]) 
     format!("0x{}", hex::encode(bytes))
 }
 
-fn selector(signature: &str) -> [u8; 4] {
+pub(crate) fn selector(signature: &str) -> [u8; 4] {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
     let hash = hasher.finalize();
     [hash[0], hash[1], hash[2], hash[3]]
 }
 
-fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
     let normalized = normalize_address(address)?;
     let raw = hex::decode(&normalized[2..])
         .map_err(|_| ChainBaseError::InvalidAddress(address.to_string()))?;
@@ -6760,7 +6764,7 @@ fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
     Ok(word)
 }
 
-fn encode_uint256(value: u128) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn encode_uint256(value: u128) -> Result<[u8; 32], ChainBaseError> {
     let mut word = [0u8; 32];
     word[16..].copy_from_slice(&value.to_be_bytes());
     Ok(word)

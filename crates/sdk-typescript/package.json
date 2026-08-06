@@ -5,6 +5,9 @@
   "license": "Apache-2.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "dependencies": {
+    "@noble/hashes": "^1.8.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:examples": "tsc -p tsconfig.examples.json",

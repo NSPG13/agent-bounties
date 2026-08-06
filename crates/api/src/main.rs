@@ -27,20 +27,23 @@ use axum::{
 };
 use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
-    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
-    build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
-    build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
-    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
+    attach_open_competition_commit_calls, attach_open_competition_reveal_call,
+    attach_open_competition_withdrawal_call, autonomous_bounty_is_earning_ready,
+    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
+    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
+    build_autonomous_submission_preparation, build_autonomous_verification_jobs,
+    built_in_open_competition_verifier_catalog, decode_autonomous_bounty_logs,
     eth_get_transaction_receipt_request, eth_send_raw_transaction_request, fetch_block_number,
     fetch_transaction_receipt, normalize_evm_address, observe_erc20_balance_safe,
-    observe_solver_leaderboard_paid_winner_safe, open_competition_readiness,
+    observe_open_competition_safe_state, observe_solver_leaderboard_paid_winner_safe,
+    open_competition_readiness_from_state,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    plan_open_competition_action, plan_standing_meta_v4_action,
+    plan_open_competition_action, plan_open_competition_creation, plan_standing_meta_v4_action,
     prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
     standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
-    validate_autonomous_creation_for_public_earning, AgentWalletReadinessReport,
-    AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
+    validate_autonomous_creation_for_public_earning, validate_open_competition_commitment_envelope,
+    AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
     AutonomousBountyAuthorizedClaimPlan, AutonomousBountyAuthorizedContributionPlan,
     AutonomousBountyAuthorizedCreationPlan, AutonomousBountyClaimPlan,
     AutonomousBountyContribution, AutonomousBountyContributionPlan, AutonomousBountyCreate,
@@ -54,7 +57,11 @@ use chain_base::{
     BaseTransactionRelayer, CanonicalChildBountyTermsPlan, CanonicalChildBountyTermsRequest,
     ChainBaseError, Eip3009AuthorizationTypedData, EthGetTransactionReceiptRequest,
     EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, OpenCompetitionActionPlan,
-    OpenCompetitionOperation, OpenCompetitionReadinessEvidence, OpenCompetitionReadinessReport,
+    OpenCompetitionAuthorizationSignature, OpenCompetitionCommitmentEnvelope,
+    OpenCompetitionCreateParams, OpenCompetitionCreationPlan, OpenCompetitionCreationRequest,
+    OpenCompetitionFundingAuthorization, OpenCompetitionOffchainGates, OpenCompetitionOperation,
+    OpenCompetitionReadinessReport, OpenCompetitionReleaseManifest, OpenCompetitionSafeState,
+    OpenCompetitionStateQuery, OpenCompetitionVerifierCatalog, OpenCompetitionVerifierProfile,
     PrepareAgentToEarnInput, RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
     StandingMetaV2ChildPreparationPlan, StandingMetaV2ChildPreparationRequest,
     StandingMetaV4ActionPlan, StandingMetaV4EconomicsEvidence, StandingMetaV4Operation,
@@ -190,6 +197,10 @@ use worker::{
         get_unfunded_bounty,
         submit_unfunded_bounty_solution,
         prepare_agent_wallet_to_earn,
+        list_open_competition_verifiers,
+        prepare_open_competition_creation,
+        prepare_open_competition_authorized_creation,
+        get_open_competition_state,
         get_open_competition_readiness,
         prepare_open_competition_commit,
         prepare_open_competition_reveal,
@@ -1152,6 +1163,8 @@ struct StandingMetaV4ActionRequest {
 struct OpenCompetitionReadinessQuery {
     network: Option<String>,
     bounty_contract: Option<String>,
+    solver: Option<String>,
+    verifier_profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -1161,6 +1174,77 @@ struct OpenCompetitionActionRequest {
     bounty_contract: String,
     #[serde(default)]
     arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionCommitRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    commitment: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionVerifierQuery {
+    network: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionCreateParamsRequest {
+    solver_reward: u64,
+    verifier_reward: u64,
+    terms_hash: String,
+    policy_hash: String,
+    acceptance_criteria_hash: String,
+    benchmark_hash: String,
+    evidence_schema_hash: String,
+    funding_deadline: u64,
+    competition_window_seconds: u64,
+    reveal_window_seconds: u64,
+    max_entries: u8,
+    verifier_reward_recipient: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionAuthorizationSignatureRequest {
+    v: u8,
+    r: String,
+    s: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionFundingAuthorizationRequest {
+    valid_after: u64,
+    valid_before: u64,
+    nonce: String,
+    signature: Option<OpenCompetitionAuthorizationSignatureRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionCreationRequestBody {
+    network: Option<String>,
+    creator: String,
+    creation_nonce: String,
+    initial_funding: u64,
+    verifier_profile_id: String,
+    params: OpenCompetitionCreateParamsRequest,
+    funding_authorization: Option<OpenCompetitionFundingAuthorizationRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionRevealRequest {
+    network: Option<String>,
+    bounty_contract: String,
+    solver: String,
+    commitment_envelope: serde_json::Value,
+    proof: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1793,6 +1877,22 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/agent-wallet/readiness",
             post(prepare_agent_wallet_to_earn),
+        )
+        .route(
+            "/v1/base/open-competition-v1/verifiers",
+            get(list_open_competition_verifiers),
+        )
+        .route(
+            "/v1/base/open-competition-v1/creation-preparation",
+            post(prepare_open_competition_creation),
+        )
+        .route(
+            "/v1/base/open-competition-v1/authorized-creation-preparation",
+            post(prepare_open_competition_authorized_creation),
+        )
+        .route(
+            "/v1/base/open-competition-v1/state",
+            get(get_open_competition_state),
         )
         .route(
             "/v1/base/open-competition-v1/readiness",
@@ -5280,6 +5380,135 @@ async fn prepare_agent_wallet_to_earn(
 
 #[utoipa::path(
     get,
+    path = "/v1/base/open-competition-v1/verifiers",
+    params(("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet")),
+    responses(
+        (status = 200, description = "Exact approved deterministic verifier catalog"),
+        (status = 400, description = "Unknown Base network")
+    )
+)]
+async fn list_open_competition_verifiers(
+    Query(query): Query<OpenCompetitionVerifierQuery>,
+) -> Result<Json<OpenCompetitionVerifierCatalog>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    open_competition_verifier_catalog_from_environment(network).map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/base/open-competition-v1/creation-preparation",
+    request_body = OpenCompetitionCreationRequestBody,
+    responses(
+        (status = 200, description = "Unsigned deterministic approval-and-create plan"),
+        (status = 400, description = "Malformed or unapproved creation request"),
+        (status = 503, description = "No frozen release manifest is configured")
+    )
+)]
+async fn prepare_open_competition_creation(
+    Json(request): Json<OpenCompetitionCreationRequestBody>,
+) -> Result<Json<OpenCompetitionCreationPlan>, StatusCode> {
+    prepare_open_competition_creation_common(request, false).map(Json)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/base/open-competition-v1/authorized-creation-preparation",
+    request_body = OpenCompetitionCreationRequestBody,
+    responses(
+        (status = 200, description = "EIP-3009 typed data or signed authorized creation plan"),
+        (status = 400, description = "Malformed or unapproved authorized creation request"),
+        (status = 503, description = "No frozen release manifest is configured")
+    )
+)]
+async fn prepare_open_competition_authorized_creation(
+    Json(request): Json<OpenCompetitionCreationRequestBody>,
+) -> Result<Json<OpenCompetitionCreationPlan>, StatusCode> {
+    prepare_open_competition_creation_common(request, true).map(Json)
+}
+
+fn prepare_open_competition_creation_common(
+    request: OpenCompetitionCreationRequestBody,
+    authorized: bool,
+) -> Result<OpenCompetitionCreationPlan, StatusCode> {
+    if authorized != request.funding_authorization.is_some() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    if !open_competition_hosted_operation_enabled(network, "CREATION_ENABLED")? {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let release = open_competition_release_from_environment(network)?;
+    let catalog = open_competition_verifier_catalog_from_environment(network)?;
+    let profile = select_open_competition_verifier(&catalog, Some(&request.verifier_profile_id))?;
+    let funding_authorization =
+        request
+            .funding_authorization
+            .map(|authorization| OpenCompetitionFundingAuthorization {
+                valid_after: authorization.valid_after,
+                valid_before: authorization.valid_before,
+                nonce: authorization.nonce,
+                signature: authorization.signature.map(|signature| {
+                    OpenCompetitionAuthorizationSignature {
+                        v: signature.v,
+                        r: signature.r,
+                        s: signature.s,
+                    }
+                }),
+            });
+    plan_open_competition_creation(OpenCompetitionCreationRequest {
+        network: network.to_string(),
+        factory_contract: release.factory_contract,
+        implementation_contract: release.implementation_contract,
+        creator: request.creator,
+        creation_nonce: request.creation_nonce,
+        initial_funding: request.initial_funding.into(),
+        verifier_profile: profile.clone(),
+        params: OpenCompetitionCreateParams {
+            solver_reward: request.params.solver_reward.into(),
+            verifier_reward: request.params.verifier_reward.into(),
+            terms_hash: request.params.terms_hash,
+            policy_hash: request.params.policy_hash,
+            acceptance_criteria_hash: request.params.acceptance_criteria_hash,
+            benchmark_hash: request.params.benchmark_hash,
+            evidence_schema_hash: request.params.evidence_schema_hash,
+            funding_deadline: request.params.funding_deadline,
+            competition_window_seconds: request.params.competition_window_seconds,
+            reveal_window_seconds: request.params.reveal_window_seconds,
+            max_entries: request.params.max_entries,
+            verifier_module: profile.verifier_address,
+            verifier_reward_recipient: request.params.verifier_reward_recipient,
+        },
+        funding_authorization,
+    })
+    .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/open-competition-v1/state",
+    params(
+        ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet"),
+        ("bounty_contract" = Option<String>, Query, description = "canonical open-competition bounty address"),
+        ("solver" = Option<String>, Query, description = "optional wallet for one-entry and capacity checks"),
+        ("verifier_profile_id" = Option<String>, Query, description = "approved verifier profile id")
+    ),
+    responses(
+        (status = 200, description = "Canonical safe-block competition state"),
+        (status = 400, description = "Malformed state query"),
+        (status = 503, description = "Release manifest or RPC state unavailable")
+    )
+)]
+async fn get_open_competition_state(
+    State(state): State<SharedState>,
+    Query(query): Query<OpenCompetitionReadinessQuery>,
+) -> Result<Json<OpenCompetitionSafeState>, StatusCode> {
+    observe_open_competition_state_for_api(&state, &query)
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    get,
     path = "/v1/base/open-competition-v1/readiness",
     params(
         ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet"),
@@ -5291,110 +5520,333 @@ async fn prepare_agent_wallet_to_earn(
     )
 )]
 async fn get_open_competition_readiness(
+    State(state): State<SharedState>,
     Query(query): Query<OpenCompetitionReadinessQuery>,
 ) -> Result<Json<OpenCompetitionReadinessReport>, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
-    open_competition_readiness_from_environment(network, query.bounty_contract.as_deref()).map(Json)
-}
-
-#[utoipa::path(post, path = "/v1/base/open-competition-v1/commit-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned fail-closed commitment plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
-async fn prepare_open_competition_commit(
-    Json(request): Json<OpenCompetitionActionRequest>,
-) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
-    open_competition_action_from_environment(
-        request,
-        OpenCompetitionOperation::PrepareOpenCompetitionCommit,
-        Some("commitSolutionWithAuthorization"),
-    )
-}
-
-#[utoipa::path(post, path = "/v1/base/open-competition-v1/reveal-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned committed reveal plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
-async fn prepare_open_competition_reveal(
-    Json(request): Json<OpenCompetitionActionRequest>,
-) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
-    open_competition_action_from_environment(
-        request,
-        OpenCompetitionOperation::PrepareOpenCompetitionReveal,
-        Some("revealSolution"),
-    )
-}
-
-#[utoipa::path(post, path = "/v1/base/open-competition-v1/status", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Canonical competition status read plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
-async fn get_open_competition_status(
-    Json(request): Json<OpenCompetitionActionRequest>,
-) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
-    open_competition_action_from_environment(
-        request,
-        OpenCompetitionOperation::GetOpenCompetitionStatus,
-        Some("competitionStatus"),
-    )
-}
-
-#[utoipa::path(post, path = "/v1/base/open-competition-v1/bond-withdrawal-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned losing-entry bond withdrawal plan"), (status = 400, description = "Unknown network or malformed bounty address")))]
-async fn withdraw_open_competition_bond(
-    Json(request): Json<OpenCompetitionActionRequest>,
-) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
-    open_competition_action_from_environment(
-        request,
-        OpenCompetitionOperation::WithdrawOpenCompetitionBond,
-        Some("withdrawEntryBond"),
-    )
-}
-
-fn open_competition_action_from_environment(
-    request: OpenCompetitionActionRequest,
-    operation: OpenCompetitionOperation,
-    function: Option<&str>,
-) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
-    let network = request.network.as_deref().unwrap_or("base-mainnet");
-    open_competition_environment_prefix(network)?;
-    let bounty_contract =
-        normalize_evm_address(&request.bounty_contract).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let readiness = open_competition_readiness_from_environment(network, Some(&bounty_contract))?;
-    Ok(Json(plan_open_competition_action(
-        operation,
-        &readiness,
-        Some(bounty_contract),
-        function.map(str::to_string),
-        request.arguments,
+    let safe_state = observe_open_competition_state_for_api(&state, &query).await?;
+    Ok(Json(open_competition_readiness_from_state(
+        &safe_state,
+        &open_competition_offchain_gates(network)?,
     )))
 }
 
-fn open_competition_readiness_from_environment(
-    network: &str,
-    bounty_contract: Option<&str>,
-) -> Result<OpenCompetitionReadinessReport, StatusCode> {
-    let prefix = open_competition_environment_prefix(network)?;
-    let canonical_factory_configured = optional_evm_address(&format!("{prefix}_FACTORY"))
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-        .is_some()
-        && env_flag(&format!("{prefix}_CANONICAL_FACTORY_RUNTIME"));
-    let canonical_bounty_runtime = match bounty_contract {
-        Some(value) => {
-            let normalized = normalize_evm_address(value).map_err(|_| StatusCode::BAD_REQUEST)?;
-            configured_open_competition(network, &normalized)
-                && env_flag(&format!("{prefix}_CANONICAL_BOUNTY_RUNTIME"))
-        }
-        None => false,
-    };
-    Ok(open_competition_readiness(
-        &OpenCompetitionReadinessEvidence {
-            canonical_factory_configured,
-            canonical_bounty_runtime,
-            valid_terms: env_flag(&format!("{prefix}_VALID_TERMS")),
-            fully_funded: env_flag(&format!("{prefix}_FULLY_FUNDED")),
-            deterministic_verifier_ready: env_flag(&format!(
-                "{prefix}_DETERMINISTIC_VERIFIER_READY"
-            )),
-            competition_open: env_flag(&format!("{prefix}_COMPETITION_OPEN")),
-            entry_capacity_available: env_flag(&format!("{prefix}_ENTRY_CAPACITY_AVAILABLE")),
-            safe_commit_reveal_timing: env_flag(&format!("{prefix}_SAFE_COMMIT_REVEAL_TIMING")),
-            gas_sponsorship_available: env_flag(&format!("{prefix}_GAS_SPONSORSHIP_AVAILABLE")),
-            relay_support_available: env_flag(&format!("{prefix}_RELAY_SUPPORT_AVAILABLE")),
-            r4_release_evidence_complete: env_flag(&format!("{prefix}_R4_EVIDENCE_COMPLETE")),
-            monitoring_active: env_flag(&format!("{prefix}_MONITORING_ACTIVE")),
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/commit-preparation", request_body = OpenCompetitionCommitRequest, responses((status = 200, description = "Unsigned fail-closed commitment plan"), (status = 400, description = "Unknown network or malformed commitment"), (status = 503, description = "Canonical safe-block state unavailable")))]
+async fn prepare_open_competition_commit(
+    State(state): State<SharedState>,
+    Json(request): Json<OpenCompetitionCommitRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    if !open_competition_hosted_operation_enabled(network, "COMMITMENTS_ENABLED")? {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let commitment = normalize_fixed_hex(&request.commitment, 32)?;
+    if commitment == format!("0x{}", "00".repeat(32)) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    open_competition_action_from_safe_state(
+        &state,
+        network,
+        &request.bounty_contract,
+        Some(&request.solver),
+        OpenCompetitionOperation::PrepareOpenCompetitionCommit,
+        Some("commitSolution"),
+        serde_json::json!({
+            "solver": request.solver,
+            "commitment": commitment
+        }),
+    )
+    .await
+    .map(Json)
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/reveal-preparation", request_body = OpenCompetitionRevealRequest, responses((status = 200, description = "Unsigned envelope-validated reveal plan"), (status = 400, description = "Malformed or mismatched commitment envelope"), (status = 503, description = "Canonical safe-block state unavailable")))]
+async fn prepare_open_competition_reveal(
+    State(state): State<SharedState>,
+    Json(request): Json<OpenCompetitionRevealRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    let network = request.network.as_deref().unwrap_or("base-mainnet");
+    let envelope: OpenCompetitionCommitmentEnvelope =
+        serde_json::from_value(request.commitment_envelope).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let envelope = validate_open_competition_commitment_envelope(
+        &envelope,
+        network,
+        &request.bounty_contract,
+        &request.solver,
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let committed_block = envelope.committed_block.ok_or(StatusCode::BAD_REQUEST)?;
+    let reveal_deadline = envelope.reveal_deadline.ok_or(StatusCode::BAD_REQUEST)?;
+    let safe_state = observe_open_competition_state_for_api(
+        &state,
+        &OpenCompetitionReadinessQuery {
+            network: Some(network.to_string()),
+            bounty_contract: Some(request.bounty_contract.clone()),
+            solver: Some(request.solver.clone()),
+            verifier_profile_id: None,
         },
-    ))
+    )
+    .await?;
+    if safe_state.safe_block_number <= committed_block
+        || safe_state.safe_block_timestamp > reveal_deadline
+        || safe_state.safe_block_timestamp > safe_state.competition_ends_at
+    {
+        return Err(StatusCode::CONFLICT);
+    }
+    let readiness = open_competition_readiness_from_state(
+        &safe_state,
+        &open_competition_offchain_gates(network)?,
+    );
+    let mut plan = plan_open_competition_action(
+        OpenCompetitionOperation::PrepareOpenCompetitionReveal,
+        &readiness,
+        Some(safe_state.bounty_contract.clone()),
+        Some("revealSolution".to_string()),
+        serde_json::json!({
+            "solver": request.solver,
+            "submission_hash": envelope.submission_hash,
+            "evidence_hash": envelope.evidence_hash,
+            "salt": envelope.salt,
+            "proof": request.proof
+        }),
+    );
+    let plan_solver = plan.arguments["solver"]
+        .as_str()
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .to_string();
+    let submission_hash = plan.arguments["submission_hash"]
+        .as_str()
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .to_string();
+    let evidence_hash = plan.arguments["evidence_hash"]
+        .as_str()
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .to_string();
+    let salt = plan.arguments["salt"]
+        .as_str()
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .to_string();
+    let proof = plan.arguments["proof"]
+        .as_str()
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .to_string();
+    attach_open_competition_reveal_call(
+        &mut plan,
+        &safe_state.bounty_contract,
+        &plan_solver,
+        &submission_hash,
+        &evidence_hash,
+        &salt,
+        &proof,
+    )
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/status", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Canonical competition status read plan"), (status = 400, description = "Unknown network or malformed bounty address"), (status = 503, description = "Canonical safe-block state unavailable")))]
+async fn get_open_competition_status(
+    State(state): State<SharedState>,
+    Json(request): Json<OpenCompetitionActionRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    let solver = request
+        .arguments
+        .get("solver")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    open_competition_action_from_safe_state(
+        &state,
+        request.network.as_deref().unwrap_or("base-mainnet"),
+        &request.bounty_contract,
+        solver.as_deref(),
+        OpenCompetitionOperation::GetOpenCompetitionStatus,
+        Some("competitionStatus"),
+        request.arguments,
+    )
+    .await
+    .map(Json)
+}
+
+#[utoipa::path(post, path = "/v1/base/open-competition-v1/bond-withdrawal-preparation", request_body = OpenCompetitionActionRequest, responses((status = 200, description = "Unsigned losing-entry bond withdrawal plan"), (status = 400, description = "Unknown network or malformed bounty address"), (status = 503, description = "Canonical safe-block state unavailable")))]
+async fn withdraw_open_competition_bond(
+    State(state): State<SharedState>,
+    Json(request): Json<OpenCompetitionActionRequest>,
+) -> Result<Json<OpenCompetitionActionPlan>, StatusCode> {
+    let solver = request
+        .arguments
+        .get("solver")
+        .and_then(|value| value.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?
+        .to_string();
+    open_competition_action_from_safe_state(
+        &state,
+        request.network.as_deref().unwrap_or("base-mainnet"),
+        &request.bounty_contract,
+        Some(&solver),
+        OpenCompetitionOperation::WithdrawOpenCompetitionBond,
+        Some("withdrawEntryBond"),
+        request.arguments,
+    )
+    .await
+    .map(Json)
+}
+
+async fn open_competition_action_from_safe_state(
+    state: &AppState,
+    network: &str,
+    bounty_contract: &str,
+    solver: Option<&str>,
+    operation: OpenCompetitionOperation,
+    function: Option<&str>,
+    arguments: serde_json::Value,
+) -> Result<OpenCompetitionActionPlan, StatusCode> {
+    let safe_state = observe_open_competition_state_for_api(
+        state,
+        &OpenCompetitionReadinessQuery {
+            network: Some(network.to_string()),
+            bounty_contract: Some(bounty_contract.to_string()),
+            solver: solver.map(str::to_string),
+            verifier_profile_id: None,
+        },
+    )
+    .await?;
+    let readiness = open_competition_readiness_from_state(
+        &safe_state,
+        &open_competition_offchain_gates(network)?,
+    );
+    let mut plan = plan_open_competition_action(
+        operation,
+        &readiness,
+        Some(safe_state.bounty_contract.clone()),
+        function.map(str::to_string),
+        arguments,
+    );
+    match operation {
+        OpenCompetitionOperation::PrepareOpenCompetitionCommit => {
+            let solver = solver.ok_or(StatusCode::BAD_REQUEST)?;
+            let commitment = plan.arguments["commitment"]
+                .as_str()
+                .ok_or(StatusCode::BAD_REQUEST)?
+                .to_string();
+            attach_open_competition_commit_calls(
+                &mut plan,
+                &safe_state.settlement_token,
+                &safe_state.bounty_contract,
+                solver,
+                &commitment,
+                safe_state.entry_bond,
+            )
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        OpenCompetitionOperation::WithdrawOpenCompetitionBond => {
+            attach_open_competition_withdrawal_call(
+                &mut plan,
+                &safe_state.bounty_contract,
+                solver.ok_or(StatusCode::BAD_REQUEST)?,
+            )
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        }
+        OpenCompetitionOperation::PrepareOpenCompetitionReveal
+        | OpenCompetitionOperation::GetOpenCompetitionStatus => {}
+    }
+    Ok(plan)
+}
+
+async fn observe_open_competition_state_for_api(
+    state: &AppState,
+    query: &OpenCompetitionReadinessQuery,
+) -> Result<OpenCompetitionSafeState, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let bounty_contract = query
+        .bounty_contract
+        .as_deref()
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let release = open_competition_release_from_environment(network)?;
+    let catalog = open_competition_verifier_catalog_from_environment(network)?;
+    let profile = select_open_competition_verifier(&catalog, query.verifier_profile_id.as_deref())?;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|error| base_rpc_fetch_status(&error))?;
+    tokio::time::timeout(
+        Duration::from_secs(12),
+        observe_open_competition_safe_state(
+            &rpc_url,
+            &OpenCompetitionStateQuery {
+                release,
+                bounty_contract: bounty_contract.to_string(),
+                solver: query.solver.clone(),
+                verifier_profile: profile,
+            },
+        ),
+    )
+    .await
+    .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
+    .map_err(|error| base_rpc_fetch_status(&error))
+}
+
+fn open_competition_release_from_environment(
+    network: &str,
+) -> Result<OpenCompetitionReleaseManifest, StatusCode> {
+    let prefix = open_competition_environment_prefix(network)?;
+    let raw = env::var(format!("{prefix}_RELEASE_MANIFEST_JSON"))
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let release: OpenCompetitionReleaseManifest =
+        serde_json::from_str(&raw).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if release.network != network {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok(release)
+}
+
+fn open_competition_verifier_catalog_from_environment(
+    network: &str,
+) -> Result<OpenCompetitionVerifierCatalog, StatusCode> {
+    let prefix = open_competition_environment_prefix(network)?;
+    if let Ok(raw) = env::var(format!("{prefix}_VERIFIER_CATALOG_JSON")) {
+        let catalog: OpenCompetitionVerifierCatalog =
+            serde_json::from_str(&raw).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        if catalog.network != network {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        return Ok(catalog);
+    }
+    built_in_open_competition_verifier_catalog(network).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn select_open_competition_verifier(
+    catalog: &OpenCompetitionVerifierCatalog,
+    profile_id: Option<&str>,
+) -> Result<OpenCompetitionVerifierProfile, StatusCode> {
+    match profile_id {
+        Some(profile_id) => catalog
+            .profiles
+            .iter()
+            .find(|profile| profile.profile_id == profile_id)
+            .cloned()
+            .ok_or(StatusCode::BAD_REQUEST),
+        None if catalog.profiles.len() == 1 => Ok(catalog.profiles[0].clone()),
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
+fn open_competition_offchain_gates(
+    network: &str,
+) -> Result<OpenCompetitionOffchainGates, StatusCode> {
+    let prefix = open_competition_environment_prefix(network)?;
+    Ok(OpenCompetitionOffchainGates {
+        gas_sponsorship_available: env_flag(&format!("{prefix}_GAS_SPONSORSHIP_AVAILABLE")),
+        relay_support_available: env_flag(&format!("{prefix}_RELAY_SUPPORT_AVAILABLE")),
+        r4_release_evidence_complete: env_flag(&format!("{prefix}_R4_EVIDENCE_COMPLETE")),
+        monitoring_active: env_flag(&format!("{prefix}_MONITORING_ACTIVE")),
+    })
+}
+
+fn open_competition_hosted_operation_enabled(
+    network: &str,
+    operation: &str,
+) -> Result<bool, StatusCode> {
+    let prefix = open_competition_environment_prefix(network)?;
+    Ok(env_flag(&format!("{prefix}_{operation}")))
 }
 
 fn open_competition_environment_prefix(network: &str) -> Result<&'static str, StatusCode> {
@@ -16114,6 +16566,10 @@ mod tests {
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/verifiers"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/creation-preparation"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/authorized-creation-preparation"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/state"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/readiness"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/commit-preparation"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/reveal-preparation"));

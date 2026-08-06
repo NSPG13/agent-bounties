@@ -2,10 +2,12 @@ use anyhow::{anyhow, Context};
 use app::BountyNetwork;
 use chain_base::{
     autonomous_bounty_event_topics, base_network_descriptor, build_autonomous_bounty_feed,
-    decode_autonomous_bounty_logs, fetch_base_contract_logs, fetch_base_multi_contract_logs,
-    fetch_block_number, fetch_block_timestamp, redact_provider_urls, rpc_logs_to_evm_logs,
+    decode_autonomous_bounty_logs, decode_open_competition_logs, fetch_base_contract_logs,
+    fetch_base_multi_contract_logs, fetch_block_number, fetch_block_timestamp,
+    open_competition_event_topics, redact_provider_urls, rpc_logs_to_evm_logs,
     AutonomousBountyEvent, AutonomousBountyEventKind, BaseContractLogQuery,
-    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError,
+    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError, OpenCompetitionEventKind,
+    OPEN_COMPETITION_PROTOCOL_VERSION,
 };
 use chrono::{DateTime, Utc};
 use db::{BaseIndexerHeartbeat, DbError, PostgresStore};
@@ -280,6 +282,112 @@ impl AutonomousIndexerConfig {
     pub fn network_descriptor(&self) -> anyhow::Result<BaseNetworkDescriptor> {
         Ok(base_network_descriptor(&self.network)?)
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionIndexerConfig {
+    pub network: String,
+    pub rpc_url: String,
+    pub factory_contract: String,
+    pub deployment_block: u64,
+    pub poll_seconds: u64,
+    pub confirmations: u64,
+    pub max_blocks_per_query: u64,
+    pub request_id: u64,
+}
+
+impl OpenCompetitionIndexerConfig {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    pub fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let requested_network = lookup("OPEN_COMPETITION_INDEXER_NETWORK")
+            .filter(|value| nonempty(value))
+            .unwrap_or_else(|| "base-sepolia".to_string());
+        let descriptor = base_network_descriptor(&requested_network)?;
+        let network = canonical_base_network(&descriptor);
+        let factory_contract = lookup("OPEN_COMPETITION_V1_FACTORY_CONTRACT")
+            .filter(|value| nonempty(value))
+            .ok_or_else(|| anyhow!("OPEN_COMPETITION_V1_FACTORY_CONTRACT is required"))?;
+        let rpc_url = lookup("OPEN_COMPETITION_INDEXER_RPC_URL")
+            .filter(|value| nonempty(value))
+            .or_else(|| lookup(&descriptor.rpc_url_env).filter(|value| nonempty(value)))
+            .ok_or_else(|| {
+                anyhow!(
+                    "set OPEN_COMPETITION_INDEXER_RPC_URL or {}",
+                    descriptor.rpc_url_env
+                )
+            })?;
+        let deployment_block = lookup("OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK")
+            .filter(|value| nonempty(value))
+            .ok_or_else(|| anyhow!("OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK is required"))
+            .and_then(|value| parse_u64_env("OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK", &value))?;
+        let poll_seconds = lookup("OPEN_COMPETITION_INDEXER_POLL_SECONDS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_INDEXER_POLL_SECONDS", &value))
+            .transpose()?
+            .unwrap_or(15);
+        let confirmations = lookup("OPEN_COMPETITION_INDEXER_CONFIRMATIONS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_INDEXER_CONFIRMATIONS", &value))
+            .transpose()?
+            .unwrap_or(2);
+        let max_blocks_per_query = lookup("OPEN_COMPETITION_INDEXER_MAX_BLOCKS_PER_QUERY")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_INDEXER_MAX_BLOCKS_PER_QUERY", &value))
+            .transpose()?
+            .unwrap_or(2_000)
+            .max(1);
+        let request_id = lookup("OPEN_COMPETITION_INDEXER_REQUEST_ID")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_INDEXER_REQUEST_ID", &value))
+            .transpose()?
+            .unwrap_or(100_000);
+        let factory_contract = BaseContractLogQuery::new(
+            factory_contract,
+            deployment_block,
+            None,
+            open_competition_event_topics(),
+        )?
+        .contract;
+        Ok(Self {
+            network,
+            rpc_url,
+            factory_contract,
+            deployment_block,
+            poll_seconds,
+            confirmations,
+            max_blocks_per_query,
+            request_id,
+        })
+    }
+
+    pub fn network_descriptor(&self) -> anyhow::Result<BaseNetworkDescriptor> {
+        Ok(base_network_descriptor(&self.network)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCompetitionIndexerPollReport {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub factory_contract: String,
+    pub deployment_block: u64,
+    pub latest_block: u64,
+    pub confirmations: u64,
+    pub confirmed_to_block: Option<u64>,
+    pub from_block: u64,
+    pub to_block: Option<u64>,
+    pub canonical_competitions: usize,
+    pub fetched_logs: usize,
+    pub persisted_events: usize,
+    pub persisted_cursor_block: Option<u64>,
+    pub skipped_reason: Option<String>,
+    pub evidence_boundary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -586,6 +694,307 @@ async fn backfill_autonomous_event_block_times(
         .await?;
         store
             .confirm_autonomous_event_block_time(&config.network, block_number, occurred_at)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn poll_open_competition_indexer_once(
+    store: &PostgresStore,
+    config: &OpenCompetitionIndexerConfig,
+) -> anyhow::Result<OpenCompetitionIndexerPollReport> {
+    let descriptor = config.network_descriptor()?;
+    backfill_open_competition_event_block_times(store, config).await?;
+    let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
+    let confirmed_to_block = latest_block.checked_sub(config.confirmations);
+    let scan_cursor = store
+        .get_base_log_cursor(&config.network, &config.factory_contract)
+        .await?;
+    let from_block = next_indexer_from_block(
+        scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+        None,
+        Some(config.deployment_block),
+    )?;
+    if from_block < config.deployment_block {
+        return Err(anyhow!(
+            "open-competition cursor predates the frozen factory deployment block"
+        ));
+    }
+    let skipped = |reason: &str| {
+        OpenCompetitionIndexerPollReport {
+        protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
+        network: descriptor.clone(),
+        factory_contract: config.factory_contract.clone(),
+        deployment_block: config.deployment_block,
+        latest_block,
+        confirmations: config.confirmations,
+        confirmed_to_block,
+        from_block,
+        to_block: None,
+        canonical_competitions: 0,
+        fetched_logs: 0,
+        persisted_events: 0,
+        persisted_cursor_block: scan_cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+        skipped_reason: Some(reason.to_string()),
+        evidence_boundary: "A skipped indexer poll creates no protocol or payment evidence. Only a safe-block canonical BountySettled event is payment evidence.".to_string(),
+    }
+    };
+    let Some(confirmed_to_block) = confirmed_to_block else {
+        return Ok(skipped("latest block is below configured confirmations"));
+    };
+    if confirmed_to_block < from_block {
+        return Ok(skipped("no confirmed blocks are ready to scan"));
+    }
+    let to_block = bounded_to_block(from_block, confirmed_to_block, config.max_blocks_per_query);
+    let topics = open_competition_event_topics();
+    let factory_query = BaseContractLogQuery::new(
+        &config.factory_contract,
+        from_block,
+        Some(to_block),
+        topics.clone(),
+    )?;
+    let factory_response = fetch_base_contract_logs(
+        &config.rpc_url,
+        &factory_query,
+        config.request_id.saturating_add(1),
+    )
+    .await?;
+    let factory_logs = rpc_logs_to_evm_logs(factory_response.result)?;
+    let mut events = decode_open_competition_logs(factory_logs.clone())?;
+    if events.iter().any(|event| {
+        !event
+            .contract_address
+            .eq_ignore_ascii_case(&config.factory_contract)
+            || !matches!(
+                event.kind,
+                OpenCompetitionEventKind::CanonicalCompetitionCreated
+                    | OpenCompetitionEventKind::CanonicalCompetitionTermsCommitted
+                    | OpenCompetitionEventKind::CanonicalCompetitionEconomicsConfigured
+                    | OpenCompetitionEventKind::CanonicalCompetitionVerificationConfigured
+            )
+    }) {
+        return Err(anyhow!(
+            "factory query returned a non-factory open-competition event"
+        ));
+    }
+    let mut competitions = store
+        .list_canonical_open_competition_contracts(&config.network, &config.factory_contract)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    for event in &events {
+        if event.kind == OpenCompetitionEventKind::CanonicalCompetitionCreated {
+            let address = event.data["bounty_contract"]
+                .as_str()
+                .ok_or_else(|| anyhow!("competition creation is missing bounty_contract"))?;
+            let normalized =
+                BaseContractLogQuery::new(address, from_block, Some(to_block), topics.clone())?
+                    .contract;
+            competitions.insert(normalized);
+        }
+    }
+    let mut fetched_logs = factory_logs.len();
+    let mut ordered_competitions = competitions.iter().cloned().collect::<Vec<_>>();
+    ordered_competitions.sort();
+    for (index, batch) in ordered_competitions
+        .chunks(AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE)
+        .enumerate()
+    {
+        let query = BaseMultiContractLogQuery::new(
+            batch.iter().cloned(),
+            from_block,
+            Some(to_block),
+            topics.clone(),
+        )?;
+        let response = fetch_base_multi_contract_logs(
+            &config.rpc_url,
+            &query,
+            config.request_id.saturating_add(2 + index as u64),
+        )
+        .await?;
+        let logs = rpc_logs_to_evm_logs(response.result)?;
+        fetched_logs += logs.len();
+        let decoded = decode_open_competition_logs(logs)?;
+        let expected_emitters = batch
+            .iter()
+            .map(|address| address.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        if decoded.iter().any(|event| {
+            !expected_emitters.contains(&event.contract_address.to_ascii_lowercase())
+                || matches!(
+                    event.kind,
+                    OpenCompetitionEventKind::CanonicalCompetitionCreated
+                        | OpenCompetitionEventKind::CanonicalCompetitionTermsCommitted
+                        | OpenCompetitionEventKind::CanonicalCompetitionEconomicsConfigured
+                        | OpenCompetitionEventKind::CanonicalCompetitionVerificationConfigured
+                )
+        }) {
+            return Err(anyhow!(
+                "competition batch query returned an invalid emitter or factory event"
+            ));
+        }
+        events.extend(decoded);
+    }
+    events.sort_by_key(|event| (event.block_number, event.log_index));
+    let mut seen = HashSet::new();
+    events.retain(|event| seen.insert(event.log_key.clone()));
+    let mut blocks = events
+        .iter()
+        .map(|event| event.block_number)
+        .collect::<Vec<_>>();
+    blocks.sort_unstable();
+    blocks.dedup();
+    let mut block_times = std::collections::HashMap::new();
+    for (index, block) in blocks.iter().copied().enumerate() {
+        let timestamp = fetch_block_timestamp(
+            &config.rpc_url,
+            block,
+            config.request_id.saturating_add(20_000 + index as u64),
+        )
+        .await?;
+        block_times.insert(block, timestamp);
+    }
+    for event in &mut events {
+        event.occurred_at = *block_times
+            .get(&event.block_number)
+            .ok_or_else(|| anyhow!("canonical competition block timestamp is unavailable"))?;
+        store
+            .upsert_open_competition_event(&config.network, &config.factory_contract, event)
+            .await?;
+    }
+    for (&block, &timestamp) in &block_times {
+        store
+            .confirm_open_competition_event_block_time(
+                &config.network,
+                &config.factory_contract,
+                block,
+                timestamp,
+            )
+            .await?;
+    }
+    let last_log_key = events.last().map(|event| event.log_key.as_str());
+    store
+        .upsert_base_log_cursor(
+            &config.network,
+            &config.factory_contract,
+            to_block,
+            last_log_key,
+        )
+        .await?;
+    Ok(OpenCompetitionIndexerPollReport {
+        protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
+        network: descriptor,
+        factory_contract: config.factory_contract.clone(),
+        deployment_block: config.deployment_block,
+        latest_block,
+        confirmations: config.confirmations,
+        confirmed_to_block: Some(confirmed_to_block),
+        from_block,
+        to_block: Some(to_block),
+        canonical_competitions: competitions.len(),
+        fetched_logs,
+        persisted_events: events.len(),
+        persisted_cursor_block: Some(to_block),
+        skipped_reason: None,
+        evidence_boundary: "Events are isolated to the versioned factory cursor and confirmed block timestamps. Only canonical BountySettled is payment evidence.".to_string(),
+    })
+}
+
+pub async fn poll_open_competition_indexer_once_with_heartbeat(
+    store: &PostgresStore,
+    config: &OpenCompetitionIndexerConfig,
+) -> anyhow::Result<OpenCompetitionIndexerPollReport> {
+    let started_at = Utc::now();
+    match poll_open_competition_indexer_once(store, config).await {
+        Ok(report) => {
+            let completed_at = Utc::now();
+            let status = if report.skipped_reason.is_some() {
+                INDEXER_HEARTBEAT_SKIPPED
+            } else {
+                INDEXER_HEARTBEAT_SUCCESS
+            };
+            store
+                .upsert_base_indexer_heartbeat(&BaseIndexerHeartbeat {
+                    network: config.network.clone(),
+                    escrow_contract: config.factory_contract.clone(),
+                    status: status.to_string(),
+                    started_at,
+                    completed_at: Some(completed_at),
+                    latest_block: Some(report.latest_block),
+                    confirmed_to_block: report.confirmed_to_block,
+                    from_block: Some(report.from_block),
+                    to_block: report.to_block,
+                    fetched_logs: report.fetched_logs as u64,
+                    persisted_cursor_block: report.persisted_cursor_block,
+                    skipped_reason: report.skipped_reason.clone(),
+                    error_message: None,
+                    updated_at: completed_at,
+                })
+                .await?;
+            Ok(report)
+        }
+        Err(error) => {
+            let completed_at = Utc::now();
+            let retryable = indexer_error_is_retryable(&error);
+            let error_message = redact_operational_error(&error.to_string());
+            let heartbeat = BaseIndexerHeartbeat {
+                network: config.network.clone(),
+                escrow_contract: config.factory_contract.clone(),
+                status: INDEXER_HEARTBEAT_FAILED.to_string(),
+                started_at,
+                completed_at: Some(completed_at),
+                latest_block: None,
+                confirmed_to_block: None,
+                from_block: None,
+                to_block: None,
+                fetched_logs: 0,
+                persisted_cursor_block: None,
+                skipped_reason: None,
+                error_message: Some(error_message.clone()),
+                updated_at: completed_at,
+            };
+            if let Err(heartbeat_error) = store.upsert_base_indexer_heartbeat(&heartbeat).await {
+                return Err(anyhow::Error::new(IndexerOperationalError {
+                    message: format!(
+                        "{error_message}; failed to persist open-competition Base indexer failure heartbeat: {}",
+                        redact_operational_error(&heartbeat_error.to_string())
+                    ),
+                    retryable: retryable && matches!(heartbeat_error, DbError::Sqlx(_)),
+                }));
+            }
+            Err(anyhow::Error::new(IndexerOperationalError {
+                message: error_message,
+                retryable,
+            }))
+        }
+    }
+}
+
+async fn backfill_open_competition_event_block_times(
+    store: &PostgresStore,
+    config: &OpenCompetitionIndexerConfig,
+) -> anyhow::Result<()> {
+    let blocks = store
+        .list_unverified_open_competition_event_blocks(
+            &config.network,
+            &config.factory_contract,
+            50,
+        )
+        .await?;
+    for (index, block) in blocks.into_iter().enumerate() {
+        let timestamp = fetch_block_timestamp(
+            &config.rpc_url,
+            block,
+            config.request_id.saturating_add(10_000 + index as u64),
+        )
+        .await?;
+        store
+            .confirm_open_competition_event_block_time(
+                &config.network,
+                &config.factory_contract,
+                block,
+                timestamp,
+            )
             .await?;
     }
     Ok(())
@@ -1108,6 +1517,48 @@ mod tests {
             "0x1111111111111111111111111111111111111111"
         );
         assert_eq!(config.start_block, Some(456));
+    }
+
+    #[test]
+    fn open_competition_indexer_is_pinned_to_its_factory_deployment_block() {
+        let values = HashMap::from([
+            ("BASE_SEPOLIA_RPC_URL", "https://sepolia.example"),
+            (
+                "OPEN_COMPETITION_V1_FACTORY_CONTRACT",
+                "0x2222222222222222222222222222222222222222",
+            ),
+            ("OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK", "987654"),
+        ]);
+        let config = OpenCompetitionIndexerConfig::from_lookup(|key| {
+            values.get(key).map(|value| value.to_string())
+        })
+        .unwrap();
+        assert_eq!(config.network, "base-sepolia");
+        assert_eq!(config.deployment_block, 987_654);
+        assert_eq!(config.rpc_url, "https://sepolia.example");
+        assert_eq!(
+            config.factory_contract,
+            "0x2222222222222222222222222222222222222222"
+        );
+        assert_eq!(open_competition_event_topics().len(), 14);
+    }
+
+    #[test]
+    fn open_competition_indexer_refuses_implicit_genesis_scans() {
+        let values = HashMap::from([
+            ("BASE_SEPOLIA_RPC_URL", "https://sepolia.example"),
+            (
+                "OPEN_COMPETITION_V1_FACTORY_CONTRACT",
+                "0x2222222222222222222222222222222222222222",
+            ),
+        ]);
+        let error = OpenCompetitionIndexerConfig::from_lookup(|key| {
+            values.get(key).map(|value| value.to_string())
+        })
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK"));
     }
 
     #[test]
