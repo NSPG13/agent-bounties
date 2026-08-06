@@ -24,11 +24,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+EXPECTED_STATES = {
+    "claimable.json": "claimable",
+    "unfunded.json": "unfunded",
+    "stale.json": "stale",
+}
 EXPECTED_NEXT_ACTIONS = {
     "claimable.json": "claim",
     "unfunded.json": "wait",
     "stale.json": "refresh",
 }
+
 FEED_URL = "https://api.agentbounties.app/v1/base/autonomous-bounties/feed"
 INSTALL = (
     "hermes skills install "
@@ -48,7 +54,8 @@ def main() -> None:
     skill = skill_path.read_text(encoding="utf-8")
     if not skill.startswith("---\n"):
         fail("canonical skill requires YAML frontmatter")
-    if "\n---\n" not in skill[4:2000]:
+    closing = skill.find("\n---\n", 4)
+    if closing < 0 or closing + 5 >= 2000:
         fail("Hermes-readable skill frontmatter must close before byte 2000")
     lower = skill.lower()
     for phrase in (FEED_URL, "claimable-live", "post your own bounty"):
@@ -75,8 +82,11 @@ def main() -> None:
             data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             fail(f"fixture {fixture} is not valid JSON: {error}")
-        if data.get("state") is None:
-            fail(f"fixture {fixture} must declare a state")
+        if data.get("state") != EXPECTED_STATES[fixture]:
+            fail(
+                f"fixture {fixture} state must be {EXPECTED_STATES[fixture]}, "
+                f"got {data.get('state')!r}"
+            )
         action = data.get("next_action")
         if not isinstance(action, str) or not action.strip():
             fail(f"fixture {fixture} must carry exactly one next_action")
