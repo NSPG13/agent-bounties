@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from plan_bounded_agent_budget import CAST, ROOT, require_address, require_bytes32, validate_manifest
+from plan_bounded_agent_budget import CAST, ROOT, require_address, require_bytes32, validate_action_manifest
 
 
 DEFAULT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
@@ -107,7 +107,7 @@ def inspect(
     expected_delegate: str | None = None,
     expected_policy_hash: str | None = None,
 ) -> dict:
-    validate_manifest(manifest)
+    validate_action_manifest(manifest)
     safe = rpc(rpc_url, "eth_getBlockByNumber", ["safe", False], 1)
     if not isinstance(safe, dict) or not safe.get("number") or not safe.get("hash"):
         raise RuntimeError("Base safe block is unavailable")
@@ -242,7 +242,7 @@ def main() -> None:
     parser.add_argument("--expect-policy-hash")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    manifest = validate_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
+    manifest = validate_action_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
     wallet = require_address(args.wallet, "wallet")
     expected_owner = require_address(args.expect_owner, "expected owner") if args.expect_owner else None
     expected_delegate = require_address(args.expect_delegate, "expected delegate") if args.expect_delegate else None

@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "plan_bounded_agent_budget.py"
 MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
+LEGACY_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
 
 
 def load_planner():
@@ -57,6 +58,7 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         cls.action_planner = load_action_planner()
         cls.create_helper = load_create_helper()
         cls.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cls.legacy_manifest = json.loads(LEGACY_MANIFEST.read_text(encoding="utf-8"))
 
     def test_usdc_amounts_are_exact(self) -> None:
         self.assertEqual(self.planner.usdc_units("89", "amount"), 89_000_000)
@@ -212,6 +214,40 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         changed = {**self.manifest, "contract_source_dirty": True}
         with self.assertRaises(SystemExit):
             self.planner.validate_manifest(changed)
+
+    def test_budget_manifest_validation_remains_v2_only(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "schema is unsupported"):
+            self.planner.validate_manifest(self.legacy_manifest)
+
+    def test_action_manifest_validation_accepts_exact_deployed_versions(self) -> None:
+        self.planner.validate_action_manifest(self.legacy_manifest)
+        self.planner.validate_action_manifest(self.manifest)
+
+    def test_action_manifest_validation_binds_quorum_to_schema(self) -> None:
+        legacy_with_v2_quorum = json.loads(json.dumps(self.legacy_manifest))
+        legacy_with_v2_quorum["canonical"]["signed_quorum_verifier_set_hash"] = (
+            self.manifest["canonical"]["signed_quorum_verifier_set_hash"]
+        )
+        with self.assertRaisesRegex(SystemExit, "unexpected signed quorum"):
+            self.planner.validate_action_manifest(legacy_with_v2_quorum)
+
+        v2_with_legacy_quorum = json.loads(json.dumps(self.manifest))
+        v2_with_legacy_quorum["canonical"]["signed_quorum_verifier_set_hash"] = (
+            self.legacy_manifest["canonical"]["signed_quorum_verifier_set_hash"]
+        )
+        with self.assertRaisesRegex(SystemExit, "unexpected signed quorum"):
+            self.planner.validate_action_manifest(v2_with_legacy_quorum)
+
+    def test_action_manifest_validation_rejects_unknown_schema(self) -> None:
+        changed = {**self.manifest, "schema": "agent-bounties/bounded-agent-wallet-deployment-v3"}
+        with self.assertRaisesRegex(SystemExit, "schema is unsupported"):
+            self.planner.validate_action_manifest(changed)
+
+    def test_action_manifest_validation_rejects_deployment_drift(self) -> None:
+        changed = json.loads(json.dumps(self.legacy_manifest))
+        changed["wallet_factory"]["address"] = "0x1111111111111111111111111111111111111111"
+        with self.assertRaisesRegex(SystemExit, "unexpected wallet factory"):
+            self.planner.validate_action_manifest(changed)
 
     def test_action_planner_fails_closed_on_remaining_caps(self) -> None:
         report = {
