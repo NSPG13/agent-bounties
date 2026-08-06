@@ -216,6 +216,76 @@ class Cast:
         return tx_hash
 
 
+def cast_uint(value: str, label: str) -> int:
+    match = re.match(r"^\s*(\d+)\b", value)
+    if match is None:
+        raise ActivationError(f"{label} did not return an unsigned integer")
+    return int(match.group(1))
+
+
+def latest_wallet_state(cast: Cast, manifest: Mapping[str, Any]) -> dict[str, int]:
+    wallet = manifest["wallet"]
+    return {
+        "wallet_usdc_balance": cast_uint(
+            cast.call(
+                manifest["settlement_token"],
+                "balanceOf(address)(uint256)",
+                wallet,
+            ),
+            "wallet USDC balance",
+        ),
+        "lifetime_spent": cast_uint(
+            cast.call(wallet, "lifetimeSpent()(uint256)"), "wallet lifetime spend"
+        ),
+        "period_spent": cast_uint(
+            cast.call(wallet, "periodSpent()(uint256)"), "wallet period spend"
+        ),
+        "delegate_nonce": cast_uint(
+            cast.call(wallet, "delegateNonce()(uint256)"), "wallet delegate nonce"
+        ),
+    }
+
+
+def is_canonical(cast: Cast, factory: str, bounty: str) -> bool:
+    result = cast.call(factory, "isCanonicalBounty(address)(bool)", bounty).lower()
+    if result not in {"true", "false"}:
+        raise ActivationError("canonical-bounty check did not return a boolean")
+    return result == "true"
+
+
+def wait_for_canonical(
+    cast: Cast, factory: str, bounty: str, timeout_seconds: int
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if is_canonical(cast, factory, bounty):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(2)
+
+
+def create_if_missing(
+    cast: Cast,
+    factory: str,
+    bounty: str,
+    target: str,
+    data: str,
+    private_key: str,
+    recovery_timeout: int,
+) -> tuple[str | None, bool]:
+    if is_canonical(cast, factory, bounty):
+        return None, False
+    try:
+        return cast.send_data(target, data, private_key), True
+    except ActivationError:
+        # A provider may accept the broadcast and then fail while polling its
+        # receipt. The deterministic contract is the authoritative postcondition.
+        if wait_for_canonical(cast, factory, bounty, recovery_timeout):
+            return None, True
+        raise
+
+
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -542,7 +612,11 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             f"delegate key resolves to {delegate}, expected {manifest['delegate']}"
         )
 
-    before = inspect_wallet(args, manifest, "before")
+    inspect_wallet(args, manifest, "before")
+    before = latest_wallet_state(cast, manifest)
+    (args.output_dir / "wallet-before-latest.json").write_text(
+        json.dumps(before, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     results: list[dict[str, Any]] = []
     new_spend = 0
     for task in manifest["tasks"]:
@@ -599,21 +673,16 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         direct = action["direct_transaction"]
         predicted = address(plan.get("predicted_bounty_contract"), "predicted bounty")
         bounty_id = bytes32(plan.get("bounty_id"), "bounty id")
-        if (
-            cast.call(
-                manifest["canonical_factory"],
-                "isCanonicalBounty(address)(bool)",
-                predicted,
-            ).lower()
-            == "true"
-        ):
-            tx_hash = None
-        else:
-            tx_hash = cast.send_data(
-                address(direct.get("to"), "direct transaction target"),
-                str(direct.get("data")),
-                private_key,
-            )
+        tx_hash, created_now = create_if_missing(
+            cast,
+            manifest["canonical_factory"],
+            predicted,
+            address(direct.get("to"), "direct transaction target"),
+            str(direct.get("data")),
+            private_key,
+            args.broadcast_recovery_timeout,
+        )
+        if created_now:
             new_spend += int(manifest["initial_funding"])
         reconciled = reconcile(args.api, predicted, bounty_id, args.reconcile_timeout)
         feed_events = reconciled["feed_item"].get("events") or []
@@ -643,19 +712,21 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         )
         results.append(result)
 
-    after = inspect_wallet(args, manifest, "after")
-    before_state = before["state"]
-    after_state = after["state"]
+    inspect_wallet(args, manifest, "after")
+    after = latest_wallet_state(cast, manifest)
+    (args.output_dir / "wallet-after-latest.json").write_text(
+        json.dumps(after, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     if (
-        int(after_state["lifetime_spent"]) - int(before_state["lifetime_spent"])
+        int(after["lifetime_spent"]) - int(before["lifetime_spent"])
         != new_spend
     ):
         raise ActivationError(
             "bounded wallet lifetime-spend delta does not match newly created bounties"
         )
     if (
-        int(before_state["wallet_usdc_balance"])
-        - int(after_state["wallet_usdc_balance"])
+        int(before["wallet_usdc_balance"])
+        - int(after["wallet_usdc_balance"])
         != new_spend
     ):
         raise ActivationError(
@@ -667,8 +738,9 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         "commit": commit,
         "wallet": manifest["wallet"],
         "new_spend": new_spend,
-        "wallet_balance_before": int(before_state["wallet_usdc_balance"]),
-        "wallet_balance_after": int(after_state["wallet_usdc_balance"]),
+        "total_funding": int(manifest["total_funding"]),
+        "wallet_balance_before": int(before["wallet_usdc_balance"]),
+        "wallet_balance_after": int(after["wallet_usdc_balance"]),
         "results": results,
         "complete": len(results) == 4,
         "evidence_boundary": "Canonical creation, funding, claimability, valid terms, and verification readiness are reconciled. Only a future BountySettled event proves solver payment.",
@@ -679,7 +751,8 @@ def markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "## Four direct growth bounties activated",
         "",
-        f"- New funding: **{int(report['new_spend']) / 1_000_000:.2f} USDC**",
+        f"- Canonical funding in this batch: **{int(report['total_funding']) / 1_000_000:.2f} USDC**",
+        f"- Newly spent by this run: **{int(report['new_spend']) / 1_000_000:.2f} USDC**",
         f"- Bounded wallet remaining: **{int(report['wallet_balance_after']) / 1_000_000:.2f} USDC**",
         "",
     ]
@@ -708,6 +781,7 @@ def main() -> int:
     parser.add_argument("--cast", default=os.environ.get("CAST_BIN", "cast"))
     parser.add_argument("--python", default=os.environ.get("PYTHON_BIN", "python"))
     parser.add_argument("--reconcile-timeout", type=int, default=300)
+    parser.add_argument("--broadcast-recovery-timeout", type=int, default=45)
     parser.add_argument(
         "--output-dir", type=Path, default=ROOT / "target" / "direct-growth-v2"
     )
