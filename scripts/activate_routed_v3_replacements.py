@@ -328,12 +328,10 @@ def reconcile(api: str, contract: str, bounty_id: str, timeout_seconds: int = 18
                 )
             item = matches[0] if matches else None
             active_statuses = {"claimable", "claimed", "submitted", "verifying"}
-            if (
-                item
-                and item.get("status") in active_statuses
-                and item.get("terms_valid") is True
-                and item.get("verification_ready") is True
-            ):
+            status = item.get("status") if item else None
+            active = status in active_statuses and item.get("verification_ready") is True
+            settled = status == "paid" and "bounty_settled" in kinds
+            if item and item.get("terms_valid") is True and (active or settled):
                 return {"event_kinds": sorted(kinds), "feed_item": item}
         time.sleep(3)
     raise ActivationError(f"canonical activation did not reconcile for {contract}")
@@ -529,10 +527,11 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "policy_hash": deployment["policy_hash"],
             "reconciliation": reconciled,
         }
-        (args.output_dir / f"routed-v3-{issue}-issue.md").write_text(
-            issue_body(issue, str(config["lane"]), config["old"], result, deployment),
-            encoding="utf-8",
-        )
+        if reconciled["feed_item"]["status"] == "claimable":
+            (args.output_dir / f"routed-v3-{issue}-issue.md").write_text(
+                issue_body(issue, str(config["lane"]), config["old"], result, deployment),
+                encoding="utf-8",
+            )
         results.append(result)
 
     after = policy_state(cast, deployment)
