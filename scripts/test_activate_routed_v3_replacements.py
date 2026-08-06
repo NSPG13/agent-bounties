@@ -253,13 +253,53 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         cast.call.return_value = "true"
         create = mock.Mock(return_value="0x" + "41" * 32)
 
-        transaction, remaining = MODULE.create_if_missing(
+        transaction, remaining, created = MODULE.create_if_missing(
             cast, "0x" + "31" * 20, 3, create
         )
 
         self.assertEqual(transaction, "already-canonical")
         self.assertEqual(remaining, 3)
+        self.assertFalse(created)
         create.assert_not_called()
+
+    def test_create_recovers_a_post_broadcast_provider_failure(self) -> None:
+        cast = mock.Mock()
+        cast.call.side_effect = ["false", "true"]
+        create = mock.Mock(side_effect=MODULE.ActivationError("receipt failed"))
+
+        transaction, remaining, created = MODULE.create_if_missing(
+            cast, "0x" + "31" * 20, 3, create, recovery_timeout=0
+        )
+
+        self.assertEqual(transaction, "recovered-canonical")
+        self.assertEqual(remaining, 2)
+        self.assertTrue(created)
+
+    def test_create_preserves_a_pre_broadcast_failure(self) -> None:
+        cast = mock.Mock()
+        cast.call.side_effect = ["false", "false"]
+        create = mock.Mock(side_effect=MODULE.ActivationError("send failed"))
+
+        with self.assertRaisesRegex(MODULE.ActivationError, "send failed"):
+            MODULE.create_if_missing(
+                cast, "0x" + "31" * 20, 3, create, recovery_timeout=0
+            )
+
+    def test_canonical_creation_transaction_requires_one_indexed_hash(self) -> None:
+        transaction = "0x" + "41" * 32
+        reconciliation = {
+            "feed_item": {
+                "events": [
+                    {"kind": "funding_added", "tx_hash": transaction},
+                    {"kind": "canonical_bounty_created", "tx_hash": transaction},
+                ]
+            }
+        }
+        self.assertEqual(
+            MODULE.canonical_creation_transaction(reconciliation), transaction
+        )
+        with self.assertRaisesRegex(MODULE.ActivationError, "missing or ambiguous"):
+            MODULE.canonical_creation_transaction({"feed_item": {"events": []}})
 
     def test_reconciliation_accepts_active_and_canonically_paid_states(self) -> None:
         contract = "0x" + "31" * 20
