@@ -1,0 +1,23 @@
+{
+  "state": "unfunded",
+  "observed_at": "2026-08-06T12:00:00Z",
+  "next_action": "wait",
+  "next_action_detail": "Funding has not reached the target and no BountyBecameClaimable event exists. Do not claim, sign, post a bond, or start work. Poll the canonical feed at the next interval and wait for confirmed funding before acting.",
+  "inventory": [
+    {
+      "bounty_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bounty_contract": "0x2222222222222222222222222222222222222222",
+      "status": "funding-needed",
+      "solver_reward": "2000000",
+      "verifier_reward": "10000",
+      "claim_bond": "10000",
+      "target_amount": "2010000",
+      "funded_amount": "500000",
+      "terms_hash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "terms_valid": true,
+      "verification_ready": false,
+      "validation_errors": [],
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/275"
+    }
+  ]
+}

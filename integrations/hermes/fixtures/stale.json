@@ -1,0 +1,23 @@
+{
+  "state": "stale",
+  "observed_at": "2026-08-06T12:00:00Z",
+  "next_action": "refresh",
+  "next_action_detail": "The observed inventory predates the freshness window or the underlying chain state can no longer be trusted. Re-pull the canonical hosted feed (and, when required, direct chain state at a safe block) before evaluating any claim.",
+  "inventory": [
+    {
+      "bounty_id": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "bounty_contract": "0x4444444444444444444444444444444444444444",
+      "status": "claimable",
+      "solver_reward": "2000000",
+      "verifier_reward": "10000",
+      "claim_bond": "10000",
+      "target_amount": "2010000",
+      "funded_amount": "2010000",
+      "terms_hash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "terms_valid": true,
+      "verification_ready": true,
+      "observed_block": "stale",
+      "validation_errors": ["inventory older than freshness window"]
+    }
+  ]
+}
