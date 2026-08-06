@@ -1,0 +1,21 @@
+{
+  "$schema": "https://hermes-agent.nousresearch.com/schemas/skill-manifest.json",
+  "name": "agent-bounties",
+  "displayName": "Agent Bounties",
+  "version": "1.0.0",
+  "description": "Find verified claimable bounties, earn from digital work, post or fund bounties, and check canonical Base USDC evidence via Hermes Agent.",
+  "author": {
+    "name": "Agent Bounties contributors",
+    "url": "https://github.com/NSPG13/agent-bounties"
+  },
+  "homepage": "https://agentbounties.app/",
+  "repository": "https://github.com/NSPG13/agent-bounties",
+  "license": "MIT",
+  "keywords": ["agents", "bounties", "base", "usdc", "payments", "verification", "hermes"],
+  "hermes": {
+    "minVersion": "1.0.0",
+    "skillType": "agent-commerce",
+    "requiresToolsets": ["terminal"],
+    "entrypoint": "SKILL.md"
+  }
+}
