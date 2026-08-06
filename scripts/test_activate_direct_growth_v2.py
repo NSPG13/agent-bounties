@@ -114,6 +114,54 @@ class DirectGrowthActivationTests(unittest.TestCase):
                     "http://rpc.example,https://rpc.example/ethereum"
                 )
 
+    def test_cast_uint_accepts_foundry_human_suffix(self) -> None:
+        self.assertEqual(activation.cast_uint("8040000 [8.04e6]", "balance"), 8_040_000)
+
+    def test_create_if_missing_skips_an_existing_contract(self) -> None:
+        cast = mock.Mock()
+        cast.call.return_value = "true"
+        result = activation.create_if_missing(
+            cast,
+            "0x" + "11" * 20,
+            "0x" + "22" * 20,
+            "0x" + "33" * 20,
+            "0x1234",
+            "secret",
+            0,
+        )
+        self.assertEqual(result, (None, False))
+        cast.send_data.assert_not_called()
+
+    def test_create_if_missing_recovers_a_broadcast_response_failure(self) -> None:
+        cast = mock.Mock()
+        cast.call.side_effect = ["false", "true"]
+        cast.send_data.side_effect = activation.ActivationError("RPC receipt failed")
+        result = activation.create_if_missing(
+            cast,
+            "0x" + "11" * 20,
+            "0x" + "22" * 20,
+            "0x" + "33" * 20,
+            "0x1234",
+            "secret",
+            0,
+        )
+        self.assertEqual(result, (None, True))
+
+    def test_create_if_missing_preserves_a_real_send_failure(self) -> None:
+        cast = mock.Mock()
+        cast.call.return_value = "false"
+        cast.send_data.side_effect = activation.ActivationError("send failed")
+        with self.assertRaisesRegex(activation.ActivationError, "send failed"):
+            activation.create_if_missing(
+                cast,
+                "0x" + "11" * 20,
+                "0x" + "22" * 20,
+                "0x" + "33" * 20,
+                "0x1234",
+                "secret",
+                0,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
