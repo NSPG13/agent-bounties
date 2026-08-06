@@ -12,6 +12,7 @@ import re
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Mapping, Sequence
 
@@ -144,6 +145,39 @@ def http_json(method: str, url: str, body: Mapping[str, object] | None = None) -
         return json.loads(raw)
     except json.JSONDecodeError as error:
         raise ActivationError(f"{method} {url} returned invalid JSON") from error
+
+
+def rpc_chain_id(url: str) -> int:
+    request = urllib.request.Request(
+        url,
+        data=b'{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}',
+        method="POST",
+        headers={
+            "content-type": "application/json",
+            "user-agent": "agent-bounties-direct-growth/2",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return int(str(payload.get("result", "")), 16)
+
+
+def select_rpc_url(value: str) -> str:
+    candidates = [
+        candidate.strip() for candidate in value.split(",") if candidate.strip()
+    ]
+    for candidate in candidates:
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.scheme != "https" or not parsed.netloc:
+            continue
+        try:
+            if rpc_chain_id(candidate) == 8453:
+                return candidate
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    raise ActivationError(
+        "no configured HTTPS RPC endpoint returned Base chain ID 8453"
+    )
 
 
 class Cast:
@@ -685,6 +719,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     args.api = args.api.rstrip("/")
+    args.rpc_url = select_rpc_url(args.rpc_url)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     report = activate(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
