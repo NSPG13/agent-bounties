@@ -1,0 +1,23 @@
+{
+  "state": "submitted-not-paid",
+  "observed_at": "2026-08-06T12:00:00Z",
+  "next_action": "verify",
+  "next_action_detail": "A submission exists but no canonical BountySettled event names the solver. Do not report paid. Confirm canonical events (SubmissionAdded, verification result) and wait for BountySettled before claiming payment.",
+  "inventory": [
+    {
+      "bounty_id": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "bounty_contract": "0x6666666666666666666666666666666666666666",
+      "status": "submitted",
+      "solver_reward": "2000000",
+      "verifier_reward": "10000",
+      "claim_bond": "10000",
+      "target_amount": "2010000",
+      "funded_amount": "2010000",
+      "terms_valid": true,
+      "verification_ready": true,
+      "submission_added": true,
+      "settled": false,
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/275"
+    }
+  ]
+}

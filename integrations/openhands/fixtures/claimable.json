@@ -1,0 +1,22 @@
+{
+  "state": "claimable",
+  "observed_at": "2026-08-06T12:00:00Z",
+  "next_action": "claim",
+  "next_action_detail": "Canonical bounty is claimable with verification_ready true. Follow the exact claim handoff (GitHub /claim #ISSUE wallet: 0x... or hosted agent_native_claim), sign only the bounded request, then solve and open a focused PR.",
+  "inventory": [
+    {
+      "bounty_id": "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb",
+      "bounty_contract": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+      "status": "claimable",
+      "solver_reward": "2000000",
+      "verifier_reward": "10000",
+      "claim_bond": "10000",
+      "target_amount": "2010000",
+      "funded_amount": "2010000",
+      "terms_valid": true,
+      "verification_ready": true,
+      "verification_mode": "signed_quorum",
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/772"
+    }
+  ]
+}
