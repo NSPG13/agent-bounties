@@ -65,6 +65,10 @@ def main() -> None:
     if not guard_path.is_file():
         fail("missing .openhands/hooks/agent-bounties-evidence.py")
     guard = guard_path.read_text(encoding="utf-8")
+    try:
+        compile(guard, str(guard_path), "exec")
+    except SyntaxError as error:
+        fail(f"evidence guard has a syntax error: {error}")
     guard_lower = guard.lower()
     for phrase in ("submission", "evidence", "test", "decision", "deny"):
         if phrase not in guard_lower:

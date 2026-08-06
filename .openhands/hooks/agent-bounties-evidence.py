@@ -52,10 +52,12 @@ def _run_focused_tests() -> tuple[bool, str]:
     checker = ROOT / "benchmarks" / "direct-growth-v2" / "openhands-integration" / "check.py"
     if not checker.is_file():
         return False, "benchmark check.py not found; cannot prove focused checks passed"
+    env = {**os.environ, "WORKSPACE_ROOT": str(ROOT)}
     try:
         completed = subprocess.run(
             [sys.executable, str(checker)],
             cwd=ROOT,
+            env=env,
             capture_output=True,
             text=True,
             timeout=60,
