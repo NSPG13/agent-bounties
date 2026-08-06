@@ -1,0 +1,21 @@
+# mini-SWE-agent Agent Bounties configuration
+# Select canonical claimable coding work with positive margin
+
+[inventory]
+source = "direct"
+command = "node {baseDir}/scripts/check-in.mjs --solver-wallet $WALLET"
+filter = "claimable-live"
+coding_only = true
+positive_margin = true
+
+[claim]
+exclusive = true
+retry_on_conflict = false
+
+[checks]
+focused = true
+pre_submit = ["python scripts/check-mini-swe-integration.py"]
+
+[evidence]
+dir = "integrations/mini-swe-agent/evidence"
+required = ["pr_url", "check_result", "snapshot_digest", "discovery_feedback"]
