@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("register_participant.py")
@@ -70,6 +71,43 @@ class RegisterParticipantTests(unittest.TestCase):
             registration.validate_eligibility(
                 [participant_id, source_hash, False], participant_id, source_hash
             )
+
+    def test_rpc_configuration_accepts_ordered_fallbacks_and_skips_bad_entries(self) -> None:
+        configured = (
+            "https://first.example/rpc, https//malformed.example/rpc, "
+            "https://second.example/rpc, https://first.example/rpc"
+        )
+        self.assertEqual(
+            registration.parse_rpc_urls(configured),
+            ["https://first.example/rpc", "https://second.example/rpc"],
+        )
+
+    def test_rpc_configuration_requires_a_credential_free_https_endpoint(self) -> None:
+        for configured in ("", "http://base.example/rpc", "https://user:pass@base.example/rpc"):
+            with self.subTest(configured=configured), self.assertRaises(registration.RegistrationError):
+                registration.parse_rpc_urls(configured)
+
+    def test_rpc_selection_uses_first_endpoint_that_reports_base_mainnet(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str]) -> str:
+            calls.append(command)
+            endpoint = command[-1]
+            if endpoint == "https://down.example/rpc":
+                raise registration.RegistrationError("endpoint unavailable")
+            if endpoint == "https://wrong-chain.example/rpc":
+                return "1"
+            return registration.BASE_CHAIN_ID
+
+        with patch.object(registration, "run", side_effect=fake_run):
+            selected = registration.select_base_rpc(
+                "cast",
+                "https://down.example/rpc,https://wrong-chain.example/rpc,https://base.example/rpc",
+            )
+
+        self.assertEqual(selected, "https://base.example/rpc")
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(call[1:3] == ["chain-id", "--rpc-url"] for call in calls))
 
     def test_post_receipt_error_preserves_transaction_evidence(self) -> None:
         error = registration.RegistrationError(
