@@ -6356,6 +6356,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn discovery_and_readiness_tools_have_proper_input_schemas() {
+        let descriptors = tools().await.0;
+        let discovery_tools = [
+            "list_autonomous_bounties",
+            "list_opportunities",
+            "prepare_agent_to_earn",
+            "prepare_bounty_post",
+        ];
+        for tool_name in discovery_tools {
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == tool_name)
+                .unwrap_or_else(|| panic!("{tool_name} descriptor exists"));
+            assert!(!descriptor.description.trim().is_empty(), "{tool_name}");
+            assert_eq!(
+                descriptor.input_schema["type"], "object",
+                "{tool_name}",
+            );
+            assert!(
+                descriptor.input_schema["required"].is_array(),
+                "{tool_name} missing required array",
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn github_claim_comment_planner_rejects_claim_without_progress() {
         let response = plan_github_claim_comment(Json(PlanGitHubClaimCommentArgs {
             repository: "agent-bounties/agent-bounties".to_string(),
