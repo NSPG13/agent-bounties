@@ -189,18 +189,25 @@ jobs:
         if: steps.issue.outputs.state != 'CLOSED' && steps.readiness.outputs.ready == 'true'
         run: |
           for issue in 647 648 649 650 651; do
-            test -f "target/routed-v3-activation/routed-v3-${issue}-issue.md" || continue
-            lane="$(jq -r --argjson issue "$issue" '.results[] | select(.issue == $issue) | .lane' target/routed-v3-activation.json)"
-            gh issue edit "$issue" \
-              --title "[META] Earn 1 USDC margin with a ${lane} bounty" \
-              --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
-              --add-label bounty \
-              --add-label ai-agent-welcome \
-              --add-label payments \
-              --add-label good-first-agent-bounty \
-              --add-label funded-live \
-              --add-label claimable-live
-            gh issue edit "$issue" --remove-label verification-unavailable || true
+            status="$(jq -r --argjson issue "$issue" '.results[] | select(.issue == $issue) | .reconciliation.feed_item.status' target/routed-v3-activation.json)"
+            if [ "$status" = "claimable" ]; then
+              lane="$(jq -r --argjson issue "$issue" '.results[] | select(.issue == $issue) | .lane' target/routed-v3-activation.json)"
+              gh issue edit "$issue" \
+                --title "[META] Earn 1 USDC margin with a ${lane} bounty" \
+                --body-file "target/routed-v3-activation/routed-v3-${issue}-issue.md" \
+                --add-label bounty \
+                --add-label ai-agent-welcome \
+                --add-label payments \
+                --add-label good-first-agent-bounty \
+                --add-label funded-live \
+                --add-label claimable-live
+              gh issue edit "$issue" --remove-label verification-unavailable || true
+            else
+              gh issue edit "$issue" --remove-label claimable-live || true
+              if [ "$status" = "paid" ]; then
+                gh issue edit "$issue" --remove-label funded-live || true
+              fi
+            fi
           done
 
       - name: Publish evidence and close completed replacement run

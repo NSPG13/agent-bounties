@@ -261,7 +261,7 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         self.assertEqual(remaining, 3)
         create.assert_not_called()
 
-    def test_reconciliation_accepts_every_active_state_and_fails_closed(self) -> None:
+    def test_reconciliation_accepts_active_and_canonically_paid_states(self) -> None:
         contract = "0x" + "31" * 20
         bounty_id = "0x" + "32" * 32
         events = [
@@ -288,10 +288,29 @@ class ActivateRoutedV3Tests(unittest.TestCase):
                 result = MODULE.reconcile("https://api.example", contract, bounty_id, 1)
                 self.assertEqual(result["feed_item"]["status"], status)
 
+        paid_events = [*events, {"kind": "bounty_settled"}]
+        with mock.patch.object(
+            MODULE,
+            "http_json",
+            side_effect=[
+                paid_events,
+                [
+                    {
+                        "bounty_contract": contract,
+                        "status": "paid",
+                        "terms_valid": True,
+                        "verification_ready": False,
+                    }
+                ],
+            ],
+        ):
+            result = MODULE.reconcile("https://api.example", contract, bounty_id, 1)
+            self.assertEqual(result["feed_item"]["status"], "paid")
+
         failures = [
             {"status": "claimable", "terms_valid": False, "verification_ready": True},
             {"status": "claimable", "terms_valid": True, "verification_ready": False},
-            {"status": "settled", "terms_valid": True, "verification_ready": True},
+            {"status": "paid", "terms_valid": True, "verification_ready": True},
         ]
         for item in failures:
             item["bounty_contract"] = contract
