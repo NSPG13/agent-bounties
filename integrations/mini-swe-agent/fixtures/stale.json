@@ -1,0 +1,14 @@
+{
+  "observed_at": "2026-08-06T12:00:00Z",
+  "inventory": [
+    {
+      "bounty_id": "B-2001",
+      "title": "Update integration tests",
+      "claimable": true,
+      "verification_ready": true,
+      "margin_usdc": "1.25",
+      "funding_updated_at": "2026-08-06T09:00:00Z",
+      "exclusive_claimant": null
+    }
+  ]
+}

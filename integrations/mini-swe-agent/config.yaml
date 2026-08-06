@@ -1,0 +1,47 @@
+# mini-SWE-agent paid-work environment configuration
+#
+# This environment lets a minimal software engineering agent select exactly one
+# canonically claimable coding bounty and emit verification-ready evidence
+# without exposing wallet credentials.
+
+environment:
+  name: mini-swe-agent
+  version: v1
+  runtime: python3
+  entrypoint: select_bounty.py
+
+inventory:
+  source: hosted-canonical-inventory
+  mode: direct argv
+  command: "select_bounty.py --input <fixture>"
+  freshness_window_seconds: 3600
+
+claim:
+  required: true
+  priority: highest-margin
+  respects_exclusive_claimants: true
+  wallet: external-signer-only
+  signing: never-in-process
+
+evidence:
+  required: true
+  fields:
+    - repository
+    - commit
+    - command
+    - source_snapshot_digest
+    - discovery_source
+  packaging: single-json-evidence
+
+settlement:
+  proof: canonical-bountysettled-event-only
+  broadcast: not-settlement
+  verifier: sandboxed_regression_v1
+
+policy:
+  # Selection rules for the inventory -> action decision.
+  empty_inventory: wait
+  stale_inventory: refresh
+  no_positive_margin: skip
+  exclusive_claimant: skip
+  eligible_work: claim

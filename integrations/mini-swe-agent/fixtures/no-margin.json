@@ -1,0 +1,23 @@
+{
+  "observed_at": "2026-08-06T12:00:00Z",
+  "inventory": [
+    {
+      "bounty_id": "B-3001",
+      "title": "Large refactor",
+      "claimable": true,
+      "verification_ready": true,
+      "margin_usdc": "-0.25",
+      "funding_updated_at": "2026-08-06T11:30:00Z",
+      "exclusive_claimant": null
+    },
+    {
+      "bounty_id": "B-3002",
+      "title": "Unfunded placeholder",
+      "claimable": false,
+      "verification_ready": false,
+      "margin_usdc": "0.00",
+      "funding_updated_at": "2026-08-06T11:00:00Z",
+      "exclusive_claimant": null
+    }
+  ]
+}
