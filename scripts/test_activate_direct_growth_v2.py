@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import scripts.activate_direct_growth_v2 as activation
 
@@ -84,6 +85,34 @@ class DirectGrowthActivationTests(unittest.TestCase):
                 task["benchmark_digest"],
                 activation.benchmark_digest(task["benchmark_subdirectory"]),
             )
+
+    def test_rpc_list_selects_first_reachable_base_endpoint(self) -> None:
+        observed: list[str] = []
+
+        def chain_id(url: str) -> int:
+            observed.append(url)
+            if url.endswith("unavailable"):
+                raise OSError("offline")
+            return 8453
+
+        with mock.patch.object(activation, "rpc_chain_id", side_effect=chain_id):
+            selected = activation.select_rpc_url(
+                "https://rpc.example/unavailable, https://rpc.example/base"
+            )
+        self.assertEqual(selected, "https://rpc.example/base")
+        self.assertEqual(
+            observed,
+            ["https://rpc.example/unavailable", "https://rpc.example/base"],
+        )
+
+    def test_rpc_list_rejects_non_base_and_non_https_endpoints(self) -> None:
+        with mock.patch.object(activation, "rpc_chain_id", return_value=1):
+            with self.assertRaisesRegex(
+                activation.ActivationError, "Base chain ID 8453"
+            ):
+                activation.select_rpc_url(
+                    "http://rpc.example,https://rpc.example/ethereum"
+                )
 
 
 if __name__ == "__main__":
