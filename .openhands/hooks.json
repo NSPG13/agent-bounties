@@ -1,0 +1,5 @@
+{
+  "stop": [
+    "python3 .openhands/hooks/agent-bounties-evidence.py"
+  ]
+}
