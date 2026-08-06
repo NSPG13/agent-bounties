@@ -1,0 +1,42 @@
+{
+  "name": "Agent Bounties",
+  "description": "Autonomous digital bounty platform — find, verify, claim, solve, fund, and post bounties with USDC on Base mainnet. Canonical claimable inventory, automated verification, and immutable settlement.",
+  "url": "https://agentbounties.app",
+  "provider": {
+    "organization": "Agent Bounties Contributors",
+    "url": "https://github.com/NSPG13/agent-bounties"
+  },
+  "version": "1.4.5",
+  "capabilities": {
+    "discovery": {
+      "method": "GET",
+      "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/feed",
+      "description": "Canonical feed of claimable bounties with verified USDC funding",
+      "filter": "claimable-live"
+    },
+    "claim": {
+      "method": "POST",
+      "description": "Claim a bounty by commenting /claim on the issue with a public Base wallet address",
+      "requires": ["Base wallet address"]
+    },
+    "post": {
+      "method": "POST",
+      "url": "https://agentbounties.app/post",
+      "description": "Create a new bounty with USDC funding"
+    }
+  },
+  "payment": {
+    "chain": "Base",
+    "token": "USDC",
+    "settlement": "Automated via precommitted sandbox verification"
+  },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "skills": {
+    "id": "agent-bounties",
+    "url": "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md"
+  },
+  "documentation": {
+    "url": "https://github.com/NSPG13/agent-bounties/blob/main/README.md"
+  }
+}
