@@ -30,6 +30,7 @@ FACTORY = durable.CANONICAL_FACTORY
 USDC = durable.NATIVE_USDC
 TARGET = durable.PARENT_TARGET
 TOTAL = durable.TOTAL_REPLACEMENT_FUNDING
+BROADCAST_RECOVERY_TIMEOUT = 60
 ISSUES = {
     333: {"lane": "CLI", "old": "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562"},
     335: {"lane": "MCP", "old": "0x43d42cb227d76588ab16693f14efd6cff851fa7a"},
@@ -337,22 +338,57 @@ def reconcile(api: str, contract: str, bounty_id: str, timeout_seconds: int = 18
     raise ActivationError(f"canonical activation did not reconcile for {contract}")
 
 
+def is_canonical(cast: Cast, predicted: str) -> bool:
+    return parse_bool(
+        cast.call(FACTORY, "isCanonicalBounty(address)(bool)", predicted),
+        "canonical bounty state",
+    )
+
+
+def wait_for_canonical(cast: Cast, predicted: str, timeout_seconds: int) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if is_canonical(cast, predicted):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(2)
+
+
 def create_if_missing(
     cast: Cast,
     predicted: str,
     spend_available: int,
     create: Callable[[], str],
-) -> tuple[str | None, int]:
-    canonical = parse_bool(
-        cast.call(FACTORY, "isCanonicalBounty(address)(bool)", predicted),
-        "canonical bounty state",
-    )
-    if canonical:
-        return "already-canonical", spend_available
+    recovery_timeout: int = BROADCAST_RECOVERY_TIMEOUT,
+) -> tuple[str | None, int, bool]:
+    if is_canonical(cast, predicted):
+        return "already-canonical", spend_available, False
     if spend_available <= 0:
-        return None, spend_available
-    transaction_hash = bytes32(create(), "creation transaction hash")
-    return transaction_hash, spend_available - 1
+        return None, spend_available, False
+    try:
+        transaction_hash = bytes32(create(), "creation transaction hash")
+    except ActivationError:
+        # A provider may accept a transaction and fail while polling its receipt.
+        # The deterministic canonical contract is the authoritative postcondition.
+        if wait_for_canonical(cast, predicted, recovery_timeout):
+            return "recovered-canonical", spend_available - 1, True
+        raise
+    return transaction_hash, spend_available - 1, True
+
+
+def canonical_creation_transaction(reconciliation: Mapping[str, object]) -> str:
+    feed_item = reconciliation.get("feed_item")
+    events = feed_item.get("events") if isinstance(feed_item, Mapping) else None
+    matches = {
+        str(event.get("tx_hash", "")).lower()
+        for event in events or []
+        if isinstance(event, Mapping) and event.get("kind") == "canonical_bounty_created"
+    }
+    valid = {value for value in matches if BYTES32_RE.fullmatch(value)}
+    if len(valid) != 1:
+        raise ActivationError("canonical creation transaction evidence is missing or ambiguous")
+    return valid.pop()
 
 
 def issue_body(
@@ -509,13 +545,17 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             )
             return str(sent.get("transactionHash") or sent.get("transaction_hash"))
 
-        tx_hash, spend_available = create_if_missing(
+        tx_hash, spend_available, created_now = create_if_missing(
             cast, predicted, spend_available, create_bounty
         )
         if tx_hash is None:
             pending.append(issue)
             continue
         reconciled = reconcile(args.api, predicted, bounty_id)
+        indexed_transaction = canonical_creation_transaction(reconciled)
+        if BYTES32_RE.fullmatch(tx_hash) and tx_hash != indexed_transaction:
+            raise ActivationError(f"issue #{issue} broadcast and indexed transactions differ")
+        tx_hash = indexed_transaction
         result = {
             "issue": issue,
             "lane": config["lane"],
@@ -523,6 +563,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "contract": predicted,
             "bounty_id": bounty_id,
             "transaction_hash": tx_hash,
+            "created_now": created_now,
             "terms_hash": bytes32(published.get("terms_hash"), f"issue #{issue} terms hash"),
             "policy_hash": deployment["policy_hash"],
             "reconciliation": reconciled,
@@ -535,7 +576,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         results.append(result)
 
     after = policy_state(cast, deployment)
-    newly_created = sum(1 for item in results if item["transaction_hash"] != "already-canonical")
+    newly_created = sum(1 for item in results if item["created_now"])
     expected_spend = newly_created * TARGET
     if before["lifetime_spent"] + expected_spend != after["lifetime_spent"]:
         raise ActivationError("wallet lifetime spend did not increase by the exact newly-created amount")
