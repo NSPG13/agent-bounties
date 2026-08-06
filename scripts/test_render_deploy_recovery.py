@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+import urllib.parse
 from unittest import mock
 
 
@@ -408,6 +409,19 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(recovery.RecoveryError):
                 recovery.normalize_public_base_url("PUBLIC_BASE_URL", value)
 
+    def test_public_base_urls_reject_non_canonical_public_origins(self) -> None:
+        for name, value in (
+            ("PUBLIC_BASE_URL", "https://agentbounties.app"),
+            ("PUBLIC_BASE_URL", "https://api.bountyboard.global"),
+            ("MCP_BASE_URL", "https://api.agentbounties.app"),
+            ("MCP_BASE_URL", "https://mcp.bountyboard.global"),
+            ("WEBSITE_BASE_URL", "https://mcp.agentbounties.app"),
+            ("WEBSITE_BASE_URL", "https://stale.agentbounties.app"),
+        ):
+            with self.subTest(name=name, value=value):
+                with self.assertRaises(recovery.RecoveryError):
+                    recovery.normalize_public_base_url(name, value)
+
     def test_public_environment_includes_website_origin(self) -> None:
         self.assertEqual(
             recovery.public_environment_values(
@@ -421,6 +435,21 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 "WEBSITE_BASE_URL": "https://agentbounties.app",
             },
         )
+
+    def test_generated_links_are_canonical_only(self) -> None:
+        env = recovery.public_environment_values(
+            "https://api.agentbounties.app/",
+            "https://mcp.agentbounties.app/",
+            "https://agentbounties.app/",
+        )
+        generated = {
+            "analytics": f"{env['PUBLIC_BASE_URL']}/v1/analytics",
+            "discovery": f"{env['WEBSITE_BASE_URL']}/v1/discovery",
+            "redirect": f"{env['MCP_BASE_URL']}/mcp",
+        }
+        for name, value in generated.items():
+            hostname = urllib.parse.urlsplit(value).hostname
+            self.assertIn(hostname, recovery.CANONICAL_ORIGINS, name)
 
     def test_api_runtime_environment_enables_social_mention_drafts(self) -> None:
         self.assertEqual(
