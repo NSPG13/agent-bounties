@@ -1,0 +1,10 @@
+{
+  "fixture": "unfunded",
+  "status": "funding-needed",
+  "action": "This bounty needs funding before work can begin. Fund it or skip to claimable ones.",
+  "example": {
+    "title": "Example unfunded bounty",
+    "reward": "0.00 USDC (unfunded)",
+    "note": "Crowdfunding opportunity — add USDC to unlock"
+  }
+}
