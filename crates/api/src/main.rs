@@ -1718,6 +1718,10 @@ async fn main() -> anyhow::Result<()> {
             get(agent_bounties_discovery),
         )
         .route("/.well-known/x402.json", get(x402_discovery))
+        .route(
+            "/.well-known/agent-card.json",
+            get(agent_card),
+        )
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5208,6 +5212,39 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]
 async fn risk_policy() -> Json<RiskPolicyDescriptor> {
     Json(RiskPolicy::default().descriptor())
+}
+
+/// A2A 1.0 Agent Card served for machine discovery.
+///
+/// The card is immutable per release and is served with explicit
+/// cache-control and etag headers so A2A clients can cache it between
+/// on-chain changes. Content mirrors `fixtures/a2a-agent-card.json`; all
+/// capability URLs resolve to the canonical HTTPS API and preserve the
+/// canonical funding and settlement evidence boundaries (claimable feed
+/// states, BountySettled settlement proof).
+#[utoipa::path(get, path = "/.well-known/agent-card.json", responses((status = 200, description = "A2A 1.0 Agent Card")))]
+async fn agent_card() -> (axum::http::StatusCode, axum::http::HeaderMap, Json<serde_json::Value>) {
+    use axum::http::header::{CACHE_CONTROL, ETAG};
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let card: serde_json::Value =
+        serde_json::from_str(include_str!("../../../fixtures/a2a-agent-card.json"))
+            .expect("embedded Agent Card fixture must parse");
+    let body = serde_json::to_vec(&card).expect("Agent Card must serialize");
+
+    let mut hasher = DefaultHasher::new();
+    body.hash(&mut hasher);
+    let etag = format!("\"{:016x}\"", hasher.finish());
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    headers.insert(ETAG, HeaderValue::from_str(&etag).expect("etag must be a valid header value"));
+
+    (StatusCode::OK, headers, Json(card))
 }
 
 #[utoipa::path(
