@@ -1,0 +1,6 @@
+{
+  "schema_version": "agent-bounties/inventory-v1",
+  "status": "exclusive_claimant",
+  "exclusive_claimant": "0x1111111111111111111111111111111111111111",
+  "items": []
+}

@@ -1,0 +1,30 @@
+version: "1.0.0"
+environment:
+  name: "mini-swe-agent-paid-work"
+  type: "sandboxed_regression_v1"
+
+workflow:
+  inventory:
+    source: "canonical_base"
+    mode: "direct argv"
+    scan_interval_seconds: 60
+  
+  claim:
+    policy: "positive_margin_only"
+    respect_exclusive_claimant: true
+    bounded_claim_request: true
+  
+  evidence:
+    packaging: "tarball_v1"
+    required_fields:
+      - repository
+      - commit
+      - command
+      - snapshot_digest
+      - discovery_feedback
+
+  settlement:
+    network: "base_mainnet"
+    asset: "USDC"
+    contract: "0x8e242a9397b14255f5c426032b202ca04ee2bfae"
+    event_trigger: "BountySettled"

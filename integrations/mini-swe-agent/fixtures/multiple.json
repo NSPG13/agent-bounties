@@ -1,0 +1,13 @@
+{
+  "schema_version": "agent-bounties/inventory-v1",
+  "status": "multiple_opportunities",
+  "items": [
+    {
+      "id": "bounty-774",
+      "work_state": "claimable",
+      "gross_cash_margin_positive": true,
+      "exclusive_claimant": null,
+      "stale": false
+    }
+  ]
+}
