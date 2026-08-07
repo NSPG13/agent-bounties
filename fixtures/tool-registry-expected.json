@@ -1,0 +1,16 @@
+{
+  "schema": "agent-bounties/tool-registry-fixture-v1",
+  "transport": "mcp",
+  "required_readonly_tools": [
+    "list_autonomous_bounties",
+    "list_opportunities"
+  ],
+  "required_readiness_tools": [
+    "prepare_agent_to_earn",
+    "prepare_bounty_post"
+  ],
+  "endpoints": {
+    "mcp_transport": "/mcp",
+    "json_tool_inventory": "/api/tools"
+  }
+}
