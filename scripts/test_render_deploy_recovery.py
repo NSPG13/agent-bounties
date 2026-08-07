@@ -809,7 +809,16 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         client = RecordingClient()
         group = env_group_record()
         expected = {"envVar": {"key": "SAFE_GATE", "value": "false"}}
-        responses = [recovery.RenderHttpError(404, "missing"), expected, expected]
+        updated_group = {
+            "envGroup": env_group_record(
+                envVars=[{"key": "SAFE_GATE", "value": "false"}]
+            )
+        }
+        responses = [
+            recovery.RenderHttpError(404, "missing"),
+            updated_group,
+            expected,
+        ]
         with mock.patch.object(
             client, "_request_json", side_effect=responses
         ) as request:

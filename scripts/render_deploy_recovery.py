@@ -515,6 +515,26 @@ def unwrap_env_group(payload: object) -> dict[str, Any]:
     return group
 
 
+def env_group_env_var(payload: object, key: str) -> dict[str, str]:
+    group = unwrap_env_group(payload)
+    env_vars = group.get("envVars")
+    if not isinstance(env_vars, list):
+        raise RecoveryError("Render environment group is missing environment variables")
+    matches = [
+        item
+        for item in env_vars
+        if isinstance(item, dict) and item.get("key") == key
+    ]
+    if len(matches) != 1:
+        raise RecoveryError(
+            f"Render environment group returned {len(matches)} values for {key}"
+        )
+    value = matches[0].get("value")
+    if not isinstance(value, str):
+        raise RecoveryError(f"Render environment group returned an invalid value for {key}")
+    return {"key": key, "value": value}
+
+
 def env_group_has_service(
     payload: object,
     spec: ServiceSpec,
@@ -905,8 +925,8 @@ class RenderClient:
             if error.status != 404:
                 raise
         if changed:
-            updated = unwrap_env_var(
-                self._write_with_retry("PUT", path, {"value": value})
+            updated = env_group_env_var(
+                self._write_with_retry("PUT", path, {"value": value}), key
             )
             if updated != {"key": key, "value": value}:
                 raise RecoveryError(
