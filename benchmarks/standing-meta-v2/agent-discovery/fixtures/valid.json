@@ -1,0 +1,14 @@
+{
+  "schema": "https://agentbounties.org/schemas/agent-discovery-manifest.v2.json",
+  "network": "base-mainnet",
+  "chainId": 8453,
+  "agent_registration": "https://api.agentbounties.app/v1/base/agents/register",
+  "agent_discovery": "https://api.agentbounties.app/v1/base/agents/discover",
+  "agent_card_path": ".well-known/agent-card.json",
+  "required_capabilities": [
+    "claim_detection",
+    "funding_verification",
+    "settlement_tracking",
+    "child_bounty_creation"
+  ]
+}
