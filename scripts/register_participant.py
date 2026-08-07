@@ -113,13 +113,23 @@ def parse_rpc_urls(value: str) -> list[str]:
     return endpoints
 
 
-def select_base_rpc(cast: str, configured: str) -> str:
-    """Probe ordered RPC fallbacks and commit to one Base-mainnet endpoint."""
+def select_base_rpc(cast: str, configured: str, registry: str) -> str:
+    """Probe ordered RPC fallbacks and commit to one usable Base endpoint.
+
+    A cheap chain-id probe is insufficient: public endpoints may report Base
+    while refusing the contract reads registration needs. Require one real
+    participant-registry read before selecting an endpoint.
+    """
 
     endpoints = parse_rpc_urls(configured)
     for endpoint in endpoints:
         try:
-            if run([cast, "chain-id", "--rpc-url", endpoint]) == BASE_CHAIN_ID:
+            if run([cast, "chain-id", "--rpc-url", endpoint]) != BASE_CHAIN_ID:
+                continue
+            attester = run(
+                [cast, "call", "--rpc-url", endpoint, registry, "attester()(address)"]
+            ).lower()
+            if ADDRESS.fullmatch(attester):
                 return endpoint
         except RegistrationError:
             continue
@@ -169,7 +179,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     if not attester_key or not keeper_key:
         raise RegistrationError("participant attester and keeper capabilities are required")
     cast = str(args.cast)
-    rpc_url = select_base_rpc(cast, str(args.rpc_url))
+    rpc_url = select_base_rpc(cast, str(args.rpc_url), registry)
     attester = run([cast, "wallet", "address", "--private-key", attester_key]).lower()
     configured = run([cast, "call", "--rpc-url", rpc_url, registry, "attester()(address)"]).lower()
     if attester != configured:
@@ -260,7 +270,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
                         "call",
                         "--json",
                         "--rpc-url",
-                        args.rpc_url,
+                        rpc_url,
                         registry,
                         "eligibleAt(address,uint64)(bytes32,bytes32,bool)",
                         request.wallet,
