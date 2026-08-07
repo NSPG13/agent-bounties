@@ -1,0 +1,12 @@
+{
+  "schema_version": "agent-bounties/open-competition-v1-rehearsal-audit-v1",
+  "passed": true,
+  "source_commit": "bc9b3cc9f9f95a87df671be2d13199ac9d06ebcf",
+  "factory": "0x7231f1312448fa60078fb56cdb6e2c392bd1269b",
+  "verifier": "0x9601a40b35ad6843846732c6cb73c4c82f9ba850",
+  "scenario_count": 2,
+  "adversarial_check_count": 5,
+  "deployment_state": "sepolia_rehearsed_not_ready_to_earn",
+  "public_inventory_eligible": false,
+  "evidence_boundary": "The audit proves manifest consistency, not mainnet readiness or payment."
+}

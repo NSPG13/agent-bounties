@@ -84,6 +84,7 @@ def audit(bundle: dict[str, Any], rehearsal: dict[str, Any]) -> dict[str, Any]:
         require(document.get("deployer") == ADMIN, "deployer must be the frozen admin")
         require(document.get("settlement_token") == USDC, "settlement token must be native Base Sepolia USDC")
     require(rehearsal.get("deployment_state") == "sepolia_rehearsed_not_ready_to_earn", "rehearsal deployment state is invalid")
+    require(rehearsal.get("public_inventory_eligible") is False, "rehearsal must remain outside public inventory")
     require(bundle.get("source_commit") == rehearsal.get("source_commit"), "source commit changed after bytecode freeze")
     require(bundle.get("compiler") == rehearsal.get("compiler"), "compiler settings changed after bytecode freeze")
     require(re.fullmatch(r"[0-9a-f]{40}", str(rehearsal.get("source_commit", ""))) is not None, "source commit must be full lowercase SHA")

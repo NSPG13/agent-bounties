@@ -47,7 +47,9 @@ wallets through EIP-6963 and defaults to the announced MetaMask provider. The
 operator selects a provider, after which the console accepts only the frozen
 bundle, exact admin account, and Base Sepolia chain. It verifies the pending
 nonce and predicted addresses, displays each exact transaction, and records
-receipts. Never paste a seed phrase or private key into the page.
+receipts. If an earlier action was confirmed before an interruption, the signer
+resumes only after the public RPC returns the exact frozen runtime at every
+consumed nonce. Never paste a seed phrase or private key into the page.
 
 ## Sepolia Rehearsal
 
@@ -65,6 +67,30 @@ recovery. The manifest must include deployment and scenario transaction
 hashes, blocks, events, runtime hashes, balance deltas, compiler settings, and
 the source commit.
 
+Start the runner before funding. It creates the actors, writes a temporary
+recovery file outside the repository, and emits the exact bounded funding
+request:
+
+```text
+python scripts/run_open_competition_v1_sepolia_rehearsal.py \
+  --bundle target/open-competition-v1/base-sepolia-deployment-bundle.json \
+  --verifier-tx <verifier-deployment-transaction> \
+  --factory-tx <factory-deployment-transaction> \
+  --funding-request target/open-competition-v1/base-sepolia-rehearsal-funding.json \
+  --output target/open-competition-v1/base-sepolia-rehearsal.json
+```
+
+Serve `scripts/open-competition-v1-rehearsal-funding.html` from the repository
+root. It accepts only the emitted request, the frozen admin, Base Sepolia,
+exactly 0.0005 ETH, and exactly 0.5 native test USDC. After both canonical
+balances match, continue the waiting runner. If the runner is interrupted,
+resume with `--recovery-file <temporary-path>`; do not create new actors or
+fund them again. If an already-settled rehearsal stopped before a losing-bond
+withdrawal, also pass `--reclaim-bounty <canonical-bounty-address>` so the
+runner recovers the bond and restores exact actor allocations before retrying.
+The temporary recovery file is deleted only after the final manifest is
+written successfully.
+
 Validate the evidence against the versioned schema:
 
 ```text
@@ -76,6 +102,9 @@ python scripts/audit_open_competition_v1_rehearsal.py \
 
 Only a passing audit may advance the release to
 `sepolia_rehearsed_not_ready_to_earn`.
+
+Publish the secret-free deployment bundle, rehearsal manifest, and audit under
+`deployments/` for review. Never publish the temporary recovery file.
 
 ## Mainnet Canary And Activation
 

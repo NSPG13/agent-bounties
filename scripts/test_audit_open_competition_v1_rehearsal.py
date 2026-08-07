@@ -68,6 +68,7 @@ def fixtures() -> tuple[dict, dict]:
         "network": "base-sepolia",
         "chain_id": 84532,
         "deployment_state": "sepolia_rehearsed_not_ready_to_earn",
+        "public_inventory_eligible": False,
         "source_commit": "a" * 40,
         "compiler": compiler,
         "deployer": MODULE.ADMIN,
@@ -128,6 +129,12 @@ class RehearsalAuditTests(unittest.TestCase):
         bundle, rehearsal = fixtures()
         rehearsal["deployments"]["factory"]["runtime_code_hash"] = hash_of("d")
         with self.assertRaisesRegex(MODULE.RehearsalAuditError, "factory runtime hash mismatch"):
+            MODULE.audit(bundle, rehearsal)
+
+    def test_public_inventory_activation_fails_closed(self) -> None:
+        bundle, rehearsal = fixtures()
+        rehearsal["public_inventory_eligible"] = True
+        with self.assertRaisesRegex(MODULE.RehearsalAuditError, "outside public inventory"):
             MODULE.audit(bundle, rehearsal)
 
     def test_secret_bearing_fields_are_rejected(self) -> None:

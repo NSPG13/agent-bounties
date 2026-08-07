@@ -5,12 +5,17 @@
   const EXPECTED_PROTOCOL = "agent-bounties/open-competition-v1";
   const EXPECTED_CHAIN = "0x14a34";
   const EXPECTED_ADMIN = "0x884834e884d6e93462655a2820140ad03e6747bc";
+  const READ_RPC_URLS = [
+    "https://sepolia.base.org",
+    "https://base-sepolia-rpc.publicnode.com",
+  ];
   const $ = (id) => document.getElementById(id);
   let bundle;
   let account;
   let results;
   let provider;
   let providerLabel;
+  let nextActionIndex = 0;
   const announcedProviders = [];
   const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -83,9 +88,35 @@
     return provider;
   }
 
-  function wallet(method, params = []) {
+  async function wallet(method, params = []) {
     const selected = provider || selectProvider();
-    return selected.request({ method, params });
+    try {
+      return await selected.request({ method, params });
+    } catch (error) {
+      const code = error && error.code !== undefined ? ` (${error.code})` : "";
+      const message = error && error.message ? error.message : String(error);
+      throw new Error(`${method} failed${code}: ${message}`);
+    }
+  }
+
+  async function readRpc(method, params = []) {
+    const failures = [];
+    for (const url of READ_RPC_URLS) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        if (payload.error) throw new Error(`${payload.error.code}: ${payload.error.message}`);
+        return payload.result;
+      } catch (error) {
+        failures.push(`${url}: ${error.message}`);
+      }
+    }
+    throw new Error(`${method} failed on every read-only Base Sepolia RPC: ${failures.join("; ")}`);
   }
 
   function fail(message) {
@@ -163,6 +194,25 @@
     maybeReady();
   }
 
+  function loadBundle(value, message) {
+    bundle = validateBundle(value);
+    renderBundle();
+    note(message);
+  }
+
+  async function loadLocalBundle() {
+    if (!['127.0.0.1', 'localhost'].includes(window.location.hostname)) return;
+    const response = await fetch(
+      '/target/open-competition-v1/base-sepolia-deployment-bundle.json',
+      { cache: 'no-store' },
+    );
+    if (!response.ok) throw new Error(`Local frozen bundle returned HTTP ${response.status}.`);
+    loadBundle(
+      await response.json(),
+      'Local frozen bundle loaded and validated. Connect the known Brave MetaMask admin account.',
+    );
+  }
+
   async function connect() {
     if (!bundle) throw new Error("Load and inspect the frozen bundle before connecting a wallet.");
     if (!$("wallet-provider")._providers) await discoverProviders();
@@ -188,36 +238,60 @@
     account = String(accounts[0] || "").toLowerCase();
     if (account !== EXPECTED_ADMIN) throw new Error(`Connected account ${account || "(none)"} is not the frozen admin.`);
     note(`Connected ${providerLabel} to frozen admin ${account} on Base Sepolia.`);
-    maybeReady();
+    await maybeReady();
   }
 
   async function maybeReady() {
     if (!bundle || account !== EXPECTED_ADMIN) return;
-    const pendingNonce = Number.parseInt(await wallet("eth_getTransactionCount", [account, "pending"]), 16);
-    if (pendingNonce !== bundle.actions[0].from_nonce) {
-      return fail(`Pending nonce ${pendingNonce} does not match frozen nonce ${bundle.actions[0].from_nonce}. Regenerate the bundle.`);
+    const pendingNonce = Number.parseInt(await readRpc("eth_getTransactionCount", [account, "pending"]), 16);
+    const frozenNonce = bundle.actions[0].from_nonce;
+    nextActionIndex = pendingNonce - frozenNonce;
+    if (nextActionIndex < 0 || nextActionIndex > bundle.actions.length) {
+      return fail(`Pending nonce ${pendingNonce} is outside the frozen deployment nonce range ${frozenNonce}-${frozenNonce + bundle.actions.length}.`);
     }
-    for (const action of bundle.actions) {
-      const occupied = await wallet("eth_getCode", [action.expected_contract, "latest"]);
-      if (occupied !== "0x") return fail(`Predicted address ${action.expected_contract} is already occupied.`);
+    for (const [index, action] of bundle.actions.entries()) {
+      const runtime = String(await readRpc("eth_getCode", [action.expected_contract, "latest"])).toLowerCase();
+      if (index < nextActionIndex) {
+        if (runtime !== action.expected_runtime_code.toLowerCase()) {
+          return fail(`Nonce advanced past ${action.name}, but ${action.expected_contract} does not contain its exact frozen runtime.`);
+        }
+        if (action.expected_implementation) {
+          const implementationRuntime = String(await readRpc(
+            "eth_getCode",
+            [action.expected_implementation, "latest"],
+          )).toLowerCase();
+          if (implementationRuntime !== action.expected_implementation_runtime_code.toLowerCase()) {
+            return fail("Previously deployed factory implementation runtime bytecode mismatch.");
+          }
+        }
+      } else if (runtime !== "0x") {
+        return fail(`Predicted address ${action.expected_contract} is already occupied before its frozen nonce.`);
+      }
+    }
+    if (nextActionIndex === bundle.actions.length) {
+      results = makeResults();
+      note("Both frozen deployments already exist with exact runtime matches. No transaction is required.");
+      $("download").disabled = false;
+      return;
     }
     $("reviewed").disabled = false;
-    note("Bundle, account, chain, pending nonce, and predicted addresses match. Review exact actions before deployment.");
+    const resumed = nextActionIndex === 0
+      ? ""
+      : `${nextActionIndex} earlier frozen action already has an exact runtime match. `;
+    note(`${resumed}Bundle, account, chain, pending nonce, and remaining predicted addresses match. Review the remaining exact actions before deployment.`);
   }
 
   async function waitForReceipt(hash) {
     for (let attempt = 0; attempt < 180; attempt += 1) {
-      const receipt = await wallet("eth_getTransactionReceipt", [hash]);
+      const receipt = await readRpc("eth_getTransactionReceipt", [hash]);
       if (receipt) return receipt;
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     throw new Error(`Timed out waiting for receipt ${hash}.`);
   }
 
-  async function execute() {
-    $("execute").disabled = true;
-    $("reviewed").disabled = true;
-    results = {
+  function makeResults() {
+    const value = {
       schema_version: "agent-bounties/open-competition-v1-deployment-receipts-v1",
       protocol_version: EXPECTED_PROTOCOL,
       network: "base-sepolia",
@@ -227,7 +301,23 @@
       actions: [],
       evidence_boundary: "Confirmed deployment receipts and exact runtime matches are deployment evidence only. They are not rehearsal, activation, settlement, or payment evidence.",
     };
-    for (const action of bundle.actions) {
+    if (nextActionIndex > 0) {
+      value.preexisting_actions = bundle.actions.slice(0, nextActionIndex).map((action) => ({
+        name: action.name,
+        contract_address: action.expected_contract,
+        runtime_code_hash: action.runtime_code_hash,
+        runtime_matches: true,
+        evidence_note: "Exact runtime was confirmed before this signer session; obtain the canonical transaction receipt separately.",
+      }));
+    }
+    return value;
+  }
+
+  async function execute() {
+    $("execute").disabled = true;
+    $("reviewed").disabled = true;
+    results = makeResults();
+    for (const action of bundle.actions.slice(nextActionIndex)) {
       note(`Requesting ${providerLabel} signature for ${action.name}…`);
       const hash = await wallet("eth_sendTransaction", [{
         from: account,
@@ -240,12 +330,12 @@
       if (String(receipt.contractAddress).toLowerCase() !== action.expected_contract) {
         throw new Error(`${action.name} deployed at an unexpected address.`);
       }
-      const runtime = String(await wallet("eth_getCode", [action.expected_contract, receipt.blockNumber])).toLowerCase();
+      const runtime = String(await readRpc("eth_getCode", [action.expected_contract, receipt.blockNumber])).toLowerCase();
       if (runtime !== action.expected_runtime_code.toLowerCase()) {
         throw new Error(`${action.name} runtime bytecode mismatch.`);
       }
       if (action.expected_implementation) {
-        const implementationRuntime = String(await wallet(
+        const implementationRuntime = String(await readRpc(
           "eth_getCode",
           [action.expected_implementation, receipt.blockNumber],
         )).toLowerCase();
@@ -281,9 +371,10 @@
 
   $("bundle").addEventListener("change", async (event) => {
     try {
-      bundle = validateBundle(JSON.parse(await event.target.files[0].text()));
-      renderBundle();
-      note("Frozen bundle loaded. Connect the known Brave MetaMask admin account.");
+      loadBundle(
+        JSON.parse(await event.target.files[0].text()),
+        "Frozen bundle loaded. Connect the known Brave MetaMask admin account.",
+      );
     } catch (error) { fail(error.message); }
   });
   $("connect").addEventListener("click", () => connect().catch((error) => fail(error.message)));
@@ -302,4 +393,5 @@
   $("execute").addEventListener("click", () => execute().catch((error) => fail(error.message)));
   $("download").addEventListener("click", download);
   discoverProviders().catch((error) => fail(error.message));
+  loadLocalBundle().catch((error) => fail(error.message));
 })();

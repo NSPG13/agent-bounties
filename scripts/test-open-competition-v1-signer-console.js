@@ -20,6 +20,9 @@ for (const required of [
   "eth_getCode",
   "eth_sendTransaction",
   "eth_getTransactionReceipt",
+  "https://sepolia.base.org",
+  "https://base-sepolia-rpc.publicnode.com",
+  "${method} failed${code}: ${message}",
   "expected_runtime_code",
   "expected_implementation_runtime_code",
 ]) assert.ok(script.includes(required), `signer console must include ${required}`);
@@ -31,7 +34,9 @@ for (const forbidden of ["privateKey", "private_key", "seed phrase", "mnemonic",
 
 assert.ok(html.includes('id="wallet-provider"'));
 assert.ok(html.includes('id="bundle"'));
-assert.ok(html.includes("open-competition-v1-signer.js?v=eip6963-provider-selection-v1"));
+assert.ok(html.includes("open-competition-v1-signer.js?v=partial-deployment-recovery-v1"));
 assert.ok(script.includes("Load and inspect the frozen bundle before connecting a wallet."));
 assert.ok(script.includes('Connected account ${account || "(none)"} is not the frozen admin'));
+assert.ok(script.includes("earlier frozen action already has an exact runtime match"));
+assert.ok(script.includes("Local frozen bundle loaded and validated"));
 console.log("Open Competition V1 signer console contract passed");
