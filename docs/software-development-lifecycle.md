@@ -194,7 +194,9 @@ Blueprint healthy without materializing the worker, the controller may create
 only that worker through the service API using the validated legacy worker's
 workspace, project environment, database binding, and exact existing
 environment group. It read-verifies the new worker and revalidates all bindings
-before deployment. Other missing or ambiguous services fail closed.
+before deployment. The controller then reconciles only the checked-in
+hidden-canary manifest, verifier catalog, and explicit false activation gates
+on the exact shared environment group. Other missing or ambiguous services fail closed.
 Native provider commit triggers are disabled so two independent deploy
 authorities cannot race. The Render credential is isolated to this workflow;
 the scheduled observer and application containers never receive it. This
