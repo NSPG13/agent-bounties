@@ -1,0 +1,14 @@
+{
+  "fixture": "claimable",
+  "description": "A funded and claimable bounty on Base mainnet with verification_ready: true.",
+  "state": {
+    "status": "claimable",
+    "funding": "confirmed",
+    "verification_ready": true,
+    "canonical_event": "BountyBecameClaimable",
+    "network": "base-mainnet",
+    "solver_reward_usdc": "2.00",
+    "bond_usdc": "0.01"
+  },
+  "next_action": "Comment /claim #772 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS on the canonical GitHub issue, then follow the returned claim handoff through the exact EIP-1193 wallet_request."
+}
