@@ -180,6 +180,9 @@ pub struct OpportunityItem {
     pub funded_amount: OpportunityAmount,
     pub funding_target: OpportunityAmount,
     pub bond: OpportunityAmount,
+    pub refundable_bond: OpportunityAmount,
+    pub external_spend: OpportunityAmount,
+    pub gross_cash_margin: OpportunityAmount,
     pub deadline: Option<String>,
     pub deadline_kind: Option<String>,
     pub verification_method: String,
@@ -531,6 +534,9 @@ pub fn unfunded_opportunity(
         funded_amount: OpportunityAmount::usdc_base_units("0"),
         funding_target: OpportunityAmount::usdc_base_units("0"),
         bond: OpportunityAmount::usdc_base_units("0"),
+        refundable_bond: OpportunityAmount::usdc_base_units("0"),
+        external_spend: OpportunityAmount::usdc_base_units("0"),
+        gross_cash_margin: OpportunityAmount::usdc_base_units("0"),
         deadline: Some(trial.expires_at.to_rfc3339()),
         deadline_kind: Some("publication_expires_at".to_string()),
         verification_method: "poster_review_or_unspecified".to_string(),
@@ -656,6 +662,9 @@ pub fn legacy_opportunity(
             &status.funding_summary.target.currency,
         ),
         bond: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        refundable_bond: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        external_spend: OpportunityAmount::minor_units(0, &bounty.amount.currency),
+        gross_cash_margin: OpportunityAmount::minor_units(bounty.amount.amount, &bounty.amount.currency),
         deadline: None,
         deadline_kind: None,
         verification_method,
@@ -749,6 +758,20 @@ pub fn canonical_opportunity(
         })
         .into_iter()
         .collect();
+    let (external_spend, gross_cash_margin) = if let Ok(ctx) = standing_meta_v2_parent_context(item) {
+        let external_amount = ctx.child_target.amount;
+        let solver_amount = ctx.solver_reward.amount;
+        let margin = solver_amount - external_amount;
+        (
+            OpportunityAmount::usdc_base_units(external_amount.to_string()),
+            OpportunityAmount::usdc_base_units(margin.to_string()),
+        )
+    } else {
+        (
+            OpportunityAmount::usdc_base_units("0"),
+            OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
+        )
+    };
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
     let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
     let image = terms
@@ -812,6 +835,9 @@ pub fn canonical_opportunity(
         funded_amount: OpportunityAmount::usdc_base_units(item.funded_amount.clone()),
         funding_target: OpportunityAmount::usdc_base_units(item.target_amount.clone()),
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        refundable_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        external_spend,
+        gross_cash_margin,
         deadline,
         deadline_kind,
         verification_method,
@@ -897,6 +923,7 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             matches
         }
         OpportunityView::ReadyToEarn => {
+            let is_unprofitable = item.gross_cash_margin.amount.starts_with('-');
             let matches = item.work_state == "claimable"
                 && item.payment_state == "escrowed"
                 && item.payment_committed
@@ -1528,5 +1555,6 @@ mod tests {
         assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
+    }
     }
 }
