@@ -94,6 +94,36 @@ def blueprint_record(**overrides):
     return record
 
 
+def worker_service_record(name=None, **overrides):
+    record = {
+        "id": "srv-" + "c" * 20,
+        "name": name or recovery.OPEN_COMPETITION_WORKER_NAME,
+        "type": "background_worker",
+        "branch": "main",
+        "repo": "https://github.com/NSPG13/agent-bounties.git",
+        "ownerId": "tea-owner123",
+        "environmentId": "evm-project123",
+        "autoDeploy": "no",
+    }
+    record.update(overrides)
+    return record
+
+
+def env_group_record(service=None, **overrides):
+    linked_service = None
+    if service is not None:
+        linked_service = dict(service)
+        linked_service["type"] = "worker"
+    record = {
+        "id": "evg-" + "d" * 20,
+        "name": recovery.OPEN_COMPETITION_ENV_GROUP_NAME,
+        "ownerId": "tea-owner123",
+        "serviceLinks": [] if linked_service is None else [linked_service],
+    }
+    record.update(overrides)
+    return record
+
+
 class ResolutionFailureClient:
     def __init__(self) -> None:
         self.resolved = []
@@ -287,6 +317,184 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(recovery.RecoveryError, "unexpected type"):
             recovery.blueprint_has_service(blueprint, spec)
+
+    def test_direct_worker_provisioning_is_exact_and_secret_free_in_result(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME,
+            id="srv-" + "b" * 20,
+        )
+        created = worker_service_record()
+        database_url = "postgresql://worker:private-value@database.internal/bounties"
+        env_responses = [
+            {"envVar": {"key": key, "value": value}}
+            for key, value in recovery.OPEN_COMPETITION_WORKER_ENVIRONMENT.items()
+        ]
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+            {"service": created},
+            {"envGroup": env_group_record()},
+            {},
+            {"envGroup": env_group_record(created)},
+            [{"service": created}],
+            *env_responses,
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses) as request:
+            result = client.provision_open_competition_service(spec, reference)
+
+        self.assertEqual(result, created)
+        create_call = request.call_args_list[2]
+        self.assertEqual(create_call.args[:2], ("POST", "/services"))
+        create_payload = create_call.args[2]
+        self.assertEqual(create_payload["type"], "background_worker")
+        self.assertEqual(create_payload["ownerId"], reference["ownerId"])
+        self.assertEqual(create_payload["environmentId"], reference["environmentId"])
+        self.assertEqual(create_payload["autoDeploy"], "no")
+        self.assertEqual(
+            create_payload["serviceDetails"],
+            {
+                "runtime": "docker",
+                "envSpecificDetails": {
+                    "dockerContext": ".",
+                    "dockerfilePath": "./Dockerfile",
+                },
+                "plan": "starter",
+                "region": "oregon",
+                "maxShutdownDelaySeconds": 60,
+            },
+        )
+        self.assertEqual(
+            {item["key"]: item["value"] for item in create_payload["envVars"]},
+            {
+                **recovery.OPEN_COMPETITION_WORKER_ENVIRONMENT,
+                "DATABASE_URL": database_url,
+            },
+        )
+        self.assertNotIn("private-value", recovery.json.dumps(result))
+
+    def test_direct_worker_provisioning_refuses_any_other_service(self) -> None:
+        client = RecordingClient()
+        with self.assertRaisesRegex(recovery.RecoveryError, "not authorized"):
+            client.provision_open_competition_service(
+                recovery.SERVICE_SPECS[0],
+                worker_service_record(recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME),
+            )
+        self.assertEqual(client.requests, [])
+
+    def test_direct_worker_provisioning_requires_one_matching_env_group(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", return_value=[]):
+            with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+                client.provision_open_competition_service(spec, reference)
+        self.assertEqual(
+            client.requests,
+            [],
+        )
+
+    def test_direct_worker_provisioning_accepts_only_an_exact_409_race(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME,
+            id="srv-" + "b" * 20,
+        )
+        created = worker_service_record()
+        database_url = "postgres://worker:private-value@database.internal/bounties"
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+            recovery.RenderHttpError(409, "service name already exists"),
+            [{"service": created}],
+            {"envGroup": env_group_record()},
+            {},
+            {"envGroup": env_group_record(created)},
+            [{"service": created}],
+            *[
+                {"envVar": {"key": key, "value": value}}
+                for key, value in recovery.OPEN_COMPETITION_WORKER_ENVIRONMENT.items()
+            ],
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            self.assertEqual(
+                client.provision_open_competition_service(spec, reference),
+                created,
+            )
+
+    def test_direct_worker_provisioning_rejects_created_owner_mismatch(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {
+                "envVar": {
+                    "key": "DATABASE_URL",
+                    "value": "postgres://worker:private-value@db/app",
+                }
+            },
+            {"service": worker_service_record(ownerId="tea-attacker123")},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            with self.assertRaisesRegex(recovery.RecoveryError, "workspace"):
+                client.provision_open_competition_service(spec, reference)
+
+    def test_direct_worker_provisioning_requires_verified_group_link(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        created = worker_service_record()
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {
+                "envVar": {
+                    "key": "DATABASE_URL",
+                    "value": "postgres://worker:private-value@db/app",
+                }
+            },
+            {"service": created},
+            {"envGroup": env_group_record()},
+            {},
+            {"envGroup": env_group_record()},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            with self.assertRaisesRegex(recovery.RecoveryError, "attach"):
+                client.provision_open_competition_service(spec, reference)
+
+    def test_blueprint_error_never_invokes_direct_provisioning(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        client = RecordingClient()
+        responses = [
+            [{"blueprint": blueprint_record(autoSync=False)}],
+            blueprint_record(status="syncing", autoSync=True),
+            blueprint_record(status="error", autoSync=False),
+        ]
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            with mock.patch.object(
+                client, "provision_open_competition_service"
+            ) as provision:
+                with self.assertRaisesRegex(recovery.RecoveryError, "error state"):
+                    client.ensure_blueprint_service(
+                        spec,
+                        reference_service=reference,
+                        attempts=1,
+                        poll_seconds=0,
+                    )
+                provision.assert_not_called()
 
     def test_existing_deploy_reuses_only_active_exact_revision(self) -> None:
         revision = "a" * 40
@@ -1307,6 +1515,12 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(
             recovery.redact("RENDER_API_KEY is required"),
             "RENDER_API_KEY is required",
+        )
+        self.assertNotIn(
+            "private-value",
+            recovery.redact(
+                'bad payload {"value":"postgresql://worker:private-value@db/app"}'
+            ),
         )
 
 

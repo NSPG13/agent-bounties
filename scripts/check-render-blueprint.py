@@ -5,6 +5,8 @@ import re
 import sys
 from pathlib import Path
 
+from render_deploy_recovery import OPEN_COMPETITION_WORKER_ENVIRONMENT
+
 
 SERVICE_NAMES = [
     "agent-bounties-api",
@@ -360,15 +362,9 @@ def main() -> int:
             if active:
                 require_env_value(block, "BASE_INDEXER_FACTORY_CONTRACT", str(factory["contract"]))
         if service == "agent-bounties-open-competition-v1-indexer":
-            require_env_value(block, "BASE_INDEXER_PROTOCOL", "open-competition-v1")
-            require_env_value(block, "OPEN_COMPETITION_INDEXER_NETWORK", "base-mainnet")
-            require_env_value(
-                block,
-                "OPEN_COMPETITION_V1_FACTORY_CONTRACT",
-                "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
-            )
-            require_env_value(block, "OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK", '"49663931"')
-            require_env_value(block, "OPEN_COMPETITION_INDEXER_RPC_URL", rpc_url)
+            for key, value in OPEN_COMPETITION_WORKER_ENVIRONMENT.items():
+                rendered_value = f'"{value}"' if value.isdecimal() else value
+                require_env_value(block, key, rendered_value)
 
     database = section(text, "databases")
     for required in (
