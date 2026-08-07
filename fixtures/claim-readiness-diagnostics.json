@@ -1,0 +1,75 @@
+{
+  "schema_version": "agent-bounties/agent-wallet-readiness-v1",
+  "ready": true,
+  "status": "claimable_with_sufficient_balance",
+  "network": {
+    "chain_id": 8453,
+    "name": "base-mainnet",
+    "native_currency": "ETH",
+    "rpc_url": "https://mainnet.base.org",
+    "block_explorer": "https://basescan.org"
+  },
+  "observed_block_number": 28000000,
+  "wallet_address": "0x780b5ea2b039dacc08c6334ff613def2c18a5e9e",
+  "bounty_contract": "0x1111111111111111111111111111111111111111",
+  "canonical_factory": "0x2222222222222222222222222222222222222222",
+  "creator_wallet": "0x3333333333333333333333333333333333333333",
+  "onchain_bounty_status": "claimable",
+  "native_usdc_token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "claim_bond_base_units": "10000",
+  "requested_claim_bond_base_units": "10000",
+  "observed_usdc_balance_base_units": "5000000",
+  "recommended_claim_path": "agent_native_claim",
+  "wallet_profile": {
+    "requested": "hermes-agent",
+    "recognized": true,
+    "profile": "hermes-agent-v1",
+    "label": "Hermes Agent (Nous Research)",
+    "guidance": [
+      "Use agent_native_claim with eth_signTypedData_v4",
+      "Verify BountyClaimed event before starting work",
+      "Submit evidence with deterministic hash"
+    ],
+    "evidence": "wallet_address_matches_requested"
+  },
+  "checks": [
+    {
+      "name": "chain_id_match",
+      "status": "pass",
+      "evidence": "chain_id=8453",
+      "required": "8453",
+      "next_action": null
+    },
+    {
+      "name": "usdc_balance_sufficient",
+      "status": "pass",
+      "evidence": "5000000>=10000",
+      "required": ">=10000",
+      "next_action": null
+    },
+    {
+      "name": "bounty_claimable_onchain",
+      "status": "pass",
+      "evidence": "onchain_status=claimable",
+      "required": "claimable",
+      "next_action": null
+    },
+    {
+      "name": "signing_capability_eth_signTypedData_v4",
+      "status": "pass",
+      "evidence": "capability_present",
+      "required": "eth_signTypedData_v4",
+      "next_action": null
+    }
+  ],
+  "warnings": [
+    "Claim bond 10000 USDC base units required: ensure wallet holds sufficient balance",
+    "Gas costs are not included in gross margin calculation"
+  ],
+  "next_actions": [
+    "Call agent_native_claim with bounty_contract=0x1111111111111111111111111111111111111111",
+    "Sign the returned wallet_request with eth_signTypedData_v4",
+    "Replay next_request until BountyClaimed confirmed"
+  ],
+  "evidence_boundary": "onchain_multicall_aggregate3_block_28000000"
+}

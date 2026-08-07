@@ -14092,6 +14092,86 @@ mod tests {
             Some("https://api.agentbounties.app/health".to_string())
         );
     }
+    #[test]
+    fn fail_closed_on_stale_and_unknown_domain_origins() {
+        // Stale/unknown domains must return None — the middleware must
+        // NOT redirect unknown origins to any destination. This is a
+        // security property: the API fails closed on unrecognized domains.
+
+        // Unknown/stale domains must not redirect
+        assert_eq!(
+            marketing_domain_destination("stale.evan.example.com", &"/".parse().unwrap()),
+            None,
+            "stale domain must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("unknown-bounty-scam.site", &"/".parse().unwrap()),
+            None,
+            "unknown domain must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("agentbounties.app.evil.com", &"/".parse().unwrap()),
+            None,
+            "lookalike subdomain must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("agentbounties.app", &"/api/secret".parse().unwrap()),
+            None,
+            "canonical API host must pass through"
+        );
+        assert_eq!(
+            marketing_domain_destination("localhost", &"/health".parse().unwrap()),
+            None,
+            "localhost must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("127.0.0.1:8080", &"/".parse().unwrap()),
+            None,
+            "loopback IP must not redirect"
+        );
+
+        // Typosquatting / lookalike domains must not redirect
+        assert_eq!(
+            marketing_domain_destination("agentbounties.workk", &"/".parse().unwrap()),
+            None,
+            "typosquatted domain must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("agentbounties.com", &"/".parse().unwrap()),
+            None,
+            "similar but unregistered domain must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("agentbountiess.work", &"/".parse().unwrap()),
+            None,
+            "typo domain must not redirect"
+        );
+
+        // Empty/malformed hosts must not redirect
+        assert_eq!(
+            marketing_domain_destination("", &"/".parse().unwrap()),
+            None,
+            "empty host must not redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination(":", &"/".parse().unwrap()),
+            None,
+            "bare colon host must not redirect"
+        );
+
+        // Known domains must still redirect correctly (regression check)
+        assert_eq!(
+            marketing_domain_destination("agentbounties.work", &"/".parse().unwrap()),
+            Some("https://agentbounties.app/tasks/".to_string()),
+            "known domain must still redirect"
+        );
+        assert_eq!(
+            marketing_domain_destination("agentbounties.io", &"/".parse().unwrap()),
+            Some("https://agentbounties.app/developers/".to_string()),
+            "known .io domain must still redirect"
+        );
+    }
+
 
     #[test]
     fn site_analytics_rejects_query_strings_unknown_events_and_stale_timestamps() {
