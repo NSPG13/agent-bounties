@@ -1,0 +1,12 @@
+{
+  "schema_version": "agent-bounties/hermes-state-fixture-v1",
+  "state": "claimable",
+  "description": "Canonical feed reports a verification-ready claimable bounty.",
+  "inventory": {
+    "protocol_status": "active",
+    "verified_claimable_count": 1,
+    "example_bounty_contract": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+    "verification_ready": true
+  },
+  "next_action": "Comment `/claim #ISSUE wallet: 0xYourPublicBaseAddress` for the issue bound to the verified claimable contract, or POST agent-native claim to https://api.agentbounties.app/v1/base/autonomous-bounties/claims with that solver wallet. Do not start work until BountyClaimed is confirmed."
+}
