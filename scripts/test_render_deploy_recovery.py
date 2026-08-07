@@ -79,6 +79,21 @@ class EnvironmentClient:
         return {"key": key, "value": value, "changed": self.changed}
 
 
+def blueprint_record(**overrides):
+    record = {
+        "id": "exs-" + "a" * 20,
+        "name": "agent-bounties-production",
+        "status": "in_sync",
+        "autoSync": True,
+        "repo": "https://github.com/NSPG13/agent-bounties.git",
+        "branch": "main",
+        "path": "render.yaml",
+        "resources": [],
+    }
+    record.update(overrides)
+    return record
+
+
 class ResolutionFailureClient:
     def __init__(self) -> None:
         self.resolved = []
@@ -161,6 +176,117 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             recovery.select_service(spec, [{"service": wrong}])
         with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
             recovery.select_service(spec, [{"service": service}, {"service": service}])
+
+    def test_missing_service_has_a_typed_fail_closed_error(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        with self.assertRaises(recovery.RenderServiceMissing) as raised:
+            recovery.select_service(spec, [])
+        self.assertEqual(raised.exception.service_name, spec.name)
+
+    def test_blueprint_selection_is_exact_and_repository_bound(self) -> None:
+        selected = recovery.select_blueprint(
+            [{"blueprint": blueprint_record()}, {"blueprint": blueprint_record(
+                id="exs-" + "b" * 20,
+                branch="staging",
+            )}]
+        )
+        self.assertEqual(selected["id"], "exs-" + "a" * 20)
+
+        with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+            recovery.select_blueprint(
+                [
+                    {"blueprint": blueprint_record()},
+                    {"blueprint": blueprint_record(id="exs-" + "b" * 20)},
+                ]
+            )
+        with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+            recovery.select_blueprint(
+                [{"blueprint": blueprint_record(repo="https://github.com/attacker/fork")}]
+            )
+
+    def test_blueprint_recovery_materializes_only_the_pinned_worker(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        resource = {"id": "srv-" + "c" * 20, "name": spec.name, "type": spec.service_type}
+        service = {
+            "id": resource["id"],
+            "name": spec.name,
+            "type": spec.service_type,
+            "branch": "main",
+            "repo": "https://github.com/NSPG13/agent-bounties.git",
+        }
+        client = RecordingClient()
+        sleeps = []
+        client._sleep = sleeps.append
+        responses = [
+            [{"blueprint": blueprint_record()}],
+            blueprint_record(autoSync=False),
+            blueprint_record(autoSync=True),
+            blueprint_record(status="syncing"),
+            blueprint_record(resources=[resource]),
+            [{"service": service}],
+        ]
+        with mock.patch.object(client, "_request_json", side_effect=responses) as request:
+            self.assertEqual(
+                client.ensure_blueprint_service(spec, attempts=3, poll_seconds=0.25),
+                service,
+            )
+
+        blueprint_id = "exs-" + "a" * 20
+        self.assertEqual(
+            request.call_args_list,
+            [
+                mock.call("GET", "/blueprints?limit=100"),
+                mock.call("PATCH", f"/blueprints/{blueprint_id}", {"autoSync": False}),
+                mock.call(
+                    "PATCH",
+                    f"/blueprints/{blueprint_id}",
+                    {"autoSync": True, "path": "render.yaml"},
+                ),
+                mock.call("GET", f"/blueprints/{blueprint_id}"),
+                mock.call("GET", f"/blueprints/{blueprint_id}"),
+                mock.call(
+                    "GET",
+                    "/services?name=agent-bounties-open-competition-v1-indexer&includePreviews=false&limit=20",
+                ),
+            ],
+        )
+        self.assertEqual(sleeps, [0.25])
+
+    def test_blueprint_recovery_refuses_other_missing_services(self) -> None:
+        client = RecordingClient()
+        with self.assertRaisesRegex(recovery.RecoveryError, "not authorized"):
+            client.ensure_blueprint_service(recovery.SERVICE_SPECS[0])
+        self.assertEqual(client.requests, [])
+
+    def test_blueprint_recovery_restores_auto_sync_after_enable_failure(self) -> None:
+        client = RecordingClient()
+        responses = [
+            [{"blueprint": blueprint_record()}],
+            blueprint_record(autoSync=False),
+            recovery.RenderHttpError(400, "invalid update"),
+            blueprint_record(autoSync=True),
+        ]
+        with mock.patch.object(client, "_request_json", side_effect=responses) as request:
+            with self.assertRaises(recovery.RenderHttpError):
+                client.ensure_blueprint_service(recovery.SERVICE_SPECS[-1])
+
+        blueprint_id = "exs-" + "a" * 20
+        self.assertEqual(
+            request.call_args_list[-1],
+            mock.call(
+                "PATCH",
+                f"/blueprints/{blueprint_id}",
+                {"autoSync": True, "path": "render.yaml"},
+            ),
+        )
+
+    def test_blueprint_resource_type_mismatch_fails_closed(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        blueprint = blueprint_record(
+            resources=[{"name": spec.name, "type": "web_service"}]
+        )
+        with self.assertRaisesRegex(recovery.RecoveryError, "unexpected type"):
+            recovery.blueprint_has_service(blueprint, spec)
 
     def test_existing_deploy_reuses_only_active_exact_revision(self) -> None:
         revision = "a" * 40
