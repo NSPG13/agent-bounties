@@ -77,7 +77,7 @@ use cloud_agent::{
     CloudObjectiveVerifierDraft, CloudUnfundedBountyRequest,
 };
 use db::{
-    ChatgptActionIntent as DbChatgptActionIntent, ChatgptActionObservation,
+    BaseIndexerHeartbeat, ChatgptActionIntent as DbChatgptActionIntent, ChatgptActionObservation,
     ClaimCandidateReservation, ClaimFunnelStats, DbError, GitHubIssueSyncBountyUpsert,
     NewBondSponsorship, NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription,
     NewLegalAcceptance, NewOpportunityComment, NewSiteAnalyticsEvent, NewSocialMentionIngestion,
@@ -5523,11 +5523,11 @@ async fn get_open_competition_readiness(
     State(state): State<SharedState>,
     Query(query): Query<OpenCompetitionReadinessQuery>,
 ) -> Result<Json<OpenCompetitionReadinessReport>, StatusCode> {
-    let network = query.network.as_deref().unwrap_or("base-mainnet");
     let safe_state = observe_open_competition_state_for_api(&state, &query).await?;
+    let offchain_gates = open_competition_offchain_gates(&state, &safe_state).await?;
     Ok(Json(open_competition_readiness_from_state(
         &safe_state,
-        &open_competition_offchain_gates(network)?,
+        &offchain_gates,
     )))
 }
 
@@ -5593,10 +5593,8 @@ async fn prepare_open_competition_reveal(
     {
         return Err(StatusCode::CONFLICT);
     }
-    let readiness = open_competition_readiness_from_state(
-        &safe_state,
-        &open_competition_offchain_gates(network)?,
-    );
+    let offchain_gates = open_competition_offchain_gates(&state, &safe_state).await?;
+    let readiness = open_competition_readiness_from_state(&safe_state, &offchain_gates);
     let mut plan = plan_open_competition_action(
         OpenCompetitionOperation::PrepareOpenCompetitionReveal,
         &readiness,
@@ -5709,10 +5707,8 @@ async fn open_competition_action_from_safe_state(
         },
     )
     .await?;
-    let readiness = open_competition_readiness_from_state(
-        &safe_state,
-        &open_competition_offchain_gates(network)?,
-    );
+    let offchain_gates = open_competition_offchain_gates(state, &safe_state).await?;
+    let readiness = open_competition_readiness_from_state(&safe_state, &offchain_gates);
     let mut plan = plan_open_competition_action(
         operation,
         &readiness,
@@ -5829,16 +5825,67 @@ fn select_open_competition_verifier(
     }
 }
 
-fn open_competition_offchain_gates(
-    network: &str,
+async fn open_competition_offchain_gates(
+    state: &AppState,
+    safe_state: &OpenCompetitionSafeState,
 ) -> Result<OpenCompetitionOffchainGates, StatusCode> {
-    let prefix = open_competition_environment_prefix(network)?;
+    let prefix = open_competition_environment_prefix(&safe_state.network)?;
+    let monitoring_configured = env_flag(&format!("{prefix}_MONITORING_ACTIVE"));
+    let monitoring_active = if monitoring_configured {
+        match &state.store {
+            Some(store) => store
+                .get_base_indexer_heartbeat(&safe_state.network, &safe_state.factory_contract)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|heartbeat| {
+                    open_competition_monitoring_is_fresh(
+                        &heartbeat,
+                        safe_state.safe_block_number,
+                        Utc::now(),
+                    )
+                }),
+            None => false,
+        }
+    } else {
+        false
+    };
     Ok(OpenCompetitionOffchainGates {
         gas_sponsorship_available: env_flag(&format!("{prefix}_GAS_SPONSORSHIP_AVAILABLE")),
         relay_support_available: env_flag(&format!("{prefix}_RELAY_SUPPORT_AVAILABLE")),
         r4_release_evidence_complete: env_flag(&format!("{prefix}_R4_EVIDENCE_COMPLETE")),
-        monitoring_active: env_flag(&format!("{prefix}_MONITORING_ACTIVE")),
+        monitoring_active,
     })
+}
+
+fn open_competition_monitoring_is_fresh(
+    heartbeat: &BaseIndexerHeartbeat,
+    safe_block_number: u64,
+    now: DateTime<Utc>,
+) -> bool {
+    const MAX_HEARTBEAT_AGE_SECONDS: i64 = 90;
+    const MAX_CURSOR_LAG_BLOCKS: u64 = 20;
+
+    let status_healthy = heartbeat.status == "success"
+        || (heartbeat.status == "skipped"
+            && heartbeat.skipped_reason.as_deref()
+                == Some("no confirmed blocks are ready to scan"));
+    let Some(completed_at) = heartbeat.completed_at else {
+        return false;
+    };
+    let age = now.signed_duration_since(completed_at).num_seconds();
+    let latest_block_healthy = heartbeat
+        .latest_block
+        .is_some_and(|latest| latest.saturating_add(MAX_CURSOR_LAG_BLOCKS) >= safe_block_number);
+    let cursor_healthy = heartbeat
+        .persisted_cursor_block
+        .is_some_and(|cursor| cursor.saturating_add(MAX_CURSOR_LAG_BLOCKS) >= safe_block_number);
+
+    status_healthy
+        && heartbeat.error_message.is_none()
+        && (0..=MAX_HEARTBEAT_AGE_SECONDS).contains(&age)
+        && latest_block_healthy
+        && cursor_healthy
 }
 
 fn open_competition_hosted_operation_enabled(
@@ -13662,6 +13709,78 @@ mod tests {
     };
 
     type TestHmacSha256 = Hmac<Sha256>;
+
+    fn open_competition_heartbeat(
+        now: DateTime<Utc>,
+        status: &str,
+        cursor: Option<u64>,
+        age_seconds: i64,
+    ) -> BaseIndexerHeartbeat {
+        BaseIndexerHeartbeat {
+            network: "base-mainnet".to_string(),
+            escrow_contract: "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5".to_string(),
+            status: status.to_string(),
+            started_at: now - ChronoDuration::seconds(age_seconds + 1),
+            completed_at: Some(now - ChronoDuration::seconds(age_seconds)),
+            latest_block: cursor.map(|block| block.saturating_add(2)),
+            confirmed_to_block: cursor,
+            from_block: cursor,
+            to_block: cursor,
+            fetched_logs: 0,
+            persisted_cursor_block: cursor,
+            skipped_reason: None,
+            error_message: None,
+            updated_at: now - ChronoDuration::seconds(age_seconds),
+        }
+    }
+
+    #[test]
+    fn open_competition_monitoring_requires_fresh_healthy_cursor_evidence() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        let safe_block = 50_000_000;
+        let healthy = open_competition_heartbeat(now, "success", Some(safe_block), 15);
+        assert!(open_competition_monitoring_is_fresh(
+            &healthy, safe_block, now
+        ));
+
+        let stale = open_competition_heartbeat(now, "success", Some(safe_block), 91);
+        assert!(!open_competition_monitoring_is_fresh(
+            &stale, safe_block, now
+        ));
+
+        let lagging = open_competition_heartbeat(now, "success", Some(safe_block - 21), 15);
+        assert!(!open_competition_monitoring_is_fresh(
+            &lagging, safe_block, now
+        ));
+
+        let failed = open_competition_heartbeat(now, "failed", Some(safe_block), 15);
+        assert!(!open_competition_monitoring_is_fresh(
+            &failed, safe_block, now
+        ));
+    }
+
+    #[test]
+    fn open_competition_monitoring_accepts_only_the_caught_up_skip_reason() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        let safe_block = 50_000_000;
+        let mut caught_up = open_competition_heartbeat(now, "skipped", Some(safe_block), 15);
+        caught_up.skipped_reason = Some("no confirmed blocks are ready to scan".to_string());
+        assert!(open_competition_monitoring_is_fresh(
+            &caught_up, safe_block, now
+        ));
+
+        caught_up.skipped_reason =
+            Some("latest block is below configured confirmations".to_string());
+        assert!(!open_competition_monitoring_is_fresh(
+            &caught_up, safe_block, now
+        ));
+
+        caught_up.skipped_reason = Some("no confirmed blocks are ready to scan".to_string());
+        caught_up.error_message = Some("redacted failure".to_string());
+        assert!(!open_competition_monitoring_is_fresh(
+            &caught_up, safe_block, now
+        ));
+    }
 
     #[tokio::test]
     async fn objective_api_requires_signed_creation_and_preserves_role_boundaries() {

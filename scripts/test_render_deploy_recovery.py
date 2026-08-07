@@ -776,7 +776,12 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         for key, value in values.items():
             if key.endswith("_JSON") or key == "BASE_MAINNET_RPC_URL":
                 continue
-            self.assertEqual(value, "false")
+            expected = (
+                "true"
+                if key == "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE"
+                else "false"
+            )
+            self.assertEqual(value, expected)
 
     def test_open_competition_shared_environment_rejects_activation(self) -> None:
         source = recovery.json.loads(
@@ -789,6 +794,36 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             path = Path(directory) / "release.json"
             path.write_text(recovery.json.dumps(source), encoding="utf-8")
             with self.assertRaisesRegex(recovery.RecoveryError, "requires.*false"):
+                recovery.open_competition_shared_environment(path)
+
+    def test_open_competition_shared_environment_rejects_unconfigured_monitoring(
+        self,
+    ) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["hosted_activation"]["monitoring_gate_configured"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "must be configured"):
+                recovery.open_competition_shared_environment(path)
+
+    def test_open_competition_shared_environment_rejects_pre_attested_monitoring(
+        self,
+    ) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["hosted_activation"]["monitoring_active"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "cannot be pre-attested"):
                 recovery.open_competition_shared_environment(path)
 
     def test_shared_environment_variable_is_read_verified(self) -> None:

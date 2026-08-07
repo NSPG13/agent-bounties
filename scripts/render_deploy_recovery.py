@@ -670,7 +670,6 @@ def open_competition_shared_environment(
         "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE": (
             "r4_release_evidence_complete"
         ),
-        "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE": "monitoring_active",
         "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED": (
             "public_creation_enabled"
         ),
@@ -680,6 +679,10 @@ def open_competition_shared_environment(
     }
     if activation.get("public_inventory_eligible") is not False:
         raise RecoveryError("Open Competition public inventory must remain disabled")
+    if activation.get("monitoring_gate_configured") is not True:
+        raise RecoveryError("Open Competition monitoring gate must be configured")
+    if activation.get("monitoring_active") is not False:
+        raise RecoveryError("Open Competition runtime monitoring cannot be pre-attested")
     for field in activation_fields.values():
         if activation.get(field) is not False:
             raise RecoveryError(f"Open Competition hosted activation requires {field}=false")
@@ -694,6 +697,7 @@ def open_competition_shared_environment(
         ),
     }
     values.update({key: "false" for key in activation_fields})
+    values["BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE"] = "true"
     return values
 
 

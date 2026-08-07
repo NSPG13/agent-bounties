@@ -58,7 +58,7 @@ envVarGroups:
       - key: BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE
         value: "false"
       - key: BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE
-        value: "false"
+        value: "true"
       - key: BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED
         value: "false"
       - key: BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED

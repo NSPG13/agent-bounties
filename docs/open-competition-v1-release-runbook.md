@@ -165,5 +165,8 @@ The current Base mainnet release evidence is published in
 `deployments/open-competition-v1-base-mainnet.json`. Its hidden canary settled
 canonically and conserved escrow at a safe block. The hosted manifest remains
 `mainnet_canary_not_ready_to_earn`; public creation, commitments, and inventory
-stay disabled while monitoring, relay, gas-sponsorship, and final release
-evidence gates are false.
+stay disabled. The monitoring gate is configured but becomes ready only when
+the version-specific indexer's database heartbeat is successful or caught up,
+no more than 90 seconds old, error-free, and within 20 blocks of the API's safe
+block. A feature flag by itself cannot satisfy it. Relay, gas-sponsorship, and
+final R4 release-evidence gates remain false.

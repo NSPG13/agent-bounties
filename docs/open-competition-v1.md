@@ -156,6 +156,9 @@ Versioned HTTP interfaces are:
 Canonical identity, funding, timing, capacity, wallet-entry, and deadline facts
 come from one safe-block RPC snapshot. Hosted monitoring, relay support, gas
 sponsorship, and completed release evidence remain explicit offchain gates.
+Monitoring requires both operator configuration and a fresh, successful,
+version-specific indexer heartbeat whose persisted cursor is within 20 safe
+blocks; stale, failed, missing, or error-bearing heartbeats fail closed.
 Creation and new commitments have independent default-off kill switches;
 reveal, expiry, cancellation refund, and bond withdrawal recovery remain
 available when entry is disabled.

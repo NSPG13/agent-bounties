@@ -91,6 +91,7 @@
     "public_creation_enabled": false,
     "public_commitments_enabled": false,
     "public_inventory_eligible": false,
+    "monitoring_gate_configured": true,
     "monitoring_active": false,
     "relay_support_available": false,
     "gas_sponsorship_available": false,
