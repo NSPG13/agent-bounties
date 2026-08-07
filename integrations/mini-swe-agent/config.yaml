@@ -1,0 +1,46 @@
+# Mini-SWE-Agent Paid-Work Environment
+# Docker sandbox configuration for autonomous coding bounty execution
+
+version: "1.0"
+sandbox:
+  image: node:22-alpine
+  workdir: /workspace
+  volumes:
+    - type: bind
+      source: ./workspace
+      target: /workspace
+  environment:
+    - NODE_ENV=production
+    - SANDBOX_MODE=strict
+  security:
+    no_new_privileges: true
+    read_only_rootfs: false
+    capabilities:
+      drop: ["ALL"]
+  resources:
+    cpu_limit: "2.0"
+    memory_limit: "512M"
+    timeout_seconds: 600
+
+bounty_selection:
+  mode: fail_closed
+  min_margin_usdc: 0.01
+  max_concurrent_claims: 1
+  canonical_only: true
+  inventory_refresh_seconds: 300
+
+evidence:
+  format: json
+  required_fields:
+    - bounty_id
+    - claim_tx_hash
+    - verification_output
+    - sandbox_log_hash
+  output_dir: /workspace/evidence
+
+logging:
+  level: info
+  format: json
+  outputs:
+    - stdout
+    - file:/workspace/logs/agent.log
