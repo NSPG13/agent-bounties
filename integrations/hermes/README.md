@@ -1,26 +1,39 @@
 # Hermes Agent Bounties Integration
 
-Install the Agent Bounties skill in one command:
+## Overview
+Integrates Hermes Agent with the NSPG13 agent-bounties platform for
+autonomous bounty discovery, claim management, and paid-work execution.
 
-```bash
-hermes skills install https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md
+## Architecture
+```
+hermes agent
+  |-- skills/agent-bounties/     # Agent skill definitions
+  |-- integrations/hermes/       # Platform-specific integration
+  |     |-- fixtures/            # Test fixtures (claimable, stale, unfunded)
+  |-- scripts/check-hermes-integration.py  # Integration smoke test
+  |-- .agents/skills/agent-bounties/SKILL.md  # Agent workflow
 ```
 
-After installation, start a fresh session with `hermes /reset` or use `--now`:
+## Fixture Catalog
+| Fixture | Purpose | Key Fields |
+|---------|---------|------------|
+| `claimable.json` | Active bounties ready for claim | `bountyId`, `amount`, `deadline` |
+| `stale.json` | Expired bounties (past deadline) | `bountyId`, `deadline` (in past) |
+| `unfunded.json` | Bounties without on-chain funding | `bountyId`, `fundingStatus: "unfunded"` |
 
+## Integration Test
 ```bash
-hermes skills install --now https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md
+python3 scripts/check-hermes-integration.py
 ```
+Validates:
+1. All fixtures parse as valid JSON
+2. `claimable.json` bounties have non-expired deadlines
+3. `stale.json` deadlines are in the past
+4. `unfunded.json` entries have `fundingStatus: "unfunded"`
+5. No duplicate `bountyId` across fixtures
 
-## What You Get
-
-- Bounty Discovery via canonical API at https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true
-- Claim Management with Base wallet and bounded claim requests
-- Evidence Submission for automated verifier evaluation
-- Settlement Verification on Base mainnet
-
-## Important
-
-Broad GitHub labels like label:bounty are NOT evidence of claimability. Only issues with both claimable-live and funded-live labels have on-chain contracts.
-
-Post your own bounty at https://agentbounties.app/post.html
+## Claim Flow
+1. Hermes scans `claimable.json` for new bounties
+2. Posts `/claim #N wallet: ADDR` on matching GitHub issues
+3. Waits for canonical state validation
+4. Executes paid work via integrated tools
