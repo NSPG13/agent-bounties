@@ -42,10 +42,12 @@ LeadingZeroWorkVerifier difficulty `16`, compiler settings, creation bytecode,
 expected runtimes, and predicted addresses. The bundle contains no private key
 or signature.
 
-Serve `scripts/open-competition-v1-signer.html` locally. It accepts only the
-frozen bundle, requires the exact Brave extension account and chain, verifies
-the pending nonce and predicted addresses, displays each exact transaction,
-and records receipts. Never paste a seed phrase or private key into the page.
+Serve `scripts/open-competition-v1-signer.html` locally. It discovers injected
+wallets through EIP-6963 and defaults to the announced MetaMask provider. The
+operator selects a provider, after which the console accepts only the frozen
+bundle, exact admin account, and Base Sepolia chain. It verifies the pending
+nonce and predicted addresses, displays each exact transaction, and records
+receipts. Never paste a seed phrase or private key into the page.
 
 ## Sepolia Rehearsal
 

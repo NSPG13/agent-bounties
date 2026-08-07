@@ -9,6 +9,84 @@
   let bundle;
   let account;
   let results;
+  let provider;
+  let providerLabel;
+  const announcedProviders = [];
+  const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+  function isProvider(candidate) {
+    return Boolean(candidate && typeof candidate.request === "function");
+  }
+
+  function providerName(item) {
+    if (item.info && item.info.name) return item.info.name;
+    if (item.provider.isMetaMask && !item.provider.isBraveWallet) return "MetaMask";
+    if (item.provider.isBraveWallet) return "Brave Wallet";
+    return "Injected wallet";
+  }
+
+  function rememberProvider(event) {
+    const detail = event && event.detail;
+    if (!detail || !isProvider(detail.provider)) return;
+    if (!announcedProviders.some((item) => item.provider === detail.provider)) {
+      announcedProviders.push(detail);
+    }
+  }
+
+  window.addEventListener("eip6963:announceProvider", rememberProvider);
+
+  async function discoverProviders() {
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+    await sleep(300);
+    const candidates = [...announcedProviders];
+    const injected = window.ethereum && Array.isArray(window.ethereum.providers)
+      ? window.ethereum.providers
+      : (window.ethereum ? [window.ethereum] : []);
+    for (const candidate of injected) {
+      if (isProvider(candidate) && !candidates.some((item) => item.provider === candidate)) {
+        candidates.push({ provider: candidate, info: {} });
+      }
+    }
+    const providers = candidates.filter((item) => isProvider(item.provider));
+    const selector = $("wallet-provider");
+    selector.replaceChildren();
+    if (providers.length === 0) {
+      const option = document.createElement("option");
+      option.textContent = "No injected wallet detected";
+      selector.append(option);
+      selector.disabled = true;
+      throw new Error("No browser wallet is exposed. Unlock MetaMask and reload this page.");
+    }
+    providers.forEach((item, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = providerName(item);
+      option.dataset.rdns = item.info && item.info.rdns ? item.info.rdns : "";
+      selector.append(option);
+    });
+    const preferred = providers.findIndex((item) => (
+      String(item.info && item.info.rdns).toLowerCase() === "io.metamask"
+      || (item.provider.isMetaMask && !item.provider.isBraveWallet)
+    ));
+    selector.value = String(preferred >= 0 ? preferred : 0);
+    selector.disabled = false;
+    selector._providers = providers;
+    return providers;
+  }
+
+  function selectProvider() {
+    const selector = $("wallet-provider");
+    const item = selector._providers && selector._providers[Number.parseInt(selector.value, 10)];
+    if (!item) throw new Error("Select an available MetaMask provider.");
+    provider = item.provider;
+    providerLabel = providerName(item);
+    return provider;
+  }
+
+  function wallet(method, params = []) {
+    const selected = provider || selectProvider();
+    return selected.request({ method, params });
+  }
 
   function fail(message) {
     $("status").className = "status bad";
@@ -86,31 +164,41 @@
   }
 
   async function connect() {
-    if (!window.ethereum) throw new Error("Brave MetaMask is not available in this browser profile.");
-    let chain = await ethereum.request({ method: "eth_chainId" });
+    if (!bundle) throw new Error("Load and inspect the frozen bundle before connecting a wallet.");
+    if (!$("wallet-provider")._providers) await discoverProviders();
+    selectProvider();
+    let chain = await wallet("eth_chainId");
     if (chain.toLowerCase() !== EXPECTED_CHAIN) {
-      await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: EXPECTED_CHAIN }] });
-      chain = await ethereum.request({ method: "eth_chainId" });
+      try {
+        await wallet("wallet_switchEthereumChain", [{ chainId: EXPECTED_CHAIN }]);
+      } catch (error) {
+        if (!error || error.code !== 4902) throw error;
+        await wallet("wallet_addEthereumChain", [{
+          chainId: EXPECTED_CHAIN,
+          chainName: "Base Sepolia",
+          nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://sepolia.base.org"],
+          blockExplorerUrls: ["https://sepolia.basescan.org"],
+        }]);
+      }
+      chain = await wallet("eth_chainId");
     }
     if (chain.toLowerCase() !== EXPECTED_CHAIN) throw new Error("Wallet did not switch to Base Sepolia.");
-    const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+    const accounts = await wallet("eth_requestAccounts");
     account = String(accounts[0] || "").toLowerCase();
     if (account !== EXPECTED_ADMIN) throw new Error(`Connected account ${account || "(none)"} is not the frozen admin.`);
-    note(`Connected frozen admin ${account} on Base Sepolia.`);
+    note(`Connected ${providerLabel} to frozen admin ${account} on Base Sepolia.`);
     maybeReady();
   }
 
   async function maybeReady() {
     if (!bundle || account !== EXPECTED_ADMIN) return;
-    const pendingNonce = Number.parseInt(await ethereum.request({
-      method: "eth_getTransactionCount",
-      params: [account, "pending"],
-    }), 16);
+    const pendingNonce = Number.parseInt(await wallet("eth_getTransactionCount", [account, "pending"]), 16);
     if (pendingNonce !== bundle.actions[0].from_nonce) {
       return fail(`Pending nonce ${pendingNonce} does not match frozen nonce ${bundle.actions[0].from_nonce}. Regenerate the bundle.`);
     }
     for (const action of bundle.actions) {
-      const occupied = await ethereum.request({ method: "eth_getCode", params: [action.expected_contract, "latest"] });
+      const occupied = await wallet("eth_getCode", [action.expected_contract, "latest"]);
       if (occupied !== "0x") return fail(`Predicted address ${action.expected_contract} is already occupied.`);
     }
     $("reviewed").disabled = false;
@@ -119,7 +207,7 @@
 
   async function waitForReceipt(hash) {
     for (let attempt = 0; attempt < 180; attempt += 1) {
-      const receipt = await ethereum.request({ method: "eth_getTransactionReceipt", params: [hash] });
+      const receipt = await wallet("eth_getTransactionReceipt", [hash]);
       if (receipt) return receipt;
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
@@ -140,28 +228,27 @@
       evidence_boundary: "Confirmed deployment receipts and exact runtime matches are deployment evidence only. They are not rehearsal, activation, settlement, or payment evidence.",
     };
     for (const action of bundle.actions) {
-      note(`Requesting Brave MetaMask signature for ${action.name}…`);
-      const hash = await ethereum.request({
-        method: "eth_sendTransaction",
-        params: [{ from: account, data: action.data, value: "0x0", nonce: `0x${action.from_nonce.toString(16)}` }],
-      });
+      note(`Requesting ${providerLabel} signature for ${action.name}…`);
+      const hash = await wallet("eth_sendTransaction", [{
+        from: account,
+        data: action.data,
+        value: "0x0",
+        nonce: `0x${action.from_nonce.toString(16)}`,
+      }]);
       const receipt = await waitForReceipt(hash);
       if (Number.parseInt(receipt.status, 16) !== 1) throw new Error(`${action.name} reverted.`);
       if (String(receipt.contractAddress).toLowerCase() !== action.expected_contract) {
         throw new Error(`${action.name} deployed at an unexpected address.`);
       }
-      const runtime = String(await ethereum.request({
-        method: "eth_getCode",
-        params: [action.expected_contract, receipt.blockNumber],
-      })).toLowerCase();
+      const runtime = String(await wallet("eth_getCode", [action.expected_contract, receipt.blockNumber])).toLowerCase();
       if (runtime !== action.expected_runtime_code.toLowerCase()) {
         throw new Error(`${action.name} runtime bytecode mismatch.`);
       }
       if (action.expected_implementation) {
-        const implementationRuntime = String(await ethereum.request({
-          method: "eth_getCode",
-          params: [action.expected_implementation, receipt.blockNumber],
-        })).toLowerCase();
+        const implementationRuntime = String(await wallet(
+          "eth_getCode",
+          [action.expected_implementation, receipt.blockNumber],
+        )).toLowerCase();
         if (implementationRuntime !== action.expected_implementation_runtime_code.toLowerCase()) {
           throw new Error("Factory implementation runtime bytecode mismatch.");
         }
@@ -200,9 +287,19 @@
     } catch (error) { fail(error.message); }
   });
   $("connect").addEventListener("click", () => connect().catch((error) => fail(error.message)));
+  $("wallet-provider").addEventListener("change", () => {
+    provider = null;
+    providerLabel = null;
+    account = null;
+    $("reviewed").disabled = true;
+    $("reviewed").checked = false;
+    $("execute").disabled = true;
+    note("Wallet provider changed. Connect it to re-run every account and chain check.");
+  });
   $("reviewed").addEventListener("change", () => {
     $("execute").disabled = !$("reviewed").checked || !bundle || account !== EXPECTED_ADMIN;
   });
   $("execute").addEventListener("click", () => execute().catch((error) => fail(error.message)));
   $("download").addEventListener("click", download);
+  discoverProviders().catch((error) => fail(error.message));
 })();

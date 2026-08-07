@@ -240,6 +240,8 @@ def main() -> int:
         ["scripts/test-autonomous-activation-console.js"], ["--check", "tools/canonical-child-verifier-deployment.js"],
         ["scripts/test-canonical-child-verifier-deployment-console.js"], ["--check", "tools/base-sepolia-sponsor-activation.js"],
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
+        ["--check", "scripts/open-competition-v1-signer.js"],
+        ["scripts/test-open-competition-v1-signer-console.js"],
         ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
