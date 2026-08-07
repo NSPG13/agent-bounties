@@ -1718,6 +1718,7 @@ async fn main() -> anyhow::Result<()> {
             get(agent_bounties_discovery),
         )
         .route("/.well-known/x402.json", get(x402_discovery))
+        .route("/.well-known/agent-card.json", get(agent_card_discovery))
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5135,6 +5136,47 @@ async fn agent_bounties_discovery(
         &state.public_base_url,
         &state.mcp_base_url,
     ))
+}
+
+
+#[utoipa::path(get, path = "/.well-known/agent-card.json", responses((status = 200, description = "A2A 1.0 Agent Card"), (status = 304, description = "Not Modified")))]
+async fn agent_card_discovery(headers: HeaderMap) -> Response {
+    // A2A Agent Card: emit ETag + Cache-Control (clients revalidate with If-None-Match).
+
+    let (body, etag) = web_public::agent_card_body_and_etag();
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    if if_none_match == Some(etag.as_str())
+        || if_none_match == Some(etag.trim_matches('"'))
+        || if_none_match.map(|v| v.contains(etag.as_str())).unwrap_or(false)
+    {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, HeaderValue::from_str(&etag).expect("etag")),
+                (
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=300, must-revalidate"),
+                ),
+            ],
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
+            (header::ETAG, HeaderValue::from_str(&etag).expect("etag")),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=300, must-revalidate"),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[utoipa::path(get, path = "/.well-known/x402.json", responses((status = 200, description = "x402 funding and discovery capabilities")))]
@@ -14267,7 +14309,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn x402_discovery_is_explicit_about_custom_funding_and_mpp_boundary() {
+
+    #[tokio::test]
+    async fn agent_card_discovery_sets_cache_headers() {
+        let response = agent_card_discovery(HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let headers = response.headers();
+        assert!(headers.get(header::ETAG).is_some());
+        let cache = headers
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(cache.to_ascii_lowercase().contains("max-age"));
+        let etag = headers
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .unwrap()
+            .to_string();
+        let mut revalidate = HeaderMap::new();
+        revalidate.insert(header::IF_NONE_MATCH, HeaderValue::from_str(&etag).unwrap());
+        let not_modified = agent_card_discovery(revalidate).await;
+        assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    }
+
+        async fn x402_discovery_is_explicit_about_custom_funding_and_mpp_boundary() {
         let state = test_state(BountyNetwork::default());
         let document = x402_discovery(State(state)).await.0;
 
