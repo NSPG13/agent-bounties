@@ -212,8 +212,21 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
     if release.get("deployment_state") != "mainnet_canary_not_ready_to_earn":
         fail("Open Competition V1 hosted release must remain in hidden-canary state")
     hosted = release.get("hosted_activation")
-    if not isinstance(hosted, dict) or any(hosted.values()):
-        fail("Open Competition V1 hosted activation gates must remain false")
+    if not isinstance(hosted, dict):
+        fail("Open Competition V1 hosted activation evidence is missing")
+    if hosted.get("monitoring_gate_configured") is not True:
+        fail("Open Competition V1 monitoring gate must be configured")
+    for field in (
+        "public_creation_enabled",
+        "public_commitments_enabled",
+        "public_inventory_eligible",
+        "monitoring_active",
+        "relay_support_available",
+        "gas_sponsorship_available",
+        "r4_release_evidence_complete",
+    ):
+        if hosted.get(field) is not False:
+            fail(f"Open Competition V1 hidden-canary gate {field} must remain false")
     if not isinstance(release.get("release_manifest"), dict):
         fail("Open Competition V1 release_manifest is missing")
     catalog = release.get("verifier_catalog")
@@ -343,11 +356,13 @@ def main() -> int:
         "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE",
         "BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE",
         "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE",
-        "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE",
         "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED",
         "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED",
     ):
         require_env_value(base_group, key, '"false"')
+    require_env_value(
+        base_group, "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE", '"true"'
+    )
     relayer_group = require_group(
         text,
         "agent-bounties-x402-relayer",
