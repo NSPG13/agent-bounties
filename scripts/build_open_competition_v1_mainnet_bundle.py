@@ -30,6 +30,25 @@ CANARY_VERIFIER_REWARD = 100_000
 CANARY_INITIAL_FUNDING = CANARY_SOLVER_REWARD + CANARY_VERIFIER_REWARD
 CANARY_SOLVER_BOND = CANARY_VERIFIER_REWARD
 MIN_CANARY_USDC = CANARY_INITIAL_FUNDING + CANARY_SOLVER_BOND
+CANARY_BENCHMARK_PREIMAGE = "leading-zero-work-v1/difficulty-16/canary-benchmark-v1"
+CANARY_EVIDENCE_SCHEMA_PREIMAGE = "agent-bounties/leading-zero-work-evidence-v1"
+CANARY_BENCHMARK_HASH = keccak256(CANARY_BENCHMARK_PREIMAGE.encode())
+CANARY_EVIDENCE_SCHEMA_HASH = keccak256(CANARY_EVIDENCE_SCHEMA_PREIMAGE.encode())
+
+
+def verifier_profile() -> dict[str, Any]:
+    return {
+        "profile_id": "leading-zero-work-v1-difficulty-16-mainnet-canary",
+        "verifier_address": VERIFIER,
+        "difficulty_bits": DIFFICULTY_BITS,
+        "runtime_code_hash": VERIFIER_RUNTIME_HASH,
+        "benchmark_preimage": CANARY_BENCHMARK_PREIMAGE,
+        "benchmark_hash": CANARY_BENCHMARK_HASH,
+        "evidence_schema_preimage": CANARY_EVIDENCE_SCHEMA_PREIMAGE,
+        "evidence_schema_hash": CANARY_EVIDENCE_SCHEMA_HASH,
+        "usage": "protocol_canary_only",
+        "public_inventory_eligible": False,
+    }
 
 
 def normalized_sha256(path: Path) -> str:
@@ -210,14 +229,7 @@ def build_bundle(args: argparse.Namespace) -> dict[str, Any]:
             "deployer_usdc_base_units": deployer_usdc,
         },
         "actions": [action],
-        "verifier_profile": {
-            "profile_id": "leading-zero-work-v1-difficulty-16-mainnet-canary",
-            "verifier_address": VERIFIER,
-            "difficulty_bits": DIFFICULTY_BITS,
-            "runtime_code_hash": VERIFIER_RUNTIME_HASH,
-            "usage": "protocol_canary_only",
-            "public_inventory_eligible": False,
-        },
+        "verifier_profile": verifier_profile(),
         "factory": factory_address.lower(),
         "implementation": implementation_address.lower(),
         "hidden_canary": {

@@ -14,6 +14,8 @@ from urllib.request import Request, urlopen
 
 from Crypto.Hash import keccak
 
+import build_open_competition_v1_mainnet_bundle as bundle_builder
+
 
 ADMIN = "0x884834e884d6e93462655a2820140ad03e6747bc"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
@@ -127,8 +129,8 @@ def create_competition_data(bundle: dict[str, Any], block_timestamp: int) -> tup
     terms = hash_text("agent-bounties/open-competition-v1/mainnet-canary/terms-v1")
     policy = hash_text("agent-bounties/open-competition-v1/mainnet-canary/policy-v1")
     criteria = hash_text("leading-zero-work-v1/difficulty-16/canary-criteria-v1")
-    benchmark = hash_text("leading-zero-work-v1/difficulty-16/canary-benchmark-v1")
-    evidence_schema = hash_text("agent-bounties/leading-zero-work-evidence-v1")
+    benchmark = hash_text(bundle_builder.CANARY_BENCHMARK_PREIMAGE)
+    evidence_schema = hash_text(bundle_builder.CANARY_EVIDENCE_SCHEMA_PREIMAGE)
     creation_nonce = hash_text("agent-bounties/open-competition-v1/mainnet-hidden-canary-v1")
     funding_deadline = block_timestamp + 7 * 24 * 60 * 60
     params = [

@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+import build_open_competition_v1_mainnet_bundle as bundle_builder
+
 
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
 ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
@@ -45,6 +47,16 @@ def audit(bundle: dict[str, Any], replay: dict[str, Any]) -> dict[str, Any]:
     require(replay.get("factory") == bundle.get("factory"), "factory mismatch")
     require(replay.get("implementation") == bundle.get("implementation"), "implementation mismatch")
     require(replay.get("verifier") == bundle["verifier_profile"]["verifier_address"], "verifier mismatch")
+    canary_profile = replay.get("canary_profile")
+    require(isinstance(canary_profile, dict), "canary profile missing")
+    require(
+        canary_profile.get("benchmark_hash") == bundle_builder.CANARY_BENCHMARK_HASH,
+        "canary benchmark hash mismatch",
+    )
+    require(
+        canary_profile.get("evidence_schema_hash") == bundle_builder.CANARY_EVIDENCE_SCHEMA_HASH,
+        "canary evidence schema hash mismatch",
+    )
     require(replay.get("deployer") != replay.get("solver"), "creator/deployer cannot be solver")
     for field in ("factory", "implementation", "verifier", "solver", "bounty"):
         require(ADDRESS.fullmatch(str(replay.get(field, ""))) is not None, f"{field} address invalid")
