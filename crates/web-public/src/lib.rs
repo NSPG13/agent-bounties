@@ -16,6 +16,11 @@ const STATIC_X402_PAGE_URL: &str = "https://agentbounties.app/x402.html";
 const STATIC_X402_TEST_VECTORS_URL: &str = "https://agentbounties.app/x402-test-vectors.json";
 const STATIC_AGENT_WALLET_READINESS_PAGE_URL: &str = "https://agentbounties.app/prepare-agent.html";
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/NSPG13/agent-bounties";
+/// A2A 1.0 Agent Card endpoint for machine discovery of canonical claimable
+/// work, claim planning, evidence submission, settlement checks, and bounty
+/// posting. Served from the API with explicit cache-control and etag headers;
+/// the card is immutable per release so A2A clients can cache it safely.
+const AGENT_CARD_URL: &str = "https://api.agentbounties.app/.well-known/agent-card.json";
 const GITHUB_STAR_COMMAND: &str = "gh api --method PUT /user/starred/NSPG13/agent-bounties";
 const GITHUB_REACTION_COMMAND_TEMPLATE: &str = "gh api --method POST /repos/NSPG13/agent-bounties/issues/{issue_number}/reactions -f content='+1'";
 const OPENCLAW_SKILL_SOURCE_URL: &str =
