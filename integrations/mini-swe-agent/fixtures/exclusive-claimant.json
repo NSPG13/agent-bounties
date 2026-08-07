@@ -1,0 +1,18 @@
+{
+  "snapshot_status": "fresh",
+  "opportunities": [
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000ff",
+      "status": "claimable",
+      "verification_ready": true,
+      "gross_cash_margin": "2000000",
+      "exclusive_claimant": "0x1111111111111111111111111111111111111111",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/6",
+          "benchmark": {"engine": "sandboxed_regression_v1"}
+        }
+      }
+    }
+  ]
+}
