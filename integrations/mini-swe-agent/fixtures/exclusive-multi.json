@@ -1,0 +1,42 @@
+{
+  "bountyId": "edge-exclusive-multi",
+  "issueNumber": 993,
+  "repo": "NSPG13/agent-bounties",
+  "scenario": "Multiple agents claimed; only first valid claim wins",
+  "claims": [
+    {
+      "agentId": "fast-agent-001",
+      "claimedAt": "2026-08-01T00:00:00Z",
+      "wallet": "0xaaaa000000000000000000000000000000000000",
+      "status": "accepted",
+      "priority": 1
+    },
+    {
+      "agentId": "slow-agent-002",
+      "claimedAt": "2026-08-01T00:00:05Z",
+      "wallet": "0xbbbb000000000000000000000000000000000000",
+      "status": "rejected",
+      "priority": 2,
+      "rejectionReason": "Already claimed by fast-agent-001"
+    },
+    {
+      "agentId": "invalid-agent-003",
+      "claimedAt": "2026-08-01T00:00:10Z",
+      "wallet": "0xcccc000000000000000000000000000000000000",
+      "status": "rejected",
+      "priority": 3,
+      "rejectionReason": "Agent card validation failed — missing skill 'code-change'"
+    }
+  ],
+  "bounty": {
+    "amount": "2.00",
+    "token": "USDC",
+    "fundingStatus": "funded",
+    "winner": "fast-agent-001"
+  },
+  "rules": {
+    "policy": "exclusive",
+    "tiebreaker": "first_valid_claim",
+    "validationChecks": ["agent_card_exists", "wallet_format", "skill_match"]
+  }
+}
