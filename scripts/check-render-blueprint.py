@@ -5,7 +5,6 @@ import re
 import sys
 from pathlib import Path
 
-from _shared.evm import keccak256
 from render_deploy_recovery import OPEN_COMPETITION_WORKER_ENVIRONMENT
 
 
@@ -230,13 +229,19 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
     for field in ("profile_id", "benchmark_hash", "evidence_schema_hash"):
         if canary_profile.get(field) != catalog_profile.get(field):
             fail(f"Open Competition V1 hidden canary {field} must match the verifier catalog")
-    for preimage_field, hash_field in (
-        ("benchmark_preimage", "benchmark_hash"),
-        ("evidence_schema_preimage", "evidence_schema_hash"),
-    ):
-        preimage = canary_profile.get(preimage_field)
-        if not isinstance(preimage, str) or keccak256(preimage.encode()) != canary_profile.get(hash_field):
-            fail(f"Open Competition V1 hidden canary {hash_field} does not match its frozen preimage")
+    frozen_commitments = {
+        "benchmark": (
+            "leading-zero-work-v1/difficulty-16/canary-benchmark-v1",
+            "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+        ),
+        "evidence_schema": (
+            "agent-bounties/leading-zero-work-evidence-v1",
+            "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da",
+        ),
+    }
+    for name, (preimage, commitment_hash) in frozen_commitments.items():
+        if canary_profile.get(f"{name}_preimage") != preimage or canary_profile.get(f"{name}_hash") != commitment_hash:
+            fail(f"Open Competition V1 hidden canary {name} commitment is not frozen")
     if catalog_profile.get("evidence_schema") != canary_profile.get("evidence_schema_preimage"):
         fail("Open Competition V1 evidence schema identifier must match its frozen preimage")
     return release
