@@ -1,0 +1,82 @@
+name: Bounty Activation Workflow
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+jobs:
+  check_activation:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'pending-activation')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify activation requirements
+        id: verify
+        run: |
+          echo "Checking activation requirements for issue #${{ github.event.issue.number }}"
+          
+          ISSUE_BODY="${{ github.event.issue.body }}"
+          
+          CHECKS_PASSED=true
+          
+          if echo "$ISSUE_BODY" | grep -q "routed-V3 parent contract"; then
+            echo "✓ Parent contract reference found"
+          else
+            echo "✗ Missing parent contract reference"
+            CHECKS_PASSED=false
+          fi
+          
+          if echo "$ISSUE_BODY" | grep -q "2.01 USDC funding"; then
+            echo "✓ Funding amount specified"
+          else
+            echo "✗ Missing funding specification"
+            CHECKS_PASSED=false
+          fi
+          
+          if echo "$ISSUE_BODY" | grep -q "BountyBecameClaimable"; then
+            echo "✓ Claimable event mentioned"
+          else
+            echo "✗ Missing claimable event"
+            CHECKS_PASSED=false
+          fi
+          
+          echo "checks_passed=$CHECKS_PASSED" >> $GITHUB_OUTPUT
+
+      - name: Add activation labels
+        if: steps.verify.outputs.checks_passed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['bounty', 'funded-live', 'claimable-live']
+            });
+            
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: 'pending-activation'
+            });
+
+      - name: Post activation comment
+        if: steps.verify.outputs.checks_passed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🎉 **Bounty Activated**\n\nAll activation requirements verified. This bounty is now claimable.\n\nSolvers may now:\n1. Post and fund a 1.00 USDC child bounty\n2. Complete the child bounty work\n3. Receive canonical settlement\n4. Earn 1.00 USDC parent margin'
+            });
