@@ -1,10 +1,9 @@
 use super::{
     address_from_word, base_network_descriptor, decode_words, deterministic_log_id,
-    eip3009_typed_data, encode_address, encode_call, encode_uint256, event_topic,
-    fetch_account_code_hash, fetch_contract_word, log_key, normalize_address,
-    normalize_evm_address, normalize_hash, normalize_topic, parse_bytes32, parse_rpc_quantity,
-    predict_minimal_proxy_address, rpc_result, selector, topic_u64, topic_word, word_hex,
-    word_to_u128, word_to_u64, ChainBaseError, Eip3009AuthorizationTypedData, EvmLog,
+    eip3009_typed_data, encode_address, encode_call, encode_uint256, event_topic, log_key,
+    normalize_address, normalize_evm_address, normalize_hash, normalize_topic, parse_bytes32,
+    parse_rpc_quantity, predict_minimal_proxy_address, rpc_result, selector, topic_u64, topic_word,
+    word_hex, word_to_u128, word_to_u64, ChainBaseError, Eip3009AuthorizationTypedData, EvmLog,
     EvmTransactionIntent, JsonRpcTransport, ReqwestJsonRpcTransport,
 };
 use chrono::{DateTime, Utc};
@@ -12,6 +11,7 @@ use domain::Id;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha3::{Digest, Keccak256};
+use std::collections::BTreeMap;
 
 pub const OPEN_COMPETITION_READINESS_SCHEMA: &str =
     "agent-bounties/open-competition-v1-readiness-v1";
@@ -1225,168 +1225,234 @@ where
     let exact_block = format!("0x{safe_block_number:x}");
     let mut request_id = 2_u64;
 
-    let factory_runtime = fetch_account_code_hash(
-        rpc_url,
-        &factory,
-        &exact_block,
-        take_request_id(&mut request_id),
-        transport,
-    )
-    .await?;
-    let implementation_runtime = fetch_account_code_hash(
-        rpc_url,
+    let mut batch_requests = Vec::new();
+    let profile_verifier = normalize_evm_address(&query.verifier_profile.verifier_address)?;
+    let factory_runtime_id =
+        push_batch_code(&mut batch_requests, &mut request_id, &factory, &exact_block);
+    let implementation_runtime_id = push_batch_code(
+        &mut batch_requests,
+        &mut request_id,
         &implementation,
         &exact_block,
-        take_request_id(&mut request_id),
-        transport,
-    )
-    .await?;
-    let factory_protocol = fetch_word(
-        rpc_url,
-        &factory,
-        &encode_call("SUPPORTED_PROTOCOL_VERSION()", Vec::new()),
-        &exact_block,
+    );
+    let bounty_runtime_id =
+        push_batch_code(&mut batch_requests, &mut request_id, &bounty, &exact_block);
+    let verifier_runtime_id = push_batch_code(
+        &mut batch_requests,
         &mut request_id,
-        transport,
-    )
-    .await?;
+        &profile_verifier,
+        &exact_block,
+    );
+    let factory_protocol_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &factory,
+        encode_call("SUPPORTED_PROTOCOL_VERSION()", Vec::new()),
+        &exact_block,
+    );
+    let factory_implementation_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &factory,
+        encode_call("implementation()", Vec::new()),
+        &exact_block,
+    );
+    let factory_token_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &factory,
+        encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+    );
+    let registered_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &factory,
+        encode_call(
+            "isCanonicalCompetition(address)",
+            vec![encode_address(&bounty)?],
+        ),
+        &exact_block,
+    );
+    let bounty_protocol_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("protocolVersion()", Vec::new()),
+        &exact_block,
+    );
+    let bounty_factory_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("factory()", Vec::new()),
+        &exact_block,
+    );
+    let bounty_token_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+    );
+    let solver_reward_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("solverReward()", Vec::new()),
+        &exact_block,
+    );
+    let verifier_reward_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("verifierReward()", Vec::new()),
+        &exact_block,
+    );
+    let target_amount_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("targetAmount()", Vec::new()),
+        &exact_block,
+    );
+    let funded_amount_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("fundedAmount()", Vec::new()),
+        &exact_block,
+    );
+    let status_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("status()", Vec::new()),
+        &exact_block,
+    );
+    let entry_count_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("entryCount()", Vec::new()),
+        &exact_block,
+    );
+    let max_entries_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("maxEntries()", Vec::new()),
+        &exact_block,
+    );
+    let competition_ends_at_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("competitionEndsAt()", Vec::new()),
+        &exact_block,
+    );
+    let reveal_window_seconds_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("revealWindowSeconds()", Vec::new()),
+        &exact_block,
+    );
+    let verifier_module_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("verifierModule()", Vec::new()),
+        &exact_block,
+    );
+    let terms_hash_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("termsHash()", Vec::new()),
+        &exact_block,
+    );
+    let policy_hash_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("policyHash()", Vec::new()),
+        &exact_block,
+    );
+    let acceptance_criteria_hash_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("acceptanceCriteriaHash()", Vec::new()),
+        &exact_block,
+    );
+    let benchmark_hash_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("benchmarkHash()", Vec::new()),
+        &exact_block,
+    );
+    let evidence_schema_hash_id = push_batch_call(
+        &mut batch_requests,
+        &mut request_id,
+        &bounty,
+        encode_call("evidenceSchemaHash()", Vec::new()),
+        &exact_block,
+    );
+    let solver_has_entered_id = solver
+        .as_ref()
+        .map(|solver| {
+            Ok(push_batch_call(
+                &mut batch_requests,
+                &mut request_id,
+                &bounty,
+                encode_call("hasEntered(address)", vec![encode_address(solver)?]),
+                &exact_block,
+            ))
+        })
+        .transpose()?;
+
+    let mut batch_results = fetch_batch_results(rpc_url, batch_requests, transport).await?;
+    let factory_runtime = take_batch_code_hash(&mut batch_results, factory_runtime_id)?;
+    let implementation_runtime =
+        take_batch_code_hash(&mut batch_results, implementation_runtime_id)?;
+    let bounty_runtime = take_batch_code_hash(&mut batch_results, bounty_runtime_id)?;
+    let verifier_runtime = take_batch_code_hash(&mut batch_results, verifier_runtime_id)?;
+    let factory_protocol = take_batch_word(&mut batch_results, factory_protocol_id)?;
     let expected_protocol: [u8; 32] =
         Keccak256::digest(OPEN_COMPETITION_PROTOCOL_VERSION.as_bytes()).into();
-    let factory_implementation = address_from_word(
-        fetch_word(
-            rpc_url,
-            &factory,
-            &encode_call("implementation()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let factory_token = address_from_word(
-        fetch_word(
-            rpc_url,
-            &factory,
-            &encode_call("settlementToken()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
+    let factory_implementation = address_from_word(take_batch_word(
+        &mut batch_results,
+        factory_implementation_id,
+    )?);
+    let factory_token = address_from_word(take_batch_word(&mut batch_results, factory_token_id)?);
     let registered = word_as_bool(
-        fetch_word(
-            rpc_url,
-            &factory,
-            &encode_call(
-                "isCanonicalCompetition(address)",
-                vec![encode_address(&bounty)?],
-            ),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, registered_id)?,
         "factory registration",
     )?;
-    let bounty_runtime = fetch_account_code_hash(
-        rpc_url,
-        &bounty,
-        &exact_block,
-        take_request_id(&mut request_id),
-        transport,
-    )
-    .await?;
     let expected_bounty_runtime = minimal_proxy_runtime_code_hash(&implementation)?;
-    let bounty_protocol = fetch_word(
-        rpc_url,
-        &bounty,
-        &encode_call("protocolVersion()", Vec::new()),
-        &exact_block,
-        &mut request_id,
-        transport,
-    )
-    .await?;
-    let bounty_factory = address_from_word(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("factory()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let bounty_token = address_from_word(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("settlementToken()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
+    let bounty_protocol = take_batch_word(&mut batch_results, bounty_protocol_id)?;
+    let bounty_factory = address_from_word(take_batch_word(&mut batch_results, bounty_factory_id)?);
+    let bounty_token = address_from_word(take_batch_word(&mut batch_results, bounty_token_id)?);
     let solver_reward = word_as_u128(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("solverReward()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, solver_reward_id)?,
         "solver reward",
     )?;
     let verifier_reward = word_as_u128(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("verifierReward()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, verifier_reward_id)?,
         "verifier reward",
     )?;
     let target_amount = word_as_u128(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("targetAmount()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, target_amount_id)?,
         "target amount",
     )?;
     let funded_amount = word_as_u128(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("fundedAmount()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, funded_amount_id)?,
         "funded amount",
     )?;
     let status = word_as_u8(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("status()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, status_id)?,
         "competition status",
     )?;
     if status > 3 {
@@ -1395,143 +1461,42 @@ where
         ));
     }
     let entry_count = word_as_u8(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("entryCount()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, entry_count_id)?,
         "entry count",
     )?;
     let max_entries = word_as_u8(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("maxEntries()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, max_entries_id)?,
         "max entries",
     )?;
     let competition_ends_at = word_as_u64(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("competitionEndsAt()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, competition_ends_at_id)?,
         "competition deadline",
     )?;
     let reveal_window_seconds = word_as_u64(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("revealWindowSeconds()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
+        take_batch_word(&mut batch_results, reveal_window_seconds_id)?,
         "reveal window",
     )?;
-    let verifier_module = address_from_word(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("verifierModule()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let terms_hash = word_as_hash(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("termsHash()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let policy_hash = word_as_hash(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("policyHash()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let acceptance_criteria_hash = word_as_hash(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("acceptanceCriteriaHash()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let benchmark_hash = word_as_hash(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("benchmarkHash()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let evidence_schema_hash = word_as_hash(
-        fetch_word(
-            rpc_url,
-            &bounty,
-            &encode_call("evidenceSchemaHash()", Vec::new()),
-            &exact_block,
-            &mut request_id,
-            transport,
-        )
-        .await?,
-    );
-    let solver_has_entered = if let Some(solver) = &solver {
-        Some(word_as_bool(
-            fetch_word(
-                rpc_url,
-                &bounty,
-                &encode_call("hasEntered(address)", vec![encode_address(solver)?]),
-                &exact_block,
-                &mut request_id,
-                transport,
-            )
-            .await?,
-            "wallet entry",
-        )?)
-    } else {
-        None
-    };
-    let verifier_runtime = fetch_account_code_hash(
-        rpc_url,
-        &verifier_module,
-        &exact_block,
-        take_request_id(&mut request_id),
-        transport,
-    )
-    .await?;
+    let verifier_module =
+        address_from_word(take_batch_word(&mut batch_results, verifier_module_id)?);
+    let terms_hash = word_as_hash(take_batch_word(&mut batch_results, terms_hash_id)?);
+    let policy_hash = word_as_hash(take_batch_word(&mut batch_results, policy_hash_id)?);
+    let acceptance_criteria_hash = word_as_hash(take_batch_word(
+        &mut batch_results,
+        acceptance_criteria_hash_id,
+    )?);
+    let benchmark_hash = word_as_hash(take_batch_word(&mut batch_results, benchmark_hash_id)?);
+    let evidence_schema_hash = word_as_hash(take_batch_word(
+        &mut batch_results,
+        evidence_schema_hash_id,
+    )?);
+    let solver_has_entered = solver_has_entered_id
+        .map(|id| word_as_bool(take_batch_word(&mut batch_results, id)?, "wallet entry"))
+        .transpose()?;
+    if !batch_results.is_empty() {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "JSON-RPC batch returned unconsumed results".to_string(),
+        ));
+    }
 
     let profile = validate_open_competition_verifier_profile(
         &query.verifier_profile,
@@ -1667,21 +1632,6 @@ pub fn open_competition_readiness_from_state(
     })
 }
 
-async fn fetch_word<T>(
-    rpc_url: &str,
-    contract: &str,
-    data: &str,
-    block: &str,
-    request_id: &mut u64,
-    transport: &T,
-) -> Result<[u8; 32], ChainBaseError>
-where
-    T: JsonRpcTransport + ?Sized,
-{
-    let id = take_request_id(request_id);
-    parse_bytes32(&fetch_contract_word(rpc_url, contract, data, block, id, transport).await?)
-}
-
 fn take_request_id(request_id: &mut u64) -> u64 {
     let current = *request_id;
     *request_id += 1;
@@ -1733,6 +1683,10 @@ fn word_as_hash(word: [u8; 32]) -> String {
 }
 
 fn minimal_proxy_runtime_code_hash(implementation: &str) -> Result<String, ChainBaseError> {
+    runtime_code_hash(&minimal_proxy_runtime_code(implementation)?)
+}
+
+fn minimal_proxy_runtime_code(implementation: &str) -> Result<String, ChainBaseError> {
     let implementation = normalize_evm_address(implementation)?;
     let mut runtime = hex::decode("363d3d373d3d3d363d73").expect("proxy prefix is valid hex");
     runtime.extend_from_slice(
@@ -1741,7 +1695,20 @@ fn minimal_proxy_runtime_code_hash(implementation: &str) -> Result<String, Chain
     runtime.extend_from_slice(
         &hex::decode("5af43d82803e903d91602b57fd5bf3").expect("proxy suffix is valid hex"),
     );
-    Ok(format!("0x{}", hex::encode(Keccak256::digest(runtime))))
+    Ok(format!("0x{}", hex::encode(runtime)))
+}
+
+fn runtime_code_hash(code: &str) -> Result<String, ChainBaseError> {
+    let bytes = code
+        .strip_prefix("0x")
+        .filter(|hex| hex.len() % 2 == 0)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse("eth_getCode result is malformed".to_string())
+        })?;
+    let bytes = hex::decode(bytes).map_err(|_| {
+        ChainBaseError::InvalidRpcResponse("eth_getCode result is malformed".to_string())
+    })?;
+    Ok(format!("0x{}", hex::encode(Keccak256::digest(bytes))))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2038,28 +2005,26 @@ mod tests {
                     "jsonrpc": "2.0", "id": id,
                     "result": { "number": "0x64", "hash": format!("0x{}", "99".repeat(32)), "timestamp": "0x3e8" }
                 })),
-                "eth_getProof" => {
+                "eth_getCode" => {
                     let address = request["params"][0].as_str().unwrap().to_ascii_lowercase();
-                    let code_hash = if address == self.query.release.factory_contract {
-                        self.query.release.factory_runtime_code_hash.clone()
+                    let code = if address == self.query.release.factory_contract {
+                        "0x6001".to_string()
                     } else if address == self.query.release.implementation_contract {
-                        self.query.release.implementation_runtime_code_hash.clone()
+                        "0x6002".to_string()
                     } else if address == self.query.bounty_contract {
-                        minimal_proxy_runtime_code_hash(
-                            &self.query.release.implementation_contract,
-                        )?
+                        minimal_proxy_runtime_code(&self.query.release.implementation_contract)?
                     } else if address == self.query.verifier_profile.verifier_address {
                         if self.verifier_runtime_drift {
-                            format!("0x{}", "77".repeat(32))
+                            "0x6077".to_string()
                         } else {
-                            self.query.verifier_profile.runtime_code_hash.clone()
+                            "0x6003".to_string()
                         }
                     } else {
                         return Err(ChainBaseError::RpcTransport(format!(
-                            "unexpected eth_getProof address {address}"
+                            "unexpected eth_getCode address {address}"
                         )));
                     };
-                    Ok(json!({ "jsonrpc": "2.0", "id": id, "result": { "codeHash": code_hash } }))
+                    Ok(json!({ "jsonrpc": "2.0", "id": id, "result": code }))
                 }
                 "eth_call" => {
                     let to = request["params"][0]["to"]
@@ -2154,6 +2119,7 @@ mod tests {
             .remove(0);
         profile.deployment_state = OpenCompetitionDeploymentState::ActiveReadyToEarn;
         profile.public_inventory_eligible = true;
+        profile.runtime_code_hash = runtime_code_hash("0x6003").unwrap();
         OpenCompetitionStateQuery {
             release: OpenCompetitionReleaseManifest {
                 protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
@@ -2164,8 +2130,8 @@ mod tests {
                 implementation_contract: "0x2222222222222222222222222222222222222222".to_string(),
                 settlement_token: descriptor.native_usdc_token_address,
                 deployment_block: 50,
-                factory_runtime_code_hash: format!("0x{}", "11".repeat(32)),
-                implementation_runtime_code_hash: format!("0x{}", "22".repeat(32)),
+                factory_runtime_code_hash: runtime_code_hash("0x6001").unwrap(),
+                implementation_runtime_code_hash: runtime_code_hash("0x6002").unwrap(),
             },
             bounty_contract: "0x3333333333333333333333333333333333333333".to_string(),
             solver: Some("0x4444444444444444444444444444444444444444".to_string()),
@@ -2627,6 +2593,199 @@ mod tests {
             "agent-bounties/leading-zero-work-evidence-v1"
         );
     }
+}
+
+fn push_batch_request(
+    requests: &mut Vec<(u64, String, Value)>,
+    request_id: &mut u64,
+    method: &str,
+    params: Value,
+) -> u64 {
+    let id = take_request_id(request_id);
+    requests.push((
+        id,
+        method.to_string(),
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        }),
+    ));
+    id
+}
+
+fn push_batch_code(
+    requests: &mut Vec<(u64, String, Value)>,
+    request_id: &mut u64,
+    address: &str,
+    block: &str,
+) -> u64 {
+    push_batch_request(requests, request_id, "eth_getCode", json!([address, block]))
+}
+
+fn push_batch_call(
+    requests: &mut Vec<(u64, String, Value)>,
+    request_id: &mut u64,
+    contract: &str,
+    data: String,
+    block: &str,
+) -> u64 {
+    push_batch_request(
+        requests,
+        request_id,
+        "eth_call",
+        json!([{ "to": contract, "data": data }, block]),
+    )
+}
+
+async fn fetch_batch_results<T>(
+    rpc_url: &str,
+    requests: Vec<(u64, String, Value)>,
+    transport: &T,
+) -> Result<BTreeMap<u64, Value>, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let mut results = BTreeMap::new();
+    let mut chunks = Vec::new();
+    let mut current_chunk = Vec::new();
+    let mut current_weight = 0_u8;
+    for request in requests {
+        let weight = if request.1 == "eth_getCode" { 2 } else { 1 };
+        if current_weight + weight > 2 {
+            chunks.push(std::mem::take(&mut current_chunk));
+            current_weight = 0;
+        }
+        current_weight += weight;
+        current_chunk.push(request);
+    }
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    for chunk in &chunks {
+        let payloads = chunk
+            .iter()
+            .map(|(_, _, payload)| payload.clone())
+            .collect::<Vec<_>>();
+        let mut attempt = 0_u64;
+        let chunk_results = loop {
+            attempt += 1;
+            let responses = match transport.post_json_values(rpc_url, &payloads).await {
+                Ok(responses) => responses,
+                Err(error) if rpc_rate_limited(&error) && attempt < 4 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt)).await;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if responses.len() != chunk.len() {
+                return Err(ChainBaseError::InvalidRpcResponse(
+                    "JSON-RPC batch response count does not match the request count".to_string(),
+                ));
+            }
+            let mut responses_by_id = BTreeMap::new();
+            for response in responses {
+                let id = response.get("id").and_then(Value::as_u64).ok_or_else(|| {
+                    ChainBaseError::InvalidRpcResponse(
+                        "JSON-RPC batch response is missing a numeric id".to_string(),
+                    )
+                })?;
+                if responses_by_id.insert(id, response).is_some() {
+                    return Err(ChainBaseError::InvalidRpcResponse(
+                        "JSON-RPC batch response contains a duplicate id".to_string(),
+                    ));
+                }
+            }
+            let mut chunk_results = BTreeMap::new();
+            let mut rate_limit = None;
+            for (id, method, _) in chunk {
+                let response = responses_by_id.remove(id).ok_or_else(|| {
+                    ChainBaseError::InvalidRpcResponse(format!(
+                        "JSON-RPC batch response is missing id {id}"
+                    ))
+                })?;
+                match rpc_result(response, *id, method) {
+                    Ok(result) => {
+                        chunk_results.insert(*id, result);
+                    }
+                    Err(error) if rpc_rate_limited(&error) => {
+                        rate_limit = Some(error);
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if let Some(error) = rate_limit {
+                if attempt < 4 {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt)).await;
+                    continue;
+                }
+                let methods = chunk
+                    .iter()
+                    .map(|(id, method, _)| format!("{id}:{method}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                return Err(match error {
+                    ChainBaseError::RpcProviderError { code, message } => {
+                        ChainBaseError::RpcProviderError {
+                            code,
+                            message: format!("{message}; requests={methods}"),
+                        }
+                    }
+                    other => other,
+                });
+            }
+            if !responses_by_id.is_empty() {
+                return Err(ChainBaseError::InvalidRpcResponse(
+                    "JSON-RPC batch response contains an unknown id".to_string(),
+                ));
+            }
+            break chunk_results;
+        };
+        results.extend(chunk_results);
+    }
+    Ok(results)
+}
+
+fn rpc_rate_limited(error: &ChainBaseError) -> bool {
+    match error {
+        ChainBaseError::RpcHttpStatus(429) => true,
+        ChainBaseError::RpcProviderError { code, message } => {
+            *code == -32016 || message.to_ascii_lowercase().contains("rate limit")
+        }
+        _ => false,
+    }
+}
+
+fn take_batch_word(
+    results: &mut BTreeMap<u64, Value>,
+    request_id: u64,
+) -> Result<[u8; 32], ChainBaseError> {
+    let result = results.remove(&request_id).ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!(
+            "JSON-RPC batch result is missing id {request_id}"
+        ))
+    })?;
+    parse_bytes32(result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_call result is not one ABI word".to_string())
+    })?)
+}
+
+fn take_batch_code_hash(
+    results: &mut BTreeMap<u64, Value>,
+    request_id: u64,
+) -> Result<String, ChainBaseError> {
+    let result = results.remove(&request_id).ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!(
+            "JSON-RPC batch result is missing id {request_id}"
+        ))
+    })?;
+    let code = result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_getCode result is not hex bytecode".to_string())
+    })?;
+    runtime_code_hash(code)
 }
 
 pub fn attach_open_competition_commit_calls(

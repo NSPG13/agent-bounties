@@ -2497,6 +2497,18 @@ pub trait JsonRpcTransport: Send + Sync {
         rpc_url: &str,
         request: &Value,
     ) -> Result<Value, ChainBaseError>;
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.post_json_value(rpc_url, request).await?);
+        }
+        Ok(responses)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2512,12 +2524,11 @@ impl Default for ReqwestJsonRpcTransport {
     }
 }
 
-#[async_trait::async_trait]
-impl JsonRpcTransport for ReqwestJsonRpcTransport {
-    async fn post_json_value(
+impl ReqwestJsonRpcTransport {
+    async fn post_json_request<T: Serialize + ?Sized>(
         &self,
         rpc_url: &str,
-        request: &Value,
+        request: &T,
     ) -> Result<Value, ChainBaseError> {
         let response = self
             .client
@@ -2545,6 +2556,30 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
             .json::<Value>()
             .await
             .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))
+    }
+}
+
+#[async_trait::async_trait]
+impl JsonRpcTransport for ReqwestJsonRpcTransport {
+    async fn post_json_value(
+        &self,
+        rpc_url: &str,
+        request: &Value,
+    ) -> Result<Value, ChainBaseError> {
+        self.post_json_request(rpc_url, request).await
+    }
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let response = self.post_json_request(rpc_url, requests).await?;
+        response.as_array().cloned().ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse(
+                "JSON-RPC batch response is not an array".to_string(),
+            )
+        })
     }
 }
 

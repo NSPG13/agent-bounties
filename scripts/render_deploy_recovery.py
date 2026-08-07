@@ -37,6 +37,7 @@ OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
 OPEN_COMPETITION_RELEASE_MANIFEST_PATH = Path(
     "deployments/open-competition-v1-base-mainnet.json"
 )
+HOSTED_BASE_MAINNET_RPC_URL = "https://base.drpc.org"
 OPEN_COMPETITION_WORKER_ENVIRONMENT = {
     "APP_PACKAGE": "worker",
     "APP_BINARY": "worker",
@@ -48,7 +49,7 @@ OPEN_COMPETITION_WORKER_ENVIRONMENT = {
         "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
     ),
     "OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK": "49663931",
-    "OPEN_COMPETITION_INDEXER_RPC_URL": "https://mainnet.base.org",
+    "OPEN_COMPETITION_INDEXER_RPC_URL": HOSTED_BASE_MAINNET_RPC_URL,
     "OPEN_COMPETITION_INDEXER_POLL_SECONDS": "15",
     "OPEN_COMPETITION_INDEXER_CONFIRMATIONS": "2",
     "OPEN_COMPETITION_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
@@ -684,6 +685,7 @@ def open_competition_shared_environment(
             raise RecoveryError(f"Open Competition hosted activation requires {field}=false")
 
     values = {
+        "BASE_MAINNET_RPC_URL": HOSTED_BASE_MAINNET_RPC_URL,
         "BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON": json.dumps(
             release, ensure_ascii=False, separators=(",", ":")
         ),
