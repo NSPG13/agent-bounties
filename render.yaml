@@ -28,7 +28,7 @@ envVarGroups:
       - key: BASE_SEPOLIA_RPC_URL
         sync: false
       - key: BASE_MAINNET_RPC_URL
-        value: https://mainnet.base.org
+        value: https://base.drpc.org
       - key: BASE_SEPOLIA_USDC_TOKEN
         value: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
       - key: BASE_MAINNET_USDC_TOKEN
@@ -344,7 +344,7 @@ services:
       - key: OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK
         value: "49663931"
       - key: OPEN_COMPETITION_INDEXER_RPC_URL
-        value: https://mainnet.base.org
+        value: https://base.drpc.org
       - key: OPEN_COMPETITION_INDEXER_POLL_SECONDS
         value: "15"
       - key: OPEN_COMPETITION_INDEXER_CONFIRMATIONS

@@ -759,7 +759,10 @@ class RenderDeployRecoveryTests(unittest.TestCase):
 
     def test_open_competition_shared_environment_is_hidden_canary_only(self) -> None:
         values = recovery.open_competition_shared_environment()
-        self.assertEqual(len(values), 8)
+        self.assertEqual(len(values), 9)
+        self.assertEqual(
+            values["BASE_MAINNET_RPC_URL"], recovery.HOSTED_BASE_MAINNET_RPC_URL
+        )
         release = recovery.json.loads(
             values["BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON"]
         )
@@ -771,7 +774,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         )
         self.assertFalse(catalog["profiles"][0]["public_inventory_eligible"])
         for key, value in values.items():
-            if key.endswith("_JSON"):
+            if key.endswith("_JSON") or key == "BASE_MAINNET_RPC_URL":
                 continue
             self.assertEqual(value, "false")
 

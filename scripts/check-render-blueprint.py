@@ -23,6 +23,7 @@ RECOVERY_RESERVED_BOUNTY_CONTRACTS = (
     "0x43d42cb227d76588ab16693f14efd6cff851fa7a,"
     "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"
 )
+HOSTED_BASE_MAINNET_RPC_URL = "https://base.drpc.org"
 MAINNET_LEADERBOARD_REWARD_CONTRACT = "0xb2637dd1dcf4ac9e22b42e9612e907ac44c52c69"
 SEPOLIA_LEADERBOARD_REWARD_CONTRACT = "0x2e84ef6708d5fff0e9909e80481a00b7ac47293e"
 
@@ -309,7 +310,9 @@ def main() -> int:
     require_env_sync_false(base_group, "BASE_SEPOLIA_RPC_URL")
     require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_FACTORY")
     require_env_sync_false(base_group, "BASE_SEPOLIA_BOUNTY_IMPLEMENTATION")
-    require_env_value(base_group, "BASE_MAINNET_RPC_URL", rpc_url)
+    require_env_value(
+        base_group, "BASE_MAINNET_RPC_URL", HOSTED_BASE_MAINNET_RPC_URL
+    )
     require_env_value(base_group, "BASE_MAINNET_USDC_TOKEN", str(deployment["native_usdc"]))
     require_env_value(
         base_group,
