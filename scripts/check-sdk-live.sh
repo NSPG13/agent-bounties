@@ -25,8 +25,8 @@ else
   exit 127
 fi
 
-if ! "${python_cmd[@]}" -c "import httpx" >/dev/null 2>&1; then
-  "${python_cmd[@]}" -m pip install "httpx>=0.27"
+if ! "${python_cmd[@]}" -c "import httpx; from eth_hash.auto import keccak" >/dev/null 2>&1; then
+  "${python_cmd[@]}" -m pip install -e "$repo_root/crates/sdk-python"
 fi
 
 cd "$repo_root"
