@@ -185,8 +185,12 @@ activate from an unattended CI wallet.
 Reviewed application releases use the `Render Deploy Recovery` workflow as an
 R2 action. It runs only after successful `CI` for a same-repository push to
 `main`, requires the latest successful SHA reachable from current `main`,
-deploys that exact SHA through Render's API, waits for API, MCP, and worker to
-reach terminal `live`, and verifies API/MCP revision headers.
+deploys that exact SHA through Render's API, waits for API, MCP, the legacy
+indexer, and the versioned Open Competition indexer to reach terminal `live`,
+and verifies API/MCP revision headers. The sole provisioning recovery is an
+absent allowlisted Open Competition indexer: the controller verifies the exact
+repository Blueprint identity, synchronizes it, and revalidates all bindings
+before deployment. Other missing or ambiguous services fail closed.
 Native provider commit triggers are disabled so two independent deploy
 authorities cannot race. The Render credential is isolated to this workflow;
 the scheduled observer and application containers never receive it. This

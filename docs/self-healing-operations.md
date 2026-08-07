@@ -39,15 +39,19 @@ Base indexer -> poll -> persist heartbeat/events/cursor
 malformed log/cursor/config/integrity failure -> failed heartbeat -> halt ingestion
                                                     +-> contain + incident
 
-successful main CI -> exact-SHA Render deploy controller -> API/MCP/worker live
+successful main CI -> exact-SHA Render deploy controller -> API/MCP/workers live
                                                        +-> exact web revision proof
 ```
 
 The deploy controller is separate from the public observer. It is allowed to
 deploy the latest successful reviewed application revision reachable from
 main. It resolves services against the canonical repository and branch,
-disables native commit-trigger deploys, polls all three Render deploy records,
-and writes redacted evidence. A newer failed main commit cannot suppress the
+disables native commit-trigger deploys, polls all four Render deploy records,
+and writes redacted evidence. If only the allowlisted additive Open Competition
+indexer is missing, it first verifies the exact repository Blueprint identity,
+cycles Auto Sync through Render's supported API, waits for the typed resource,
+and revalidates all bindings. Any other missing or ambiguous service fails
+closed. A newer failed main commit cannot suppress the
 last known-good release, and an older successful run skips after a newer
 successful run exists. It cannot deploy an unrelated branch, contract, wallet,
 or payment action. A missing credential, ambiguous service, failed build,

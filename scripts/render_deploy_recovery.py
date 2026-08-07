@@ -19,6 +19,11 @@ from typing import Any, Callable
 SCHEMA = "agent-bounties/render-deploy-evidence-v1"
 REPOSITORY = "github.com/nspg13/agent-bounties"
 PROTOCOL = "agent-bounties/autonomous-v1"
+BLUEPRINT_PATH = "render.yaml"
+BLUEPRINT_RECOVERABLE_SERVICE_NAMES = frozenset(
+    {"agent-bounties-open-competition-v1-indexer"}
+)
+BLUEPRINT_STATUSES = {"created", "paused", "in_sync", "syncing", "error"}
 HEALTH_STABILITY_PROBES = 8
 DEPLOY_MODES = {"build_and_deploy", "deploy_only"}
 ACTIVE_STATUSES = {
@@ -67,6 +72,12 @@ CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
 
 class RecoveryError(RuntimeError):
     pass
+
+
+class RenderServiceMissing(RecoveryError):
+    def __init__(self, service_name: str) -> None:
+        self.service_name = service_name
+        super().__init__(f"expected exactly one Render service named {service_name}; found 0")
 
 
 class RenderHttpError(RecoveryError):
@@ -277,6 +288,8 @@ def select_service(spec: ServiceSpec, payload: object) -> dict[str, Any]:
         for service in unwrap_service_entries(payload)
         if service.get("name") == spec.name
     ]
+    if not matches:
+        raise RenderServiceMissing(spec.name)
     if len(matches) != 1:
         raise RecoveryError(
             f"expected exactly one Render service named {spec.name}; found {len(matches)}"
@@ -292,6 +305,80 @@ def select_service(spec: ServiceSpec, payload: object) -> dict[str, Any]:
     if not isinstance(service_id, str) or not re.fullmatch(r"srv-[0-9a-z]+", service_id):
         raise RecoveryError(f"{spec.name} has an invalid Render service id")
     return service
+
+
+def unwrap_blueprint_entries(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render Blueprint-list response must be an array")
+    blueprints: list[dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        blueprint = entry.get("blueprint", entry)
+        if isinstance(blueprint, dict):
+            blueprints.append(blueprint)
+    return blueprints
+
+
+def validate_blueprint(blueprint: object) -> dict[str, Any]:
+    if not isinstance(blueprint, dict):
+        raise RecoveryError("Render Blueprint response must be an object")
+    blueprint = blueprint.get("blueprint", blueprint)
+    if not isinstance(blueprint, dict):
+        raise RecoveryError("Render Blueprint response is missing metadata")
+    blueprint_id = blueprint.get("id")
+    if not isinstance(blueprint_id, str) or not re.fullmatch(
+        r"exs-[0-9a-z]{20}", blueprint_id
+    ):
+        raise RecoveryError("Render Blueprint has an invalid id")
+    if normalize_repo(blueprint.get("repo")) != REPOSITORY:
+        raise RecoveryError("Render Blueprint is connected to an unexpected repository")
+    if blueprint.get("branch") != "main":
+        raise RecoveryError("Render Blueprint is not connected to the main branch")
+    if blueprint.get("path") != BLUEPRINT_PATH:
+        raise RecoveryError("Render Blueprint uses an unexpected file path")
+    status = blueprint.get("status")
+    if status not in BLUEPRINT_STATUSES:
+        raise RecoveryError("Render Blueprint has an unknown status")
+    if not isinstance(blueprint.get("autoSync"), bool):
+        raise RecoveryError("Render Blueprint is missing its Auto Sync state")
+    resources = blueprint.get("resources", [])
+    if not isinstance(resources, list):
+        raise RecoveryError("Render Blueprint resources must be an array")
+    return blueprint
+
+
+def select_blueprint(payload: object) -> dict[str, Any]:
+    candidates = [
+        blueprint
+        for blueprint in unwrap_blueprint_entries(payload)
+        if normalize_repo(blueprint.get("repo")) == REPOSITORY
+        and blueprint.get("branch") == "main"
+        and blueprint.get("path") == BLUEPRINT_PATH
+    ]
+    if len(candidates) != 1:
+        raise RecoveryError(
+            "expected exactly one Render Blueprint for the repository main branch and "
+            f"{BLUEPRINT_PATH}; found {len(candidates)}"
+        )
+    return validate_blueprint(candidates[0])
+
+
+def blueprint_has_service(
+    blueprint: dict[str, Any], spec: ServiceSpec
+) -> bool:
+    matches = [
+        resource
+        for resource in blueprint.get("resources", [])
+        if isinstance(resource, dict) and resource.get("name") == spec.name
+    ]
+    if len(matches) > 1:
+        raise RecoveryError(f"Render Blueprint has duplicate resources named {spec.name}")
+    if not matches:
+        return False
+    if matches[0].get("type") != spec.service_type:
+        raise RecoveryError(f"Render Blueprint has an unexpected type for {spec.name}")
+    return True
 
 
 def unwrap_deploy(payload: object) -> dict[str, Any]:
@@ -522,11 +609,109 @@ class RenderClient:
             self._sleep(float(attempt * 2))
         raise AssertionError("unreachable")
 
+    def _write_with_retry(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+        attempts: int = 3,
+    ) -> Any:
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._request_json(method, path, payload)
+            except RenderHttpError as error:
+                if error.status not in TRANSIENT_HTTP_STATUSES or attempt == attempts:
+                    raise
+            except RenderTransportError:
+                if attempt == attempts:
+                    raise
+            self._sleep(float(attempt * 2))
+        raise AssertionError("unreachable")
+
     def resolve_service(self, spec: ServiceSpec) -> dict[str, Any]:
         query = urllib.parse.urlencode(
             {"name": spec.name, "includePreviews": "false", "limit": "20"}
         )
         return select_service(spec, self._read_with_retry(f"/services?{query}"))
+
+    def ensure_blueprint_service(
+        self,
+        spec: ServiceSpec,
+        *,
+        attempts: int = 60,
+        poll_seconds: float = 5,
+    ) -> dict[str, Any]:
+        if spec.name not in BLUEPRINT_RECOVERABLE_SERVICE_NAMES:
+            raise RecoveryError(f"Blueprint recovery is not authorized for {spec.name}")
+        if attempts < 1 or poll_seconds < 0:
+            raise RecoveryError("Blueprint recovery polling configuration is invalid")
+
+        blueprint = select_blueprint(self._read_with_retry("/blueprints?limit=100"))
+        blueprint_id = blueprint["id"]
+        if not blueprint_has_service(blueprint, spec):
+            disabled_for_recovery = False
+            try:
+                if blueprint["autoSync"]:
+                    disabled = validate_blueprint(
+                        self._write_with_retry(
+                            "PATCH",
+                            f"/blueprints/{blueprint_id}",
+                            {"autoSync": False},
+                        )
+                    )
+                    if disabled["autoSync"]:
+                        raise RecoveryError("Render did not disable Blueprint Auto Sync")
+                    disabled_for_recovery = True
+                enabled = validate_blueprint(
+                    self._write_with_retry(
+                        "PATCH",
+                        f"/blueprints/{blueprint_id}",
+                        {"autoSync": True, "path": BLUEPRINT_PATH},
+                    )
+                )
+                if not enabled["autoSync"]:
+                    raise RecoveryError("Render did not enable Blueprint Auto Sync")
+            except RecoveryError as error:
+                if disabled_for_recovery:
+                    try:
+                        restored = validate_blueprint(
+                            self._write_with_retry(
+                                "PATCH",
+                                f"/blueprints/{blueprint_id}",
+                                {"autoSync": True, "path": BLUEPRINT_PATH},
+                            )
+                        )
+                    except RecoveryError as restore_error:
+                        raise RecoveryError(
+                            "Blueprint recovery failed and Render Auto Sync could not be "
+                            "restored"
+                        ) from restore_error
+                    if not restored["autoSync"]:
+                        raise RecoveryError(
+                            "Blueprint recovery failed and Render Auto Sync remains disabled"
+                        ) from error
+                raise
+
+        last_status = blueprint.get("status")
+        for attempt in range(1, attempts + 1):
+            current = validate_blueprint(
+                self._read_with_retry(f"/blueprints/{blueprint_id}")
+            )
+            last_status = current["status"]
+            if blueprint_has_service(current, spec):
+                try:
+                    return self.resolve_service(spec)
+                except RenderServiceMissing:
+                    pass
+            if current["status"] == "error":
+                raise RecoveryError(
+                    f"Render Blueprint entered error state before creating {spec.name}"
+                )
+            if attempt < attempts:
+                self._sleep(poll_seconds)
+        raise RecoveryError(
+            f"Render Blueprint did not create {spec.name}; last status {last_status}"
+        )
 
     def disable_native_auto_deploy(self, service: dict[str, Any]) -> None:
         if auto_deploy_disabled(service.get("autoDeploy")):
@@ -1316,8 +1501,24 @@ def deploy(
     initial: dict[str, dict[str, Any]] = {}
     preexisting_live: dict[str, dict[str, Any]] = {}
 
+    resolved: dict[str, dict[str, Any]] = {}
+    missing: list[ServiceSpec] = []
     for spec in specs:
-        services.append((spec, client.resolve_service(spec)))
+        try:
+            resolved[spec.name] = client.resolve_service(spec)
+        except RenderServiceMissing:
+            if spec.name not in BLUEPRINT_RECOVERABLE_SERVICE_NAMES:
+                raise
+            missing.append(spec)
+
+    for spec in missing:
+        resolved[spec.name] = client.ensure_blueprint_service(spec)
+
+    # Revalidate every binding after a Blueprint sync and before changing any
+    # service configuration or triggering a deployment.
+    if missing:
+        resolved = {spec.name: client.resolve_service(spec) for spec in specs}
+    services = [(spec, resolved[spec.name]) for spec in specs]
 
     if deploy_mode == "deploy_only":
         for spec, service in services:

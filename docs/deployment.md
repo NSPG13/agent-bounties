@@ -70,26 +70,30 @@ succeeds on a push to `main`, the workflow:
 
 1. checks out the exact successful-CI SHA;
 2. verifies it is the latest successful CI revision reachable from `main`;
-3. resolves all three Render services by exact name and verifies repository,
+3. resolves all four Render services by exact name and verifies repository,
    branch, and service type;
-4. disables any drifted native auto-deploy setting;
-5. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
+4. if and only if the additive Open Competition V1 indexer is absent, validates
+   exactly one Blueprint bound to this repository, `main`, and `render.yaml`,
+   cycles its supported Auto Sync setting, waits for the exact typed worker,
+   and then revalidates every service binding;
+5. disables any drifted native auto-deploy setting;
+6. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
    both public services;
-6. reconciles all nonsecret cloud-agent settings on API and copies the optional
+7. reconciles all nonsecret cloud-agent settings on API and copies the optional
    GitHub-held model key without including its value in evidence;
-7. creates or updates the optional FID-filtered Neynar provider webhook and
+8. creates or updates the optional FID-filtered Neynar provider webhook and
    reconciles its bot identity, reply signer, and generated signing secret on
    API without including their values in evidence;
-8. calls Render's deploy API with the exact commit for API, MCP, and worker;
-9. waits for all three deploys to reach `live` and fails on terminal errors;
-10. verifies exact revision and protocol headers from API and MCP `/health`;
-11. attests cloud readiness and fails if a supplied model credential did not
+9. calls Render's deploy API with the exact commit for API, MCP, and both workers;
+10. waits for all four deploys to reach `live` and fails on terminal errors;
+11. verifies exact revision and protocol headers from API and MCP `/health`;
+12. attests cloud readiness and fails if a supplied model credential did not
     become usable;
-12. attests social mention readiness when provider values were supplied;
-13. stores a redacted 30-day deployment evidence artifact.
+13. attests social mention readiness when provider values were supplied;
+14. stores a redacted 30-day deployment evidence artifact.
 
 Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
-Render Dashboard for the workspace that owns these three services, then store
+Render Dashboard for the workspace that owns these four services, then store
 it only under repository **Settings > Secrets and variables > Actions**. Never
 put the key in Render variables, workflow inputs, logs, issues, or Git. A
 missing key is a visible workflow failure, not a silent manual-deploy fallback.
