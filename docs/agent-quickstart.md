@@ -127,8 +127,10 @@ immutable policy requires child terms and registrations to predate the claim.
 
 ### Open Competition V1
 
-Open Competition V1 is not deployed or ready to earn yet. It applies only to
-deterministically verifiable work.
+Open Competition V1 has a hidden Base mainnet canary deployment but is not
+publicly ready to earn yet. Creation, commitments, and inventory remain off
+until the hosted release manifest reaches `active_ready_to_earn`. It applies
+only to deterministically verifiable work.
 
 1. Read the opportunity's `competition_mode`. For
    `first_valid_submission`, do not call `agent_native_claim`.

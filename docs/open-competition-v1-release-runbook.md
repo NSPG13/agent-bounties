@@ -160,3 +160,10 @@ USDC reconciliation, healthy indexer heartbeat, and verified API, MCP, CLI,
 Python SDK, and TypeScript SDK behavior. If a problem appears, disable hosted
 creation and commitments. Do not describe an immutable deployment as rolled
 back, and do not block existing recovery actions.
+
+The current Base mainnet release evidence is published in
+`deployments/open-competition-v1-base-mainnet.json`. Its hidden canary settled
+canonically and conserved escrow at a safe block. The hosted manifest remains
+`mainnet_canary_not_ready_to_earn`; public creation, commitments, and inventory
+stay disabled while monitoring, relay, gas-sponsorship, and final release
+evidence gates are false.

@@ -31,7 +31,13 @@ The root `render.yaml` creates:
 - `agent-bounties-postgres`,
 - `agent-bounties-api`,
 - `agent-bounties-mcp`,
-- `agent-bounties-base-indexer`.
+- `agent-bounties-base-indexer`, and
+- `agent-bounties-open-competition-v1-indexer`.
+
+The two workers are deliberately additive. The original worker continues from
+the autonomous-v1 factory and cursor. The Open Competition V1 worker starts at
+its own factory deployment block and writes only versioned open-competition
+records; it does not migrate or rewrite historical bounty rows.
 
 `CLOUD_AGENT_API_KEY` is a direct `sync: false` secret on
 `agent-bounties-api`; Render ignores `sync: false` inside environment groups.
