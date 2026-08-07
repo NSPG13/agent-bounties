@@ -40,9 +40,9 @@
         "configuration": {
           "difficulty_bits": 16
         },
-        "benchmark_hash": "0xf561db43183cd283b1ed059eeb64f6524ff92de33001616882d31071e2086d2c",
-        "evidence_schema_hash": "0x21521c3eac6143dc56fd2c8d1aaf9831057d6c40c18b542fea77102a6c6d2244",
-        "evidence_schema": "agent-bounties/leading-zero-work-proof-v1",
+        "benchmark_hash": "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+        "evidence_schema_hash": "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da",
+        "evidence_schema": "agent-bounties/leading-zero-work-evidence-v1",
         "immutable_runtime_required": true,
         "approved_for_rehearsal": true,
         "public_inventory_eligible": false,
@@ -54,6 +54,13 @@
   },
   "hidden_canary": {
     "bounty_contract": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+    "verifier_profile": {
+      "profile_id": "leading-zero-work-v1-difficulty-16-mainnet-canary",
+      "benchmark_preimage": "leading-zero-work-v1/difficulty-16/canary-benchmark-v1",
+      "benchmark_hash": "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+      "evidence_schema_preimage": "agent-bounties/leading-zero-work-evidence-v1",
+      "evidence_schema_hash": "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da"
+    },
     "creation_transaction": "0x9914bef22a5f2535805696fc6dcc3608c44a13a9641a84c552ea2c5d6b02b781",
     "settlement_transaction": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5",
     "settlement_block": 49664756,

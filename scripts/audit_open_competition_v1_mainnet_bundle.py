@@ -94,6 +94,19 @@ def audit(bundle: dict[str, Any], repo: Path) -> dict[str, Any]:
     require(verifier.get("verifier_address") == builder.VERIFIER, "verifier address mismatch")
     require(verifier.get("runtime_code_hash") == builder.VERIFIER_RUNTIME_HASH, "verifier runtime mismatch")
     require(verifier.get("difficulty_bits") == builder.DIFFICULTY_BITS, "verifier difficulty mismatch")
+    require(
+        verifier.get("benchmark_preimage") == builder.CANARY_BENCHMARK_PREIMAGE,
+        "canary benchmark preimage mismatch",
+    )
+    require(verifier.get("benchmark_hash") == builder.CANARY_BENCHMARK_HASH, "canary benchmark hash mismatch")
+    require(
+        verifier.get("evidence_schema_preimage") == builder.CANARY_EVIDENCE_SCHEMA_PREIMAGE,
+        "canary evidence schema preimage mismatch",
+    )
+    require(
+        verifier.get("evidence_schema_hash") == builder.CANARY_EVIDENCE_SCHEMA_HASH,
+        "canary evidence schema hash mismatch",
+    )
     require(verifier.get("usage") == "protocol_canary_only", "verifier usage boundary missing")
     require(verifier.get("public_inventory_eligible") is False, "verifier cannot be public before canary")
 

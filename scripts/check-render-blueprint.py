@@ -215,8 +215,35 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
         fail("Open Competition V1 hosted activation gates must remain false")
     if not isinstance(release.get("release_manifest"), dict):
         fail("Open Competition V1 release_manifest is missing")
-    if not isinstance(release.get("verifier_catalog"), dict):
+    catalog = release.get("verifier_catalog")
+    if not isinstance(catalog, dict):
         fail("Open Competition V1 verifier_catalog is missing")
+    profiles = catalog.get("profiles")
+    if not isinstance(profiles, list) or len(profiles) != 1 or not isinstance(profiles[0], dict):
+        fail("Open Competition V1 hidden-canary catalog must contain one exact verifier profile")
+    hidden_canary = release.get("hidden_canary")
+    if not isinstance(hidden_canary, dict) or not isinstance(hidden_canary.get("verifier_profile"), dict):
+        fail("Open Competition V1 hidden canary must pin its verifier profile commitments")
+    canary_profile = hidden_canary["verifier_profile"]
+    catalog_profile = profiles[0]
+    for field in ("profile_id", "benchmark_hash", "evidence_schema_hash"):
+        if canary_profile.get(field) != catalog_profile.get(field):
+            fail(f"Open Competition V1 hidden canary {field} must match the verifier catalog")
+    frozen_commitments = {
+        "benchmark": (
+            "leading-zero-work-v1/difficulty-16/canary-benchmark-v1",
+            "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+        ),
+        "evidence_schema": (
+            "agent-bounties/leading-zero-work-evidence-v1",
+            "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da",
+        ),
+    }
+    for name, (preimage, commitment_hash) in frozen_commitments.items():
+        if canary_profile.get(f"{name}_preimage") != preimage or canary_profile.get(f"{name}_hash") != commitment_hash:
+            fail(f"Open Competition V1 hidden canary {name} commitment is not frozen")
+    if catalog_profile.get("evidence_schema") != canary_profile.get("evidence_schema_preimage"):
+        fail("Open Competition V1 evidence schema identifier must match its frozen preimage")
     return release
 
 

@@ -481,16 +481,16 @@ pub fn built_in_open_competition_verifier_catalog(
                     .to_string(),
             configuration: json!({ "difficulty_bits": 16 }),
             benchmark_hash:
-                "0xf561db43183cd283b1ed059eeb64f6524ff92de33001616882d31071e2086d2c"
+                "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2"
                     .to_string(),
             evidence_schema_hash:
-                "0x21521c3eac6143dc56fd2c8d1aaf9831057d6c40c18b542fea77102a6c6d2244"
+                "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da"
                     .to_string(),
-            evidence_schema: "agent-bounties/leading-zero-work-proof-v1".to_string(),
+            evidence_schema: "agent-bounties/leading-zero-work-evidence-v1".to_string(),
             immutable_runtime_required: true,
             approved_for_rehearsal: true,
             public_inventory_eligible: false,
-            deployment_state: OpenCompetitionDeploymentState::SourceOnlyNotReadyToEarn,
+            deployment_state: OpenCompetitionDeploymentState::MainnetCanaryNotReadyToEarn,
             evidence_boundary: "This profile approves one exact immutable runtime and configuration for a protocol canary. It does not approve factory-origin modules generally or claim that leading-zero work represents ordinary digital work.".to_string(),
         }],
         "base-sepolia" => Vec::new(),
@@ -2554,7 +2554,7 @@ mod tests {
     }
 
     #[test]
-    fn creation_plan_is_exact_and_not_public_while_source_only() {
+    fn creation_plan_is_exact_and_not_public_during_hidden_canary() {
         let plan = plan_open_competition_creation(creation_request(None)).unwrap();
         assert!(plan.ready_to_broadcast);
         assert_eq!(plan.funding_mode, "approval_then_create");
@@ -2601,6 +2601,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("approved catalog profile"));
+    }
+
+    #[test]
+    fn mainnet_catalog_pins_the_settled_hidden_canary_profile() {
+        let profile = built_in_open_competition_verifier_catalog("base-mainnet")
+            .unwrap()
+            .profiles
+            .remove(0);
+        assert_eq!(
+            profile.deployment_state,
+            OpenCompetitionDeploymentState::MainnetCanaryNotReadyToEarn
+        );
+        assert!(!profile.public_inventory_eligible);
+        assert_eq!(
+            profile.benchmark_hash,
+            "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2"
+        );
+        assert_eq!(
+            profile.evidence_schema_hash,
+            "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da"
+        );
+        assert_eq!(
+            profile.evidence_schema,
+            "agent-bounties/leading-zero-work-evidence-v1"
+        );
     }
 }
 

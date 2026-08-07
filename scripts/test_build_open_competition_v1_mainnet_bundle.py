@@ -39,6 +39,21 @@ class OpenCompetitionMainnetBundleTests(unittest.TestCase):
         self.assertEqual(MODULE.CANARY_INITIAL_FUNDING, 1_100_000)
         self.assertEqual(MODULE.MIN_CANARY_USDC, 1_200_000)
 
+    def test_canary_profile_commitments_are_frozen_with_the_bundle(self) -> None:
+        profile = MODULE.verifier_profile()
+        self.assertEqual(profile["benchmark_preimage"], MODULE.CANARY_BENCHMARK_PREIMAGE)
+        self.assertEqual(profile["benchmark_hash"], MODULE.CANARY_BENCHMARK_HASH)
+        self.assertEqual(profile["evidence_schema_preimage"], MODULE.CANARY_EVIDENCE_SCHEMA_PREIMAGE)
+        self.assertEqual(profile["evidence_schema_hash"], MODULE.CANARY_EVIDENCE_SCHEMA_HASH)
+        self.assertEqual(
+            MODULE.CANARY_BENCHMARK_HASH,
+            "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+        )
+        self.assertEqual(
+            MODULE.CANARY_EVIDENCE_SCHEMA_HASH,
+            "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
