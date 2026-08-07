@@ -1,0 +1,7 @@
+{
+  "state": "funded-none",
+  "bounty_id": 99,
+  "reward": "0 USDC",
+  "network": "base-mainnet",
+  "next_action": "No funded contract. Do not claim until funded-live label appears. Check canonical feed."
+}
