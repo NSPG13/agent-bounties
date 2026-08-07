@@ -56,7 +56,7 @@ jobs:
           --event "$GITHUB_EVENT_PATH"
           --repository "$GITHUB_REPOSITORY"
           --registry "$PARTICIPANT_REGISTRY"
-          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --rpc-url "$BASE_MAINNET_RPC_URL,https://mainnet.base.org,https://base.drpc.org"
           --json-out target/participant-registration.json
           --md-out target/participant-registration.md
       - name: Publish constructive registration result

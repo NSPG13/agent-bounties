@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -89,25 +90,141 @@ class RegisterParticipantTests(unittest.TestCase):
 
     def test_rpc_selection_uses_first_endpoint_that_reports_base_mainnet(self) -> None:
         calls: list[list[str]] = []
+        registry = "0x" + "9" * 40
 
         def fake_run(command: list[str]) -> str:
             calls.append(command)
-            endpoint = command[-1]
-            if endpoint == "https://down.example/rpc":
-                raise registration.RegistrationError("endpoint unavailable")
-            if endpoint == "https://wrong-chain.example/rpc":
-                return "1"
-            return registration.BASE_CHAIN_ID
+            if command[1] == "chain-id":
+                endpoint = command[-1]
+                if endpoint == "https://down.example/rpc":
+                    raise registration.RegistrationError("endpoint unavailable")
+                if endpoint == "https://wrong-chain.example/rpc":
+                    return "1"
+                return registration.BASE_CHAIN_ID
+            self.assertEqual(command[1], "call")
+            self.assertEqual(command[4], registry)
+            return "0x" + "8" * 40
 
         with patch.object(registration, "run", side_effect=fake_run):
             selected = registration.select_base_rpc(
                 "cast",
                 "https://down.example/rpc,https://wrong-chain.example/rpc,https://base.example/rpc",
+                registry,
             )
 
         self.assertEqual(selected, "https://base.example/rpc")
-        self.assertEqual(len(calls), 3)
-        self.assertTrue(all(call[1:3] == ["chain-id", "--rpc-url"] for call in calls))
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(all(call[1:3] == ["chain-id", "--rpc-url"] for call in calls[:3]))
+        self.assertEqual(calls[3][1:3], ["call", "--rpc-url"])
+
+    def test_rpc_selection_skips_chain_only_endpoint_without_registry_read(self) -> None:
+        calls: list[list[str]] = []
+        registry = "0x" + "9" * 40
+
+        def fake_run(command: list[str]) -> str:
+            calls.append(command)
+            if command[1] == "chain-id":
+                return registration.BASE_CHAIN_ID
+            endpoint = command[3]
+            if endpoint == "https://chain-only.example/rpc":
+                raise registration.RegistrationError("archive read refused")
+            return "0x" + "8" * 40
+
+        with patch.object(registration, "run", side_effect=fake_run):
+            selected = registration.select_base_rpc(
+                "cast",
+                "https://chain-only.example/rpc,https://healthy.example/rpc",
+                registry,
+            )
+
+        self.assertEqual(selected, "https://healthy.example/rpc")
+        self.assertEqual(
+            [call[3] for call in calls if call[1] == "call"],
+            ["https://chain-only.example/rpc", "https://healthy.example/rpc"],
+        )
+
+    def test_register_uses_selected_rpc_for_every_chain_operation(self) -> None:
+        registry = "0x" + "9" * 40
+        wallet = "0x" + "a" * 40
+        attester = "0x" + "8" * 40
+        participant_id = "0x" + "1" * 64
+        source_hash = "0x" + "2" * 64
+        digest = "0x" + "3" * 64
+        transaction_hash = "0x" + "4" * 64
+        selected_rpc = "https://healthy.example/rpc"
+        raw_rpcs = "https://chain-only.example/rpc,https://healthy.example/rpc"
+        now = 1_786_000_000
+        valid_until = now + 30 * 24 * 60 * 60
+        chain_commands: list[list[str]] = []
+
+        def fake_run(command: list[str]) -> str:
+            if "--rpc-url" in command:
+                chain_commands.append(command)
+                self.assertEqual(command[command.index("--rpc-url") + 1], selected_rpc)
+            if command[1:3] == ["wallet", "address"]:
+                return attester
+            if command[1] == "keccak":
+                return participant_id if "github-user-v1" in command[2] else source_hash
+            if command[1] == "send":
+                return '{"transactionHash":"' + transaction_hash + '","status":"0x1"}'
+            if command[1] == "wallet" and command[2] == "sign":
+                return "0x" + "5" * 130
+            if command[1] == "call" and "attester()(address)" in command:
+                return attester
+            if command[1] == "call" and "nonces(address)(uint256)" in command:
+                return "0"
+            if command[1] == "call" and any(
+                value.startswith("attestationDigest(") for value in command
+            ):
+                return digest
+            if command[1] == "call" and any(
+                value.startswith("participants(address)") for value in command
+            ):
+                return (
+                    '["'
+                    + participant_id
+                    + '","'
+                    + source_hash
+                    + '",'
+                    + str(now)
+                    + ','
+                    + str(valid_until)
+                    + "]"
+                )
+            if command[1] == "call" and any(
+                value.startswith("eligibleAt(address,uint64)") for value in command
+            ):
+                return '["' + participant_id + '","' + source_hash + '",true]'
+            raise AssertionError(f"unexpected command: {command}")
+
+        args = SimpleNamespace(
+            registry=registry,
+            cast="cast",
+            rpc_url=raw_rpcs,
+        )
+        request = registration.RegistrationRequest(
+            repository="NSPG13/agent-bounties",
+            issue_number=333,
+            github_login="solver-agent",
+            github_user_id=12345,
+            wallet=wallet,
+        )
+        with (
+            patch.dict(
+                registration.os.environ,
+                {
+                    "PARTICIPANT_ATTESTER_PRIVATE_KEY": "attester-key",
+                    "BASE_KEEPER_PRIVATE_KEY": "keeper-key",
+                },
+            ),
+            patch.object(registration, "select_base_rpc", return_value=selected_rpc),
+            patch.object(registration, "run", side_effect=fake_run),
+            patch.object(registration.time, "time", return_value=now),
+        ):
+            result = registration.register(args, request)
+
+        self.assertEqual(result["transaction_hash"], transaction_hash)
+        self.assertGreaterEqual(len(chain_commands), 5)
 
     def test_post_receipt_error_preserves_transaction_evidence(self) -> None:
         error = registration.RegistrationError(
