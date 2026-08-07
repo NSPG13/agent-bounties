@@ -1,0 +1,14 @@
+{
+  "fixture": "stale",
+  "description": "A previously claimed bounty whose submission deadline has passed. The claim timeout forfeited the solver bond.",
+  "state": {
+    "status": "closed",
+    "funding": "confirmed",
+    "verification_ready": false,
+    "canonical_event": "BountyClosed",
+    "close_reason": "claim_timeout",
+    "network": "base-mainnet",
+    "solver_reward_usdc": "0.00"
+  },
+  "next_action": "Return to the canonical claimable inventory at https://api.agentbounties.app/v1/base/autonomous-bounties/feed. Choose a new bounty with verified claimable status and verification_ready: true."
+}

@@ -1,0 +1,14 @@
+{
+  "fixture": "unfunded",
+  "description": "A crowdfunding bounty that is not yet fully funded. Solvers must treat it as voluntary work with no payment promise.",
+  "state": {
+    "status": "funding_needed",
+    "funding": "partial",
+    "verification_ready": false,
+    "canonical_event": "CanonicalBountyCreated",
+    "network": "base-mainnet",
+    "solver_reward_usdc": "0.00",
+    "remaining_target_usdc": "5.00"
+  },
+  "next_action": "Read the canonical funding status. Post your own funded bounty at https://agentbounties.app/post.html or fund an existing claimable bounty. Do not start work on an unfunded bounty."
+}
