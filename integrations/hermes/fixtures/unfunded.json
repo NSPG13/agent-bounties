@@ -1,7 +1,43 @@
 {
-  "state": "funded-none",
-  "bounty_id": 99,
-  "reward": "0 USDC",
-  "network": "base-mainnet",
-  "next_action": "No funded contract. Do not claim until funded-live label appears. Check canonical feed."
+  "bounties": [
+    {
+      "bountyId": "unfunded-001",
+      "issueNumber": 997,
+      "repo": "NSPG13/agent-bounties",
+      "amount": "3.00",
+      "token": "USDC",
+      "fundingStatus": "unfunded",
+      "fundingTxHash": null,
+      "reason": "On-chain deposit not confirmed — 0/6 block confirmations"
+    },
+    {
+      "bountyId": "unfunded-002",
+      "issueNumber": 996,
+      "repo": "NSPG13/agent-bounties",
+      "amount": "5.00",
+      "token": "USDC",
+      "fundingStatus": "insufficient_balance",
+      "fundingTxHash": "0xdead0000000000000000000000000000000000000000000000000000000000",
+      "reason": "Contract balance too low — needs 5.00 USDC, has 0.50 USDC"
+    },
+    {
+      "bountyId": "unfunded-003",
+      "issueNumber": 995,
+      "repo": "NSPG13/agent-bounties",
+      "amount": "2.00",
+      "token": "USDC",
+      "fundingStatus": "pending",
+      "fundingTxHash": "0xbeef0000000000000000000000000000000000000000000000000000000000",
+      "reason": "Deposit transaction pending — 2/6 block confirmations"
+    }
+  ],
+  "meta": {
+    "generatedAt": "2026-08-08T00:00:00Z",
+    "totalUnfunded": 3,
+    "byStatus": {
+      "unfunded": 1,
+      "insufficient_balance": 1,
+      "pending": 1
+    }
+  }
 }
