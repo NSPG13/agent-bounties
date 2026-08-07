@@ -4430,4 +4430,44 @@ mod tests {
         assert!(bounded_opportunity_id("bad/id").is_err());
         assert!(bounded_opportunity_id(" ").is_err());
     }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_unknown_tool_fails_closed() {
+        let err = sandbox_tool_result("unknown_tool", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.contains("unknown or unavailable ChatGPT app sandbox tool: unknown_tool"));
+    }
+
+    #[tokio::test]
+    async fn public_chatgpt_app_get_bounty_feed_fixture_is_canonical() {
+        let tools = chatgpt_tools().await;
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "get_bounty_feed")
+            .expect("get_bounty_feed must be in mounted ChatGPT app tools catalog");
+        assert_eq!(tool["_meta"]["ui"]["visibility"], json!(["model", "app"]));
+
+        let res = sandbox_tool_result(
+            "get_bounty_feed",
+            &json!({"claimable_only": true, "network": "base-mainnet"}),
+        )
+        .await
+        .unwrap();
+
+        let summary = res["content"][0]["text"].as_str().unwrap();
+        assert!(summary.contains("sandbox feed"));
+        
+        let items = res["structuredContent"]["items"].as_array().unwrap();
+        assert!(!items.is_empty());
+        let item = &items[0];
+        
+        assert_eq!(item["work_state"], "claimable");
+        assert_eq!(item["payment_state"], "escrowed");
+        assert_eq!(item["payment_committed"], true);
+        assert_eq!(item["verification_ready"], true);
+        assert_eq!(item["reward"]["amount"], "3500000");
+        assert_eq!(item["bond"]["amount"], "500000");
+    }
 }
+
