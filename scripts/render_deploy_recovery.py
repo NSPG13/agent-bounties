@@ -24,6 +24,35 @@ BLUEPRINT_RECOVERABLE_SERVICE_NAMES = frozenset(
     {"agent-bounties-open-competition-v1-indexer"}
 )
 BLUEPRINT_STATUSES = {"created", "paused", "in_sync", "syncing", "error"}
+ENV_GROUP_SERVICE_TYPES = {
+    "static_site": "static",
+    "web_service": "web",
+    "private_service": "pserv",
+    "background_worker": "worker",
+    "cron_job": "cron",
+}
+OPEN_COMPETITION_WORKER_NAME = "agent-bounties-open-competition-v1-indexer"
+OPEN_COMPETITION_REFERENCE_SERVICE_NAME = "agent-bounties-base-indexer"
+OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
+OPEN_COMPETITION_WORKER_ENVIRONMENT = {
+    "APP_PACKAGE": "worker",
+    "APP_BINARY": "worker",
+    "RUST_LOG": "info",
+    "PUBLIC_BASE_URL": "https://api.agentbounties.app",
+    "BASE_INDEXER_PROTOCOL": "open-competition-v1",
+    "OPEN_COMPETITION_INDEXER_NETWORK": "base-mainnet",
+    "OPEN_COMPETITION_V1_FACTORY_CONTRACT": (
+        "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
+    ),
+    "OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK": "49663931",
+    "OPEN_COMPETITION_INDEXER_RPC_URL": "https://mainnet.base.org",
+    "OPEN_COMPETITION_INDEXER_POLL_SECONDS": "15",
+    "OPEN_COMPETITION_INDEXER_CONFIRMATIONS": "2",
+    "OPEN_COMPETITION_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
+    "BASE_INDEXER_RETRY_INITIAL_SECONDS": "5",
+    "BASE_INDEXER_RETRY_MAX_SECONDS": "120",
+    "BASE_INDEXER_EXIT_AFTER_FAILURES": "8",
+}
 HEALTH_STABILITY_PROBES = 8
 DEPLOY_MODES = {"build_and_deploy", "deploy_only"}
 ACTIVE_STATUSES = {
@@ -183,6 +212,7 @@ def redact(value: str) -> str:
     value = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)([?&](?:key|token)=)[^&\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)(render_api_key\s*[=:]\s*)[^\s,;]+", r"\1[redacted]", value)
+    value = re.sub(r"(?i)postgres(?:ql)?://[^\s\"']+", "[database-url-redacted]", value)
     return value[:1000]
 
 
@@ -416,6 +446,101 @@ def unwrap_env_var(payload: object) -> dict[str, str]:
     return {"key": key, "value": value}
 
 
+def validate_owner_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z]+-[0-9a-z]+", value):
+        raise RecoveryError("Render service is missing its workspace id")
+    return value
+
+
+def validate_environment_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z]+-[0-9a-z]+", value):
+        raise RecoveryError("Render service has an invalid project environment id")
+    return value
+
+
+def validate_database_url(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise RecoveryError("reference Render worker has no DATABASE_URL")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        raise RecoveryError("reference Render worker has an invalid DATABASE_URL") from None
+    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+        raise RecoveryError("reference Render worker has an invalid DATABASE_URL")
+    return value
+
+
+def unwrap_env_group_entries(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render environment-group list response must be an array")
+    groups: list[dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        group = entry.get("envGroup", entry)
+        if isinstance(group, dict):
+            groups.append(group)
+    return groups
+
+
+def select_env_group(payload: object, owner_id: str) -> dict[str, Any]:
+    matches = [
+        group
+        for group in unwrap_env_group_entries(payload)
+        if group.get("name") == OPEN_COMPETITION_ENV_GROUP_NAME
+        and group.get("ownerId") == owner_id
+    ]
+    if len(matches) != 1:
+        raise RecoveryError(
+            "expected exactly one Render environment group named "
+            f"{OPEN_COMPETITION_ENV_GROUP_NAME} in the reference workspace; "
+            f"found {len(matches)}"
+        )
+    group = matches[0]
+    group_id = group.get("id")
+    if not isinstance(group_id, str) or not re.fullmatch(r"evg-[0-9a-z]+", group_id):
+        raise RecoveryError("Render environment group has an invalid id")
+    return group
+
+
+def unwrap_env_group(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise RecoveryError("Render environment-group response must be an object")
+    group = payload.get("envGroup", payload)
+    if not isinstance(group, dict):
+        raise RecoveryError("Render environment-group response is missing metadata")
+    return group
+
+
+def env_group_has_service(
+    payload: object,
+    spec: ServiceSpec,
+    service_id: str,
+) -> bool:
+    group = unwrap_env_group(payload)
+    links = group.get("serviceLinks")
+    if not isinstance(links, list):
+        raise RecoveryError("Render environment group is missing service links")
+    matches: list[dict[str, Any]] = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        service = link.get("service", link)
+        if isinstance(service, dict) and service.get("id") == service_id:
+            matches.append(service)
+    if len(matches) > 1:
+        raise RecoveryError("Render environment group has duplicate worker links")
+    if not matches:
+        return False
+    service = matches[0]
+    if (
+        service.get("name") != spec.name
+        or service.get("type") != ENV_GROUP_SERVICE_TYPES.get(spec.service_type)
+    ):
+        raise RecoveryError("Render environment group linked an unexpected service")
+    return True
+
+
 def normalize_public_base_url(name: str, value: str) -> str:
     candidate = value.strip().rstrip("/")
     try:
@@ -613,7 +738,7 @@ class RenderClient:
         self,
         method: str,
         path: str,
-        payload: dict[str, Any],
+        payload: dict[str, Any] | None,
         attempts: int = 3,
     ) -> Any:
         for attempt in range(1, attempts + 1):
@@ -634,11 +759,149 @@ class RenderClient:
         )
         return select_service(spec, self._read_with_retry(f"/services?{query}"))
 
+    def resolve_env_group(self, owner_id: str) -> dict[str, Any]:
+        owner_id = validate_owner_id(owner_id)
+        query = urllib.parse.urlencode(
+            {
+                "name": OPEN_COMPETITION_ENV_GROUP_NAME,
+                "ownerId": owner_id,
+                "limit": "20",
+            }
+        )
+        return select_env_group(
+            self._read_with_retry(f"/env-groups?{query}"), owner_id
+        )
+
+    def get_env_var(self, service: dict[str, Any], key: str) -> dict[str, str]:
+        service_id = service.get("id")
+        if not isinstance(service_id, str) or not service_id.startswith("srv-"):
+            raise RecoveryError("Render service is missing its id")
+        encoded_key = urllib.parse.quote(key, safe="")
+        return unwrap_env_var(
+            self._read_with_retry(f"/services/{service_id}/env-vars/{encoded_key}")
+        )
+
+    def provision_open_competition_service(
+        self,
+        spec: ServiceSpec,
+        reference_service: dict[str, Any],
+    ) -> dict[str, Any]:
+        if spec.name != OPEN_COMPETITION_WORKER_NAME:
+            raise RecoveryError(f"direct Render provisioning is not authorized for {spec.name}")
+        if (
+            reference_service.get("name") != OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+            or reference_service.get("type") != "background_worker"
+            or reference_service.get("branch") != "main"
+            or normalize_repo(reference_service.get("repo")) != REPOSITORY
+        ):
+            raise RecoveryError("direct Render provisioning reference service is invalid")
+
+        owner_id = validate_owner_id(reference_service.get("ownerId"))
+        environment_id = reference_service.get("environmentId")
+        if environment_id is not None:
+            environment_id = validate_environment_id(environment_id)
+        env_group = self.resolve_env_group(owner_id)
+        group_environment_id = env_group.get("environmentId")
+        if group_environment_id is not None:
+            group_environment_id = validate_environment_id(group_environment_id)
+        if (
+            environment_id is not None
+            and group_environment_id is not None
+            and group_environment_id != environment_id
+        ):
+            raise RecoveryError(
+                "reference Render worker and environment group are in different projects"
+            )
+        if environment_id is None:
+            environment_id = group_environment_id
+        database_url = validate_database_url(
+            self.get_env_var(reference_service, "DATABASE_URL").get("value")
+        )
+
+        env_vars = [
+            {"key": key, "value": value}
+            for key, value in OPEN_COMPETITION_WORKER_ENVIRONMENT.items()
+        ]
+        env_vars.append({"key": "DATABASE_URL", "value": database_url})
+        payload: dict[str, Any] = {
+            "type": "background_worker",
+            "name": OPEN_COMPETITION_WORKER_NAME,
+            "ownerId": owner_id,
+            "repo": "https://github.com/NSPG13/agent-bounties",
+            "branch": "main",
+            "autoDeploy": "no",
+            "envVars": env_vars,
+            "serviceDetails": {
+                "runtime": "docker",
+                "envSpecificDetails": {
+                    "dockerContext": ".",
+                    "dockerfilePath": "./Dockerfile",
+                },
+                "plan": "starter",
+                "region": "oregon",
+                "maxShutdownDelaySeconds": 60,
+            },
+        }
+        if environment_id is not None:
+            payload["environmentId"] = environment_id
+
+        try:
+            created = select_service(
+                spec,
+                [self._write_with_retry("POST", "/services", payload)],
+            )
+        except RenderHttpError as error:
+            if error.status != 409:
+                raise
+            # A concurrent Blueprint sync is acceptable only if it created the
+            # exact service identity that this controller was about to create.
+            created = self.resolve_service(spec)
+
+        if created.get("ownerId") != owner_id:
+            raise RecoveryError("new Render worker is in an unexpected workspace")
+        if environment_id is not None and created.get("environmentId") != environment_id:
+            raise RecoveryError("new Render worker is in an unexpected project environment")
+
+        group_id = env_group["id"]
+        linked_group = self._read_with_retry(f"/env-groups/{group_id}")
+        if not env_group_has_service(linked_group, spec, created["id"]):
+            try:
+                self._write_with_retry(
+                    "POST",
+                    f"/env-groups/{group_id}/services/{created['id']}",
+                    None,
+                )
+            except RenderHttpError as error:
+                if error.status != 409:
+                    raise
+            linked_group = self._read_with_retry(f"/env-groups/{group_id}")
+        if not env_group_has_service(linked_group, spec, created["id"]):
+            raise RecoveryError("Render did not attach the required environment group")
+
+        verified = self.resolve_service(spec)
+        if verified.get("ownerId") != owner_id:
+            raise RecoveryError("provisioned Render worker changed workspaces")
+        if environment_id is not None and verified.get("environmentId") != environment_id:
+            raise RecoveryError("provisioned Render worker changed project environments")
+        for key, expected in OPEN_COMPETITION_WORKER_ENVIRONMENT.items():
+            actual = self.get_env_var(verified, key)
+            if actual != {"key": key, "value": expected}:
+                raise RecoveryError(
+                    f"provisioned Render worker did not retain required {key}"
+                )
+        retained_database_url = validate_database_url(
+            self.get_env_var(verified, "DATABASE_URL").get("value")
+        )
+        if retained_database_url != database_url:
+            raise RecoveryError("provisioned Render worker changed its DATABASE_URL")
+        return verified
+
     def ensure_blueprint_service(
         self,
         spec: ServiceSpec,
         *,
-        attempts: int = 60,
+        reference_service: dict[str, Any] | None = None,
+        attempts: int = 12,
         poll_seconds: float = 5,
     ) -> dict[str, Any]:
         if spec.name not in BLUEPRINT_RECOVERABLE_SERVICE_NAMES:
@@ -709,6 +972,8 @@ class RenderClient:
                 )
             if attempt < attempts:
                 self._sleep(poll_seconds)
+        if reference_service is not None:
+            return self.provision_open_competition_service(spec, reference_service)
         raise RecoveryError(
             f"Render Blueprint did not create {spec.name}; last status {last_status}"
         )
@@ -1512,7 +1777,10 @@ def deploy(
             missing.append(spec)
 
     for spec in missing:
-        resolved[spec.name] = client.ensure_blueprint_service(spec)
+        resolved[spec.name] = client.ensure_blueprint_service(
+            spec,
+            reference_service=resolved.get(OPEN_COMPETITION_REFERENCE_SERVICE_NAME),
+        )
 
     # Revalidate every binding after a Blueprint sync and before changing any
     # service configuration or triggering a deployment.

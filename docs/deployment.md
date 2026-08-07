@@ -74,8 +74,12 @@ succeeds on a push to `main`, the workflow:
    branch, and service type;
 4. if and only if the additive Open Competition V1 indexer is absent, validates
    exactly one Blueprint bound to this repository, `main`, and `render.yaml`,
-   cycles its supported Auto Sync setting, waits for the exact typed worker,
-   and then revalidates every service binding;
+   cycles its supported Auto Sync setting, and waits for the exact typed worker;
+   if an otherwise healthy Blueprint remains in sync without materializing that
+   worker, provisions only that allowlisted worker through Render's service API
+   by copying the validated legacy worker's workspace, project environment, and
+   database binding, attaches the exact existing environment group, verifies
+   every nonsecret value by readback, and then revalidates all four bindings;
 5. disables any drifted native auto-deploy setting;
 6. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
    both public services;

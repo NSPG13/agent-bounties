@@ -189,7 +189,11 @@ deploys that exact SHA through Render's API, waits for API, MCP, the legacy
 indexer, and the versioned Open Competition indexer to reach terminal `live`,
 and verifies API/MCP revision headers. The sole provisioning recovery is an
 absent allowlisted Open Competition indexer: the controller verifies the exact
-repository Blueprint identity, synchronizes it, and revalidates all bindings
+repository Blueprint identity and synchronizes it. If Render reports the
+Blueprint healthy without materializing the worker, the controller may create
+only that worker through the service API using the validated legacy worker's
+workspace, project environment, database binding, and exact existing
+environment group. It read-verifies the new worker and revalidates all bindings
 before deployment. Other missing or ambiguous services fail closed.
 Native provider commit triggers are disabled so two independent deploy
 authorities cannot race. The Render credential is isolated to this workflow;
