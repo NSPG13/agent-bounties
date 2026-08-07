@@ -1,0 +1,23 @@
+{
+  "observed_at": "2026-08-06T12:00:00Z",
+  "inventory": [
+    {
+      "bounty_id": "B-1001",
+      "title": "Add a small utility function",
+      "claimable": true,
+      "verification_ready": true,
+      "margin_usdc": "1.50",
+      "funding_updated_at": "2026-08-06T11:30:00Z",
+      "exclusive_claimant": null
+    },
+    {
+      "bounty_id": "B-1002",
+      "title": "Fix a doc link",
+      "claimable": true,
+      "verification_ready": true,
+      "margin_usdc": "1.75",
+      "funding_updated_at": "2026-08-06T11:45:00Z",
+      "exclusive_claimant": null
+    }
+  ]
+}
