@@ -1,0 +1,7 @@
+{
+  "state": "stale",
+  "bounty_id": 7,
+  "reward": "1.00 USDC",
+  "last_activity_days": 45,
+  "next_action": "Bounty is stale (>30 days). Verify contract on BaseScan before investing time."
+}
