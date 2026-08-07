@@ -34,6 +34,9 @@ ENV_GROUP_SERVICE_TYPES = {
 OPEN_COMPETITION_WORKER_NAME = "agent-bounties-open-competition-v1-indexer"
 OPEN_COMPETITION_REFERENCE_SERVICE_NAME = "agent-bounties-base-indexer"
 OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
+OPEN_COMPETITION_RELEASE_MANIFEST_PATH = Path(
+    "deployments/open-competition-v1-base-mainnet.json"
+)
 OPEN_COMPETITION_WORKER_ENVIRONMENT = {
     "APP_PACKAGE": "worker",
     "APP_BINARY": "worker",
@@ -578,6 +581,100 @@ def public_environment_values(
     }
 
 
+def open_competition_shared_environment(
+    manifest_path: Path = OPEN_COMPETITION_RELEASE_MANIFEST_PATH,
+) -> dict[str, str]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RecoveryError(
+            f"Open Competition release manifest is unavailable: {redact(str(error))}"
+        ) from None
+    if not isinstance(manifest, dict):
+        raise RecoveryError("Open Competition release manifest must be an object")
+    if (
+        manifest.get("schema_version")
+        != "agent-bounties/open-competition-v1-base-mainnet-release-v1"
+        or manifest.get("protocol_version")
+        != "agent-bounties/open-competition-v1"
+        or manifest.get("network") != "base-mainnet"
+        or manifest.get("chain_id") != 8453
+        or manifest.get("deployment_state")
+        != "mainnet_canary_not_ready_to_earn"
+    ):
+        raise RecoveryError("Open Competition release manifest identity is invalid")
+
+    release = manifest.get("release_manifest")
+    catalog = manifest.get("verifier_catalog")
+    activation = manifest.get("hosted_activation")
+    if not isinstance(release, dict) or not isinstance(catalog, dict):
+        raise RecoveryError("Open Competition release manifest is incomplete")
+    if not isinstance(activation, dict):
+        raise RecoveryError("Open Competition hosted activation evidence is missing")
+    if (
+        release.get("protocol_version") != "agent-bounties/open-competition-v1"
+        or release.get("network") != "base-mainnet"
+        or release.get("chain_id") != 8453
+        or release.get("deployment_state")
+        != "mainnet_canary_not_ready_to_earn"
+    ):
+        raise RecoveryError("Open Competition hosted release identity is invalid")
+    profiles = catalog.get("profiles")
+    if (
+        catalog.get("schema_version")
+        != "agent-bounties/open-competition-v1-verifier-catalog-v1"
+        or catalog.get("protocol_version")
+        != "agent-bounties/open-competition-v1"
+        or catalog.get("network") != "base-mainnet"
+        or not isinstance(profiles, list)
+        or not profiles
+    ):
+        raise RecoveryError("Open Competition verifier catalog identity is invalid")
+    for profile in profiles:
+        if (
+            not isinstance(profile, dict)
+            or profile.get("deployment_state")
+            != "mainnet_canary_not_ready_to_earn"
+            or profile.get("public_inventory_eligible") is not False
+        ):
+            raise RecoveryError("Open Competition verifier profile is not hidden-canary safe")
+
+    activation_fields = {
+        "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE": (
+            "gas_sponsorship_available"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE": (
+            "relay_support_available"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE": (
+            "r4_release_evidence_complete"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE": "monitoring_active",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED": (
+            "public_creation_enabled"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED": (
+            "public_commitments_enabled"
+        ),
+    }
+    if activation.get("public_inventory_eligible") is not False:
+        raise RecoveryError("Open Competition public inventory must remain disabled")
+    for field in activation_fields.values():
+        if activation.get(field) is not False:
+            raise RecoveryError(f"Open Competition hosted activation requires {field}=false")
+
+    values = {
+        "BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON": json.dumps(
+            release, ensure_ascii=False, separators=(",", ":")
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON": json.dumps(
+            catalog, ensure_ascii=False, separators=(",", ":")
+        ),
+    }
+    values.update({key: "false" for key in activation_fields})
+    return values
+
+
 def normalize_evm_address(name: str, value: str) -> str:
     normalized = value.strip().lower()
     if not re.fullmatch(r"0x[0-9a-f]{40}", normalized):
@@ -772,6 +869,11 @@ class RenderClient:
             self._read_with_retry(f"/env-groups?{query}"), owner_id
         )
 
+    def get_env_group(self, group_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"evg-[0-9a-z]+", group_id):
+            raise RecoveryError("Render environment group has an invalid id")
+        return unwrap_env_group(self._read_with_retry(f"/env-groups/{group_id}"))
+
     def get_env_var(self, service: dict[str, Any], key: str) -> dict[str, str]:
         service_id = service.get("id")
         if not isinstance(service_id, str) or not service_id.startswith("srv-"):
@@ -780,6 +882,42 @@ class RenderClient:
         return unwrap_env_var(
             self._read_with_retry(f"/services/{service_id}/env-vars/{encoded_key}")
         )
+
+    def ensure_env_group_env_var(
+        self,
+        group: dict[str, Any],
+        key: str,
+        value: str,
+    ) -> dict[str, Any]:
+        group_id = group.get("id")
+        if not isinstance(group_id, str) or not re.fullmatch(
+            r"evg-[0-9a-z]+", group_id
+        ):
+            raise RecoveryError("Render environment group has an invalid id")
+        encoded_key = urllib.parse.quote(key, safe="")
+        path = f"/env-groups/{group_id}/env-vars/{encoded_key}"
+        changed = True
+        try:
+            current = unwrap_env_var(self._read_with_retry(path))
+            if current == {"key": key, "value": value}:
+                changed = False
+        except RenderHttpError as error:
+            if error.status != 404:
+                raise
+        if changed:
+            updated = unwrap_env_var(
+                self._write_with_retry("PUT", path, {"value": value})
+            )
+            if updated != {"key": key, "value": value}:
+                raise RecoveryError(
+                    f"Render did not update shared Open Competition variable {key}"
+                )
+        verified = unwrap_env_var(self._read_with_retry(path))
+        if verified != {"key": key, "value": value}:
+            raise RecoveryError(
+                f"Render did not retain shared Open Competition variable {key}"
+            )
+        return {"key": key, "value": value, "changed": changed}
 
     def provision_open_competition_service(
         self,
@@ -863,7 +1001,7 @@ class RenderClient:
             raise RecoveryError("new Render worker is in an unexpected project environment")
 
         group_id = env_group["id"]
-        linked_group = self._read_with_retry(f"/env-groups/{group_id}")
+        linked_group = self.get_env_group(group_id)
         if not env_group_has_service(linked_group, spec, created["id"]):
             try:
                 self._write_with_retry(
@@ -874,7 +1012,7 @@ class RenderClient:
             except RenderHttpError as error:
                 if error.status != 409:
                     raise
-            linked_group = self._read_with_retry(f"/env-groups/{group_id}")
+            linked_group = self.get_env_group(group_id)
         if not env_group_has_service(linked_group, spec, created["id"]):
             raise RecoveryError("Render did not attach the required environment group")
 
@@ -1802,6 +1940,26 @@ def deploy(
                 )
             preexisting_live[spec.name] = current
 
+    reference_service = resolved.get(OPEN_COMPETITION_REFERENCE_SERVICE_NAME)
+    if reference_service is None:
+        raise RecoveryError("validated reference Render worker is unavailable")
+    shared_group = client.resolve_env_group(
+        validate_owner_id(reference_service.get("ownerId"))
+    )
+    shared_group = client.get_env_group(shared_group["id"])
+    for spec, service in services:
+        if not env_group_has_service(shared_group, spec, service["id"]):
+            raise RecoveryError(
+                f"required Render environment group is not linked to {spec.name}"
+            )
+    desired_open_competition_environment = open_competition_shared_environment()
+    reconciled_open_competition_environment = []
+    open_competition_environment_changed = False
+    for key, value in desired_open_competition_environment.items():
+        record = client.ensure_env_group_env_var(shared_group, key, value)
+        open_competition_environment_changed |= record["changed"]
+        reconciled_open_competition_environment.append(record)
+
     neynar_inputs = normalize_neynar_social_inputs(
         api_key=neynar_api_key,
         signer_uuid=neynar_signer_uuid,
@@ -1910,7 +2068,11 @@ def deploy(
         else frozenset()
     )
     for spec, service in services:
-        if deploy_mode == "deploy_only" and spec.name != CLOUD_AGENT_API_SERVICE_NAME:
+        if (
+            deploy_mode == "deploy_only"
+            and spec.name != CLOUD_AGENT_API_SERVICE_NAME
+            and not open_competition_environment_changed
+        ):
             created = preexisting_live[spec.name]
         else:
             created = client.ensure_deploy(
@@ -1919,7 +2081,10 @@ def deploy(
                 force=(
                     True
                     if deploy_mode == "deploy_only"
-                    else public_environment_changed.get(spec.name, False)
+                    else (
+                        public_environment_changed.get(spec.name, False)
+                        or open_competition_environment_changed
+                    )
                 ),
                 deploy_mode=deploy_mode,
             )
@@ -2033,6 +2198,7 @@ def deploy(
         "health": health,
         "custom_domains": custom_domains,
         "public_environment": reconciled_public_environment,
+        "open_competition_environment": reconciled_open_competition_environment,
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
         "social_environment": social_environment,

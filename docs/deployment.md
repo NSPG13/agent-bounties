@@ -80,21 +80,25 @@ succeeds on a push to `main`, the workflow:
    by copying the validated legacy worker's workspace, project environment, and
    database binding, attaches the exact existing environment group, verifies
    every nonsecret value by readback, and then revalidates all four bindings;
-5. disables any drifted native auto-deploy setting;
-6. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
+5. verifies that the exact shared Base environment group is linked to all four
+   services, derives the Open Competition manifest, verifier catalog, and
+   disabled activation gates from the checked-in mainnet release evidence, and
+   reconciles each nonsecret value through Render with exact readback;
+6. disables any drifted native auto-deploy setting;
+7. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
    both public services;
-7. reconciles all nonsecret cloud-agent settings on API and copies the optional
+8. reconciles all nonsecret cloud-agent settings on API and copies the optional
    GitHub-held model key without including its value in evidence;
-8. creates or updates the optional FID-filtered Neynar provider webhook and
+9. creates or updates the optional FID-filtered Neynar provider webhook and
    reconciles its bot identity, reply signer, and generated signing secret on
    API without including their values in evidence;
-9. calls Render's deploy API with the exact commit for API, MCP, and both workers;
-10. waits for all four deploys to reach `live` and fails on terminal errors;
-11. verifies exact revision and protocol headers from API and MCP `/health`;
-12. attests cloud readiness and fails if a supplied model credential did not
+10. calls Render's deploy API with the exact commit for API, MCP, and both workers;
+11. waits for all four deploys to reach `live` and fails on terminal errors;
+12. verifies exact revision and protocol headers from API and MCP `/health`;
+13. attests cloud readiness and fails if a supplied model credential did not
     become usable;
-13. attests social mention readiness when provider values were supplied;
-14. stores a redacted 30-day deployment evidence artifact.
+14. attests social mention readiness when provider values were supplied;
+15. stores a redacted 30-day deployment evidence artifact.
 
 Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
 Render Dashboard for the workspace that owns these four services, then store

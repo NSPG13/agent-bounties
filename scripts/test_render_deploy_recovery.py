@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -754,6 +755,76 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 "MCP_BASE_URL": "https://mcp.agentbounties.app",
                 "WEBSITE_BASE_URL": "https://agentbounties.app",
             },
+        )
+
+    def test_open_competition_shared_environment_is_hidden_canary_only(self) -> None:
+        values = recovery.open_competition_shared_environment()
+        self.assertEqual(len(values), 8)
+        release = recovery.json.loads(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON"]
+        )
+        catalog = recovery.json.loads(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON"]
+        )
+        self.assertEqual(
+            release["deployment_state"], "mainnet_canary_not_ready_to_earn"
+        )
+        self.assertFalse(catalog["profiles"][0]["public_inventory_eligible"])
+        for key, value in values.items():
+            if key.endswith("_JSON"):
+                continue
+            self.assertEqual(value, "false")
+
+    def test_open_competition_shared_environment_rejects_activation(self) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["hosted_activation"]["public_creation_enabled"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "requires.*false"):
+                recovery.open_competition_shared_environment(path)
+
+    def test_shared_environment_variable_is_read_verified(self) -> None:
+        client = RecordingClient()
+        group = env_group_record()
+        expected = {"envVar": {"key": "SAFE_GATE", "value": "false"}}
+        with mock.patch.object(
+            client, "_request_json", side_effect=[expected, expected]
+        ) as request:
+            self.assertEqual(
+                client.ensure_env_group_env_var(group, "SAFE_GATE", "false"),
+                {"key": "SAFE_GATE", "value": "false", "changed": False},
+            )
+        path = f"/env-groups/{group['id']}/env-vars/SAFE_GATE"
+        self.assertEqual(
+            request.call_args_list,
+            [mock.call("GET", path), mock.call("GET", path)],
+        )
+
+    def test_shared_environment_variable_update_requires_exact_readback(self) -> None:
+        client = RecordingClient()
+        group = env_group_record()
+        expected = {"envVar": {"key": "SAFE_GATE", "value": "false"}}
+        responses = [recovery.RenderHttpError(404, "missing"), expected, expected]
+        with mock.patch.object(
+            client, "_request_json", side_effect=responses
+        ) as request:
+            self.assertEqual(
+                client.ensure_env_group_env_var(group, "SAFE_GATE", "false"),
+                {"key": "SAFE_GATE", "value": "false", "changed": True},
+            )
+        path = f"/env-groups/{group['id']}/env-vars/SAFE_GATE"
+        self.assertEqual(
+            request.call_args_list,
+            [
+                mock.call("GET", path),
+                mock.call("PUT", path, {"value": "false"}),
+                mock.call("GET", path),
+            ],
         )
 
     def test_api_runtime_environment_enables_social_mention_drafts(self) -> None:

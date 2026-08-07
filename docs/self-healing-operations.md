@@ -54,8 +54,11 @@ and revalidates all bindings. If the Blueprint remains healthy but does not
 materialize that one worker, the controller may create only the allowlisted
 worker through Render's service API. It derives workspace, project environment,
 database, and environment-group identity from already validated resources and
-read-verifies the resulting service before deployment. Any other missing or
-ambiguous service fails closed. A newer failed main commit cannot suppress the
+read-verifies the resulting service before deployment. Before every deployment
+it also requires that shared group on all four services and reconciles the
+hidden-canary manifest, verifier catalog, and false activation gates from the
+checked-in release evidence. Any other missing or ambiguous service fails
+closed. A newer failed main commit cannot suppress the
 last known-good release, and an older successful run skips after a newer
 successful run exists. It cannot deploy an unrelated branch, contract, wallet,
 or payment action. A missing credential, ambiguous service, failed build,
