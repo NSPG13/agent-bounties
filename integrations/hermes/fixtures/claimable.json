@@ -1,0 +1,8 @@
+{
+  "state": "claimable-live",
+  "bounty_id": 42,
+  "reward": "2.00 USDC",
+  "network": "base-mainnet",
+  "canonical_contract": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+  "next_action": "Post /claim #42 wallet: 0xYOUR_BASE_ADDRESS on the GitHub issue, then sign the bounded claim request."
+}
