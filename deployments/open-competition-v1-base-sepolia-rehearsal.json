@@ -1,0 +1,272 @@
+{
+  "schema_version": "agent-bounties/open-competition-v1-rehearsal-manifest-v1",
+  "protocol_version": "agent-bounties/open-competition-v1",
+  "network": "base-sepolia",
+  "chain_id": 84532,
+  "deployment_state": "sepolia_rehearsed_not_ready_to_earn",
+  "public_inventory_eligible": false,
+  "source_commit": "bc9b3cc9f9f95a87df671be2d13199ac9d06ebcf",
+  "compiler": {
+    "solc": "0.8.26",
+    "optimizer": true,
+    "optimizer_runs": 200,
+    "evm": "cancun"
+  },
+  "deployer": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "settlement_token": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+  "deployments": {
+    "verifier": {
+      "address": "0x9601a40b35ad6843846732c6cb73c4c82f9ba850",
+      "transaction_hash": "0x7180d630942cbeeb7a76bdfaddc5e55296ab76119ed80b3ce5857df1b68e7da9",
+      "block_number": 45146453,
+      "block_hash": "0x99a5d210150bd050394a9f1e7cca1eabc9380fc2084c425f6a179115cccfe5bd",
+      "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3",
+      "runtime_matches": true
+    },
+    "factory": {
+      "address": "0x7231f1312448fa60078fb56cdb6e2c392bd1269b",
+      "transaction_hash": "0xad02026e29897dd7edf57f77df6bce78702ebad5dec2c46f37cafd84e67b63c4",
+      "block_number": 45147323,
+      "block_hash": "0x5841e6386f1a171d2de4664fc901f8d76da6c04e6d5c14262476b97b89c14c2d",
+      "runtime_code_hash": "0xfcb228831d71ab6d1b536d03b39f90a9c1793221468d9dd948cc64089308330c",
+      "runtime_matches": true
+    },
+    "implementation": {
+      "address": "0x5c9d0a4960c54321b0c32a4bca78740280eef89d",
+      "transaction_hash": "0xad02026e29897dd7edf57f77df6bce78702ebad5dec2c46f37cafd84e67b63c4",
+      "block_number": 45147323,
+      "block_hash": "0x5841e6386f1a171d2de4664fc901f8d76da6c04e6d5c14262476b97b89c14c2d",
+      "runtime_code_hash": "0xd06d8b654362da834eeec8f93fdc68481f93ff314c692ccc44f2e14327cd52cd",
+      "runtime_matches": true
+    }
+  },
+  "actors": {
+    "creator": "0x057cec8fc75bc0790034d2c482e3d5b7dde60f85",
+    "failed_competitor": "0x772aee5d91a717de8ec4f689a0380cf305198f88",
+    "passing_competitor": "0xa63d090ea0acf6cf9ea5a2b5691b4fca0490b394",
+    "expiring_competitor": "0x93ac5dad26fd845f6e89a68f50ec4e9c620a0900",
+    "relayer": "0xd0ac831e15fa0b9caa04df94b6028906eea388e6"
+  },
+  "scenarios": {
+    "settlement_and_losing_bond_withdrawal": {
+      "bounty_contract": "0xfb30b4c751b76298b94f282af45061edf22e0402",
+      "transactions": [
+        "0xfdea6ce307e89efc336f8ca28bf8ebf48df237ff9788a75b2d238b8b9b78f4cc",
+        "0xb397adc1d04b7308488117cd82673f9d785ddec144f642d5c2acbd1f37078daf",
+        "0x6894b69f69248ddabffa5b2ce130c577ce98aa97b79a2c947ceb0395c458f9d1",
+        "0xa0b542eb37056e6653fa3267021f4e01ce7b4746a477ea47873d037b410b9260",
+        "0x5d78a44ff49170629f82bf2635fae9b1069010e9b590d67c021ac513abc1f737",
+        "0x0776883f10179957b8149119338fbf4961eefc7dccec426fc74661653dd41c51",
+        "0x426a7eba6bbfc11df32343bca89bcc4e6e39b9f46eb6fcf4b82b06244eb6e88d"
+      ],
+      "events": [
+        {
+          "name": "FundingAdded",
+          "transaction_hash": "0xfdea6ce307e89efc336f8ca28bf8ebf48df237ff9788a75b2d238b8b9b78f4cc",
+          "block_number": 45148208,
+          "log_index": 220
+        },
+        {
+          "name": "CompetitionOpened",
+          "transaction_hash": "0xfdea6ce307e89efc336f8ca28bf8ebf48df237ff9788a75b2d238b8b9b78f4cc",
+          "block_number": 45148208,
+          "log_index": 221
+        },
+        {
+          "name": "SolutionCommitted",
+          "transaction_hash": "0xb397adc1d04b7308488117cd82673f9d785ddec144f642d5c2acbd1f37078daf",
+          "block_number": 45148214,
+          "log_index": 116
+        },
+        {
+          "name": "SolutionCommitted",
+          "transaction_hash": "0x6894b69f69248ddabffa5b2ce130c577ce98aa97b79a2c947ceb0395c458f9d1",
+          "block_number": 45148219,
+          "log_index": 4
+        },
+        {
+          "name": "SolutionCommitted",
+          "transaction_hash": "0xa0b542eb37056e6653fa3267021f4e01ce7b4746a477ea47873d037b410b9260",
+          "block_number": 45148223,
+          "log_index": 73
+        },
+        {
+          "name": "SolutionRevealed",
+          "transaction_hash": "0x5d78a44ff49170629f82bf2635fae9b1069010e9b590d67c021ac513abc1f737",
+          "block_number": 45148227,
+          "log_index": 111
+        },
+        {
+          "name": "CompetitionSubmissionRejected",
+          "transaction_hash": "0x5d78a44ff49170629f82bf2635fae9b1069010e9b590d67c021ac513abc1f737",
+          "block_number": 45148227,
+          "log_index": 113
+        },
+        {
+          "name": "SolutionRevealed",
+          "transaction_hash": "0x0776883f10179957b8149119338fbf4961eefc7dccec426fc74661653dd41c51",
+          "block_number": 45148234,
+          "log_index": 6
+        },
+        {
+          "name": "BountySettled",
+          "transaction_hash": "0x0776883f10179957b8149119338fbf4961eefc7dccec426fc74661653dd41c51",
+          "block_number": 45148234,
+          "log_index": 9
+        },
+        {
+          "name": "EntryBondWithdrawn",
+          "transaction_hash": "0x426a7eba6bbfc11df32343bca89bcc4e6e39b9f46eb6fcf4b82b06244eb6e88d",
+          "block_number": 45148238,
+          "log_index": 142
+        }
+      ],
+      "balance_deltas": {
+        "creator": 0,
+        "failed_competitor": -10000,
+        "passing_competitor": 100000,
+        "losing_competitor": 0,
+        "verifier_recipient": 20000,
+        "bounty": -110000
+      },
+      "reconciled": true,
+      "assertions": {
+        "authorized_creation_funded_exact_target": true,
+        "failed_entry_preserved_reward": true,
+        "first_confirmed_passing_reveal_won": true,
+        "losing_bond_returned": true,
+        "escrow_conserved_to_zero": true
+      }
+    },
+    "expiry_cancellation_and_refund": {
+      "bounty_contract": "0x5f8bddcf0008f29f1c97c7a94cece41d1bdfac5c",
+      "transactions": [
+        "0x4e5f6699fc5e6031f15b4ba170119f64d44062c72e961e65e53585d5d4a260e2",
+        "0x165c335ae37ab3d5ba767aeb825fa0603d637f88b54d098bb114d16793ad1f4d",
+        "0x1f4af71dd8153554c6e4c0f877dad32ab4818d40d7fcb81459d49991a8b1ae7c",
+        "0x33efb69f665e19e28599c0bb20bd2aeec7c1af0e72ae3e3cbd928fe4c45cf9c1",
+        "0x14fe783341ab03d7bb835a0e0dbd82eb2f6c77f696f1d3917d5161ef2f8a2851",
+        "0x8b7521c539d39030618b8e999b5608077d6f494d48248a007521193dfb49d084",
+        "0xe54f9c58aa3c9d8f8e3b679f80fbc4be0eae14a11cdadbfe65eb0b6dce8be925"
+      ],
+      "events": [
+        {
+          "name": "FundingAdded",
+          "transaction_hash": "0x4e5f6699fc5e6031f15b4ba170119f64d44062c72e961e65e53585d5d4a260e2",
+          "block_number": 45148244,
+          "log_index": 63
+        },
+        {
+          "name": "CompetitionOpened",
+          "transaction_hash": "0x4e5f6699fc5e6031f15b4ba170119f64d44062c72e961e65e53585d5d4a260e2",
+          "block_number": 45148244,
+          "log_index": 64
+        },
+        {
+          "name": "SolutionCommitted",
+          "transaction_hash": "0x165c335ae37ab3d5ba767aeb825fa0603d637f88b54d098bb114d16793ad1f4d",
+          "block_number": 45148250,
+          "log_index": 3
+        },
+        {
+          "name": "SolutionCommitted",
+          "transaction_hash": "0x1f4af71dd8153554c6e4c0f877dad32ab4818d40d7fcb81459d49991a8b1ae7c",
+          "block_number": 45148254,
+          "log_index": 97
+        },
+        {
+          "name": "CommitmentExpired",
+          "transaction_hash": "0x33efb69f665e19e28599c0bb20bd2aeec7c1af0e72ae3e3cbd928fe4c45cf9c1",
+          "block_number": 45148284,
+          "log_index": 67
+        },
+        {
+          "name": "CommitmentExpired",
+          "transaction_hash": "0x14fe783341ab03d7bb835a0e0dbd82eb2f6c77f696f1d3917d5161ef2f8a2851",
+          "block_number": 45148289,
+          "log_index": 3
+        },
+        {
+          "name": "BountyCancelled",
+          "transaction_hash": "0x8b7521c539d39030618b8e999b5608077d6f494d48248a007521193dfb49d084",
+          "block_number": 45148293,
+          "log_index": 93
+        },
+        {
+          "name": "RefundWithdrawn",
+          "transaction_hash": "0xe54f9c58aa3c9d8f8e3b679f80fbc4be0eae14a11cdadbfe65eb0b6dce8be925",
+          "block_number": 45148298,
+          "log_index": 4
+        }
+      ],
+      "balance_deltas": {
+        "creator": 130000,
+        "bounty": -110000
+      },
+      "reconciled": true,
+      "assertions": {
+        "capacity_enforced_before_token_transfer": true,
+        "all_commitments_expired_before_cancel": true,
+        "principal_refunded": true,
+        "expired_bond_refunded_as_bonus": true,
+        "escrow_conserved_to_zero": true
+      }
+    }
+  },
+  "adversarial_checks": {
+    "copied_reveal_rejected": true,
+    "same_block_reveal_rejected": true,
+    "authorization_substitution_rejected": true,
+    "capacity_enforced": true,
+    "verifier_revert_recoverable": true
+  },
+  "adversarial_evidence": {
+    "same_block_reveal_rejected": {
+      "passed": true,
+      "block_number": 45148214,
+      "reason": "reveal requires later block"
+    },
+    "copied_reveal_rejected": {
+      "passed": true,
+      "reason": "commitment mismatch"
+    },
+    "authorization_substitution_rejected": {
+      "passed": true,
+      "reason": "authorization not commitment-bound"
+    },
+    "capacity_enforced": {
+      "passed": true,
+      "reason": "entry capacity reached"
+    },
+    "verifier_revert_recoverable": {
+      "passed": true,
+      "helper_verifier": "0x69440a2441a9d0238d3949bf07f18f4921aaf90c",
+      "helper_deployment_transaction": "0x3a5f7ec9c2b783cc9d114807ded46baafad4a558e9ff5efa6e5a48a36c13d719",
+      "bounty_contract": "0x8c0697d3095f795c2242a3bd21227dc455e1ab15",
+      "creation_transaction": "0x4b829c430f5e082d2c3a88332d6059969c1f48d94df4468f12243b73df511507",
+      "commit_transaction": "0x38424377c65cb7cc9d0efdff90fd9f0ce212539b21b11c74c400375f63793148",
+      "reverted_reveal_transaction": "0xfb56fc10f9cb53240a08f1bf2e85c1dcdc15c24e1b835e08c49e129a7126d057",
+      "reverted_reveal_block": 45148317,
+      "retry_transaction": "0xf002804359533410740926256292ef5e6d7b9e06fc8dcf4497016f3525c9c77c",
+      "commitment_remained_retryable": true
+    }
+  },
+  "bytecode_freeze": {
+    "verifier_runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3",
+    "factory_runtime_code_hash": "0xfcb228831d71ab6d1b536d03b39f90a9c1793221468d9dd948cc64089308330c",
+    "implementation_runtime_code_hash": "0xd06d8b654362da834eeec8f93fdc68481f93ff314c692ccc44f2e14327cd52cd"
+  },
+  "evidence_boundary": "This manifest proves the Base Sepolia rehearsal only. It is not mainnet readiness, activation, or payment evidence.",
+  "superseded_rehearsal_cleanup": {
+    "superseded_bounty": "0x7c2ecdb505b13bd7a39125d8f0495e8be86ec5b5",
+    "transactions": [
+      "0x42d63a1bbbdcbcfa0cb8626c2376525b3afd8ac62cea361df7a5860be4605b8b",
+      "0x50de03e9811266a78a002fee54be12ba70aae0ecf29e28a8c8d0f9e7478a3c66",
+      "0xd8350a945fc4f5adb346526636c6a506fde8d67185e7abf368210840fb712804",
+      "0x36bec0cf1ab0ba0f25e0a1d3059f6e115e4335fe9248fcc1e92c239c79d2f8f5",
+      "0xc5cd460032bec024a144c6cb9684783fe4c0e17c2352590bea697bdbc2c38f43"
+    ],
+    "losing_bond_recovered": true,
+    "actor_allocations_restored": true
+  }
+}

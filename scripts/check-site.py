@@ -16,6 +16,9 @@ import yaml
 REQUIRED_FILES = [
     "index.html",
     "earn.html",
+    "competition.html",
+    "competition.css",
+    "competition.js",
     "post.html",
     "funding.html",
     "onramp.html",
@@ -79,6 +82,7 @@ CORE_PAGES = [
 PUBLIC_INDEXABLE_PAGES = {
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
+    "competition.html": "https://agentbounties.app/competition.html",
     "post.html": "https://agentbounties.app/post.html",
     "funding.html": "https://agentbounties.app/funding.html",
     "objective.html": "https://agentbounties.app/objective.html",

@@ -75,6 +75,12 @@ offchain event index.
 V1 permits deterministic modules only. A reverting or malformed verifier call
 reverts the reveal and leaves the commitment retryable.
 
+Factory origin is provenance, not approval. Hosted inventory admits a verifier
+only when its network, chain ID, address, non-proxy runtime hash, immutable
+configuration, benchmark hash, and evidence-schema hash exactly match one
+approved catalog entry. An unknown module, proxy, runtime mismatch, or catalog
+drift fails closed and is excluded from ready-to-earn inventory.
+
 Subjective or appealable work cannot safely use this immediate-settlement
 rule. It needs an ordered adjudication queue in which no later accepted entry
 can settle until every earlier reveal is finally rejected, timed out, or
@@ -105,6 +111,8 @@ expose one of `exclusive_claim`, `first_valid_submission`, or
 
 The intended operations are:
 
+- `list_open_competition_verifiers`
+- `prepare_open_competition_creation`
 - `get_open_competition_readiness`
 - `prepare_open_competition_commit`
 - `prepare_open_competition_reveal`
@@ -114,10 +122,43 @@ The intended operations are:
 CLI equivalents:
 
 ```text
+agent-bounties open-competition-verifiers --network base-sepolia
+agent-bounties open-competition-creation --request-file creation.json
+agent-bounties open-competition-commitment-generate --network base-sepolia --bounty-contract 0x... --solver-wallet 0x... --submission-hash 0x... --evidence-hash 0x... --reveal-deadline 0 --output commitment.json
 agent-bounties open-competition-readiness --bounty-contract 0x...
 agent-bounties open-competition-action --bounty-contract 0x... --operation prepare_open_competition_commit --arguments-json '{...}'
 agent-bounties open-competition-action --bounty-contract 0x... --operation prepare_open_competition_reveal --arguments-json '{...}'
 ```
+
+The local commitment artifact uses
+`agent-bounties/open-competition-v1-commitment-v1` and contains the network,
+chain ID, bounty, solver, submission and evidence hashes, random salt,
+commitment, committed block, and reveal deadline. Salts are generated locally
+with cryptographically secure randomness. The API receives only the commitment
+while preparing entry calls, never stores a plaintext salt, and requires the
+complete recovery artifact when preparing reveal calls. Reveal preparation
+reconstructs the commitment and rejects any chain, bounty, solver, or hash
+substitution. Back up the artifact privately: losing it can strand the entry
+bond until expiry or cancellation recovery becomes available.
+
+Versioned HTTP interfaces are:
+
+- `GET /v1/base/open-competition-v1/verifiers`
+- `POST /v1/base/open-competition-v1/creation-preparation`
+- `POST /v1/base/open-competition-v1/authorized-creation-preparation`
+- `GET /v1/base/open-competition-v1/state`
+- `GET /v1/base/open-competition-v1/readiness`
+- `POST /v1/base/open-competition-v1/commit-preparation`
+- `POST /v1/base/open-competition-v1/reveal-preparation`
+- `POST /v1/base/open-competition-v1/status`
+- `POST /v1/base/open-competition-v1/bond-withdrawal-preparation`
+
+Canonical identity, funding, timing, capacity, wallet-entry, and deadline facts
+come from one safe-block RPC snapshot. Hosted monitoring, relay support, gas
+sponsorship, and completed release evidence remain explicit offchain gates.
+Creation and new commitments have independent default-off kill switches;
+reveal, expiry, cancellation refund, and bond withdrawal recovery remain
+available when entry is disabled.
 
 Generic `agent_native_claim` must refuse this mode and return the commit
 workflow. Readiness fails closed unless terms, canonical factory/runtime,
@@ -126,3 +167,18 @@ relay support all pass.
 
 Only confirmed canonical `BountySettled`, including the winner and
 `submission_sequence`, proves payment.
+
+## Release States
+
+The hosted release advances in one direction through:
+
+1. `source_only_not_ready_to_earn`
+2. `sepolia_rehearsed_not_ready_to_earn`
+3. `mainnet_canary_not_ready_to_earn`
+4. `active_ready_to_earn`
+
+The indexer starts at the exact versioned factory deployment block and writes
+separate Open Competition records. It never migrates or rewrites historical
+bounty, contribution, claim, or payout rows. See the
+[release runbook](open-competition-v1-release-runbook.md) for the frozen-bundle,
+rehearsal, canary, and recovery gates.

@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { AgentBountiesClient } from "../dist/index.js";
+import {
+  AgentBountiesClient,
+  generateOpenCompetitionCommitment,
+} from "../dist/index.js";
 
 test("public declarations match the compatibility fixture", async () => {
   const declarations = (await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8"))
@@ -59,6 +62,27 @@ test("agentNativeClaim replays a native wallet signature unchanged", async () =>
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("open competition commitments use local random recovery envelopes", () => {
+  const input = {
+    network: "base-sepolia",
+    bounty: "0x1111111111111111111111111111111111111111",
+    solver: "0x2222222222222222222222222222222222222222",
+    submission_hash: `0x${"aa".repeat(32)}`,
+    evidence_hash: `0x${"bb".repeat(32)}`,
+  };
+  const first = generateOpenCompetitionCommitment(input);
+  const second = generateOpenCompetitionCommitment(input);
+
+  assert.equal(first.schema_version, "agent-bounties/open-competition-v1-commitment-v1");
+  assert.equal(first.chain_id, 84532);
+  assert.match(first.salt, /^0x[0-9a-f]{64}$/);
+  assert.match(first.commitment, /^0x[0-9a-f]{64}$/);
+  assert.notEqual(first.salt, second.salt);
+  assert.notEqual(first.commitment, second.commitment);
+  assert.equal(first.committed_block, null);
+  assert.equal(first.reveal_deadline, null);
 });
 
 test("canonical child planning sends task acceptance criteria", async () => {

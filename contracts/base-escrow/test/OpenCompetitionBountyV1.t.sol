@@ -58,6 +58,25 @@ contract CompetitionTestToken {
     }
 }
 
+contract NonTransferringCompetitionToken {
+    function balanceOf(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function transfer(address, uint256) external pure returns (bool) {
+        return true;
+    }
+
+    function transferFrom(address, address, uint256) external pure returns (bool) {
+        return true;
+    }
+
+    function transferWithAuthorization(address, address, uint256, uint256, uint256, bytes32, uint8, bytes32, bytes32)
+        external
+        pure
+    {}
+}
+
 contract CompetitionActor {
     function approve(CompetitionTestToken token, address spender, uint256 amount) external {
         token.approve(spender, amount);
@@ -362,6 +381,23 @@ contract OpenCompetitionBountyV1Test {
         require(actual == predicted, "prediction mismatch");
         require(factory.isCanonicalCompetition(actual), "canonical registration missing");
         require(_codeSize(actual) < 100, "not a minimal proxy");
+    }
+
+    function testFactoryFundingRevertsWhenTokenReportsSuccessWithoutTransfer() public {
+        NonTransferringCompetitionToken malformed = new NonTransferringCompetitionToken();
+        OpenCompetitionBountyFactoryV1 malformedFactory = new OpenCompetitionBountyFactoryV1(address(malformed));
+        CompetitionProofVerifier verifier = new CompetitionProofVerifier(keccak256(PASSING_PROOF));
+        OpenCompetitionBountyFactoryV1.CreateCompetitionParams memory params = _params(verifier, 900, 100, 4);
+        bytes32 nonce = keccak256("malformed-token-competition");
+        address predicted = malformedFactory.predictCompetitionAddress(address(this), params, nonce);
+
+        try malformedFactory.createCompetition(params, 1_000, nonce) {
+            revert("malformed token funding succeeded");
+        } catch Error(string memory reason) {
+            require(keccak256(bytes(reason)) == keccak256("funding not received"), "wrong funding rejection");
+        }
+        require(!malformedFactory.isCanonicalCompetition(predicted), "reverted competition registered");
+        require(_codeSize(predicted) == 0, "reverted competition retained code");
     }
 
     function testFuzzFailedRevealConservesFundedTarget(uint64 rawSolverReward, uint32 rawVerifierReward) public {

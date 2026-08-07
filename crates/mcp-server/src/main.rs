@@ -616,13 +616,92 @@ tool_args! {
     struct OpenCompetitionReadinessArgs {
         network: Option<String>,
         bounty_contract: String,
+        solver: Option<String>,
+        verifier_profile_id: Option<String>,
     }
     schema object_tool_schema(
         json!({
             "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet."),
-            "bounty_contract": string_property("Canonical open-competition bounty address.")
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "solver": nullable_string_property("Optional solver wallet for one-entry and capacity checks."),
+            "verifier_profile_id": nullable_string_property("Approved deterministic verifier profile id.")
         }),
         &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct OpenCompetitionVerifierArgs {
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionCreationArgs {
+        network: Option<String>,
+        creator: String,
+        creation_nonce: String,
+        initial_funding: u64,
+        verifier_profile_id: String,
+        params: Value,
+        funding_authorization: Option<Value>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the frozen release."),
+            "creator": string_property("Creator wallet address."),
+            "creation_nonce": string_property("Nonzero 32-byte creation nonce."),
+            "initial_funding": { "type": "integer", "minimum": 0, "description": "Native USDC base units supplied at creation." },
+            "verifier_profile_id": string_property("Exact approved verifier catalog profile id."),
+            "params": { "type": "object", "description": "Deterministic terms, economics, deadlines, capacity, and verifier reward recipient.", "additionalProperties": true },
+            "funding_authorization": { "type": ["object", "null"], "description": "Optional EIP-3009 authorization window, nonce, and signature. Omit for approval-and-create.", "additionalProperties": true }
+        }),
+        &["creator", "creation_nonce", "initial_funding", "verifier_profile_id", "params"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionCommitArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        solver: String,
+        commitment: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "solver": string_property("Wallet entering the competition."),
+            "commitment": string_property("Public commitment only. Never include submission hashes or salt in this request.")
+        }),
+        &["bounty_contract", "solver", "commitment"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionRevealArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        solver: String,
+        commitment_envelope: Value,
+        proof: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "solver": string_property("Same wallet recorded in the commitment envelope."),
+            "commitment_envelope": { "type": "object", "description": "Locally recovered agent-bounties/open-competition-v1-commitment-v1 envelope.", "additionalProperties": true },
+            "proof": string_property("Verifier-specific proof calldata as 0x-prefixed bytes.")
+        }),
+        &["bounty_contract", "solver", "commitment_envelope", "proof"],
     );
 }
 
@@ -1641,6 +1720,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
         .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
         .route(
+            "/tools/list_open_competition_verifiers",
+            post(list_open_competition_verifiers),
+        )
+        .route(
+            "/tools/prepare_open_competition_creation",
+            post(prepare_open_competition_creation),
+        )
+        .route(
             "/tools/get_open_competition_readiness",
             post(get_open_competition_readiness),
         )
@@ -2492,6 +2579,16 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
+            "list_open_competition_verifiers",
+            "List exact approved deterministic verifier profiles. Factory provenance alone is never verifier approval.",
+            OpenCompetitionVerifierArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_creation",
+            "Prepare either approval-and-create or EIP-3009 authorized creation against the frozen release manifest and exact verifier catalog profile.",
+            OpenCompetitionCreationArgs::input_schema(),
+        ),
+        tool(
             "get_open_competition_readiness",
             "Fail closed unless canonical runtime, terms, funding, deterministic verification, timing, entry capacity, sponsorship, relay support, R4 evidence, and monitoring all pass.",
             OpenCompetitionReadinessArgs::input_schema(),
@@ -2499,12 +2596,12 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         tool(
             "prepare_open_competition_commit",
             "Prepare a commitment-bound entry bond. Generic agent_native_claim is forbidden because open competition has no exclusive claim.",
-            OpenCompetitionActionArgs::input_schema(),
+            OpenCompetitionCommitArgs::input_schema(),
         ),
         tool(
             "prepare_open_competition_reveal",
             "Prepare the same wallet's later-block reveal. The first passing onchain reveal sequence wins; verifier response time does not order competitors.",
-            OpenCompetitionActionArgs::input_schema(),
+            OpenCompetitionRevealArgs::input_schema(),
         ),
         tool(
             "get_open_competition_status",
@@ -4561,18 +4658,57 @@ async fn prepare_agent_to_earn(
     .await
 }
 
+async fn list_open_competition_verifiers(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionVerifierArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/open-competition-v1/verifiers",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new()
+            .get(url)
+            .query(&[("network", network)]),
+        "open-competition verifier catalog API",
+    )
+    .await
+}
+
+async fn prepare_open_competition_creation(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionCreationArgs>,
+) -> Json<serde_json::Value> {
+    let path = if args.funding_authorization.is_some() {
+        "authorized-creation-preparation"
+    } else {
+        "creation-preparation"
+    };
+    proxy_open_competition_json(path, &args).await
+}
+
 async fn get_open_competition_readiness(
     State(_state): State<SharedState>,
     Json(args): Json<OpenCompetitionReadinessArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let url = format!(
-        "{}/v1/base/open-competition-v1/readiness?network={network}&bounty_contract={}",
-        public_base_url_from_env().trim_end_matches('/'),
-        args.bounty_contract
+        "{}/v1/base/open-competition-v1/readiness",
+        public_base_url_from_env().trim_end_matches('/')
     );
+    let mut query = vec![
+        ("network", network.to_string()),
+        ("bounty_contract", args.bounty_contract),
+    ];
+    if let Some(solver) = args.solver {
+        query.push(("solver", solver));
+    }
+    if let Some(profile_id) = args.verifier_profile_id {
+        query.push(("verifier_profile_id", profile_id));
+    }
     proxy_public_json_response(
-        reqwest::Client::new().get(url),
+        reqwest::Client::new().get(url).query(&query),
         "open-competition readiness API",
     )
     .await
@@ -4580,16 +4716,16 @@ async fn get_open_competition_readiness(
 
 async fn prepare_open_competition_commit(
     State(_state): State<SharedState>,
-    Json(args): Json<OpenCompetitionActionArgs>,
+    Json(args): Json<OpenCompetitionCommitArgs>,
 ) -> Json<serde_json::Value> {
-    proxy_open_competition_action("commit-preparation", args).await
+    proxy_open_competition_json("commit-preparation", &args).await
 }
 
 async fn prepare_open_competition_reveal(
     State(_state): State<SharedState>,
-    Json(args): Json<OpenCompetitionActionArgs>,
+    Json(args): Json<OpenCompetitionRevealArgs>,
 ) -> Json<serde_json::Value> {
-    proxy_open_competition_action("reveal-preparation", args).await
+    proxy_open_competition_json("reveal-preparation", &args).await
 }
 
 async fn get_open_competition_status(
@@ -4616,6 +4752,21 @@ async fn proxy_open_competition_action(
     );
     proxy_public_json_response(
         reqwest::Client::new().post(url).json(&args),
+        "open-competition action API",
+    )
+    .await
+}
+
+async fn proxy_open_competition_json<T>(path: &str, args: &T) -> Json<serde_json::Value>
+where
+    T: Serialize + ?Sized,
+{
+    let url = format!(
+        "{}/v1/base/open-competition-v1/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(args),
         "open-competition action API",
     )
     .await
@@ -5766,7 +5917,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 114);
+        assert_eq!(descriptors.len(), 116);
         assert_eq!(
             descriptors
                 .iter()

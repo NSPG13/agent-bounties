@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fund Open Competition V1 Rehearsal</title>
+<style>
+body{margin:0;background:#00140c;color:#f4f7f0;font:16px/1.5 system-ui,sans-serif}main{max-width:920px;margin:4rem auto;padding:2rem}section{border:1px solid #245b34;border-radius:24px;padding:2rem;margin:1.5rem 0;background:#062016}h1{font-size:3rem;margin:.2rem 0 1rem}button{border:1px solid #60a848;border-radius:999px;padding:.9rem 1.4rem;background:#b8ef2f;font-weight:800}button:disabled{opacity:.4}dl{display:grid;grid-template-columns:12rem 1fr;gap:.6rem}dt{color:#9ec6aa}dd{margin:0;word-break:break-all}.status{border-left:3px solid #b8ef2f;padding:1rem}.bad{border-color:#ff725f;color:#ffd2cb}
+</style>
+</head>
+<body><main>
+<p>LOCAL ADMIN UTILITY - BASE SEPOLIA ONLY</p>
+<h1>Exact rehearsal funding.</h1>
+<p>This page sends only the two displayed testnet transfers. It never receives a private key.</p>
+<section><h2>1. Inspect and connect</h2><dl id="facts"></dl><p id="status" class="status">Loading the local request...</p><button id="connect" disabled>Connect MetaMask</button></section>
+<section><h2>2. Fund the ephemeral relayer</h2><label><input id="reviewed" type="checkbox" disabled> The network, sender, recipient, and exact ETH/USDC amounts match the rehearsal request.</label> <button id="execute" disabled>Send exact testnet funding</button></section>
+</main><script src="open-competition-v1-rehearsal-funding.js?v=2"></script></body>
+</html>

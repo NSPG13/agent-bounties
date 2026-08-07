@@ -869,6 +869,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 health_timeout_seconds=1,
                 poll_seconds=0,
             )
+        # Resolution stops at the intentionally failing third binding; no
+        # service mutation may occur before every prior binding validates.
         self.assertEqual(len(client.resolved), 3)
         self.assertEqual(client.mutations, [])
 

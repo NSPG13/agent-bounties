@@ -10,6 +10,7 @@ SERVICE_NAMES = [
     "agent-bounties-api",
     "agent-bounties-mcp",
     "agent-bounties-base-indexer",
+    "agent-bounties-open-competition-v1-indexer",
 ]
 RECOVERY_RESERVED_BOUNTY_CONTRACTS = (
     "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,"
@@ -80,6 +81,19 @@ def require_env_sync_false(block: str, key: str) -> None:
     body = env_entry(block, key)
     if not re.search(r"^\s+sync: false\s*$", body, re.MULTILINE):
         fail(f"{key} must be Dashboard-provided with sync: false")
+
+
+def require_env_json(block: str, key: str, expected: object) -> None:
+    body = env_entry(block, key)
+    match = re.search(r"^\s+value: '(.*)'\s*$", body, re.MULTILINE)
+    if not match:
+        fail(f"{key} must be a single-quoted JSON value")
+    try:
+        actual = json.loads(match.group(1))
+    except json.JSONDecodeError as error:
+        fail(f"{key} contains invalid JSON: {error}")
+    if actual != expected:
+        fail(f"{key} must exactly match the published mainnet release manifest")
 
 
 def require_database_ref(block: str) -> None:
@@ -178,9 +192,36 @@ def load_mainnet_deployment(repo_root: Path) -> dict[str, object]:
     return deployment
 
 
+def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
+    path = repo_root / "deployments" / "open-competition-v1-base-mainnet.json"
+    if not path.exists():
+        fail("missing deployments/open-competition-v1-base-mainnet.json")
+    try:
+        release = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"invalid Open Competition V1 mainnet release manifest: {error}")
+    if release.get("schema_version") != "agent-bounties/open-competition-v1-base-mainnet-release-v1":
+        fail("Open Competition V1 release schema is invalid")
+    if release.get("protocol_version") != "agent-bounties/open-competition-v1":
+        fail("Open Competition V1 protocol version is invalid")
+    if release.get("network") != "base-mainnet" or release.get("chain_id") != 8453:
+        fail("Open Competition V1 release must target Base mainnet")
+    if release.get("deployment_state") != "mainnet_canary_not_ready_to_earn":
+        fail("Open Competition V1 hosted release must remain in hidden-canary state")
+    hosted = release.get("hosted_activation")
+    if not isinstance(hosted, dict) or any(hosted.values()):
+        fail("Open Competition V1 hosted activation gates must remain false")
+    if not isinstance(release.get("release_manifest"), dict):
+        fail("Open Competition V1 release_manifest is missing")
+    if not isinstance(release.get("verifier_catalog"), dict):
+        fail("Open Competition V1 verifier_catalog is missing")
+    return release
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     deployment = load_mainnet_deployment(repo_root)
+    open_competition_release = load_open_competition_mainnet_release(repo_root)
     rpc_url = str(deployment["rpc_url"])
     factory = deployment["factory"]
     assert isinstance(factory, dict)
@@ -226,6 +267,14 @@ def main() -> int:
             "BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT",
             "BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT",
             "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED",
         ],
     )
     require_env_sync_false(base_group, "BASE_SEPOLIA_RPC_URL")
@@ -248,6 +297,25 @@ def main() -> int:
         "BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS",
         f'"{RECOVERY_RESERVED_BOUNTY_CONTRACTS}"',
     )
+    require_env_json(
+        base_group,
+        "BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON",
+        open_competition_release["release_manifest"],
+    )
+    require_env_json(
+        base_group,
+        "BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON",
+        open_competition_release["verifier_catalog"],
+    )
+    for key in (
+        "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED",
+    ):
+        require_env_value(base_group, key, '"false"')
     relayer_group = require_group(
         text,
         "agent-bounties-x402-relayer",
@@ -291,6 +359,16 @@ def main() -> int:
             require_env_value(block, "BASE_INDEXER_RPC_URL", rpc_url)
             if active:
                 require_env_value(block, "BASE_INDEXER_FACTORY_CONTRACT", str(factory["contract"]))
+        if service == "agent-bounties-open-competition-v1-indexer":
+            require_env_value(block, "BASE_INDEXER_PROTOCOL", "open-competition-v1")
+            require_env_value(block, "OPEN_COMPETITION_INDEXER_NETWORK", "base-mainnet")
+            require_env_value(
+                block,
+                "OPEN_COMPETITION_V1_FACTORY_CONTRACT",
+                "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+            )
+            require_env_value(block, "OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK", '"49663931"')
+            require_env_value(block, "OPEN_COMPETITION_INDEXER_RPC_URL", rpc_url)
 
     database = section(text, "databases")
     for required in (

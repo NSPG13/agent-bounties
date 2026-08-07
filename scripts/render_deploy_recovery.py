@@ -156,6 +156,11 @@ SERVICE_SPECS = (
         "https://agent-bounties-mcp.onrender.com/health",
     ),
     ServiceSpec("agent-bounties-base-indexer", "background_worker", None),
+    ServiceSpec(
+        "agent-bounties-open-competition-v1-indexer",
+        "background_worker",
+        None,
+    ),
 )
 
 

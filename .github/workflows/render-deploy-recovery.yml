@@ -216,7 +216,7 @@ jobs:
               f"- Revision: `{evidence['revision']}`",
               f"- Deploy mode: `{evidence['deploy_mode']}`",
               f"- Verified: `{str(evidence['success']).lower()}`",
-              f"- Services live: `{sum(item['status'] == 'live' for item in evidence['services'])}/3`",
+              f"- Services live: `{sum(item['status'] == 'live' for item in evidence['services'])}/4`",
               f"- Exact health attestations: `{len(evidence['health'])}/2`",
               f"- Public runtime variables reconciled: `{len(evidence.get('public_environment', []))}`",
               f"- Cloud runtime variables: `{len(evidence.get('cloud_environment', []))}/10`",

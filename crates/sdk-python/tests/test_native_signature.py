@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 import agent_bounties
 import httpx
-from agent_bounties.client import AgentBountiesClient
+from agent_bounties.client import (
+    AgentBountiesClient,
+    generate_open_competition_commitment,
+)
 
 
 class StubAgentBountiesClient(AgentBountiesClient):
@@ -66,6 +69,29 @@ class NativeSignatureTests(unittest.TestCase):
         self.assertEqual(len(client.requests), 2)
         self.assertEqual(client.requests[1]["wallet_signature"], wallet_signature)
         self.assertNotIn("signature", client.requests[1])
+
+    def test_open_competition_commitment_is_local_and_recoverable(self):
+        inputs = {
+            "network": "base-sepolia",
+            "bounty": "0x1111111111111111111111111111111111111111",
+            "solver": "0x2222222222222222222222222222222222222222",
+            "submission_hash": f"0x{'aa' * 32}",
+            "evidence_hash": f"0x{'bb' * 32}",
+        }
+        first = generate_open_competition_commitment(**inputs)
+        second = generate_open_competition_commitment(**inputs)
+
+        self.assertEqual(
+            first["schema_version"],
+            "agent-bounties/open-competition-v1-commitment-v1",
+        )
+        self.assertEqual(first["chain_id"], 84532)
+        self.assertEqual(len(first["salt"]), 66)
+        self.assertEqual(len(first["commitment"]), 66)
+        self.assertNotEqual(first["salt"], second["salt"])
+        self.assertNotEqual(first["commitment"], second["commitment"])
+        self.assertIsNone(first["committed_block"])
+        self.assertIsNone(first["reveal_deadline"])
 
     def test_canonical_child_plan_sends_task_acceptance_criteria(self):
         client = StubAgentBountiesClient([{"benchmark_hash": "0x1234"}])
