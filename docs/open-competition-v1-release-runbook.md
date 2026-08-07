@@ -112,6 +112,45 @@ Before signing, require static analysis, full Foundry/invariant/fuzz checks,
 independent contract review, exact mainnet-fork replay, bundle/manifest audit,
 monitoring, sufficient wallet balances, and explicit signing-time approval.
 
+Build and independently audit the one-action unsigned mainnet bundle at a Base
+safe block. It reuses the already deployed, runtime-pinned mainnet
+`LeadingZeroWorkVerifier(16)` and deploys only the new factory:
+
+```text
+python scripts/build_open_competition_v1_mainnet_bundle.py \
+  --deployer-nonce <pending-nonce> \
+  --source-commit bc9b3cc9f9f95a87df671be2d13199ac9d06ebcf \
+  --preflight-block-number <safe-block> \
+  --preflight-block-hash <safe-block-hash> \
+  --output target/open-competition-v1/base-mainnet-deployment-canary-bundle.json
+
+python scripts/audit_open_competition_v1_mainnet_bundle.py \
+  --bundle target/open-competition-v1/base-mainnet-deployment-canary-bundle.json
+```
+
+Replay that exact bundle and exact bounded canary against the same pinned block.
+The replay uses an impersonated admin and a fixed separate solver only inside
+Anvil; it never broadcasts or stores a live key:
+
+```text
+python scripts/run_open_competition_v1_mainnet_fork_replay.py \
+  --bundle target/open-competition-v1/base-mainnet-deployment-canary-bundle.json \
+  --output target/open-competition-v1/base-mainnet-fork-replay-manifest.json
+
+python scripts/audit_open_competition_v1_mainnet_fork_replay.py \
+  --bundle target/open-competition-v1/base-mainnet-deployment-canary-bundle.json \
+  --replay target/open-competition-v1/base-mainnet-fork-replay-manifest.json \
+  --output target/open-competition-v1/base-mainnet-fork-replay-audit.json
+```
+
+Serve `scripts/open-competition-v1-mainnet-signer.html` locally for the real
+factory deployment. It fails closed unless the account is the frozen admin,
+the chain is Base mainnet, the pinned block is still canonical, the nonce and
+balances satisfy the bundle, the verifier runtime/configuration match, both
+predicted addresses are vacant, and all public activation fields remain false.
+The page submits exactly one zero-value contract-creation transaction and then
+checks both factory and implementation runtime bytecode.
+
 The hidden canary is capped at a 1.00 USDC solver reward, 0.10 USDC verifier
 reward/bond, four entries, a 24-hour competition window, and a one-hour reveal
 window. The creator cannot compete; use a separate bounded solver wallet.

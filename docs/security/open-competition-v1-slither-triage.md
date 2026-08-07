@@ -1,16 +1,20 @@
 # Open Competition V1 Slither Triage
 
-Date: 2026-08-06
+Date: 2026-08-07
 
 Tool: Slither `0.11.6`, Foundry `1.7.1`, Solidity `0.8.26`.
 
 Targets were analyzed separately with dependencies excluded:
 
-- `OpenCompetitionBountyV1.sol`: 11 findings (10 Low, 1 Informational)
-- `OpenCompetitionBountyFactoryV1.sol`: 12 findings (10 Low, 2 Informational)
+- `OpenCompetitionBountyV1.sol`: 12 findings
+- `OpenCompetitionBountyFactoryV1.sol`: 13 findings
 - `LeadingZeroWorkVerifier.sol`: 1 Informational finding
 
-There are no High or Medium findings.
+There are no High or Medium findings. The 2026-08-07 rerun analyzed each
+target separately against frozen source commit
+`bc9b3cc9f9f95a87df671be2d13199ac9d06ebcf`; the additional result count is
+within the already-triaged detector classes below and does not reflect a
+contract-source change.
 
 ## Triaged Findings
 
