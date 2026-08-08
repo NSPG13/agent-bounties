@@ -26,6 +26,16 @@ def require(condition: bool, message: str) -> None:
         raise AuditError(message)
 
 
+def is_hex_bytes(value: Any, byte_length: int) -> bool:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 2 + byte_length * 2:
+        return False
+    try:
+        bytes.fromhex(value[2:])
+    except ValueError:
+        return False
+    return True
+
+
 def load(path: Path, label: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -49,7 +59,7 @@ def audit(bundle: dict[str, Any], browser_receipt: dict[str, Any], rpc_url: str)
     action = bundle.get("action")
     require(isinstance(action, dict), "bundle action is missing")
     tx_hash = browser_receipt.get("transaction_hash")
-    require(isinstance(tx_hash, str) and Web3.is_hex(tx_hash) and len(tx_hash) == 66, "deployment transaction hash is required")
+    require(is_hex_bytes(tx_hash, 32), "deployment transaction hash is required")
 
     w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
     require(w3.is_connected() and w3.eth.chain_id == 8453, "Base mainnet RPC unavailable")
