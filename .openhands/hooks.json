@@ -1,33 +1,14 @@
 {
-  "hooks": {
-    "on_claim": {
-      "script": ".openhands/hooks/agent-bounties-evidence.py",
-      "triggers": ["bounty_claimed", "canonical_state_updated"],
-      "description": "Collects on-chain evidence after a claim is posted"
-    },
-    "on_execute": {
-      "script": ".openhands/hooks/agent-bounties-execute.py",
-      "triggers": ["work_assigned", "deadline_approaching"],
-      "description": "Executes paid work within OpenHands sandbox"
-    },
-    "on_complete": {
-      "script": ".openhands/hooks/agent-bounties-submit.py",
-      "triggers": ["work_completed", "evidence_collected"],
-      "description": "Submits work artifact + evidence to bounty contract"
+  "stop": [
+    {
+      "name": "agent-bounties-evidence",
+      "path": ".openhands/hooks/agent-bounties-evidence.py",
+      "description": "Blocks completion until focused checks and submission evidence exist",
+      "required_evidence": [
+        "submission",
+        "test_output",
+        "decision"
+      ]
     }
-  },
-  "sandbox": {
-    "image": "nikolaik/python-nodejs:latest",
-    "timeout_seconds": 1800,
-    "network": "allowed",
-    "env": {
-      "NSPG13_RPC_URL": "https://mainnet.base.org",
-      "BOUNTY_CONTRACT": "0xNSPG13BountyRouter"
-    }
-  },
-  "retry": {
-    "max_attempts": 3,
-    "backoff_seconds": 60,
-    "on_permanent_failure": "comment_on_issue"
-  }
+  ]
 }
