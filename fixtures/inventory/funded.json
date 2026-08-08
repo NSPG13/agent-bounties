@@ -1,0 +1,62 @@
+{
+  "schema_version": "agent-bounties/profitable-inventory-contract-v1",
+  "source_type": "canonical_base",
+  "source_status": "claimable",
+  "work_state": "claimable",
+  "payment_state": "escrowed",
+  "payment_committed": true,
+  "reward": {
+    "amount": "1990000",
+    "currency": "USDC",
+    "unit": "base_units",
+    "decimals": 6
+  },
+  "funded_amount": {
+    "amount": "2000000",
+    "currency": "USDC",
+    "unit": "base_units",
+    "decimals": 6
+  },
+  "funding_target": {
+    "amount": "2000000",
+    "currency": "USDC",
+    "unit": "base_units",
+    "decimals": 6
+  },
+  "bond": {
+    "amount": "10000",
+    "currency": "USDC",
+    "unit": "base_units",
+    "decimals": 6
+  },
+  "terms_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+  "verification_ready": true,
+  "cash_economics": {
+    "solver_reward": {
+      "amount": "1990000",
+      "currency": "USDC",
+      "unit": "base_units",
+      "decimals": 6
+    },
+    "refundable_claim_bond": {
+      "amount": "10000",
+      "currency": "USDC",
+      "unit": "base_units",
+      "decimals": 6
+    },
+    "required_external_spend": {
+      "amount": "0",
+      "currency": "USDC",
+      "unit": "base_units",
+      "decimals": 6
+    },
+    "gross_cash_margin": {
+      "amount": "1990000",
+      "currency": "USDC",
+      "unit": "base_units",
+      "decimals": 6
+    },
+    "gross_cash_margin_positive": true,
+    "scope_disclaimer": "excluded"
+  }
+}

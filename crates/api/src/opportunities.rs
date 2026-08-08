@@ -1396,6 +1396,42 @@ mod tests {
     }
 
     #[test]
+    fn ready_to_earn_excludes_unclaimable_canonical_states() {
+        let healthy_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/funded.json")).unwrap();
+        let unfunded_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/unfunded.json")).unwrap();
+        let not_ready_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/not-ready.json")).unwrap();
+        let stale_feed: AutonomousBountyFeedItem = serde_json::from_str(include_str!("../../../fixtures/inventory/stale.json")).unwrap();
+
+        let healthy = canonical_opportunity(&healthy_feed, "base-mainnet", "https://api.example").unwrap();
+        let unfunded = canonical_opportunity(&unfunded_feed, "base-mainnet", "https://api.example").unwrap();
+        let not_ready = canonical_opportunity(&not_ready_feed, "base-mainnet", "https://api.example").unwrap();
+        let stale = canonical_opportunity(&stale_feed, "base-mainnet", "https://api.example").unwrap();
+
+        // 1. Assert properties
+        assert_eq!(not_ready.work_state, "claimable");
+        assert!(!not_ready.verification_ready);
+        
+        assert_eq!(unfunded.payment_committed, false);
+        
+        assert_eq!(stale.work_state, "open");
+
+        // 2. Assert that applying the ReadyToEarn view filters them all out except the healthy one.
+        let items = apply_query(
+            vec![
+                healthy.clone(),
+                unfunded,
+                not_ready,
+                stale,
+            ],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
     fn canonical_cash_economics_cover_direct_standing_meta_and_unprofitable() {
         let direct = canonical_opportunity(
             &canonical("claimable", "1000000", true),
