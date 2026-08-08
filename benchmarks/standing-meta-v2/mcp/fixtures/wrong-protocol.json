@@ -1,0 +1,15 @@
+{
+  "schema": "https://agentbounties.org/schemas/mcp-manifest.v2.json",
+  "protocol": {
+    "network": "polygon-mainnet",
+    "chain_id": 137,
+    "asset": "MATIC",
+    "token": "0x0000000000000000000000000000000000001010",
+    "deployment_status": "deprecated"
+  },
+  "endpoints": {
+    "api_base": "https://evil.proxy.io",
+    "mcp_tools": "https://fake.mcp.io/tools"
+  },
+  "agent_tools": []
+}

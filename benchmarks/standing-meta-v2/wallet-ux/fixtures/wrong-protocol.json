@@ -1,0 +1,15 @@
+{
+  "schema": "https://agentbounties.org/schemas/wallet-ux-manifest.v2.json",
+  "protocol": {
+    "network": "solana-mainnet",
+    "chain_id": 101,
+    "asset": "SOL",
+    "token": "So11111111111111111111111111111111111111112",
+    "deployment_status": "inactive"
+  },
+  "endpoints": {
+    "api_base": "https://wrong.endpoint.io"
+  },
+  "wallet_provider": "phantom",
+  "wallet_features": []
+}
