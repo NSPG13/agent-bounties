@@ -199,6 +199,102 @@ Record a passing settlement and a losing-bond recovery, exact event topics,
 safe-block receipt hashes, gas payer and cost, wallet and escrow USDC deltas,
 nonces, policy hash/version, verifier runtime/profile hashes, and source tree.
 
+Prepare the one-use actor envelope and bounded funding request before any live
+transaction:
+
+```text
+python scripts/run_open_competition_entrant_wallet_sepolia_rehearsal.py --prepare \
+  --recovery-file target/open-competition-entrant-wallet/base-sepolia-rehearsal-recovery.json \
+  --funding-request target/open-competition-entrant-wallet/base-sepolia-rehearsal-funding.json
+```
+
+Serve the repository only on localhost and open
+`scripts/open-competition-entrant-wallet-signer.html`. The page refuses an
+unknown account, chain, token, amount, recipient, runtime, or activation gate.
+When the factory already exists it sends no deployment transaction. Actor
+funding is one atomic two-call Base Sepolia batch containing exactly 0.0005
+test ETH and 0.4 test USDC to the ephemeral keeper. The confirmed transaction
+trace must show the known admin as execution sender, or a successful admin
+EIP-1271 authorization for the relayed MetaMask transaction.
+
+Execute only with both confirmed transaction hashes:
+
+```text
+python scripts/run_open_competition_entrant_wallet_sepolia_rehearsal.py --execute \
+  --bundle target/open-competition-entrant-wallet/base-sepolia-deployment.json \
+  --deployment-tx 0x... \
+  --funding-tx 0x... \
+  --recovery-file target/open-competition-entrant-wallet/base-sepolia-rehearsal-recovery.json \
+  --output target/open-competition-entrant-wallet/base-sepolia-rehearsal.json
+```
+
+The runner reconstructs every reveal salt from the protected recovery envelope,
+so a process restart does not strand a bond. It records no plaintext salt,
+signature, or private key in the final manifest and deletes the recovery file
+only after every scenario receipt is canonical at a Base safe block. The
+`--local-priority-fee-cap-wei` option is rejected for non-local RPC URLs and is
+only for deterministic Anvil fork testing.
+
+The runner is restart-idempotent after actor distribution, wallet creation,
+competition creation, EOA commitment/rejection, and every relayed wallet
+action. It recovers the original policy and time bounds from the exact clone,
+matches existing competitions by creator and deterministic terms hash, and
+reuses canonical action events rather than creating another wallet, bounty, or
+bond. Public RPC propagation is checked at each receipt block. A transaction
+that is re-included after a reorganization is accepted only after its refreshed
+receipt and block hash are canonical and safe.
+
+Audit the secret-free live manifest independently:
+
+```text
+python scripts/audit_open_competition_entrant_wallet_sepolia_rehearsal.py \
+  --bundle target/open-competition-entrant-wallet/base-sepolia-deployment-regenerated.json \
+  --rehearsal target/open-competition-entrant-wallet/base-sepolia-rehearsal.json \
+  --output target/open-competition-entrant-wallet/base-sepolia-rehearsal-audit.json
+```
+
+Replay the exact frozen entrant factory and both keeper-relayed scenarios on a
+canonical Base mainnet safe-block fork, then audit the result:
+
+```text
+python scripts/run_open_competition_entrant_wallet_mainnet_fork_replay.py \
+  --fork-block-number <safe-block> \
+  --fork-block-hash <safe-block-hash> \
+  --output target/open-competition-entrant-wallet/base-mainnet-fork-replay.json
+
+python scripts/audit_open_competition_entrant_wallet_mainnet_fork_replay.py \
+  --bundle target/open-competition-entrant-wallet/base-mainnet-deployment-regenerated.json \
+  --replay target/open-competition-entrant-wallet/base-mainnet-fork-replay.json \
+  --output target/open-competition-entrant-wallet/base-mainnet-fork-replay-audit.json
+```
+
+The fork runner uses temporary Anvil-only keys and deletes them before writing
+the final manifest. It does not broadcast to Base and cannot satisfy the live
+Sepolia, hosted relay, gas sponsorship, deployment, settlement, or payment
+gates.
+
+After both audits pass, prepare and audit the single zero-value Base mainnet
+CREATE2 action. The explicit waiver is permitted only when the admin has
+timeboxed the independent review as described in the release plan:
+
+```text
+python scripts/build_open_competition_entrant_wallet_mainnet_release_bundle.py \
+  --waive-independent-review \
+  --output target/open-competition-entrant-wallet/base-mainnet-release-bundle.json
+
+python scripts/audit_open_competition_entrant_wallet_mainnet_release_bundle.py \
+  --bundle target/open-competition-entrant-wallet/base-mainnet-release-bundle.json \
+  --output target/open-competition-entrant-wallet/base-mainnet-release-bundle-audit.json
+```
+
+Serve `scripts/open-competition-entrant-wallet-mainnet-signer.html` only on
+localhost. It accepts the known admin on Base mainnet, rechecks the pinned safe
+block, current ETH balance, every canonical dependency runtime, deterministic
+address vacancy, and all default-off activation fields. It can submit only one
+zero-value call to the canonical CREATE2 deployer. The preserved hidden 1 USDC
+canary remains the already-settled competition canary; entrant-factory
+deployment does not spend or recreate that reward.
+
 Any entrant wallet, factory, planner, typed-data schema, or relay-byte change
 invalidates that rehearsal. Do not set hosted relay or gas-sponsorship gates
 true until the secret-free evidence is published, audited, replayed on an
