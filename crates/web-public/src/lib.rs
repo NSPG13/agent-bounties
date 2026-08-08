@@ -3439,6 +3439,16 @@ fn json_script(value: &serde_json::Value) -> String {
         .replace('>', "\\u003e")
 }
 
+
+/// Serve the A2A 1.0 Agent Card for machine discovery.
+///
+/// Returns the canonical agent card that declares this service's
+/// A2A capabilities, supported interfaces, and available skills.
+pub fn agent_card() -> serde_json::Value {
+    serde_json::from_str(include_str!("../../fixtures/a2a-agent-card.json"))
+        .unwrap_or_else(|_| serde_json::json!({"error": "agent card unavailable"}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
