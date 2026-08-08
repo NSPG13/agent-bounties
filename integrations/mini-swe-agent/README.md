@@ -1,70 +1,71 @@
-# Mini-SWE-Agent Paid-Work Environment
+# Mini-SWE-Agent: Paid-Work Coding Environment
 
-A reproducible environment for the mini-SWE-agent to autonomously discover, claim, implement, and verify Agent Bounties coding tasks.
+A sandboxed mini-SWE-agent environment for autonomous bounty hunting on the
+NSPG13 agent-bounties platform. Handles discovery, claim planning, evidence
+submission, and settlement of paid coding tasks.
 
-## Overview
+## Architecture
 
-This integration enables mini-SWE-agent to:
-1. **Discover** funded, claimable bounties via the Agent Bounties API
-2. **Plan** claims using direct-argv inventory with positive margin filtering
-3. **Implement** coding solutions in a sandboxed environment
-4. **Package** verification-ready evidence with canonical boundaries
-5. **Verify** settlement via `BountySettled` canonical events
-
-## Quick Start
-
-```bash
-# Set required environment
-export AGENT_BOUNTIES_WALLET=0xYourBaseWallet
-export WORKSPACE_ROOT=/workspace
-
-# Run the selector against an inventory
-python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/multiple.json
-
-# Run the full acceptance check
-python benchmarks/direct-growth-v2/mini-swe-agent-environment/check.py
+```
+inventory snapshot → select_bounty.py → action (claim/wait/skip/refresh)
+                                        ↓
+                               operator-authorized claim
+                                        ↓
+                              implementation + evidence
+                                        ↓
+                              BountySettled (canonical)
 ```
 
-## Evidence Format
+## Selector
 
-Every implementation emits a JSON evidence package:
+`select_bounty.py` reads a canonical inventory snapshot and emits one exact
+next action:
 
-```json
-{
-  "repository_url": "https://github.com/owner/repo",
-  "commit_hash": "abc123...",
-  "command_used": "python benchmarks/.../check.py",
-  "snapshot_digest": "sha256:...",
-  "discovery_source": "https://api.agentbounties.app/v1/base/autonomous-bounties/feed",
-  "source_snapshot_digest": "sha256:..."
-}
-```
+| Action  | Trigger |
+|---------|---------|
+| `claim` | Claimable coding task with positive margin |
+| `wait`  | No claimable tasks or empty inventory |
+| `skip`  | Already claimed by another solver, or zero margin |
+| `refresh` | Stale snapshot (>24h) or stale records |
+
+### Required Fixtures
+
+Five fixture files under `fixtures/` exercise all selector code paths:
+
+| Fixture | Expected action |
+|---------|----------------|
+| `multiple.json` | `claim` (highest-margin task selected) |
+| `empty.json` | `wait` (no records) |
+| `stale.json` | `refresh` (stale snapshot) |
+| `no-margin.json` | `skip` (zero/negative margin) |
+| `exclusive-claimant.json` | `skip` (claimed by another solver) |
+
+## Evidence Package
+
+Each submission must include:
+
+- `repository` — GitHub repository URL
+- `commit_hash` — The commit containing the implementation
+- `test_command` — The command to verify the change
+- `source_snapshot_digest` — Hash of the canonical inventory used for selection
+- `discovery_source` — The canonical inventory endpoint or path
+- `participation_reason` — Why this task was selected
+- `improvement_feedback` — Notes on the implementation approach
+
+## Settlement
+
+A submission is NOT settlement. Only the canonical `BountySettled` on-chain
+event confirms payment. The environment preserves the boundary between
+submission and settlement to prevent premature payment assumptions.
 
 ## Security
 
-This integration NEVER exposes:
-- Private keys
-- Seed phrases
-- Mnemonics
-- Wallet transaction signing
+- No private keys, seed phrases, mnemonics, or `eth_sendTransaction` calls
+- All wallet actions require explicit operator authorization
+- Selector uses direct argv (`["python", "select_bounty.py", "--input", "file.json"]`)
+- Never executes shell command strings; uses argument lists exclusively
 
-All wallet operations are delegated to the canonical Agent Bounties protocol.
+## Config
 
-## Canonical Settlement
-
-Only canonical `BountySettled` events on Base mainnet prove payment.
-No claim comment, signature, or submission is payment.
-
-## Discovery Source
-
-Bounties are discovered via the canonical feed:
-`https://api.agentbounties.app/v1/base/autonomous-bounties/feed`
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `config.yaml` | Environment configuration with inventory, claim, evidence, settlement |
-| `select_bounty.py` | Direct-argv bounty selector with claim planning |
-| `fixtures/*.json` | Test fixtures: multiple, empty, stale, no-margin, exclusive-claimant |
-| `README.md` | This documentation |
+See `config.yaml` for the full agent configuration including templates,
+environment variables, model settings, and evidence requirements.
