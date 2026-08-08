@@ -3,8 +3,9 @@ use super::{
     eip3009_typed_data, encode_address, encode_call, encode_uint256, event_topic, log_key,
     normalize_address, normalize_evm_address, normalize_hash, normalize_topic, parse_bytes32,
     parse_rpc_quantity, predict_minimal_proxy_address, rpc_result, selector, topic_u64, topic_word,
-    word_hex, word_to_u128, word_to_u64, ChainBaseError, Eip3009AuthorizationTypedData, EvmLog,
-    EvmTransactionIntent, JsonRpcTransport, ReqwestJsonRpcTransport,
+    word_hex, word_to_u128, word_to_u64, ChainBaseError, Eip3009AuthorizationTypedData,
+    Eip712DomainData, Eip712TypeField, EvmLog, EvmTransactionIntent, JsonRpcTransport,
+    ReqwestJsonRpcTransport,
 };
 use chrono::{DateTime, Utc};
 use domain::Id;
@@ -23,6 +24,8 @@ pub const OPEN_COMPETITION_VERIFIER_CATALOG_SCHEMA: &str =
 pub const OPEN_COMPETITION_CREATION_SCHEMA: &str =
     "agent-bounties/open-competition-v1-creation-preparation-v1";
 pub const OPEN_COMPETITION_STATE_SCHEMA: &str = "agent-bounties/open-competition-v1-state-v1";
+pub const OPEN_COMPETITION_ENTRANT_ACTION_SCHEMA: &str =
+    "agent-bounties/open-competition-entrant-wallet-action-v1";
 pub const OPEN_COMPETITION_PROTOCOL_VERSION: &str = "agent-bounties/open-competition-v1";
 pub const OPEN_COMPETITION_MAX_ENTRIES: u8 = 64;
 pub const OPEN_COMPETITION_MAX_COMPETITION_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -575,6 +578,64 @@ pub struct OpenCompetitionCommitmentEnvelope {
     pub evidence_boundary: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenCompetitionEntrantAction {
+    Commit,
+    Reveal,
+    WithdrawBond,
+}
+
+impl OpenCompetitionEntrantAction {
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Commit => 0,
+            Self::Reveal => 1,
+            Self::WithdrawBond => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCompetitionEntrantActionMessage {
+    pub wallet: String,
+    pub action: u8,
+    pub payload_hash: String,
+    pub nonce: String,
+    pub deadline: String,
+    pub policy_version: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCompetitionEntrantActionTypedData {
+    pub types: BTreeMap<String, Vec<Eip712TypeField>>,
+    pub domain: Eip712DomainData,
+    pub primary_type: String,
+    pub message: OpenCompetitionEntrantActionMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCompetitionEntrantActionPlan {
+    pub schema_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub wallet: String,
+    pub delegate: String,
+    pub policy_hash: String,
+    pub policy_version: u64,
+    pub action: OpenCompetitionEntrantAction,
+    pub action_code: u8,
+    pub nonce: u64,
+    pub deadline: u64,
+    pub payload: String,
+    pub payload_hash: String,
+    pub signing_payload: OpenCompetitionEntrantActionTypedData,
+    pub relay_call: Value,
+    pub evidence_boundary: String,
+}
+
 pub fn generate_open_competition_commitment_envelope(
     input: OpenCompetitionCommitmentInput,
 ) -> Result<OpenCompetitionCommitmentEnvelope, ChainBaseError> {
@@ -691,6 +752,203 @@ pub fn open_competition_solution_commitment(
         parse_bytes32(salt)?,
     ];
     Ok(format!("0x{}", hex::encode(keccak_words(&words))))
+}
+
+pub fn encode_open_competition_entrant_commit_payload(
+    bounty_contract: &str,
+    commitment: &str,
+) -> Result<String, ChainBaseError> {
+    let words = [
+        encode_address(&normalize_evm_address(bounty_contract)?)?,
+        parse_bytes32(commitment)?,
+    ];
+    Ok(format!("0x{}", hex::encode(words.concat())))
+}
+
+pub fn encode_open_competition_entrant_reveal_payload(
+    bounty_contract: &str,
+    submission_hash: &str,
+    evidence_hash: &str,
+    salt: &str,
+    proof: &str,
+) -> Result<String, ChainBaseError> {
+    let proof = decode_prefixed_hex(proof, "proof")?;
+    let mut bytes = Vec::with_capacity(32 * 6 + proof.len().next_multiple_of(32));
+    bytes.extend_from_slice(&encode_address(&normalize_evm_address(bounty_contract)?)?);
+    bytes.extend_from_slice(&parse_bytes32(submission_hash)?);
+    bytes.extend_from_slice(&parse_bytes32(evidence_hash)?);
+    bytes.extend_from_slice(&parse_bytes32(salt)?);
+    bytes.extend_from_slice(&encode_uint256(160)?);
+    bytes.extend_from_slice(&encode_uint256(proof.len() as u128)?);
+    bytes.extend_from_slice(&proof);
+    let padding = (32 - proof.len() % 32) % 32;
+    bytes.resize(bytes.len() + padding, 0);
+    Ok(format!("0x{}", hex::encode(bytes)))
+}
+
+pub fn encode_open_competition_entrant_withdraw_payload(
+    bounty_contract: &str,
+) -> Result<String, ChainBaseError> {
+    Ok(format!(
+        "0x{}",
+        hex::encode(encode_address(&normalize_evm_address(bounty_contract)?)?)
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn plan_open_competition_entrant_action(
+    network: &str,
+    wallet: &str,
+    delegate: &str,
+    policy_hash: &str,
+    policy_version: u64,
+    action: OpenCompetitionEntrantAction,
+    nonce: u64,
+    deadline: u64,
+    payload: &str,
+) -> Result<OpenCompetitionEntrantActionPlan, ChainBaseError> {
+    let descriptor = base_network_descriptor(network)?;
+    let wallet = normalize_evm_address(wallet)?;
+    let delegate = normalize_evm_address(delegate)?;
+    let policy_hash = normalized_nonzero_bytes32(policy_hash, "entrant wallet policy hash")?;
+    if deadline == 0 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant wallet action deadline must be positive".to_string(),
+        ));
+    }
+    let payload_bytes = decode_prefixed_hex(payload, "entrant wallet payload")?;
+    if payload_bytes.is_empty() {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant wallet payload must not be empty".to_string(),
+        ));
+    }
+    let payload = format!("0x{}", hex::encode(&payload_bytes));
+    let payload_hash = format!("0x{}", hex::encode(Keccak256::digest(&payload_bytes)));
+    let mut types = BTreeMap::new();
+    types.insert(
+        "EIP712Domain".to_string(),
+        vec![
+            eip712_type_field("name", "string"),
+            eip712_type_field("version", "string"),
+            eip712_type_field("chainId", "uint256"),
+            eip712_type_field("verifyingContract", "address"),
+        ],
+    );
+    types.insert(
+        "OpenCompetitionEntrantAction".to_string(),
+        vec![
+            eip712_type_field("wallet", "address"),
+            eip712_type_field("action", "uint8"),
+            eip712_type_field("payloadHash", "bytes32"),
+            eip712_type_field("nonce", "uint256"),
+            eip712_type_field("deadline", "uint256"),
+            eip712_type_field("policyVersion", "uint64"),
+        ],
+    );
+    let action_code = action.code();
+    Ok(OpenCompetitionEntrantActionPlan {
+        schema_version: OPEN_COMPETITION_ENTRANT_ACTION_SCHEMA.to_string(),
+        network: network.to_string(),
+        chain_id: descriptor.chain_id,
+        wallet: wallet.clone(),
+        delegate,
+        policy_hash,
+        policy_version,
+        action,
+        action_code,
+        nonce,
+        deadline,
+        payload: payload.clone(),
+        payload_hash: payload_hash.clone(),
+        signing_payload: OpenCompetitionEntrantActionTypedData {
+            types,
+            domain: Eip712DomainData {
+                name: "Agent Bounties Open Competition Entrant Wallet".to_string(),
+                version: "1".to_string(),
+                chain_id: descriptor.chain_id,
+                verifying_contract: wallet.clone(),
+            },
+            primary_type: "OpenCompetitionEntrantAction".to_string(),
+            message: OpenCompetitionEntrantActionMessage {
+                wallet: wallet.clone(),
+                action: action_code,
+                payload_hash,
+                nonce: nonce.to_string(),
+                deadline: deadline.to_string(),
+                policy_version,
+            },
+        },
+        relay_call: json!({
+            "to": wallet,
+            "function": "executeWithSignature(uint8,bytes,uint256,uint256,bytes)",
+            "arguments_before_signature": [action_code, payload, nonce, deadline],
+            "signature_tail": ["delegate_signature"]
+        }),
+        evidence_boundary: "This plan authorizes one exact policy-bound entrant-wallet action. It moves no value until a keeper simulates and broadcasts it. Only canonical competition events prove entry, reveal, bond recovery, or settlement; only BountySettled proves payout.".to_string(),
+    })
+}
+
+pub fn attach_open_competition_entrant_relay_signature(
+    plan: &OpenCompetitionEntrantActionPlan,
+    relayer: &str,
+    signature: &str,
+) -> Result<EvmTransactionIntent, ChainBaseError> {
+    let relayer = normalize_evm_address(relayer)?;
+    let signature_bytes = decode_prefixed_hex(signature, "delegate signature")?;
+    if signature_bytes.len() != 65 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant wallet delegate signature must contain 65 bytes".to_string(),
+        ));
+    }
+    let payload = decode_prefixed_hex(&plan.payload, "entrant wallet payload")?;
+    let data = encode_open_competition_entrant_execute_call(
+        plan.action_code,
+        &payload,
+        plan.nonce,
+        plan.deadline,
+        &signature_bytes,
+    )?;
+    Ok(EvmTransactionIntent {
+        from: Some(relayer),
+        to: plan.wallet.clone(),
+        value_wei: 0,
+        data,
+        function: "executeWithSignature(uint8,bytes,uint256,uint256,bytes)".to_string(),
+    })
+}
+
+fn eip712_type_field(name: &str, field_type: &str) -> Eip712TypeField {
+    Eip712TypeField {
+        name: name.to_string(),
+        field_type: field_type.to_string(),
+    }
+}
+
+fn encode_open_competition_entrant_execute_call(
+    action: u8,
+    payload: &[u8],
+    nonce: u64,
+    deadline: u64,
+    signature: &[u8],
+) -> Result<String, ChainBaseError> {
+    let payload_tail_length = 32 + payload.len().next_multiple_of(32);
+    let mut bytes = selector("executeWithSignature(uint8,bytes,uint256,uint256,bytes)").to_vec();
+    bytes.extend_from_slice(&encode_uint256(action.into())?);
+    bytes.extend_from_slice(&encode_uint256(160)?);
+    bytes.extend_from_slice(&encode_uint256(nonce.into())?);
+    bytes.extend_from_slice(&encode_uint256(deadline.into())?);
+    bytes.extend_from_slice(&encode_uint256((160 + payload_tail_length) as u128)?);
+    append_dynamic_bytes(&mut bytes, payload)?;
+    append_dynamic_bytes(&mut bytes, signature)?;
+    Ok(format!("0x{}", hex::encode(bytes)))
+}
+
+fn append_dynamic_bytes(output: &mut Vec<u8>, value: &[u8]) -> Result<(), ChainBaseError> {
+    output.extend_from_slice(&encode_uint256(value.len() as u128)?);
+    output.extend_from_slice(value);
+    let padding = (32 - value.len() % 32) % 32;
+    output.resize(output.len() + padding, 0);
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1980,7 +2238,7 @@ pub fn plan_open_competition_action(
 mod tests {
     use super::*;
     use alloy::{
-        primitives::{keccak256, Address, B256, U256},
+        primitives::{keccak256, Address, Bytes, B256, U256},
         sol_types::SolValue,
     };
     use std::sync::Mutex;
@@ -2592,6 +2850,98 @@ mod tests {
             profile.evidence_schema,
             "agent-bounties/leading-zero-work-evidence-v1"
         );
+    }
+
+    #[test]
+    fn entrant_wallet_payloads_match_solidity_abi_encoding() {
+        let bounty = "0x1111111111111111111111111111111111111111";
+        let commitment = format!("0x{}", "22".repeat(32));
+        let commit = encode_open_competition_entrant_commit_payload(bounty, &commitment).unwrap();
+        let expected_commit =
+            (bounty.parse::<Address>().unwrap(), B256::from([0x22; 32])).abi_encode();
+        assert_eq!(commit, format!("0x{}", hex::encode(expected_commit)));
+
+        let reveal = encode_open_competition_entrant_reveal_payload(
+            bounty,
+            &format!("0x{}", "33".repeat(32)),
+            &format!("0x{}", "44".repeat(32)),
+            &format!("0x{}", "55".repeat(32)),
+            "0xaabbcc",
+        )
+        .unwrap();
+        let expected_reveal = (
+            bounty.parse::<Address>().unwrap(),
+            B256::from([0x33; 32]),
+            B256::from([0x44; 32]),
+            B256::from([0x55; 32]),
+            Bytes::from(vec![0xaa, 0xbb, 0xcc]),
+        )
+            .abi_encode_params();
+        assert_eq!(reveal, format!("0x{}", hex::encode(expected_reveal)));
+    }
+
+    #[test]
+    fn entrant_wallet_typed_action_and_relay_call_are_exact() {
+        let wallet = "0x1111111111111111111111111111111111111111";
+        let relayer = "0x2222222222222222222222222222222222222222";
+        let payload = encode_open_competition_entrant_commit_payload(
+            "0x3333333333333333333333333333333333333333",
+            &format!("0x{}", "44".repeat(32)),
+        )
+        .unwrap();
+        let plan = plan_open_competition_entrant_action(
+            "base-sepolia",
+            wallet,
+            "0x5555555555555555555555555555555555555555",
+            &format!("0x{}", "66".repeat(32)),
+            7,
+            OpenCompetitionEntrantAction::Commit,
+            9,
+            2_000_000_000,
+            &payload,
+        )
+        .unwrap();
+        assert_eq!(plan.schema_version, OPEN_COMPETITION_ENTRANT_ACTION_SCHEMA);
+        assert_eq!(plan.chain_id, 84_532);
+        assert_eq!(plan.action_code, 0);
+        assert_eq!(
+            plan.signing_payload.primary_type,
+            "OpenCompetitionEntrantAction"
+        );
+        assert_eq!(
+            plan.signing_payload.domain.name,
+            "Agent Bounties Open Competition Entrant Wallet"
+        );
+        assert_eq!(plan.signing_payload.message.nonce, "9");
+        assert_eq!(
+            plan.payload_hash,
+            format!(
+                "0x{}",
+                hex::encode(keccak256(
+                    hex::decode(payload.trim_start_matches("0x")).unwrap()
+                ))
+            )
+        );
+
+        let signature = format!("0x{}", "77".repeat(65));
+        let intent =
+            attach_open_competition_entrant_relay_signature(&plan, relayer, &signature).unwrap();
+        let mut expected =
+            selector("executeWithSignature(uint8,bytes,uint256,uint256,bytes)").to_vec();
+        expected.extend_from_slice(
+            &(
+                U256::ZERO,
+                Bytes::from(hex::decode(payload.trim_start_matches("0x")).unwrap()),
+                U256::from(9_u64),
+                U256::from(2_000_000_000_u64),
+                Bytes::from(vec![0x77_u8; 65]),
+            )
+                .abi_encode_params(),
+        );
+        assert_eq!(intent.from.as_deref(), Some(relayer));
+        assert_eq!(intent.to, wallet);
+        assert_eq!(intent.value_wei, 0);
+        assert_eq!(intent.data, format!("0x{}", hex::encode(expected)));
     }
 }
 

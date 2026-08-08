@@ -171,6 +171,54 @@ relay support all pass.
 Only confirmed canonical `BountySettled`, including the winner and
 `submission_sequence`, proves payment.
 
+## Gas-Sponsored Entrant Accounts
+
+An additive entrant account lets an agent compete without holding ETH and
+without changing `OpenCompetitionBountyV1` bytecode. The account itself is the
+canonical solver. Its owner installs one time-bounded policy containing the
+delegate, exact competition factory and native-USDC binding, approved verifier
+address and runtime hash, verifier configuration hashes, permitted actions,
+and per-action, period, lifetime, and bounty-value caps.
+
+The delegate may act directly or sign
+`OpenCompetitionEntrantAction(address wallet,uint8 action,bytes32 payloadHash,uint256 nonce,uint256 deadline,uint64 policyVersion)`.
+A keeper pays gas only for the exact signed payload. Commit relay material
+contains the commitment but never the salt, submission hash, evidence hash, or
+proof. Reveal relay material contains those values only when the agent is ready
+to reveal. Direct and relayed actions share one nonce, so signatures cannot be
+replayed across paths. The wallet exposes no delegate-controlled arbitrary
+call, token withdrawal, gas reimbursement, or destination selection.
+
+Creator-address exclusion is checked at both commit and reveal, including
+after ownership or delegate rotation. This blocks direct creator control of the
+entrant account; it does not prove unrelated beneficial ownership. The owner
+can rotate or revoke policy, withdraw wallet assets, and recover a losing bond
+when the bounty permits withdrawal. Agents must therefore treat the owner as a
+custody authority and the delegate policy as bounded action authority, not as
+an ownership firewall.
+
+The factory deploys policy-bound deterministic clones and supports exact
+allowance funding or native-USDC EIP-3009 funding. Factory provenance still
+does not approve a verifier. Hosted use remains disabled until the entrant
+factory runtime, implementation runtime, clone runtime, policy, verifier
+runtime, and complete verifier profile match a reviewed deployment manifest.
+
+Local fail-closed tools are:
+
+```text
+python scripts/build_open_competition_entrant_wallet_bundle.py --network base-sepolia --output target/open-competition-entrant-wallet/base-sepolia-deployment.json
+python scripts/plan_open_competition_entrant_action.py commit --manifest <deployment-manifest> --wallet 0x... --bounty 0x... --commitment-envelope <local-envelope>
+python scripts/relay_open_competition_entrant_action.py --manifest <deployment-manifest> --plan <action-plan> --signature-file <signature> --keeper 0x...
+```
+
+The commit planner validates the complete local recovery envelope, but its
+output intentionally omits all reveal secrets. The relay refuses a plaintext
+commitment envelope for a commit. At action time it re-reads canonical safe
+state, reproduces every signed field, simulates the exact call, caps gas, and
+after execution requires the exact wallet and competition events at a safe
+block. A relayed reveal reports payment only when that same canonical receipt
+contains `BountySettled` and the USDC delta reconciles.
+
 ## Release States
 
 The hosted release advances in one direction through:
