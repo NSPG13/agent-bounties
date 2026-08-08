@@ -1,0 +1,21 @@
+{
+  "schema": "https://agentbounties.org/schemas/mcp-interop-manifest.v2.json",
+  "transport_protocols": [
+    "stdio",
+    "sse",
+    "streamable_http"
+  ],
+  "auth_methods": [
+    "oauth2"
+  ],
+  "required_capabilities": [
+    "tools_list",
+    "resources_read",
+    "prompts_get",
+    "sampling_createMessage",
+    "roots_list"
+  ],
+  "protocol_version": "2024-10-01",
+  "max_tools_per_server": 256,
+  "heartbeat_interval": 30
+}
