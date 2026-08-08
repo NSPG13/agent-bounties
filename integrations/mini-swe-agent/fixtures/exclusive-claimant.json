@@ -1,17 +1,1 @@
-[
-  {
-    "id": 703,
-    "title": "Already exclusively claimed",
-    "created_at": "2026-08-07T10:00:00Z",
-    "reward_usdc": "2.00",
-    "bond_usdc": "0.01",
-    "canonical": true,
-    "state": "claimable-live",
-    "claimants": [
-      {
-        "address": "0xdead",
-        "exclusive": true
-      }
-    ]
-  }
-]
+[{"id": "bounty-blocked", "status": "claimable-live", "margin_usdc": 10.0, "exclusive_claimant": "competitor-42"}]
