@@ -1,0 +1,16 @@
+{
+  "submission_id": "claimable-001",
+  "bounty_ref": "NSPG13/agent-bounties#773",
+  "canonical_state": "claimable-live",
+  "decision": "accept",
+  "evidence_files": [
+    ".openhands/evidence/test-output.json",
+    ".openhands/evidence/integration-log.txt"
+  ],
+  "onchain_verification": {
+    "contract": "0x-auto-bounty-v3",
+    "funding": "2.01 USDC",
+    "parent_solver_reward": "2.00 USDC"
+  },
+  "timestamp": "2026-08-08T00:00:00Z"
+}
