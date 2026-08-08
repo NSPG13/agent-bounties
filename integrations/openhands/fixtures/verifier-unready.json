@@ -1,11 +1,9 @@
 {
-  "submission_id": "verifier-004",
-  "bounty_ref": "NSPG13/agent-bounties#773",
-  "canonical_state": "claimable-live",
-  "decision": "deny",
-  "evidence_files": [
-    ".openhands/evidence/verifier-check.json"
-  ],
-  "reason": "Verifier not yet registered for this bounty round \u2014 wait for verifier assignment before submission",
-  "timestamp": "2026-08-08T03:00:00Z"
+  "id": "bounty-oh-3",
+  "status": "funded-live",
+  "contract": "0xffff0000",
+  "margin_usdc": 1.5,
+  "funding": "1.51 USDC",
+  "verifier_status": "unready",
+  "note": "Verifier not yet ready \u2014 wait"
 }
