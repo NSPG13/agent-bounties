@@ -1802,6 +1802,7 @@ async fn main() -> anyhow::Result<()> {
             get(agent_bounties_discovery),
         )
         .route("/.well-known/x402.json", get(x402_discovery))
+        .route("/.well-known/agent-card.json", get(agent_card))
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5304,6 +5305,22 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
         }
     }))
 }
+
+#[utoipa::path(get, path = "/.well-known/agent-card.json", responses((status = 200, description = "A2A 1.0 Agent Card for machine discovery")))]
+async fn agent_card() -> impl IntoResponse {
+    let body = include_str!("../../fixtures/a2a-agent-card.json");
+    let etag = format!(r#""{:x}""#, md5::compute(body.as_bytes()));
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::ETAG, HeaderValue::from_str(&etag).unwrap()),
+            (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=3600")),
+        ],
+        body,
+    )
+}
+
 
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]
 async fn risk_policy() -> Json<RiskPolicyDescriptor> {
