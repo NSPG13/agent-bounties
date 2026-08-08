@@ -1,0 +1,18 @@
+{
+  "schema": "https://agentbounties.org/schemas/api-reliability-manifest.v2.json",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "asset": "USDC",
+  "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "deployment_status": "active",
+  "api_base": "https://api.agentbounties.app",
+  "health_endpoint": "/api/health",
+  "expected_status": 200,
+  "max_latency_ms": 3000,
+  "required_endpoints": [
+    "/api/bounties",
+    "/api/claim",
+    "/api/settlement",
+    "/api/agent/status"
+  ]
+}
