@@ -420,6 +420,38 @@ enum Command {
         #[arg(long, default_value = "{}")]
         arguments_json: String,
     },
+    OpenCompetitionEntrantAction {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        wallet: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        commitment: Option<String>,
+        #[arg(long)]
+        commitment_envelope_file: Option<String>,
+        #[arg(long)]
+        proof: Option<String>,
+        #[arg(long)]
+        deadline_seconds: Option<u64>,
+    },
+    OpenCompetitionEntrantRelay {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        request_file: String,
+    },
+    OpenCompetitionEntrantRelayStatus {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        relay_id: String,
+    },
     StandingMetaV4Readiness {
         #[arg(long, default_value = "https://api.agentbounties.app")]
         api_base_url: String,
@@ -819,6 +851,35 @@ async fn async_main() -> Result<()> {
             operation,
             arguments_json,
         ),
+        Command::OpenCompetitionEntrantAction {
+            api_base_url,
+            network,
+            wallet,
+            bounty_contract,
+            action,
+            commitment,
+            commitment_envelope_file,
+            proof,
+            deadline_seconds,
+        } => open_competition_entrant_action_cli(
+            api_base_url,
+            network,
+            wallet,
+            bounty_contract,
+            action,
+            commitment,
+            commitment_envelope_file,
+            proof,
+            deadline_seconds,
+        ),
+        Command::OpenCompetitionEntrantRelay {
+            api_base_url,
+            request_file,
+        } => open_competition_entrant_relay_cli(api_base_url, request_file),
+        Command::OpenCompetitionEntrantRelayStatus {
+            api_base_url,
+            relay_id,
+        } => open_competition_entrant_relay_status_cli(api_base_url, relay_id),
         Command::StandingMetaV4Readiness {
             api_base_url,
             network,
@@ -2420,6 +2481,127 @@ fn open_competition_action_cli(
         payload,
     )?;
     println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_competition_entrant_action_cli(
+    api_base_url: String,
+    network: String,
+    wallet: String,
+    bounty_contract: String,
+    action: String,
+    commitment: Option<String>,
+    commitment_envelope_file: Option<String>,
+    proof: Option<String>,
+    deadline_seconds: Option<u64>,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let wallet = normalize_evm_address(&wallet)?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    require(
+        matches!(action.as_str(), "commit" | "reveal" | "withdraw_bond"),
+        "action must be commit, reveal, or withdraw_bond",
+    )?;
+    if let Some(seconds) = deadline_seconds {
+        require(
+            (30..=600).contains(&seconds),
+            "deadline_seconds must be between 30 and 600",
+        )?;
+    }
+    let commitment_envelope = commitment_envelope_file
+        .as_deref()
+        .map(|file| {
+            let raw = fs::read_to_string(file)
+                .with_context(|| format!("failed to read commitment envelope {file}"))?;
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .context("commitment envelope file must contain valid JSON")
+        })
+        .transpose()?;
+    match action.as_str() {
+        "commit" => require(
+            commitment.is_some() && commitment_envelope.is_none() && proof.is_none(),
+            "commit requires --commitment and forbids reveal fields",
+        )?,
+        "reveal" => require(
+            commitment.is_none() && commitment_envelope.is_some() && proof.is_some(),
+            "reveal requires --commitment-envelope-file and --proof",
+        )?,
+        "withdraw_bond" => require(
+            commitment.is_none() && commitment_envelope.is_none() && proof.is_none(),
+            "withdraw_bond forbids commitment and reveal fields",
+        )?,
+        _ => unreachable!(),
+    }
+    let payload = serde_json::json!({
+        "network": network,
+        "wallet": wallet,
+        "bounty_contract": bounty_contract,
+        "action": action,
+        "commitment": commitment,
+        "commitment_envelope": commitment_envelope,
+        "proof": proof,
+        "deadline_seconds": deadline_seconds,
+    });
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/open-competition-v1/entrant-action-preparation"),
+        payload,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn open_competition_entrant_relay_cli(api_base_url: String, request_file: String) -> Result<()> {
+    let raw = fs::read_to_string(&request_file)
+        .with_context(|| format!("failed to read entrant relay request {request_file}"))?;
+    let request: serde_json::Value =
+        serde_json::from_str(&raw).context("request_file must contain valid JSON")?;
+    let object = request
+        .as_object()
+        .context("request_file must contain one JSON object")?;
+    require(
+        object.len() == 3
+            && object.contains_key("idempotency_key")
+            && object.contains_key("plan")
+            && object.contains_key("signature"),
+        "request_file must contain only idempotency_key, plan, and signature",
+    )?;
+    require(
+        object.get("plan").is_some_and(serde_json::Value::is_object),
+        "request_file plan must be an object",
+    )?;
+    let signature = object
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .context("request_file signature must be a 65-byte 0x-prefixed signature")?;
+    require(
+        signature.len() == 132
+            && signature.starts_with("0x")
+            && signature[2..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "request_file signature must be a 65-byte 0x-prefixed signature",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let response = post_json(
+        &format!("{api}/v1/base/open-competition-v1/entrant-action-relays"),
+        request,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn open_competition_entrant_relay_status_cli(api_base_url: String, relay_id: String) -> Result<()> {
+    let relay_id = Uuid::parse_str(&relay_id).context("relay_id must be a UUID")?;
+    let api = normalize_base_url(&api_base_url);
+    let response = get_json(&format!(
+        "{api}/v1/base/open-competition-v1/entrant-action-relays/{relay_id}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
 }
 

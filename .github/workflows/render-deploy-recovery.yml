@@ -34,6 +34,11 @@ on:
         description: "Exact current production SHA; required for deploy_only"
         required: false
         type: string
+      open_competition_entrant_relay_canary:
+        description: "Enable only the operator-authenticated entrant relay canary"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -82,6 +87,7 @@ jobs:
       PRODUCTION_MCP_BASE_URL: ${{ vars.PRODUCTION_MCP_BASE_URL || 'https://mcp.agentbounties.app' }}
       PRODUCTION_WEBSITE_BASE_URL: ${{ vars.PRODUCTION_WEBSITE_BASE_URL || 'https://agentbounties.app' }}
       RENDER_DEPLOY_PAUSE_REASON: ${{ vars.RENDER_DEPLOY_PAUSE_REASON }}
+      OPEN_COMPETITION_ENTRANT_RELAY_CANARY: ${{ inputs.open_competition_entrant_relay_canary || false }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -180,6 +186,13 @@ jobs:
           BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT }}
           BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT: ${{ vars.BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT }}
         run: |
+          entrant_canary_args=()
+          if [[ "${OPEN_COMPETITION_ENTRANT_RELAY_CANARY}" == "true" ]]; then
+            entrant_canary_args+=(--enable-open-competition-entrant-relay-canary)
+          elif [[ "${OPEN_COMPETITION_ENTRANT_RELAY_CANARY}" != "false" ]]; then
+            echo "Invalid entrant relay canary input" >&2
+            exit 1
+          fi
           python scripts/render_deploy_recovery.py \
             --revision "${{ steps.target.outputs.deployment_revision }}" \
             --deploy-mode "${{ steps.target.outputs.deploy_mode }}" \
@@ -190,6 +203,7 @@ jobs:
             --website-base-url "${PRODUCTION_WEBSITE_BASE_URL%/}" \
             --base-mainnet-leaderboard-reward-contract "$BASE_MAINNET_LEADERBOARD_REWARD_CONTRACT" \
             --base-sepolia-leaderboard-reward-contract "$BASE_SEPOLIA_LEADERBOARD_REWARD_CONTRACT" \
+            "${entrant_canary_args[@]}" \
             --output target/operations/render-deploy.json
 
       - name: Publish deployment evidence summary
