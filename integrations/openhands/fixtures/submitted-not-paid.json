@@ -1,0 +1,11 @@
+{
+  "submission_id": "submitted-002",
+  "bounty_ref": "NSPG13/agent-bounties#773",
+  "canonical_state": "submitted",
+  "decision": "needs_revision",
+  "evidence_files": [
+    ".openhands/evidence/draft-output.json"
+  ],
+  "reviewer_notes": "Evidence bundle references funded-live state but canonical state is now claimable-live. Re-run with updated state check.",
+  "timestamp": "2026-08-08T01:00:00Z"
+}
