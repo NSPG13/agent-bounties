@@ -487,7 +487,7 @@ def validate_hosted_plan(plan: dict, setup: dict, action: str, envelope: dict, p
         "name": "Agent Bounties Open Competition Entrant Wallet",
         "version": "1",
         "chainId": CHAIN_ID,
-        "verifyingContract": checksum(setup["wallet"]),
+        "verifyingContract": setup["wallet"],
     }
     expected_types = {
         "EIP712Domain": [
@@ -511,7 +511,6 @@ def validate_hosted_plan(plan: dict, setup: dict, action: str, envelope: dict, p
         or plan.get("chain_id") != CHAIN_ID
         or plan.get("wallet", "").lower() != setup["wallet"]
         or plan.get("delegate", "").lower() != setup["delegate"]
-        or plan.get("bounty", "").lower() != setup["bounty"]
         or plan.get("policy_hash", "").lower() != setup["wallet_policy_hash"].lower()
         or plan.get("action") != action
         or plan.get("action_code") != action_code
@@ -526,6 +525,18 @@ def validate_hosted_plan(plan: dict, setup: dict, action: str, envelope: dict, p
         or int(str(message.get("nonce", -1))) != plan.get("nonce")
         or int(str(message.get("deadline", -1))) != plan.get("deadline")
         or int(str(message.get("policyVersion", -1))) != plan.get("policy_version")
+        or plan.get("relay_call")
+        != {
+            "to": setup["wallet"],
+            "function": "executeWithSignature(uint8,bytes,uint256,uint256,bytes)",
+            "arguments_before_signature": [
+                action_code,
+                Web3.to_hex(payload).lower(),
+                plan.get("nonce"),
+                plan.get("deadline"),
+            ],
+            "signature_tail": ["delegate_signature"],
+        }
     ):
         fail("hosted entrant action plan does not match the exact local action")
 
