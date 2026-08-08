@@ -1,1 +1,46 @@
-[{"id": "bounty-1", "status": "claimable-live", "margin_usdc": 5.0, "exclusive_claimant": null}, {"id": "bounty-2", "status": "claimable-live", "margin_usdc": 2.0, "exclusive_claimant": null}, {"id": "bounty-3", "status": "funded-live", "margin_usdc": 0.5, "exclusive_claimant": "other-user"}]
+{
+  "snapshot_status": "fresh",
+  "observed_at": "2026-08-08T12:00:00Z",
+  "opportunities": [
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000aa",
+      "status": "claimable",
+      "terms_valid": true,
+      "verification_ready": true,
+      "gross_cash_margin": "1500000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/1",
+          "benchmark": {"engine": "sandboxed_regression_v1"},
+          "discovery_source": "canonical-inventory"
+        }
+      }
+    },
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000bb",
+      "status": "claimable",
+      "terms_valid": true,
+      "verification_ready": true,
+      "gross_cash_margin": "2000000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/2",
+          "benchmark": {"engine": "sandboxed_regression_v1"},
+          "discovery_source": "canonical-inventory"
+        }
+      }
+    },
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000cc",
+      "status": "open",
+      "gross_cash_margin": "9000000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/3",
+          "benchmark": {"engine": "sandboxed_regression_v1"},
+          "discovery_source": "canonical-inventory"
+        }
+      }
+    }
+  ]
+}
