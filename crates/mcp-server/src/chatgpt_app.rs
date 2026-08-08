@@ -19,7 +19,7 @@ use super::{
 use super::{AppState, ChatgptFileInput};
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header::ORIGIN, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -33,7 +33,17 @@ use std::{env, net::IpAddr};
 use url::Url;
 use uuid::Uuid;
 
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+const MCP_LEGACY_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_CATALOG_TTL_MS: u64 = 300_000;
+const MCP_PROTOCOL_VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
+const MCP_CLIENT_INFO_META: &str = "io.modelcontextprotocol/clientInfo";
+const MCP_CLIENT_CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
+const MCP_SERVER_INFO_META: &str = "io.modelcontextprotocol/serverInfo";
+const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
+const MCP_METHOD_HEADER: &str = "mcp-method";
+const MCP_NAME_HEADER: &str = "mcp-name";
+const MCP_ALLOWED_ORIGINS_ENV: &str = "MCP_ALLOWED_ORIGINS";
 const CHATGPT_SANDBOX_ENV: &str = "CHATGPT_APP_SANDBOX_MODE";
 const FEED_WIDGET_URI: &str = "ui://agent-bounties/live-feed-v4.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
@@ -535,12 +545,39 @@ fn sandbox_bounty_image_reference(
 
 pub(super) async fn mcp_post(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Response {
+    if !mcp_origin_is_allowed(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    if mcp_protocol_era(&headers, &payload) == McpProtocolEra::Modern {
+        if payload.is_array() {
+            return mcp_error_response(
+                StatusCode::BAD_REQUEST,
+                payload_id(&payload),
+                -32600,
+                "MCP 2026-07-28 accepts one JSON-RPC request per HTTP POST",
+                None,
+            );
+        }
+        if let Err(error) = validate_modern_request(&headers, &payload) {
+            return error.into_response(payload_id(&payload));
+        }
+        let Some((status, response)) = handle_request(state, payload, McpProtocolEra::Modern).await
+        else {
+            return StatusCode::ACCEPTED.into_response();
+        };
+        return (status, Json(response)).into_response();
+    }
+
     let responses = if let Some(batch) = payload.as_array() {
         let mut responses = Vec::new();
         for request in batch {
-            if let Some(response) = handle_request(state.clone(), request.clone()).await {
+            if let Some((_, response)) =
+                handle_request(state.clone(), request.clone(), McpProtocolEra::Legacy).await
+            {
                 responses.push(response);
             }
         }
@@ -548,7 +585,8 @@ pub(super) async fn mcp_post(
             return StatusCode::ACCEPTED.into_response();
         }
         Value::Array(responses)
-    } else if let Some(response) = handle_request(state, payload).await {
+    } else if let Some((_, response)) = handle_request(state, payload, McpProtocolEra::Legacy).await
+    {
         response
     } else {
         return StatusCode::ACCEPTED.into_response();
@@ -557,7 +595,10 @@ pub(super) async fn mcp_post(
     (StatusCode::OK, Json(responses)).into_response()
 }
 
-pub(super) async fn mcp_get() -> Response {
+pub(super) async fn mcp_get(headers: HeaderMap) -> Response {
+    if !mcp_origin_is_allowed(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     (
         StatusCode::METHOD_NOT_ALLOWED,
         [("allow", "POST")],
@@ -566,39 +607,311 @@ pub(super) async fn mcp_get() -> Response {
         .into_response()
 }
 
-pub(super) async fn mcp_delete() -> Response {
-    StatusCode::METHOD_NOT_ALLOWED.into_response()
+pub(super) async fn mcp_delete(headers: HeaderMap) -> Response {
+    if !mcp_origin_is_allowed(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    (StatusCode::METHOD_NOT_ALLOWED, [("allow", "POST")]).into_response()
 }
 
-async fn handle_request(state: SharedState, request: Value) -> Option<Value> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpProtocolEra {
+    Legacy,
+    Modern,
+}
+
+#[derive(Debug)]
+struct McpProtocolError {
+    status: StatusCode,
+    code: i64,
+    message: String,
+    data: Option<Value>,
+}
+
+impl McpProtocolError {
+    fn header_mismatch(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: -32020,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    fn invalid_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: -32600,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    fn invalid_params(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: -32602,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    fn unsupported_version(requested: &str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: -32022,
+            message: format!("Unsupported MCP protocol version: {requested}"),
+            data: Some(json!({
+                "supported": [MCP_PROTOCOL_VERSION],
+                "requested": requested
+            })),
+        }
+    }
+
+    fn into_response(self, id: Value) -> Response {
+        mcp_error_response(self.status, id, self.code, &self.message, self.data)
+    }
+}
+
+fn mcp_protocol_era(headers: &HeaderMap, payload: &Value) -> McpProtocolEra {
+    let header_is_modern = headers
+        .get(MCP_PROTOCOL_VERSION_HEADER)
+        .is_some_and(|value| {
+            value.to_str().map_or(true, |version| {
+                !matches!(version, "2024-11-05" | "2025-03-26" | "2025-06-18")
+            })
+        });
+    let body_has_request_metadata = payload
+        .get("params")
+        .and_then(|params| params.get("_meta"))
+        .and_then(|metadata| metadata.get(MCP_PROTOCOL_VERSION_META))
+        .is_some();
+    let is_discovery = payload
+        .get("method")
+        .and_then(Value::as_str)
+        .is_some_and(|method| method == "server/discover");
+
+    if header_is_modern || body_has_request_metadata || is_discovery {
+        McpProtocolEra::Modern
+    } else {
+        McpProtocolEra::Legacy
+    }
+}
+
+fn validate_modern_request(headers: &HeaderMap, request: &Value) -> Result<(), McpProtocolError> {
+    let object = request
+        .as_object()
+        .ok_or_else(|| McpProtocolError::invalid_request("Invalid Request"))?;
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Err(McpProtocolError::invalid_request(
+            "jsonrpc must be exactly '2.0'",
+        ));
+    }
+    if !object
+        .get("id")
+        .is_some_and(|id| id.is_string() || id.is_number())
+    {
+        return Err(McpProtocolError::invalid_request(
+            "MCP 2026-07-28 HTTP messages must be JSON-RPC requests with a string or number id",
+        ));
+    }
+    let method = object
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpProtocolError::invalid_request("method must be a string"))?;
+    let params = object
+        .get("params")
+        .and_then(Value::as_object)
+        .ok_or_else(|| McpProtocolError::invalid_params("params must be an object"))?;
+    let metadata = params
+        .get("_meta")
+        .and_then(Value::as_object)
+        .ok_or_else(|| McpProtocolError::invalid_params("params._meta must be an object"))?;
+    let body_version = metadata
+        .get(MCP_PROTOCOL_VERSION_META)
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            McpProtocolError::header_mismatch(format!(
+                "params._meta.{MCP_PROTOCOL_VERSION_META} is required"
+            ))
+        })?;
+    let header_version = required_header(headers, MCP_PROTOCOL_VERSION_HEADER)?;
+    if header_version != body_version {
+        return Err(McpProtocolError::header_mismatch(format!(
+            "{MCP_PROTOCOL_VERSION_HEADER} header does not match request metadata"
+        )));
+    }
+    if body_version != MCP_PROTOCOL_VERSION {
+        return Err(McpProtocolError::unsupported_version(body_version));
+    }
+
+    let header_method = required_header(headers, MCP_METHOD_HEADER)?;
+    if header_method != method {
+        return Err(McpProtocolError::header_mismatch(format!(
+            "{MCP_METHOD_HEADER} header does not match method"
+        )));
+    }
+
+    if matches!(method, "tools/call" | "resources/read" | "prompts/get") {
+        let source_field = if method == "resources/read" {
+            "uri"
+        } else {
+            "name"
+        };
+        let body_name = params
+            .get(source_field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                McpProtocolError::invalid_params(format!(
+                    "{method} requires a string params.{source_field}"
+                ))
+            })?;
+        let header_name = decode_mcp_header_value(required_header(headers, MCP_NAME_HEADER)?)?;
+        if header_name != body_name {
+            return Err(McpProtocolError::header_mismatch(format!(
+                "{MCP_NAME_HEADER} header does not match params.{source_field}"
+            )));
+        }
+    }
+
+    if !metadata
+        .get(MCP_CLIENT_CAPABILITIES_META)
+        .is_some_and(Value::is_object)
+    {
+        return Err(McpProtocolError::invalid_params(format!(
+            "params._meta.{MCP_CLIENT_CAPABILITIES_META} must be an object"
+        )));
+    }
+    if let Some(client_info) = metadata.get(MCP_CLIENT_INFO_META) {
+        let valid = client_info.as_object().is_some_and(|client_info| {
+            client_info.get("name").is_some_and(Value::is_string)
+                && client_info.get("version").is_some_and(Value::is_string)
+        });
+        if !valid {
+            return Err(McpProtocolError::invalid_params(format!(
+                "params._meta.{MCP_CLIENT_INFO_META} must include string name and version fields"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, McpProtocolError> {
+    headers
+        .get(name)
+        .ok_or_else(|| McpProtocolError::header_mismatch(format!("missing {name} header")))?
+        .to_str()
+        .map_err(|_| McpProtocolError::header_mismatch(format!("malformed {name} header")))
+}
+
+fn decode_mcp_header_value(value: &str) -> Result<String, McpProtocolError> {
+    const PREFIX: &str = "=?base64?";
+    const SUFFIX: &str = "?=";
+    if value.starts_with(PREFIX) {
+        let encoded = value
+            .strip_prefix(PREFIX)
+            .and_then(|value| value.strip_suffix(SUFFIX))
+            .ok_or_else(|| McpProtocolError::header_mismatch("malformed Base64 header sentinel"))?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| McpProtocolError::header_mismatch("invalid Base64 header value"))?;
+        return String::from_utf8(decoded)
+            .map_err(|_| McpProtocolError::header_mismatch("Base64 header value is not UTF-8"));
+    }
+    Ok(value.to_string())
+}
+
+fn payload_id(payload: &Value) -> Value {
+    payload.get("id").cloned().unwrap_or(Value::Null)
+}
+
+fn mcp_error_response(
+    status: StatusCode,
+    id: Value,
+    code: i64,
+    message: &str,
+    data: Option<Value>,
+) -> Response {
+    (
+        status,
+        Json(json_rpc_error_with_data(id, code, message, data)),
+    )
+        .into_response()
+}
+
+async fn handle_request(
+    state: SharedState,
+    request: Value,
+    era: McpProtocolEra,
+) -> Option<(StatusCode, Value)> {
     let Some(object) = request.as_object() else {
-        return Some(json_rpc_error(Value::Null, -32600, "Invalid Request"));
+        return Some((
+            StatusCode::OK,
+            json_rpc_error(Value::Null, -32600, "Invalid Request"),
+        ));
     };
     let id = object.get("id").cloned();
     let Some(method) = object.get("method").and_then(Value::as_str) else {
-        return Some(json_rpc_error(
-            id.unwrap_or(Value::Null),
-            -32600,
-            "Invalid Request",
+        return Some((
+            StatusCode::OK,
+            json_rpc_error(id.unwrap_or(Value::Null), -32600, "Invalid Request"),
         ));
     };
     let id = id?;
     let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
 
     let result = match method {
-        "initialize" => Ok(initialize_result(&params)),
-        "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools": chatgpt_tools().await})),
+        "server/discover" if era == McpProtocolEra::Modern => Ok(discover_result()),
+        "initialize" if era == McpProtocolEra::Legacy => Ok(initialize_result(&params)),
+        "ping" if era == McpProtocolEra::Legacy => Ok(json!({})),
+        "tools/list" => {
+            let mut tools = chatgpt_tools().await;
+            if era == McpProtocolEra::Modern {
+                tools.sort_by(|left, right| {
+                    left.get("name")
+                        .and_then(Value::as_str)
+                        .cmp(&right.get("name").and_then(Value::as_str))
+                });
+            }
+            Ok(json!({"tools": tools}))
+        }
         "tools/call" => call_tool(state, &params).await,
         "resources/list" => Ok(json!({"resources": [feed_widget_resource_descriptor()]})),
         "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
         "resources/read" => read_resource(&params),
-        _ => return Some(json_rpc_error(id, -32601, "Method not found")),
+        _ => {
+            return Some((
+                if era == McpProtocolEra::Modern {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::OK
+                },
+                json_rpc_error(id, -32601, "Method not found"),
+            ))
+        }
     };
 
     Some(match result {
-        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-        Err(error) => json_rpc_error(id, -32602, &error),
+        Ok(result) => (
+            StatusCode::OK,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": if era == McpProtocolEra::Modern {
+                    modern_result(method, result)
+                } else {
+                    result
+                }
+            }),
+        ),
+        Err(error) => (
+            if era == McpProtocolEra::Modern {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::OK
+            },
+            json_rpc_error(id, -32602, &error),
+        ),
     })
 }
 
@@ -606,45 +919,168 @@ fn initialize_result(params: &Value) -> Value {
     let requested = params
         .get("protocolVersion")
         .and_then(Value::as_str)
-        .unwrap_or(MCP_PROTOCOL_VERSION);
+        .unwrap_or(MCP_LEGACY_PROTOCOL_VERSION);
     let protocol_version = match requested {
         "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
-        _ => MCP_PROTOCOL_VERSION,
+        _ => MCP_LEGACY_PROTOCOL_VERSION,
     };
+    json!({
+        "protocolVersion": protocol_version,
+        "capabilities": mcp_server_capabilities(),
+        "serverInfo": mcp_server_info(),
+        "instructions": mcp_server_instructions()
+    })
+}
+
+fn discover_result() -> Value {
+    json!({
+        "supportedVersions": [MCP_PROTOCOL_VERSION],
+        "capabilities": mcp_server_capabilities(),
+        "instructions": mcp_server_instructions()
+    })
+}
+
+fn mcp_server_instructions() -> &'static str {
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
-    let instructions = if sandbox {
+    if sandbox {
         "Sandbox mode is active. Use get_bounty_feed and render_bounty_feed to exercise the complete in-chat bounty UI. Use prepare_moonpay_onramp to exercise the external top-up handoff without opening MoonPay, and use prepare_bounty_action plus get_bounty_action_status to exercise the hosted bounty lifecycle without opening a wallet. Every tool returns deterministic fixture data and performs no network write, wallet action, public comment, publication, funding, claim, submission, verification, settlement, purchase, or payment. Never describe sandbox output as canonical evidence."
     } else if public_review {
         "Public review mode is active. Show only voluntary, unfunded community requests with no payment promise. Use render_bounty_feed for the compact in-chat work queue, publish_unfunded_bounty only when the user explicitly asks to publish a voluntary request, compile_objective_with_cloud_agent only for non-economic task decomposition, and the comment and share tools for public collaboration. Funding, claiming, completion, verification, wallet, settlement, token, and payment actions are unavailable in this app configuration. Never imply otherwise or direct a user around this boundary."
     } else {
         "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms and image direction are complete, generate a unique bounty image in their ChatGPT account, show it for approval, summarize the complete bounty, and obtain explicit confirmation. Then call prepare_bounty_post with that approved ChatGPT image file; Agent Bounties stores the exact file and never generates a replacement. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; MoonPay purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use compile_objective_with_cloud_agent to break a broad objective into smaller reviewable child bounties. Use create_share_bundle after every meaningful step."
-    };
+    }
+}
+
+fn mcp_server_capabilities() -> Value {
     json!({
-        "protocolVersion": protocol_version,
-        "capabilities": {
-            "tools": {"listChanged": false},
-            "resources": {"subscribe": false, "listChanged": false}
-        },
-        "serverInfo": {
-            "name": if sandbox {
-                "agent-bounties-sandbox"
-            } else if public_review {
-                "agent-bounties-community"
-            } else {
-                "agent-bounties"
-            },
-            "title": if sandbox {
-                "Agent Bounties Sandbox"
-            } else if public_review {
-                "Agent Bounties Community"
-            } else {
-                "Agent Bounties"
-            },
-            "version": env!("CARGO_PKG_VERSION")
-        },
-        "instructions": instructions
+        "tools": {"listChanged": false},
+        "resources": {"subscribe": false, "listChanged": false}
     })
+}
+
+fn mcp_server_info() -> Value {
+    let sandbox = chatgpt_sandbox_mode();
+    let public_review = !sandbox && chatgpt_public_review_mode();
+    json!({
+        "name": if sandbox {
+            "agent-bounties-sandbox"
+        } else if public_review {
+            "agent-bounties-community"
+        } else {
+            "agent-bounties"
+        },
+        "title": if sandbox {
+            "Agent Bounties Sandbox"
+        } else if public_review {
+            "Agent Bounties Community"
+        } else {
+            "Agent Bounties"
+        },
+        "version": env!("CARGO_PKG_VERSION")
+    })
+}
+
+fn modern_result(method: &str, mut result: Value) -> Value {
+    let object = result
+        .as_object_mut()
+        .expect("every implemented MCP method returns an object result");
+    object.insert("resultType".to_string(), json!("complete"));
+    let metadata = object
+        .entry("_meta".to_string())
+        .or_insert_with(|| json!({}));
+    if !metadata.is_object() {
+        *metadata = json!({});
+    }
+    metadata[MCP_SERVER_INFO_META] = mcp_server_info();
+    if matches!(
+        method,
+        "server/discover"
+            | "tools/list"
+            | "resources/list"
+            | "resources/templates/list"
+            | "resources/read"
+    ) {
+        object.insert("ttlMs".to_string(), json!(MCP_CATALOG_TTL_MS));
+        object.insert("cacheScope".to_string(), json!("public"));
+    }
+    result
+}
+
+fn mcp_origin_is_allowed(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN) else {
+        return true;
+    };
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    mcp_origin_is_allowed_with_config(
+        origin,
+        env::var("MCP_BASE_URL").ok().as_deref(),
+        env::var(MCP_ALLOWED_ORIGINS_ENV).ok().as_deref(),
+    )
+}
+
+fn mcp_origin_is_allowed_with_config(
+    origin: &str,
+    mcp_base_url: Option<&str>,
+    configured_origins: Option<&str>,
+) -> bool {
+    let Some(origin) = normalized_mcp_origin(origin) else {
+        return false;
+    };
+    let defaults = [
+        "https://chatgpt.com",
+        "https://chat.openai.com",
+        "https://agentbounties.app",
+        "https://www.agentbounties.app",
+        "https://mcp.agentbounties.app",
+    ];
+    if defaults.contains(&origin.as_str()) || is_loopback_http_origin(&origin) {
+        return true;
+    }
+    if mcp_base_url
+        .and_then(normalized_mcp_origin)
+        .is_some_and(|allowed| allowed == origin)
+    {
+        return true;
+    }
+    configured_origins.is_some_and(|configured| {
+        configured.split(',').any(|allowed| {
+            normalized_mcp_origin(allowed.trim()).is_some_and(|allowed| allowed == origin)
+        })
+    })
+}
+
+fn normalized_mcp_origin(value: &str) -> Option<String> {
+    let url = Url::parse(value).ok()?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.host_str().is_none()
+        || !matches!(url.scheme(), "http" | "https")
+    {
+        return None;
+    }
+    Some(url.origin().ascii_serialization())
+}
+
+fn is_loopback_http_origin(origin: &str) -> bool {
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    if url.scheme() != "http" {
+        return false;
+    }
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback()),
+        None => false,
+    }
 }
 
 async fn chatgpt_tools() -> Vec<Value> {
@@ -3503,10 +3939,18 @@ fn format_usdc(amount: u64) -> String {
 }
 
 fn json_rpc_error(id: Value, code: i64, message: &str) -> Value {
+    json_rpc_error_with_data(id, code, message, None)
+}
+
+fn json_rpc_error_with_data(id: Value, code: i64, message: &str, data: Option<Value>) -> Value {
+    let mut error = json!({"code": code, "message": message});
+    if let Some(data) = data {
+        error["data"] = data;
+    }
     json!({
         "jsonrpc": "2.0",
         "id": id,
-        "error": {"code": code, "message": message}
+        "error": error
     })
 }
 
@@ -3847,6 +4291,218 @@ mod tests {
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
+    }
+
+    fn modern_request(
+        method: &'static str,
+        mut params: Value,
+        name: Option<&str>,
+    ) -> (HeaderMap, Value) {
+        params["_meta"] = json!({
+            (MCP_PROTOCOL_VERSION_META): MCP_PROTOCOL_VERSION,
+            (MCP_CLIENT_INFO_META): {
+                "name": "agent-bounties-protocol-test",
+                "version": "1.0.0"
+            },
+            (MCP_CLIENT_CAPABILITIES_META): {}
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            MCP_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        headers.insert(MCP_METHOD_HEADER, method.parse().unwrap());
+        if let Some(name) = name {
+            headers.insert(MCP_NAME_HEADER, name.parse().unwrap());
+        }
+        (
+            headers,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "protocol-test",
+                "method": method,
+                "params": params
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn modern_discovery_is_stateless_typed_and_cacheable() {
+        let (headers, request) = modern_request("server/discover", json!({}), None);
+        assert_eq!(mcp_protocol_era(&headers, &request), McpProtocolEra::Modern);
+        validate_modern_request(&headers, &request).unwrap();
+
+        let (status, response) =
+            handle_request(public_tool_test_state(), request, McpProtocolEra::Modern)
+                .await
+                .unwrap();
+        let result = &response["result"];
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(result["supportedVersions"], json!([MCP_PROTOCOL_VERSION]));
+        assert_eq!(result["resultType"], "complete");
+        assert_eq!(result["ttlMs"], MCP_CATALOG_TTL_MS);
+        assert_eq!(result["cacheScope"], "public");
+        assert_eq!(
+            result["_meta"][MCP_SERVER_INFO_META]["version"],
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+        assert_eq!(result["capabilities"]["resources"]["subscribe"], false);
+        assert!(result.get("protocolVersion").is_none());
+    }
+
+    #[tokio::test]
+    async fn modern_tool_catalog_is_deterministic_typed_and_cacheable() {
+        let (headers, request) = modern_request("tools/list", json!({}), None);
+        validate_modern_request(&headers, &request).unwrap();
+        let (_, response) =
+            handle_request(public_tool_test_state(), request, McpProtocolEra::Modern)
+                .await
+                .unwrap();
+        let result = &response["result"];
+        let names = result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        let mut sorted_names = names.clone();
+        sorted_names.sort_unstable();
+
+        assert_eq!(names, sorted_names);
+        assert_eq!(result["resultType"], "complete");
+        assert_eq!(result["ttlMs"], MCP_CATALOG_TTL_MS);
+        assert_eq!(result["cacheScope"], "public");
+        assert!(result["_meta"][MCP_SERVER_INFO_META].is_object());
+    }
+
+    #[test]
+    fn modern_headers_must_match_the_request_body() {
+        let (mut headers, request) = modern_request("tools/list", json!({}), None);
+        headers.insert(MCP_METHOD_HEADER, "resources/list".parse().unwrap());
+        let error = validate_modern_request(&headers, &request).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, -32020);
+
+        let (mut headers, mut request) = modern_request("tools/list", json!({}), None);
+        headers.insert(MCP_PROTOCOL_VERSION_HEADER, "2099-01-01".parse().unwrap());
+        request["params"]["_meta"][MCP_PROTOCOL_VERSION_META] = json!("2099-01-01");
+        let error = validate_modern_request(&headers, &request).unwrap_err();
+        assert_eq!(error.code, -32022);
+        assert_eq!(
+            error.data.unwrap()["supported"],
+            json!([MCP_PROTOCOL_VERSION])
+        );
+    }
+
+    #[test]
+    fn modern_name_header_supports_the_required_base64_sentinel() {
+        let resource_uri = "ui://agent-bounties/世界.html";
+        let encoded = format!(
+            "=?base64?{}?=",
+            base64::engine::general_purpose::STANDARD.encode(resource_uri)
+        );
+        let (mut headers, request) =
+            modern_request("resources/read", json!({"uri": resource_uri}), None);
+        headers.insert(MCP_NAME_HEADER, encoded.parse().unwrap());
+
+        validate_modern_request(&headers, &request).unwrap();
+        assert_eq!(decode_mcp_header_value(&encoded).unwrap(), resource_uri);
+        assert_eq!(decode_mcp_header_value("ordinary?=").unwrap(), "ordinary?=");
+        assert!(decode_mcp_header_value("=?base64?not-valid?=").is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_initialize_remains_available_without_modern_metadata() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": MCP_LEGACY_PROTOCOL_VERSION}
+        });
+        assert_eq!(
+            mcp_protocol_era(&HeaderMap::new(), &request),
+            McpProtocolEra::Legacy
+        );
+        let (status, response) =
+            handle_request(public_tool_test_state(), request, McpProtocolEra::Legacy)
+                .await
+                .unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response["result"]["protocolVersion"],
+            MCP_LEGACY_PROTOCOL_VERSION
+        );
+        assert!(response["result"].get("resultType").is_none());
+
+        let mut legacy_headers = HeaderMap::new();
+        legacy_headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            MCP_LEGACY_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        assert_eq!(
+            mcp_protocol_era(
+                &legacy_headers,
+                &json!({"method": "tools/list", "params": {}})
+            ),
+            McpProtocolEra::Legacy
+        );
+        legacy_headers.insert(MCP_PROTOCOL_VERSION_HEADER, "2099-01-01".parse().unwrap());
+        assert_eq!(
+            mcp_protocol_era(
+                &legacy_headers,
+                &json!({"method": "tools/list", "params": {}})
+            ),
+            McpProtocolEra::Modern
+        );
+    }
+
+    #[tokio::test]
+    async fn removed_handshake_methods_are_not_exposed_to_modern_clients() {
+        let (headers, request) = modern_request("initialize", json!({}), None);
+        validate_modern_request(&headers, &request).unwrap();
+        let (status, response) =
+            handle_request(public_tool_test_state(), request, McpProtocolEra::Modern)
+                .await
+                .unwrap();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(response["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn origin_validation_is_exact_and_configurable() {
+        assert!(mcp_origin_is_allowed_with_config(
+            "https://chatgpt.com",
+            None,
+            None
+        ));
+        assert!(mcp_origin_is_allowed_with_config(
+            "http://127.0.0.1:3000",
+            None,
+            None
+        ));
+        assert!(mcp_origin_is_allowed_with_config(
+            "https://tenant.example",
+            Some("https://tenant.example"),
+            None
+        ));
+        assert!(mcp_origin_is_allowed_with_config(
+            "https://client.example",
+            None,
+            Some("https://one.example, https://client.example")
+        ));
+        for rejected in [
+            "null",
+            "http://chatgpt.com",
+            "https://chatgpt.com.evil.example",
+            "https://user:secret@chatgpt.com",
+            "https://chatgpt.com/path",
+        ] {
+            assert!(
+                !mcp_origin_is_allowed_with_config(rejected, None, None),
+                "expected rejected Origin: {rejected}"
+            );
+        }
     }
 
     #[tokio::test]

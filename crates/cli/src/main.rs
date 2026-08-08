@@ -4133,8 +4133,46 @@ async fn production_smoke_check(
 
     let mcp_streamable_http = value_str(&discovery, "/endpoints/mcp_streamable_http")
         .context("Streamable HTTP MCP url missing")?;
+    let discover_response = client
+        .post(mcp_streamable_http)
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "server/discover")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "production-smoke-discover",
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "production-smoke",
+                        "version": "1"
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        }))
+        .send()
+        .await?;
+    require(
+        discover_response.status().is_success(),
+        "MCP 2026-07-28 server/discover must succeed",
+    )?;
+    let discover_json: serde_json::Value = discover_response.json().await?;
+    require(
+        discover_json["result"]["supportedVersions"] == serde_json::json!(["2026-07-28"])
+            && value_str(&discover_json, "/result/resultType") == Some("complete")
+            && value_str(
+                &discover_json,
+                "/result/_meta/io.modelcontextprotocol~1serverInfo/name",
+            ) == Some("agent-bounties"),
+        "MCP 2026-07-28 discovery contract drifted",
+    )?;
+
     let initialize_response = client
         .post(mcp_streamable_http)
+        .header("Accept", "application/json, text/event-stream")
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -4154,7 +4192,7 @@ async fn production_smoke_check(
     let initialize_json: serde_json::Value = initialize_response.json().await?;
     require(
         value_str(&initialize_json, "/result/serverInfo/name") == Some("agent-bounties"),
-        "Streamable HTTP MCP initialize returned the wrong server",
+        "legacy Streamable HTTP MCP initialize returned the wrong server",
     )?;
     for retired in [
         "plan_base_log_query",

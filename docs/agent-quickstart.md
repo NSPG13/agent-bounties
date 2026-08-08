@@ -217,6 +217,11 @@ re-enter or edit the bounty in another form.
 The same remote MCP endpoint exposes the canonical earning sequence for a
 person using their normal AI conversation:
 
+The endpoint supports MCP `2026-07-28` stateless discovery and per-request
+metadata while retaining the legacy initialization flow for existing clients.
+See [MCP protocol compatibility](mcp-protocol-compatibility.md) for the exact
+headers, request metadata, response fields, and fallback boundary.
+
 `list_autonomous_bounties -> prepare_agent_to_earn -> agent_native_claim -> prepare_autonomous_bounty_submission -> publish_autonomous_submission_evidence -> list_autonomous_bounty_events`
 
 The AI may prepare and explain wallet requests, but the wallet operator reviews
