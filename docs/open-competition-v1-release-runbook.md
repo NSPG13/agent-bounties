@@ -322,6 +322,42 @@ commitments, gas-sponsorship readiness, and public inventory remain false.
 Dispatch the controller again with the canary input false after evidence has
 been reconciled.
 
+When the Render-generated operator token is not already present in the local
+environment, do not reveal it through screenshots, workflow logs, or a
+plaintext artifact. Generate a one-time RSA key locally, dispatch
+`render-operator-token-encrypted-handoff.yml` with only its public key and
+SHA-256 fingerprint, download the one-day ciphertext artifact, and decrypt it
+only into the current process. Delete the artifact immediately after the live
+canary. The workflow never changes or rotates the existing token.
+
+The live mainnet entrant canary uses a DPAPI-protected owner/delegate outside
+the repository and an exact four-transaction setup plan:
+
+```text
+python scripts/run_open_competition_entrant_mainnet_canary.py prepare \
+  --state-dir <private-local-state> \
+  --creator <separate-bounded-creator> \
+  --output target/open-competition-entrant-wallet/base-mainnet-live-canary-plan.json
+
+python scripts/run_open_competition_entrant_mainnet_canary.py relay \
+  --state-dir <private-local-state> \
+  --plan target/open-competition-entrant-wallet/base-mainnet-live-canary-plan.json \
+  --approval-tx 0x... \
+  --creation-tx 0x... \
+  --wallet-creation-tx 0x... \
+  --wallet-funding-tx 0x...
+```
+
+The creator starts with exactly 0.10 USDC. The hidden bounty escrows 0.08 USDC
+for the solver and 0.01 USDC for the verifier, while the separate entrant
+wallet receives the remaining 0.01 USDC bond. The runner sends commitment-only
+material during commit preparation, keeps the recovery envelope encrypted with
+Windows DPAPI, signs the exact hosted EIP-712 plan locally, requires both relay
+receipts to become canonical at a Base safe block, and accepts payment evidence
+only when the reveal relay records `BountySettled`. Its redacted evidence must
+reconcile the final 0.01/0.09/0.00 USDC creator, entrant-wallet, and bounty
+balances. The canary-only verifier remains ineligible for public inventory.
+
 Any entrant wallet, factory, planner, typed-data schema, or relay-byte change
 invalidates that rehearsal. Do not set hosted relay or gas-sponsorship gates
 true until the secret-free evidence is published, audited, replayed on an
