@@ -17864,6 +17864,9 @@ mod tests {
         assert!(paths.contains_key("/v1/base/open-competition-v1/reveal-preparation"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/status"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/bond-withdrawal-preparation"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/entrant-action-preparation"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/entrant-action-relays"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/entrant-action-relays/{relay_id}"));
         assert!(
             paths.contains_key("/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan")
         );
