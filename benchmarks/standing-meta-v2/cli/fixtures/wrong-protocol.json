@@ -1,0 +1,17 @@
+{
+  "schema": "https://agentbounties.org/schemas/cli-manifest.v2.json",
+  "protocol": {
+    "network": "arbitrum-one",
+    "chain_id": 42161,
+    "asset": "ETH",
+    "token": "0x912CE59144191C1204E64559FE8253a0e49E6548",
+    "deployment_status": "paused"
+  },
+  "endpoints": {
+    "api_base": "https://staging.example.com"
+  },
+  "cli_entry": "npm run agent-bounties",
+  "cli_commands": [
+    "help"
+  ]
+}
