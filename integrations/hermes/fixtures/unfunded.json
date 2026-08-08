@@ -1,0 +1,8 @@
+{
+  "id": "bounty-hermes-2",
+  "status": "bounty",
+  "contract": "0xdef456",
+  "margin_usdc": 0,
+  "funding": "0 USDC",
+  "note": "Not funded on-chain"
+}

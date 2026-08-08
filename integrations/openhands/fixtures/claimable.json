@@ -1,0 +1,9 @@
+{
+  "id": "bounty-oh-1",
+  "status": "claimable-live",
+  "contract": "0x294cda5faa1b1a9dd7eca2cb52daff1fa843ad22",
+  "margin_usdc": 2.0,
+  "funding": "2.01 USDC",
+  "network": "base-mainnet",
+  "chain_id": 8453
+}

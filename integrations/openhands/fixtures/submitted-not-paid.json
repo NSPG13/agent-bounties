@@ -1,0 +1,10 @@
+{
+  "id": "bounty-oh-4",
+  "status": "submitted",
+  "contract": "0xeeee1111",
+  "margin_usdc": 2.0,
+  "funding": "2.01 USDC",
+  "submission_tx": "0x1234...",
+  "settled": false,
+  "note": "Submitted but BountySettled not yet emitted"
+}

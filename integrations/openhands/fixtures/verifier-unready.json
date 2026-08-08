@@ -1,0 +1,9 @@
+{
+  "id": "bounty-oh-3",
+  "status": "funded-live",
+  "contract": "0xffff0000",
+  "margin_usdc": 1.5,
+  "funding": "1.51 USDC",
+  "verifier_status": "unready",
+  "note": "Verifier not yet ready \u2014 wait"
+}

@@ -1,0 +1,14 @@
+{
+  "stop": [
+    {
+      "name": "agent-bounties-evidence",
+      "path": ".openhands/hooks/agent-bounties-evidence.py",
+      "description": "Blocks completion until focused checks and submission evidence exist",
+      "required_evidence": [
+        "submission",
+        "test_output",
+        "decision"
+      ]
+    }
+  ]
+}

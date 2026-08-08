@@ -1,0 +1,9 @@
+{
+  "id": "bounty-hermes-1",
+  "status": "claimable-live",
+  "contract": "0xabc123",
+  "margin_usdc": 2.0,
+  "funding": "2.01 USDC",
+  "network": "base-mainnet",
+  "chain_id": 8453
+}

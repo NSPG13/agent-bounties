@@ -1,0 +1,8 @@
+{
+  "id": "bounty-hermes-3",
+  "status": "stale",
+  "contract": "0x789abc",
+  "margin_usdc": 1.0,
+  "funding": "1.01 USDC",
+  "stale_since": "2026-07-01T00:00:00Z"
+}
