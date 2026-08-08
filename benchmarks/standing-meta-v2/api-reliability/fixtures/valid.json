@@ -1,0 +1,24 @@
+{
+  "schema": "https://agentbounties.org/schemas/api-reliability-manifest.v2.json",
+  "network": {
+    "protocol": "https",
+    "endpoint_base_url": "https://api.agentbounties.org/v2/health",
+    "expected_statuses": [
+      200,
+      201,
+      204
+    ]
+  },
+  "policy": {
+    "timeout": 5,
+    "retry_strategy": "exponential_backoff",
+    "max_retries": 3,
+    "health_check_interval": 30
+  },
+  "required_metrics": [
+    "latency_p95",
+    "error_rate",
+    "uptime_percentage",
+    "throughput_rps"
+  ]
+}
