@@ -1,0 +1,20 @@
+{
+  "schema": "https://agentbounties.org/schemas/cli-manifest.v2.json",
+  "protocol": {
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "asset": "USDC",
+    "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "deployment_status": "active"
+  },
+  "endpoints": {
+    "api_base": "https://api.agentbounties.app"
+  },
+  "cli_entry": "npx agent-bounties",
+  "cli_commands": [
+    "register",
+    "claim",
+    "status",
+    "wallet"
+  ]
+}
