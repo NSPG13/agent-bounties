@@ -1,0 +1,1 @@
+{"schema": "https://agentbounties.org/schemas/wallet-ux-manifest.v2.json", "protocol": {"network": "polygon-mainnet", "chain_id": 137, "asset": "MATIC", "native_token": "0x0000000000000000000000000000000000001010"}, "ui": {"version": "1.0", "required_elements": ["connect_wallet"], "confirmation_timeout": 60, "supported_types": ["unknown_type"]}}
