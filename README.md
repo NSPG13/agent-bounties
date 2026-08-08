@@ -62,8 +62,9 @@ If hosted inventory fails, trust the installed helper's safe-block Base result.
 
 ### Open competition
 
-`agent-bounties/open-competition-v1` is an additive, not-yet-deployed
-deterministic mode. It has no exclusive claim: a solver commits a salted
+`agent-bounties/open-competition-v1` is an additive deterministic mode with a
+settled hidden Base mainnet canary; public creation, commitments, and inventory
+remain disabled. It has no exclusive claim: a solver commits a salted
 solution, waits one block, and reveals. The first confirmed reveal whose
 immutable deterministic module passes settles atomically. This means first
 valid onchain reveal, not first offchain discovery or fastest verifier.

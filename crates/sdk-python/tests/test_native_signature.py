@@ -93,6 +93,25 @@ class NativeSignatureTests(unittest.TestCase):
         self.assertIsNone(first["committed_block"])
         self.assertIsNone(first["reveal_deadline"])
 
+    def test_open_competition_entrant_relay_preserves_exact_plan_and_signature(self):
+        client = StubAgentBountiesClient([{"status": "broadcast"}])
+        plan = {
+            "schema_version": "agent-bounties/open-competition-entrant-wallet-action-v1",
+            "network": "base-mainnet",
+            "nonce": 7,
+            "payload_hash": f"0x{'aa' * 32}",
+        }
+        signature = f"0x{'11' * 64}1b"
+
+        response = client.relay_open_competition_entrant_action(
+            "entrant-relay-7", plan, signature
+        )
+
+        self.assertEqual(response["status"], "broadcast")
+        self.assertEqual(client.requests[0]["plan"], plan)
+        self.assertEqual(client.requests[0]["signature"], signature)
+        self.assertEqual(client.requests[0]["idempotency_key"], "entrant-relay-7")
+
     def test_canonical_child_plan_sends_task_acceptance_criteria(self):
         client = StubAgentBountiesClient([{"benchmark_hash": "0x1234"}])
         criteria = ["The committed regression test passes."]

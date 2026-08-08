@@ -85,6 +85,44 @@ test("open competition commitments use local random recovery envelopes", () => {
   assert.equal(first.reveal_deadline, null);
 });
 
+test("open competition entrant relay preserves the exact plan and signature", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ status: "broadcast" }), {
+      status: 202,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const client = new AgentBountiesClient("https://api.example");
+    const plan = {
+      schema_version: "agent-bounties/open-competition-entrant-wallet-action-v1",
+      network: "base-mainnet",
+      nonce: 7,
+      payload_hash: `0x${"aa".repeat(32)}`,
+    };
+    const signature = `0x${"11".repeat(64)}1b`;
+    await client.relayOpenCompetitionEntrantAction({
+      idempotency_key: "entrant-relay-7",
+      plan,
+      signature,
+    });
+
+    assert.equal(
+      requests[0].url,
+      "https://api.example/v1/base/open-competition-v1/entrant-action-relays",
+    );
+    assert.deepEqual(requests[0].body.plan, plan);
+    assert.equal(requests[0].body.signature, signature);
+    assert.equal(requests[0].body.idempotency_key, "entrant-relay-7");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("canonical child planning sends task acceptance criteria", async () => {
   const requests = [];
   const originalFetch = globalThis.fetch;

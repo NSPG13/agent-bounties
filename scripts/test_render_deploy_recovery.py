@@ -759,7 +759,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
 
     def test_open_competition_shared_environment_is_hidden_canary_only(self) -> None:
         values = recovery.open_competition_shared_environment()
-        self.assertEqual(len(values), 9)
+        self.assertEqual(len(values), 12)
         self.assertEqual(
             values["BASE_MAINNET_RPC_URL"], recovery.HOSTED_BASE_MAINNET_RPC_URL
         )
@@ -782,6 +782,74 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 else "false"
             )
             self.assertEqual(value, expected)
+
+    def test_open_competition_entrant_canary_requires_exact_deployment_audit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            with self.assertRaisesRegex(recovery.RecoveryError, "requires a deployment audit"):
+                recovery.open_competition_entrant_environment(
+                    missing,
+                    canary_enabled=True,
+                )
+
+            release = {
+                "schema_version": "agent-bounties/open-competition-entrant-wallet-release-v1",
+                "protocol_version": "agent-bounties/open-competition-entrant-wallet-v1",
+                "network": "base-mainnet",
+                "chain_id": 8453,
+                "deployment_state": "mainnet_canary_not_ready_to_earn",
+                "factory_contract": recovery.OPEN_COMPETITION_ENTRANT_FACTORY,
+                "implementation_contract": recovery.OPEN_COMPETITION_ENTRANT_IMPLEMENTATION,
+                "competition_factory": recovery.OPEN_COMPETITION_FACTORY,
+                "settlement_token": recovery.BASE_MAINNET_USDC,
+                "deployment_block": 49_690_500,
+                **recovery.OPEN_COMPETITION_ENTRANT_RUNTIME_HASHES,
+            }
+            audit = {
+                "schema_version": "agent-bounties/open-competition-entrant-wallet-mainnet-deployment-audit-v1",
+                "network": "base-mainnet",
+                "chain_id": 8453,
+                "release_manifest": release,
+                "assertions": {
+                    "exact_admin_zero_value_create2_transaction": True,
+                    "deployment_receipt_matches_browser_receipt": True,
+                    "deployment_block_is_canonical_at_safe_block": True,
+                    "factory_and_implementation_runtimes_match": True,
+                    "factory_dependencies_match_frozen_bundle": True,
+                    "public_activation_remains_disabled": True,
+                },
+                "passed": True,
+            }
+            path = Path(directory) / "entrant-audit.json"
+            path.write_text(recovery.json.dumps(audit), encoding="utf-8")
+            values = recovery.open_competition_entrant_environment(
+                path,
+                canary_enabled=True,
+            )
+            self.assertEqual(
+                values[
+                    "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED"
+                ],
+                "true",
+            )
+            self.assertEqual(
+                recovery.json.loads(
+                    values[
+                        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_WALLET_RELEASE_MANIFEST_JSON"
+                    ]
+                ),
+                release,
+            )
+
+            audit["assertions"]["public_activation_remains_disabled"] = False
+            path.write_text(recovery.json.dumps(audit), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "assertions are incomplete"):
+                recovery.open_competition_entrant_environment(
+                    path,
+                    canary_enabled=False,
+                )
 
     def test_open_competition_shared_environment_rejects_activation(self) -> None:
         source = recovery.json.loads(

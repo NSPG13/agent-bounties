@@ -59,6 +59,8 @@ pub const SOLVE_ACTION_RENAME_MIGRATION: &str =
     include_str!("../../../migrations/0018_rename_compete_action_to_solve.sql");
 pub const OPEN_COMPETITION_V1_MIGRATION: &str =
     include_str!("../../../migrations/0019_open_competition_v1.sql");
+pub const OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION: &str =
+    include_str!("../../../migrations/0020_open_competition_entrant_relays.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -161,6 +163,10 @@ pub enum DbError {
     X402RelayConflict(String),
     #[error("x402 hosted relay quota exceeded: {0}")]
     X402RelayQuotaExceeded(String),
+    #[error("conflicting open-competition entrant relay replay: {0}")]
+    OpenCompetitionEntrantRelayConflict(String),
+    #[error("open-competition entrant relay quota exceeded: {0}")]
+    OpenCompetitionEntrantRelayQuotaExceeded(String),
     #[error("objective {0} already exists")]
     ObjectiveAlreadyExists(Id),
     #[error("objective {0} was not found")]
@@ -660,6 +666,64 @@ pub struct X402RelayAttempt {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenCompetitionEntrantRelayStatus {
+    Prepared,
+    Relaying,
+    Broadcast,
+    Confirmed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewOpenCompetitionEntrantRelay {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub wallet: String,
+    pub bounty_contract: String,
+    pub delegate: String,
+    pub action: u8,
+    pub wallet_nonce: u64,
+    pub deadline: u64,
+    pub payload_hash: String,
+    pub request_fingerprint: String,
+    pub relayer_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionEntrantRelay {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub wallet: String,
+    pub bounty_contract: String,
+    pub delegate: String,
+    pub action: u8,
+    pub wallet_nonce: u64,
+    pub deadline: u64,
+    pub payload_hash: String,
+    pub request_fingerprint: String,
+    pub relayer_address: String,
+    pub status: OpenCompetitionEntrantRelayStatus,
+    pub retryable: bool,
+    pub attempt_count: u32,
+    pub tx_hash: Option<String>,
+    pub estimated_gas: Option<u64>,
+    pub gas_limit: Option<u64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub receipt_block: Option<u64>,
+    pub receipt_block_hash: Option<String>,
+    pub canonical_safe_block: Option<u64>,
+    pub canonical_safe_block_hash: Option<String>,
+    pub canonical_event: Option<String>,
+    pub payment_proven: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewClaimCandidate {
     pub id: Uuid,
@@ -832,6 +896,7 @@ impl PostgresStore {
                 BOUNTY_IMAGE_ASSETS_MIGRATION,
                 SOLVE_ACTION_RENAME_MIGRATION,
                 OPEN_COMPETITION_V1_MIGRATION,
+                OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -2672,6 +2737,342 @@ impl PostgresStore {
             DbError::X402RelayConflict("relay was not broadcast before confirmation".to_string())
         })?;
         x402_relay_attempt_from_row(row)
+    }
+
+    pub async fn reserve_open_competition_entrant_relay(
+        &self,
+        relay: &NewOpenCompetitionEntrantRelay,
+        max_network_attempts: u32,
+        max_wallet_attempts: u32,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        if max_network_attempts == 0
+            || max_wallet_attempts == 0
+            || max_wallet_attempts > max_network_attempts
+        {
+            return Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(
+                "configured quota is invalid".to_string(),
+            ));
+        }
+        if relay.action > 2 || relay.deadline == 0 || relay.idempotency_key.trim().is_empty() {
+            return Err(DbError::OpenCompetitionEntrantRelayConflict(
+                "relay action, deadline, or idempotency key is invalid".to_string(),
+            ));
+        }
+        let normalized_wallet = normalize_key_address(&relay.wallet);
+        let normalized_bounty = normalize_key_address(&relay.bounty_contract);
+        let normalized_delegate = normalize_key_address(&relay.delegate);
+        let normalized_payload_hash = relay.payload_hash.to_ascii_lowercase();
+        let normalized_relayer = normalize_key_address(&relay.relayer_address);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!(
+                "open-competition-entrant-relay-quota:{}",
+                relay.network
+            ))
+            .execute(&mut *transaction)
+            .await?;
+
+        let existing_idempotency = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays
+            WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(&relay.idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(open_competition_entrant_relay_from_row)
+        .transpose()?;
+        if let Some(existing) = existing_idempotency {
+            validate_open_competition_entrant_relay_replay(&existing, relay)?;
+            transaction.commit().await?;
+            return Ok(existing);
+        }
+
+        let existing_live_nonce = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays
+            WHERE network = $1 AND wallet = $2 AND wallet_nonce = $3
+              AND (status <> 'failed' OR retryable)
+            "#,
+        )
+        .bind(&relay.network)
+        .bind(&normalized_wallet)
+        .bind(i64_from_u64(relay.wallet_nonce)?)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(open_competition_entrant_relay_from_row)
+        .transpose()?;
+        if let Some(existing) = existing_live_nonce {
+            validate_open_competition_entrant_relay_replay(&existing, relay)?;
+            transaction.commit().await?;
+            return Ok(existing);
+        }
+
+        let quota = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS network_count,
+                   COUNT(*) FILTER (WHERE wallet = $2) AS wallet_count
+            FROM open_competition_entrant_relays
+            WHERE network = $1 AND created_at >= now() - interval '24 hours'
+            "#,
+        )
+        .bind(&relay.network)
+        .bind(&normalized_wallet)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let network_count: i64 = quota.try_get("network_count")?;
+        let wallet_count: i64 = quota.try_get("wallet_count")?;
+        if network_count >= i64::from(max_network_attempts) {
+            return Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(
+                "network rolling-24-hour relay limit reached".to_string(),
+            ));
+        }
+        if wallet_count >= i64::from(max_wallet_attempts) {
+            return Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(
+                "wallet rolling-24-hour relay limit reached".to_string(),
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO open_competition_entrant_relays
+              (id, idempotency_key, network, wallet, bounty_contract, delegate,
+               action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+               relayer_address, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'prepared')
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(relay.id)
+        .bind(&relay.idempotency_key)
+        .bind(&relay.network)
+        .bind(&normalized_wallet)
+        .bind(&normalized_bounty)
+        .bind(&normalized_delegate)
+        .bind(i16::from(relay.action))
+        .bind(i64_from_u64(relay.wallet_nonce)?)
+        .bind(i64_from_u64(relay.deadline)?)
+        .bind(&normalized_payload_hash)
+        .bind(&relay.request_fingerprint)
+        .bind(&normalized_relayer)
+        .execute(&mut *transaction)
+        .await?;
+
+        let persisted = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays
+            WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(&relay.idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(open_competition_entrant_relay_from_row)
+        .transpose()?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict(
+                "idempotency key is already bound to another relay".to_string(),
+            )
+        })?;
+        validate_open_competition_entrant_relay_replay(&persisted, relay)?;
+        transaction.commit().await?;
+        Ok(persisted)
+    }
+
+    pub async fn get_open_competition_entrant_relay(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<OpenCompetitionEntrantRelay>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_entrant_relay_from_row).transpose()
+    }
+
+    pub async fn claim_open_competition_entrant_relay(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        lease_seconds: u64,
+    ) -> DbResult<Option<OpenCompetitionEntrantRelay>> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'relaying', retryable = true,
+                attempt_count = attempt_count + 1, lease_token = $2,
+                lease_expires_at = now() + make_interval(secs => $3),
+                error_code = NULL, error_message = NULL, updated_at = now()
+            WHERE id = $1
+              AND (
+                status = 'prepared'
+                OR (status = 'failed' AND retryable)
+                OR (status = 'relaying' AND lease_expires_at <= now())
+              )
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(i64_from_u64(lease_seconds)?)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_entrant_relay_from_row).transpose()
+    }
+
+    pub async fn mark_open_competition_entrant_relay_broadcast(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        tx_hash: &str,
+        estimated_gas: u64,
+        gas_limit: u64,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'broadcast', retryable = true, tx_hash = $3,
+                estimated_gas = $4, gas_limit = $5,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1 AND lease_token = $2 AND status = 'relaying'
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(tx_hash.to_ascii_lowercase())
+        .bind(i64_from_u64(estimated_gas)?)
+        .bind(i64_from_u64(gas_limit)?)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict(
+                "relay lease was lost before broadcast persisted".to_string(),
+            )
+        })?;
+        open_competition_entrant_relay_from_row(row)
+    }
+
+    pub async fn mark_open_competition_entrant_relay_failed(
+        &self,
+        id: Uuid,
+        lease_token: Option<Uuid>,
+        retryable: bool,
+        error_code: &str,
+        error_message: &str,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'failed', retryable = $3, error_code = $4, error_message = $5,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1
+              AND status IN ('relaying', 'broadcast', 'failed')
+              AND ($2::uuid IS NULL OR lease_token = $2)
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(retryable)
+        .bind(error_code)
+        .bind(error_message.chars().take(500).collect::<String>())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict("relay failure lease mismatch".to_string())
+        })?;
+        open_competition_entrant_relay_from_row(row)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mark_open_competition_entrant_relay_confirmed(
+        &self,
+        id: Uuid,
+        receipt_block: u64,
+        receipt_block_hash: &str,
+        canonical_safe_block: u64,
+        canonical_safe_block_hash: &str,
+        canonical_event: &str,
+        payment_proven: bool,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'confirmed', retryable = false,
+                receipt_block = $2, receipt_block_hash = $3,
+                canonical_safe_block = $4, canonical_safe_block_hash = $5,
+                canonical_event = $6, payment_proven = $7,
+                lease_token = NULL, lease_expires_at = NULL,
+                error_code = NULL, error_message = NULL, updated_at = now()
+            WHERE id = $1 AND status IN ('broadcast', 'confirmed')
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(i64_from_u64(receipt_block)?)
+        .bind(receipt_block_hash.to_ascii_lowercase())
+        .bind(i64_from_u64(canonical_safe_block)?)
+        .bind(canonical_safe_block_hash.to_ascii_lowercase())
+        .bind(canonical_event)
+        .bind(payment_proven)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict(
+                "relay was not broadcast before confirmation".to_string(),
+            )
+        })?;
+        open_competition_entrant_relay_from_row(row)
     }
 
     pub async fn reserve_claim_candidate(
@@ -6138,6 +6539,96 @@ fn validate_x402_relay_replay(
     Ok(())
 }
 
+fn parse_open_competition_entrant_relay_status(
+    value: String,
+) -> DbResult<OpenCompetitionEntrantRelayStatus> {
+    match value.as_str() {
+        "prepared" => Ok(OpenCompetitionEntrantRelayStatus::Prepared),
+        "relaying" => Ok(OpenCompetitionEntrantRelayStatus::Relaying),
+        "broadcast" => Ok(OpenCompetitionEntrantRelayStatus::Broadcast),
+        "confirmed" => Ok(OpenCompetitionEntrantRelayStatus::Confirmed),
+        "failed" => Ok(OpenCompetitionEntrantRelayStatus::Failed),
+        other => Err(DbError::InvalidEnum(format!(
+            "open-competition entrant relay status {other}"
+        ))),
+    }
+}
+
+fn open_competition_entrant_relay_from_row(row: PgRow) -> DbResult<OpenCompetitionEntrantRelay> {
+    Ok(OpenCompetitionEntrantRelay {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        network: row.try_get("network")?,
+        wallet: row.try_get("wallet")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        delegate: row.try_get("delegate")?,
+        action: u8::try_from(row.try_get::<i16, _>("action")?)
+            .map_err(|_| DbError::IntegerOverflow("entrant relay action".to_string()))?,
+        wallet_nonce: u64_from_i64(row.try_get("wallet_nonce")?)?,
+        deadline: u64_from_i64(row.try_get("deadline")?)?,
+        payload_hash: row.try_get("payload_hash")?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        relayer_address: row.try_get("relayer_address")?,
+        status: parse_open_competition_entrant_relay_status(row.try_get("status")?)?,
+        retryable: row.try_get("retryable")?,
+        attempt_count: u32::try_from(row.try_get::<i32, _>("attempt_count")?)
+            .map_err(|_| DbError::IntegerOverflow("entrant relay attempt count".to_string()))?,
+        tx_hash: row.try_get("tx_hash")?,
+        estimated_gas: row
+            .try_get::<Option<i64>, _>("estimated_gas")?
+            .map(u64_from_i64)
+            .transpose()?,
+        gas_limit: row
+            .try_get::<Option<i64>, _>("gas_limit")?
+            .map(u64_from_i64)
+            .transpose()?,
+        error_code: row.try_get("error_code")?,
+        error_message: row.try_get("error_message")?,
+        receipt_block: row
+            .try_get::<Option<i64>, _>("receipt_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        receipt_block_hash: row.try_get("receipt_block_hash")?,
+        canonical_safe_block: row
+            .try_get::<Option<i64>, _>("canonical_safe_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        canonical_safe_block_hash: row.try_get("canonical_safe_block_hash")?,
+        canonical_event: row.try_get("canonical_event")?,
+        payment_proven: row.try_get("payment_proven")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn validate_open_competition_entrant_relay_replay(
+    persisted: &OpenCompetitionEntrantRelay,
+    requested: &NewOpenCompetitionEntrantRelay,
+) -> DbResult<()> {
+    if persisted.idempotency_key != requested.idempotency_key
+        || !persisted.wallet.eq_ignore_ascii_case(&requested.wallet)
+        || !persisted
+            .bounty_contract
+            .eq_ignore_ascii_case(&requested.bounty_contract)
+        || !persisted.delegate.eq_ignore_ascii_case(&requested.delegate)
+        || persisted.action != requested.action
+        || persisted.wallet_nonce != requested.wallet_nonce
+        || persisted.deadline != requested.deadline
+        || !persisted
+            .payload_hash
+            .eq_ignore_ascii_case(&requested.payload_hash)
+        || persisted.request_fingerprint != requested.request_fingerprint
+        || !persisted
+            .relayer_address
+            .eq_ignore_ascii_case(&requested.relayer_address)
+    {
+        return Err(DbError::OpenCompetitionEntrantRelayConflict(
+            "wallet nonce replay does not match the original request".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 async fn waitlist_position(
     transaction: &mut Transaction<'_, Postgres>,
     candidate: &ClaimCandidate,
@@ -7738,6 +8229,181 @@ mod tests {
             .unwrap();
         assert_eq!(confirmed.status, X402RelayStatus::Confirmed);
         assert!(!confirmed.retryable);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn open_competition_entrant_relay_is_secret_free_idempotent_and_quota_bounded() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("entrant-relay-test-{}", Uuid::new_v4());
+        let relay = NewOpenCompetitionEntrantRelay {
+            id: Uuid::new_v4(),
+            idempotency_key: format!("entrant-relay-{}", Uuid::new_v4()),
+            network: network.clone(),
+            wallet: "0x1111111111111111111111111111111111111111".to_string(),
+            bounty_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            delegate: "0x3333333333333333333333333333333333333333".to_string(),
+            action: 0,
+            wallet_nonce: 7,
+            deadline: 2_000_000_000,
+            payload_hash: format!("0x{}", "44".repeat(32)),
+            request_fingerprint: "fingerprint-a".to_string(),
+            relayer_address: "0x5555555555555555555555555555555555555555".to_string(),
+        };
+        let first = store
+            .reserve_open_competition_entrant_relay(&relay, 2, 1)
+            .await
+            .unwrap();
+        let replay = store
+            .reserve_open_competition_entrant_relay(&relay, 2, 1)
+            .await
+            .unwrap();
+        assert_eq!(first.id, replay.id);
+
+        let mut conflict = relay.clone();
+        conflict.id = Uuid::new_v4();
+        conflict.request_fingerprint = "fingerprint-b".to_string();
+        assert!(matches!(
+            store
+                .reserve_open_competition_entrant_relay(&conflict, 2, 1)
+                .await,
+            Err(DbError::OpenCompetitionEntrantRelayConflict(_))
+        ));
+
+        let mut wallet_quota = relay.clone();
+        wallet_quota.id = Uuid::new_v4();
+        wallet_quota.idempotency_key = format!("entrant-relay-{}", Uuid::new_v4());
+        wallet_quota.wallet_nonce = 8;
+        wallet_quota.payload_hash = format!("0x{}", "66".repeat(32));
+        wallet_quota.request_fingerprint = "fingerprint-wallet-quota".to_string();
+        assert!(matches!(
+            store
+                .reserve_open_competition_entrant_relay(&wallet_quota, 2, 1)
+                .await,
+            Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(_))
+        ));
+
+        let mut second = wallet_quota;
+        second.wallet = "0x7777777777777777777777777777777777777777".to_string();
+        second.request_fingerprint = "fingerprint-second".to_string();
+        store
+            .reserve_open_competition_entrant_relay(&second, 2, 1)
+            .await
+            .unwrap();
+
+        let lease = store
+            .acquire_x402_relayer_lease(&network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        let claimed = store
+            .claim_open_competition_entrant_relay(first.id, lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.status, OpenCompetitionEntrantRelayStatus::Relaying);
+        let broadcast = store
+            .mark_open_competition_entrant_relay_broadcast(
+                first.id,
+                lease,
+                &format!("0x{}", "88".repeat(32)),
+                90_000,
+                120_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            broadcast.status,
+            OpenCompetitionEntrantRelayStatus::Broadcast
+        );
+        store
+            .release_x402_relayer_lease(&network, lease)
+            .await
+            .unwrap();
+        let confirmed = store
+            .mark_open_competition_entrant_relay_confirmed(
+                first.id,
+                123,
+                &format!("0x{}", "99".repeat(32)),
+                130,
+                &format!("0x{}", "aa".repeat(32)),
+                "SolutionCommitted",
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            confirmed.status,
+            OpenCompetitionEntrantRelayStatus::Confirmed
+        );
+        assert!(!confirmed.retryable);
+        assert!(!confirmed.payment_proven);
+
+        let recovery_network = format!("entrant-relay-recovery-{}", Uuid::new_v4());
+        let mut failed = relay.clone();
+        failed.id = Uuid::new_v4();
+        failed.idempotency_key = format!("entrant-relay-{}", Uuid::new_v4());
+        failed.network = recovery_network.clone();
+        failed.request_fingerprint = "fingerprint-retryable-failure".to_string();
+        let failed = store
+            .reserve_open_competition_entrant_relay(&failed, 3, 3)
+            .await
+            .unwrap();
+        let recovery_lease = store
+            .acquire_x402_relayer_lease(&recovery_network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .claim_open_competition_entrant_relay(failed.id, recovery_lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .mark_open_competition_entrant_relay_failed(
+                failed.id,
+                Some(recovery_lease),
+                true,
+                "temporary_provider_failure",
+                "retry the exact request",
+            )
+            .await
+            .unwrap();
+        store
+            .release_x402_relayer_lease(&recovery_network, recovery_lease)
+            .await
+            .unwrap();
+
+        let mut replacement = relay.clone();
+        replacement.id = Uuid::new_v4();
+        replacement.idempotency_key = format!("entrant-relay-{}", Uuid::new_v4());
+        replacement.network = recovery_network;
+        replacement.payload_hash = format!("0x{}", "77".repeat(32));
+        replacement.request_fingerprint = "fingerprint-corrected-action".to_string();
+        assert!(matches!(
+            store
+                .reserve_open_competition_entrant_relay(&replacement, 3, 3)
+                .await,
+            Err(DbError::OpenCompetitionEntrantRelayConflict(_))
+        ));
+        store
+            .mark_open_competition_entrant_relay_failed(
+                failed.id,
+                None,
+                false,
+                "transaction_reverted",
+                "wallet nonce was not consumed",
+            )
+            .await
+            .unwrap();
+        let recovered = store
+            .reserve_open_competition_entrant_relay(&replacement, 3, 3)
+            .await
+            .unwrap();
+        assert_eq!(recovered.wallet_nonce, failed.wallet_nonce);
+        assert_ne!(recovered.id, failed.id);
     }
 
     #[tokio::test]

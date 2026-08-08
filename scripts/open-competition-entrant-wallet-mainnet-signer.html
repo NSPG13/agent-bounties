@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Entrant Wallet V1 Mainnet Release Signer</title>
+  <style>
+    :root{color-scheme:dark;--bg:#06100b;--panel:#0b1b12;--line:#25432d;--lime:#b4f52c;--muted:#9db0a2;--bad:#ff8c7d;--warn:#ffd29a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f2f7f3;font:15px/1.5 system-ui,sans-serif}main{width:min(1040px,calc(100% - 32px));margin:48px auto 80px}h1{font:700 clamp(36px,6vw,68px)/1.02 Georgia,serif;max-width:900px;margin:10px 0 18px}.eyebrow{color:var(--lime);font-weight:800;letter-spacing:.12em;text-transform:uppercase}.lede{color:var(--muted);max-width:850px;font-size:18px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:24px;margin-top:24px}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}button,select{border:1px solid var(--line);border-radius:999px;background:transparent;color:#fff;padding:12px 18px;font-weight:750;cursor:pointer}select{background:var(--panel)}button.primary{background:var(--lime);color:#0a130c;border-color:var(--lime)}button:disabled,select:disabled{opacity:.38;cursor:not-allowed}.status{border-left:3px solid var(--lime);padding:10px 14px;margin-top:16px;background:#07130c}.status.bad{border-color:var(--bad);color:#ffd5cf}.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:18px}.fact{border-top:1px solid var(--line);padding-top:12px}.fact span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.fact strong{display:block;margin-top:5px;overflow-wrap:anywhere}.action{border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:16px}.action dl{display:grid;grid-template-columns:180px 1fr;gap:5px 12px;margin:0}.action dt{color:var(--muted)}.action dd{margin:0;overflow-wrap:anywhere}details{margin-top:12px}code{font:12px/1.45 ui-monospace,monospace;overflow-wrap:anywhere;color:#cfe0d3}.warning{color:var(--warn)}
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Local admin utility · Base mainnet · additive entrant factory</p>
+  <h1>Frozen bytecode in. Public activation stays off.</h1>
+  <p class="lede">This page never receives a private key. It accepts only the audited one-action bundle, the known admin, current Base balances, exact dependency runtimes, and vacant deterministic addresses.</p>
+
+  <section class="panel">
+    <h2>1. Load and preflight</h2>
+    <div class="row">
+      <input id="bundle" type="file" accept="application/json,.json">
+      <select id="wallet-provider" aria-label="Wallet provider" disabled><option>Discovering wallets…</option></select>
+      <button id="connect">Connect selected wallet</button>
+    </div>
+    <div id="status" class="status">Loading the locally audited release bundle.</div>
+    <div id="facts" class="facts" hidden></div>
+    <div id="action"></div>
+  </section>
+
+  <section class="panel">
+    <h2>2. Request the exact deployment</h2>
+    <p class="warning">One zero-value call goes only to the canonical CREATE2 deployer. It cannot change an existing bounty, contribution, claim, or payout. Hosted relay and public inventory remain disabled.</p>
+    <div class="row">
+      <label><input id="reviewed" type="checkbox" disabled> The account, chain, safe block, balances, runtimes, calldata, and predicted addresses match the audited bundle.</label>
+      <button id="execute" class="primary" disabled>Open MetaMask confirmation</button>
+      <button id="download" disabled>Download deployment receipt</button>
+    </div>
+  </section>
+</main>
+<script src="../site/evm.js"></script>
+<script src="open-competition-entrant-wallet-mainnet-signer.js?v=release-v1"></script>
+</body>
+</html>
