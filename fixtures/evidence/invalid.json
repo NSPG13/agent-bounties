@@ -1,0 +1,14 @@
+{
+  "submission": {
+    "repository": "",
+    "commit_sha": "7d8251e605d398d5c4146c3b6831d102e1b816ab",
+    "pull_request_url": "http://github.com/NSPG13/agent-bounties/pull/123"
+  },
+  "verification": {
+    "check_run_urls": [],
+    "artifact_digest": "http://example.com/latest.tar.gz"
+  },
+  "payment": {
+    "settlement_boundary": ""
+  }
+}

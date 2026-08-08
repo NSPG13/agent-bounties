@@ -1,0 +1,16 @@
+{
+  "submission": {
+    "repository": "NSPG13/agent-bounties",
+    "commit_sha": "7d8251e605d398d5c4146c3b6831d102e1b816ab",
+    "pull_request_url": "https://github.com/NSPG13/agent-bounties/pull/123"
+  },
+  "verification": {
+    "check_run_urls": [
+      "https://github.com/NSPG13/agent-bounties/actions/runs/123456"
+    ],
+    "artifact_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "payment": {
+    "settlement_boundary": "BountySettled(0xabc123)"
+  }
+}

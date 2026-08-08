@@ -11,6 +11,9 @@ mod leaderboard;
 
 pub use leaderboard::*;
 
+pub mod direct_bounty;
+pub use direct_bounty::*;
+
 pub type Id = Uuid;
 
 #[derive(Debug, Error, PartialEq, Eq)]
