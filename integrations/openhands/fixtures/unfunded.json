@@ -1,11 +1,8 @@
 {
-  "submission_id": "unfunded-003",
-  "bounty_ref": "NSPG13/agent-bounties#999",
-  "canonical_state": "funded-live",
-  "decision": "deny",
-  "evidence_files": [
-    ".openhands/evidence/missing-funding.json"
-  ],
-  "reason": "Bounty is funded-live but not yet claimable-live \u2014 child bounty contract not ready",
-  "timestamp": "2026-08-08T02:00:00Z"
+  "id": "bounty-oh-2",
+  "status": "bounty",
+  "contract": null,
+  "margin_usdc": 0,
+  "funding": "0 USDC",
+  "note": "Not funded \u2014 cannot claim"
 }
