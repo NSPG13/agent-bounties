@@ -1,12 +1,1 @@
-[
-  {
-    "id": 700,
-    "title": "Stale bounty from last month",
-    "created_at": "2026-07-01T00:00:00Z",
-    "reward_usdc": "2.00",
-    "bond_usdc": "0.01",
-    "canonical": true,
-    "state": "claimable-live",
-    "claimants": []
-  }
-]
+[{"id": "bounty-old", "status": "stale", "margin_usdc": 3.0, "exclusive_claimant": null}]
