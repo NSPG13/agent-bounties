@@ -1802,6 +1802,7 @@ async fn main() -> anyhow::Result<()> {
             get(agent_bounties_discovery),
         )
         .route("/.well-known/x402.json", get(x402_discovery))
+        .route("/.well-known/agent-card.json", get(agent_card))
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5238,6 +5239,40 @@ async fn agent_bounties_discovery(
 }
 
 #[utoipa::path(get, path = "/.well-known/x402.json", responses((status = 200, description = "x402 funding and discovery capabilities")))]
+/// Serve the A2A 1.0 Agent Card for machine discovery.
+///
+/// Returns a standards-compliant Agent Card that declares protocol capabilities,
+/// supported interfaces with the canonical A2A Direct API Binding v1, and
+/// documented skills for discovery, claim planning, evidence submission,
+/// settlement checks, and bounty posting.
+#[utoipa::path(
+    get,
+    path = "/.well-known/agent-card.json",
+    responses(
+        (status = 200, description = "A2A 1.0 Agent Card with canonical evidence boundaries"),
+        (status = 404, description = "Agent Card fixture not found")
+    )
+)]
+async fn agent_card(State(state): State<SharedState>) -> Result<impl IntoResponse, StatusCode> {
+    let card_path = std::path::Path::new("fixtures/a2a-agent-card.json");
+    let card_bytes = tokio::fs::read(card_path).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    let card: serde_json::Value =
+        serde_json::from_slice(&card_bytes).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let body = serde_json::to_vec(&card).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let etag = format!(""{:x}"", seahash::hash(&body));
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300, stale-while-revalidate=600"),
+            (header::ETAG, etag.as_str()),
+        ],
+        body,
+    ))
+}
+
 async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let api = state.public_base_url.trim_end_matches('/');
     let hosted_relayer_address = state.x402_relayer.address();
@@ -14838,7 +14873,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn x402_discovery_is_explicit_about_custom_funding_and_mpp_boundary() {
+    /// Serve the A2A 1.0 Agent Card for machine discovery.
+///
+/// Returns a standards-compliant Agent Card that declares protocol capabilities,
+/// supported interfaces with the canonical A2A Direct API Binding v1, and
+/// documented skills for discovery, claim planning, evidence submission,
+/// settlement checks, and bounty posting.
+#[utoipa::path(
+    get,
+    path = "/.well-known/agent-card.json",
+    responses(
+        (status = 200, description = "A2A 1.0 Agent Card with canonical evidence boundaries"),
+        (status = 404, description = "Agent Card fixture not found")
+    )
+)]
+async fn agent_card(State(state): State<SharedState>) -> Result<impl IntoResponse, StatusCode> {
+    let card_path = std::path::Path::new("fixtures/a2a-agent-card.json");
+    let card_bytes = tokio::fs::read(card_path).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    let card: serde_json::Value =
+        serde_json::from_slice(&card_bytes).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let body = serde_json::to_vec(&card).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let etag = format!(""{:x}"", seahash::hash(&body));
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=300, stale-while-revalidate=600"),
+            (header::ETAG, etag.as_str()),
+        ],
+        body,
+    ))
+}
+
+async fn x402_discovery_is_explicit_about_custom_funding_and_mpp_boundary() {
         let state = test_state(BountyNetwork::default());
         let document = x402_discovery(State(state)).await.0;
 
