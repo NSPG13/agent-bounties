@@ -759,7 +759,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
 
     def test_open_competition_shared_environment_is_hidden_canary_only(self) -> None:
         values = recovery.open_competition_shared_environment()
-        self.assertEqual(len(values), 11)
+        self.assertEqual(len(values), 12)
         self.assertEqual(
             values["BASE_MAINNET_RPC_URL"], recovery.HOSTED_BASE_MAINNET_RPC_URL
         )
