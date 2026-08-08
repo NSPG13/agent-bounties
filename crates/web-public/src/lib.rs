@@ -6,6 +6,13 @@ use domain::{
 };
 use serde::{Deserialize, Serialize};
 
+
+/// Returns the A2A 1.0 Agent Card for machine discovery.
+/// The card declares canonical protocol capabilities, supported interfaces,
+/// and documented skills without advertising unsupported A2A transports.
+pub fn agent_card_discovery() -> &'static str {
+    AGENT_CARD_URL
+}
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v2.json";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
@@ -14,6 +21,8 @@ const STATIC_EARN_PAGE_URL: &str = "https://agentbounties.app/earn.html";
 const STATIC_POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const STATIC_X402_PAGE_URL: &str = "https://agentbounties.app/x402.html";
 const STATIC_X402_TEST_VECTORS_URL: &str = "https://agentbounties.app/x402-test-vectors.json";
+/// A2A 1.0 Agent Card URL for machine discovery.
+const AGENT_CARD_URL: &str = "/.well-known/agent-card.json";
 const STATIC_AGENT_WALLET_READINESS_PAGE_URL: &str = "https://agentbounties.app/prepare-agent.html";
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/NSPG13/agent-bounties";
 const GITHUB_STAR_COMMAND: &str = "gh api --method PUT /user/starred/NSPG13/agent-bounties";
