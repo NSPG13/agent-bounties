@@ -1,0 +1,16 @@
+{
+  "schema_version": "agent-bounties/hermes-fixture-v1",
+  "state": "unfunded",
+  "verified_claimable_bounties": [],
+  "funding_candidates": [
+    {
+      "title": "Example unfunded request",
+      "status": "funding-needed",
+      "payment_state": "unfunded"
+    }
+  ],
+  "next_action": {
+    "action": "skip_or_fund_only",
+    "reason": "no_claimable_inventory_funding_candidates_are_not_paid_work"
+  }
+}
