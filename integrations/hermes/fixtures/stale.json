@@ -1,33 +1,8 @@
 {
-  "bounties": [
-    {
-      "bountyId": "stale-001",
-      "issueNumber": 999,
-      "repo": "NSPG13/agent-bounties",
-      "amount": "2.00",
-      "token": "USDC",
-      "deadline": "2026-01-01T00:00:00Z",
-      "status": "expired",
-      "claimAttempts": 3,
-      "lastClaimAt": "2026-02-01T12:00:00Z",
-      "reason": "Deadline passed — bounty no longer claimable"
-    },
-    {
-      "bountyId": "stale-002",
-      "issueNumber": 998,
-      "repo": "NSPG13/agent-bounties",
-      "amount": "1.50",
-      "token": "USDC",
-      "deadline": "2026-06-01T00:00:00Z",
-      "status": "stale",
-      "claimAttempts": 0,
-      "lastClaimAt": null,
-      "reason": "No claims within 7 days of deadline — marked stale"
-    }
-  ],
-  "meta": {
-    "generatedAt": "2026-08-08T00:00:00Z",
-    "totalStale": 2,
-    "oldestStaleDays": 219
-  }
+  "id": "bounty-hermes-3",
+  "status": "stale",
+  "contract": "0x789abc",
+  "margin_usdc": 1.0,
+  "funding": "1.01 USDC",
+  "stale_since": "2026-07-01T00:00:00Z"
 }
