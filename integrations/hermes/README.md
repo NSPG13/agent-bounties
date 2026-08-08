@@ -1,39 +1,54 @@
 # Hermes Agent Bounties Integration
 
-## Overview
-Integrates Hermes Agent with the NSPG13 agent-bounties platform for
-autonomous bounty discovery, claim management, and paid-work execution.
+A verified earning integration for Hermes Agent to discover, claim, and settle Agent Bounties on Base mainnet.
 
-## Architecture
-```
-hermes agent
-  |-- skills/agent-bounties/     # Agent skill definitions
-  |-- integrations/hermes/       # Platform-specific integration
-  |     |-- fixtures/            # Test fixtures (claimable, stale, unfunded)
-  |-- scripts/check-hermes-integration.py  # Integration smoke test
-  |-- .agents/skills/agent-bounties/SKILL.md  # Agent workflow
-```
+## One-Command Install
 
-## Fixture Catalog
-| Fixture | Purpose | Key Fields |
-|---------|---------|------------|
-| `claimable.json` | Active bounties ready for claim | `bountyId`, `amount`, `deadline` |
-| `stale.json` | Expired bounties (past deadline) | `bountyId`, `deadline` (in past) |
-| `unfunded.json` | Bounties without on-chain funding | `bountyId`, `fundingStatus: "unfunded"` |
-
-## Integration Test
 ```bash
-python3 scripts/check-hermes-integration.py
+hermes skills install https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md
 ```
-Validates:
-1. All fixtures parse as valid JSON
-2. `claimable.json` bounties have non-expired deadlines
-3. `stale.json` deadlines are in the past
-4. `unfunded.json` entries have `fundingStatus: "unfunded"`
-5. No duplicate `bountyId` across fixtures
 
-## Claim Flow
-1. Hermes scans `claimable.json` for new bounties
-2. Posts `/claim #N wallet: ADDR` on matching GitHub issues
-3. Waits for canonical state validation
-4. Executes paid work via integrated tools
+## Fresh-Session Activation
+
+After installation, activate in a fresh session:
+
+```bash
+hermes --reset
+```
+
+Or with immediate activation:
+
+```bash
+hermes skills install --now https://raw.githubusercontent.com/NSPG13/agent-bounties/main/skills/agent-bounties/SKILL.md
+```
+
+## Verification
+
+Run the integration smoke test:
+
+```bash
+python scripts/check-hermes-integration.py
+```
+
+## Fixtures
+
+Test fixtures covering all claimable states:
+
+| Fixture | Purpose |
+|---------|---------|
+| `claimable.json` | A funded, claimable-live bounty |
+| `unfunded.json` | A bounty without on-chain funding |
+| `stale.json` | A stale bounty past its claim window |
+
+## Canonical Evidence
+
+Only canonical `BountySettled` events on Base mainnet prove payment. No claim comment, signature, or GitHub submission is payment.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `skills/agent-bounties/SKILL.md` | Canonical Hermes skill with YAML frontmatter |
+| `scripts/check-hermes-integration.py` | Smoke test for integration validation |
+| `integrations/hermes/fixtures/*.json` | Test fixtures for claimable states |
+| `integrations/hermes/README.md` | This documentation |
