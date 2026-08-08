@@ -1,0 +1,25 @@
+{
+  "schema": "https://agentbounties.org/schemas/wallet-ux-manifest.v2.json",
+  "protocol": {
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "asset": "USDC",
+    "native_token": "0X833589FCD6EDB6E08F4C7C32D4F71B54BDA02913"
+  },
+  "ui": {
+    "version": "2.0",
+    "required_elements": [
+      "balance_display",
+      "send_form",
+      "receive_qr",
+      "tx_history",
+      "gas_estimator"
+    ],
+    "supported_types": [
+      "browser_extension",
+      "mobile_deep_link",
+      "web_wallet"
+    ],
+    "confirmation_timeout": 30
+  }
+}
