@@ -6,6 +6,9 @@ use domain::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod stale_domain_origins;
+
 const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v2.json";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
