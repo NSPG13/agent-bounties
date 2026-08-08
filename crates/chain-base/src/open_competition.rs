@@ -26,6 +26,12 @@ pub const OPEN_COMPETITION_CREATION_SCHEMA: &str =
 pub const OPEN_COMPETITION_STATE_SCHEMA: &str = "agent-bounties/open-competition-v1-state-v1";
 pub const OPEN_COMPETITION_ENTRANT_ACTION_SCHEMA: &str =
     "agent-bounties/open-competition-entrant-wallet-action-v1";
+pub const OPEN_COMPETITION_ENTRANT_WALLET_RELEASE_SCHEMA: &str =
+    "agent-bounties/open-competition-entrant-wallet-release-v1";
+pub const OPEN_COMPETITION_ENTRANT_WALLET_STATE_SCHEMA: &str =
+    "agent-bounties/open-competition-entrant-wallet-state-v1";
+pub const OPEN_COMPETITION_ENTRANT_WALLET_PROTOCOL_VERSION: &str =
+    "agent-bounties/open-competition-entrant-wallet-v1";
 pub const OPEN_COMPETITION_PROTOCOL_VERSION: &str = "agent-bounties/open-competition-v1";
 pub const OPEN_COMPETITION_MAX_ENTRIES: u8 = 64;
 pub const OPEN_COMPETITION_MAX_COMPETITION_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -795,6 +801,93 @@ pub fn encode_open_competition_entrant_withdraw_payload(
     ))
 }
 
+pub fn open_competition_entrant_payload_bounty(
+    action: OpenCompetitionEntrantAction,
+    payload: &str,
+) -> Result<String, ChainBaseError> {
+    let bytes = decode_prefixed_hex(payload, "entrant wallet payload")?;
+    if bytes.len() < 32 || bytes.len() % 32 != 0 {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant wallet payload length does not match the action".to_string(),
+        ));
+    }
+    if bytes[..12].iter().any(|byte| *byte != 0) {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant wallet payload bounty is not an ABI address".to_string(),
+        ));
+    }
+    match action {
+        OpenCompetitionEntrantAction::Commit => {
+            if bytes.len() != 64 || bytes[32..64].iter().all(|byte| *byte == 0) {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant commit payload must contain one nonzero commitment".to_string(),
+                ));
+            }
+        }
+        OpenCompetitionEntrantAction::WithdrawBond => {
+            if bytes.len() != 32 {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant withdrawal payload must contain only the bounty address".to_string(),
+                ));
+            }
+        }
+        OpenCompetitionEntrantAction::Reveal => {
+            if bytes.len() < 192
+                || bytes[32..64].iter().all(|byte| *byte == 0)
+                || bytes[64..96].iter().all(|byte| *byte == 0)
+                || bytes[96..128].iter().all(|byte| *byte == 0)
+                || bytes[128..152].iter().any(|byte| *byte != 0)
+                || u64::from_be_bytes(bytes[152..160].try_into().expect("fixed ABI word")) != 160
+                || bytes[160..184].iter().any(|byte| *byte != 0)
+            {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant reveal payload is not canonical ABI encoding".to_string(),
+                ));
+            }
+            let proof_length = usize::try_from(u64::from_be_bytes(
+                bytes[184..192].try_into().expect("fixed ABI word"),
+            ))
+            .map_err(|_| {
+                ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant reveal proof length exceeds this runtime".to_string(),
+                )
+            })?;
+            if proof_length > 32_770 {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant reveal proof exceeds the hosted relay limit".to_string(),
+                ));
+            }
+            let padded_length = proof_length
+                .checked_add(31)
+                .map(|length| length / 32 * 32)
+                .ok_or_else(|| {
+                    ChainBaseError::InvalidVerificationConfiguration(
+                        "entrant reveal proof length overflowed".to_string(),
+                    )
+                })?;
+            let expected_length = 192_usize.checked_add(padded_length).ok_or_else(|| {
+                ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant reveal payload length overflowed".to_string(),
+                )
+            })?;
+            if bytes.len() != expected_length
+                || bytes[192 + proof_length..].iter().any(|byte| *byte != 0)
+            {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "entrant reveal payload length or padding is not canonical".to_string(),
+                ));
+            }
+        }
+    }
+    let bounty = normalize_evm_address(format!("0x{}", hex::encode(&bytes[12..32])))?;
+    if bounty == "0x0000000000000000000000000000000000000000" {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant wallet payload bounty must be nonzero".to_string(),
+        ));
+    }
+    Ok(bounty)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn plan_open_competition_entrant_action(
     network: &str,
@@ -1308,6 +1401,76 @@ pub struct OpenCompetitionReleaseManifest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OpenCompetitionEntrantWalletReleaseManifest {
+    pub schema_version: String,
+    pub protocol_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub deployment_state: OpenCompetitionDeploymentState,
+    pub factory_contract: String,
+    pub implementation_contract: String,
+    pub competition_factory: String,
+    pub settlement_token: String,
+    pub deployment_block: u64,
+    pub factory_runtime_code_hash: String,
+    pub implementation_runtime_code_hash: String,
+    pub clone_runtime_code_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionEntrantWalletSafeState {
+    pub schema_version: String,
+    pub protocol_version: String,
+    pub network: String,
+    pub chain_id: u64,
+    pub deployment_state: OpenCompetitionDeploymentState,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+    pub safe_block_timestamp: u64,
+    pub factory_contract: String,
+    pub factory_runtime_code_hash: String,
+    pub factory_runtime_matches: bool,
+    pub implementation_contract: String,
+    pub implementation_runtime_code_hash: String,
+    pub implementation_runtime_matches: bool,
+    pub wallet: String,
+    pub wallet_runtime_code_hash: String,
+    pub wallet_runtime_matches: bool,
+    pub factory_registered_wallet: bool,
+    pub competition_factory: String,
+    pub settlement_token: String,
+    pub canonical_dependencies_match: bool,
+    pub owner: String,
+    pub delegate: String,
+    pub policy_hash: String,
+    pub policy_version: u64,
+    pub delegate_nonce: u64,
+    pub valid_after: u64,
+    pub valid_until: u64,
+    pub period_seconds: u64,
+    pub allowed_actions: u8,
+    pub max_per_action: u128,
+    pub max_per_period: u128,
+    pub max_lifetime_spend: u128,
+    pub max_bounty_target: u128,
+    pub period_bucket: u64,
+    pub period_spent: u128,
+    pub lifetime_spent: u128,
+    pub token_balance: u128,
+    pub verifier_module: String,
+    pub verifier_runtime_code_hash: String,
+    pub verifier_policy_hash: String,
+    pub acceptance_criteria_hash: String,
+    pub benchmark_hash: String,
+    pub evidence_schema_hash: String,
+    pub policy_active: bool,
+    pub onchain_ready_to_relay: bool,
+    pub blockers: Vec<String>,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OpenCompetitionStateQuery {
     pub release: OpenCompetitionReleaseManifest,
     pub bounty_contract: String,
@@ -1369,6 +1532,11 @@ pub struct OpenCompetitionSafeState {
     pub entry_capacity_available: bool,
     pub solver: Option<String>,
     pub solver_has_entered: Option<bool>,
+    pub solver_entry_commitment: Option<String>,
+    pub solver_entry_committed_block: Option<u64>,
+    pub solver_entry_reveal_deadline: Option<u64>,
+    pub solver_entry_bond: Option<u128>,
+    pub solver_entry_state: Option<u8>,
     pub competition_ends_at: u64,
     pub reveal_window_seconds: u64,
     pub competition_open: bool,
@@ -1670,6 +1838,18 @@ where
             ))
         })
         .transpose()?;
+    let solver_entry_id = solver
+        .as_ref()
+        .map(|solver| {
+            Ok(push_batch_call(
+                &mut batch_requests,
+                &mut request_id,
+                &bounty,
+                encode_call("entries(address)", vec![encode_address(solver)?]),
+                &exact_block,
+            ))
+        })
+        .transpose()?;
 
     let mut batch_results = fetch_batch_results(rpc_url, batch_requests, transport).await?;
     let factory_runtime = take_batch_code_hash(&mut batch_results, factory_runtime_id)?;
@@ -1750,6 +1930,26 @@ where
     let solver_has_entered = solver_has_entered_id
         .map(|id| word_as_bool(take_batch_word(&mut batch_results, id)?, "wallet entry"))
         .transpose()?;
+    let solver_entry = solver_entry_id
+        .map(|id| take_batch_words(&mut batch_results, id, 5))
+        .transpose()?;
+    let (
+        solver_entry_commitment,
+        solver_entry_committed_block,
+        solver_entry_reveal_deadline,
+        solver_entry_bond,
+        solver_entry_state,
+    ) = if let Some(words) = solver_entry {
+        (
+            Some(word_as_hash(words[0])),
+            Some(word_as_u64(words[1], "solver committed block")?),
+            Some(word_as_u64(words[2], "solver reveal deadline")?),
+            Some(word_as_u128(words[3], "solver entry bond")?),
+            Some(word_as_u8(words[4], "solver entry state")?),
+        )
+    } else {
+        (None, None, None, None, None)
+    };
     if !batch_results.is_empty() {
         return Err(ChainBaseError::InvalidRpcResponse(
             "JSON-RPC batch returned unconsumed results".to_string(),
@@ -1856,6 +2056,11 @@ where
         entry_capacity_available,
         solver,
         solver_has_entered,
+        solver_entry_commitment,
+        solver_entry_committed_block,
+        solver_entry_reveal_deadline,
+        solver_entry_bond,
+        solver_entry_state,
         competition_ends_at,
         reveal_window_seconds,
         competition_open,
@@ -1866,6 +2071,433 @@ where
             && query.release.deployment_state.permits_public_inventory(),
         blockers,
         evidence_boundary: "This is a safe-block observation of canonical identity, funding, verifier, capacity, wallet-entry, and timing facts. It is not a commitment, reveal, settlement, or payment receipt. Only a canonical BountySettled event proves payment.".to_string(),
+    })
+}
+
+pub async fn observe_open_competition_entrant_wallet_safe_state(
+    rpc_url: &str,
+    release: &OpenCompetitionEntrantWalletReleaseManifest,
+    competition_release: &OpenCompetitionReleaseManifest,
+    wallet: &str,
+) -> Result<OpenCompetitionEntrantWalletSafeState, ChainBaseError> {
+    observe_open_competition_entrant_wallet_safe_state_with_transport(
+        rpc_url,
+        release,
+        competition_release,
+        wallet,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn observe_open_competition_entrant_wallet_safe_state_with_transport<T>(
+    rpc_url: &str,
+    release: &OpenCompetitionEntrantWalletReleaseManifest,
+    competition_release: &OpenCompetitionReleaseManifest,
+    wallet: &str,
+    transport: &T,
+) -> Result<OpenCompetitionEntrantWalletSafeState, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let descriptor = base_network_descriptor(&release.network)?;
+    if release.schema_version != OPEN_COMPETITION_ENTRANT_WALLET_RELEASE_SCHEMA
+        || release.protocol_version != OPEN_COMPETITION_ENTRANT_WALLET_PROTOCOL_VERSION
+        || release.chain_id != descriptor.chain_id
+        || competition_release.protocol_version != OPEN_COMPETITION_PROTOCOL_VERSION
+        || competition_release.network != release.network
+        || competition_release.chain_id != descriptor.chain_id
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant-wallet release manifest has an unsupported protocol or chain".to_string(),
+        ));
+    }
+    let factory = normalize_evm_address(&release.factory_contract)?;
+    let implementation = normalize_evm_address(&release.implementation_contract)?;
+    let competition_factory = normalize_evm_address(&release.competition_factory)?;
+    let settlement_token = normalize_evm_address(&release.settlement_token)?;
+    let wallet = normalize_evm_address(wallet)?;
+    if competition_factory != normalize_evm_address(&competition_release.factory_contract)?
+        || settlement_token != normalize_evm_address(&competition_release.settlement_token)?
+        || settlement_token != normalize_evm_address(&descriptor.native_usdc_token_address)?
+    {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "entrant-wallet release dependencies do not match the competition release".to_string(),
+        ));
+    }
+    let expected_factory_runtime = normalized_nonzero_bytes32(
+        &release.factory_runtime_code_hash,
+        "entrant factory runtime",
+    )?;
+    let expected_implementation_runtime = normalized_nonzero_bytes32(
+        &release.implementation_runtime_code_hash,
+        "entrant implementation runtime",
+    )?;
+    let expected_clone_runtime =
+        normalized_nonzero_bytes32(&release.clone_runtime_code_hash, "entrant clone runtime")?;
+
+    let safe_block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_getBlockByNumber",
+                    "params": ["safe", false]
+                }),
+            )
+            .await?,
+        1,
+        "eth_getBlockByNumber",
+    )?;
+    let safe_block_number = parse_rpc_quantity(
+        safe_block
+            .get("number")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing number".to_string(),
+                )
+            })?,
+    )?;
+    if safe_block_number < release.deployment_block {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "safe block predates the entrant-wallet factory deployment".to_string(),
+        ));
+    }
+    let safe_block_hash = normalize_hash(
+        safe_block
+            .get("hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing hash".to_string(),
+                )
+            })?,
+    )?;
+    let safe_block_timestamp = parse_rpc_quantity(
+        safe_block
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidRpcResponse(
+                    "safe block response is missing timestamp".to_string(),
+                )
+            })?,
+    )?;
+    let exact_block = format!("0x{safe_block_number:x}");
+    let mut request_id = 2_u64;
+    let mut requests = Vec::new();
+    let factory_runtime_id =
+        push_batch_code(&mut requests, &mut request_id, &factory, &exact_block);
+    let implementation_runtime_id = push_batch_code(
+        &mut requests,
+        &mut request_id,
+        &implementation,
+        &exact_block,
+    );
+    let wallet_runtime_id = push_batch_code(&mut requests, &mut request_id, &wallet, &exact_block);
+    let factory_competition_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &factory,
+        encode_call("competitionFactory()", Vec::new()),
+        &exact_block,
+    );
+    let factory_token_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &factory,
+        encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+    );
+    let factory_implementation_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &factory,
+        encode_call("implementation()", Vec::new()),
+        &exact_block,
+    );
+    let registered_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &factory,
+        encode_call("isFactoryWallet(address)", vec![encode_address(&wallet)?]),
+        &exact_block,
+    );
+    let wallet_deployment_factory_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("deploymentFactory()", Vec::new()),
+        &exact_block,
+    );
+    let wallet_competition_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("factory()", Vec::new()),
+        &exact_block,
+    );
+    let wallet_token_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("settlementToken()", Vec::new()),
+        &exact_block,
+    );
+    let owner_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("owner()", Vec::new()),
+        &exact_block,
+    );
+    let policy_hash_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("policyHash()", Vec::new()),
+        &exact_block,
+    );
+    let policy_version_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("policyVersion()", Vec::new()),
+        &exact_block,
+    );
+    let delegate_nonce_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("delegateNonce()", Vec::new()),
+        &exact_block,
+    );
+    let revoked_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("revoked()", Vec::new()),
+        &exact_block,
+    );
+    let policy_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("policy()", Vec::new()),
+        &exact_block,
+    );
+    let period_bucket_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("periodBucket()", Vec::new()),
+        &exact_block,
+    );
+    let period_spent_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("periodSpent()", Vec::new()),
+        &exact_block,
+    );
+    let lifetime_spent_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &wallet,
+        encode_call("lifetimeSpent()", Vec::new()),
+        &exact_block,
+    );
+    let token_balance_id = push_batch_call(
+        &mut requests,
+        &mut request_id,
+        &settlement_token,
+        encode_call("balanceOf(address)", vec![encode_address(&wallet)?]),
+        &exact_block,
+    );
+
+    let mut results = fetch_batch_results(rpc_url, requests, transport).await?;
+    let factory_runtime = take_batch_code_hash(&mut results, factory_runtime_id)?;
+    let implementation_runtime = take_batch_code_hash(&mut results, implementation_runtime_id)?;
+    let wallet_runtime = take_batch_code_hash(&mut results, wallet_runtime_id)?;
+    let observed_factory_competition =
+        address_from_word(take_batch_word(&mut results, factory_competition_id)?);
+    let observed_factory_token =
+        address_from_word(take_batch_word(&mut results, factory_token_id)?);
+    let observed_factory_implementation =
+        address_from_word(take_batch_word(&mut results, factory_implementation_id)?);
+    let factory_registered_wallet = word_as_bool(
+        take_batch_word(&mut results, registered_id)?,
+        "entrant factory registration",
+    )?;
+    let wallet_deployment_factory =
+        address_from_word(take_batch_word(&mut results, wallet_deployment_factory_id)?);
+    let observed_wallet_competition =
+        address_from_word(take_batch_word(&mut results, wallet_competition_id)?);
+    let observed_wallet_token = address_from_word(take_batch_word(&mut results, wallet_token_id)?);
+    let owner = address_from_word(take_batch_word(&mut results, owner_id)?);
+    let policy_hash = word_as_hash(take_batch_word(&mut results, policy_hash_id)?);
+    let policy_version = word_as_u64(
+        take_batch_word(&mut results, policy_version_id)?,
+        "entrant policy version",
+    )?;
+    let delegate_nonce = word_as_u64(
+        take_batch_word(&mut results, delegate_nonce_id)?,
+        "entrant delegate nonce",
+    )?;
+    let revoked = word_as_bool(
+        take_batch_word(&mut results, revoked_id)?,
+        "entrant policy revoked",
+    )?;
+    let policy_words = take_batch_words(&mut results, policy_id, 15)?;
+    let period_bucket = word_as_u64(
+        take_batch_word(&mut results, period_bucket_id)?,
+        "entrant period bucket",
+    )?;
+    let period_spent = word_as_u128(
+        take_batch_word(&mut results, period_spent_id)?,
+        "entrant period spend",
+    )?;
+    let lifetime_spent = word_as_u128(
+        take_batch_word(&mut results, lifetime_spent_id)?,
+        "entrant lifetime spend",
+    )?;
+    let token_balance = word_as_u128(
+        take_batch_word(&mut results, token_balance_id)?,
+        "entrant token balance",
+    )?;
+    if !results.is_empty() {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "entrant-wallet JSON-RPC batch returned unconsumed results".to_string(),
+        ));
+    }
+    let delegate = address_from_word(policy_words[0]);
+    let valid_after = word_as_u64(policy_words[1], "entrant valid-after")?;
+    let valid_until = word_as_u64(policy_words[2], "entrant valid-until")?;
+    let period_seconds = word_as_u64(policy_words[3], "entrant period seconds")?;
+    let max_per_action = word_as_u128(policy_words[4], "entrant per-action cap")?;
+    let max_per_period = word_as_u128(policy_words[5], "entrant period cap")?;
+    let max_lifetime_spend = word_as_u128(policy_words[6], "entrant lifetime cap")?;
+    let max_bounty_target = word_as_u128(policy_words[7], "entrant bounty target cap")?;
+    let allowed_actions = word_as_u8(policy_words[8], "entrant allowed actions")?;
+    let verifier_module = address_from_word(policy_words[9]);
+    let verifier_runtime_code_hash = word_as_hash(policy_words[10]);
+    let verifier_policy_hash = word_as_hash(policy_words[11]);
+    let acceptance_criteria_hash = word_as_hash(policy_words[12]);
+    let benchmark_hash = word_as_hash(policy_words[13]);
+    let evidence_schema_hash = word_as_hash(policy_words[14]);
+
+    let mut verifier_requests = Vec::new();
+    let verifier_runtime_id = push_batch_code(
+        &mut verifier_requests,
+        &mut request_id,
+        &verifier_module,
+        &exact_block,
+    );
+    let mut verifier_results = fetch_batch_results(rpc_url, verifier_requests, transport).await?;
+    let observed_verifier_runtime =
+        take_batch_code_hash(&mut verifier_results, verifier_runtime_id)?;
+
+    let factory_runtime_matches = factory_runtime == expected_factory_runtime
+        && observed_factory_competition == competition_factory
+        && observed_factory_token == settlement_token
+        && observed_factory_implementation == implementation;
+    let implementation_runtime_matches = implementation_runtime == expected_implementation_runtime;
+    let wallet_runtime_matches = wallet_runtime == expected_clone_runtime;
+    let canonical_dependencies_match = wallet_deployment_factory == factory
+        && observed_wallet_competition == competition_factory
+        && observed_wallet_token == settlement_token;
+    let verifier_runtime_matches = observed_verifier_runtime == verifier_runtime_code_hash;
+    let zero_address = "0x0000000000000000000000000000000000000000";
+    let policy_active = !revoked
+        && policy_version > 0
+        && owner != zero_address
+        && delegate != zero_address
+        && verifier_module != zero_address
+        && safe_block_timestamp >= valid_after
+        && safe_block_timestamp <= valid_until
+        && period_seconds > 0
+        && allowed_actions != 0
+        && max_per_action > 0
+        && max_per_period >= max_per_action
+        && max_lifetime_spend >= max_per_action
+        && max_bounty_target > 0
+        && policy_hash != zero_hash()
+        && verifier_policy_hash != zero_hash()
+        && acceptance_criteria_hash != zero_hash()
+        && benchmark_hash != zero_hash()
+        && evidence_schema_hash != zero_hash();
+    let mut blockers = Vec::new();
+    for (ready, name) in [
+        (factory_runtime_matches, "entrant_factory_runtime"),
+        (
+            implementation_runtime_matches,
+            "entrant_implementation_runtime",
+        ),
+        (wallet_runtime_matches, "entrant_wallet_runtime"),
+        (factory_registered_wallet, "entrant_factory_registration"),
+        (
+            canonical_dependencies_match,
+            "entrant_canonical_dependencies",
+        ),
+        (verifier_runtime_matches, "entrant_verifier_runtime"),
+        (policy_active, "entrant_policy_active"),
+    ] {
+        if !ready {
+            blockers.push(name.to_string());
+        }
+    }
+    Ok(OpenCompetitionEntrantWalletSafeState {
+        schema_version: OPEN_COMPETITION_ENTRANT_WALLET_STATE_SCHEMA.to_string(),
+        protocol_version: OPEN_COMPETITION_ENTRANT_WALLET_PROTOCOL_VERSION.to_string(),
+        network: release.network.clone(),
+        chain_id: descriptor.chain_id,
+        deployment_state: release.deployment_state,
+        safe_block_number,
+        safe_block_hash,
+        safe_block_timestamp,
+        factory_contract: factory,
+        factory_runtime_code_hash: factory_runtime,
+        factory_runtime_matches,
+        implementation_contract: implementation,
+        implementation_runtime_code_hash: implementation_runtime,
+        implementation_runtime_matches,
+        wallet,
+        wallet_runtime_code_hash: wallet_runtime,
+        wallet_runtime_matches,
+        factory_registered_wallet,
+        competition_factory,
+        settlement_token,
+        canonical_dependencies_match,
+        owner,
+        delegate,
+        policy_hash,
+        policy_version,
+        delegate_nonce,
+        valid_after,
+        valid_until,
+        period_seconds,
+        allowed_actions,
+        max_per_action,
+        max_per_period,
+        max_lifetime_spend,
+        max_bounty_target,
+        period_bucket,
+        period_spent,
+        lifetime_spent,
+        token_balance,
+        verifier_module,
+        verifier_runtime_code_hash,
+        verifier_policy_hash,
+        acceptance_criteria_hash,
+        benchmark_hash,
+        evidence_schema_hash,
+        policy_active,
+        onchain_ready_to_relay: blockers.is_empty(),
+        blockers,
+        evidence_boundary: "This is a safe-block observation of one exact factory-created entrant wallet and policy. It contains no signature, reveal salt, proof, transaction, or payment claim.".to_string(),
     })
 }
 
@@ -2293,6 +2925,15 @@ mod tests {
                     let function_selector = &data[..10];
                     let selector_for =
                         |function: &str| format!("0x{}", hex::encode(selector(function)));
+                    if to == self.query.bounty_contract
+                        && function_selector == selector_for("entries(address)")
+                    {
+                        return Ok(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": format!("0x{}", "00".repeat(32 * 5))
+                        }));
+                    }
                     let protocol: [u8; 32] =
                         Keccak256::digest(OPEN_COMPETITION_PROTOCOL_VERSION.as_bytes()).into();
                     let word = if to == self.query.release.factory_contract {
@@ -2475,6 +3116,8 @@ mod tests {
         assert_eq!(state.entry_count, 1);
         assert_eq!(state.max_entries, 4);
         assert_eq!(state.solver_has_entered, Some(false));
+        assert_eq!(state.solver_entry_state, Some(0));
+        assert_eq!(state.solver_entry_bond, Some(0));
         let seen = transport.seen.lock().unwrap();
         assert_eq!(seen[0]["params"], json!(["safe", false]));
         assert!(seen[1..].iter().all(|request| {
@@ -2607,6 +3250,78 @@ mod tests {
         );
         assert_eq!(calldata.len(), 4 + 6 * 32);
         assert_eq!(&calldata[4 + 5 * 32..4 + 5 * 32 + 3], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn entrant_payload_bounty_requires_canonical_action_encoding() {
+        let bounty = "0x1111111111111111111111111111111111111111";
+        let commit = encode_open_competition_entrant_commit_payload(
+            bounty,
+            &format!("0x{}", "aa".repeat(32)),
+        )
+        .unwrap();
+        assert_eq!(
+            open_competition_entrant_payload_bounty(OpenCompetitionEntrantAction::Commit, &commit)
+                .unwrap(),
+            bounty
+        );
+        assert!(open_competition_entrant_payload_bounty(
+            OpenCompetitionEntrantAction::Commit,
+            &format!("{commit}{}", "00".repeat(32))
+        )
+        .is_err());
+        assert!(open_competition_entrant_payload_bounty(
+            OpenCompetitionEntrantAction::Commit,
+            &encode_open_competition_entrant_commit_payload(
+                bounty,
+                &format!("0x{}", "00".repeat(32))
+            )
+            .unwrap()
+        )
+        .is_err());
+
+        let withdraw = encode_open_competition_entrant_withdraw_payload(bounty).unwrap();
+        assert_eq!(
+            open_competition_entrant_payload_bounty(
+                OpenCompetitionEntrantAction::WithdrawBond,
+                &withdraw
+            )
+            .unwrap(),
+            bounty
+        );
+        assert!(open_competition_entrant_payload_bounty(
+            OpenCompetitionEntrantAction::WithdrawBond,
+            &format!("{withdraw}{}", "00".repeat(32))
+        )
+        .is_err());
+
+        let reveal = encode_open_competition_entrant_reveal_payload(
+            bounty,
+            &format!("0x{}", "aa".repeat(32)),
+            &format!("0x{}", "bb".repeat(32)),
+            &format!("0x{}", "cc".repeat(32)),
+            "0x010203",
+        )
+        .unwrap();
+        assert_eq!(
+            open_competition_entrant_payload_bounty(OpenCompetitionEntrantAction::Reveal, &reveal)
+                .unwrap(),
+            bounty
+        );
+        let mut noncanonical_offset = hex::decode(&reveal[2..]).unwrap();
+        noncanonical_offset[159] = 0xa1;
+        assert!(open_competition_entrant_payload_bounty(
+            OpenCompetitionEntrantAction::Reveal,
+            &format!("0x{}", hex::encode(noncanonical_offset))
+        )
+        .is_err());
+        let mut nonzero_padding = hex::decode(&reveal[2..]).unwrap();
+        *nonzero_padding.last_mut().unwrap() = 1;
+        assert!(open_competition_entrant_payload_bounty(
+            OpenCompetitionEntrantAction::Reveal,
+            &format!("0x{}", hex::encode(nonzero_padding))
+        )
+        .is_err());
     }
 
     #[test]
@@ -3121,6 +3836,38 @@ fn take_batch_word(
     parse_bytes32(result.as_str().ok_or_else(|| {
         ChainBaseError::InvalidRpcResponse("eth_call result is not one ABI word".to_string())
     })?)
+}
+
+fn take_batch_words(
+    results: &mut BTreeMap<u64, Value>,
+    request_id: u64,
+    expected_words: usize,
+) -> Result<Vec<[u8; 32]>, ChainBaseError> {
+    let result = results.remove(&request_id).ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse(format!(
+            "JSON-RPC batch result is missing id {request_id}"
+        ))
+    })?;
+    let value = result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_call result is not ABI bytes".to_string())
+    })?;
+    let bytes = decode_prefixed_hex(value, "eth_call result")?;
+    if bytes.len() != expected_words * 32 {
+        return Err(ChainBaseError::InvalidRpcResponse(format!(
+            "eth_call result contains {} ABI words; expected {expected_words}",
+            bytes.len() / 32
+        )));
+    }
+    bytes
+        .chunks_exact(32)
+        .map(|word| {
+            word.try_into().map_err(|_| {
+                ChainBaseError::InvalidRpcResponse(
+                    "eth_call result contains a partial ABI word".to_string(),
+                )
+            })
+        })
+        .collect()
 }
 
 fn take_batch_code_hash(

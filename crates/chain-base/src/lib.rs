@@ -2377,9 +2377,18 @@ pub struct RpcTransactionReceipt {
     pub transaction_hash: String,
     #[serde(rename = "blockNumber")]
     pub block_number: Option<String>,
+    #[serde(rename = "blockHash")]
+    pub block_hash: Option<String>,
     pub status: Option<String>,
     #[serde(default)]
     pub logs: Vec<RpcEvmLog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseBlockIdentity {
+    pub number: u64,
+    pub hash: String,
+    pub timestamp: u64,
 }
 
 pub fn base_network_descriptor(network: &str) -> Result<BaseNetworkDescriptor, ChainBaseError> {
@@ -2960,6 +2969,85 @@ pub async fn fetch_block_timestamp(
         &ReqwestJsonRpcTransport::default(),
     )
     .await
+}
+
+pub async fn fetch_safe_block_identity(
+    rpc_url: &str,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        "safe",
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_exact_block_identity(
+    rpc_url: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        &hex_quantity(block_number),
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_block_identity_with_transport<T>(
+    rpc_url: &str,
+    block_tag: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<BaseBlockIdentity, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    if block_tag != "safe"
+        && !(block_tag.starts_with("0x")
+            && block_tag.len() > 2
+            && block_tag[2..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()))
+    {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "block identity tag must be safe or a hex quantity".to_string(),
+        ));
+    }
+    let block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getBlockByNumber",
+                    "params": [block_tag, false]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getBlockByNumber",
+    )?;
+    Ok(BaseBlockIdentity {
+        number: parse_rpc_quantity(block.get("number").and_then(Value::as_str).ok_or_else(
+            || ChainBaseError::InvalidRpcResponse("block identity is missing number".to_string()),
+        )?)?,
+        hash: normalize_hash(block.get("hash").and_then(Value::as_str).ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse("block identity is missing hash".to_string())
+        })?)?,
+        timestamp: parse_rpc_quantity(block.get("timestamp").and_then(Value::as_str).ok_or_else(
+            || {
+                ChainBaseError::InvalidRpcResponse(
+                    "block identity is missing timestamp".to_string(),
+                )
+            },
+        )?)?,
+    })
 }
 
 pub async fn fetch_block_timestamp_with_transport<T>(
@@ -5765,7 +5853,7 @@ fn decode_expiry_event(
     ))
 }
 
-fn event_topic(signature: &str) -> String {
+pub fn event_topic(signature: &str) -> String {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
     format!("0x{}", hex::encode(hasher.finalize()))

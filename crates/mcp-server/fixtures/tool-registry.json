@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "27b09fd9e8ebac3a39764803fb404e0d58e89f9bb211420ee7ea402663d9d67a",
+  "normalized_descriptors_sha256": "ab76f0abb94fc4dc3ccb0482713d13305295d141e6158302421295bf951024c7",
   "tools": [
     "route_blocked_goal",
     "plan_objective_creation",
@@ -68,6 +68,9 @@
     "prepare_open_competition_reveal",
     "get_open_competition_status",
     "withdraw_open_competition_bond",
+    "prepare_open_competition_entrant_action",
+    "relay_open_competition_entrant_action",
+    "get_open_competition_entrant_relay",
     "get_standing_meta_v4_readiness",
     "prepare_standing_meta_v4_claim",
     "prepare_anonymous_stake_registration",

@@ -726,6 +726,60 @@ tool_args! {
 }
 
 tool_args! {
+    struct OpenCompetitionEntrantActionArgs {
+        network: Option<String>,
+        wallet: String,
+        bounty_contract: String,
+        action: String,
+        commitment: Option<String>,
+        commitment_envelope: Option<Value>,
+        proof: Option<String>,
+        deadline_seconds: Option<u64>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition and entrant wallet."),
+            "wallet": string_property("Canonical entrant-wallet contract owned by the solver."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "action": enum_property(&["commit", "reveal", "withdraw_bond"], "Exact policy-bound entrant action."),
+            "commitment": nullable_string_property("Commit only: public nonzero commitment. Never include its salt."),
+            "commitment_envelope": { "type": ["object", "null"], "description": "Reveal only: locally recovered commitment envelope.", "additionalProperties": true },
+            "proof": nullable_string_property("Reveal only: verifier-specific 0x-prefixed proof bytes."),
+            "deadline_seconds": { "type": ["integer", "null"], "minimum": 30, "maximum": 600, "description": "Optional action-signature lifetime; defaults to 300 seconds." }
+        }),
+        &["wallet", "bounty_contract", "action"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionEntrantRelayArgs {
+        idempotency_key: String,
+        plan: Value,
+        signature: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "idempotency_key": string_property("Stable replay key for this exact wallet nonce, plan, and signature."),
+            "plan": { "type": "object", "description": "Exact plan returned by prepare_open_competition_entrant_action.", "additionalProperties": true },
+            "signature": string_property("Delegate EIP-712 signature for this exact plan. Never provide a private key or seed phrase.")
+        }),
+        &["idempotency_key", "plan", "signature"],
+    );
+}
+
+tool_args! {
+    struct GetOpenCompetitionEntrantRelayArgs {
+        relay_id: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "relay_id": string_property("Relay UUID returned by relay_open_competition_entrant_action.")
+        }),
+        &["relay_id"],
+    );
+}
+
+tool_args! {
     #[derive(Default)]
     struct StandingMetaV4ReadinessArgs {
         network: Option<String>,
@@ -1748,6 +1802,18 @@ async fn main() -> anyhow::Result<()> {
             post(withdraw_open_competition_bond),
         )
         .route(
+            "/tools/prepare_open_competition_entrant_action",
+            post(prepare_open_competition_entrant_action),
+        )
+        .route(
+            "/tools/relay_open_competition_entrant_action",
+            post(relay_open_competition_entrant_action),
+        )
+        .route(
+            "/tools/get_open_competition_entrant_relay",
+            post(get_open_competition_entrant_relay),
+        )
+        .route(
             "/tools/get_standing_meta_v4_readiness",
             post(get_standing_meta_v4_readiness),
         )
@@ -2612,6 +2678,21 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "withdraw_open_competition_bond",
             "Prepare a pull withdrawal for a still-committed losing entry after canonical settlement.",
             OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_entrant_action",
+            "Prepare one exact policy-bound entrant-wallet action from canonical Base safe-block state.",
+            OpenCompetitionEntrantActionArgs::input_schema(),
+        ),
+        tool(
+            "relay_open_competition_entrant_action",
+            "Submit one delegate-signed entrant action to the bounded hosted relayer. A broadcast is not canonical execution or payment evidence.",
+            OpenCompetitionEntrantRelayArgs::input_schema(),
+        ),
+        tool(
+            "get_open_competition_entrant_relay",
+            "Poll one entrant relay through canonical Base safe-block reconciliation. Only BountySettled proves solver payment.",
+            GetOpenCompetitionEntrantRelayArgs::input_schema(),
         ),
         tool(
             "get_standing_meta_v4_readiness",
@@ -4742,6 +4823,40 @@ async fn withdraw_open_competition_bond(
     proxy_open_competition_action("bond-withdrawal-preparation", args).await
 }
 
+async fn prepare_open_competition_entrant_action(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionEntrantActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_json_with_timeout("entrant-action-preparation", &args, 60).await
+}
+
+async fn relay_open_competition_entrant_action(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionEntrantRelayArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_json_with_timeout("entrant-action-relays", &args, 90).await
+}
+
+async fn get_open_competition_entrant_relay(
+    State(_state): State<SharedState>,
+    Json(args): Json<GetOpenCompetitionEntrantRelayArgs>,
+) -> Json<serde_json::Value> {
+    let relay_id = match uuid::Uuid::parse_str(&args.relay_id) {
+        Ok(relay_id) => relay_id,
+        Err(_) => return mcp_error("relay_id must be a UUID"),
+    };
+    let url = format!(
+        "{}/v1/base/open-competition-v1/entrant-action-relays/{relay_id}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response_with_timeout(
+        reqwest::Client::new().get(url),
+        "open-competition entrant relay API",
+        60,
+    )
+    .await
+}
+
 async fn proxy_open_competition_action(
     path: &str,
     args: OpenCompetitionActionArgs,
@@ -4761,13 +4876,25 @@ async fn proxy_open_competition_json<T>(path: &str, args: &T) -> Json<serde_json
 where
     T: Serialize + ?Sized,
 {
+    proxy_open_competition_json_with_timeout(path, args, 20).await
+}
+
+async fn proxy_open_competition_json_with_timeout<T>(
+    path: &str,
+    args: &T,
+    timeout_seconds: u64,
+) -> Json<serde_json::Value>
+where
+    T: Serialize + ?Sized,
+{
     let url = format!(
         "{}/v1/base/open-competition-v1/{path}",
         public_base_url_from_env().trim_end_matches('/')
     );
-    proxy_public_json_response(
+    proxy_public_json_response_with_timeout(
         reqwest::Client::new().post(url).json(args),
         "open-competition action API",
+        timeout_seconds,
     )
     .await
 }
@@ -4870,8 +4997,16 @@ async fn proxy_public_json_response(
     request: reqwest::RequestBuilder,
     service: &str,
 ) -> Json<serde_json::Value> {
+    proxy_public_json_response_with_timeout(request, service, 20).await
+}
+
+async fn proxy_public_json_response_with_timeout(
+    request: reqwest::RequestBuilder,
+    service: &str,
+    timeout_seconds: u64,
+) -> Json<serde_json::Value> {
     let response = match request
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
         .send()
         .await
     {
@@ -5917,7 +6052,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 116);
+        assert_eq!(descriptors.len(), 119);
         assert_eq!(
             descriptors
                 .iter()

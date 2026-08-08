@@ -295,6 +295,21 @@ zero-value call to the canonical CREATE2 deployer. The preserved hidden 1 USDC
 canary remains the already-settled competition canary; entrant-factory
 deployment does not spend or recreate that reward.
 
+Download the browser deployment receipt, then require the exact transaction,
+runtime pointers, and deployment block to become canonical at a Base safe
+block. This produces the only entrant release manifest accepted by the hosted
+relay:
+
+```text
+python scripts/audit_open_competition_entrant_wallet_mainnet_deployment.py \
+  --receipt <downloaded-deployment-receipt.json> \
+  --output target/open-competition-entrant-wallet/base-mainnet-deployment-audit.json
+```
+
+The audit must complete before setting the entrant release-manifest environment
+value or enabling the operator-only relay canary. It is still not evidence of a
+working hosted relay or public readiness.
+
 Any entrant wallet, factory, planner, typed-data schema, or relay-byte change
 invalidates that rehearsal. Do not set hosted relay or gas-sponsorship gates
 true until the secret-free evidence is published, audited, replayed on an

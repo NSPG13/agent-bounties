@@ -363,6 +363,65 @@ export interface OpenCompetitionActionPlan {
   evidence_boundary: string;
 }
 
+export type OpenCompetitionEntrantAction = "commit" | "reveal" | "withdraw_bond";
+
+export interface OpenCompetitionEntrantActionPreparationRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  wallet: string;
+  bounty_contract: string;
+  action: OpenCompetitionEntrantAction;
+  commitment?: string | null;
+  commitment_envelope?: OpenCompetitionCommitmentEnvelope | null;
+  proof?: string | null;
+  deadline_seconds?: number | null;
+}
+
+export interface OpenCompetitionEntrantActionPlan {
+  schema_version: "agent-bounties/open-competition-entrant-wallet-action-v1";
+  network: "base-mainnet" | "base-sepolia";
+  chain_id: number;
+  wallet: string;
+  delegate: string;
+  policy_hash: string;
+  policy_version: number;
+  action: OpenCompetitionEntrantAction;
+  action_code: number;
+  nonce: number;
+  deadline: number;
+  payload: string;
+  payload_hash: string;
+  signing_payload: Record<string, unknown>;
+  relay_call: Record<string, unknown>;
+  evidence_boundary: string;
+}
+
+export interface OpenCompetitionEntrantRelayRequest {
+  idempotency_key: string;
+  plan: OpenCompetitionEntrantActionPlan;
+  signature: string;
+}
+
+export interface OpenCompetitionEntrantRelayResponse {
+  schema_version: "agent-bounties/open-competition-entrant-relay-v1";
+  id: string;
+  network: "base-mainnet" | "base-sepolia";
+  wallet: string;
+  bounty_contract: string;
+  action: number;
+  wallet_nonce: number;
+  status: "prepared" | "relaying" | "broadcast" | "confirmed" | "failed";
+  retryable: boolean;
+  transaction_hash: string | null;
+  receipt_block: number | null;
+  receipt_block_hash: string | null;
+  canonical_safe_block: number | null;
+  canonical_safe_block_hash: string | null;
+  canonical_event: string | null;
+  payment_proven: boolean;
+  next_action: string;
+  evidence_boundary: string;
+}
+
 export interface StandingMetaV4ReadinessReport {
   schema_version: "agent-bounties/standing-meta-v4-readiness-v1";
   protocol_version: "standing-meta-v4";
@@ -1216,6 +1275,33 @@ export class AgentBountiesClient {
     request: OpenCompetitionActionRequest,
   ): Promise<OpenCompetitionActionPlan> {
     return this.openCompetitionAction("bond-withdrawal-preparation", request);
+  }
+
+  async prepareOpenCompetitionEntrantAction(
+    request: OpenCompetitionEntrantActionPreparationRequest,
+  ): Promise<OpenCompetitionEntrantActionPlan> {
+    return this.post("/v1/base/open-competition-v1/entrant-action-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionEntrantActionPlan>;
+  }
+
+  async relayOpenCompetitionEntrantAction(
+    request: OpenCompetitionEntrantRelayRequest,
+  ): Promise<OpenCompetitionEntrantRelayResponse> {
+    return this.post(
+      "/v1/base/open-competition-v1/entrant-action-relays",
+      request,
+    ) as Promise<OpenCompetitionEntrantRelayResponse>;
+  }
+
+  async getOpenCompetitionEntrantRelay(
+    relayId: string,
+  ): Promise<OpenCompetitionEntrantRelayResponse> {
+    return this.query(
+      `/v1/base/open-competition-v1/entrant-action-relays/${encodeURIComponent(relayId)}`,
+      {},
+    ) as Promise<OpenCompetitionEntrantRelayResponse>;
   }
 
   private standingMetaV4Action(

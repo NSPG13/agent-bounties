@@ -506,6 +506,37 @@ class AgentBountiesClient:
             "bond-withdrawal-preparation", bounty_contract, arguments, network
         )
 
+    def prepare_open_competition_entrant_action(self, request: dict):
+        """Prepare one exact policy-bound entrant-wallet EIP-712 action."""
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v1/entrant-action-preparation",
+            json=payload,
+        )
+
+    def relay_open_competition_entrant_action(
+        self, idempotency_key: str, plan: dict, signature: str
+    ):
+        """Relay one signed entrant action; only canonical events prove execution."""
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v1/entrant-action-relays",
+            json={
+                "idempotency_key": idempotency_key,
+                "plan": plan,
+                "signature": signature,
+            },
+        )
+
+    def get_open_competition_entrant_relay(self, relay_id: str):
+        """Poll durable relay state through Base safe-block reconciliation."""
+        return self._request(
+            "GET",
+            f"/v1/base/open-competition-v1/entrant-action-relays/{relay_id}",
+        )
+
     def _standing_meta_v4_action(
         self,
         path: str,

@@ -118,6 +118,9 @@ The intended operations are:
 - `prepare_open_competition_reveal`
 - `get_open_competition_status`
 - `withdraw_open_competition_bond`
+- `prepare_open_competition_entrant_action`
+- `relay_open_competition_entrant_action`
+- `get_open_competition_entrant_relay`
 
 CLI equivalents:
 
@@ -128,6 +131,10 @@ agent-bounties open-competition-commitment-generate --network base-sepolia --bou
 agent-bounties open-competition-readiness --bounty-contract 0x...
 agent-bounties open-competition-action --bounty-contract 0x... --operation prepare_open_competition_commit --arguments-json '{...}'
 agent-bounties open-competition-action --bounty-contract 0x... --operation prepare_open_competition_reveal --arguments-json '{...}'
+agent-bounties open-competition-entrant-action --wallet 0x... --bounty-contract 0x... --action commit --commitment 0x...
+agent-bounties open-competition-entrant-action --wallet 0x... --bounty-contract 0x... --action reveal --commitment-envelope-file commitment.json --proof 0x...
+agent-bounties open-competition-entrant-relay --request-file signed-relay.json
+agent-bounties open-competition-entrant-relay-status --relay-id 00000000-0000-0000-0000-000000000000
 ```
 
 The local commitment artifact uses
@@ -152,6 +159,9 @@ Versioned HTTP interfaces are:
 - `POST /v1/base/open-competition-v1/reveal-preparation`
 - `POST /v1/base/open-competition-v1/status`
 - `POST /v1/base/open-competition-v1/bond-withdrawal-preparation`
+- `POST /v1/base/open-competition-v1/entrant-action-preparation`
+- `POST /v1/base/open-competition-v1/entrant-action-relays`
+- `GET /v1/base/open-competition-v1/entrant-action-relays/:relay_id`
 
 Canonical identity, funding, timing, capacity, wallet-entry, and deadline facts
 come from one safe-block RPC snapshot. Hosted monitoring, relay support, gas
@@ -189,6 +199,14 @@ to reveal. Direct and relayed actions share one nonce, so signatures cannot be
 replayed across paths. The wallet exposes no delegate-controlled arbitrary
 call, token withdrawal, gas reimbursement, or destination selection.
 
+The hosted relay persists only the action and payload hashes, wallet and bounty
+addresses, nonce, deadline, transaction receipt, and canonical event evidence.
+It does not persist the signature, plaintext payload, proof, salt, or recovery
+envelope. One live or retryable relay may reserve a wallet nonce. A confirmed
+relay keeps that nonce closed; a canonically reverted, non-retryable relay
+releases it so the delegate can sign a corrected action without stranding the
+wallet.
+
 Creator-address exclusion is checked at both commit and reveal, including
 after ownership or delegate rotation. This blocks direct creator control of the
 entrant account; it does not prove unrelated beneficial ownership. The owner
@@ -202,6 +220,10 @@ allowance funding or native-USDC EIP-3009 funding. Factory provenance still
 does not approve a verifier. Hosted use remains disabled until the entrant
 factory runtime, implementation runtime, clone runtime, policy, verifier
 runtime, and complete verifier profile match a reviewed deployment manifest.
+Public commit relay also requires a configured database and bounded relayer,
+fresh versioned monitoring, gas sponsorship, release evidence, and the public
+commitment gate. Hidden canary access is operator-authorized. Reveal and bond
+withdrawal can be left in recovery mode when new commitments are disabled.
 
 Local fail-closed tools are:
 
