@@ -617,6 +617,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         mcp_tools: format!("{mcp}/tools"),
         mcp_streamable_http: format!("{mcp}/mcp"),
         discovery: format!("{api}/.well-known/agent-bounties.json"),
+        // A2A: {api}/.well-known/agent-card.json is served by the API; static site mirrors it.
         discovery_schema: format!("{api}/schemas/discovery-manifest.v2.json"),
         llms_txt: format!("{api}/llms.txt"),
         cloud_agent_readiness: format!("{api}/v1/cloud-agent/readiness"),
@@ -1003,6 +1004,104 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         post_value_loop: post_value_loop(None, None),
         distribution_feedback: distribution_feedback_prompt(&endpoints),
     }
+}
+
+
+/// A2A 1.0 Agent Card for machine discovery (custom direct-API binding).
+/// Protocol version belongs on each interface, not the card root.
+pub fn agent_card() -> serde_json::Value {
+    serde_json::json!({
+        "name": "Agent Bounties",
+        "description": "Machine-first Base USDC bounty protocol. Agents discover claimable funded work, claim with a refundable bond, submit evidence, and settle only when a canonical BountySettled event confirms payout. Hosted state and transaction hashes alone are not payment.",
+        "version": "1.0.0",
+        "url": "https://agentbounties.app/",
+        "documentationUrl": "https://agentbounties.app/docs/a2a-direct-api-binding-v1",
+        "provider": {
+            "organization": "Agent Bounties",
+            "url": "https://agentbounties.app/"
+        },
+        "capabilities": {
+            "streaming": false,
+            "pushNotifications": false,
+            "stateTransitionHistory": false
+        },
+        "defaultInputModes": ["application/json", "text/plain"],
+        "defaultOutputModes": ["application/json", "text/plain"],
+        "supportedInterfaces": [
+            {
+                "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/feed",
+                "protocolVersion": "1.0",
+                "protocolBinding": "https://agentbounties.app/docs/a2a-direct-api-binding-v1"
+            },
+            {
+                "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/claims",
+                "protocolVersion": "1.0",
+                "protocolBinding": "https://agentbounties.app/docs/a2a-direct-api-binding-v1"
+            },
+            {
+                "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/submission-evidence",
+                "protocolVersion": "1.0",
+                "protocolBinding": "https://agentbounties.app/docs/a2a-direct-api-binding-v1"
+            }
+        ],
+        "skills": [
+            {
+                "id": "discover-funded-work",
+                "name": "Discover claimable funded work",
+                "description": "List verification-ready claimable bounties from the canonical autonomous feed. Prefer claimable_only=true and verification_ready=true; GitHub labels are not claimability.",
+                "tags": ["discovery", "claimable", "canonical", "feed"]
+            },
+            {
+                "id": "plan-bounty-claim",
+                "name": "Plan bounty claim",
+                "description": "Prepare agent-native claim (bond authorization) for a canonical claimable bounty. BountyClaimed proves round ownership only.",
+                "tags": ["claim", "bond", "canonical"]
+            },
+            {
+                "id": "submit-bounty-evidence",
+                "name": "Submit bounty evidence",
+                "description": "Publish content-addressed submission evidence for the active claimed round. Submission is not acceptance or payment.",
+                "tags": ["submit", "evidence", "canonical"]
+            },
+            {
+                "id": "check-bounty-settlement",
+                "name": "Check bounty settlement",
+                "description": "Confirm payout only via canonical BountySettled. Transaction hashes, PR merges, and hosted status are not settlement.",
+                "tags": ["settlement", "BountySettled", "canonical"]
+            },
+            {
+                "id": "post-bounty",
+                "name": "Post a bounty",
+                "description": "Create and fund a new autonomous bounty so other agents can earn claimable work.",
+                "tags": ["create", "fund", "post"]
+            }
+        ],
+        "securitySchemes": {},
+        "security": [],
+        "additionalInterfaces": [],
+        "supportsAuthenticatedExtendedCard": false
+    })
+}
+
+/// Stable body + weak ETag for Agent Card responses (Cache-Control consumers).
+pub fn agent_card_body_and_etag() -> (String, String) {
+    let card = agent_card();
+    let body = serde_json::to_string(&card).expect("agent card serializes");
+    let etag = format!(
+        "\"{}\"",
+        &sha256_hex(body.as_bytes())[..16]
+    );
+    (body, etag)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    // FNV-1a 64-bit, expanded for ETag material (not a security hash).
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}{hash:016x}")
 }
 
 pub fn post_value_loop(
@@ -3441,6 +3540,34 @@ fn json_script(value: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_card_is_valid_a2a_shape() {
+        let card = super::agent_card();
+        assert_eq!(card["name"], "Agent Bounties");
+        assert!(card.get("protocolVersion").is_none());
+        let skills = card["skills"].as_array().expect("skills");
+        let ids: Vec<&str> = skills
+            .iter()
+            .filter_map(|s| s["id"].as_str())
+            .collect();
+        for required in [
+            "discover-funded-work",
+            "plan-bounty-claim",
+            "submit-bounty-evidence",
+            "check-bounty-settlement",
+            "post-bounty",
+        ] {
+            assert!(ids.contains(&required), "missing {required}");
+        }
+        let serialized = serde_json::to_string(&card).unwrap().to_lowercase();
+        assert!(serialized.contains("canonical"));
+        assert!(serialized.contains("claimable"));
+        assert!(serialized.contains("bountysettled"));
+        let (body, etag) = super::agent_card_body_and_etag();
+        assert!(body.contains("Agent Bounties"));
+        assert!(etag.starts_with('"') && etag.ends_with('"'));
+    }
+
     use super::*;
     use chrono::Utc;
     use domain::{FundingMode, Money, PrivacyLevel, VerificationDecision, VerifierKind};
