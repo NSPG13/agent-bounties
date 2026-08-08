@@ -1,0 +1,16 @@
+{
+  "schema": "https://agentbounties.org/schemas/mcp-interop-manifest.v1.json",
+  "network": "WRONG_base-mainnet",
+  "chain_id": 9453,
+  "asset": "WRONG_USDC",
+  "token": "WRONG_0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "deployment_status": "WRONG_active",
+  "api_base": "https://wrong.example.com",
+  "supported_transports": [
+    "wrong"
+  ],
+  "mcp_version": "WRONG_2024-11-05",
+  "required_tools": [
+    "wrong"
+  ]
+}
