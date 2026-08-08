@@ -1,0 +1,21 @@
+{
+  "schema_version": "agent-bounties/hermes-fixture-v1",
+  "state": "claimable",
+  "verified_claimable_bounties": [
+    {
+      "contract": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+      "title": "Example claimable bounty",
+      "status": "claimable",
+      "verification_ready": true,
+      "source_issue_number": 335,
+      "solver_reward_minor": 2000000,
+      "claim_bond_minor": 10000
+    }
+  ],
+  "funding_candidates": [],
+  "next_action": {
+    "action": "call_agent_native_claim",
+    "bounty_contract": "0x61679a2658f75e957d21d4da6122876ae6ddbf7d",
+    "reason": "exactly_one_verified_claimable_bounty"
+  }
+}

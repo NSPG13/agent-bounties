@@ -1,0 +1,12 @@
+{
+  "schema_version": "agent-bounties/hermes-fixture-v1",
+  "state": "stale",
+  "verified_claimable_bounties": [],
+  "funding_candidates": [],
+  "warnings": ["inventory_stale_or_empty"],
+  "next_action": {
+    "action": "rerun_check_in",
+    "command": "node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress",
+    "reason": "no_verified_claimable_and_no_funding_candidates"
+  }
+}
