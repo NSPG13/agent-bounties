@@ -170,3 +170,36 @@ the version-specific indexer's database heartbeat is successful or caught up,
 no more than 90 seconds old, error-free, and within 20 blocks of the API's safe
 block. A feature flag by itself cannot satisfy it. Relay, gas-sponsorship, and
 final R4 release-evidence gates remain false.
+
+## Entrant-Wallet Relay Gate
+
+Gas sponsorship for multiple competitors uses the additive
+`OpenCompetitionEntrantWalletV1`; a generic keeper cannot relay for arbitrary
+EOAs because the frozen bounty records `msg.sender` as solver. This path does
+not change or redeploy the existing bounty factory.
+
+Freeze and review the entrant wallet and its deterministic factory separately:
+
+```text
+python scripts/build_open_competition_entrant_wallet_bundle.py \
+  --network base-sepolia \
+  --output target/open-competition-entrant-wallet/base-sepolia-deployment.json
+
+forge test --root contracts/base-escrow \
+  --match-contract OpenCompetitionEntrantWalletV1Test --fuzz-runs 1000
+```
+
+The manifest must pin the existing competition factory and native USDC, the
+entrant implementation/factory/clone runtimes, deterministic deployer runtime,
+compiler settings, clean git tree, and default-off activation fields. Rehearse
+with separate ephemeral owner, delegate, keeper, creator, and competitor
+actors. Commit and reveal must be relayed by the keeper while the entrant
+wallet holds zero ETH; the commit transport must contain no reveal secret.
+Record a passing settlement and a losing-bond recovery, exact event topics,
+safe-block receipt hashes, gas payer and cost, wallet and escrow USDC deltas,
+nonces, policy hash/version, verifier runtime/profile hashes, and source tree.
+
+Any entrant wallet, factory, planner, typed-data schema, or relay-byte change
+invalidates that rehearsal. Do not set hosted relay or gas-sponsorship gates
+true until the secret-free evidence is published, audited, replayed on an
+exact mainnet fork, and covered by the required independent contract review.
