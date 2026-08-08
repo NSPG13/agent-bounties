@@ -310,6 +310,18 @@ The audit must complete before setting the entrant release-manifest environment
 value or enabling the operator-only relay canary. It is still not evidence of a
 working hosted relay or public readiness.
 
+After the deployment audit passes, copy that exact redacted audit to
+`deployments/open-competition-entrant-wallet-v1-base-mainnet.json` and commit
+it with no private keys, signatures, salts, or recovery envelopes. The Render
+controller accepts only its pinned factory, implementation, competition
+factory, token, runtime hashes, safe deployment assertions, and
+`mainnet_canary_not_ready_to_earn` state. A manual recovery dispatch may then
+set `open_competition_entrant_relay_canary=true`; this enables only the
+operator-authenticated relay canary. Recovery relay, public creation, public
+commitments, gas-sponsorship readiness, and public inventory remain false.
+Dispatch the controller again with the canary input false after evidence has
+been reconciled.
+
 Any entrant wallet, factory, planner, typed-data schema, or relay-byte change
 invalidates that rehearsal. Do not set hosted relay or gas-sponsorship gates
 true until the secret-free evidence is published, audited, replayed on an

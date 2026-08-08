@@ -37,6 +37,26 @@ OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
 OPEN_COMPETITION_RELEASE_MANIFEST_PATH = Path(
     "deployments/open-competition-v1-base-mainnet.json"
 )
+OPEN_COMPETITION_ENTRANT_RELEASE_AUDIT_PATH = Path(
+    "deployments/open-competition-entrant-wallet-v1-base-mainnet.json"
+)
+OPEN_COMPETITION_ENTRANT_FACTORY = "0x9b92a65a42de770157f30dd75f44a3136f2cda79"
+OPEN_COMPETITION_ENTRANT_IMPLEMENTATION = (
+    "0xd7890aa6c4d4c981c246a05576a6fc689255923c"
+)
+OPEN_COMPETITION_FACTORY = "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
+BASE_MAINNET_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+OPEN_COMPETITION_ENTRANT_RUNTIME_HASHES = {
+    "factory_runtime_code_hash": (
+        "0xa0596a53e2f4685d104c2f24176307edfcb4fe8f0fd86162378347996c8f3c40"
+    ),
+    "implementation_runtime_code_hash": (
+        "0xd1789de47b6c956b090f4fcf693361ef93ad4aeeec74ddc359bdcf73cb1ea998"
+    ),
+    "clone_runtime_code_hash": (
+        "0xe94f67382a2692b2ebe7f71ab4163ae0c9c16bded92d45695454deed927b01d4"
+    ),
+}
 HOSTED_BASE_MAINNET_RPC_URL = "https://base.drpc.org"
 OPEN_COMPETITION_WORKER_ENVIRONMENT = {
     "APP_PACKAGE": "worker",
@@ -604,6 +624,9 @@ def public_environment_values(
 
 def open_competition_shared_environment(
     manifest_path: Path = OPEN_COMPETITION_RELEASE_MANIFEST_PATH,
+    entrant_release_audit_path: Path = OPEN_COMPETITION_ENTRANT_RELEASE_AUDIT_PATH,
+    *,
+    entrant_relay_canary_enabled: bool = False,
 ) -> dict[str, str]:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -698,6 +721,78 @@ def open_competition_shared_environment(
     }
     values.update({key: "false" for key in activation_fields})
     values["BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE"] = "true"
+    values.update(
+        open_competition_entrant_environment(
+            entrant_release_audit_path,
+            canary_enabled=entrant_relay_canary_enabled,
+        )
+    )
+    return values
+
+
+def open_competition_entrant_environment(
+    audit_path: Path,
+    *,
+    canary_enabled: bool,
+) -> dict[str, str]:
+    values = {
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED": (
+            "true" if canary_enabled else "false"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED": "false",
+    }
+    if not audit_path.exists():
+        if canary_enabled:
+            raise RecoveryError(
+                "Open Competition entrant relay canary requires a deployment audit"
+            )
+        return values
+    try:
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RecoveryError(
+            f"Open Competition entrant deployment audit is unavailable: {redact(str(error))}"
+        ) from None
+    if not isinstance(audit, dict):
+        raise RecoveryError("Open Competition entrant deployment audit must be an object")
+    if (
+        audit.get("schema_version")
+        != "agent-bounties/open-competition-entrant-wallet-mainnet-deployment-audit-v1"
+        or audit.get("network") != "base-mainnet"
+        or audit.get("chain_id") != 8453
+        or audit.get("passed") is not True
+    ):
+        raise RecoveryError("Open Competition entrant deployment audit identity is invalid")
+    assertions = audit.get("assertions")
+    if (
+        not isinstance(assertions, dict)
+        or not assertions
+        or not all(value is True for value in assertions.values())
+        or assertions.get("public_activation_remains_disabled") is not True
+    ):
+        raise RecoveryError("Open Competition entrant deployment assertions are incomplete")
+    release = audit.get("release_manifest")
+    if not isinstance(release, dict):
+        raise RecoveryError("Open Competition entrant release manifest is missing")
+    expected_identity = {
+        "schema_version": "agent-bounties/open-competition-entrant-wallet-release-v1",
+        "protocol_version": "agent-bounties/open-competition-entrant-wallet-v1",
+        "network": "base-mainnet",
+        "chain_id": 8453,
+        "deployment_state": "mainnet_canary_not_ready_to_earn",
+        "factory_contract": OPEN_COMPETITION_ENTRANT_FACTORY,
+        "implementation_contract": OPEN_COMPETITION_ENTRANT_IMPLEMENTATION,
+        "competition_factory": OPEN_COMPETITION_FACTORY,
+        "settlement_token": BASE_MAINNET_USDC,
+        **OPEN_COMPETITION_ENTRANT_RUNTIME_HASHES,
+    }
+    if any(release.get(key) != value for key, value in expected_identity.items()):
+        raise RecoveryError("Open Competition entrant release identity is invalid")
+    if not isinstance(release.get("deployment_block"), int) or release["deployment_block"] <= 0:
+        raise RecoveryError("Open Competition entrant deployment block is invalid")
+    values[
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_WALLET_RELEASE_MANIFEST_JSON"
+    ] = json.dumps(release, ensure_ascii=False, separators=(",", ":"))
     return values
 
 
@@ -1923,6 +2018,7 @@ def deploy(
     neynar_bot_username: str | None = None,
     base_mainnet_leaderboard_reward_contract: str | None = None,
     base_sepolia_leaderboard_reward_contract: str | None = None,
+    open_competition_entrant_relay_canary_enabled: bool = False,
 ) -> dict[str, Any]:
     deploy_mode = validate_deploy_mode(deploy_mode)
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
@@ -1978,7 +2074,9 @@ def deploy(
             raise RecoveryError(
                 f"required Render environment group is not linked to {spec.name}"
             )
-    desired_open_competition_environment = open_competition_shared_environment()
+    desired_open_competition_environment = open_competition_shared_environment(
+        entrant_relay_canary_enabled=open_competition_entrant_relay_canary_enabled
+    )
     reconciled_open_competition_environment = []
     open_competition_environment_changed = False
     for key, value in desired_open_competition_environment.items():
@@ -2267,6 +2365,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-mainnet-leaderboard-reward-contract")
     parser.add_argument("--base-sepolia-leaderboard-reward-contract")
+    parser.add_argument(
+        "--enable-open-competition-entrant-relay-canary",
+        action="store_true",
+        help="Enable only the operator-authenticated entrant relay canary.",
+    )
     parser.add_argument("--deploy-timeout-seconds", type=float, default=2400)
     parser.add_argument("--health-timeout-seconds", type=float, default=300)
     parser.add_argument("--poll-seconds", type=float, default=10)
@@ -2328,6 +2431,9 @@ def main() -> int:
             ),
             base_sepolia_leaderboard_reward_contract=(
                 args.base_sepolia_leaderboard_reward_contract
+            ),
+            open_competition_entrant_relay_canary_enabled=(
+                args.enable_open_competition_entrant_relay_canary
             ),
         )
         evidence.update(result)
