@@ -1,0 +1,42 @@
+[
+  {
+    "scenario": "ready-to-earn",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "sign_claim_transaction",
+    "blocker": null
+  },
+  {
+    "scenario": "stale",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Claim is stale"
+  },
+  {
+    "scenario": "malformed",
+    "reward": "2000000",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "1990000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Claim is malformed"
+  },
+  {
+    "scenario": "unfunded",
+    "reward": "0",
+    "refundable_bond": "10000",
+    "external_spend": "0",
+    "gross_cash_margin": "-10000",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Bounty is unfunded"
+  }
+]
