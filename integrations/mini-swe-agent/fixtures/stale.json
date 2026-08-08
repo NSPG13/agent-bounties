@@ -1,0 +1,18 @@
+{
+  "snapshot_status": "stale",
+  "observed_at": "2026-07-01T00:00:00Z",
+  "opportunities": [
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000dd",
+      "status": "claimable",
+      "gross_cash_margin": "5000000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/4",
+          "benchmark": {"engine": "sandboxed_regression_v1"},
+          "discovery_source": "canonical-inventory"
+        }
+      }
+    }
+  ]
+}
