@@ -114,7 +114,16 @@ assert.strictEqual(protocol.default_verification.mode, "signed_quorum");
 assert.strictEqual(protocol.default_verification.product_label, "single_verifier");
 assert.strictEqual(protocol.default_verification.verifiers.length, 1);
 assert.strictEqual(protocol.default_verification.threshold, 1);
-assert.strictEqual(protocol.deterministic_modules.leading_zero_work_v1.usage, "protocol_canary_only");
+assert.strictEqual(
+  protocol.deterministic_modules.leading_zero_work_v1.usage,
+  "public_open_competition_profile_only",
+);
+for (const unsupportedKind of ["ordinary code", "design", "writing", "research", "human identity"]) {
+  assert(
+    protocol.deterministic_modules.leading_zero_work_v1.scope_notice.includes(unsupportedKind),
+    `public work verifier scope must exclude ${unsupportedKind}`,
+  );
+}
 assert.strictEqual(
   protocol.deterministic_modules.leading_zero_work_v1.benchmark.engine,
   "leading_zero_work_v1",
@@ -310,7 +319,10 @@ async function testDeterministicPostingDefaults() {
     protocol.deterministic_modules.leading_zero_work_v1.benchmark,
   );
   assert.strictEqual(terms.verification_policy.module_id, "leading_zero_work_v1");
-  assert.strictEqual(terms.verification_policy.settlement_scope, "protocol_canary_only");
+  assert.strictEqual(
+    terms.verification_policy.settlement_scope,
+    "public_open_competition_profile_only",
+  );
 
   const account = "0x2222222222222222222222222222222222222222";
   const bountyContract = "0x1111111111111111111111111111111111111111";
