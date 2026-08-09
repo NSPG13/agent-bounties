@@ -1,0 +1,10 @@
+{
+  "state": "stale",
+  "bounty_id": "888",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "1.50 USDC",
+  "network": "Base",
+  "verification_ready": false,
+  "next_action": "This bounty has expired. Check the canonical feed at https://api.agentbounties.app/v1/base/autonomous-bounties/feed for current claimable inventory.",
+  "description": "Expired bounty — claim deadline has passed. Bond forfeited if applicable."
+}

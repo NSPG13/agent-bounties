@@ -1,0 +1,11 @@
+{
+  "state": "claimable",
+  "bounty_id": "772",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "2.00 USDC",
+  "network": "Base",
+  "verification_ready": true,
+  "next_action": "/claim #772 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+  "benchmark": "benchmarks/direct-growth-v2/hermes-integration/check.py",
+  "description": "Add a verified Hermes earning integration — funded and claimable on Base mainnet."
+}
