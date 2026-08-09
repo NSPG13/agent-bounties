@@ -242,6 +242,7 @@ def main() -> int:
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
         ["--check", "scripts/open-competition-v1-signer.js"],
         ["scripts/test-open-competition-v1-signer-console.js"],
+        ["scripts/test-create-competition-flow.js"],
         ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")

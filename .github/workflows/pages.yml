@@ -18,6 +18,7 @@ on:
       - "scripts/test-x402-browser.js"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
   push:
     branches: [main]
@@ -37,6 +38,7 @@ on:
       - "scripts/test-x402-browser.js"
       - "scripts/test-homepage-bounty-wiring.py"
       - "scripts/test-homepage-bounty-flow.js"
+      - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
   workflow_dispatch:
 
@@ -79,6 +81,7 @@ jobs:
       - run: python scripts/check-site.py
       - run: python scripts/test-homepage-bounty-wiring.py
       - run: node scripts/test-homepage-bounty-flow.js
+      - run: node scripts/test-create-competition-flow.js
       - run: node scripts/test-ai-bounty-handoff.js
       - name: Check simplified public scripts
         run: |

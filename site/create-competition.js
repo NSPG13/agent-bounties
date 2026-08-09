@@ -126,11 +126,11 @@
 
   async function createCompetition(event) {
     event.preventDefault();
+    const form = event.currentTarget;
     if (!state.account || !state.profile) throw new Error("Connect the creator wallet first.");
     if (window.AgentBountiesLegal) {
       await window.AgentBountiesLegal.requireAcceptance({ action: "post_bounty", walletAddress: state.account, scope: document.body });
     }
-    const form = event.currentTarget;
     const solverReward = usdcBaseUnits(form.elements.solverReward.value, "Solver reward");
     const verifierReward = usdcBaseUnits(form.elements.verifierReward.value, "Verifier reward");
     const competitionWindow = Number(form.elements.competitionHours.value) * 3_600;
