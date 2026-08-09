@@ -161,15 +161,24 @@ Python SDK, and TypeScript SDK behavior. If a problem appears, disable hosted
 creation and commitments. Do not describe an immutable deployment as rolled
 back, and do not block existing recovery actions.
 
-The current Base mainnet release evidence is published in
+Public activation also records a canonical `public_activation_block`. Hosted
+inventory excludes competitions created before that block, including the
+hidden canary. The deployment controller accepts an active manifest only when
+the catalog profile is active and public, every hosted gate is true, the
+test/rehearsal/fork evidence remains pinned, and an independent review record
+binds the reviewed source commit plus exact factory and implementation runtime
+hashes. Runtime monitoring is never pre-attested by the manifest; a fresh
+versioned indexer heartbeat must still pass at request time.
+
+The Base mainnet release evidence is published in
 `deployments/open-competition-v1-base-mainnet.json`. Its hidden canary settled
-canonically and conserved escrow at a safe block. The hosted manifest remains
-`mainnet_canary_not_ready_to_earn`; public creation, commitments, and inventory
-stay disabled. The monitoring gate is configured but becomes ready only when
+canonically and conserved escrow at a safe block. The monitoring gate becomes
+ready only when
 the version-specific indexer's database heartbeat is successful or caught up,
 no more than 90 seconds old, error-free, and within 20 blocks of the API's safe
-block. A feature flag by itself cannot satisfy it. Relay, gas-sponsorship, and
-final R4 release-evidence gates remain false.
+block. A feature flag by itself cannot satisfy it. When activation is disabled,
+new creation and commitments fail closed while reveal, expiry, refunds, and
+bond withdrawals remain recoverable.
 
 ## Entrant-Wallet Relay Gate
 

@@ -7,6 +7,12 @@ solution, and the first valid reveal settles atomically.
 It does not mutate or reinterpret autonomous-v1, standing-meta V2/V3, or
 standing-meta V4 contracts.
 
+For hosted discovery, this is the primary mode only when every task commitment
+exactly matches an active catalog profile. The initial public profile is the
+existing immutable 16-bit leading-zero verifier. That narrow profile makes the
+ordering, recovery, and USDC settlement path usable without implying that V1
+can judge ordinary software, writing, design, or research.
+
 ## Meaning Of "First"
 
 The contract orders completed attempts by `submission_sequence`, an immutable
@@ -86,6 +92,13 @@ rule. It needs an ordered adjudication queue in which no later accepted entry
 can settle until every earlier reveal is finally rejected, timed out, or
 appealed. That preserves ordering but adds latency and is outside V1.
 
+"Catalog-pinned" therefore means all of these values match one reviewed row:
+network and chain ID, verifier address, immutable runtime hash, configuration,
+benchmark hash, evidence-schema hash, and release state. A factory-created
+module, matching interface, or familiar name is insufficient. Proxies,
+unknown runtimes, ambiguous duplicate profiles, and stale release evidence are
+excluded from public inventory.
+
 ## Standing Meta Compatibility
 
 Standing-meta V4 remains `vrf_assigned_child`, not
@@ -112,6 +125,7 @@ expose one of `exclusive_claim`, `first_valid_submission`, or
 The intended operations are:
 
 - `list_open_competition_verifiers`
+- `list_open_competition_events`
 - `prepare_open_competition_creation`
 - `get_open_competition_readiness`
 - `prepare_open_competition_commit`
@@ -180,6 +194,16 @@ relay support all pass.
 
 Only confirmed canonical `BountySettled`, including the winner and
 `submission_sequence`, proves payment.
+
+The public website exposes the same bounded paths:
+
+- `create-competition.html` prepares and submits the exact USDC approval and
+  factory call for the initial profile;
+- `competition.html` generates the salt locally, downloads the recovery
+  envelope, submits the exact bond and commitment calls, updates the envelope
+  from canonical indexed state, and later submits the reveal; and
+- the Bounty Board labels the mode `Open competition` and never offers its
+  generic exclusive-claim action.
 
 ## Gas-Sponsored Entrant Accounts
 

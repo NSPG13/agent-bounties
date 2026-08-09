@@ -69,6 +69,8 @@ envVarGroups:
         value: "false"
       - key: BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED
         value: "false"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK
+        value: "0"
 
   - name: agent-bounties-x402-relayer
     envVars:

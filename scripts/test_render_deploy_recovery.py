@@ -848,9 +848,9 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             },
         )
 
-    def test_open_competition_shared_environment_is_hidden_canary_only(self) -> None:
+    def test_open_competition_shared_environment_is_fail_closed_hidden_canary(self) -> None:
         values = recovery.open_competition_shared_environment()
-        self.assertEqual(len(values), 12)
+        self.assertEqual(len(values), 13)
         self.assertEqual(
             values["BASE_MAINNET_RPC_URL"], recovery.HOSTED_BASE_MAINNET_RPC_URL
         )
@@ -864,8 +864,16 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             release["deployment_state"], "mainnet_canary_not_ready_to_earn"
         )
         self.assertFalse(catalog["profiles"][0]["public_inventory_eligible"])
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"],
+            "0",
+        )
         for key, value in values.items():
-            if key.endswith("_JSON") or key == "BASE_MAINNET_RPC_URL":
+            if (
+                key.endswith("_JSON")
+                or key == "BASE_MAINNET_RPC_URL"
+                or key.endswith("_PUBLIC_ACTIVATION_BLOCK")
+            ):
                 continue
             expected = (
                 "true"
@@ -942,17 +950,95 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                     canary_enabled=False,
                 )
 
-    def test_open_competition_shared_environment_rejects_activation(self) -> None:
+    def test_open_competition_shared_environment_accepts_exact_reviewed_activation(self) -> None:
         source = recovery.json.loads(
             recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
                 encoding="utf-8"
             )
         )
-        source["hosted_activation"]["public_creation_enabled"] = True
+        source["deployment_state"] = "active_ready_to_earn"
+        source["release_manifest"]["deployment_state"] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "deployment_state"
+        ] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "public_inventory_eligible"
+        ] = True
+        source["release_evidence"]["independent_review"] = {
+            "status": "passed",
+            "review_url": "https://github.com/NSPG13/agent-bounties/pull/999",
+            "reviewed_source_commit": source["source_commit"],
+            "factory_runtime_code_hash": source["release_manifest"][
+                "factory_runtime_code_hash"
+            ],
+            "implementation_runtime_code_hash": source["release_manifest"][
+                "implementation_runtime_code_hash"
+            ],
+        }
+        source["hosted_activation"].update(
+            {
+                "public_creation_enabled": True,
+                "public_commitments_enabled": True,
+                "public_inventory_eligible": True,
+                "relay_support_available": True,
+                "gas_sponsorship_available": True,
+                "r4_release_evidence_complete": True,
+                "public_activation_block": source["release_manifest"][
+                    "deployment_block"
+                ]
+                + 1,
+            }
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "release.json"
             path.write_text(recovery.json.dumps(source), encoding="utf-8")
-            with self.assertRaisesRegex(recovery.RecoveryError, "requires.*false"):
+            values = recovery.open_competition_shared_environment(path)
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED"], "true"
+        )
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED"],
+            "true",
+        )
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"],
+            str(source["hosted_activation"]["public_activation_block"]),
+        )
+
+    def test_open_competition_shared_environment_rejects_unreviewed_activation(self) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["deployment_state"] = "active_ready_to_earn"
+        source["release_manifest"]["deployment_state"] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "deployment_state"
+        ] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "public_inventory_eligible"
+        ] = True
+        source["hosted_activation"].update(
+            {
+                "public_creation_enabled": True,
+                "public_commitments_enabled": True,
+                "public_inventory_eligible": True,
+                "relay_support_available": True,
+                "gas_sponsorship_available": True,
+                "r4_release_evidence_complete": True,
+                "public_activation_block": source["release_manifest"][
+                    "deployment_block"
+                ]
+                + 1,
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(
+                recovery.RecoveryError, "independent-review evidence"
+            ):
                 recovery.open_competition_shared_environment(path)
 
     def test_open_competition_shared_environment_rejects_unconfigured_monitoring(

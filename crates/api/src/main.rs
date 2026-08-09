@@ -64,16 +64,17 @@ use chain_base::{
     EthSendRawTransactionRequest, EvmLog, EvmTransactionIntent, OpenCompetitionActionPlan,
     OpenCompetitionAuthorizationSignature, OpenCompetitionCommitmentEnvelope,
     OpenCompetitionCreateParams, OpenCompetitionCreationPlan, OpenCompetitionCreationRequest,
-    OpenCompetitionEntrantAction, OpenCompetitionEntrantActionPlan,
+    OpenCompetitionDeploymentState, OpenCompetitionEntrantAction, OpenCompetitionEntrantActionPlan,
     OpenCompetitionEntrantWalletReleaseManifest, OpenCompetitionEntrantWalletSafeState,
-    OpenCompetitionFundingAuthorization, OpenCompetitionOffchainGates, OpenCompetitionOperation,
-    OpenCompetitionReadinessReport, OpenCompetitionReleaseManifest, OpenCompetitionSafeState,
-    OpenCompetitionStateQuery, OpenCompetitionVerifierCatalog, OpenCompetitionVerifierProfile,
-    PrepareAgentToEarnInput, RpcTransactionReceipt, SolverLeaderboardAwardSafeObservation,
-    StandingMetaV2ChildPreparationPlan, StandingMetaV2ChildPreparationRequest,
-    StandingMetaV4ActionPlan, StandingMetaV4EconomicsEvidence, StandingMetaV4Operation,
-    StandingMetaV4ReadinessEvidence, StandingMetaV4ReadinessReport,
-    AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION, AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
+    OpenCompetitionEvent, OpenCompetitionFundingAuthorization, OpenCompetitionOffchainGates,
+    OpenCompetitionOperation, OpenCompetitionReadinessReport, OpenCompetitionReleaseManifest,
+    OpenCompetitionSafeState, OpenCompetitionStateQuery, OpenCompetitionVerifierCatalog,
+    OpenCompetitionVerifierProfile, PrepareAgentToEarnInput, RpcTransactionReceipt,
+    SolverLeaderboardAwardSafeObservation, StandingMetaV2ChildPreparationPlan,
+    StandingMetaV2ChildPreparationRequest, StandingMetaV4ActionPlan,
+    StandingMetaV4EconomicsEvidence, StandingMetaV4Operation, StandingMetaV4ReadinessEvidence,
+    StandingMetaV4ReadinessReport, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
+    AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use cloud_agent::{
@@ -123,8 +124,9 @@ use github_app::{
 use hmac::{Hmac, Mac};
 use opportunities::{
     apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
-    render_opportunity_feeds, unfunded_opportunity, OpportunityItem, OpportunityProjectionResponse,
-    OpportunityQuery, OpportunitySourceStatus, OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
+    open_competition_opportunities, render_opportunity_feeds, unfunded_opportunity,
+    OpportunityItem, OpportunityProjectionResponse, OpportunityQuery, OpportunitySourceStatus,
+    OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
 };
 use payments_stripe::{
     apply_checkout_payment_method_configuration, execute_stripe_request, verify_webhook_signature,
@@ -206,6 +208,7 @@ use worker::{
         submit_unfunded_bounty_solution,
         prepare_agent_wallet_to_earn,
         list_open_competition_verifiers,
+        list_open_competition_events,
         prepare_open_competition_creation,
         prepare_open_competition_authorized_creation,
         get_open_competition_state,
@@ -1202,6 +1205,13 @@ struct OpenCompetitionVerifierQuery {
     network: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionEventsQuery {
+    network: Option<String>,
+    bounty_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct OpenCompetitionCreateParamsRequest {
@@ -1953,6 +1963,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/open-competition-v1/verifiers",
             get(list_open_competition_verifiers),
+        )
+        .route(
+            "/v1/base/open-competition-v1/events",
+            get(list_open_competition_events),
         )
         .route(
             "/v1/base/open-competition-v1/creation-preparation",
@@ -3659,6 +3673,7 @@ async fn build_opportunity_projection(
     )?;
 
     let api = state.public_base_url.trim_end_matches('/');
+    let now = Utc::now();
     let mut items = Vec::<OpportunityItem>::new();
     let mut source_statuses = Vec::<OpportunitySourceStatus>::new();
 
@@ -3725,7 +3740,7 @@ async fn build_opportunity_projection(
     });
     items.extend(legacy_items);
 
-    let (canonical_items, canonical_error) =
+    let (mut canonical_items, autonomous_error) =
         match load_autonomous_bounty_feed(state, network, false).await {
             Ok(feed) => (
                 feed.iter()
@@ -3738,18 +3753,34 @@ async fn build_opportunity_projection(
                 Some("canonical_read_model_unavailable".to_string()),
             ),
         };
+    let (open_competition_items, open_competition_error) =
+        match load_public_open_competition_opportunities(state, network, api, now).await {
+            Ok(items) => (items, None),
+            Err(_) => (
+                Vec::new(),
+                Some("open_competition_read_model_unavailable".to_string()),
+            ),
+        };
+    canonical_items.extend(open_competition_items);
+    let canonical_error = match (autonomous_error, open_competition_error) {
+        (None, None) => None,
+        (Some(error), None) | (None, Some(error)) => Some(error),
+        (Some(left), Some(right)) => Some(format!("{left}+{right}")),
+    };
     source_statuses.push(OpportunitySourceStatus {
         source_type: "canonical_base".to_string(),
         available: canonical_error.is_none(),
-        authoritative_urls: vec![format!(
-            "{api}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=false"
-        )],
+        authoritative_urls: vec![
+            format!(
+                "{api}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=false"
+            ),
+            format!("{api}/v1/base/open-competition-v1/events?network={network}"),
+        ],
         item_count: canonical_items.len(),
         error: canonical_error,
     });
     items.extend(canonical_items);
 
-    let now = Utc::now();
     let items = apply_opportunity_query(items, &query, view, now);
     Ok(OpportunityProjectionResponse {
         schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
@@ -3761,6 +3792,100 @@ async fn build_opportunity_projection(
         items,
         evidence_boundary: "This endpoint is a read-only projection. Each listed source remains authoritative for its own records; the projection cannot create funding, claims, verification, settlement, or payment evidence. Only confirmed canonical BountySettled proves autonomous-v1 solver payment.".to_string(),
     })
+}
+
+async fn load_public_open_competition_opportunities(
+    state: &SharedState,
+    network: &str,
+    api_base_url: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<OpportunityItem>, StatusCode> {
+    let release = match open_competition_release_from_environment(network) {
+        Ok(release) => release,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if release.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn {
+        return Ok(Vec::new());
+    }
+    let prefix = open_competition_environment_prefix(network)?;
+    let public_activation_block = env::var(format!("{prefix}_PUBLIC_ACTIVATION_BLOCK"))
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .parse::<u64>()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if public_activation_block < release.deployment_block {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    for gate in [
+        "CREATION_ENABLED",
+        "COMMITMENTS_ENABLED",
+        "GAS_SPONSORSHIP_AVAILABLE",
+        "RELAY_SUPPORT_AVAILABLE",
+        "R4_EVIDENCE_COMPLETE",
+        "MONITORING_ACTIVE",
+    ] {
+        if !env_flag(&format!("{prefix}_{gate}")) {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+    if state.store.is_none()
+        || !state.x402_relayer.enabled
+        || state.x402_relayer.relayer.is_none()
+        || open_competition_entrant_release_from_environment(network).is_err()
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let catalog = open_competition_verifier_catalog_from_environment(network)?;
+    let [profile] = catalog.profiles.as_slice() else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    if !profile.public_inventory_eligible
+        || profile.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let safe_block = tokio::time::timeout(
+        Duration::from_secs(12),
+        fetch_safe_block_identity(&rpc_url, 92),
+    )
+    .await
+    .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if safe_block.number < public_activation_block {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let heartbeat = store
+        .get_base_indexer_heartbeat(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if !open_competition_monitoring_is_fresh(&heartbeat, safe_block.number, now) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let events: Vec<OpenCompetitionEvent> = store
+        .list_open_competition_events(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let website_base_url =
+        legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
+    open_competition_opportunities(
+        &events,
+        profile,
+        network,
+        api_base_url,
+        &website_base_url,
+        public_activation_block,
+        now,
+    )
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
 #[utoipa::path(
@@ -5476,6 +5601,52 @@ async fn list_open_competition_verifiers(
 ) -> Result<Json<OpenCompetitionVerifierCatalog>, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
     open_competition_verifier_catalog_from_environment(network).map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/open-competition-v1/events",
+    params(
+        ("network" = Option<String>, Query, description = "base-mainnet or base-sepolia; defaults to base-mainnet"),
+        ("bounty_id" = Option<String>, Query, description = "optional canonical bytes32 competition id")
+    ),
+    responses(
+        (status = 200, description = "Version-specific canonical Open Competition events indexed from the frozen factory deployment block"),
+        (status = 400, description = "Unknown network or malformed bounty id"),
+        (status = 503, description = "Release manifest or canonical read model unavailable")
+    )
+)]
+async fn list_open_competition_events(
+    State(state): State<SharedState>,
+    Query(query): Query<OpenCompetitionEventsQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let release = open_competition_release_from_environment(network)?;
+    let bounty_id = query
+        .bounty_id
+        .as_deref()
+        .map(|value| normalize_fixed_hex(value, 32))
+        .transpose()?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut events = store
+        .list_open_competition_events(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if let Some(bounty_id) = bounty_id.as_deref() {
+        events.retain(|event| event.bounty_id.eq_ignore_ascii_case(bounty_id));
+    }
+    Ok(Json(serde_json::json!({
+        "schema_version": "agent-bounties/open-competition-v1-events-v1",
+        "protocol_version": "agent-bounties/open-competition-v1",
+        "network": network,
+        "factory_contract": release.factory_contract,
+        "deployment_block": release.deployment_block,
+        "events": events,
+        "evidence_boundary": "These are version-specific canonical events from the configured factory deployment block. A transaction hash or hosted row is not payment; only a confirmed BountySettled event proves solver payment."
+    })))
 }
 
 #[utoipa::path(
@@ -17861,6 +18032,7 @@ mod tests {
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/verifiers"));
+        assert!(paths.contains_key("/v1/base/open-competition-v1/events"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/creation-preparation"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/authorized-creation-preparation"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/state"));
