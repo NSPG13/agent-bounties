@@ -107,6 +107,11 @@ PUBLIC_ENV_SERVICE_NAMES = {
 CLOUD_AGENT_API_SERVICE_NAME = "agent-bounties-api"
 API_RUNTIME_ENVIRONMENT = {
     "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
+    # The hosted relayer applies its own 120% padding after eth_estimateGas.
+    # Relayed Open Competition commits use roughly 420k gas in the frozen
+    # mainnet-fork replay, so the former 300k x402-only cap rejected the exact
+    # canary action before broadcast.
+    "X402_RELAYER_MAX_GAS": "700000",
 }
 CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_ENABLED": "true",

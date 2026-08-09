@@ -644,7 +644,7 @@ impl X402HostedRelayerConfig {
         }
         let min_amount = env_u64("X402_RELAYER_MIN_USDC_BASE_UNITS", 100_000)?;
         let max_amount = env_u64("X402_RELAYER_MAX_USDC_BASE_UNITS", 5_000_000)?;
-        let max_gas = env_u64("X402_RELAYER_MAX_GAS", 300_000)?;
+        let max_gas = env_u64("X402_RELAYER_MAX_GAS", 700_000)?;
         let max_fee_per_gas_wei = env_u128("X402_RELAYER_MAX_FEE_PER_GAS_WEI", 10_000_000_000)?;
         if min_amount == 0 || max_amount < min_amount || max_gas == 0 || max_fee_per_gas_wei == 0 {
             anyhow::bail!("x402 relayer amount, gas, and fee caps must be positive");
@@ -6503,19 +6503,10 @@ async fn process_open_competition_entrant_relay(
         .map_err(map_open_competition_entrant_relay_db_error);
     relay = persisted?;
     release?;
-    if relay.status != OpenCompetitionEntrantRelayStatus::Broadcast {
-        return Ok(relay);
-    }
-    let deadline = Instant::now() + Duration::from_secs(state.x402_relayer.wait_seconds);
-    loop {
-        relay = reconcile_open_competition_entrant_relay(state, relay).await?;
-        if relay.status != OpenCompetitionEntrantRelayStatus::Broadcast
-            || Instant::now() >= deadline
-        {
-            return Ok(relay);
-        }
-        sleep(Duration::from_secs(1)).await;
-    }
+    // Return the durable relay id as soon as the broadcast is persisted. A
+    // Base safe block can take longer than the HTTP gateway timeout, and the
+    // client already polls the status route for canonical confirmation.
+    Ok(relay)
 }
 
 async fn reconcile_open_competition_entrant_relay(
@@ -8394,7 +8385,8 @@ fn x402_relay_error_is_retryable(error: &ChainBaseError) -> bool {
     match error {
         ChainBaseError::InvalidRelayerPrivateKey
         | ChainBaseError::InvalidRelayIntent(_)
-        | ChainBaseError::RelayerChainMismatch { .. } => false,
+        | ChainBaseError::RelayerChainMismatch { .. }
+        | ChainBaseError::RelayerGasLimitExceeded { .. } => false,
         ChainBaseError::RelayerProvider(message) => {
             !message.to_ascii_lowercase().contains("revert")
         }
@@ -14950,6 +14942,19 @@ mod tests {
             validate_open_competition_entrant_relay_receipt(&relay, &high_nonce),
             Err(StatusCode::BAD_GATEWAY)
         );
+    }
+
+    #[test]
+    fn relayer_gas_cap_rejection_requires_configuration_change() {
+        assert!(!x402_relay_error_is_retryable(
+            &ChainBaseError::RelayerGasLimitExceeded {
+                estimated: 565_940,
+                maximum: 300_000,
+            }
+        ));
+        assert!(x402_relay_error_is_retryable(
+            &ChainBaseError::RelayerProvider("temporary RPC failure".to_string())
+        ));
     }
 
     #[tokio::test]

@@ -942,10 +942,13 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             ],
         )
 
-    def test_api_runtime_environment_enables_social_mention_drafts(self) -> None:
+    def test_api_runtime_environment_preserves_bounded_relay_capacity(self) -> None:
         self.assertEqual(
             recovery.API_RUNTIME_ENVIRONMENT,
-            {"AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true"},
+            {
+                "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
+                "X402_RELAYER_MAX_GAS": "700000",
+            },
         )
 
     def test_leaderboard_environment_requires_exact_addresses(self) -> None:
