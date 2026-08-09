@@ -848,7 +848,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             },
         )
 
-    def test_open_competition_shared_environment_is_fail_closed_hidden_canary(self) -> None:
+    def test_open_competition_shared_environment_matches_reviewed_public_activation(self) -> None:
         values = recovery.open_competition_shared_environment()
         self.assertEqual(len(values), 13)
         self.assertEqual(
@@ -860,14 +860,16 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         catalog = recovery.json.loads(
             values["BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON"]
         )
-        self.assertEqual(
-            release["deployment_state"], "mainnet_canary_not_ready_to_earn"
-        )
-        self.assertFalse(catalog["profiles"][0]["public_inventory_eligible"])
+        self.assertEqual(release["deployment_state"], "active_ready_to_earn")
+        self.assertTrue(catalog["profiles"][0]["public_inventory_eligible"])
         self.assertEqual(
             values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"],
-            "0",
+            "49759875",
         )
+        disabled = {
+            "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED",
+        }
         for key, value in values.items():
             if (
                 key.endswith("_JSON")
@@ -875,11 +877,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 or key.endswith("_PUBLIC_ACTIVATION_BLOCK")
             ):
                 continue
-            expected = (
-                "true"
-                if key == "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE"
-                else "false"
-            )
+            expected = "false" if key in disabled else "true"
             self.assertEqual(value, expected)
 
     def test_open_competition_entrant_canary_requires_exact_deployment_audit(
@@ -1011,6 +1009,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        source["release_evidence"]["independent_review"]["status"] = "pending"
         source["deployment_state"] = "active_ready_to_earn"
         source["release_manifest"]["deployment_state"] = "active_ready_to_earn"
         source["verifier_catalog"]["profiles"][0][

@@ -22,8 +22,8 @@
       "label": "16-bit scope-bound work proof",
       "contract": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
       "difficulty_bits": 16,
-      "usage": "protocol_canary_only",
-      "scope_notice": "This module verifies only the locked 16-bit scope-bound work proof. It does not evaluate task output, acceptance criteria, GitHub CI, or artifact quality.",
+      "usage": "public_open_competition_profile_only",
+      "scope_notice": "This public profile verifies only the locked 16-bit scope-bound hash-work predicate. It does not evaluate ordinary code, design, writing, research, acceptance-criteria quality, or human identity.",
       "benchmark": {
         "engine": "leading_zero_work_v1",
         "difficulty_bits": 16,

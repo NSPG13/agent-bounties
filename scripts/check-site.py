@@ -1001,8 +1001,18 @@ def main() -> int:
         "verifier_module": default_module.get("contract"),
         "reference_command": "cargo run -p cli -- autonomous-mine-work-proof",
     }
-    if default_module.get("usage") != "protocol_canary_only":
-        fail("default work verifier must be scoped to protocol canaries")
+    if default_module.get("usage") != "public_open_competition_profile_only":
+        fail("default work verifier must be scoped to the public Open Competition profile")
+    scope_notice = default_module.get("scope_notice", "")
+    for unsupported_kind in (
+        "ordinary code",
+        "design",
+        "writing",
+        "research",
+        "human identity",
+    ):
+        if unsupported_kind not in scope_notice:
+            fail(f"public work verifier scope notice must exclude {unsupported_kind}")
     if default_module.get("benchmark") != expected_work_benchmark:
         fail("default work verifier benchmark does not match its exact contract semantics")
     if '{"engine":"github_ci"' in pages["post.html"]:
