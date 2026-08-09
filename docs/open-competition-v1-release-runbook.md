@@ -348,15 +348,20 @@ python scripts/run_open_competition_entrant_mainnet_canary.py relay \
   --wallet-funding-tx 0x...
 ```
 
-The creator starts with exactly 0.10 USDC. The hidden bounty escrows 0.08 USDC
-for the solver and 0.01 USDC for the verifier, while the separate entrant
-wallet receives the remaining 0.01 USDC bond. The runner sends commitment-only
-material during commit preparation, keeps the recovery envelope encrypted with
-Windows DPAPI, signs the exact hosted EIP-712 plan locally, requires both relay
-receipts to become canonical at a Base safe block, and accepts payment evidence
-only when the reveal relay records `BountySettled`. Its redacted evidence must
-reconcile the final 0.01/0.09/0.00 USDC creator, entrant-wallet, and bounty
-balances. The canary-only verifier remains ineligible for public inventory.
+The runner reserves exactly 0.10 USDC from the creator's starting balance and
+preserves any surplus as an explicitly reconciled baseline. The hidden bounty
+escrows 0.08 USDC for the solver and 0.01 USDC for the verifier, while the
+separate entrant wallet receives the remaining 0.01 USDC bond. The runner sends
+commitment-only material during commit preparation, keeps the recovery envelope
+encrypted with Windows DPAPI, signs the exact hosted EIP-712 plan locally,
+requires both relay receipts to become canonical at a Base safe block, and
+accepts payment evidence only when the reveal relay records `BountySettled`.
+Its redacted evidence must
+reconcile the creator's starting balance and reserved baseline, plus the final
+creator, entrant-wallet, and bounty balances. The verifier reward returns 0.01
+USDC to the creator, the entrant finishes with 0.09 USDC, the bounty finishes
+at zero, and the creator's unrelated surplus remains untouched. The canary-only
+verifier remains ineligible for public inventory.
 
 Any entrant wallet, factory, planner, typed-data schema, or relay-byte change
 invalidates that rehearsal. Do not set hosted relay or gas-sponsorship gates

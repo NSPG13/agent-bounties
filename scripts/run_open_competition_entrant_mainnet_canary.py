@@ -129,6 +129,15 @@ def fail(message: str) -> None:
     raise SystemExit(message)
 
 
+def expected_creator_balances(creator_start_usdc: int) -> tuple[int, int]:
+    """Return the creator balance after setup and after verifier settlement."""
+    if creator_start_usdc < TOTAL_CREATOR_BUDGET:
+        fail("creator needs at least 0.10 USDC for the bounded canary")
+    after_setup = creator_start_usdc - TOTAL_CREATOR_BUDGET
+    after_settlement = after_setup + VERIFIER_REWARD
+    return after_setup, after_settlement
+
+
 def checksum(value: str) -> str:
     try:
         return Web3.to_checksum_address(value)
@@ -233,8 +242,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     entrant_factory = w3.eth.contract(address=checksum(ENTRANT_FACTORY), abi=ENTRANT_FACTORY_ABI)
     creator_usdc = token.functions.balanceOf(creator).call(block_identifier=safe["number"])
     creator_eth = w3.eth.get_balance(creator, block_identifier=safe["number"])
-    if creator_usdc != TOTAL_CREATOR_BUDGET:
-        fail("creator must hold exactly 0.10 USDC before the bounded canary")
+    expected_creator_balances(creator_usdc)
     if creator_eth <= 0:
         fail("creator needs Base ETH for the four setup transactions")
 
@@ -646,6 +654,8 @@ def relay(args: argparse.Namespace) -> dict[str, Any]:
     bounty_contract = w3.eth.contract(address=checksum(setup["bounty"]), abi=BOUNTY_ABI)
     token_contract = w3.eth.contract(address=checksum(USDC), abi=ERC20_ABI)
     block = setup_safe["number"]
+    creator_start_usdc = int(setup.get("preflight_balances", {}).get("creator_usdc", -1))
+    creator_after_setup, creator_after_settlement = expected_creator_balances(creator_start_usdc)
     live_policy = wallet_contract.functions.policy().call(block_identifier=block)
     expected_profile = setup["profile"]
     if (
@@ -674,7 +684,8 @@ def relay(args: argparse.Namespace) -> dict[str, Any]:
         or code_hash(w3, setup["bounty"], block) != minimal_proxy_runtime_hash(COMPETITION_IMPLEMENTATION)
         or token_contract.functions.balanceOf(checksum(setup["wallet"])).call(block_identifier=block) != WALLET_FUNDING
         or token_contract.functions.balanceOf(checksum(setup["bounty"])).call(block_identifier=block) != TARGET
-        or token_contract.functions.balanceOf(checksum(setup["creator"])).call(block_identifier=block) != 0
+        or token_contract.functions.balanceOf(checksum(setup["creator"])).call(block_identifier=block)
+        != creator_after_setup
     ):
         fail("canary setup state or exact USDC allocation mismatch")
 
@@ -740,10 +751,10 @@ def relay(args: argparse.Namespace) -> dict[str, Any]:
         "canonical_payment_proven": reveal_relay["payment_proven"] is True,
         "settled_status": status == 2,
         "winner_is_entrant_wallet": winner == setup["wallet"],
-        "creator_final_usdc": creator_final == VERIFIER_REWARD,
+        "creator_final_usdc": creator_final == creator_after_settlement,
         "wallet_final_usdc": wallet_final == SOLVER_REWARD + ENTRY_BOND,
         "bounty_final_usdc_zero": bounty_final == 0,
-        "escrow_conservation": creator_final + wallet_final + bounty_final == TOTAL_CREATOR_BUDGET,
+        "escrow_conservation": creator_final + wallet_final + bounty_final == creator_start_usdc,
         "public_activation_remains_disabled": setup.get("public_activation") is False,
     }
     if not all(assertions.values()):
@@ -762,7 +773,13 @@ def relay(args: argparse.Namespace) -> dict[str, Any]:
         "commit_relay": {key: commit_relay.get(key) for key in ("id", "transaction_hash", "receipt_block", "receipt_block_hash", "canonical_safe_block", "canonical_safe_block_hash", "canonical_event", "payment_proven")},
         "reveal_relay": {key: reveal_relay.get(key) for key in ("id", "transaction_hash", "receipt_block", "receipt_block_hash", "canonical_safe_block", "canonical_safe_block_hash", "canonical_event", "payment_proven")},
         "proof": {"nonce": nonce, "work_hash": Web3.to_hex(work_hash), "difficulty_bits": 16, "proof_persisted": False},
-        "balances": {"creator_final": creator_final, "entrant_wallet_final": wallet_final, "bounty_final": bounty_final},
+        "balances": {
+            "creator_start": creator_start_usdc,
+            "creator_reserved_baseline": creator_after_setup,
+            "creator_final": creator_final,
+            "entrant_wallet_final": wallet_final,
+            "bounty_final": bounty_final,
+        },
         "assertions": assertions,
         "passed": True,
         "secrets_published": False,

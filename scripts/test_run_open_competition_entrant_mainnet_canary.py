@@ -14,6 +14,20 @@ import run_open_competition_entrant_mainnet_canary as canary  # noqa: E402
 
 
 class OpenCompetitionEntrantMainnetCanaryTests(unittest.TestCase):
+    def test_creator_balance_reconciliation_preserves_surplus(self) -> None:
+        after_setup, after_settlement = canary.expected_creator_balances(788_053)
+        self.assertEqual(after_setup, 688_053)
+        self.assertEqual(after_settlement, 698_053)
+
+    def test_creator_balance_reconciliation_accepts_exact_budget(self) -> None:
+        after_setup, after_settlement = canary.expected_creator_balances(100_000)
+        self.assertEqual(after_setup, 0)
+        self.assertEqual(after_settlement, 10_000)
+
+    def test_creator_balance_reconciliation_rejects_underfunding(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "at least 0.10 USDC"):
+            canary.expected_creator_balances(99_999)
+
     def test_commitment_binds_chain_bounty_solver_and_reveal_material(self) -> None:
         bounty = "0x1111111111111111111111111111111111111111"
         solver = "0x2222222222222222222222222222222222222222"
