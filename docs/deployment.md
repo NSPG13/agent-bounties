@@ -156,11 +156,19 @@ Use `deploy_only` for runtime-only configuration after capacity is available:
 
 `deploy_only` rejects a service whose current live artifact does not match the
 supplied SHA. It reuses that artifact, applies saved environment values, and
-does not build new code. It restarts only API, then requires the supplied SHA
-from `/health` and the exact leaderboard contracts from the live API. Render's
+does not build new code. It restarts only API unless a shared environment
+change requires another linked service, then requires the supplied SHA from
+`/health` and the exact leaderboard contracts from the live API. Render's
 branch label is recorded but is not artifact evidence. Render currently applies
 the workspace pipeline quota before both deployment modes, so `deploy_only` is
 not a quota bypass.
+
+If the hosted operator credential may have been disclosed, dispatch this same
+exact-revision recovery workflow in `deploy_only` mode with
+`rotate_operator_api_token=true`. The replacement is generated only inside the
+runner, installed in the existing Render operator environment group, and never
+returned in logs or evidence. The API and MCP are both redeployed and attested;
+the evidence records only that rotation occurred.
 
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -34,6 +35,11 @@ ENV_GROUP_SERVICE_TYPES = {
 OPEN_COMPETITION_WORKER_NAME = "agent-bounties-open-competition-v1-indexer"
 OPEN_COMPETITION_REFERENCE_SERVICE_NAME = "agent-bounties-base-indexer"
 OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
+OPERATOR_ENV_GROUP_NAME = "agent-bounties-operator"
+OPERATOR_TOKEN_KEY = "OPERATOR_API_TOKEN"
+OPERATOR_TOKEN_SERVICE_NAMES = frozenset(
+    {"agent-bounties-api", "agent-bounties-mcp"}
+)
 OPEN_COMPETITION_RELEASE_MANIFEST_PATH = Path(
     "deployments/open-competition-v1-base-mainnet.json"
 )
@@ -481,6 +487,21 @@ def validate_owner_id(value: object) -> str:
     return value
 
 
+def deploy_only_can_reuse_current(
+    service_name: str,
+    *,
+    open_competition_environment_changed: bool,
+    operator_token_changed: bool,
+) -> bool:
+    if service_name == CLOUD_AGENT_API_SERVICE_NAME:
+        return False
+    if open_competition_environment_changed:
+        return False
+    return not (
+        operator_token_changed and service_name in OPERATOR_TOKEN_SERVICE_NAMES
+    )
+
+
 def validate_environment_id(value: object) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[a-z]+-[0-9a-z]+", value):
         raise RecoveryError("Render service has an invalid project environment id")
@@ -529,6 +550,26 @@ def select_env_group(payload: object, owner_id: str) -> dict[str, Any]:
     group_id = group.get("id")
     if not isinstance(group_id, str) or not re.fullmatch(r"evg-[0-9a-z]+", group_id):
         raise RecoveryError("Render environment group has an invalid id")
+    return group
+
+
+def select_operator_env_group(payload: object, owner_id: str) -> dict[str, Any]:
+    matches = [
+        group
+        for group in unwrap_env_group_entries(payload)
+        if group.get("name") == OPERATOR_ENV_GROUP_NAME
+        and group.get("ownerId") == owner_id
+    ]
+    if len(matches) != 1:
+        raise RecoveryError(
+            "expected exactly one Render environment group named "
+            f"{OPERATOR_ENV_GROUP_NAME} in the reference workspace; "
+            f"found {len(matches)}"
+        )
+    group = matches[0]
+    group_id = group.get("id")
+    if not isinstance(group_id, str) or not re.fullmatch(r"evg-[0-9a-z]+", group_id):
+        raise RecoveryError("Render operator environment group has an invalid id")
     return group
 
 
@@ -992,6 +1033,19 @@ class RenderClient:
             }
         )
         return select_env_group(
+            self._read_with_retry(f"/env-groups?{query}"), owner_id
+        )
+
+    def resolve_operator_env_group(self, owner_id: str) -> dict[str, Any]:
+        owner_id = validate_owner_id(owner_id)
+        query = urllib.parse.urlencode(
+            {
+                "name": OPERATOR_ENV_GROUP_NAME,
+                "ownerId": owner_id,
+                "limit": "20",
+            }
+        )
+        return select_operator_env_group(
             self._read_with_retry(f"/env-groups?{query}"), owner_id
         )
 
@@ -1772,6 +1826,42 @@ def reconcile_cloud_agent_environment(
     return runtime_environment, secret_environment, changed
 
 
+def rotate_operator_token(
+    client: RenderClient,
+    group: dict[str, Any],
+    *,
+    token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(48),
+) -> dict[str, Any]:
+    token_text = token_factory()
+    if (
+        not isinstance(token_text, str)
+        or len(token_text) < 64
+        or any(character.isspace() for character in token_text)
+    ):
+        raise RecoveryError("generated operator token is malformed")
+    token = bytearray(token_text.encode("utf-8"))
+    token_text = ""
+    try:
+        record = client.ensure_env_group_env_var(
+            group,
+            OPERATOR_TOKEN_KEY,
+            token.decode("utf-8"),
+        )
+        if record.get("key") != OPERATOR_TOKEN_KEY or record.get("changed") is not True:
+            raise RecoveryError("Render did not rotate the operator token")
+        evidence = {
+            "performed": True,
+            "key": OPERATOR_TOKEN_KEY,
+            "characters": len(token),
+            "secret_published": False,
+        }
+        setattr(client, "operator_token_rotation_evidence", evidence)
+        return evidence
+    finally:
+        for index in range(len(token)):
+            token[index] = 0
+
+
 def reconcile_neynar_social_environment(
     client: RenderClient,
     service: dict[str, Any],
@@ -2024,8 +2114,11 @@ def deploy(
     base_mainnet_leaderboard_reward_contract: str | None = None,
     base_sepolia_leaderboard_reward_contract: str | None = None,
     open_competition_entrant_relay_canary_enabled: bool = False,
+    rotate_operator_api_token: bool = False,
 ) -> dict[str, Any]:
     deploy_mode = validate_deploy_mode(deploy_mode)
+    if rotate_operator_api_token and deploy_mode != "deploy_only":
+        raise RecoveryError("operator token rotation requires deploy_only")
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
@@ -2079,6 +2172,23 @@ def deploy(
             raise RecoveryError(
                 f"required Render environment group is not linked to {spec.name}"
             )
+
+    operator_token_rotation: dict[str, Any] = {}
+    operator_token_changed = False
+    if rotate_operator_api_token:
+        operator_group = client.resolve_operator_env_group(
+            validate_owner_id(reference_service.get("ownerId"))
+        )
+        operator_group = client.get_env_group(operator_group["id"])
+        for spec, service in services:
+            if spec.name not in OPERATOR_TOKEN_SERVICE_NAMES:
+                continue
+            if not env_group_has_service(operator_group, spec, service["id"]):
+                raise RecoveryError(
+                    f"operator environment group is not linked to {spec.name}"
+                )
+        operator_token_rotation = rotate_operator_token(client, operator_group)
+        operator_token_changed = True
     desired_open_competition_environment = open_competition_shared_environment(
         entrant_relay_canary_enabled=open_competition_entrant_relay_canary_enabled
     )
@@ -2199,8 +2309,13 @@ def deploy(
     for spec, service in services:
         if (
             deploy_mode == "deploy_only"
-            and spec.name != CLOUD_AGENT_API_SERVICE_NAME
-            and not open_competition_environment_changed
+            and deploy_only_can_reuse_current(
+                spec.name,
+                open_competition_environment_changed=(
+                    open_competition_environment_changed
+                ),
+                operator_token_changed=operator_token_changed,
+            )
         ):
             created = preexisting_live[spec.name]
         else:
@@ -2335,6 +2450,7 @@ def deploy(
         "cloud_readiness": cloud_readiness,
         "social_readiness": social_readiness,
         "leaderboard_readiness": leaderboard_readiness,
+        "operator_token_rotation": operator_token_rotation,
     }
 
 
@@ -2375,6 +2491,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable only the operator-authenticated entrant relay canary.",
     )
+    parser.add_argument(
+        "--rotate-operator-api-token",
+        action="store_true",
+        help="Rotate the Render-generated operator token without publishing its value.",
+    )
     parser.add_argument("--deploy-timeout-seconds", type=float, default=2400)
     parser.add_argument("--health-timeout-seconds", type=float, default=300)
     parser.add_argument("--poll-seconds", type=float, default=10)
@@ -2388,6 +2509,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    client: RenderClient | None = None
     evidence: dict[str, Any] = {
         "schema": SCHEMA,
         "started_at": utc_now(),
@@ -2406,6 +2528,7 @@ def main() -> int:
         "cloud_readiness": {},
         "social_readiness": {},
         "leaderboard_readiness": [],
+        "operator_token_rotation": {},
         "failure": None,
         "error": None,
     }
@@ -2440,6 +2563,7 @@ def main() -> int:
             open_competition_entrant_relay_canary_enabled=(
                 args.enable_open_competition_entrant_relay_canary
             ),
+            rotate_operator_api_token=args.rotate_operator_api_token,
         )
         evidence.update(result)
         evidence["revision"] = revision
@@ -2449,6 +2573,12 @@ def main() -> int:
         if isinstance(error, RenderDeployFailure):
             evidence["failure"] = error.evidence
     finally:
+        if client is not None:
+            evidence["operator_token_rotation"] = getattr(
+                client,
+                "operator_token_rotation_evidence",
+                evidence["operator_token_rotation"],
+            )
         evidence["completed_at"] = utc_now()
         write_evidence(args.output, evidence)
 
