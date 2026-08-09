@@ -80,6 +80,16 @@ class EnvironmentClient:
         return {"key": key, "value": value, "changed": self.changed}
 
 
+class OperatorRotationClient:
+    def __init__(self, changed=True) -> None:
+        self.changed = changed
+        self.values = []
+
+    def ensure_env_group_env_var(self, group, key, value):
+        self.values.append((group["id"], key, value))
+        return {"key": key, "value": value, "changed": self.changed}
+
+
 def blueprint_record(**overrides):
     record = {
         "id": "exs-" + "a" * 20,
@@ -191,6 +201,87 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(recovery.RecoveryError, "deploy mode"):
             recovery.validate_deploy_mode("latest")
+
+    def test_operator_environment_group_selection_is_exact(self) -> None:
+        group = {
+            "id": "evg-" + "e" * 20,
+            "name": recovery.OPERATOR_ENV_GROUP_NAME,
+            "ownerId": "tea-owner123",
+        }
+        self.assertEqual(
+            recovery.select_operator_env_group(
+                [{"envGroup": group}], "tea-owner123"
+            ),
+            group,
+        )
+        with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+            recovery.select_operator_env_group([], "tea-owner123")
+
+    def test_operator_token_rotation_never_returns_the_secret(self) -> None:
+        client = OperatorRotationClient()
+        result = recovery.rotate_operator_token(
+            client,
+            {"id": "evg-" + "e" * 20},
+            token_factory=lambda: "n" * 64,
+        )
+        self.assertEqual(
+            client.values[0][1:],
+            (recovery.OPERATOR_TOKEN_KEY, "n" * 64),
+        )
+        self.assertEqual(
+            result,
+            {
+                "performed": True,
+                "key": recovery.OPERATOR_TOKEN_KEY,
+                "characters": 64,
+                "secret_published": False,
+            },
+        )
+        self.assertEqual(client.operator_token_rotation_evidence, result)
+        self.assertNotIn("n" * 64, recovery.json.dumps(result))
+
+    def test_operator_token_rotation_requires_a_changed_value(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "did not rotate"):
+            recovery.rotate_operator_token(
+                OperatorRotationClient(changed=False),
+                {"id": "evg-" + "e" * 20},
+                token_factory=lambda: "n" * 64,
+            )
+
+    def test_operator_token_rotation_requires_deploy_only(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "requires deploy_only"):
+            recovery.deploy(
+                ResolutionFailureClient(),
+                "a" * 40,
+                rotate_operator_api_token=True,
+                deploy_timeout_seconds=1,
+                health_timeout_seconds=1,
+                poll_seconds=0,
+            )
+
+    def test_operator_rotation_redeploys_only_linked_runtime_services(self) -> None:
+        decisions = {
+            name: recovery.deploy_only_can_reuse_current(
+                name,
+                open_competition_environment_changed=False,
+                operator_token_changed=True,
+            )
+            for name in (
+                "agent-bounties-api",
+                "agent-bounties-mcp",
+                "agent-bounties-base-indexer",
+                "agent-bounties-open-competition-v1-indexer",
+            )
+        }
+        self.assertEqual(
+            decisions,
+            {
+                "agent-bounties-api": False,
+                "agent-bounties-mcp": False,
+                "agent-bounties-base-indexer": True,
+                "agent-bounties-open-competition-v1-indexer": True,
+            },
+        )
 
     def test_service_resolution_is_exact_and_repository_bound(self) -> None:
         spec = recovery.SERVICE_SPECS[0]
