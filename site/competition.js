@@ -12,6 +12,7 @@
     envelope: null,
     profile: null,
     provider: null,
+    recoveryUrl: null,
   };
 
   const by = (selector) => document.querySelector(selector);
@@ -109,9 +110,102 @@
     assertAddress(account, "Connected wallet");
     state.provider = provider;
     state.account = account;
+    await ensureNetwork();
     setText("[data-competition-wallet]", account);
     await loadCanonicalState();
     output("Wallet connected. Generate and download a recovery envelope before preparing an entry.");
+  }
+
+  async function ensureNetwork() {
+    if (!state.provider) throw new Error("Connect MetaMask first.");
+    const expected = network === "base-mainnet" ? "0x2105" : network === "base-sepolia" ? "0x14a34" : null;
+    if (!expected) throw new Error("Unsupported Base network.");
+    const actual = String(await state.provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (actual === expected) return;
+    await state.provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: expected }],
+    });
+    const switched = String(await state.provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (switched !== expected) throw new Error("MetaMask did not switch to the required Base network.");
+  }
+
+  async function waitForReceipt(transactionHash) {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      const receipt = await state.provider.request({
+        method: "eth_getTransactionReceipt",
+        params: [transactionHash],
+      });
+      if (receipt) {
+        if (String(receipt.status).toLowerCase() !== "0x1") {
+          throw new Error(`Transaction reverted: ${transactionHash}`);
+        }
+        return receipt;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error(`Timed out waiting for transaction receipt: ${transactionHash}`);
+  }
+
+  function walletTransaction(call) {
+    const from = String(call.from || state.account).toLowerCase();
+    const to = String(call.to || "").toLowerCase();
+    const data = String(call.data || "");
+    if (from !== state.account) throw new Error("Prepared transaction sender does not match the connected wallet.");
+    assertAddress(to, "Prepared transaction target");
+    if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(data)) throw new Error("Prepared transaction calldata is malformed.");
+    return {
+      from,
+      to,
+      data,
+      value: `0x${BigInt(call.value_wei || 0).toString(16)}`,
+    };
+  }
+
+  async function sendWalletCalls(plan, label) {
+    if (!Array.isArray(plan.wallet_calls) || !plan.wallet_calls.length) {
+      throw new Error(`${label} did not return an executable wallet call.`);
+    }
+    await ensureNetwork();
+    const receipts = [];
+    for (let index = 0; index < plan.wallet_calls.length; index += 1) {
+      output(`${label}: confirm wallet transaction ${index + 1} of ${plan.wallet_calls.length}. A transaction hash is not canonical evidence.`);
+      const transactionHash = await state.provider.request({
+        method: "eth_sendTransaction",
+        params: [walletTransaction(plan.wallet_calls[index])],
+      });
+      receipts.push(await waitForReceipt(transactionHash));
+    }
+    return receipts;
+  }
+
+  function refreshEnvelopeDownload() {
+    if (!state.envelope) return;
+    if (state.recoveryUrl) URL.revokeObjectURL(state.recoveryUrl);
+    const blob = new Blob([`${JSON.stringify(state.envelope, null, 2)}\n`], { type: "application/json" });
+    state.recoveryUrl = URL.createObjectURL(blob);
+    const link = by("[data-download-envelope]");
+    link.href = state.recoveryUrl;
+    link.download = `open-competition-${bounty.slice(2, 10)}-${state.envelope.commitment.slice(2, 10)}.json`;
+  }
+
+  async function waitForCommittedState() {
+    for (let attempt = 0; attempt < 45; attempt += 1) {
+      await loadCanonicalState();
+      if (
+        state.canonical.solver_has_entered === true
+        && String(state.canonical.solver_entry_commitment || "").toLowerCase() === state.envelope.commitment
+        && Number(state.canonical.solver_entry_committed_block) > 0
+        && Number(state.canonical.solver_entry_reveal_deadline) > 0
+      ) {
+        state.envelope.committed_block = Number(state.canonical.solver_entry_committed_block);
+        state.envelope.reveal_deadline = Number(state.canonical.solver_entry_reveal_deadline);
+        refreshEnvelopeDownload();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    throw new Error("The commitment transaction confirmed, but canonical indexed entry evidence is not available yet. Keep the original recovery file and retry status shortly.");
   }
 
   function updateButtons() {
@@ -148,10 +242,7 @@
       reveal_deadline: null,
       evidence_boundary: "This recovery envelope contains the secret salt. Store it locally and send only commitment during entry preparation.",
     };
-    const blob = new Blob([`${JSON.stringify(state.envelope, null, 2)}\n`], { type: "application/json" });
-    const link = by("[data-download-envelope]");
-    link.href = URL.createObjectURL(blob);
-    link.download = `open-competition-${bounty.slice(2, 10)}-${commitment.slice(2, 10)}.json`;
+    refreshEnvelopeDownload();
     by("[data-competition-recovery]").hidden = false;
     setText("[data-public-commitment]", commitment);
     updateButtons();
@@ -171,10 +262,10 @@
         commitment: state.envelope.commitment,
       }),
     });
-    output(plan.allowed
-      ? "Entry preparation passed. Review the exact bond approval and commitment transaction in your wallet workflow."
-      : `Entry blocked: ${plan.blocker || "canonical readiness failed"}`,
-    plan.allowed ? "ready" : "error");
+    if (!plan.allowed) throw new Error(`Entry blocked: ${plan.blocker || "canonical readiness failed"}`);
+    await sendWalletCalls(plan, "Enter competition");
+    await waitForCommittedState();
+    output("Canonical commitment confirmed. Download the updated recovery envelope now; it includes the committed block and reveal deadline needed after a restart.", "ready");
   }
 
   async function prepareReveal(event) {
@@ -194,10 +285,13 @@
         proof: form.elements.proof.value,
       }),
     });
-    output(plan.allowed
-      ? "Reveal preparation passed. Review the exact reveal calldata before signing."
-      : `Reveal blocked: ${plan.blocker || "canonical readiness failed"}`,
-    plan.allowed ? "ready" : "error");
+    if (!plan.allowed) throw new Error(`Reveal blocked: ${plan.blocker || "canonical readiness failed"}`);
+    await sendWalletCalls(plan, "Reveal solution");
+    await loadCanonicalState();
+    output(state.canonical.status_name === "settled"
+      ? "Canonical settlement confirmed. Open the event proof before describing the reward as paid."
+      : "Reveal transaction confirmed. Inspect canonical state for rejection, continued competition, or settlement.",
+    state.canonical.status_name === "settled" ? "ready" : "");
   }
 
   function guard(handler) {

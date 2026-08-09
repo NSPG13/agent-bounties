@@ -689,10 +689,15 @@ def open_competition_shared_environment(
         != "agent-bounties/open-competition-v1"
         or manifest.get("network") != "base-mainnet"
         or manifest.get("chain_id") != 8453
-        or manifest.get("deployment_state")
-        != "mainnet_canary_not_ready_to_earn"
     ):
         raise RecoveryError("Open Competition release manifest identity is invalid")
+    deployment_state = manifest.get("deployment_state")
+    active = deployment_state == "active_ready_to_earn"
+    if deployment_state not in {
+        "mainnet_canary_not_ready_to_earn",
+        "active_ready_to_earn",
+    }:
+        raise RecoveryError("Open Competition release deployment state is invalid")
 
     release = manifest.get("release_manifest")
     catalog = manifest.get("verifier_catalog")
@@ -705,8 +710,7 @@ def open_competition_shared_environment(
         release.get("protocol_version") != "agent-bounties/open-competition-v1"
         or release.get("network") != "base-mainnet"
         or release.get("chain_id") != 8453
-        or release.get("deployment_state")
-        != "mainnet_canary_not_ready_to_earn"
+        or release.get("deployment_state") != deployment_state
     ):
         raise RecoveryError("Open Competition hosted release identity is invalid")
     profiles = catalog.get("profiles")
@@ -723,11 +727,12 @@ def open_competition_shared_environment(
     for profile in profiles:
         if (
             not isinstance(profile, dict)
-            or profile.get("deployment_state")
-            != "mainnet_canary_not_ready_to_earn"
-            or profile.get("public_inventory_eligible") is not False
+            or profile.get("deployment_state") != deployment_state
+            or profile.get("public_inventory_eligible") is not active
         ):
-            raise RecoveryError("Open Competition verifier profile is not hidden-canary safe")
+            raise RecoveryError(
+                "Open Competition verifier profile does not match the hosted release state"
+            )
 
     activation_fields = {
         "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE": (
@@ -746,15 +751,64 @@ def open_competition_shared_environment(
             "public_commitments_enabled"
         ),
     }
-    if activation.get("public_inventory_eligible") is not False:
-        raise RecoveryError("Open Competition public inventory must remain disabled")
+    if activation.get("public_inventory_eligible") is not active:
+        raise RecoveryError(
+            "Open Competition public inventory does not match the hosted release state"
+        )
     if activation.get("monitoring_gate_configured") is not True:
         raise RecoveryError("Open Competition monitoring gate must be configured")
     if activation.get("monitoring_active") is not False:
         raise RecoveryError("Open Competition runtime monitoring cannot be pre-attested")
     for field in activation_fields.values():
-        if activation.get(field) is not False:
-            raise RecoveryError(f"Open Competition hosted activation requires {field}=false")
+        if activation.get(field) is not active:
+            raise RecoveryError(
+                f"Open Competition hosted activation requires {field}={str(active).lower()}"
+            )
+
+    public_activation_block = activation.get("public_activation_block")
+    if active:
+        release_evidence = manifest.get("release_evidence")
+        independent_review = (
+            release_evidence.get("independent_review")
+            if isinstance(release_evidence, dict)
+            else None
+        )
+        if (
+            not isinstance(release_evidence, dict)
+            or release_evidence.get("base_sepolia_rehearsal_passed") is not True
+            or release_evidence.get("slither_high_findings") != 0
+            or release_evidence.get("slither_medium_findings") != 0
+            or not isinstance(release_evidence.get("foundry_tests_passed"), int)
+            or release_evidence["foundry_tests_passed"] < 159
+            or not isinstance(release_evidence.get("fuzz_runs"), int)
+            or release_evidence["fuzz_runs"] < 1000
+            or release_evidence.get("exact_mainnet_fork_replay_passed") is not True
+            or release_evidence.get("bytecode_frozen") is not True
+            or not isinstance(independent_review, dict)
+            or independent_review.get("status") != "passed"
+            or not isinstance(independent_review.get("review_url"), str)
+            or not independent_review["review_url"].startswith("https://github.com/")
+            or independent_review.get("reviewed_source_commit")
+            != manifest.get("source_commit")
+            or independent_review.get("factory_runtime_code_hash")
+            != release.get("factory_runtime_code_hash")
+            or independent_review.get("implementation_runtime_code_hash")
+            != release.get("implementation_runtime_code_hash")
+        ):
+            raise RecoveryError(
+                "Open Competition active release requires exact R4 and independent-review evidence"
+            )
+        if (
+            not isinstance(public_activation_block, int)
+            or public_activation_block < release.get("deployment_block", 0)
+        ):
+            raise RecoveryError(
+                "Open Competition active release requires a canonical public activation block"
+            )
+    elif public_activation_block is not None:
+        raise RecoveryError(
+            "Open Competition hidden canary cannot predeclare a public activation block"
+        )
 
     values = {
         "BASE_MAINNET_RPC_URL": HOSTED_BASE_MAINNET_RPC_URL,
@@ -765,7 +819,10 @@ def open_competition_shared_environment(
             catalog, ensure_ascii=False, separators=(",", ":")
         ),
     }
-    values.update({key: "false" for key in activation_fields})
+    values.update({key: "true" if active else "false" for key in activation_fields})
+    values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"] = (
+        str(public_activation_block) if active else "0"
+    )
     values["BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE"] = "true"
     values.update(
         open_competition_entrant_environment(

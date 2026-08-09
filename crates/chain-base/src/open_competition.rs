@@ -482,7 +482,7 @@ pub fn built_in_open_competition_verifier_catalog(
             protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
             network: network.to_string(),
             chain_id: descriptor.chain_id,
-            display_name: "Leading-zero work (16-bit protocol canary)".to_string(),
+            display_name: "Scope-bound hash work (16-bit deterministic verifier)".to_string(),
             module_kind: "leading-zero-work-v1".to_string(),
             verifier_address: "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e".to_string(),
             runtime_code_hash:
@@ -498,9 +498,9 @@ pub fn built_in_open_competition_verifier_catalog(
             evidence_schema: "agent-bounties/leading-zero-work-evidence-v1".to_string(),
             immutable_runtime_required: true,
             approved_for_rehearsal: true,
-            public_inventory_eligible: false,
-            deployment_state: OpenCompetitionDeploymentState::MainnetCanaryNotReadyToEarn,
-            evidence_boundary: "This profile approves one exact immutable runtime and configuration for a protocol canary. It does not approve factory-origin modules generally or claim that leading-zero work represents ordinary digital work.".to_string(),
+            public_inventory_eligible: true,
+            deployment_state: OpenCompetitionDeploymentState::ActiveReadyToEarn,
+            evidence_boundary: "This public profile verifies only the locked 16-bit scope-bound hash-work predicate. It does not evaluate ordinary code, design, writing, research, acceptance-criteria quality, or human identity.".to_string(),
         }],
         "base-sepolia" => Vec::new(),
         _ => unreachable!("base_network_descriptor rejects unknown networks"),
@@ -3493,14 +3493,14 @@ mod tests {
     }
 
     #[test]
-    fn creation_plan_is_exact_and_not_public_during_hidden_canary() {
+    fn creation_plan_is_exact_and_public_for_the_active_profile() {
         let plan = plan_open_competition_creation(creation_request(None)).unwrap();
         assert!(plan.ready_to_broadcast);
         assert_eq!(plan.funding_mode, "approval_then_create");
         assert_eq!(plan.wallet_calls.len(), 2);
         assert!(plan.approve.is_some());
         assert!(plan.create_competition.is_some());
-        assert!(!plan.public_inventory_eligible);
+        assert!(plan.public_inventory_eligible);
         assert!(plan.wallet_calls[0].data.starts_with("0x095ea7b3"));
         assert_eq!(plan.bounty_id.len(), 66);
         assert_eq!(plan.predicted_bounty_contract.len(), 42);
@@ -3543,16 +3543,16 @@ mod tests {
     }
 
     #[test]
-    fn mainnet_catalog_pins_the_settled_hidden_canary_profile() {
+    fn mainnet_catalog_pins_the_active_scope_bound_profile() {
         let profile = built_in_open_competition_verifier_catalog("base-mainnet")
             .unwrap()
             .profiles
             .remove(0);
         assert_eq!(
             profile.deployment_state,
-            OpenCompetitionDeploymentState::MainnetCanaryNotReadyToEarn
+            OpenCompetitionDeploymentState::ActiveReadyToEarn
         );
-        assert!(!profile.public_inventory_eligible);
+        assert!(profile.public_inventory_eligible);
         assert_eq!(
             profile.benchmark_hash,
             "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2"

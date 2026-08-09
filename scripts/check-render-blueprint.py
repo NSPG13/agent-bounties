@@ -209,8 +209,13 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
         fail("Open Competition V1 protocol version is invalid")
     if release.get("network") != "base-mainnet" or release.get("chain_id") != 8453:
         fail("Open Competition V1 release must target Base mainnet")
-    if release.get("deployment_state") != "mainnet_canary_not_ready_to_earn":
-        fail("Open Competition V1 hosted release must remain in hidden-canary state")
+    deployment_state = release.get("deployment_state")
+    active = deployment_state == "active_ready_to_earn"
+    if deployment_state not in {
+        "mainnet_canary_not_ready_to_earn",
+        "active_ready_to_earn",
+    }:
+        fail("Open Competition V1 hosted release state is invalid")
     hosted = release.get("hosted_activation")
     if not isinstance(hosted, dict):
         fail("Open Competition V1 hosted activation evidence is missing")
@@ -220,13 +225,14 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
         "public_creation_enabled",
         "public_commitments_enabled",
         "public_inventory_eligible",
-        "monitoring_active",
         "relay_support_available",
         "gas_sponsorship_available",
         "r4_release_evidence_complete",
     ):
-        if hosted.get(field) is not False:
-            fail(f"Open Competition V1 hidden-canary gate {field} must remain false")
+        if hosted.get(field) is not active:
+            fail(f"Open Competition V1 hosted gate {field} must match release state")
+    if hosted.get("monitoring_active") is not False:
+        fail("Open Competition V1 runtime monitoring cannot be pre-attested")
     if not isinstance(release.get("release_manifest"), dict):
         fail("Open Competition V1 release_manifest is missing")
     catalog = release.get("verifier_catalog")
@@ -234,12 +240,17 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
         fail("Open Competition V1 verifier_catalog is missing")
     profiles = catalog.get("profiles")
     if not isinstance(profiles, list) or len(profiles) != 1 or not isinstance(profiles[0], dict):
-        fail("Open Competition V1 hidden-canary catalog must contain one exact verifier profile")
+        fail("Open Competition V1 catalog must contain one exact verifier profile")
     hidden_canary = release.get("hidden_canary")
     if not isinstance(hidden_canary, dict) or not isinstance(hidden_canary.get("verifier_profile"), dict):
         fail("Open Competition V1 hidden canary must pin its verifier profile commitments")
     canary_profile = hidden_canary["verifier_profile"]
     catalog_profile = profiles[0]
+    if (
+        catalog_profile.get("deployment_state") != deployment_state
+        or catalog_profile.get("public_inventory_eligible") is not active
+    ):
+        fail("Open Competition V1 catalog profile must match the hosted release state")
     for field in ("profile_id", "benchmark_hash", "evidence_schema_hash"):
         if canary_profile.get(field) != catalog_profile.get(field):
             fail(f"Open Competition V1 hidden canary {field} must match the verifier catalog")
@@ -258,6 +269,30 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
             fail(f"Open Competition V1 hidden canary {name} commitment is not frozen")
     if catalog_profile.get("evidence_schema") != canary_profile.get("evidence_schema_preimage"):
         fail("Open Competition V1 evidence schema identifier must match its frozen preimage")
+    release_manifest = release.get("release_manifest")
+    if not isinstance(release_manifest, dict) or release_manifest.get("deployment_state") != deployment_state:
+        fail("Open Competition V1 nested release state must match the hosted release state")
+    public_activation_block = hosted.get("public_activation_block")
+    if active:
+        evidence = release.get("release_evidence")
+        review = evidence.get("independent_review") if isinstance(evidence, dict) else None
+        if (
+            not isinstance(review, dict)
+            or review.get("status") != "passed"
+            or review.get("reviewed_source_commit") != release.get("source_commit")
+            or review.get("factory_runtime_code_hash")
+            != release_manifest.get("factory_runtime_code_hash")
+            or review.get("implementation_runtime_code_hash")
+            != release_manifest.get("implementation_runtime_code_hash")
+        ):
+            fail("Open Competition V1 active release requires exact independent-review evidence")
+        if (
+            not isinstance(public_activation_block, int)
+            or public_activation_block < release_manifest.get("deployment_block", 0)
+        ):
+            fail("Open Competition V1 active release requires a public activation block")
+    elif public_activation_block is not None:
+        fail("Open Competition V1 hidden canary cannot declare a public activation block")
     return release
 
 
@@ -321,6 +356,7 @@ def main() -> int:
             "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE",
             "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED",
             "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK",
         ],
     )
     require_env_sync_false(base_group, "BASE_SEPOLIA_RPC_URL")
@@ -359,16 +395,34 @@ def main() -> int:
         base_group,
         "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_WALLET_RELEASE_MANIFEST_JSON",
     )
+    open_competition_active = (
+        open_competition_release["deployment_state"] == "active_ready_to_earn"
+    )
     for key in (
         "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE",
         "BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE",
-        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED",
-        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED",
         "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE",
         "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED",
         "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED",
     ):
+        require_env_value(
+            base_group, key, '"true"' if open_competition_active else '"false"'
+        )
+    for key in (
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED",
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED",
+    ):
         require_env_value(base_group, key, '"false"')
+    activation_block = (
+        open_competition_release["hosted_activation"]["public_activation_block"]
+        if open_competition_active
+        else 0
+    )
+    require_env_value(
+        base_group,
+        "BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK",
+        f'"{activation_block}"',
+    )
     require_env_value(
         base_group, "BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE", '"true"'
     )
