@@ -1,0 +1,11 @@
+{
+  "state": "claimable",
+  "bounty_id": "773",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "2.00 USDC",
+  "network": "Base",
+  "verification_ready": true,
+  "next_action": "/claim #773 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+  "benchmark": "benchmarks/direct-growth-v2/openhands-integration/check.py",
+  "description": "Add an OpenHands earning-loop integration — funded and claimable on Base mainnet."
+}
