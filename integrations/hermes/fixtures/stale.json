@@ -1,10 +1,10 @@
 {
-  "state": "unfunded",
-  "bounty_id": "999",
+  "state": "stale",
+  "bounty_id": "888",
   "repository": "NSPG13/agent-bounties",
-  "reward": "0.00 USDC",
+  "reward": "1.50 USDC",
   "network": "Base",
   "verification_ready": false,
-  "next_action": "Post your own bounty at https://agentbounties.app/post.html or fund an existing one at https://agentbounties.app/funding.html",
-  "description": "Unfunded bounty — no USDC deposited yet. Do not start work."
+  "next_action": "This bounty has expired. Check the canonical feed at https://api.agentbounties.app/v1/base/autonomous-bounties/feed for current claimable inventory.",
+  "description": "Expired bounty — claim deadline has passed. Bond forfeited if applicable."
 }
