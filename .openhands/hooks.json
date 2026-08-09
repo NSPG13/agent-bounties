@@ -1,0 +1,10 @@
+{
+  "stop": [
+    {
+      "command": "python",
+      "args": [".openhands/hooks/agent-bounties-evidence.py"],
+      "description": "Agent Bounties evidence guard — blocks completion until submission evidence and sandbox tests pass",
+      "timeout": 60
+    }
+  ]
+}

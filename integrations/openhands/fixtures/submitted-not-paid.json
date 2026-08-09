@@ -1,0 +1,10 @@
+{
+  "state": "submitted-not-paid",
+  "bounty_id": "777",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "1.50 USDC",
+  "network": "Base",
+  "verification_ready": true,
+  "next_action": "Submission received but not yet settled. Monitor for canonical BountySettled event before reporting payment. Do not claim paid without on-chain confirmation.",
+  "description": "Evidence submitted and verifier has passed, but BountySettled has not fired yet. Payment is pending on-chain settlement."
+}
