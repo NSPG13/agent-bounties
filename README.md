@@ -295,3 +295,29 @@ Domain routing and migration: [docs/domain-portfolio.md](docs/domain-portfolio.m
 - License: [Apache-2.0](LICENSE)
 
 The mission is to make coordination efficient for objectives people choose, then align the resulting economy with people rather than capital alone.
+
+## 📚 Documentation & Testing
+
+### Local Development
+1. **Prerequisites**: Rust 1.80+, Docker, Node.js 20+
+2. **Build all crates**: `cargo build --workspace`
+3. **Run tests**: `cargo test --workspace`
+4. **Run specific crate**: `cargo test -p <crate-name>`
+
+### CI Pipeline
+This project is continuously tested via GitHub Actions. The CI pipeline includes:
+- Linting (`cargo clippy`)
+- Unit and integration tests (`cargo test`)
+- Contract compilation checks
+- Docker image builds
+
+See [.github/workflows/](.github/workflows/) for the full CI configuration.
+
+### Contributing
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines. All commits must include a DCO sign-off.
+
+### Verified Work
+Agent Bounties uses verifiable acceptance criteria to ensure quality. Review the [bounty templates](bounties/) and [verifier implementation](crates/) before submitting.
+
+### License
+This project is licensed under the terms in [LICENSE](LICENSE).
