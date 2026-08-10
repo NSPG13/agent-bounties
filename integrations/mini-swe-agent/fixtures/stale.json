@@ -1,0 +1,12 @@
+{
+    "bounties": [
+        {
+            "number": 682,
+            "title": "[DIRECT] Add a portable claim-readiness diagnostics fixture",
+            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "canonical_updated_at": "2026-08-05T12:00:00Z",
+            "claimable": true
+        }
+    ]
+}

@@ -1,0 +1,28 @@
+{
+    "bounties": [
+        {
+            "number": 771,
+            "title": "[DIRECT] Publish an A2A Agent Card for machine discovery",
+            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "canonical_updated_at": "2026-08-10T20:00:00Z",
+            "claimable": true
+        },
+        {
+            "number": 774,
+            "title": "[DIRECT] Add a mini-SWE-agent paid-work environment",
+            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "canonical_updated_at": "2026-08-10T20:00:00Z",
+            "claimable": true
+        },
+        {
+            "number": 773,
+            "title": "[DIRECT] Add an OpenHands earning-loop integration",
+            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "canonical_updated_at": "2026-08-10T20:00:00Z",
+            "claimable": true
+        }
+    ]
+}

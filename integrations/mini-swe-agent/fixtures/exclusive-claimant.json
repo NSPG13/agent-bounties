@@ -1,0 +1,13 @@
+{
+    "bounties": [
+        {
+            "number": 772,
+            "title": "[DIRECT] Add a verified Hermes earning integration",
+            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+            "canonical_updated_at": "2026-08-10T20:00:00Z",
+            "claimable": true,
+            "exclusive_claimant": "0xEb76f3442EAF192EBdDbc1F7EeBD59CdE5e00D35"
+        }
+    ]
+}
