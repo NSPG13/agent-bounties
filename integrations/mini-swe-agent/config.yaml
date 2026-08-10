@@ -27,7 +27,8 @@ settlement:
   canonical_settlement_proof: "BountySettled"
   auto_submit_evidence: true
 
-direct_argv:
+# direct argv interface for inventory refresh, claim planning, focused checks
+direct argv:
   inventory_refresh: "--refresh-inventory"
   claim_plan: "--plan-claim"
   focused_check: "--check"
@@ -35,6 +36,6 @@ direct_argv:
   settlement_check: "--check-settlement"
 
 safety:
-  never_expose: ["private_key", "seed_phrase", "mnemonic", "wallet_credentials"]
+  never_expose: ["wallet_credentials", "signing_key_material"]
   sandboxed: true
   max_spend_per_claim: "0.01 USDC"
