@@ -62,7 +62,7 @@ jobs:
             echo "This workflow does not execute live Stripe or Base transactions and never claims that planning output is funding or payout evidence."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: real-funding-rehearsal
           path: target/real-funding-rehearsal/*.json
