@@ -5529,6 +5529,7 @@ async fn agent_card(State(state): State<SharedState>) -> impl IntoResponse {
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
+    // Explicit cache-control and ETag for A2A Agent Card discovery
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=60, must-revalidate"),
