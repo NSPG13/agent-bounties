@@ -834,7 +834,7 @@ fn required_unique_open_event<'a>(
     kind: OpenCompetitionEventKind,
 ) -> Result<&'a OpenCompetitionEvent, String> {
     unique_optional_open_event(events, kind)?
-        .ok_or_else(|| format!("competition is missing {:?}", kind))
+        .ok_or_else(|| format!("competition is missing {kind:?}"))
 }
 
 fn unique_optional_open_event<'a>(
@@ -847,7 +847,7 @@ fn unique_optional_open_event<'a>(
         .filter(|event| event.kind == kind)
         .collect::<Vec<_>>();
     if matches.len() > 1 {
-        return Err(format!("competition has duplicate {:?}", kind));
+        return Err(format!("competition has duplicate {kind:?}"));
     }
     Ok(matches.first().copied())
 }
