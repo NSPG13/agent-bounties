@@ -1,3 +1,4 @@
+mod github_discovery;
 mod opportunities;
 
 use app::{
@@ -121,6 +122,11 @@ use github_app::{
     GitHubIssueApiSyncPlan, GitHubIssueFormBounty, GitHubProofComment, GitHubProofCommentPlan,
     SocialMentionDraftInput, SocialMentionDraftPlan,
 };
+use github_discovery::{
+    assemble_projection as assemble_github_discovery_projection, autonomous_discovery_items,
+    open_competition_discovery_items, GitHubDiscoveryProjectionResponse, GitHubDiscoverySafeBlock,
+    GitHubDiscoverySourceStatus, AUTONOMOUS_PROTOCOL_VERSION, OPEN_COMPETITION_PROTOCOL_VERSION,
+};
 use hmac::{Hmac, Mac};
 use opportunities::{
     apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
@@ -183,6 +189,7 @@ use worker::{
         compile_objective_with_cloud_agent,
         draft_bounty_with_cloud_agent,
         analyze_bounty_fit,
+        github_bounty_discovery,
         list_opportunities,
         stream_opportunities,
         list_opportunity_comments,
@@ -439,6 +446,13 @@ use worker::{
         ,LegalPolicyResponse
         ,RecordLegalAcceptanceRequest
         ,LegalAcceptanceResponse
+        ,GitHubDiscoveryProjectionResponse
+        ,github_discovery::GitHubDiscoveryItem
+        ,github_discovery::GitHubDiscoveryAction
+        ,github_discovery::GitHubDiscoveryVerifier
+        ,github_discovery::GitHubDiscoverySafeBlock
+        ,github_discovery::GitHubDiscoverySourceStatus
+        ,github_discovery::GitHubSettlementEvidence
     )),
     modifiers(&SecurityAddon)
 )]
@@ -1621,9 +1635,17 @@ struct AgentActionError {
     message: String,
     retryable: bool,
     next_action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    competition_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    correct_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    competition_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_action_url: Option<String>,
 }
 
-type AgentActionApiError = (StatusCode, Json<AgentActionError>);
+type AgentActionApiError = (StatusCode, Json<Box<AgentActionError>>);
 
 fn agent_action_error(
     status: StatusCode,
@@ -1634,13 +1656,57 @@ fn agent_action_error(
 ) -> AgentActionApiError {
     (
         status,
-        Json(AgentActionError {
+        Json(Box::new(AgentActionError {
             schema_version: "agent-bounties/action-error-v1".to_string(),
             error_code: error_code.to_string(),
             message: message.into(),
             retryable,
             next_action: next_action.to_string(),
-        }),
+            competition_mode: None,
+            correct_action: None,
+            competition_url: None,
+            next_action_url: None,
+        })),
+    )
+}
+
+fn wrong_competition_mode_error(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> AgentActionApiError {
+    let website = legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
+    let contract = bounty_contract.to_ascii_lowercase();
+    (
+        StatusCode::CONFLICT,
+        Json(Box::new(AgentActionError {
+            schema_version: "agent-bounties/action-error-v1".to_string(),
+            error_code: "wrong_competition_mode".to_string(),
+            message: "This bounty uses Open Competition and cannot be exclusively claimed."
+                .to_string(),
+            retryable: false,
+            next_action: "Enter competition by preparing a commitment, saving the local recovery envelope, and revealing from the same wallet in a later block.".to_string(),
+            competition_mode: Some("first_valid_submission".to_string()),
+            correct_action: Some("enter_competition".to_string()),
+            competition_url: Some(format!(
+                "{}/competition.html?network={network}&bountyContract={contract}",
+                website.trim_end_matches('/')
+            )),
+            next_action_url: Some(format!(
+                "{}/v1/base/open-competition-v1/commit-preparation",
+                state.public_base_url.trim_end_matches('/')
+            )),
+        })),
+    )
+}
+
+fn status_agent_action_error(status: StatusCode, action: &str) -> AgentActionApiError {
+    agent_action_error(
+        status,
+        "action_preparation_failed",
+        "The canonical exclusive-claim action could not be prepared.",
+        status.is_server_error(),
+        action,
     )
 }
 
@@ -1899,6 +1965,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/:bounty_contract/analysis",
             get(analyze_bounty_fit),
+        )
+        .route(
+            "/v1/github/bounty-discovery-v1",
+            get(github_bounty_discovery),
         )
         .route("/v1/opportunities", get(list_opportunities))
         .route("/v1/opportunities/stream", get(stream_opportunities))
@@ -2750,6 +2820,225 @@ async fn list_opportunities(
     Query(query): Query<OpportunityQuery>,
 ) -> Result<Json<OpportunityProjectionResponse>, StatusCode> {
     build_opportunity_projection(&state, query).await.map(Json)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubDiscoveryQuery {
+    network: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/github/bounty-discovery-v1",
+    params(("network" = Option<String>, Query, description = "Canonical Base network; defaults to base-mainnet")),
+    responses(
+        (status = 200, body = GitHubDiscoveryProjectionResponse),
+        (status = 400, description = "Unknown Base network"),
+        (status = 503, description = "Projection identity conflict or malformed canonical record")
+    )
+)]
+async fn github_bounty_discovery(
+    State(state): State<SharedState>,
+    Query(query): Query<GitHubDiscoveryQuery>,
+) -> Result<Json<GitHubDiscoveryProjectionResponse>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let (descriptor, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let generated_at = Utc::now();
+    let safe_block = match tokio::time::timeout(
+        Duration::from_secs(12),
+        fetch_safe_block_identity(&rpc_url, 92),
+    )
+    .await
+    {
+        Ok(Ok(block)) => {
+            let age_seconds = generated_at.timestamp() - block.timestamp as i64;
+            Some(GitHubDiscoverySafeBlock {
+                number: block.number,
+                hash: block.hash,
+                timestamp: block.timestamp,
+                age_seconds,
+                fresh: (0..=300).contains(&age_seconds),
+            })
+        }
+        _ => None,
+    };
+
+    let website_base_url =
+        legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
+    let safe_block_number = safe_block.as_ref().map(|block| block.number);
+    let mut items = Vec::new();
+    let mut source_statuses = Vec::new();
+
+    let autonomous_factory = autonomous_factory_for_chain(descriptor.chain_id);
+    let autonomous_result = async {
+        match (
+            state.store.as_ref(),
+            autonomous_factory.as_deref(),
+            safe_block_number,
+        ) {
+            (Some(store), Some(factory), Some(safe_number)) => {
+                let heartbeat = store
+                    .get_base_indexer_heartbeat(network, factory)
+                    .await
+                    .map_err(|_| "autonomous_heartbeat_unavailable".to_string())?
+                    .ok_or_else(|| "autonomous_heartbeat_missing".to_string());
+                match heartbeat {
+                    Ok(heartbeat)
+                        if open_competition_monitoring_is_fresh(
+                            &heartbeat,
+                            safe_number,
+                            generated_at,
+                        ) =>
+                    {
+                        let feed = load_autonomous_bounty_feed(&state, network, false)
+                            .await
+                            .map_err(|_| "autonomous_read_model_unavailable".to_string())?;
+                        let projected = autonomous_discovery_items(
+                            &feed,
+                            network,
+                            descriptor.chain_id,
+                            &state.public_base_url,
+                            &website_base_url,
+                        )?;
+                        Ok((projected, heartbeat.persisted_cursor_block))
+                    }
+                    Ok(heartbeat) => Err(format!(
+                        "autonomous_indexer_stale:{}",
+                        heartbeat.persisted_cursor_block.unwrap_or_default()
+                    )),
+                    Err(error) => Err(error),
+                }
+            }
+            _ => Err("autonomous_source_not_configured".to_string()),
+        }
+    }
+    .await;
+    match autonomous_result {
+        Ok((mut projected, cursor)) => {
+            source_statuses.push(GitHubDiscoverySourceStatus {
+                source_type: "canonical_autonomous".to_string(),
+                protocol_version: AUTONOMOUS_PROTOCOL_VERSION.to_string(),
+                factory_contract: autonomous_factory.clone(),
+                available: true,
+                fresh: true,
+                item_count: projected.len(),
+                persisted_cursor_block: cursor,
+                error: None,
+            });
+            items.append(&mut projected);
+        }
+        Err(error) => source_statuses.push(GitHubDiscoverySourceStatus {
+            source_type: "canonical_autonomous".to_string(),
+            protocol_version: AUTONOMOUS_PROTOCOL_VERSION.to_string(),
+            factory_contract: autonomous_factory.clone(),
+            available: false,
+            fresh: false,
+            item_count: 0,
+            persisted_cursor_block: None,
+            error: Some(error),
+        }),
+    }
+
+    let open_competition_result = async {
+        let release = open_competition_release_from_environment(network)
+            .map_err(|_| "open_competition_release_unavailable".to_string())?;
+        if release.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn {
+            return Err("open_competition_release_not_active".to_string());
+        }
+        let prefix = open_competition_environment_prefix(network)
+            .map_err(|_| "open_competition_network_unknown".to_string())?;
+        let public_activation_block = env::var(format!("{prefix}_PUBLIC_ACTIVATION_BLOCK"))
+            .map_err(|_| "open_competition_activation_block_missing".to_string())?
+            .parse::<u64>()
+            .map_err(|_| "open_competition_activation_block_invalid".to_string())?;
+        let safe_number = safe_block_number.ok_or_else(|| "safe_block_unavailable".to_string())?;
+        if safe_number < public_activation_block {
+            return Err("open_competition_activation_not_safe".to_string());
+        }
+        let catalog = open_competition_verifier_catalog_from_environment(network)
+            .map_err(|_| "open_competition_verifier_catalog_unavailable".to_string())?;
+        let [profile] = catalog.profiles.as_slice() else {
+            return Err("open_competition_verifier_catalog_ambiguous".to_string());
+        };
+        if !profile.public_inventory_eligible
+            || profile.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn
+        {
+            return Err("open_competition_verifier_unapproved".to_string());
+        }
+        let store = state
+            .store
+            .as_ref()
+            .ok_or_else(|| "open_competition_store_unavailable".to_string())?;
+        let heartbeat = store
+            .get_base_indexer_heartbeat(network, &release.factory_contract)
+            .await
+            .map_err(|_| "open_competition_heartbeat_unavailable".to_string())?
+            .ok_or_else(|| "open_competition_heartbeat_missing".to_string())?;
+        if !open_competition_monitoring_is_fresh(&heartbeat, safe_number, generated_at) {
+            return Err("open_competition_indexer_stale".to_string());
+        }
+        let events = store
+            .list_open_competition_events(network, &release.factory_contract)
+            .await
+            .map_err(|_| "open_competition_read_model_unavailable".to_string())?;
+        let projected = open_competition_discovery_items(
+            &events,
+            profile,
+            network,
+            descriptor.chain_id,
+            &state.public_base_url,
+            &website_base_url,
+            public_activation_block,
+            generated_at,
+        )?;
+        Ok::<_, String>((
+            release.factory_contract,
+            projected,
+            heartbeat.persisted_cursor_block,
+        ))
+    }
+    .await;
+    match open_competition_result {
+        Ok((factory, mut projected, cursor)) => {
+            source_statuses.push(GitHubDiscoverySourceStatus {
+                source_type: "open_competition".to_string(),
+                protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
+                factory_contract: Some(factory),
+                available: true,
+                fresh: true,
+                item_count: projected.len(),
+                persisted_cursor_block: cursor,
+                error: None,
+            });
+            items.append(&mut projected);
+        }
+        Err(error) => source_statuses.push(GitHubDiscoverySourceStatus {
+            source_type: "open_competition".to_string(),
+            protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
+            factory_contract: open_competition_release_from_environment(network)
+                .ok()
+                .map(|release| release.factory_contract),
+            available: false,
+            fresh: false,
+            item_count: 0,
+            persisted_cursor_block: None,
+            error: Some(error),
+        }),
+    }
+
+    assemble_github_discovery_projection(
+        network,
+        descriptor.chain_id,
+        generated_at,
+        safe_block,
+        source_statuses,
+        items,
+    )
+    .map(Json)
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
 #[utoipa::path(
@@ -4175,6 +4464,10 @@ fn validated_site_analytics_event(
             | "funding_started"
             | "claim_started"
             | "claim_confirmed"
+            | "competition_entry_started"
+            | "competition_entry_confirmed"
+            | "competition_reveal_started"
+            | "competition_reveal_confirmed"
             | "canonical_post_started"
             | "canonical_post_confirmed"
     ) {
@@ -4200,7 +4493,8 @@ fn validated_site_analytics_event(
     if opportunity_id.as_ref().is_some_and(|value| {
         value.len() > 200
             || !value.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+                character.is_ascii_alphanumeric()
+                    || matches!(character, ':' | '/' | '.' | '_' | '-')
             })
     }) {
         return Err(StatusCode::BAD_REQUEST);
@@ -5554,6 +5848,40 @@ async fn prepare_agent_wallet_to_earn(
     State(state): State<SharedState>,
     Json(request): Json<PrepareAgentToEarnInput>,
 ) -> Result<Json<AgentWalletReadinessReport>, AgentWalletReadinessProblem> {
+    if indexed_open_competition_bounty(&state, &request.network, &request.bounty_contract)
+        .await
+        .map_err(|status| {
+            agent_wallet_readiness_problem(
+                status,
+                "competition_mode_unavailable",
+                true,
+                "select_competition_mode",
+                "the canonical competition-mode index is unavailable",
+                "Retry after canonical bounty inventory is healthy; do not prepare an exclusive claim while mode is unknown.",
+            )
+        })?
+    {
+        let (_, Json(problem)) =
+            wrong_competition_mode_error(&state, &request.network, &request.bounty_contract);
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "schema_version": "agent-bounties/agent-wallet-readiness-problem-v1",
+                "state": "failed",
+                "failed_transition": "select_competition_mode",
+                "error": "wrong_competition_mode",
+                "error_code": "wrong_competition_mode",
+                "retryable": false,
+                "message": problem.message,
+                "competition_mode": problem.competition_mode,
+                "correct_action": problem.correct_action,
+                "competition_url": problem.competition_url,
+                "next_action_url": problem.next_action_url,
+                "next_action": problem.next_action,
+                "evidence_boundary": "This response only redirects the agent to the correct protocol mode; it is not an entry, claim, signature request, settlement, or payment event."
+            })),
+        ));
+    }
     let (descriptor, rpc_url) = state
         .base_rpc_urls
         .resolve(&request.network)
@@ -9525,15 +9853,39 @@ async fn plan_autonomous_bounty_authorized_contribution(
 async fn plan_autonomous_bounty_claim(
     State(state): State<SharedState>,
     Json(request): Json<PlanAutonomousBountyClaimRequest>,
-) -> Result<Json<AutonomousBountyClaimPlan>, StatusCode> {
+) -> Result<Json<AutonomousBountyClaimPlan>, AgentActionApiError> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
-    require_claimable_autonomous_item(&item)?;
-    let claim_bond = item
-        .claim_bond
-        .parse::<u128>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    configured_autonomous_planner(network)?
+    if indexed_open_competition_bounty(&state, network, &request.bounty_contract)
+        .await
+        .map_err(|status| {
+            status_agent_action_error(
+                status,
+                "Retry after canonical competition inventory is healthy; do not prepare an exclusive claim while mode is unknown.",
+            )
+        })?
+    {
+        return Err(wrong_competition_mode_error(
+            &state,
+            network,
+            &request.bounty_contract,
+        ));
+    }
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract)
+        .await
+        .map_err(|status| {
+            status_agent_action_error(status, "Refresh ready-to-earn inventory and retry.")
+        })?;
+    require_claimable_autonomous_item(&item).map_err(|status| {
+        status_agent_action_error(status, "Refresh canonical state before attempting a claim.")
+    })?;
+    let claim_bond = item.claim_bond.parse::<u128>().map_err(|_| {
+        status_agent_action_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Do not sign; report the malformed indexed bond.",
+        )
+    })?;
+    configured_autonomous_planner(network)
+        .map_err(|status| status_agent_action_error(status, "Retry after the planner is healthy."))?
         .plan_claim(
             network,
             &request.bounty_contract,
@@ -9543,22 +9895,51 @@ async fn plan_autonomous_bounty_claim(
             request.authorization_valid_before,
         )
         .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|_| {
+            status_agent_action_error(
+                StatusCode::BAD_REQUEST,
+                "Correct the public wallet inputs and retry without signing arbitrary calldata.",
+            )
+        })
 }
 
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/authorized-claim-plan", responses((status = 200, description = "Single relayer transaction after the solver signs the exact USDC claim bond authorization")))]
 async fn plan_autonomous_bounty_authorized_claim(
     State(state): State<SharedState>,
     Json(request): Json<PlanAutonomousBountyAuthorizedClaimRequest>,
-) -> Result<Json<AutonomousBountyAuthorizedClaimPlan>, StatusCode> {
+) -> Result<Json<AutonomousBountyAuthorizedClaimPlan>, AgentActionApiError> {
     let network = request.network.as_deref().unwrap_or("base-mainnet");
-    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract).await?;
-    require_claimable_autonomous_item(&item)?;
-    let claim_bond = item
-        .claim_bond
-        .parse::<u128>()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    configured_autonomous_planner(network)?
+    if indexed_open_competition_bounty(&state, network, &request.bounty_contract)
+        .await
+        .map_err(|status| {
+            status_agent_action_error(
+                status,
+                "Retry after canonical competition inventory is healthy; do not prepare an exclusive claim while mode is unknown.",
+            )
+        })?
+    {
+        return Err(wrong_competition_mode_error(
+            &state,
+            network,
+            &request.bounty_contract,
+        ));
+    }
+    let item = indexed_autonomous_bounty(&state, network, &request.bounty_contract)
+        .await
+        .map_err(|status| {
+            status_agent_action_error(status, "Refresh ready-to-earn inventory and retry.")
+        })?;
+    require_claimable_autonomous_item(&item).map_err(|status| {
+        status_agent_action_error(status, "Refresh canonical state before attempting a claim.")
+    })?;
+    let claim_bond = item.claim_bond.parse::<u128>().map_err(|_| {
+        status_agent_action_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Do not sign; report the malformed indexed bond.",
+        )
+    })?;
+    configured_autonomous_planner(network)
+        .map_err(|status| status_agent_action_error(status, "Retry after the planner is healthy."))?
         .plan_authorized_claim(
             network,
             &request.bounty_contract,
@@ -9570,7 +9951,12 @@ async fn plan_autonomous_bounty_authorized_claim(
             request.relayer.as_deref(),
         )
         .map(Json)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|_| {
+            status_agent_action_error(
+                StatusCode::BAD_REQUEST,
+                "Correct the bounded authorization inputs and retry without signing arbitrary calldata.",
+            )
+        })
 }
 
 type AgentClaimProblem = (StatusCode, Json<serde_json::Value>);
@@ -9639,13 +10025,36 @@ async fn agent_native_claim(
             "Call get_standing_meta_v4_readiness, then prepare_standing_meta_v4_claim. The atomic flow creates and funds the child, snapshots the active solver pool, requests VRF, binds the round, and posts the parent bond in one transaction.",
         ));
     }
-    if configured_open_competition(network, &bounty_contract) {
-        return Err(agent_claim_problem(
+    if indexed_open_competition_bounty(&state, network, &bounty_contract)
+        .await
+        .map_err(|status| {
+            agent_claim_problem(
+                status,
+                "competition_mode_unavailable",
+                "select_competition_mode",
+                "the canonical competition-mode index is unavailable",
+                "Retry after canonical bounty inventory is healthy; do not prepare an exclusive claim while mode is unknown.",
+            )
+        })?
+    {
+        let (_, Json(problem)) = wrong_competition_mode_error(&state, network, &bounty_contract);
+        return Err((
             StatusCode::CONFLICT,
-            "open_competition_commit_required",
-            "route_open_competition_entry",
-            "a first-valid open competition has no exclusive claim path",
-            "Call get_open_competition_readiness, then prepare_open_competition_commit. Keep the salt private and call prepare_open_competition_reveal from the same wallet in a later block.",
+            Json(serde_json::json!({
+                "schema_version": "agent-bounties/agent-claim-problem-v1",
+                "state": "failed",
+                "failed_transition": "select_competition_mode",
+                "error": "wrong_competition_mode",
+                "error_code": "wrong_competition_mode",
+                "retryable": false,
+                "message": problem.message,
+                "competition_mode": problem.competition_mode,
+                "correct_action": problem.correct_action,
+                "competition_url": problem.competition_url,
+                "next_action_url": problem.next_action_url,
+                "next_action": problem.next_action,
+                "evidence_boundary": "This response only redirects the agent to the correct protocol mode; it is not an entry, claim, signature request, settlement, or payment event."
+            })),
         ));
     }
     let item = indexed_autonomous_bounty(&state, network, &bounty_contract)
@@ -10142,6 +10551,36 @@ fn configured_open_competition(network: &str, bounty_contract: &str) -> bool {
         })
         .filter_map(|value| normalize_evm_address(&value).ok())
         .any(|value| value.eq_ignore_ascii_case(bounty_contract))
+}
+
+async fn indexed_open_competition_bounty(
+    state: &SharedState,
+    network: &str,
+    bounty_contract: &str,
+) -> Result<bool, StatusCode> {
+    let bounty_contract = normalize_evm_address(bounty_contract)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .to_ascii_lowercase();
+    if configured_open_competition(network, &bounty_contract) {
+        return Ok(true);
+    }
+
+    let release = match open_competition_release_from_environment(network) {
+        Ok(release) => release,
+        Err(StatusCode::BAD_REQUEST) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Ok(false),
+    };
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let contracts = store
+        .list_canonical_open_competition_contracts(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(contracts
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&bounty_contract)))
 }
 
 #[utoipa::path(
@@ -15511,12 +15950,12 @@ mod tests {
                 event_id: Uuid::new_v4(),
                 visitor_id: Uuid::new_v4(),
                 session_id: Uuid::new_v4(),
-                event_name: "funded_bounty_click".to_string(),
-                page_path: "/earn.html".to_string(),
+                event_name: "competition_entry_confirmed".to_string(),
+                page_path: "/competition.html".to_string(),
                 source: Some("GitHub".to_string()),
                 campaign: Some("launch-2026".to_string()),
                 referrer_host: Some("GitHub.com".to_string()),
-                opportunity_id: Some("canonical_base:base-mainnet:0xabc".to_string()),
+                opportunity_id: Some("eip155:8453:agent-bounties/open-competition-v1:0x1111111111111111111111111111111111111111".to_string()),
                 bounty_contract: Some("0x1111111111111111111111111111111111111111".to_string()),
                 occurred_at: now,
             },
@@ -15525,7 +15964,7 @@ mod tests {
         .unwrap();
         assert_eq!(event.source.as_deref(), Some("github"));
         assert_eq!(event.referrer_host.as_deref(), Some("github.com"));
-        assert_eq!(event.page_path, "/earn.html");
+        assert_eq!(event.page_path, "/competition.html");
     }
 
     #[test]
@@ -18060,6 +18499,7 @@ mod tests {
         assert!(paths.contains_key("/v1/objectives/{id}/actions"));
         assert!(paths.contains_key("/v1/objectives/{id}/reconcile"));
         assert!(paths.contains_key("/v1/opportunities"));
+        assert!(paths.contains_key("/v1/github/bounty-discovery-v1"));
         assert!(paths.contains_key("/v1/opportunities/stream"));
         assert!(paths.contains_key("/v1/opportunities/{opportunity_id}/comments"));
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));

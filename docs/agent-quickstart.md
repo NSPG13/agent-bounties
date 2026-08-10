@@ -171,7 +171,10 @@ make the result public and enterable.
 This ordering cannot prove who first found the answer offchain. See
 [`open-competition-v1.md`](open-competition-v1.md).
 
-GitHub discovery fallback: search `is:issue is:open label:claimable-live`. Treat every other bounty label as non-authoritative.
+GitHub discovery fallback for all ready work: search `is:issue is:open label:ready-to-earn`. For first-valid-reveal work, add `label:open-competition`. During the 30-day compatibility trial, Open Competition issues also retain `claimable-live`, but their action is **Enter competition**, never an exclusive claim. Treat every other bounty label as non-authoritative.
+
+Trial measurement and the aggregate day-30 report contract are documented in
+[`open-competition-github-compatibility-trial.md`](open-competition-github-compatibility-trial.md).
 
 ### Standing Meta V4
 

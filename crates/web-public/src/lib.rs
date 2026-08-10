@@ -100,6 +100,7 @@ pub struct DiscoveryEndpoints {
     pub cloud_bounty_drafts: String,
     pub cloud_objective_plans: String,
     pub opportunities: String,
+    pub github_bounty_discovery: String,
     pub opportunity_stream: String,
     pub opportunity_feed_rss: String,
     pub opportunity_feed_atom: String,
@@ -623,6 +624,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
         cloud_objective_plans: format!("{api}/v1/cloud-agent/objective-plans"),
         opportunities: format!("{api}/v1/opportunities"),
+        github_bounty_discovery: format!(
+            "{api}/v1/github/bounty-discovery-v1?network=base-mainnet"
+        ),
         opportunity_stream: format!(
             "{api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
         ),
@@ -853,6 +857,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "get_site_analytics",
             "analyze_bounty_fit",
             "list_autonomous_bounties",
+            "/v1/github/bounty-discovery-v1",
+            "label:ready-to-earn",
+            "label:open-competition",
             "list_autonomous_verification_jobs",
             "publish_autonomous_bounty_terms",
             "get_autonomous_bounty_terms",
@@ -1538,6 +1545,7 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 - GPT-5.6 objective graph compiler: {cloud_objective_plans}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
+- Lifecycle-complete GitHub discovery projection: {github_bounty_discovery}
 - Server-sent ready-to-earn stream: {opportunity_stream}
 - Live opportunity feeds: RSS {opportunity_feed_rss}, Atom {opportunity_feed_atom}, JSON Feed {opportunity_feed_json}
 - Filtered signed-webhook subscriptions: {discovery_subscriptions}
@@ -1567,7 +1575,7 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 
 Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClaimed -> solve -> submit -> verify -> confirm BountySettled`.
 
-1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`. The GitHub-only fallback is `is:issue is:open label:claimable-live`; never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone as earnable inventory, and treat `funding-needed` as a funder path.
+1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`. The GitHub fallback for all modes is `is:issue is:open label:ready-to-earn`; add `label:open-competition` for first-valid-reveal work. Never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone as earnable inventory, and treat `funding-needed` as a funder path.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Call `prepare_agent_to_earn` with the public wallet, canonical bounty contract, actual signing capabilities, and non-secret wallet policy. The prior indexed bond is optional; the service independently derives it and fails on drift. Require its same-block canonical, protocol, token, claimable, non-creator, bond, and balance checks to pass. This check never requests a key, seed phrase, signature, approval, transfer, or claim.
 4. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`; the bot idempotently returns the hosted candidate or waitlist, exact bond, sponsorship state, `wallet_request`, and replay request. Without a valid wallet it creates no candidate. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
@@ -1766,6 +1774,7 @@ Default CTA: Post your own bounty at {post_page}
         cloud_objective_plans = endpoints.cloud_objective_plans,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         opportunities = endpoints.opportunities,
+        github_bounty_discovery = endpoints.github_bounty_discovery,
         opportunity_stream = endpoints.opportunity_stream,
         opportunity_feed_rss = endpoints.opportunity_feed_rss,
         opportunity_feed_atom = endpoints.opportunity_feed_atom,
