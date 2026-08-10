@@ -1718,6 +1718,7 @@ async fn main() -> anyhow::Result<()> {
             get(agent_bounties_discovery),
         )
         .route("/.well-known/x402.json", get(x402_discovery))
+        .route("/.well-known/agent-card.json", get(agent_card))
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5203,6 +5204,25 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
             "scope": "fiat-capable payment credentials, recurring or metered sessions, and Stripe-backed convenience rails; never canonical bounty settlement authority"
         }
     }))
+}
+
+#[utoipa::path(get, path = "/.well-known/agent-card.json", responses((status = 200, description = "A2A 1.0 Agent Card for machine discovery")))]
+/// Serves the A2A Agent Card with ETag and Cache-Control headers for conditional requests.
+async fn agent_card() -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
+    let card = include_str!("../../../fixtures/a2a-agent-card.json");
+    let parsed: serde_json::Value =
+        serde_json::from_str(card).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let serialized = serde_json::to_string(&parsed).unwrap_or_default();
+    use sha2::{Digest, Sha256};
+    let hash = hex::encode(Sha256::digest(serialized.as_bytes()));
+    let etag = format!("\"{}\"", &hash[..16]);
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(header::ETAG, HeaderValue::from_str(&etag).unwrap());
+    resp_headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    Ok((resp_headers, Json(parsed)))
 }
 
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]
