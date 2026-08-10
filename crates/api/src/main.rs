@@ -1884,6 +1884,10 @@ async fn main() -> anyhow::Result<()> {
             get(agent_bounties_discovery),
         )
         .route("/.well-known/x402.json", get(x402_discovery))
+        .route(
+            "/.well-known/agent-card.json",
+            get(agent_card),
+        )
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5512,6 +5516,28 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
             "scope": "fiat-capable payment credentials, recurring or metered sessions, and Stripe-backed convenience rails; never canonical bounty settlement authority"
         }
     }))
+}
+
+#[utoipa::path(get, path = "/.well-known/agent-card.json", responses((status = 200, description = "A2A 1.0 Agent Card for machine discovery")))]
+async fn agent_card(State(state): State<SharedState>) -> impl IntoResponse {
+    use sha2::{Digest, Sha256};
+    let card = web_public::agent_card_manifest(&state.public_base_url);
+    let body = serde_json::to_string(&card).unwrap_or_default();
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(body.as_bytes())));
+    let mut response = Response::new(body.into());
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=60, must-revalidate"),
+    );
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"agent-card\"")),
+    );
+    response
 }
 
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]

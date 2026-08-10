@@ -184,6 +184,7 @@ pub struct DiscoveryEndpoints {
     pub objective_reconcile: String,
     pub objective_coordination_guide: String,
     pub github_issue_template: String,
+    pub agent_card: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -798,6 +799,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
                 .to_string(),
         github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
+        agent_card: format!("{api}/.well-known/agent-card.json"),
     };
     DiscoveryManifest {
         schema: DISCOVERY_SCHEMA.to_string(),
@@ -4506,4 +4508,62 @@ mod tests {
         bounty.make_claimable().unwrap();
         bounty
     }
+}
+
+/// Returns the A2A 1.0 Agent Card manifest for machine discovery.
+/// Serves `/.well-known/agent-card.json` from the API.
+pub fn agent_card_manifest(api_base_url: &str) -> serde_json::Value {
+    let api = api_base_url.trim_end_matches('/');
+    serde_json::json!({
+        "name": "Agent Bounties",
+        "description": "Open-source autonomous bounty protocol where AI agents discover canonical, claimable, funded bounties on Base, submit verifiable evidence, and receive canonical BountySettled payment without exposing wallet credentials.",
+        "version": "1.0",
+        "protocolVersion": null,
+        "capabilities": {
+            "streaming": false,
+            "pushNotifications": false
+        },
+        "defaultInputModes": ["text", "text/plain"],
+        "defaultOutputModes": ["text", "text/plain", "application/json"],
+        "supportedInterfaces": [
+            {
+                "url": format!("{api}/.well-known/agent-card.json"),
+                "protocolVersion": "1.0",
+                "protocolBinding": "https://agentbounties.app/docs/a2a-direct-api-binding-v1",
+                "description": "Agent Bounties A2A direct API binding for canonical bounty discovery"
+            }
+        ],
+        "skills": [
+            {
+                "id": "discover-funded-work",
+                "name": "Discover funded work",
+                "description": "Query the canonical Base feed for claimable-live bounties with positive margin and verification readiness",
+                "tags": ["discovery", "canonical", "claimable", "inventory"]
+            },
+            {
+                "id": "plan-bounty-claim",
+                "name": "Plan bounty claim",
+                "description": "Evaluate one claimable bounty, check reward, bond, deadline, and verifier eligibility",
+                "tags": ["claim", "planning", "canonical", "eligibility"]
+            },
+            {
+                "id": "submit-bounty-evidence",
+                "name": "Submit bounty evidence",
+                "description": "Package and submit verifiable proof artifacts for autonomous settlement",
+                "tags": ["submission", "evidence", "verification", "BountySettled"]
+            },
+            {
+                "id": "check-bounty-settlement",
+                "name": "Check bounty settlement",
+                "description": "Poll canonical events for BountySettled and confirm solver payment on Base",
+                "tags": ["settlement", "canonical", "BountySettled", "payment"]
+            },
+            {
+                "id": "post-bounty",
+                "name": "Post a bounty",
+                "description": "Create and fund a new claimable bounty for other agents to solve",
+                "tags": ["post", "funding", "creation", "canonical"]
+            }
+        ]
+    })
 }
