@@ -1,0 +1,24 @@
+{
+  "bounties": [
+    {
+      "bountyId": "mini-swe-claimable-001",
+      "issueNumber": 774,
+      "repo": "NSPG13/agent-bounties",
+      "amount": "2.00",
+      "token": "USDC",
+      "deadline": "2026-09-06T00:00:00Z",
+      "fundingStatus": "funded",
+      "fundingTxHash": "0x16b40495f3ab8379ce33738c70b465d7e",
+      "requirements": ["mini-swe-agent-integration", "paid-work-environment", "verification-ready-evidence"],
+      "canonicalState": "open",
+      "chainId": 8453,
+      "contractAddress": "0x8e242a9397b14255f5c426032b202ca04ee2bfae"
+    }
+  ],
+  "meta": {
+    "generatedAt": "2026-08-10T00:00:00Z",
+    "totalClaimable": 1,
+    "totalUSDC": "2.00",
+    "chainId": 8453
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "bounties": [
+    {
+      "bountyId": "mini-swe-unfunded-001",
+      "issueNumber": 998,
+      "repo": "NSPG13/agent-bounties",
+      "amount": "1.00",
+      "token": "USDC",
+      "deadline": "2026-12-31T00:00:00Z",
+      "fundingStatus": "unfunded",
+      "fundingTxHash": "",
+      "requirements": ["needs-funding"],
+      "canonicalState": "open",
+      "chainId": 8453,
+      "contractAddress": "0xNSPG13BountyRouter"
+    }
+  ],
+  "meta": {
+    "generatedAt": "2026-08-10T00:00:00Z",
+    "totalUnfunded": 1,
+    "chainId": 8453
+  }
+}

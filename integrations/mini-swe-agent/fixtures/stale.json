@@ -1,0 +1,23 @@
+{
+  "bounties": [
+    {
+      "bountyId": "mini-swe-stale-001",
+      "issueNumber": 999,
+      "repo": "NSPG13/agent-bounties",
+      "amount": "1.00",
+      "token": "USDC",
+      "deadline": "2026-01-01T00:00:00Z",
+      "fundingStatus": "funded",
+      "fundingTxHash": "0xdead0000000000000000000000000000000000000000000000000000000001",
+      "requirements": ["expired-bounty"],
+      "canonicalState": "expired",
+      "chainId": 8453,
+      "contractAddress": "0xNSPG13BountyRouter"
+    }
+  ],
+  "meta": {
+    "generatedAt": "2026-08-10T00:00:00Z",
+    "totalStale": 1,
+    "chainId": 8453
+  }
+}
