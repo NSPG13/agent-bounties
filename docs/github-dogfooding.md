@@ -101,22 +101,31 @@ offer a wallet handoff for that issue; it tells the caller not to sign or post a
 bond until the incident obligation is resolved and the label is removed.
 
 GitHub status labels are a discovery mirror, not authority. The scheduled
-inventory workflow reconciles them from the full canonical Base feed and its
-fail-closed earning subset:
+inventory workflow reconciles them from the lifecycle-complete public discovery
+projection and fails closed when a safe block, indexer, verifier, identity, or
+GitHub write is stale or ambiguous:
 
-- `claimable-live` means the exact issue contract is fully funded, canonically
-  `claimable`, terms-valid, verification-ready, and present in the earning feed.
+- `ready-to-earn` is the canonical cross-protocol search label. Search
+  `is:issue is:open label:ready-to-earn` for all ready work.
+- `claimable-live` remains on Open Competition during the 30-day compatibility
+  trial, but its action is **Enter competition**, never an exclusive claim.
+- `open-competition` narrows the ready search to first-valid-confirmed-reveal
+  work; the unrelated `competition` label is not used.
 - `claimed-live` means an on-chain solver claim is active, so another wallet
   must not sign a claim or post a bond for that round.
 - `settled-paid` requires matching confirmed `BountySettled` evidence.
 - `verification-unavailable` removes the bounty from earning discovery even
   when funds remain locked.
 
-The reconciler is dry-run by default. It changes managed labels; after exactly
-one confirmed canonical `BountySettled` event, it also creates or updates one
-trusted sticky payout receipt and closes the source issue as completed. Receipt
-publication happens before closure and is replay-safe. Neither action has
-wallet, contract-call, verification, acceptance, or settlement authority.
+The reconciler is dry-run by default. It reuses linked repository issues and
+creates central mirrors for external or missing sources. A stable hidden
+`discovery_id` marker makes repeated runs idempotent while an isolated managed
+body section preserves human-authored text, comments, assignees, milestones,
+and unrelated labels. After exactly one confirmed canonical `BountySettled`
+event, it creates or updates one trusted sticky payout receipt and closes the
+issue as completed. Receipt publication happens before closure and is
+replay-safe. Neither action has wallet, contract-call, verification,
+acceptance, or settlement authority.
 Run a local report with:
 
 ```powershell

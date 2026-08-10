@@ -252,6 +252,10 @@
   async function prepareCommit(event) {
     event.preventDefault();
     if (!state.envelope) throw new Error("Generate and download the recovery envelope first.");
+    window.agentBountiesAnalytics?.track("competition_entry_started", {
+      bounty_contract: bounty,
+      opportunity_id: params.get("discovery_id"),
+    });
     const plan = await json(`${state.api}/v1/base/open-competition-v1/commit-preparation`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -265,6 +269,10 @@
     if (!plan.allowed) throw new Error(`Entry blocked: ${plan.blocker || "canonical readiness failed"}`);
     await sendWalletCalls(plan, "Enter competition");
     await waitForCommittedState();
+    window.agentBountiesAnalytics?.track("competition_entry_confirmed", {
+      bounty_contract: bounty,
+      opportunity_id: params.get("discovery_id"),
+    });
     output("Canonical commitment confirmed. Download the updated recovery envelope now; it includes the committed block and reveal deadline needed after a restart.", "ready");
   }
 
@@ -274,6 +282,10 @@
     const file = form.elements.envelope.files[0];
     if (!file) throw new Error("Choose the recovery envelope file.");
     const envelope = JSON.parse(await file.text());
+    window.agentBountiesAnalytics?.track("competition_reveal_started", {
+      bounty_contract: bounty,
+      opportunity_id: params.get("discovery_id"),
+    });
     const plan = await json(`${state.api}/v1/base/open-competition-v1/reveal-preparation`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -288,6 +300,10 @@
     if (!plan.allowed) throw new Error(`Reveal blocked: ${plan.blocker || "canonical readiness failed"}`);
     await sendWalletCalls(plan, "Reveal solution");
     await loadCanonicalState();
+    window.agentBountiesAnalytics?.track("competition_reveal_confirmed", {
+      bounty_contract: bounty,
+      opportunity_id: params.get("discovery_id"),
+    });
     output(state.canonical.status_name === "settled"
       ? "Canonical settlement confirmed. Open the event proof before describing the reward as paid."
       : "Reveal transaction confirmed. Inspect canonical state for rejection, continued competition, or settlement.",
