@@ -10,4 +10,4 @@ publish = false
 
 [dependencies]
 competition-metric-core = { path = "../../../crates/competition-metric-core", default-features = false }
-sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", rev = "d454975ac7c1126097e36eceda9bce2cb9899da4" }
+sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", rev = "8252c2905ce32964df68248117015c61ebb854db" }
