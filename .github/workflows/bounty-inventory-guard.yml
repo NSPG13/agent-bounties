@@ -59,7 +59,7 @@ jobs:
       - name: Reconcile GitHub state from canonical Base evidence
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DISCOVERY_EXECUTE: ${{ (github.event_name == 'workflow_dispatch' && inputs.execute_github_discovery) || (github.event_name == 'schedule' && vars.GITHUB_BOUNTY_DISCOVERY_EXECUTE == 'true') }}
+          DISCOVERY_EXECUTE: ${{ (github.event_name == 'workflow_dispatch' && inputs.execute_github_discovery) || (github.event_name == 'schedule' && vars.BOUNTY_DISCOVERY_EXECUTE == 'true') }}
         run: |
           EXECUTE_ARGS=()
           if [[ "$DISCOVERY_EXECUTE" == "true" ]]; then

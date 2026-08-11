@@ -276,7 +276,8 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertIn("group: canonical-github-bounty-reconciliation", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         self.assertIn("default: false", workflow)
-        self.assertIn("vars.GITHUB_BOUNTY_DISCOVERY_EXECUTE == 'true'", workflow)
+        self.assertIn("vars.BOUNTY_DISCOVERY_EXECUTE == 'true'", workflow)
+        self.assertNotIn("vars.GITHUB_", workflow)
         self.assertIn("bounty-label-reconciliation.log", workflow)
         self.assertIn("if: always()", workflow)
 
