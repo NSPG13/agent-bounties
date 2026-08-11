@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("open_competition_v2_proof_rehearsal.py")
@@ -27,6 +28,12 @@ class OpenCompetitionV2ProofRehearsalTests(unittest.TestCase):
 
     def test_canonical_settlement_topic_is_bytes32(self) -> None:
         self.assertRegex(MODULE.SETTLED_TOPIC, r"^0x[0-9a-f]{64}$")
+
+    def test_posix_prover_receives_absolute_fixture_path(self) -> None:
+        fixture = Path("target/open-competition-v2-proof-work/fixture.json")
+        with mock.patch.object(MODULE.os, "name", "posix"):
+            command = MODULE.prover_command(fixture, "groth16")
+        self.assertTrue(Path(command[-2]).is_absolute())
 
 
 if __name__ == "__main__":

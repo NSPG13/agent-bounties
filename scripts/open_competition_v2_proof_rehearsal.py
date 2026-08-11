@@ -197,6 +197,7 @@ def scope(
 
 
 def prover_command(fixture_path: Path, mode: str) -> list[str]:
+    fixture_path = fixture_path.resolve()
     if os.name != "nt":
         return [
             "cargo", "run", "--locked", "--release", "-p", "public-vector-metric-v1-script",

@@ -524,9 +524,9 @@ contract OpenCompetitionBountyV2Beta1Test {
                 submissionHash: 0x4c57655c451f58ed3b530a6c550a6254e99caaef9f2311b26262205d88fc1744,
                 evidenceHash: 0x70efee545f9c7d4bd6964f4fa337f41d492ffeb58ca45a013684c74a28aded92,
                 proofSystem: 0x0fbfc39a4f588598b55fce747dc8dde3f1b661a9d538dc174b464d210d12a81d,
-                programVKey: 0x005934062b630354476ae4d37ea5378ba622787d2c3cb728d19f4944df53c248,
-                sourceHash: 0x5b142fc184b776a8dfaadf6ab044b9bad57dababa4e7bc47966d2d2a3d79e649,
-                elfHash: 0x1848e208039de8967760b5c4cc3fb4a404aa910220eaa1cedf7a8059a5be37d5,
+                programVKey: 0x004f46857a039393a0c686abe9c66ed1aa98fc3f86acd20e2778d58ad1ac1bba,
+                sourceHash: 0x4e78a9da5ad688b3461a063d6589bbf17c511c67aaa0a537f448076482ea2c01,
+                elfHash: 0x27a64455409be7a6ddb733251392f45968735bf824f29b85cbf463942ee02353,
                 journalSchemaHash: 0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4,
                 metricProgramHash: 0x1c27fc20ab65264c7db2997c8b76f78d7291cdb91243481bcae1e88f77beb88a,
                 executionPolicyHash: 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,
@@ -539,7 +539,7 @@ contract OpenCompetitionBountyV2Beta1Test {
         );
         require(encoded.length == 640, "journal length drift");
         require(
-            keccak256(encoded) == 0x60105dd7b00b0e7e9bfe68c65e30de22c544cf29215a9c1d944ffbd900bc3822,
+            keccak256(encoded) == 0xf8a21ebd4c7533a0817ac2d989f95f698adab55ac0dbeba789105d3dc29d6ae2,
             "shared journal drift"
         );
     }
