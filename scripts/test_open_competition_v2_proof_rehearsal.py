@@ -34,9 +34,26 @@ class OpenCompetitionV2ProofRehearsalTests(unittest.TestCase):
 
     def test_posix_prover_receives_absolute_fixture_path(self) -> None:
         fixture = Path("target/open-competition-v2-proof-work/fixture.json")
-        with mock.patch.object(MODULE.os, "name", "posix"):
+        with mock.patch.object(MODULE.os, "name", "posix"), mock.patch.dict(
+            MODULE.os.environ, {}, clear=True
+        ):
             command = MODULE.prover_command(fixture, "groth16")
         self.assertTrue(Path(command[-2]).is_absolute())
+
+    def test_posix_prover_can_use_one_prebuilt_exact_runner(self) -> None:
+        fixture = Path("target/open-competition-v2-proof-work/fixture.json")
+        with tempfile.TemporaryDirectory() as directory:
+            runner = Path(directory) / "public-vector-metric-v1-script"
+            runner.write_bytes(b"runner")
+            with mock.patch.object(MODULE.os, "name", "posix"), mock.patch.dict(
+                MODULE.os.environ,
+                {"OPEN_COMPETITION_V2_PROVER_BINARY": str(runner)},
+                clear=True,
+            ):
+                command = MODULE.prover_command(fixture, "plonk")
+        self.assertEqual(command[0], str(runner.resolve()))
+        self.assertTrue(Path(command[1]).is_absolute())
+        self.assertEqual(command[2], "plonk")
 
     def test_python_reference_journal_matches_rust_golden_vector(self) -> None:
         fixture = json.loads(
