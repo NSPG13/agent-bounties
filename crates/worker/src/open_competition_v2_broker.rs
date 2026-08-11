@@ -190,6 +190,60 @@ struct ProverResponse {
     failure_message: Option<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ValidatedProverPayload {
+    proof: Vec<u8>,
+    public_values: Vec<u8>,
+    public_values_hex: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProverPayloadError {
+    code: &'static str,
+    message: &'static str,
+}
+
+fn validate_proved_response(
+    response: &ProverResponse,
+    proof_system: &str,
+    expected_public_values: &str,
+) -> Result<ValidatedProverPayload, ProverPayloadError> {
+    let invalid = || ProverPayloadError {
+        code: "proof_provider_response_invalid",
+        message: "The proof provider returned malformed or incomplete proof data.",
+    };
+    let proof = bounded_hex(
+        response.proof.as_deref().ok_or_else(invalid)?,
+        1,
+        4 * 1024 * 1024,
+    )
+    .map_err(|_| invalid())?;
+    if !proof_has_expected_selector(proof_system, &proof) {
+        return Err(ProverPayloadError {
+            code: "proof_system_selector_mismatch",
+            message: "Proof bytes did not carry the quote-bound canonical SP1 verifier selector.",
+        });
+    }
+    let public_values = bounded_hex(
+        response.public_values.as_deref().ok_or_else(invalid)?,
+        640,
+        640,
+    )
+    .map_err(|_| invalid())?;
+    let public_values_hex = format!("0x{}", hex::encode(&public_values));
+    if !public_values_hex.eq_ignore_ascii_case(expected_public_values) {
+        return Err(ProverPayloadError {
+            code: "proof_journal_mismatch",
+            message: "Proof provider journal did not equal the quote-bound expected journal.",
+        });
+    }
+    Ok(ValidatedProverPayload {
+        proof,
+        public_values,
+        public_values_hex,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct OpenCompetitionV2BrokerPollReport {
     pub leased_job_id: Option<Uuid>,
@@ -310,12 +364,30 @@ async fn process_prover_job(
         }
         Err(_) => return Ok((job.state, "provider_retry".to_string())),
     };
-    let response = response
-        .json::<ProverResponse>()
-        .await
-        .context("proof provider returned an invalid response")?;
+    let response = match response.json::<ProverResponse>().await {
+        Ok(response) => response,
+        Err(_) => {
+            *job = mark_refund_due(
+                store,
+                config,
+                job,
+                "proof_provider_response_invalid",
+                "The proof provider returned malformed or incomplete JSON.",
+            )
+            .await?;
+            return Ok((job.state, "refund_due".to_string()));
+        }
+    };
     if response.provider_job_id.trim().is_empty() {
-        return Err(anyhow!("proof provider omitted provider_job_id"));
+        *job = mark_refund_due(
+            store,
+            config,
+            job,
+            "proof_provider_response_invalid",
+            "The proof provider omitted its stable job identifier.",
+        )
+        .await?;
+        return Ok((job.state, "refund_due".to_string()));
     }
     match response.status {
         ProverStatus::Pending => {
@@ -333,72 +405,39 @@ async fn process_prover_job(
             Ok((job.state, "provider_pending".to_string()))
         }
         ProverStatus::Failed => {
-            *job = mark_refund_due(
-                store,
-                config,
-                job,
-                response
-                    .failure_code
-                    .as_deref()
-                    .unwrap_or("proof_provider_failed"),
-                response
-                    .failure_message
-                    .as_deref()
-                    .unwrap_or("Proof provider failed without a reason."),
-            )
-            .await?;
+            let failure_message = response.failure_message.as_deref().unwrap_or_else(|| {
+                if response.failure_code.is_some() {
+                    "Proof provider reported a failure code without a message."
+                } else {
+                    "Proof provider failed without a reason."
+                }
+            });
+            *job = mark_refund_due(store, config, job, "proof_provider_failed", failure_message)
+                .await?;
             Ok((job.state, "refund_due".to_string()))
         }
         ProverStatus::Proved => {
-            let proof = bounded_hex(
-                response
-                    .proof
-                    .as_deref()
-                    .context("proved response omitted proof")?,
-                1,
-                4 * 1024 * 1024,
-            )?;
-            if !proof_has_expected_selector(&job.proof_system, &proof) {
-                *job = mark_refund_due(
-                    store,
-                    config,
-                    job,
-                    "proof_system_selector_mismatch",
-                    "Proof bytes did not carry the quote-bound canonical SP1 verifier selector.",
-                )
-                .await?;
-                return Ok((job.state, "refund_due".to_string()));
-            }
-            let public_values = bounded_hex(
-                response
-                    .public_values
-                    .as_deref()
-                    .context("proved response omitted public_values")?,
-                640,
-                640,
-            )?;
-            let public_values_hex = format!("0x{}", hex::encode(&public_values));
-            if !public_values_hex.eq_ignore_ascii_case(&job.expected_public_values) {
-                *job = mark_refund_due(
-                    store,
-                    config,
-                    job,
-                    "proof_journal_mismatch",
-                    "Proof provider journal did not equal the quote-bound expected journal.",
-                )
-                .await?;
-                return Ok((job.state, "refund_due".to_string()));
-            }
+            let payload = match validate_proved_response(
+                &response,
+                &job.proof_system,
+                &job.expected_public_values,
+            ) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    *job = mark_refund_due(store, config, job, error.code, error.message).await?;
+                    return Ok((job.state, "refund_due".to_string()));
+                }
+            };
             *job = store
                 .transition_open_competition_v2_proof_job(
                     job.id,
                     OpenCompetitionV2ProofJobState::Proving,
                     OpenCompetitionV2ProofJobState::Proved,
                     &OpenCompetitionV2ProofJobUpdate {
-                        proof_hash: Some(keccak_hex(&proof)),
-                        public_values_hash: Some(keccak_hex(&public_values)),
-                        proof: Some(format!("0x{}", hex::encode(proof))),
-                        public_values: Some(public_values_hex),
+                        proof_hash: Some(keccak_hex(&payload.proof)),
+                        public_values_hash: Some(keccak_hex(&payload.public_values)),
+                        proof: Some(format!("0x{}", hex::encode(payload.proof))),
+                        public_values: Some(payload.public_values_hex),
                         proof_provider_job_id: Some(response.provider_job_id),
                         ..Default::default()
                     },
@@ -1210,6 +1249,45 @@ mod tests {
             "groth16",
             &[0x5a, 0x09, 0x3a, 0x2f]
         ));
+    }
+
+    #[test]
+    fn proved_provider_payload_is_exact_and_fails_closed() {
+        let expected = format!("0x{}", "ab".repeat(640));
+        let mut response = ProverResponse {
+            status: ProverStatus::Proved,
+            provider_job_id: "provider-1".to_string(),
+            proof: Some("0x4388a21c01".to_string()),
+            public_values: Some(expected.clone()),
+            failure_code: None,
+            failure_message: None,
+        };
+        let payload = validate_proved_response(&response, "groth16", &expected).unwrap();
+        assert_eq!(payload.proof, [0x43, 0x88, 0xa2, 0x1c, 0x01]);
+        assert_eq!(payload.public_values.len(), 640);
+
+        response.proof = None;
+        assert_eq!(
+            validate_proved_response(&response, "groth16", &expected)
+                .unwrap_err()
+                .code,
+            "proof_provider_response_invalid"
+        );
+        response.proof = Some("0x5a093a2f01".to_string());
+        assert_eq!(
+            validate_proved_response(&response, "groth16", &expected)
+                .unwrap_err()
+                .code,
+            "proof_system_selector_mismatch"
+        );
+        response.proof = Some("0x4388a21c01".to_string());
+        response.public_values = Some(format!("0x{}", "cd".repeat(640)));
+        assert_eq!(
+            validate_proved_response(&response, "groth16", &expected)
+                .unwrap_err()
+                .code,
+            "proof_journal_mismatch"
+        );
     }
 
     #[test]
