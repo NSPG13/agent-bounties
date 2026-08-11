@@ -28,8 +28,7 @@ GPT-5.6 proposes the graph through the OpenAI Responses API. Rust code rejects
 cycles, subjective verifier types, malformed evidence, and budget drift. The
 model has no wallet, verification, or settlement authority. Existing
 autonomous-v1 contracts pay only after committed verification produces a
-confirmed canonical `BountySettled` event.
-
+* No confidential finalist information may be requested, received, or published before a verified team establishes an approved confidential workflow.
 The Build Week extension, baseline commit, live evaluation, evidence snapshot,
 judge path, and Codex collaboration record are documented in
 [docs/openai-build-week-2026.md](docs/openai-build-week-2026.md).
