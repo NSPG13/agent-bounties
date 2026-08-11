@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 from typing import Any
 
 from _shared.evm import address_bytes, address_word, artifact_hex, create_address, keccak256, keccak_bytes
@@ -78,6 +79,7 @@ GRADUATION_GATE_NAMES = PUBLIC_BETA_GATE_NAMES + (
     "graduation_review_approved",
 )
 REQUIRED_GATE_NAMES = GRADUATION_GATE_NAMES
+GATE_MANIFEST_RELATIVE = "deployments/open-competition-v2-beta1-release-gates.json"
 NETWORKS = {
     "base-mainnet": {
         "chain_id": 8453,
@@ -115,6 +117,49 @@ def source_tree_hash() -> str:
         digest.update(str(len(data)).encode())
         digest.update(b"\0")
         digest.update(data)
+    return "0x" + digest.hexdigest()
+
+
+def verify_exact_checkout(source_commit: str) -> None:
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("source commit must be a full lowercase Git commit")
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    if head != source_commit:
+        raise ValueError("source commit does not match the checked-out Git HEAD")
+    diff_commands = (
+        ["git", "diff", "--quiet", "--"],
+        ["git", "diff", "--cached", "--quiet", "--"],
+    )
+    for args in diff_commands:
+        result = subprocess.run(args, cwd=ROOT, check=False)
+        if result.returncode == 1:
+            raise ValueError("tracked worktree changes make the release source inexact")
+        if result.returncode != 0:
+            raise RuntimeError("Git could not verify the release worktree")
+
+
+def repository_subject_hash(source_commit: str) -> str:
+    """Hash the exact tracked tree while excluding only its mutable gate evidence."""
+    raw = subprocess.check_output(
+        ["git", "ls-tree", "-rz", "--full-tree", source_commit], cwd=ROOT
+    )
+    digest = hashlib.sha256()
+    found_gate_manifest = False
+    for entry in raw.split(b"\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        if path.decode("utf-8") == GATE_MANIFEST_RELATIVE:
+            found_gate_manifest = True
+            continue
+        digest.update(metadata)
+        digest.update(b"\t")
+        digest.update(path)
+        digest.update(b"\0")
+    if not found_gate_manifest:
+        raise ValueError("release gate manifest is absent from the source commit")
     return "0x" + digest.hexdigest()
 
 
@@ -196,7 +241,7 @@ def decode_route(value: str) -> tuple[str, bool]:
     return "0x" + raw[12:32].hex(), bool(int.from_bytes(raw[32:], "big"))
 
 
-def load_gates(path: Path) -> dict[str, Any]:
+def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
@@ -217,10 +262,15 @@ def load_gates(path: Path) -> dict[str, Any]:
         if not isinstance(item, dict):
             raise ValueError(f"completed release gate lacks evidence: {name}")
         source_commit = item.get("source_commit", "")
+        subject_hash = item.get("subject_hash", "")
         evidence_hash = item.get("evidence_hash", "")
         uri = item.get("uri", "")
         if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
             raise ValueError(f"release gate evidence has invalid source commit: {name}")
+        if not re.fullmatch(r"0x[0-9a-f]{64}", subject_hash):
+            raise ValueError(f"release gate evidence has invalid subject hash: {name}")
+        if expected_subject_hash is not None and subject_hash != expected_subject_hash:
+            raise ValueError(f"release gate evidence targets another repository subject: {name}")
         if not re.fullmatch(r"0x[0-9a-f]{64}", evidence_hash):
             raise ValueError(f"release gate evidence has invalid hash: {name}")
         if not isinstance(uri, str) or not uri.startswith("https://"):
@@ -284,13 +334,21 @@ def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> di
 
 
 def build_bundle(
-    *, network_name: str, deployer: str, source_commit: str, preflight: dict[str, Any], gates: dict[str, Any]
+    *,
+    network_name: str,
+    deployer: str,
+    source_commit: str,
+    repository_subject: str,
+    preflight: dict[str, Any],
+    gates: dict[str, Any],
 ) -> dict[str, Any]:
     network = NETWORKS[network_name]
     deployer = deployer.lower()
     address_bytes(deployer)
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise ValueError("source commit must be a full lowercase Git commit")
+    if not re.fullmatch(r"0x[0-9a-f]{64}", repository_subject):
+        raise ValueError("repository subject must be a 32-byte hash")
     if preflight["deployer_eth_wei"] < MIN_DEPLOYER_ETH_WEI:
         raise RuntimeError("deployer ETH is below the bounded deployment reserve")
     factory_address = create_address(deployer, preflight["deployer_nonce"])
@@ -350,6 +408,11 @@ def build_bundle(
         "network": network_name,
         "chain_id": network["chain_id"],
         "source_commit": source_commit,
+        "repository_subject": {
+            "algorithm": "sha256-git-ls-tree-v1",
+            "excluded_paths": [GATE_MANIFEST_RELATIVE],
+            "hash": repository_subject,
+        },
         "source_tree_hash": source_tree_hash(),
         "source_sha256": source_hashes,
         "compiler": {
@@ -441,13 +504,16 @@ def main() -> int:
     args = parse_args()
     network = NETWORKS[args.network]
     deployer = args.deployer.lower()
+    verify_exact_checkout(args.source_commit)
+    subject_hash = repository_subject_hash(args.source_commit)
     preflight = online_preflight(network, args.rpc_url or network["rpc"], deployer)
     bundle = build_bundle(
         network_name=args.network,
         deployer=deployer,
         source_commit=args.source_commit,
+        repository_subject=subject_hash,
         preflight=preflight,
-        gates=load_gates(args.gates),
+        gates=load_gates(args.gates, subject_hash),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
