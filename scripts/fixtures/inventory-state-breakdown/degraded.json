@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-08-11T02:00:00Z",
+  "source": "degraded-on-chain-feed",
+  "safe_block": null,
+  "source_degraded": true,
+  "items": [
+    {"id": "b1", "status": "ready_to_earn"},
+    {"id": "b2", "status": "verification_unavailable"},
+    {"id": "b3", "status": "verification_unavailable"}
+  ]
+}
