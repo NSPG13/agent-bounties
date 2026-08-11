@@ -636,6 +636,57 @@ Public
 """
 
 
+def execute_creation_plan(
+    args: argparse.Namespace,
+    cast: Cast,
+    manifest: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    plan_path: Path,
+    action_path: Path,
+    private_key: str,
+) -> tuple[str, str, str | None, bool]:
+    predicted = address(plan.get("predicted_bounty_contract"), "predicted bounty")
+    bounty_id = bytes32(plan.get("bounty_id"), "bounty id")
+    if is_canonical(cast, manifest["canonical_factory"], predicted):
+        return predicted, bounty_id, None, False
+
+    run(
+        [
+            args.python,
+            "scripts/plan_bounded_agent_action.py",
+            "create",
+            "--wallet",
+            manifest["wallet"],
+            "--creation-plan",
+            str(plan_path),
+            "--manifest",
+            str(contract_manifest_path(manifest)),
+            "--rpc-url",
+            args.rpc_url,
+            "--expect-owner",
+            manifest["owner"],
+            "--expect-delegate",
+            manifest["delegate"],
+            "--expect-policy-hash",
+            manifest["wallet_policy_hash"],
+            "--output",
+            str(action_path),
+        ]
+    )
+    action = json.loads(action_path.read_text(encoding="utf-8"))
+    direct = action["direct_transaction"]
+    tx_hash, created_now = create_if_missing(
+        cast,
+        manifest["canonical_factory"],
+        predicted,
+        address(direct.get("to"), "direct transaction target"),
+        str(direct.get("data")),
+        private_key,
+        args.broadcast_recovery_timeout,
+    )
+    return predicted, bounty_id, tx_hash, created_now
+
+
 def activate(args: argparse.Namespace) -> dict[str, Any]:
     manifest = load_manifest(args.manifest)
     commit = args.commit.strip().lower()
@@ -687,41 +738,14 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         action_path = args.output_dir / f"issue-{issue}-bounded-action.json"
-        run(
-            [
-                args.python,
-                "scripts/plan_bounded_agent_action.py",
-                "create",
-                "--wallet",
-                manifest["wallet"],
-                "--creation-plan",
-                str(plan_path),
-                "--manifest",
-                str(contract_manifest_path(manifest)),
-                "--rpc-url",
-                args.rpc_url,
-                "--expect-owner",
-                manifest["owner"],
-                "--expect-delegate",
-                manifest["delegate"],
-                "--expect-policy-hash",
-                manifest["wallet_policy_hash"],
-                "--output",
-                str(action_path),
-            ]
-        )
-        action = json.loads(action_path.read_text(encoding="utf-8"))
-        direct = action["direct_transaction"]
-        predicted = address(plan.get("predicted_bounty_contract"), "predicted bounty")
-        bounty_id = bytes32(plan.get("bounty_id"), "bounty id")
-        tx_hash, created_now = create_if_missing(
+        predicted, bounty_id, tx_hash, created_now = execute_creation_plan(
+            args,
             cast,
-            manifest["canonical_factory"],
-            predicted,
-            address(direct.get("to"), "direct transaction target"),
-            str(direct.get("data")),
+            manifest,
+            plan,
+            plan_path,
+            action_path,
             private_key,
-            args.broadcast_recovery_timeout,
         )
         if created_now:
             new_spend += int(manifest["initial_funding"])
