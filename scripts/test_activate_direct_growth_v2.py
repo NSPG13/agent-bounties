@@ -63,7 +63,8 @@ class DirectGrowthActivationTests(unittest.TestCase):
             "contract": "0x" + "12" * 20,
             "transaction_hash": "0x" + "34" * 32,
         }
-        body = activation.issue_body(task, result, "c" * 40)
+        manifest = activation.load_manifest()
+        body = activation.issue_body(manifest, task, result, "c" * 40)
         self.assertIn("Funded and claimable on Base mainnet", body)
         self.assertIn(f"/claim #{task['issue']} wallet:", body)
         self.assertIn("BountySettled", body)
