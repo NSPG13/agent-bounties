@@ -569,6 +569,8 @@
     const paidItems = items.filter((item) => item.source_type === "canonical_base"
       && item.work_state === "completed"
       && item.payment_state === "paid");
+    const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
+      && (item.work_state === "in_progress" || item.work_state === "submitted"));
     const addedThisWeek = readyItems.filter((item) => {
       const created = Date.parse(item.created_at);
       return Number.isFinite(created) && created >= oneWeekAgo;
@@ -582,7 +584,10 @@
     const settlements = paidItems.length;
 
     setMetric("ready", readyItems.length);
-    setMetricText("[data-adoption-ready-weekly]", `${formatMetric(addedThisWeek, 0)} added this week`);
+    setMetricText(
+      "[data-adoption-ready-weekly]",
+      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(inProgressItems.length, 0)} in progress`,
+    );
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
