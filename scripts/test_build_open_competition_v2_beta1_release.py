@@ -109,6 +109,9 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertEqual(
             bundle["canary_budget"]["required_usdc_base_units"], MODULE.CANARY_BUDGET
         )
+        self.assertEqual(bundle["compiler"]["solc"], "0.8.26+commit.8a97fa7a")
+        self.assertEqual(bundle["compiler"]["image"], MODULE.SOLC_IMAGE)
+        self.assertRegex(MODULE.SOLC_IMAGE, r"^docker\.io/ethereum/solc@sha256:[0-9a-f]{64}$")
 
 
 if __name__ == "__main__":
