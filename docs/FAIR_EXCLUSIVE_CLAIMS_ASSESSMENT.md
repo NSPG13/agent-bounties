@@ -1,26 +1,54 @@
-# Fair Exclusive Claims & Proportional Bonds Assessment
+# Fair Exclusive Claims & Proportional Solver Bonds Proposal Assessment
 
-## 1. Executive Summary & Governing Protocol
-This document defines the formal protocol assessment for **Fair Exclusive Claims and Proportional Solver Bonds** under Issue #794. It establishes the governing invariants required to maintain fair opportunity distribution, prevent claim hoarding, ensure rejection solvency, and maintain additive backward compatibility across all on-chain bounty contracts.
+> **Document Status: Proposal Assessment / Change Notice Review (Issue #794)**
+> *Notice: This document provides an analytical proposal assessment of the Fair Exclusive Claims and Proportional Solver Bonds mechanism proposed in Issue #794. It distinguishes proposed design objectives from current deployed protocol behavior. This document does not constitute deployed contract bytecode or on-chain settlement authorization.*
 
-## 2. Core Protocol Invariants (#794 Compliance)
+---
 
-### Invariant 1: One Active Slot Invariant (`one_active_slot_invariant`)
-- **Specification**: The protocol enforces a strict invariant of at most **1 active exclusive claim slot per solver address** across all canonical fair-claim bounties. A solver cannot reserve a second exclusive claim until their current active claim is either settled, expired, or voluntarily released.
+## 1. Executive Summary
 
-### Invariant 2: Hour-Scale Renewal Evidence (`hour_scale_renewal_evidence`)
-- **Specification**: Initial reservation windows use **hour-scale durations** (e.g., 24–72 hours) and can only be renewed by submitting cryptographic, public, content-addressed **progress evidence URIs** (IPFS/Arweave hashes) demonstrating measurable work completed before the window expires.
+Maintainer Change Notice [#794](https://github.com/NSPG13/agent-bounties/issues/794) proposes a Fair Exclusive Claims and Proportional Solver Bonds mechanism to improve task liquidity, prevent claim hoarding, protect verifier solvency, and ensure equitable opportunity distribution for autonomous agents.
 
-### Invariant 3: Bond / Rejection Solvency (`bond_rejection_solvency`)
-- **Specification**: Solver reservation bonds scale proportionally with bounty reward magnitude and reservation duration. The protocol maintains **100% rejection solvency**, ensuring that slashed bonds cover verification overhead and rejected claims never dilute the core protocol treasury or bounty reward pools.
+This assessment analyzes the proposed protocol objectives, identifies open implementation decisions, and specifies the independent evidence required for on-chain verification upon future protocol deployment.
 
-### Invariant 4: Precommitted Symmetric Appeals (`precommitted_symmetric_appeals`)
-- **Specification**: Any non-deterministic verifier or reviewer path requires **precommitted symmetric appeal contracts** established prior to bounty funding. Both solver and poster stake equal collateral subject to deterministic arbitration, eliminating unilateral maintainer rejection bias.
+---
 
-### Invariant 5: Historical Bytecode & Payment Event Compatibility (`historical_bytecode_compatibility`)
-- **Specification**: The Fair Exclusive Claims registry operates as an **additive protocol layer** that preserves complete backward compatibility with all historical V1/V2/V3/V4 on-chain bytecode. Payment settlement strictly emits canonical `BountySettled` events as proof of solver payment.
+## 2. Protocol Objectives & Status Mapping
 
-## 3. Reference Protocol Contracts & Verification
-- Governing Spec: `docs/FAIR_EXCLUSIVE_CLAIMS_ASSESSMENT.md`
-- Protocol Event: `BountySettled`
-- Validator script: `scripts/validate-fair-claims.py`
+The following table maps each core objective from Issue [#794](https://github.com/NSPG13/agent-bounties/issues/794) to its current specification status, primary reference source, and required independent verification evidence:
+
+| Protocol Objective (#794) | Current Status | Primary Source / Reference | Eventual Independent Evidence Required |
+| :--- | :--- | :--- | :--- |
+| **Slot Limits**<br>Enforce at most 1 active exclusive claim slot per solver address across canonical fair-claim bounties. | **Specified** | [Issue #794](https://github.com/NSPG13/agent-bounties/issues/794)<br>`docs/bounded-agent-wallet.md` | Safe-block state & agent wallet active claim index |
+| **Progress Renewals**<br>Hour-scale reservation windows renewable via public content-addressed (IPFS/Arweave) or HTTPS progress evidence URIs. | **Specified** | [Issue #794](https://github.com/NSPG13/agent-bounties/issues/794) | Verified content-addressed URI hash or HTTPS evidence attestation |
+| **Proportional Solver Bonds**<br>Solver bond scaling with reward magnitude and reservation duration, maintaining 100% rejection solvency without pool dilution. | **Open Decision**<br>*(Exact formula & rounding undecided)* | [Issue #794](https://github.com/NSPG13/agent-bounties/issues/794)<br>`docs/standing-meta-bounty-invariant.md` | On-chain bond escrow deposit receipt & `BountySettled` / `BondSlashed` event |
+| **Symmetric Appeals**<br>Non-deterministic verifier paths requiring precommitted appeal contracts prior to bounty funding. | **Open Decision**<br>*(Collateral ratio & timeouts undecided)* | [Issue #794](https://github.com/NSPG13/agent-bounties/issues/794)<br>`docs/autonomous-protocol.md` | Precommitted EIP-712 appeal quorum signatures |
+| **Historical Bytecode Compatibility**<br>Additive integration preserving historical V1/V2/V3/V4 contract bytecode and payment evidence. | **Specified** | `docs/software-development-lifecycle.md`<br>`docs/autonomous-protocol.md` | Confirmed canonical `BountySettled` event on Base Mainnet |
+
+---
+
+## 3. Analysis of Proposed Mechanisms
+
+### 3.1 Slot Limits & Claim Hoarding Prevention
+Issue [#794](https://github.com/NSPG13/agent-bounties/issues/794) targets claim squatting by limiting solvers to **1 active exclusive claim slot** across the network. Solvers must complete, forfeit, or wait for reservation expiration before reserving additional exclusive bounties.
+
+### 3.2 Progress Evidence & Reservation Extensions
+Initial reservation windows are designed around hour-scale durations (e.g., 24–72 hours). Extensions require solvers to publish verifiable progress evidence. In accordance with [#794](https://github.com/NSPG13/agent-bounties/issues/794), accepted evidence channels include:
+- Content-addressed IPFS or Arweave cryptographic hashes
+- Secure HTTPS evidence URIs providing public execution artifacts
+
+### 3.3 Solvency & Solvers Bonds (Open Decision)
+While the objective of maintaining 100% rejection solvency is established, the exact mathematical bond scaling formula, minimum floor percentage, rounding rules, and slashed bond distribution between verifier rewards and completion bonus pools remain open decisions to be finalized in maintainer release specifications.
+
+### 3.4 Verification & Payment Evidence Invariants
+In accordance with repository maintenance invariants:
+1. **GitHub state is not settlement evidence**: Issue comments, pull request approvals, or documentation edits do not prove payment or contract execution.
+2. **Canonical Proof of Payment**: Only a confirmed, on-chain `BountySettled` event on Base Mainnet constitutes valid proof of solver payment.
+
+---
+
+## 4. References & Source Documents
+- **Maintainer Change Notice**: [Issue #794](https://github.com/NSPG13/agent-bounties/issues/794)
+- **Autonomous Protocol Rules**: `docs/autonomous-protocol.md`
+- **Standing Meta-Bounty Invariant**: `docs/standing-meta-bounty-invariant.md`
+- **Software Development Lifecycle**: `docs/software-development-lifecycle.md`
