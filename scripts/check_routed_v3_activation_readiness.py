@@ -9,10 +9,28 @@ from pathlib import Path
 
 import activate_routed_v3_dynamic as dynamic
 import activate_routed_v3_replacements as activation
+from _shared.rpc import BASE_RPC_ENDPOINTS, rpc_failover
+
+
+def _prefer_failover_base_rpc(rpc_url: str) -> str:
+    """Prefer HTTPS Base endpoints with chain-id validation before inventory reads."""
+    preferred = (rpc_url or "").strip()
+    endpoints: list[str] = []
+    if preferred.startswith("https://"):
+        endpoints.append(preferred)
+    for endpoint in BASE_RPC_ENDPOINTS:
+        if endpoint not in endpoints:
+            endpoints.append(endpoint)
+    try:
+        rpc_failover("eth_chainId", [], endpoints=endpoints, max_retries=2)
+        return preferred if preferred.startswith("https://") else endpoints[0]
+    except Exception:
+        return preferred
 
 
 def inspect(rpc_url: str, cast_bin: str) -> dict[str, object]:
     try:
+        rpc_url = _prefer_failover_base_rpc(rpc_url)
         cast = activation.Cast(cast_bin, rpc_url)
         deployment = dynamic.discover_deployment(cast)
         state = activation.policy_state(cast, deployment)

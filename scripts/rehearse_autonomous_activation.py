@@ -16,10 +16,23 @@ import time
 from typing import Any
 
 from Crypto.Hash import keccak
-from _shared.rpc import rpc
+from _shared.rpc import BASE_RPC_ENDPOINTS, rpc, rpc_failover
 
 
 MAX_ACTIVATION_FUNDING_MINOR = 8_040_000
+
+
+def public_base_rpc(preferred: str | None = None) -> str:
+    """Validate Base chain ID 8453 via ordered HTTPS failover before reads."""
+    preferred = (preferred or "").strip()
+    endpoints: list[str] = []
+    if preferred.startswith("https://"):
+        endpoints.append(preferred)
+    for endpoint in BASE_RPC_ENDPOINTS:
+        if endpoint not in endpoints:
+            endpoints.append(endpoint)
+    rpc_failover("eth_chainId", [], endpoints=endpoints)
+    return preferred if preferred.startswith("https://") else endpoints[0]
 
 
 def selector(signature: str) -> str:
@@ -554,6 +567,7 @@ def main() -> int:
     parser.add_argument(
         "--fork-url",
         default=os.environ.get("BASE_MAINNET_RPC_URL", "https://mainnet.base.org"),
+        help="preferred Base HTTPS RPC; failover validates chain id 8453 before use",
     )
     parser.add_argument("--anvil", help="path to the anvil executable")
     parser.add_argument(
@@ -574,10 +588,11 @@ def main() -> int:
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     try:
+        fork_url = public_base_rpc(args.fork_url)
         result = rehearse(
             repo,
             repo / args.bundle,
-            args.fork_url,
+            fork_url,
             args.anvil,
             expect_existing_factory=args.expect_existing_factory,
             verifier_deployment_path=(repo / args.verifier_deployment)
