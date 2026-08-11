@@ -224,7 +224,8 @@ pub(crate) async fn profiles(Query(query): Query<NetworkQuery>) -> ApiResult {
             "settlement_token": settlement_token(&network)?,
             "groth16_gateway": OPEN_COMPETITION_V2_GROTH16_GATEWAY,
             "plonk_gateway": OPEN_COMPETITION_V2_PLONK_GATEWAY,
-            "sp1_release_line": "6.1"
+            "sp1_release_line": "6.3.1",
+            "sp1_verifier_route_line": "6.1"
         },
         "programs": programs,
         "proof_broker_enabled": release.as_ref().is_some_and(|release| release.proof_broker_enabled),
@@ -1993,6 +1994,20 @@ mod tests {
             metric_program_hash: Some(hash(7)),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn profiles_distinguish_prover_release_from_verifier_route() {
+        let response = profiles(Query(NetworkQuery {
+            network: Some("base-sepolia".to_string()),
+        }))
+        .await
+        .expect("profiles response");
+        assert_eq!(response.0["canonical_rails"]["sp1_release_line"], "6.3.1");
+        assert_eq!(
+            response.0["canonical_rails"]["sp1_verifier_route_line"],
+            "6.1"
+        );
     }
 
     #[test]
