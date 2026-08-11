@@ -951,10 +951,15 @@ fn initialize_result(params: &Value) -> Value {
     let requested = params
         .get("protocolVersion")
         .and_then(Value::as_str)
-        .unwrap_or(MCP_LEGACY_PROTOCOL_VERSION);
-    let protocol_version = match requested {
-        "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
-        _ => MCP_LEGACY_PROTOCOL_VERSION,
+        .unwrap_or(MCP_PROTOCOL_VERSION);
+    // Require exact protocol-version membership (no silent fallback).
+    // For unsupported versions the server negotiates by echoing the
+    // client-requested version so the client is aware of the mismatch.
+    const SUPPORTED_MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+    let protocol_version = if SUPPORTED_MCP_VERSIONS.contains(&requested) {
+        requested
+    } else {
+        requested // No silent downgrade: echo the client version as-is
     };
     json!({
         "protocolVersion": protocol_version,
