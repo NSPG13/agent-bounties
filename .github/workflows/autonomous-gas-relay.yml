@@ -30,7 +30,7 @@ jobs:
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
         run: python scripts/relay_autonomous_action.py --health-check
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: autonomous-gas-relay-health-${{ github.run_id }}
@@ -70,7 +70,7 @@ jobs:
           --execute
           --publish
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: autonomous-gas-relay-${{ github.event.comment.id || github.run_id }}

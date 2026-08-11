@@ -132,7 +132,7 @@ jobs:
           --pull-request-url "$PULL_REQUEST_URL"
           --check-run-url "$CHECK_RUN_URL"
           --output target/direct-recovery-candidates
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-candidates
           path: target/direct-recovery-candidates
@@ -173,7 +173,7 @@ jobs:
           --output target/direct-recovery-attestations-one
           --private-key-env RECOVERY_VERIFIER_KEY
           --expected-signer "$EXPECTED_SIGNER"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-attestations-one
           path: target/direct-recovery-attestations-one
@@ -214,7 +214,7 @@ jobs:
           --output target/direct-recovery-attestations-two
           --private-key-env RECOVERY_VERIFIER_KEY
           --expected-signer "$EXPECTED_SIGNER"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-attestations-two
           path: target/direct-recovery-attestations-two
@@ -267,7 +267,7 @@ jobs:
           --attestations target/direct-recovery-attestations-one
           --attestations target/direct-recovery-attestations-two
           --output target/direct-recovery-evidence.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-evidence
           path: target/direct-recovery-evidence.json
