@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("build_open_competition_v2_beta1_release.py")
@@ -11,6 +12,8 @@ SPEC.loader.exec_module(MODULE)
 
 
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
+    subject_hash = "0x" + "33" * 32
+
     def test_metric_identity_is_single_release_source_of_truth(self) -> None:
         identity = MODULE.METRIC_IDENTITY
         self.assertEqual(
@@ -36,6 +39,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         path = MODULE.ROOT / "target/tmp/open-competition-v2-staged-gates.json"
         evidence = {
             "source_commit": "a" * 40,
+            "subject_hash": self.subject_hash,
             "evidence_hash": "0x" + "11" * 32,
             "uri": "https://example.test/evidence",
         }
@@ -51,7 +55,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             value["gates"][name] = True
             value["evidence"][name] = evidence
         path.write_text(__import__("json").dumps(value), encoding="utf-8")
-        gates = MODULE.load_gates(path)
+        gates = MODULE.load_gates(path, self.subject_hash)
         self.assertTrue(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
         self.assertFalse(gates["graduation_complete"])
@@ -68,6 +72,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             network_name="base-mainnet",
             deployer=MODULE.DEFAULT_DEPLOYER,
             source_commit="a" * 40,
+            repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
         )
@@ -79,13 +84,14 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             value["gates"][name] = True
             value["evidence"][name] = evidence
         path.write_text(__import__("json").dumps(value), encoding="utf-8")
-        gates = MODULE.load_gates(path)
+        gates = MODULE.load_gates(path, self.subject_hash)
         self.assertTrue(gates["public_beta_launch_complete"])
         self.assertFalse(gates["graduation_complete"])
         bundle = MODULE.build_bundle(
             network_name="base-mainnet",
             deployer=MODULE.DEFAULT_DEPLOYER,
             source_commit="a" * 40,
+            repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
         )
@@ -96,12 +102,13 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             value["gates"][name] = True
             value["evidence"][name] = evidence
         path.write_text(__import__("json").dumps(value), encoding="utf-8")
-        gates = MODULE.load_gates(path)
+        gates = MODULE.load_gates(path, self.subject_hash)
         self.assertTrue(gates["graduation_complete"])
         bundle = MODULE.build_bundle(
             network_name="base-mainnet",
             deployer=MODULE.DEFAULT_DEPLOYER,
             source_commit="a" * 40,
+            repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
         )
@@ -122,6 +129,62 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         path.write_text(__import__("json").dumps(value), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "lacks evidence"):
             MODULE.load_gates(path)
+
+    def test_completed_gate_must_target_exact_repository_subject(self) -> None:
+        path = MODULE.ROOT / "target/tmp/open-competition-v2-wrong-subject.json"
+        value = {
+            "schema_version": "agent-bounties/open-competition-v2-beta1-release-gates-v2",
+            "protocol_version": "agent-bounties/open-competition-v2-beta1",
+            "beta_risk_preimage": "risk",
+            "gates": {name: name == "repository_gate_complete" for name in MODULE.REQUIRED_GATE_NAMES},
+            "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
+        }
+        value["evidence"]["repository_gate_complete"] = {
+            "source_commit": "a" * 40,
+            "subject_hash": "0x" + "44" * 32,
+            "evidence_hash": "0x" + "11" * 32,
+            "uri": "https://example.test/evidence",
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(__import__("json").dumps(value), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "another repository subject"):
+            MODULE.load_gates(path, self.subject_hash)
+
+    def test_repository_subject_excludes_only_gate_manifest(self) -> None:
+        manifest = MODULE.GATE_MANIFEST_RELATIVE.encode()
+        first = (
+            b"100644 blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tREADME.md\0"
+            + b"100644 blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\t"
+            + manifest
+            + b"\0"
+        )
+        manifest_only_change = first.replace(b"b" * 40, b"c" * 40)
+        source_change = first.replace(b"a" * 40, b"d" * 40)
+        with mock.patch.object(MODULE.subprocess, "check_output", return_value=first):
+            subject = MODULE.repository_subject_hash("a" * 40)
+        with mock.patch.object(
+            MODULE.subprocess, "check_output", return_value=manifest_only_change
+        ):
+            self.assertEqual(MODULE.repository_subject_hash("b" * 40), subject)
+        with mock.patch.object(
+            MODULE.subprocess, "check_output", return_value=source_change
+        ):
+            self.assertNotEqual(MODULE.repository_subject_hash("c" * 40), subject)
+
+    def test_exact_checkout_rejects_mismatch_and_tracked_changes(self) -> None:
+        with mock.patch.object(
+            MODULE.subprocess, "check_output", return_value="b" * 40 + "\n"
+        ):
+            with self.assertRaisesRegex(ValueError, "checked-out Git HEAD"):
+                MODULE.verify_exact_checkout("a" * 40)
+
+        clean = mock.Mock(returncode=0)
+        dirty = mock.Mock(returncode=1)
+        with mock.patch.object(
+            MODULE.subprocess, "check_output", return_value="a" * 40 + "\n"
+        ), mock.patch.object(MODULE.subprocess, "run", side_effect=[clean, dirty]):
+            with self.assertRaisesRegex(ValueError, "tracked worktree changes"):
+                MODULE.verify_exact_checkout("a" * 40)
 
     def test_official_route_decoder_rejects_malformed_data(self) -> None:
         with self.assertRaisesRegex(ValueError, "two ABI words"):
@@ -174,6 +237,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             network_name="base-mainnet",
             deployer=MODULE.DEFAULT_DEPLOYER,
             source_commit="a" * 40,
+            repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
         )

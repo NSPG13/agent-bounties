@@ -58,9 +58,15 @@ and [Prover Network quickstart](https://docs.succinct.xyz/docs/sp1/prover-networ
 The source of truth is
 `deployments/open-competition-v2-beta1-release-gates.json`. A gate is true only
 when its same-named `evidence` entry records an exact source commit, evidence
-hash, and public HTTPS artifact. The release builder rejects an unevidenced
-true Boolean. Gates are staged so Beta launch does not depend on evidence that
-can exist only after launch:
+hash, public HTTPS artifact, and the exact repository-subject hash. The subject
+hash commits to every tracked Git-tree entry except the gate manifest itself.
+That one exclusion lets evidence be recorded without changing what the evidence
+reviewed. Any source, contract, workflow, API, SDK, test, or documentation change
+changes the subject and invalidates prior gate evidence. The release builder
+also requires the requested source commit to equal a clean checked-out `HEAD`.
+It rejects unevidenced, malformed, and cross-subject true Booleans. Gates are
+staged so Beta launch does not depend on evidence that can exist only after
+launch:
 
 1. **Prelaunch** gates authorize only signing the immutable factory deployment.
    They include repository, reproducibility, static-analysis, Base Sepolia,

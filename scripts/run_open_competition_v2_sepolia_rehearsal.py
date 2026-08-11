@@ -160,6 +160,7 @@ def bundle_for_nonce(bundle: dict[str, Any], nonce: int) -> dict[str, Any]:
         network_name=NETWORK,
         deployer=bundle["deployer"],
         source_commit=bundle["source_commit"],
+        repository_subject=bundle["repository_subject"]["hash"],
         preflight=preflight,
         gates=deepcopy(bundle["release_gates"]),
     )

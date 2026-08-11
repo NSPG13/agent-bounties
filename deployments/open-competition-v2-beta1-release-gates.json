@@ -56,5 +56,5 @@
     "unassisted_agent_instructions_complete": null,
     "graduation_review_approved": null
   },
-  "evidence_boundary": "Prelaunch gates authorize only the factory deployment. Mainnet canary and indexer gates authorize public Beta creation. Graduation gates authorize a separately reviewed default change. A true flag requires canonical, hash-bound evidence; editing this file does not create review, rehearsal, payment, or activation evidence."
+  "evidence_boundary": "Prelaunch gates authorize only the factory deployment. Mainnet canary and indexer gates authorize public Beta creation. Graduation gates authorize a separately reviewed default change. A true flag requires canonical evidence bound to the exact repository-subject hash. Only this manifest is excluded from that subject, so recording evidence cannot invalidate its own subject. Editing this file does not create review, rehearsal, payment, or activation evidence."
 }
