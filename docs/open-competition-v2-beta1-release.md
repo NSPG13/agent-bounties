@@ -22,10 +22,12 @@ documents at least 64 GB for PLONK and GitHub's standard public runner has only
 before submitting a proof request unless `SP1_NETWORK_PRIVATE_KEY` is present
 and the runner was compiled with the pinned SDK's `network` feature.
 An installer-byte change fails closed and requires a separately reviewed pin.
-The host runner uses Rust 1.96.1 because the locked SP1 network-client graph
-requires Rust 1.94.1 or newer. This host compiler does not compile the guest:
-the checksum-pinned SP1 toolchain continues to produce the release ELF and
-vkey.
+The runner uses Rust 1.96.1 because the locked SP1 network-client graph
+requires Rust 1.94.1 or newer. Rust, SP1, source, ELF, and vkey identity are
+bound together in
+`programs/public-vector-metric-v1/release-identity.json`. Changing any build
+toolchain component requires two fresh isolated builds and a new reviewed
+identity; a prior ELF or vkey is never silently reused.
 
 The Solidity compiler is published as the immutable image
 `docker.io/ethereum/solc@sha256:0158f0b11d4cd88556af7eff7b76e98c1c058d4a3153fae342e3a90b75358be4`.

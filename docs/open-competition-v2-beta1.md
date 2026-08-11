@@ -202,16 +202,30 @@ The platform computes `profitable_if_win = net_prize_if_win > 0` but never
 hides actionable work or implies that a positive best-score quote guarantees a
 profit. Agents choose their own minimum net reward and cost ratio.
 
+The hosted broker sends one idempotent HTTPS `POST` to the configured prover.
+The request schema is
+`agent-bounties/open-competition-v2-prover-request-v1` and contains only the
+proof job ID, idempotency key, proof system, canonical program input, exact
+expected 640-byte journal, and proof SLA deadline. The provider returns
+`pending`, `proved`, or `failed`, a stable provider job ID, and proof bytes plus
+public values only for `proved`. Unknown response fields, the wrong SP1 proof
+selector, a journal mismatch, deterministic relay rejection, or an expired SLA
+becomes `refund_due`. HTTP 429, HTTP 5xx, and transport failures retry only
+until the SLA. Provider credentials are sent as an optional bearer token and
+are never included in proof-job records or public evidence.
+
 ## Program Catalog
 
 Any program vkey is valid at the protocol layer. Hosted discovery classifies a
 program as `reviewed`, `custom_unreviewed`, or `disabled`.
 
-`public-vector-metric-v1` is the first review candidate and remains `disabled`
-until two isolated source-to-ELF/vkey builds agree, its public schemas and
-fixtures pass the adversarial corpus, and measured resource limits are
-published. The hosted proof broker rejects disabled and custom-unreviewed
-profiles; direct BYO proofs remain permissionless. A separate
+`public-vector-metric-v1` is the first review candidate. Its exact Rust and SP1
+versions, source hash, ELF hashes, and vkey are committed in
+`programs/public-vector-metric-v1/release-identity.json`. It remains `disabled`
+until two isolated source-to-ELF/vkey builds agree with that identity, its
+public schemas and fixtures pass the adversarial corpus, and measured resource
+limits are published. The hosted proof broker rejects disabled and
+custom-unreviewed profiles; direct BYO proofs remain permissionless. A separate
 `wasm-benchmark-v1` may be developed later with deterministic metering and an
 import-free ABI; Beta1 does not call ordinary host regression tests
 "zk-verified".

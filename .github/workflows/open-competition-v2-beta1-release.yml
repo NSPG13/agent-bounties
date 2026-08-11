@@ -154,7 +154,8 @@ jobs:
           CARGO_BUILD_JOBS: "4"
         run: |
           set -euo pipefail
-          test "$(rustc --version | awk '{print $2}')" = "1.96.1"
+          expected_rust="$(python -c 'import json; print(json.load(open("release-identity.json"))["rust_version"])')"
+          test "$(rustc --version | awk '{print $2}')" = "$expected_rust"
           cargo build --locked --release -p public-vector-metric-v1-script --features network
           mkdir -p "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner"
           install -m 0755 \

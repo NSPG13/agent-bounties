@@ -3,7 +3,7 @@ use chain_base::{
     fetch_base_contract_logs, fetch_safe_block_identity, fetch_transaction_receipt,
     open_competition_v2_broker_refund_digest, plan_open_competition_v2_broker_payment,
     plan_open_competition_v2_proof, rpc_logs_to_evm_logs, BaseContractLogQuery, BaseRpcUrlConfig,
-    BaseTransactionRelayer, EvmLog, OpenCompetitionV2BrokerPaymentAuthorization,
+    BaseTransactionRelayer, ChainBaseError, EvmLog, OpenCompetitionV2BrokerPaymentAuthorization,
     OpenCompetitionV2Event, OpenCompetitionV2EventKind, OpenCompetitionV2ProofSystem,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -476,46 +476,61 @@ async fn process_relay_job(
         .await?;
         return Ok((job.state, "refund_due".to_string()));
     }
-    let public_values = bounded_hex(
-        job.public_values
-            .as_deref()
-            .context("relaying proof job omitted public values")?,
-        640,
-        640,
-    )?;
-    let proof = bounded_hex(
-        job.proof
-            .as_deref()
-            .context("relaying proof job omitted proof")?,
-        1,
-        4 * 1024 * 1024,
-    )?;
-    let signature = bounded_hex(
-        job.solver_signature
-            .as_deref()
-            .context("relaying proof job omitted solver signature")?,
-        1,
-        16 * 1024,
-    )?;
-    let proof_system = parse_proof_system(&job.proof_system)?;
-    let plan = plan_open_competition_v2_proof(
-        &job.network,
-        &job.competition_contract,
-        &job.solver,
-        job.solver_nonce
-            .parse::<u128>()
-            .context("solver nonce is invalid")?,
-        proof_system,
-        &public_values,
-        &proof,
-        authorization_deadline,
-        Some(&signature),
-    )?;
-    let mut intent = plan
-        .relay_call_after_signature
-        .context("proof planner did not create a relay call")?;
+    let prepared_relay = (|| -> anyhow::Result<_> {
+        let public_values = bounded_hex(
+            job.public_values
+                .as_deref()
+                .context("relaying proof job omitted public values")?,
+            640,
+            640,
+        )?;
+        let proof = bounded_hex(
+            job.proof
+                .as_deref()
+                .context("relaying proof job omitted proof")?,
+            1,
+            4 * 1024 * 1024,
+        )?;
+        let signature = bounded_hex(
+            job.solver_signature
+                .as_deref()
+                .context("relaying proof job omitted solver signature")?,
+            1,
+            16 * 1024,
+        )?;
+        let proof_system = parse_proof_system(&job.proof_system)?;
+        let plan = plan_open_competition_v2_proof(
+            &job.network,
+            &job.competition_contract,
+            &job.solver,
+            job.solver_nonce
+                .parse::<u128>()
+                .context("solver nonce is invalid")?,
+            proof_system,
+            &public_values,
+            &proof,
+            authorization_deadline,
+            Some(&signature),
+        )?;
+        plan.relay_call_after_signature
+            .context("proof planner did not create a relay call")
+    })();
+    let mut intent = match prepared_relay {
+        Ok(intent) => intent,
+        Err(_) => {
+            *job = mark_refund_due(
+                store,
+                config,
+                job,
+                "relay_preparation_failed",
+                "The hosted broker could not construct the exact authorized proof relay.",
+            )
+            .await?;
+            return Ok((job.state, "refund_due".to_string()));
+        }
+    };
     intent.from = Some(chain.relayer.address());
-    let transaction = chain
+    let transaction = match chain
         .relayer
         .simulate_and_broadcast(
             &rpc_url,
@@ -524,7 +539,19 @@ async fn process_relay_job(
             chain.max_gas,
             chain.max_fee_per_gas_wei,
         )
-        .await?;
+        .await
+    {
+        Ok(transaction) => transaction,
+        Err(error) => match relay_failure_disposition(&error) {
+            RelayFailureDisposition::Retry => {
+                return Ok((job.state, "relay_retry".to_string()));
+            }
+            RelayFailureDisposition::Refund { code, message } => {
+                *job = mark_refund_due(store, config, job, code, message).await?;
+                return Ok((job.state, "refund_due".to_string()));
+            }
+        },
+    };
     *job = store
         .transition_open_competition_v2_proof_job(
             job.id,
@@ -537,6 +564,42 @@ async fn process_relay_job(
         )
         .await?;
     Ok((job.state, "relay_broadcast".to_string()))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RelayFailureDisposition {
+    Retry,
+    Refund {
+        code: &'static str,
+        message: &'static str,
+    },
+}
+
+fn relay_failure_disposition(error: &ChainBaseError) -> RelayFailureDisposition {
+    match error {
+        ChainBaseError::RelayerProvider(_) => RelayFailureDisposition::Retry,
+        ChainBaseError::RelayerSimulation(_) => RelayFailureDisposition::Refund {
+            code: "relay_simulation_failed",
+            message: "The exact authorized proof relay was rejected during contract simulation.",
+        },
+        ChainBaseError::RelayerInsufficientBalance { .. } => RelayFailureDisposition::Refund {
+            code: "relay_gas_unavailable",
+            message: "The hosted relayer could not fund the bounded transaction cost.",
+        },
+        ChainBaseError::RelayerGasLimitExceeded { .. }
+        | ChainBaseError::RelayerFeeCapExceeded { .. } => RelayFailureDisposition::Refund {
+            code: "relay_policy_cap_exceeded",
+            message: "The proof relay exceeded its precommitted gas or fee cap.",
+        },
+        ChainBaseError::RelayerChainMismatch { .. } => RelayFailureDisposition::Refund {
+            code: "relay_chain_mismatch",
+            message: "The hosted relayer was connected to the wrong chain.",
+        },
+        _ => RelayFailureDisposition::Refund {
+            code: "relay_validation_failed",
+            message: "The exact authorized proof relay failed deterministic validation.",
+        },
+    }
 }
 
 fn reconcile_competition_events(
@@ -1197,6 +1260,36 @@ mod tests {
         let mut another = job.clone();
         another.network = "base-mainnet".to_string();
         assert_ne!(nonce, refund_nonce(&another));
+    }
+
+    #[test]
+    fn relay_failures_retry_only_transient_provider_errors() {
+        assert_eq!(
+            relay_failure_disposition(&ChainBaseError::RelayerProvider(
+                "temporary timeout".to_string()
+            )),
+            RelayFailureDisposition::Retry
+        );
+        assert_eq!(
+            relay_failure_disposition(&ChainBaseError::RelayerSimulation(
+                "execution reverted".to_string()
+            )),
+            RelayFailureDisposition::Refund {
+                code: "relay_simulation_failed",
+                message:
+                    "The exact authorized proof relay was rejected during contract simulation.",
+            }
+        );
+        assert_eq!(
+            relay_failure_disposition(&ChainBaseError::RelayerInsufficientBalance {
+                balance: 1,
+                required: 2,
+            }),
+            RelayFailureDisposition::Refund {
+                code: "relay_gas_unavailable",
+                message: "The hosted relayer could not fund the bounded transaction cost.",
+            }
+        );
     }
 
     #[test]
