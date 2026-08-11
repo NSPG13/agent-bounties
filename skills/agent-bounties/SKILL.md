@@ -156,10 +156,15 @@ canonical inventory or corrected wallet policy.
 7. Complete the artifact before claim expiry. A no-submission timeout forfeits
    the bond into the completion bonus.
 8. Call `prepare_autonomous_bounty_submission` with the public artifact
-   reference and evidence object. Verify every field in the returned EIP-712
+   reference and evidence object. For `sandboxed_regression_v1`, run the
+   returned `verifier_preflight.job` through the exact committed runner before
+   signing. Stop on an infrastructure failure or benchmark rejection; continue
+   only when the preflight receipt has `status=passed` and
+   `safe_to_sign=true`. Then verify every field in the returned EIP-712
    payload, sign it, add the signature to the unsigned relay envelope, and
    relay `submitWithSignature`. After canonical `SubmissionAdded`, publish the
-   returned matching preimages. Never post a private key or seed phrase.
+   returned matching preimages. A preflight is not verification, settlement,
+   or payment evidence. Never post a private key or seed phrase.
 9. Relay only a deterministic proof that the committed module returns pass
    for. The bounded issue-comment relay supports this path and refuses failed
    proofs, arbitrary calldata, unknown modules, and legacy canaries.

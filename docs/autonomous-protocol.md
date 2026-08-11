@@ -347,6 +347,13 @@ produces no verdict. The candidate is unsigned and cannot settle funds. The
 precommitted verifier path must evaluate and sign the exact current scope
 before the contract can settle.
 
+The scheduled runner isolates each job. A source, benchmark, or runtime failure
+for one bounty produces a bounded
+`agent-bounties/regression-infrastructure-failure-v1` record with
+`verdict_emitted=false`, while eligible jobs later in the same batch continue.
+The candidate manifest lists candidates and failures separately, and the
+workflow uploads that manifest even when an unexpected later step fails.
+
 The historical standing-meta-v2 verifier set has a no-secrets scheduled runner,
 two isolated signing jobs, and a separate keeper relay. Each stage re-fetches
 and validates the exact current job before acting. This describes deployed
@@ -408,7 +415,15 @@ canaries, arbitrary calldata, ETH value, and creation or funding requests.
 claim. It reads canonical indexed state, binds the current solver and round,
 computes the public artifact/evidence commitments, caps the EIP-712 deadline to
 the claim and relay window, and returns unsigned transport and publication
-templates. It cannot sign, broadcast, publish, verify, settle, or prove payout.
+templates. For `sandboxed_regression_v1`, it also returns a provisional
+`verifier_preflight.job` built by the same verification-job constructor used
+after `SubmissionAdded`. A client must run that job through the exact committed
+sandbox and require a `passed` receipt with `safe_to_sign=true` before signing.
+This catches archive limits, digest mismatches, missing dependencies, and
+benchmark failures before the on-chain verification clock begins. The
+preflight is advisory at the protocol-v1 contract boundary: the current
+contract cannot prove that a client ran it. It cannot sign, broadcast, publish,
+verify, settle, or prove payout.
 
 The relay comment and transaction hash are transport evidence only. Canonical
 events remain the lifecycle and payout evidence.
