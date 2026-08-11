@@ -64,6 +64,8 @@ pub const OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION: &str =
     include_str!("../../../migrations/0020_open_competition_entrant_relays.sql");
 pub const OPEN_COMPETITION_V2_BETA1_MIGRATION: &str =
     include_str!("../../../migrations/0021_open_competition_v2_beta1.sql");
+pub const SITE_ANALYTICS_ACTIVATION_MIGRATION: &str =
+    include_str!("../../../migrations/0022_site_analytics_activation.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -501,6 +503,127 @@ pub struct SiteAnalyticsStats {
     pub event_counts: Vec<SiteAnalyticsEventCount>,
     pub daily: Vec<SiteAnalyticsDailyStats>,
     pub channels: Vec<SiteAnalyticsChannelStats>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsActivatedDiscoveryChannelStats {
+    pub channel: String,
+    pub new_identifiers: u64,
+    pub activated_identifiers: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsActivatedDiscoveryStats {
+    pub first_received_at: Option<DateTime<Utc>>,
+    pub channels: Vec<SiteAnalyticsActivatedDiscoveryChannelStats>,
+}
+
+const SITE_ANALYTICS_EXCLUDED_TOKENS: &[&str] = &[
+    "internal",
+    "synthetic",
+    "codex-verification",
+    "analytics-launch",
+    "localhost",
+    "test-fixture",
+    "test-fixture-v1",
+];
+const SITE_ANALYTICS_AI_ANSWER_SOURCES: &[&str] =
+    &["chatgpt", "openai", "perplexity", "gemini", "copilot"];
+const SITE_ANALYTICS_AI_ANSWER_REFERRERS: &[&str] = &[
+    "chatgpt.com",
+    "chat.openai.com",
+    "perplexity.ai",
+    "gemini.google.com",
+    "copilot.microsoft.com",
+];
+const SITE_ANALYTICS_DEVELOPER_COMMUNITY_SOURCES: &[&str] = &[
+    "dev",
+    "dev.to",
+    "medium",
+    "substack",
+    "hacker-news",
+    "hn",
+    "reddit",
+    "x",
+    "twitter",
+];
+const SITE_ANALYTICS_DEVELOPER_COMMUNITY_REFERRERS: &[&str] = &[
+    "dev.to",
+    "medium.com",
+    "www.medium.com",
+    "substack.com",
+    "news.ycombinator.com",
+    "reddit.com",
+    "www.reddit.com",
+    "x.com",
+    "www.x.com",
+    "twitter.com",
+    "www.twitter.com",
+    "t.co",
+];
+const SITE_ANALYTICS_BOUNTY_DISCOVERY_SOURCES: &[&str] = &["github", "github-issue", "bountyscout"];
+const SITE_ANALYTICS_BOUNTY_DISCOVERY_REFERRERS: &[&str] = &["github.com", "www.github.com"];
+const SITE_ANALYTICS_AGENT_DIRECTORY_SOURCES: &[&str] = &[];
+const SITE_ANALYTICS_AGENT_DIRECTORY_REFERRERS: &[&str] = &[];
+const SITE_ANALYTICS_SEARCH_SOURCES: &[&str] = &["google", "bing", "duckduckgo"];
+const SITE_ANALYTICS_SEARCH_REFERRERS: &[&str] = &[
+    "google.com",
+    "www.google.com",
+    "bing.com",
+    "www.bing.com",
+    "duckduckgo.com",
+];
+const SITE_ANALYTICS_ACTIVATION_EVENTS: &[&str] = &[
+    "claim_started",
+    "claim_confirmed",
+    "competition_entry_started",
+    "competition_entry_confirmed",
+    "competition_reveal_started",
+    "competition_reveal_confirmed",
+    "canonical_post_confirmed",
+    "unfunded_post_completed",
+    "funding_started",
+];
+
+#[cfg(test)]
+fn site_analytics_token_matches(value: Option<&str>, allowed: &[&str]) -> bool {
+    value.is_some_and(|value| allowed.contains(&value))
+}
+
+#[cfg(test)]
+fn classify_site_analytics_acquisition(
+    source: Option<&str>,
+    campaign: Option<&str>,
+    referrer_host: Option<&str>,
+) -> &'static str {
+    if site_analytics_token_matches(source, SITE_ANALYTICS_EXCLUDED_TOKENS)
+        || site_analytics_token_matches(campaign, SITE_ANALYTICS_EXCLUDED_TOKENS)
+        || site_analytics_token_matches(referrer_host, SITE_ANALYTICS_EXCLUDED_TOKENS)
+    {
+        "excluded"
+    } else if site_analytics_token_matches(source, SITE_ANALYTICS_AI_ANSWER_SOURCES)
+        || site_analytics_token_matches(referrer_host, SITE_ANALYTICS_AI_ANSWER_REFERRERS)
+    {
+        "ai_answer"
+    } else if site_analytics_token_matches(source, SITE_ANALYTICS_DEVELOPER_COMMUNITY_SOURCES)
+        || site_analytics_token_matches(referrer_host, SITE_ANALYTICS_DEVELOPER_COMMUNITY_REFERRERS)
+    {
+        "developer_community"
+    } else if site_analytics_token_matches(source, SITE_ANALYTICS_BOUNTY_DISCOVERY_SOURCES)
+        || site_analytics_token_matches(referrer_host, SITE_ANALYTICS_BOUNTY_DISCOVERY_REFERRERS)
+    {
+        "bounty_discovery"
+    } else if site_analytics_token_matches(source, SITE_ANALYTICS_AGENT_DIRECTORY_SOURCES)
+        || site_analytics_token_matches(referrer_host, SITE_ANALYTICS_AGENT_DIRECTORY_REFERRERS)
+    {
+        "agent_directory"
+    } else if site_analytics_token_matches(source, SITE_ANALYTICS_SEARCH_SOURCES)
+        || site_analytics_token_matches(referrer_host, SITE_ANALYTICS_SEARCH_REFERRERS)
+    {
+        "search_unclassified"
+    } else {
+        "unqualified"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1027,6 +1150,7 @@ impl PostgresStore {
                 OPEN_COMPETITION_V1_MIGRATION,
                 OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
                 OPEN_COMPETITION_V2_BETA1_MIGRATION,
+                SITE_ANALYTICS_ACTIVATION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1746,6 +1870,140 @@ impl PostgresStore {
                         )?,
                         funding_starts: u64_from_i64(row.try_get("funding_starts")?)?,
                         claims_confirmed: u64_from_i64(row.try_get("claims_confirmed")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+        })
+    }
+
+    pub async fn site_analytics_activated_discovery(
+        &self,
+        acquisition_started_at: DateTime<Utc>,
+        acquisition_ended_at_exclusive: DateTime<Utc>,
+        activation_observation_ended_at_exclusive: DateTime<Utc>,
+    ) -> DbResult<SiteAnalyticsActivatedDiscoveryStats> {
+        let strings = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        let excluded_tokens = strings(SITE_ANALYTICS_EXCLUDED_TOKENS);
+        let ai_answer_sources = strings(SITE_ANALYTICS_AI_ANSWER_SOURCES);
+        let ai_answer_referrers = strings(SITE_ANALYTICS_AI_ANSWER_REFERRERS);
+        let developer_community_sources = strings(SITE_ANALYTICS_DEVELOPER_COMMUNITY_SOURCES);
+        let developer_community_referrers = strings(SITE_ANALYTICS_DEVELOPER_COMMUNITY_REFERRERS);
+        let bounty_discovery_sources = strings(SITE_ANALYTICS_BOUNTY_DISCOVERY_SOURCES);
+        let bounty_discovery_referrers = strings(SITE_ANALYTICS_BOUNTY_DISCOVERY_REFERRERS);
+        let agent_directory_sources = strings(SITE_ANALYTICS_AGENT_DIRECTORY_SOURCES);
+        let agent_directory_referrers = strings(SITE_ANALYTICS_AGENT_DIRECTORY_REFERRERS);
+        let search_sources = strings(SITE_ANALYTICS_SEARCH_SOURCES);
+        let search_referrers = strings(SITE_ANALYTICS_SEARCH_REFERRERS);
+        let activation_events = strings(SITE_ANALYTICS_ACTIVATION_EVENTS);
+        let first_received_at = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(
+            "SELECT MIN(received_at) FROM site_analytics_events WHERE received_at < $1",
+        )
+        .bind(activation_observation_ended_at_exclusive)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let rows = sqlx::query(
+            r#"
+            WITH first_touch AS (
+              SELECT DISTINCT ON (event.visitor_id)
+                     event.visitor_id,
+                     event.occurred_at AS acquired_at,
+                     COALESCE(event.source, '') AS source,
+                     COALESCE(event.campaign, '') AS campaign,
+                     COALESCE(event.referrer_host, '') AS referrer_host
+              FROM site_analytics_events AS event
+              WHERE event.occurred_at < $3
+                AND event.received_at < $3
+              ORDER BY event.visitor_id, event.occurred_at, event.received_at, event.event_id
+            ), classified AS (
+              SELECT first_touch.*,
+                     CASE
+                       WHEN source = ANY($4::text[])
+                         OR campaign = ANY($4::text[])
+                         OR referrer_host = ANY($4::text[])
+                         THEN 'excluded'
+                       WHEN source = ANY($5::text[])
+                         OR referrer_host = ANY($6::text[])
+                         THEN 'ai_answer'
+                       WHEN source = ANY($7::text[])
+                         OR referrer_host = ANY($8::text[])
+                         THEN 'developer_community'
+                       WHEN source = ANY($9::text[])
+                         OR referrer_host = ANY($10::text[])
+                         THEN 'bounty_discovery'
+                       WHEN source = ANY($11::text[])
+                         OR referrer_host = ANY($12::text[])
+                         THEN 'agent_directory'
+                       WHEN source = ANY($13::text[])
+                         OR referrer_host = ANY($14::text[])
+                         THEN 'search_unclassified'
+                       ELSE 'unqualified'
+                     END AS channel
+              FROM first_touch
+              WHERE acquired_at >= $1 AND acquired_at < $2
+            ), cohort AS (
+              SELECT classified.*,
+                     EXISTS (
+                       SELECT 1
+                       FROM site_analytics_events AS activation
+                       WHERE activation.visitor_id = classified.visitor_id
+                         AND activation.event_name = ANY($15::text[])
+                         AND activation.occurred_at >= classified.acquired_at
+                         AND activation.occurred_at < classified.acquired_at + INTERVAL '7 days'
+                         AND activation.occurred_at < $3
+                         AND activation.received_at < $3
+                     ) AS activated
+              FROM classified
+            )
+            SELECT channel,
+                   COUNT(*)::bigint AS new_identifiers,
+                   COUNT(*) FILTER (WHERE activated)::bigint AS activated_identifiers
+            FROM cohort
+            GROUP BY channel
+            ORDER BY CASE channel
+              WHEN 'ai_answer' THEN 1
+              WHEN 'developer_community' THEN 2
+              WHEN 'bounty_discovery' THEN 3
+              WHEN 'agent_directory' THEN 4
+              WHEN 'nonbranded_search' THEN 5
+              WHEN 'search_unclassified' THEN 6
+              WHEN 'excluded' THEN 7
+              ELSE 8
+            END
+            "#,
+        )
+        .bind(acquisition_started_at)
+        .bind(acquisition_ended_at_exclusive)
+        .bind(activation_observation_ended_at_exclusive)
+        .bind(&excluded_tokens)
+        .bind(&ai_answer_sources)
+        .bind(&ai_answer_referrers)
+        .bind(&developer_community_sources)
+        .bind(&developer_community_referrers)
+        .bind(&bounty_discovery_sources)
+        .bind(&bounty_discovery_referrers)
+        .bind(&agent_directory_sources)
+        .bind(&agent_directory_referrers)
+        .bind(&search_sources)
+        .bind(&search_referrers)
+        .bind(&activation_events)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(SiteAnalyticsActivatedDiscoveryStats {
+            first_received_at,
+            channels: rows
+                .into_iter()
+                .map(|row| {
+                    Ok(SiteAnalyticsActivatedDiscoveryChannelStats {
+                        channel: row.try_get("channel")?,
+                        new_identifiers: u64_from_i64(row.try_get("new_identifiers")?)?,
+                        activated_identifiers: u64_from_i64(row.try_get("activated_identifiers")?)?,
                     })
                 })
                 .collect::<DbResult<Vec<_>>>()?,
@@ -8658,6 +8916,71 @@ mod tests {
     }
 
     #[test]
+    fn site_analytics_activation_migration_accepts_supported_events_without_new_identifiers() {
+        for event_name in [
+            "competition_entry_started",
+            "competition_entry_confirmed",
+            "competition_reveal_started",
+            "competition_reveal_confirmed",
+        ] {
+            assert!(SITE_ANALYTICS_ACTIVATION_MIGRATION.contains(event_name));
+        }
+        for forbidden in [
+            "ip_address",
+            "user_agent",
+            "referrer_url",
+            "wallet_address",
+            "email",
+        ] {
+            assert!(
+                !SITE_ANALYTICS_ACTIVATION_MIGRATION.contains(forbidden),
+                "analytics migration must not persist {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn site_analytics_acquisition_classification_is_exact_and_conservative() {
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("chatgpt"), None, None),
+            "ai_answer"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(None, None, Some("dev.to")),
+            "developer_community"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("x"), None, None),
+            "developer_community"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(None, None, Some("t.co")),
+            "developer_community"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("github-issue"), None, None),
+            "bounty_discovery"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("google"), None, None),
+            "search_unclassified"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("internal"), None, None),
+            "excluded"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("contest"), None, None),
+            "unqualified"
+        );
+        assert_eq!(
+            classify_site_analytics_acquisition(Some("smithery"), None, None),
+            "unqualified",
+            "unverified agent-directory listings are not qualified"
+        );
+    }
+
+    #[test]
     fn social_mention_migration_is_durable_idempotent_and_lease_bounded() {
         for invariant in [
             "social_mention_ingestions",
@@ -9157,6 +9480,445 @@ mod tests {
             .channels
             .iter()
             .any(|channel| channel.source == "postgres-test"));
+
+        let cohort_visitor_id = Uuid::new_v4();
+        let acquired_at = now - chrono::Duration::seconds(1);
+        let acquisition = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            visitor_id: cohort_visitor_id,
+            session_id: Uuid::new_v4(),
+            event_name: "page_view".to_string(),
+            page_path: "/".to_string(),
+            source: Some("github-issue".to_string()),
+            campaign: None,
+            referrer_host: Some("github.com".to_string()),
+            opportunity_id: None,
+            bounty_contract: None,
+            occurred_at: acquired_at,
+        };
+        let activation = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            visitor_id: cohort_visitor_id,
+            session_id: Uuid::new_v4(),
+            event_name: "competition_entry_confirmed".to_string(),
+            page_path: "/competition.html".to_string(),
+            source: Some("github-issue".to_string()),
+            campaign: None,
+            referrer_host: Some("github.com".to_string()),
+            opportunity_id: None,
+            bounty_contract: None,
+            occurred_at: now,
+        };
+        assert!(store
+            .record_site_analytics_event(&acquisition)
+            .await
+            .unwrap());
+        assert!(store
+            .record_site_analytics_event(&activation)
+            .await
+            .unwrap());
+        let cutoff = now + chrono::Duration::days(7) + chrono::Duration::seconds(1);
+        let activated = store
+            .site_analytics_activated_discovery(
+                cutoff - chrono::Duration::days(35),
+                cutoff - chrono::Duration::days(7),
+                cutoff,
+            )
+            .await
+            .unwrap();
+        assert!(activated.channels.iter().any(|channel| {
+            channel.channel == "bounty_discovery"
+                && channel.new_identifiers >= 1
+                && channel.activated_identifiers >= 1
+        }));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn activated_discovery_cutoff_excludes_late_received_activations() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let acquired_at = Utc::now();
+        let cutoff = acquired_at + chrono::Duration::days(8);
+        let acquisition_event_id = Uuid::new_v4();
+        let activation_event_id = Uuid::new_v4();
+        let visitor_id = Uuid::new_v4();
+        let baseline = store
+            .site_analytics_activated_discovery(
+                cutoff - chrono::Duration::days(35),
+                cutoff - chrono::Duration::days(7),
+                cutoff,
+            )
+            .await
+            .unwrap();
+        let baseline_developer = baseline
+            .channels
+            .iter()
+            .find(|channel| channel.channel == "developer_community")
+            .map(|channel| (channel.new_identifiers, channel.activated_identifiers))
+            .unwrap_or_default();
+
+        assert!(store
+            .record_site_analytics_event(&NewSiteAnalyticsEvent {
+                event_id: acquisition_event_id,
+                visitor_id,
+                session_id: Uuid::new_v4(),
+                event_name: "page_view".to_string(),
+                page_path: "/".to_string(),
+                source: Some("x".to_string()),
+                campaign: None,
+                referrer_host: Some("t.co".to_string()),
+                opportunity_id: None,
+                bounty_contract: None,
+                occurred_at: acquired_at,
+            })
+            .await
+            .unwrap());
+        sqlx::query(
+            r#"
+            INSERT INTO site_analytics_events
+              (event_id, visitor_id, session_id, event_name, page_path, source,
+               referrer_host, occurred_at, received_at)
+            VALUES ($1, $2, $3, 'claim_confirmed', '/', 'x', 't.co', $4, $5)
+            "#,
+        )
+        .bind(activation_event_id)
+        .bind(visitor_id)
+        .bind(Uuid::new_v4())
+        .bind(acquired_at + chrono::Duration::days(6))
+        .bind(cutoff + chrono::Duration::hours(1))
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        let before_receipt = store
+            .site_analytics_activated_discovery(
+                cutoff - chrono::Duration::days(35),
+                cutoff - chrono::Duration::days(7),
+                cutoff,
+            )
+            .await
+            .unwrap();
+        let before_receipt_developer = before_receipt
+            .channels
+            .iter()
+            .find(|channel| channel.channel == "developer_community")
+            .map(|channel| (channel.new_identifiers, channel.activated_identifiers))
+            .unwrap_or_default();
+        assert_eq!(
+            before_receipt_developer,
+            (baseline_developer.0 + 1, baseline_developer.1)
+        );
+
+        sqlx::query("UPDATE site_analytics_events SET received_at = $1 WHERE event_id = $2")
+            .bind(cutoff - chrono::Duration::seconds(1))
+            .bind(activation_event_id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let after_receipt = store
+            .site_analytics_activated_discovery(
+                cutoff - chrono::Duration::days(35),
+                cutoff - chrono::Duration::days(7),
+                cutoff,
+            )
+            .await
+            .unwrap();
+        let after_receipt_developer = after_receipt
+            .channels
+            .iter()
+            .find(|channel| channel.channel == "developer_community")
+            .map(|channel| (channel.new_identifiers, channel.activated_identifiers))
+            .unwrap_or_default();
+        assert_eq!(
+            after_receipt_developer,
+            (baseline_developer.0 + 1, baseline_developer.1 + 1)
+        );
+
+        sqlx::query("DELETE FROM site_analytics_events WHERE event_id IN ($1, $2)")
+            .bind(acquisition_event_id)
+            .bind(activation_event_id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn activated_discovery_cohort_boundaries_and_deduplication_are_exact() {
+        async fn insert_fixture(
+            store: &PostgresStore,
+            visitor_id: Uuid,
+            event_name: &str,
+            source: Option<&str>,
+            campaign: Option<&str>,
+            referrer_host: Option<&str>,
+            occurred_at: DateTime<Utc>,
+            received_at: DateTime<Utc>,
+        ) {
+            sqlx::query(
+                r#"
+                INSERT INTO site_analytics_events
+                  (event_id, visitor_id, session_id, event_name, page_path, source,
+                   campaign, referrer_host, occurred_at, received_at)
+                VALUES ($1, $2, $3, $4, '/', $5, $6, $7, $8, $9)
+                "#,
+            )
+            .bind(Uuid::new_v4())
+            .bind(visitor_id)
+            .bind(Uuid::new_v4())
+            .bind(event_name)
+            .bind(source)
+            .bind(campaign)
+            .bind(referrer_host)
+            .bind(occurred_at)
+            .bind(received_at)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        }
+
+        fn channel_counts(
+            stats: &SiteAnalyticsActivatedDiscoveryStats,
+            channel: &str,
+        ) -> (u64, u64) {
+            stats
+                .channels
+                .iter()
+                .find(|row| row.channel == channel)
+                .map(|row| (row.new_identifiers, row.activated_identifiers))
+                .unwrap_or_default()
+        }
+
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let cutoff = Utc::now() + chrono::Duration::days(40);
+        let acquisition_started_at = cutoff - chrono::Duration::days(35);
+        let acquisition_ended_at_exclusive = cutoff - chrono::Duration::days(7);
+        let baseline = store
+            .site_analytics_activated_discovery(
+                acquisition_started_at,
+                acquisition_ended_at_exclusive,
+                cutoff,
+            )
+            .await
+            .unwrap();
+
+        let ai_boundary_visitor = Uuid::new_v4();
+        let developer_upper_activation_visitor = Uuid::new_v4();
+        let bounty_deduplicated_visitor = Uuid::new_v4();
+        let excluded_visitor = Uuid::new_v4();
+        let search_unclassified_visitor = Uuid::new_v4();
+        let unqualified_visitor = Uuid::new_v4();
+        let upper_acquisition_visitor = Uuid::new_v4();
+        let returning_visitor = Uuid::new_v4();
+        let visitor_ids = vec![
+            ai_boundary_visitor,
+            developer_upper_activation_visitor,
+            bounty_deduplicated_visitor,
+            excluded_visitor,
+            search_unclassified_visitor,
+            unqualified_visitor,
+            upper_acquisition_visitor,
+            returning_visitor,
+        ];
+
+        insert_fixture(
+            &store,
+            ai_boundary_visitor,
+            "page_view",
+            Some("chatgpt"),
+            None,
+            Some("chatgpt.com"),
+            acquisition_started_at,
+            acquisition_started_at + chrono::Duration::minutes(1),
+        )
+        .await;
+        insert_fixture(
+            &store,
+            ai_boundary_visitor,
+            "claim_started",
+            Some("chatgpt"),
+            None,
+            Some("chatgpt.com"),
+            acquisition_started_at,
+            acquisition_started_at + chrono::Duration::minutes(2),
+        )
+        .await;
+
+        let developer_acquired_at = cutoff - chrono::Duration::days(20);
+        insert_fixture(
+            &store,
+            developer_upper_activation_visitor,
+            "page_view",
+            Some("x"),
+            None,
+            Some("t.co"),
+            developer_acquired_at,
+            developer_acquired_at + chrono::Duration::minutes(1),
+        )
+        .await;
+        insert_fixture(
+            &store,
+            developer_upper_activation_visitor,
+            "claim_confirmed",
+            Some("x"),
+            None,
+            Some("t.co"),
+            developer_acquired_at + chrono::Duration::days(7),
+            developer_acquired_at + chrono::Duration::days(7) + chrono::Duration::minutes(1),
+        )
+        .await;
+
+        let bounty_acquired_at = cutoff - chrono::Duration::days(19);
+        insert_fixture(
+            &store,
+            bounty_deduplicated_visitor,
+            "page_view",
+            Some("github-issue"),
+            None,
+            Some("github.com"),
+            bounty_acquired_at,
+            bounty_acquired_at + chrono::Duration::minutes(1),
+        )
+        .await;
+        for activation_offset in [1, 2] {
+            insert_fixture(
+                &store,
+                bounty_deduplicated_visitor,
+                "competition_entry_confirmed",
+                Some("github-issue"),
+                None,
+                Some("github.com"),
+                bounty_acquired_at + chrono::Duration::days(activation_offset),
+                bounty_acquired_at
+                    + chrono::Duration::days(activation_offset)
+                    + chrono::Duration::minutes(1),
+            )
+            .await;
+        }
+
+        let excluded_acquired_at = cutoff - chrono::Duration::days(18);
+        insert_fixture(
+            &store,
+            excluded_visitor,
+            "page_view",
+            Some("internal"),
+            None,
+            None,
+            excluded_acquired_at,
+            excluded_acquired_at + chrono::Duration::minutes(1),
+        )
+        .await;
+
+        let search_acquired_at = cutoff - chrono::Duration::days(17);
+        insert_fixture(
+            &store,
+            search_unclassified_visitor,
+            "page_view",
+            Some("google"),
+            None,
+            Some("google.com"),
+            search_acquired_at,
+            search_acquired_at + chrono::Duration::minutes(1),
+        )
+        .await;
+
+        let unqualified_acquired_at = cutoff - chrono::Duration::days(16);
+        insert_fixture(
+            &store,
+            unqualified_visitor,
+            "page_view",
+            None,
+            None,
+            None,
+            unqualified_acquired_at,
+            unqualified_acquired_at + chrono::Duration::minutes(1),
+        )
+        .await;
+
+        insert_fixture(
+            &store,
+            upper_acquisition_visitor,
+            "page_view",
+            Some("chatgpt"),
+            None,
+            Some("chatgpt.com"),
+            acquisition_ended_at_exclusive,
+            acquisition_ended_at_exclusive + chrono::Duration::minutes(1),
+        )
+        .await;
+
+        let returning_first_at = acquisition_started_at - chrono::Duration::days(1);
+        insert_fixture(
+            &store,
+            returning_visitor,
+            "page_view",
+            Some("chatgpt"),
+            None,
+            Some("chatgpt.com"),
+            returning_first_at,
+            returning_first_at + chrono::Duration::minutes(1),
+        )
+        .await;
+        insert_fixture(
+            &store,
+            returning_visitor,
+            "page_view",
+            Some("chatgpt"),
+            None,
+            Some("chatgpt.com"),
+            cutoff - chrono::Duration::days(15),
+            cutoff - chrono::Duration::days(15) + chrono::Duration::minutes(1),
+        )
+        .await;
+        insert_fixture(
+            &store,
+            returning_visitor,
+            "claim_confirmed",
+            Some("chatgpt"),
+            None,
+            Some("chatgpt.com"),
+            cutoff - chrono::Duration::days(14),
+            cutoff - chrono::Duration::days(14) + chrono::Duration::minutes(1),
+        )
+        .await;
+
+        let measured = store
+            .site_analytics_activated_discovery(
+                acquisition_started_at,
+                acquisition_ended_at_exclusive,
+                cutoff,
+            )
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM site_analytics_events WHERE visitor_id = ANY($1::uuid[])")
+            .bind(&visitor_ids)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        let expected_deltas = [
+            ("ai_answer", (1, 1)),
+            ("developer_community", (1, 0)),
+            ("bounty_discovery", (1, 1)),
+            ("excluded", (1, 0)),
+            ("search_unclassified", (1, 0)),
+            ("unqualified", (1, 0)),
+        ];
+        for (channel, expected_delta) in expected_deltas {
+            let before = channel_counts(&baseline, channel);
+            let after = channel_counts(&measured, channel);
+            assert_eq!(
+                after,
+                (before.0 + expected_delta.0, before.1 + expected_delta.1),
+                "unexpected {channel} cohort delta"
+            );
+        }
     }
 
     #[tokio::test]

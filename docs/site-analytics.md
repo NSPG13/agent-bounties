@@ -28,6 +28,14 @@ GA4 disabled without affecting first-party analytics.
   returning visitors, sessions, page views, event counts, daily series,
   first-touch channels, and session-based conversion rates. The supported
   lookback is 1 through 8,760 hours.
+- `GET /v1/analytics/activated-discovery?cutoff=YYYY-MM-DD` returns a
+  privacy-safe 28-day acquisition cohort with a complete seven-day activation
+  opportunity. The acquisition interval is `[cutoff - 35 days, cutoff - 7
+  days)` and qualifying activations must occur in `[acquisition, acquisition +
+  7 days)`. Both events must have been received before the UTC cutoff, which
+  makes past reports reproducible as-of snapshots. The response never exposes
+  a browser identifier and marks the browser cohort incomplete when stored
+  history begins after the acquisition interval starts.
 - MCP `get_site_analytics`, TypeScript `getSiteAnalytics`, and Python
   `get_site_analytics` expose the same read-only aggregate report.
 
@@ -45,6 +53,8 @@ The collector accepts only:
 - `canonical_post_started` and `canonical_post_confirmed`
 - `funding_started`
 - `claim_started` and `claim_confirmed`
+- `competition_entry_started` and `competition_entry_confirmed`
+- `competition_reveal_started` and `competition_reveal_confirmed`
 
 `canonical_post_confirmed` is emitted only after indexed
 `CanonicalBountyCreated`. `claim_confirmed` is emitted only after indexed
@@ -70,6 +80,19 @@ but the canonical event index remains authoritative. Only confirmed
   `canonical_post_started`.
 - **Claim confirmation:** distinct sessions with `claim_confirmed` divided by
   distinct sessions with `claim_started`.
+- **Activated discovery browser identifier:** a new browser-local identifier
+  whose first received event is attributable to a qualified non-branded
+  search, AI-answer, autonomous-agent, DEV/developer-community, bounty-
+  discovery, or agent-directory channel and that records at least one
+  qualifying activation within seven days. Exact internal and synthetic
+  source or campaign tokens are excluded. Ambiguous search traffic remains
+  `search_unclassified` and is not counted as qualified.
+
+The activated-discovery response keeps unique-agent and composite ADU values
+null until a privacy-safe explicit agent discovery handle exists. Browser and
+agent surfaces cannot be deduplicated from current telemetry, so the endpoint
+must not claim a person-level total. The browser count is directional product
+measurement, not proof of account ownership, bounty eligibility, or payment.
 
 Do not sum channel-level visitor counts to estimate people. One browser can be
 used by several people, one person can use several browsers or devices, and
@@ -100,7 +123,9 @@ Not Track, explicit opt-out, or `?analytics=off` prevents GA4 from loading.
 python scripts/check-migration-history.py
 python scripts/check-site.py
 cargo test -p db site_analytics_migration_is_privacy_minimized_and_idempotent
+cargo test -p db site_analytics_activation_migration_accepts_supported_events_without_new_identifiers
 cargo test -p api site_analytics
+cargo test -p api activated_discovery
 ```
 
 The ignored Postgres round-trip test can be run with
