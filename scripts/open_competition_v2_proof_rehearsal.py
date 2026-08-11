@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -210,6 +211,14 @@ def scope(
 def prover_command(fixture_path: Path, mode: str) -> list[str]:
     fixture_path = fixture_path.resolve()
     if os.name != "nt":
+        prepared_runner = os.environ.get("OPEN_COMPETITION_V2_PROVER_BINARY")
+        if prepared_runner:
+            runner = os.path.abspath(os.path.expanduser(prepared_runner))
+            if not os.path.isfile(runner):
+                raise FileNotFoundError(
+                    f"OPEN_COMPETITION_V2_PROVER_BINARY does not exist: {runner}"
+                )
+            return [runner, str(fixture_path), mode]
         return [
             "cargo", "run", "--locked", "--release", "-p", "public-vector-metric-v1-script",
             "--", str(fixture_path), mode,
@@ -250,31 +259,50 @@ def prove(bound_fixture: dict[str, Any], mode: str, label: str, work: Path) -> d
     log_path = work / f"{label}.prover.log"
     evidence = None
     tail: list[str] = []
-    with log_path.open("w", encoding="utf-8") as log:
-        assert process.stdout is not None
-        for line in process.stdout:
-            stripped = line.rstrip("\r\n")
-            candidate = None
-            try:
-                candidate = json.loads(stripped)
-            except json.JSONDecodeError:
-                pass
-            if isinstance(candidate, dict) and candidate.get("mode") == mode:
-                evidence = candidate
-                summary = json.dumps({
+    heartbeat_stop = threading.Event()
+
+    def emit_heartbeat() -> None:
+        while not heartbeat_stop.wait(60):
+            print(
+                json.dumps({
                     "mode": mode,
-                    "program_vkey": candidate.get("program_vkey"),
-                    "elf_keccak256": candidate.get("elf_keccak256"),
-                    "proof_bytes": len(bytes.fromhex(str(candidate.get("proof_hex", "0x")).removeprefix("0x"))),
-                    "journal_bytes": len(bytes.fromhex(str(candidate.get("journal_hex", "0x")).removeprefix("0x"))),
-                })
-                log.write(summary + "\n")
-                print(summary, flush=True)
-            else:
-                log.write(line)
-                print(stripped, flush=True)
-            tail.append(stripped)
-            tail = tail[-20:]
+                    "status": "proving",
+                    "elapsed_seconds": round(time.monotonic() - started, 1),
+                }),
+                flush=True,
+            )
+
+    heartbeat = threading.Thread(target=emit_heartbeat, daemon=True)
+    heartbeat.start()
+    try:
+        with log_path.open("w", encoding="utf-8") as log:
+            assert process.stdout is not None
+            for line in process.stdout:
+                stripped = line.rstrip("\r\n")
+                candidate = None
+                try:
+                    candidate = json.loads(stripped)
+                except json.JSONDecodeError:
+                    pass
+                if isinstance(candidate, dict) and candidate.get("mode") == mode:
+                    evidence = candidate
+                    summary = json.dumps({
+                        "mode": mode,
+                        "program_vkey": candidate.get("program_vkey"),
+                        "elf_keccak256": candidate.get("elf_keccak256"),
+                        "proof_bytes": len(bytes.fromhex(str(candidate.get("proof_hex", "0x")).removeprefix("0x"))),
+                        "journal_bytes": len(bytes.fromhex(str(candidate.get("journal_hex", "0x")).removeprefix("0x"))),
+                    })
+                    log.write(summary + "\n")
+                    print(summary, flush=True)
+                else:
+                    log.write(line)
+                    print(stripped, flush=True)
+                tail.append(stripped)
+                tail = tail[-20:]
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=2)
     returncode = process.wait()
     elapsed = time.monotonic() - started
     if returncode != 0:

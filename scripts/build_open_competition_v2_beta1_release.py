@@ -35,6 +35,8 @@ PROOF_SYSTEM_GROTH16 = keccak256(b"sp1-groth16")
 PROOF_SYSTEM_PLONK = keccak256(b"sp1-plonk")
 SP1_COMMIT = "8252c2905ce32964df68248117015c61ebb854db"
 SP1_VERSION = "6.3.1"
+SP1_INSTALLER_URL = "https://sp1.succinct.xyz"
+SP1_INSTALLER_SHA256 = "5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b"
 MIN_DEPLOYER_ETH_WEI = 100_000_000_000_000
 CANARY_BUDGET = 525_000
 REQUIRED_GATE_NAMES = (
@@ -328,7 +330,12 @@ def build_bundle(
         "source_tree_hash": source_tree_hash(),
         "source_sha256": source_hashes,
         "compiler": {"solc": "0.8.26", "optimizer": True, "optimizer_runs": 200, "evm": "cancun"},
-        "sp1": {"version": SP1_VERSION, "commit": SP1_COMMIT},
+        "sp1": {
+            "version": SP1_VERSION,
+            "commit": SP1_COMMIT,
+            "installer_url": SP1_INSTALLER_URL,
+            "installer_sha256": SP1_INSTALLER_SHA256,
+        },
         "metric_profile": {
             "profile_id": "public-vector-metric-v1",
             "program_vkey": PROGRAM_VKEY,

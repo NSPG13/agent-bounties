@@ -31,7 +31,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -L https://sp1.succinct.xyz | bash
+          curl -fsSL https://sp1.succinct.xyz -o /tmp/sp1up-install.sh
+          echo "5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b  /tmp/sp1up-install.sh" | sha256sum -c -
+          bash /tmp/sp1up-install.sh
           "$HOME/.sp1/bin/sp1up" -v 6.3.1
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
       - name: Build and execute public vector guest

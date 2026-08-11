@@ -11,6 +11,12 @@ be built and reviewed, but it cannot satisfy the resolved-high gate, graduate,
 or activate mainnet until compatible patched prover and verifier evidence
 replaces that quarantine.
 
+CI downloads the official SP1 installer to a file and requires SHA-256
+`5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b`
+before executing it. One exact compiled prover runner is then checksummed,
+published as a workflow artifact, and reused by the three isolated proof jobs.
+An installer-byte change fails closed and requires a separately reviewed pin.
+
 ## Evidence Order
 
 1. Run the repository gate and 10,000-run V2 fuzz/invariant suite.

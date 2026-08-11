@@ -126,6 +126,46 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  build-proof-runner:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
+    needs: deterministic-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+        with:
+          version: "28.3"
+      - name: Install checksum-pinned SP1 6.3.1 toolchain
+        run: |
+          set -euo pipefail
+          curl -fsSL https://sp1.succinct.xyz -o /tmp/sp1up-install.sh
+          echo "5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b  /tmp/sp1up-install.sh" | sha256sum -c -
+          bash /tmp/sp1up-install.sh
+          "$HOME/.sp1/bin/sp1up" -v 6.3.1
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+      - name: Build one exact prover runner
+        working-directory: programs/public-vector-metric-v1
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/sp1-public-vector
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p public-vector-metric-v1-script
+          mkdir -p "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner"
+          install -m 0755 \
+            "$CARGO_TARGET_DIR/release/public-vector-metric-v1-script" \
+            "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner/public-vector-metric-v1-script"
+          cd "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner"
+          sha256sum public-vector-metric-v1-script > public-vector-metric-v1-script.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta1-prover-runner-${{ github.sha }}
+          path: target/open-competition-v2-prover-runner
+          if-no-files-found: error
+          retention-days: 90
+
   prepare-real-proof-fork:
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
     needs: deterministic-release
@@ -167,9 +207,9 @@ jobs:
 
   generate-real-proof:
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
-    needs: prepare-real-proof-fork
+    needs: [prepare-real-proof-fork, build-proof-runner]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -179,29 +219,33 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          version: "28.3"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: open-competition-v2-beta1-real-proof-inputs-${{ github.sha }}
           path: target
-      - name: Install exact SP1 6.3.1 and helper dependencies
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta1-prover-runner-${{ github.sha }}
+          path: target/open-competition-v2-prover-runner
+      - name: Verify exact runner and install helper dependencies
         run: |
           set -euo pipefail
           python -m pip install -r scripts/requirements-wallet.txt
-          curl -L https://sp1.succinct.xyz | bash
-          "$HOME/.sp1/bin/sp1up" -v 6.3.1
-          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: target/sp1-public-vector
-          key: sp1-6.3.1-public-vector-${{ runner.os }}-${{ hashFiles('programs/public-vector-metric-v1/**', 'crates/competition-metric-core/**') }}
+          cd target/open-competition-v2-prover-runner
+          sha256sum -c public-vector-metric-v1-script.sha256
+          chmod 0755 public-vector-metric-v1-script
+      - name: Configure bounded proof memory
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 12G /mnt/open-competition-v2.swap
+          sudo chmod 0600 /mnt/open-competition-v2.swap
+          sudo mkswap /mnt/open-competition-v2.swap
+          sudo swapon /mnt/open-competition-v2.swap
+          free -h
       - name: Generate and self-verify one exact proof
         env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target/sp1-public-vector
-          CARGO_BUILD_JOBS: "4"
-          RAYON_NUM_THREADS: "4"
+          OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/open-competition-v2-prover-runner/public-vector-metric-v1-script
+          RAYON_NUM_THREADS: "2"
         run: >-
           python scripts/generate_open_competition_v2_proof.py
           --bundle target/open-competition-v2-mainnet-plan.json
@@ -308,9 +352,9 @@ jobs:
 
   generate-live-sepolia-proof:
     if: github.event_name == 'workflow_dispatch' && inputs.run_live_sepolia_rehearsal && github.ref == 'refs/heads/main'
-    needs: prepare-live-sepolia
+    needs: [prepare-live-sepolia, build-proof-runner]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -320,29 +364,33 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          version: "28.3"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: open-competition-v2-beta1-sepolia-inputs-${{ github.sha }}
           path: target
-      - name: Install exact SP1 6.3.1 and helper dependencies
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta1-prover-runner-${{ github.sha }}
+          path: target/open-competition-v2-prover-runner
+      - name: Verify exact runner and install helper dependencies
         run: |
           set -euo pipefail
           python -m pip install -r scripts/requirements-wallet.txt
-          curl -L https://sp1.succinct.xyz | bash
-          "$HOME/.sp1/bin/sp1up" -v 6.3.1
-          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: target/sp1-public-vector
-          key: sp1-6.3.1-public-vector-${{ runner.os }}-${{ hashFiles('programs/public-vector-metric-v1/**', 'crates/competition-metric-core/**') }}
+          cd target/open-competition-v2-prover-runner
+          sha256sum -c public-vector-metric-v1-script.sha256
+          chmod 0755 public-vector-metric-v1-script
+      - name: Configure bounded proof memory
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 12G /mnt/open-competition-v2.swap
+          sudo chmod 0600 /mnt/open-competition-v2.swap
+          sudo mkswap /mnt/open-competition-v2.swap
+          sudo swapon /mnt/open-competition-v2.swap
+          free -h
       - name: Generate and self-verify one exact Sepolia proof
         env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target/sp1-public-vector
-          CARGO_BUILD_JOBS: "4"
-          RAYON_NUM_THREADS: "4"
+          OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/open-competition-v2-prover-runner/public-vector-metric-v1-script
+          RAYON_NUM_THREADS: "2"
         run: >-
           python scripts/generate_open_competition_v2_proof.py
           --bundle target/open-competition-v2-sepolia-plan.json
