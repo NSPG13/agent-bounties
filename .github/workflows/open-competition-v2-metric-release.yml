@@ -23,7 +23,7 @@ jobs:
         builder: [a, b]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           version: "28.3"
@@ -42,6 +42,7 @@ jobs:
           CARGO_BUILD_JOBS: "2"
         run: |
           set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "1.96.1"
           {
             cargo prove --version
             cargo run --locked --release -p public-vector-metric-v1-script -- \
