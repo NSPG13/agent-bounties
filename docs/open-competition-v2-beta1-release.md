@@ -27,6 +27,11 @@ requires Rust 1.94.1 or newer. This host compiler does not compile the guest:
 the checksum-pinned SP1 toolchain continues to produce the release ELF and
 vkey.
 
+The Solidity compiler is published as the immutable image
+`docker.io/ethereum/solc@sha256:0158f0b11d4cd88556af7eff7b76e98c1c058d4a3153fae342e3a90b75358be4`.
+It reports `0.8.26+commit.8a97fa7a`. Every release bundle binds that full
+build ID, image digest, optimizer settings, and EVM target.
+
 The Prover Network signer must be separately funded with sufficient PROVE.
 Neither a configured secret nor a submitted provider request is proof evidence.
 Only a returned proof that self-verifies, matches the exact release fixture,
@@ -130,7 +135,7 @@ evidence.
 Each bundle records:
 
 - source commit and normalized source hashes;
-- Solidity settings and exact deployment calldata;
+- Solidity compiler image, settings, and exact deployment calldata;
 - factory, adapter, and implementation addresses and runtime hashes;
 - SP1 version, commit, program vkey, ELF and schema hashes;
 - canonical USDC, gateways, verifier routes, and safe-block runtime hashes;
