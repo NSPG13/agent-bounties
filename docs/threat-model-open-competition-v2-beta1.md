@@ -48,6 +48,13 @@ database, or broker to decide payment eligibility.
 
 ## Residual Risks
 
+- **Unresolved high severity:** SP1 6.3.1 resolves
+  `p3-challenger@0.4.3-succinct`, which remains covered by
+  `GHSA-vj64-rjf3-w3v7` for Fiat-Shamir transcript malleability. The package is
+  quarantined to the V2 metric build, and CI requires the exact version,
+  checksum, lockfile locations, SP1 commit, unresolved-high gate, and disabled
+  mainnet flag. V2 must not graduate or activate mainnet until a compatible
+  patched SP1 prover and canonical verifier route are independently reviewed.
 - A sound SP1 proof can faithfully execute a flawed metric guest. Program
   review and reproducibility reduce this risk but do not remove it.
 - A canonical SP1 gateway route can be frozen or contain an undiscovered bug.
@@ -74,4 +81,7 @@ database, or broker to decide payment eligibility.
   calldata, risk hash, and golden vectors.
 - Mainnet signing is blocked until the repository R4 gate, Base Sepolia
   rehearsal, mainnet-fork replay, and independent hash-bound review pass.
+- `GHSA-vj64-rjf3-w3v7` must be removed from the dependency-review allowance,
+  and the quarantine gate must be replaced by fixed-version evidence, before
+  `critical_and_high_findings_resolved` can become true.
 - Deployment and transaction hashes are not payment evidence.

@@ -114,6 +114,8 @@ def compile_python(platform: str) -> None:
         "scripts/test_run_open_competition_v2_sepolia_rehearsal.py",
         "scripts/verify_open_competition_v2_slither.py",
         "scripts/test_verify_open_competition_v2_slither.py",
+        "scripts/verify_sp1_advisory_quarantine.py",
+        "scripts/test_verify_sp1_advisory_quarantine.py",
         "scripts/run_open_competition_v2_mainnet_fork_replay.py",
         "scripts/test_run_open_competition_v2_mainnet_fork_replay.py",
     ]
@@ -302,6 +304,7 @@ def main() -> int:
         "scripts.test_run_open_competition_v2_mainnet_fork_replay",
         "scripts.test_run_open_competition_v2_sepolia_rehearsal",
         "scripts.test_verify_open_competition_v2_slither",
+        "scripts.test_verify_sp1_advisory_quarantine",
         "-v",
     )
     check_deployment_bundles(cargo, platform)
