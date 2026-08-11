@@ -105,9 +105,16 @@ jobs:
           set -euo pipefail
           python -m pip install slither-analyzer==0.11.5
           mkdir -p target
+          set +e
           slither contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta1.sol \
             --json target/open-competition-v2-beta1-slither.json \
             > target/open-competition-v2-beta1-slither.txt 2>&1
+          SLITHER_STATUS=$?
+          set -e
+          test -s target/open-competition-v2-beta1-slither.json || {
+            cat target/open-competition-v2-beta1-slither.txt
+            exit "$SLITHER_STATUS"
+          }
           python scripts/verify_open_competition_v2_slither.py \
             --report target/open-competition-v2-beta1-slither.json \
             --output target/open-competition-v2-beta1-slither-triage.json
