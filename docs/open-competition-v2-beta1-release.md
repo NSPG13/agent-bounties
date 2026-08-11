@@ -4,6 +4,13 @@ V2 Beta1 is implemented but blocked from public mainnet creation. The release
 is R4: immutable contracts hold Base USDC, call SP1 gateways, and can settle
 without operator approval. A deployment transaction is not release approval.
 
+SP1 6.3.1 is currently quarantined by
+`scripts/verify_sp1_advisory_quarantine.py` because its transcript dependency
+remains covered by high-severity advisory `GHSA-vj64-rjf3-w3v7`. This Beta may
+be built and reviewed, but it cannot satisfy the resolved-high gate, graduate,
+or activate mainnet until compatible patched prover and verifier evidence
+replaces that quarantine.
+
 ## Evidence Order
 
 1. Run the repository gate and 10,000-run V2 fuzz/invariant suite.
