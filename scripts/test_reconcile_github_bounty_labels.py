@@ -460,15 +460,29 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
             fixture = root / "fixture.json"
             policy_path = root / "policy.json"
             report = root / "report.json"
+            markdown = root / "report.md"
             fixture.write_text(json.dumps({"projection": projection(record), "issues": []}), encoding="utf-8")
             policy_path.write_text(json.dumps(policy()), encoding="utf-8")
             self.assertEqual(
-                main(["--fixture", str(fixture), "--policy", str(policy_path), "--json-out", str(report)]),
+                main(
+                    [
+                        "--fixture",
+                        str(fixture),
+                        "--policy",
+                        str(policy_path),
+                        "--json-out",
+                        str(report),
+                        "--md-out",
+                        str(markdown),
+                    ]
+                ),
                 0,
             )
             payload = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(payload["mode"], "dry-run")
             self.assertEqual(payload["coverage_percent"], 100.0)
+            self.assertEqual(payload["covered_record_count"], 1)
+            self.assertIn("Covered records: `1`", markdown.read_text(encoding="utf-8"))
             with self.assertRaisesRegex(LabelReconciliationError, "fixture mode"):
                 with patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
                     main(
