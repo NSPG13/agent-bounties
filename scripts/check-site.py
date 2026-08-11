@@ -190,6 +190,21 @@ def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) 
         fail(f"{source}: missing linked file {link}")
 
 
+def check_index_link(source: Path, link: str) -> None:
+    target, _ = urldefrag(link)
+    parsed = urlparse(target)
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        return
+    if parsed.netloc and parsed.netloc.lower() not in {
+        "agentbounties.app",
+        "www.agentbounties.app",
+    }:
+        return
+    path = parsed.path.replace("\\", "/")
+    if path == "index.html" or path.endswith("/index.html"):
+        fail(f"{source}: internal link must use the canonical directory URL, not {link}")
+
+
 def check_protocol(protocol: dict, deployment: dict) -> None:
     if protocol.get("protocol_version") != "agent-bounties/autonomous-v1":
         fail("protocol.json must identify autonomous-v1")
@@ -264,6 +279,7 @@ def main() -> int:
     if re.search(r'<meta\s+name="robots"[^>]*noindex', agent_page, re.IGNORECASE):
         fail("agent/index.html must remain indexable")
     for link in agent_parser.links:
+        check_index_link(agent_page_path, link)
         check_internal_link(site_dir, agent_page_path, link, agent_parser.ids)
 
     agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
@@ -324,6 +340,7 @@ def main() -> int:
             if text.index('src="analytics-config.js"') > text.index('src="analytics.js"'):
                 fail(f"{html_file}: analytics configuration must load before the collector")
         for link in parser.links:
+            check_index_link(html_file, link)
             check_internal_link(site_dir, html_file, link, parser.ids)
 
     root_pages = {path.name for path in site_dir.glob("*.html")}
