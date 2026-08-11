@@ -105,7 +105,11 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
 
 
 def replay(
-    bundle: dict[str, Any], upstream_rpc: str, output: Path, *, run_proof_rehearsal: bool = False
+    bundle: dict[str, Any], upstream_rpc: str, output: Path, *,
+    run_proof_rehearsal: bool = False,
+    prepare_proof_fixtures: Path | None = None,
+    prepared_proof_dir: Path | None = None,
+    proof_evidence_dir: Path | None = None,
 ) -> dict[str, Any]:
     validate_bundle(bundle)
     port = free_port()
@@ -177,9 +181,22 @@ def replay(
                 raise RuntimeError(f"{key} rejected the canonical SP1 route on the fork")
 
         proof_rehearsal = None
-        if run_proof_rehearsal:
+        if prepare_proof_fixtures is not None:
+            context = open_competition_v2_proof_rehearsal.prepare_context(
+                local_rpc, bundle, prepare_proof_fixtures
+            )
+            proof_rehearsal = {
+                "prepared": True,
+                "context_hash": context["context_hash"],
+                "proofs": context["proofs"],
+            }
+        elif run_proof_rehearsal:
             proof_rehearsal = open_competition_v2_proof_rehearsal.run(
-                local_rpc, bundle, output.parent / "open-competition-v2-proof-work"
+                local_rpc,
+                bundle,
+                output.parent / "open-competition-v2-proof-work",
+                prepared_dir=prepared_proof_dir,
+                proof_evidence_dir=proof_evidence_dir,
             )
 
         result = {
@@ -215,13 +232,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rpc-url", default="https://mainnet.base.org")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--proof-rehearsal", action="store_true")
+    parser.add_argument("--prepare-proof-fixtures", type=Path)
+    parser.add_argument("--prepared-proof-dir", type=Path)
+    parser.add_argument("--proof-evidence-dir", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.prepare_proof_fixtures and args.proof_rehearsal:
+        raise SystemExit("--prepare-proof-fixtures and --proof-rehearsal are mutually exclusive")
+    if bool(args.prepared_proof_dir) != bool(args.proof_evidence_dir):
+        raise SystemExit("--prepared-proof-dir and --proof-evidence-dir must be supplied together")
+    if args.prepared_proof_dir and not args.proof_rehearsal:
+        raise SystemExit("external proof artifacts require --proof-rehearsal")
     bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
-    result = replay(bundle, args.rpc_url, args.output, run_proof_rehearsal=args.proof_rehearsal)
+    result = replay(
+        bundle,
+        args.rpc_url,
+        args.output,
+        run_proof_rehearsal=args.proof_rehearsal,
+        prepare_proof_fixtures=args.prepare_proof_fixtures,
+        prepared_proof_dir=args.prepared_proof_dir,
+        proof_evidence_dir=args.proof_evidence_dir,
+    )
     print(json.dumps({"output": str(args.output), "passed": result["passed"], "factory": result["components"]["factory"]["address"]}))
     return 0
 

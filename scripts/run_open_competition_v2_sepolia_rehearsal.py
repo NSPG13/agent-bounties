@@ -15,7 +15,6 @@ from eth_account import Account
 
 import build_open_competition_v2_beta1_release as release
 import open_competition_v2_proof_rehearsal as rehearsal
-import prepare_open_competition_v2_metric_fixture as fixture_builder
 from _shared.evm import keccak256, keccak_bytes
 from _shared.rpc import rpc
 
@@ -24,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROGRAM_ROOT = ROOT / "programs" / "public-vector-metric-v1"
 CHAIN_ID = 84532
 NETWORK = "base-sepolia"
+PREPARED_FUNDING_WINDOW = 7 * 24 * 60 * 60
 SETTLED_TOPIC = rehearsal.SETTLED_TOPIC
 CANCELLED_TOPIC = keccak256(
     b"CompetitionCancelledV2(bytes32,address,uint256,uint256,uint256,bytes32)"
@@ -233,6 +233,59 @@ def wait_safe(url: str, receipts: list[dict[str, Any]], timeout: int) -> dict[st
     raise SepoliaRehearsalError("Base Sepolia safe-block reconciliation timed out")
 
 
+def actors_for(raw_key: bytes, bundle: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return (
+        Account.from_key(raw_key),
+        derived_actor(raw_key, bundle["source_commit"], "solver-a"),
+        derived_actor(raw_key, bundle["source_commit"], "solver-b"),
+    )
+
+
+def prepare(args: argparse.Namespace) -> dict[str, Any]:
+    raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
+    signer = Account.from_key(raw_key)
+    raw_bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
+    client = SignedRpc(args.rpc_url)
+    bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
+    components = verify_components(client.url, bundle)
+    signer, solver_a, solver_b = actors_for(raw_key, bundle)
+    context = rehearsal.prepare_context(
+        client.url,
+        bundle,
+        args.prepare_proof_fixtures,
+        creator=signer.address,
+        solver_a=solver_a.address,
+        solver_b=solver_b.address,
+        first_label="sepolia-groth16-first",
+        best_label="sepolia-plonk-best",
+        first_nonce_label=f"{bundle['source_commit']}:sepolia-groth16-first",
+        best_nonce_label=f"{bundle['source_commit']}:sepolia-plonk-best",
+        proof_window=90,
+        funding_window=PREPARED_FUNDING_WINDOW,
+    )
+    args.resolved_bundle_output.parent.mkdir(parents=True, exist_ok=True)
+    args.resolved_bundle_output.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+    result = {
+        "schema_version": "agent-bounties/open-competition-v2-beta1-sepolia-preparation-v1",
+        "passed": True,
+        "broadcast": deployment_receipt is not None,
+        "factory_deployment_transaction": receipt_hash(deployment_receipt) if deployment_receipt else None,
+        "source_commit": bundle["source_commit"],
+        "components": components,
+        "actors": {
+            "deployer": signer.address.lower(),
+            "solver_a": solver_a.address.lower(),
+            "solver_b": solver_b.address.lower(),
+        },
+        "proof_context_hash": context["context_hash"],
+        "funds_moved": False,
+        "evidence_boundary": "Factory preparation and proof-input binding only. No competition was funded or settled.",
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    return result
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
     signer = Account.from_key(raw_key)
@@ -241,41 +294,55 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
     components = verify_components(client.url, bundle)
 
-    solver_a = derived_actor(raw_key, bundle["source_commit"], "solver-a")
-    solver_b = derived_actor(raw_key, bundle["source_commit"], "solver-b")
+    signer, solver_a, solver_b = actors_for(raw_key, bundle)
     actors = {"deployer": signer.address.lower(), "solver_a": solver_a.address.lower(), "solver_b": solver_b.address.lower()}
     token = bundle["settlement_token"]
     factory = bundle["factory"]["address"]
     risk_hash = rehearsal.b32(bundle["risk"]["hash"])
-    templates = {
-        "first": json.loads((PROGRAM_ROOT / "fixtures/rehearsal-first-proven.json").read_text()),
-        "best_a": json.loads((PROGRAM_ROOT / "fixtures/rehearsal-best-score-a.json").read_text()),
-        "best_b": json.loads((PROGRAM_ROOT / "fixtures/rehearsal-best-score-b.json").read_text()),
-    }
-    require(
-        fixture_builder.verification_policy_hash(templates["best_a"]["mode"], templates["best_a"]["threshold"], templates["best_a"]["vectors"])
-        == fixture_builder.verification_policy_hash(templates["best_b"]["mode"], templates["best_b"]["threshold"], templates["best_b"]["vectors"]),
-        "best-score fixtures do not share an immutable verification policy",
-    )
-
-    first_params = rehearsal.params(client.url, bundle, templates["first"], label="sepolia-groth16-first", proof_system="groth16", winner_mode=0, solver_reward=250_000, keeper_reward=12_500, proof_window=90, funding_window=21_600)
-    first_nonce = rehearsal.b32(rehearsal.hash_label(f"{bundle['source_commit']}:sepolia-groth16-first"))
-    first_address, first_id = rehearsal.predict(client.url, factory, signer.address, first_params, first_nonce)
-    first_fixture = fixture_builder.bind(templates["first"], rehearsal.scope(bundle, first_params, first_address, first_id, solver_a.address, 1, "groth16"))
-
-    best_params = rehearsal.params(client.url, bundle, templates["best_a"], label="sepolia-plonk-best", proof_system="plonk", winner_mode=1, solver_reward=250_000, keeper_reward=12_500, proof_window=90, funding_window=21_600)
-    best_nonce = rehearsal.b32(rehearsal.hash_label(f"{bundle['source_commit']}:sepolia-plonk-best"))
-    best_address, best_id = rehearsal.predict(client.url, factory, signer.address, best_params, best_nonce)
-    best_a_fixture = fixture_builder.bind(templates["best_a"], rehearsal.scope(bundle, best_params, best_address, best_id, solver_a.address, 2, "plonk"))
-    best_b_fixture = fixture_builder.bind(templates["best_b"], rehearsal.scope(bundle, best_params, best_address, best_id, solver_b.address, 1, "plonk"))
-
     work = args.output.parent / "open-competition-v2-sepolia-proof-work"
     work.mkdir(parents=True, exist_ok=True)
-    proofs = {
-        "groth16_first": rehearsal.prove(first_fixture, "groth16", "sepolia-groth16-first", work),
-        "plonk_best_a": rehearsal.prove(best_a_fixture, "plonk", "sepolia-plonk-best-a", work),
-        "plonk_best_b": rehearsal.prove(best_b_fixture, "plonk", "sepolia-plonk-best-b", work),
-    }
+    prepared = args.prepared_proof_dir or (work / "prepared")
+    if args.prepared_proof_dir is None:
+        rehearsal.prepare_context(
+            client.url,
+            bundle,
+            prepared,
+            creator=signer.address,
+            solver_a=solver_a.address,
+            solver_b=solver_b.address,
+            first_label="sepolia-groth16-first",
+            best_label="sepolia-plonk-best",
+            first_nonce_label=f"{bundle['source_commit']}:sepolia-groth16-first",
+            best_nonce_label=f"{bundle['source_commit']}:sepolia-plonk-best",
+            proof_window=90,
+            funding_window=PREPARED_FUNDING_WINDOW,
+        )
+    context, fixtures = rehearsal.load_context(bundle, prepared)
+    require(context["actors"] == actors, "prepared proof actor set changed")
+    if args.proof_evidence_dir is None:
+        proofs = {}
+        for name, (mode, label) in rehearsal.PROOF_SPECS.items():
+            evidence = rehearsal.prove(fixtures[name], mode, f"sepolia-{label}", work)
+            proofs[name] = rehearsal.validate_proof_evidence(
+                bundle, context, name, fixtures[name], evidence
+            )
+    else:
+        proofs = rehearsal.load_proofs(bundle, context, fixtures, args.proof_evidence_dir)
+
+    first_params = rehearsal.params_tuple(context["first"]["params"])
+    first_nonce = rehearsal.b32(context["first"]["nonce"])
+    first_address, first_id = rehearsal.predict(client.url, factory, signer.address, first_params, first_nonce)
+    best_params = rehearsal.params_tuple(context["best"]["params"])
+    best_nonce = rehearsal.b32(context["best"]["nonce"])
+    best_address, best_id = rehearsal.predict(client.url, factory, signer.address, best_params, best_nonce)
+    require(
+        (first_address, first_id) == (context["first"]["address"], context["first"]["bounty_id"]),
+        "prepared first-proven competition identity changed",
+    )
+    require(
+        (best_address, best_id) == (context["best"]["address"], context["best"]["bounty_id"]),
+        "prepared best-score competition identity changed",
+    )
 
     receipts: dict[str, dict[str, Any]] = {}
     if deployment_receipt:
@@ -308,7 +375,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     require(rehearsal.token_balance(client.url, token, solver_b.address) - best_before == 250_000, "PLONK solver payout mismatch")
     require(rehearsal.token_balance(client.url, token, signer.address) - keeper_before == 12_500, "PLONK keeper payout mismatch")
 
-    expiry_params = rehearsal.params(client.url, bundle, templates["first"], label="sepolia-expiry", proof_system="groth16", winner_mode=0, solver_reward=100_000, keeper_reward=5_000, proof_window=1)
+    expiry_template = json.loads(
+        (PROGRAM_ROOT / "fixtures/rehearsal-first-proven.json").read_text(encoding="utf-8")
+    )
+    expiry_params = rehearsal.params(client.url, bundle, expiry_template, label="sepolia-expiry", proof_system="groth16", winner_mode=0, solver_reward=100_000, keeper_reward=5_000, proof_window=1)
     expiry_nonce = rehearsal.b32(rehearsal.hash_label(f"{bundle['source_commit']}:sepolia-expiry"))
     expiry_address, expiry_id = rehearsal.predict(client.url, factory, signer.address, expiry_params, expiry_nonce)
     receipts["approve_expiry"] = client.send(signer, to=token, data=rehearsal.function_data("approve(address,uint256)", ["address", "uint256"], [expiry_address, 105_000]))
@@ -361,13 +431,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--actor-eth-wei", type=int, default=100_000_000_000_000)
     parser.add_argument("--safe-timeout", type=int, default=1_800)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--prepare-proof-fixtures", type=Path)
+    parser.add_argument("--resolved-bundle-output", type=Path)
+    parser.add_argument("--prepared-proof-dir", type=Path)
+    parser.add_argument("--proof-evidence-dir", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    result = run(args)
-    print(json.dumps({"output": str(args.output), "passed": result["passed"], "factory": result["components"]["factory"]["address"], "safe_block": result["safe_block"]["number"]}))
+    if bool(args.prepared_proof_dir) != bool(args.proof_evidence_dir):
+        raise SystemExit("--prepared-proof-dir and --proof-evidence-dir must be supplied together")
+    if args.prepare_proof_fixtures:
+        if not args.resolved_bundle_output:
+            raise SystemExit("--prepare-proof-fixtures requires --resolved-bundle-output")
+        if args.prepared_proof_dir:
+            raise SystemExit("preparation and proof execution are mutually exclusive")
+        result = prepare(args)
+        summary = {
+            "output": str(args.output),
+            "passed": result["passed"],
+            "factory": result["components"]["factory"]["address"],
+            "proof_context_hash": result["proof_context_hash"],
+        }
+    else:
+        result = run(args)
+        summary = {
+            "output": str(args.output),
+            "passed": result["passed"],
+            "factory": result["components"]["factory"]["address"],
+            "safe_block": result["safe_block"]["number"],
+        }
+    print(json.dumps(summary))
     return 0
 
 
