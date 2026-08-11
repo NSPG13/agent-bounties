@@ -29,9 +29,39 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
     byId("window").textContent = `${value.task_window_days || 30} days`;
     byId("initial").textContent = `${value.initial_funding_usdc ?? "—"} USDC`;
     byId("continue").disabled = !value.post_url;
+
+    // Open Competition V2: surface competition_type and reproducible deployment fields
+    const compTypeEl = byId("competition-type");
+    if (compTypeEl) {
+      compTypeEl.textContent = value.competition_type || "standard";
+      compTypeEl.parentElement.style.display = value.competition_type ? "" : "none";
+    }
+
+    const deploySpecEl = byId("deploy-spec");
+    if (deploySpecEl) {
+      if (value.deployment_spec && typeof value.deployment_spec === "object") {
+        deploySpecEl.textContent = JSON.stringify(value.deployment_spec, null, 2);
+        deploySpecEl.parentElement.style.display = "";
+      } else {
+        deploySpecEl.textContent = "";
+        deploySpecEl.parentElement.style.display = "none";
+      }
+    }
+
+    const reproHashEl = byId("repro-hash");
+    if (reproHashEl) {
+      if (value.reproducibility_hash) {
+        reproHashEl.textContent = value.reproducibility_hash;
+        reproHashEl.parentElement.style.display = "";
+      } else {
+        reproHashEl.textContent = "";
+        reproHashEl.parentElement.style.display = "none";
+      }
+    }
+
     byId("status").textContent = value.crowdfund
       ? "Unfunded posting selected: no USDC will be deposited now and no payment is promised yet."
-      : `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose “Post with 0 USDC now” to publish without committing a reward.`;
+      : `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose "Post with 0 USDC now" to publish without committing a reward.`;
   }
 
   app.ontoolresult = (params) => render(params.structuredContent);
