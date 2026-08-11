@@ -78,7 +78,7 @@ use chain_base::{
     StandingMetaV4ReadinessReport, AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION,
     AUTONOMOUS_FUND_WITH_AUTHORIZATION_SELECTOR,
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Utc};
 use cloud_agent::{
     CloudAgentError, CloudAgentReadiness, CloudAgentService, CloudBountyAnalysis,
     CloudBountyAnalysisRequest, CloudBountyDraft, CloudBountyDraftRequest, CloudDemoSolution,
@@ -94,8 +94,8 @@ use db::{
     NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
     NewX402RelayAttempt, OpenCompetitionEntrantRelay, OpenCompetitionEntrantRelayStatus,
     OpportunityComment as DbOpportunityComment, OpportunityLifecycleStats, PostgresStore,
-    SiteAnalyticsStats, SocialMentionIngestion, TrialBounty, UnfundedBountySolution,
-    WebhookSubscription, X402RelayAttempt, X402RelayStatus,
+    SiteAnalyticsActivatedDiscoveryStats, SiteAnalyticsStats, SocialMentionIngestion, TrialBounty,
+    UnfundedBountySolution, WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -207,6 +207,7 @@ use worker::{
         opportunity_conversion_funnel,
         record_site_analytics_event,
         site_analytics,
+        activated_discovery,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -448,6 +449,11 @@ use worker::{
         ,SiteAnalyticsChannelResponse
         ,SiteAnalyticsRateResponse
         ,SiteAnalyticsResponse
+        ,ActivatedDiscoveryChannelResponse
+        ,ActivatedDiscoveryBrowserResponse
+        ,ActivatedDiscoveryAgentsResponse
+        ,ActivatedDiscoveryCompositeResponse
+        ,ActivatedDiscoveryResponse
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -1437,6 +1443,61 @@ struct SiteAnalyticsQuery {
     window_hours: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ActivatedDiscoveryQuery {
+    cutoff: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ActivatedDiscoveryChannelResponse {
+    channel: String,
+    new_identifiers: u64,
+    activated_identifiers: u64,
+    activation_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ActivatedDiscoveryBrowserResponse {
+    new_qualified_identifiers: u64,
+    activated_identifiers: u64,
+    activation_rate: Option<f64>,
+    excluded_identifiers: u64,
+    search_unclassified_identifiers: u64,
+    unqualified_identifiers: u64,
+    channels: Vec<ActivatedDiscoveryChannelResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ActivatedDiscoveryAgentsResponse {
+    status: String,
+    new_qualified_handles: Option<u64>,
+    activated_handles: Option<u64>,
+    activation_rate: Option<f64>,
+    events_without_handle: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ActivatedDiscoveryCompositeResponse {
+    activated_discovery_users: Option<u64>,
+    no_cross_surface_deduplication: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct ActivatedDiscoveryResponse {
+    schema_version: String,
+    cutoff: String,
+    acquisition_started_at: String,
+    acquisition_ended_at_exclusive: String,
+    activation_observation_ended_at_exclusive: String,
+    data_coverage_started_at: Option<String>,
+    browser_cohort_complete: bool,
+    browser: ActivatedDiscoveryBrowserResponse,
+    agents: ActivatedDiscoveryAgentsResponse,
+    composite: ActivatedDiscoveryCompositeResponse,
+    limitations: Vec<String>,
+    evidence_boundary: String,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 struct SiteAnalyticsOverviewResponse {
     unique_visitors: u64,
@@ -2011,6 +2072,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/analytics/events", post(record_site_analytics_event))
         .route("/v1/analytics/site", get(site_analytics))
+        .route(
+            "/v1/analytics/activated-discovery",
+            get(activated_discovery),
+        )
         .route(
             "/public/opportunities/:opportunity_id/embed",
             get(opportunity_embed_page),
@@ -4603,6 +4668,155 @@ async fn site_analytics(
         window_started_at,
         generated_at,
     )))
+}
+
+fn activated_discovery_cutoff(
+    value: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>, StatusCode> {
+    let today = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is a valid time")
+        .and_utc();
+    let cutoff = match value {
+        Some(value) => NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .ok()
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .map(|date_time| date_time.and_utc())
+            .ok_or(StatusCode::BAD_REQUEST)?,
+        None => today,
+    };
+    if cutoff > today {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(cutoff)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/analytics/activated-discovery",
+    params(("cutoff" = Option<String>, Query, description = "UTC cohort cutoff as YYYY-MM-DD; defaults to the current UTC day")),
+    responses(
+        (status = 200, body = ActivatedDiscoveryResponse),
+        (status = 400, description = "Invalid or future cutoff"),
+        (status = 503, description = "Durable analytics store unavailable")
+    )
+)]
+async fn activated_discovery(
+    State(state): State<SharedState>,
+    Query(query): Query<ActivatedDiscoveryQuery>,
+) -> Result<Json<ActivatedDiscoveryResponse>, StatusCode> {
+    let cutoff = activated_discovery_cutoff(query.cutoff.as_deref(), Utc::now())?;
+    let acquisition_started_at = cutoff - ChronoDuration::days(35);
+    let acquisition_ended_at_exclusive = cutoff - ChronoDuration::days(7);
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let stats = store
+        .site_analytics_activated_discovery(
+            acquisition_started_at,
+            acquisition_ended_at_exclusive,
+            cutoff,
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(activated_discovery_response(
+        stats,
+        acquisition_started_at,
+        acquisition_ended_at_exclusive,
+        cutoff,
+    )))
+}
+
+fn activated_discovery_response(
+    stats: SiteAnalyticsActivatedDiscoveryStats,
+    acquisition_started_at: DateTime<Utc>,
+    acquisition_ended_at_exclusive: DateTime<Utc>,
+    cutoff: DateTime<Utc>,
+) -> ActivatedDiscoveryResponse {
+    let data_coverage_started_at = stats.first_received_at;
+    let browser_cohort_complete = data_coverage_started_at
+        .is_some_and(|first_received_at| first_received_at <= acquisition_started_at);
+    let mut new_qualified_identifiers = 0;
+    let mut activated_identifiers = 0;
+    let mut excluded_identifiers = 0;
+    let mut search_unclassified_identifiers = 0;
+    let mut unqualified_identifiers = 0;
+    let mut channels = Vec::new();
+
+    for channel in stats.channels {
+        match channel.channel.as_str() {
+            "ai_answer"
+            | "developer_community"
+            | "bounty_discovery"
+            | "agent_directory"
+            | "nonbranded_search" => {
+                new_qualified_identifiers += channel.new_identifiers;
+                activated_identifiers += channel.activated_identifiers;
+                channels.push(ActivatedDiscoveryChannelResponse {
+                    channel: channel.channel,
+                    new_identifiers: channel.new_identifiers,
+                    activated_identifiers: channel.activated_identifiers,
+                    activation_rate: (channel.new_identifiers > 0).then(|| {
+                        channel.activated_identifiers as f64 / channel.new_identifiers as f64
+                    }),
+                });
+            }
+            "excluded" => excluded_identifiers += channel.new_identifiers,
+            "search_unclassified" => search_unclassified_identifiers += channel.new_identifiers,
+            _ => unqualified_identifiers += channel.new_identifiers,
+        }
+    }
+
+    let mut limitations = vec![
+        "A browser identifier is a privacy-minimized browser-local UUID, not a person, account, wallet, or durable identity.".to_string(),
+        "Untagged search-engine traffic is search_unclassified; Search Console remains the aggregate non-branded search authority.".to_string(),
+        "Agent uniqueness is unavailable until an explicit opaque discovery-handle path is deployed; request or tool-call volume is not a unique-agent count.".to_string(),
+        "Browser and future agent values cannot be deduplicated across surfaces.".to_string(),
+        "The cutoff is an as-of boundary: events received at or after it are excluded even when their client occurrence time is earlier.".to_string(),
+    ];
+    if !browser_cohort_complete {
+        limitations.push(
+            "The stored event history begins after the acquisition interval starts, so this browser cohort is incomplete and must not be used as the locked baseline."
+                .to_string(),
+        );
+    }
+
+    ActivatedDiscoveryResponse {
+        schema_version: "agent-bounties/activated-discovery-v1".to_string(),
+        cutoff: cutoff.to_rfc3339(),
+        acquisition_started_at: acquisition_started_at.to_rfc3339(),
+        acquisition_ended_at_exclusive: acquisition_ended_at_exclusive.to_rfc3339(),
+        activation_observation_ended_at_exclusive: cutoff.to_rfc3339(),
+        data_coverage_started_at: data_coverage_started_at.map(|value| value.to_rfc3339()),
+        browser_cohort_complete,
+        browser: ActivatedDiscoveryBrowserResponse {
+            new_qualified_identifiers,
+            activated_identifiers,
+            activation_rate: (new_qualified_identifiers > 0).then(|| {
+                activated_identifiers as f64 / new_qualified_identifiers as f64
+            }),
+            excluded_identifiers,
+            search_unclassified_identifiers,
+            unqualified_identifiers,
+            channels,
+        },
+        agents: ActivatedDiscoveryAgentsResponse {
+            status: "unavailable_until_explicit_discovery_handle_is_deployed".to_string(),
+            new_qualified_handles: None,
+            activated_handles: None,
+            activation_rate: None,
+            events_without_handle: None,
+        },
+        composite: ActivatedDiscoveryCompositeResponse {
+            activated_discovery_users: None,
+            no_cross_surface_deduplication: true,
+        },
+        limitations,
+        evidence_boundary: "The browser cohort uses each stored visitor identifier's first event received before the cutoff and requires a qualifying activation in [acquisition, acquisition + 7 days) that was also received before the cutoff. Exact internal and synthetic tokens are excluded. No raw identifier is returned. Composite ADU remains null until unique-agent measurement exists; only BountySettled proves solver payment.".to_string(),
+    }
 }
 
 fn site_analytics_response(
@@ -16059,6 +16273,82 @@ mod tests {
     }
 
     #[test]
+    fn activated_discovery_cutoff_is_utc_aligned_and_rejects_future_or_invalid_dates() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 11, 20, 30, 0).unwrap();
+        assert_eq!(
+            activated_discovery_cutoff(None, now).unwrap(),
+            Utc.with_ymd_and_hms(2026, 8, 11, 0, 0, 0).unwrap()
+        );
+        assert_eq!(
+            activated_discovery_cutoff(Some("2026-08-10"), now).unwrap(),
+            Utc.with_ymd_and_hms(2026, 8, 10, 0, 0, 0).unwrap()
+        );
+        assert_eq!(
+            activated_discovery_cutoff(Some("2026-08-12"), now),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            activated_discovery_cutoff(Some("08/10/2026"), now),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn activated_discovery_response_separates_qualified_and_unclassified_cohorts() {
+        let acquisition_started_at = Utc.with_ymd_and_hms(2026, 7, 20, 0, 0, 0).unwrap();
+        let acquisition_ended_at_exclusive = Utc.with_ymd_and_hms(2026, 8, 17, 0, 0, 0).unwrap();
+        let cutoff = Utc.with_ymd_and_hms(2026, 8, 24, 0, 0, 0).unwrap();
+        let response = activated_discovery_response(
+            SiteAnalyticsActivatedDiscoveryStats {
+                first_received_at: Some(Utc.with_ymd_and_hms(2026, 7, 19, 21, 7, 39).unwrap()),
+                channels: vec![
+                    db::SiteAnalyticsActivatedDiscoveryChannelStats {
+                        channel: "ai_answer".to_string(),
+                        new_identifiers: 4,
+                        activated_identifiers: 1,
+                    },
+                    db::SiteAnalyticsActivatedDiscoveryChannelStats {
+                        channel: "bounty_discovery".to_string(),
+                        new_identifiers: 6,
+                        activated_identifiers: 2,
+                    },
+                    db::SiteAnalyticsActivatedDiscoveryChannelStats {
+                        channel: "search_unclassified".to_string(),
+                        new_identifiers: 3,
+                        activated_identifiers: 1,
+                    },
+                    db::SiteAnalyticsActivatedDiscoveryChannelStats {
+                        channel: "excluded".to_string(),
+                        new_identifiers: 2,
+                        activated_identifiers: 2,
+                    },
+                    db::SiteAnalyticsActivatedDiscoveryChannelStats {
+                        channel: "unqualified".to_string(),
+                        new_identifiers: 5,
+                        activated_identifiers: 0,
+                    },
+                ],
+            },
+            acquisition_started_at,
+            acquisition_ended_at_exclusive,
+            cutoff,
+        );
+
+        assert!(response.browser_cohort_complete);
+        assert_eq!(response.browser.new_qualified_identifiers, 10);
+        assert_eq!(response.browser.activated_identifiers, 3);
+        assert_eq!(response.browser.activation_rate, Some(0.3));
+        assert_eq!(response.browser.search_unclassified_identifiers, 3);
+        assert_eq!(response.browser.excluded_identifiers, 2);
+        assert_eq!(response.browser.unqualified_identifiers, 5);
+        assert_eq!(response.browser.channels.len(), 2);
+        assert_eq!(response.agents.activated_handles, None);
+        assert_eq!(response.agents.events_without_handle, None);
+        assert_eq!(response.composite.activated_discovery_users, None);
+        assert!(response.composite.no_cross_surface_deduplication);
+    }
+
+    #[test]
     fn legal_policy_is_hash_bound_and_acceptance_is_action_wallet_and_time_bound() {
         let policy = build_legal_policy("https://agentbounties.app/");
         assert_eq!(policy.terms_version, LEGAL_TERMS_VERSION);
@@ -18545,6 +18835,7 @@ mod tests {
         assert!(paths.contains_key("/v1/chatgpt/action-intents/{intent_id}/observations"));
         assert!(paths.contains_key("/v1/analytics/events"));
         assert!(paths.contains_key("/v1/analytics/site"));
+        assert!(paths.contains_key("/v1/analytics/activated-discovery"));
         assert!(paths.contains_key("/v1/discovery/subscriptions"));
         assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed"));
