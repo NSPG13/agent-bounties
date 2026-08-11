@@ -22,8 +22,8 @@ jobs:
       matrix:
         builder: [a, b]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           version: "28.3"
@@ -45,7 +45,7 @@ jobs:
             cargo run --locked --release -p public-vector-metric-v1-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.builder }}.jsonl"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: metric-evidence-${{ matrix.builder }}
           path: programs/public-vector-metric-v1/evidence-${{ matrix.builder }}.jsonl
@@ -58,8 +58,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: metric-evidence-*
           path: evidence
@@ -73,7 +73,7 @@ jobs:
             --output release/public-vector-metric-v1.json
       - name: Run adversarial metric corpus
         run: cargo test --locked -p competition-metric-core
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: public-vector-metric-v1-reviewed-release
           path: release/public-vector-metric-v1.json

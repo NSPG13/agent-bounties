@@ -48,7 +48,7 @@ database, or broker to decide payment eligibility.
 
 ## Residual Risks
 
-- **Unresolved high severity:** SP1 6.3.1 resolves
+- **Unresolved high severity:** SP1 6.3.1 includes
   `p3-challenger@0.4.3-succinct`, which remains covered by
   `GHSA-vj64-rjf3-w3v7` for Fiat-Shamir transcript malleability. The package is
   quarantined to the V2 metric build, and CI requires the exact version,
