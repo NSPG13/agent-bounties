@@ -107,6 +107,7 @@ def compile_python(platform: str) -> None:
         "scripts/prepare_open_competition_v2_metric_fixture.py",
         "scripts/test_prepare_open_competition_v2_metric_fixture.py",
         "scripts/open_competition_v2_proof_rehearsal.py",
+        "scripts/generate_open_competition_v2_proof.py",
         "scripts/test_open_competition_v2_proof_rehearsal.py",
         "scripts/run_open_competition_v2_sepolia_rehearsal.py",
         "scripts/test_run_open_competition_v2_sepolia_rehearsal.py",

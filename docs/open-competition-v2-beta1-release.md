@@ -58,10 +58,21 @@ python scripts/run_open_competition_v2_mainnet_fork_replay.py `
   --output target/open-competition-v2-mainnet-real-proof-replay.json
 ```
 
-The live Base Sepolia rehearsal is a protected default-branch workflow. It
-uses `BASE_KEEPER_PRIVATE_KEY`, derives test-only solver accounts without
-publishing their keys, reuses an exact factory after interrupted runs, and
-reclaims remaining test USDC. It does not enable mainnet creation:
+The local command is sequential. CI first prepares one hash-bound context,
+then generates `groth16_first`, `plonk_best_a`, and `plonk_best_b` in three
+independent jobs. A final job rejects any proof whose mode, vkey, ELF hashes,
+or full 640-byte journal differs from the prepared fixture before replaying
+transactions. This keeps every expensive job below the runner execution
+ceiling and makes one failed prover retryable without regenerating valid
+proofs.
+
+The live Base Sepolia rehearsal is a protected default-branch workflow. Its
+protected preparation step uses `BASE_KEEPER_PRIVATE_KEY`, derives test-only
+solver accounts without publishing their keys, deploys or reuses the exact
+factory, and publishes only bound proof inputs. Unprivileged parallel jobs
+generate the three proofs. A protected execution step validates those
+artifacts, moves testnet funds, reclaims remaining test USDC, and reconciles
+the receipts. It does not enable mainnet creation:
 
 ```bash
 gh workflow run open-competition-v2-beta1-release.yml --ref main \
