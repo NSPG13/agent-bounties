@@ -41,7 +41,7 @@ python scripts/run_open_competition_v2_mainnet_fork_replay.py `
   --output target/open-competition-v2-mainnet-fork-replay.json
 ```
 
-The real-proof replay requires SP1 6.1 and is intentionally separate because
+The real-proof replay requires SP1 6.3.1 and is intentionally separate because
 proof generation is expensive:
 
 ```powershell

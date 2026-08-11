@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -L https://sp1.succinct.xyz | bash
-          "$HOME/.sp1/bin/sp1up" -v 6.1.0
+          "$HOME/.sp1/bin/sp1up" -v 6.3.1
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
       - name: Build and execute public vector guest
         working-directory: programs/public-vector-metric-v1
