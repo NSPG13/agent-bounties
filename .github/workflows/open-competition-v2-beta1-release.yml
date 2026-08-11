@@ -55,6 +55,7 @@ jobs:
             --match-contract '(OpenCompetitionBountyV2Beta1Test|OpenCompetitionBountyV2Beta1InvariantTest)' \
             --fuzz-runs 10000 -vv
           python -m unittest \
+            scripts.test_shared_rpc \
             scripts.test_build_open_competition_v2_beta1_release \
             scripts.test_check_open_competition_v2_prover_backend \
             scripts.test_prepare_open_competition_v2_metric_fixture \
