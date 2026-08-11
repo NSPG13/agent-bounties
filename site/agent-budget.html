@@ -48,7 +48,7 @@
               Agent delegate address
               <input name="delegate" placeholder="0x... dedicated agent signer" autocomplete="off" required>
             </label>
-            <p class="fine">Use a dedicated agent signer, not the owner address or seed phrase. The delegate cannot withdraw or make arbitrary calls.</p>
+            <p class="fine">Enter only the agent signer's public Base address. This address and the limits are saved in this browser; keys, signatures, consent, and approvals are never stored.</p>
           </div>
 
           <div data-legal-consent data-consent-actions="activate_agent_budget update_agent_policy revoke_agent_policy"></div>
@@ -85,7 +85,7 @@
             </div>
             <div class="readiness-panel">
               <h3>Fixed authority</h3>
-              <p>Base mainnet native USDC; create, fund, claim, and submit; the exact standing-meta module and two-wallet sandboxed-regression quorum only. AI-judge spending is disabled.</p>
+              <p>Base mainnet native USDC; create, fund, claim, and submit; one exact sandboxed-regression verifier. AI-judge spending is disabled.</p>
             </div>
             <label class="check-line">
               <input name="reviewed" type="checkbox" required>
@@ -118,7 +118,7 @@
               <button id="rotate-agent-delegate" class="button secondary" type="button" disabled>Update policy</button>
               <button id="revoke-agent-budget" class="button secondary" type="button" disabled>Revoke agent authority</button>
             </div>
-            <p class="fine">The update replaces the signer, preserves the standing-meta-v2 verifier, and adds only the exact sandboxed-regression quorum. It starts a fresh policy-period counter but preserves lifetime spend. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
+            <p class="fine">The update replaces the signer and installs only the reviewed durable verifier router plus the exact one-verifier regression policy. Recovery-reserved contracts are not eligible for new earning actions. This starts a fresh policy-period counter but preserves lifetime spend. Revocation blocks all new delegate actions. Neither action moves the wallet's USDC.</p>
           </div>
         </form>
       </section>
@@ -131,6 +131,7 @@
           </div>
           <div class="copy">
             <p>The owner still makes a deliberate setup decision. EOAs sign one bounded USDC authorization; smart accounts approve the exact amount and call the reviewed factory. After activation, the agent signs with its dedicated delegate key and the contract accepts only in-policy canonical actions.</p>
+            <p>The owner can cancel an unclaimed bounty created by this V2 wallet and recover the wallet's contribution. A claimed bounty cannot be cancelled through this escape hatch, and pooled contributors keep their own refunds.</p>
             <p>The predicted wallet address commits the full policy hash. Changing the delegate, cap, verifier, action set, or expiry changes the USDC authorization destination.</p>
             <p>This release is internally reviewed and fork-rehearsed, not independently audited. Caps limit authority; they do not guarantee that an agent chooses useful work.</p>
             <p>A signature or transaction hash is not funding or payment evidence. Inspect the deployed wallet and native-USDC balance; only canonical bounty events prove later work and payout.</p>

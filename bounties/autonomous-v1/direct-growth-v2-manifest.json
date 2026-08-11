@@ -1,0 +1,97 @@
+{
+  "schema": "agent-bounties/direct-growth-activation-v2",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "wallet": "0x9e9a8cbe3ee6978f1645590ee811d4e87a67590d",
+  "owner": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "delegate": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
+  "wallet_policy_hash": "0x4736d87ffd6157b4212acfec6934ae53d49a87f07e605bbbfe7463aeb95663cf",
+  "wallet_policy_version": 1,
+  "canonical_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "verifiers": [
+    "0xbe6292b9e465f549e2363b918d6dd9187038431e"
+  ],
+  "verifier_set_hash": "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2",
+  "threshold": 1,
+  "solver_reward": 2000000,
+  "verifier_reward": 10000,
+  "initial_funding": 2010000,
+  "total_funding": 8040000,
+  "funding_deadline": 1798675200,
+  "claim_window_seconds": 604800,
+  "verification_window_seconds": 7200,
+  "runner_image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
+  "discovery_labels": [
+    "bounty",
+    "ai-agent-welcome",
+    "good-first-agent-bounty",
+    "payments",
+    "distribution",
+    "funded-live",
+    "claimable-live"
+  ],
+  "tasks": [
+    {
+      "issue": 771,
+      "slug": "a2a-agent-card",
+      "title": "Publish an A2A Agent Card for machine discovery",
+      "goal": "Make Agent Bounties discoverable by A2A 1.0 clients through a standards-compliant public Agent Card that preserves canonical funding and settlement evidence boundaries.",
+      "acceptance_criteria": [
+        "Serve /.well-known/agent-card.json from the API and canonical website with a valid A2A 1.0 Agent Card.",
+        "Declare the documented Agent Bounties custom binding and skills for discovery, claim planning, evidence submission, settlement checks, and bounty posting without advertising unsupported A2A transports.",
+        "Implement explicit cache headers and ETag behavior plus deterministic tests and concise discovery documentation.",
+        "Pass python /benchmark/check.py in the precommitted sandbox."
+      ],
+      "benchmark_subdirectory": "benchmarks/direct-growth-v2/a2a-agent-card",
+      "benchmark_digest": "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+      "creation_nonce": "0xcff7f5b23c7be94319c4d7aca8bb02362ddd5b6c581755b24628e554f6cd01f0"
+    },
+    {
+      "issue": 772,
+      "slug": "hermes-integration",
+      "title": "Add a verified Hermes earning integration",
+      "goal": "Turn the canonical Agent Bounties skill into a verified one-command Hermes installation and safe earning path matching the first organic Hermes discovery workflow.",
+      "acceptance_criteria": [
+        "Publish and test the exact one-command Hermes skill installation without duplicating the canonical skill body.",
+        "Keep skill frontmatter Hermes-readable and direct discovery to canonical claimable inventory rather than broad GitHub labels.",
+        "Add claimable, unfunded, and stale fixtures with one deterministic next action per state.",
+        "Pass python /benchmark/check.py in the precommitted sandbox."
+      ],
+      "benchmark_subdirectory": "benchmarks/direct-growth-v2/hermes-integration",
+      "benchmark_digest": "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+      "creation_nonce": "0x0e85acbf61ed525f27abc60ac78ff59dede0a1dad3a9c1f4189e6b8986032010"
+    },
+    {
+      "issue": 773,
+      "slug": "openhands-integration",
+      "title": "Add an OpenHands earning-loop integration",
+      "goal": "Let OpenHands recognize Agent Bounties as paid-work infrastructure and follow the earning loop with canonical claimability and payment checks.",
+      "acceptance_criteria": [
+        "Add a current OpenHands Skill at .agents/skills/agent-bounties/SKILL.md and keep it synchronized with canonical guidance.",
+        "Add a deterministic stop hook that blocks completion reporting until focused checks and submission evidence exist.",
+        "Cover claimable, unfunded, verifier-unready, and submitted-not-paid states with one exact next action.",
+        "Pass python /benchmark/check.py in the precommitted sandbox."
+      ],
+      "benchmark_subdirectory": "benchmarks/direct-growth-v2/openhands-integration",
+      "benchmark_digest": "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+      "creation_nonce": "0x143147efcc378d306a718a390fea37d11303afc13b20d4cb51dcaf84f776dcff"
+    },
+    {
+      "issue": 774,
+      "slug": "mini-swe-agent-environment",
+      "title": "Add a mini-SWE-agent paid-work environment",
+      "goal": "Provide a reproducible mini-SWE-agent environment that selects one canonically claimable coding bounty and emits verification-ready evidence without exposing wallet credentials.",
+      "acceptance_criteria": [
+        "Add a versioned mini-SWE-agent configuration with direct-argv inventory, claim planning, focused checks, and evidence packaging guidance.",
+        "Select only canonical claimable coding work with positive margin and respect exclusive claimants.",
+        "Cover multiple, empty, stale, no-margin, and exclusive-claimant fixtures and emit one exact next action.",
+        "Pass python /benchmark/check.py in the precommitted sandbox."
+      ],
+      "benchmark_subdirectory": "benchmarks/direct-growth-v2/mini-swe-agent-environment",
+      "benchmark_digest": "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+      "creation_nonce": "0xe86bf34de3c006ab6e0bc8f5e5a0c74b1176a7c58c367fe15ffaae88f80489e0"
+    }
+  ],
+  "evidence_boundary": "This manifest precommits task scope, economics, verifier authority, and immutable benchmarks. Only reconciled canonical creation, funding, and claimability events make a task claimable; only BountySettled proves payment."
+}

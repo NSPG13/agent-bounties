@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { AgentBountiesClient } from "../dist/index.js";
+import {
+  AgentBountiesClient,
+  generateOpenCompetitionCommitment,
+} from "../dist/index.js";
 
 test("public declarations match the compatibility fixture", async () => {
   const declarations = (await readFile(new URL("../dist/index.d.ts", import.meta.url), "utf8"))
@@ -56,6 +59,65 @@ test("agentNativeClaim replays a native wallet signature unchanged", async () =>
     assert.equal(requests.length, 2);
     assert.equal(requests[1].wallet_signature, walletSignature);
     assert.equal(requests[1].signature, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("open competition commitments use local random recovery envelopes", () => {
+  const input = {
+    network: "base-sepolia",
+    bounty: "0x1111111111111111111111111111111111111111",
+    solver: "0x2222222222222222222222222222222222222222",
+    submission_hash: `0x${"aa".repeat(32)}`,
+    evidence_hash: `0x${"bb".repeat(32)}`,
+  };
+  const first = generateOpenCompetitionCommitment(input);
+  const second = generateOpenCompetitionCommitment(input);
+
+  assert.equal(first.schema_version, "agent-bounties/open-competition-v1-commitment-v1");
+  assert.equal(first.chain_id, 84532);
+  assert.match(first.salt, /^0x[0-9a-f]{64}$/);
+  assert.match(first.commitment, /^0x[0-9a-f]{64}$/);
+  assert.notEqual(first.salt, second.salt);
+  assert.notEqual(first.commitment, second.commitment);
+  assert.equal(first.committed_block, null);
+  assert.equal(first.reveal_deadline, null);
+});
+
+test("open competition entrant relay preserves the exact plan and signature", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ status: "broadcast" }), {
+      status: 202,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const client = new AgentBountiesClient("https://api.example");
+    const plan = {
+      schema_version: "agent-bounties/open-competition-entrant-wallet-action-v1",
+      network: "base-mainnet",
+      nonce: 7,
+      payload_hash: `0x${"aa".repeat(32)}`,
+    };
+    const signature = `0x${"11".repeat(64)}1b`;
+    await client.relayOpenCompetitionEntrantAction({
+      idempotency_key: "entrant-relay-7",
+      plan,
+      signature,
+    });
+
+    assert.equal(
+      requests[0].url,
+      "https://api.example/v1/base/open-competition-v1/entrant-action-relays",
+    );
+    assert.deepEqual(requests[0].body.plan, plan);
+    assert.equal(requests[0].body.signature, signature);
+    assert.equal(requests[0].body.idempotency_key, "entrant-relay-7");
   } finally {
     globalThis.fetch = originalFetch;
   }

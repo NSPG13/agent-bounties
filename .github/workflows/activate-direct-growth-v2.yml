@@ -1,0 +1,97 @@
+name: Activate direct growth V2 bounties
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/activate-direct-growth-v2.yml"
+      - "benchmarks/direct-growth-v2/**"
+      - "bounties/autonomous-v1/direct-growth-v2-manifest.json"
+      - "deployments/bounded-agent-wallet-v2-base-mainnet.json"
+      - "docs/direct-growth-v2-activation.md"
+      - "scripts/activate_direct_growth_v2.py"
+      - "scripts/test_activate_direct_growth_v2.py"
+      - "scripts/plan_bounded_agent_action.py"
+      - "scripts/inspect_bounded_agent_wallet.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: direct-growth-v2-activation
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate exact activation and benchmark contract
+        run: |
+          python -m unittest scripts.test_activate_direct_growth_v2 -v
+          python -m py_compile \
+            scripts/activate_direct_growth_v2.py \
+            benchmarks/direct-growth-v2/a2a-agent-card/check.py \
+            benchmarks/direct-growth-v2/hermes-integration/check.py \
+            benchmarks/direct-growth-v2/openhands-integration/check.py \
+            benchmarks/direct-growth-v2/mini-swe-agent-environment/check.py
+
+  activate:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Create, fund, and reconcile four direct bounties
+        run: |
+          python scripts/activate_direct_growth_v2.py \
+            --commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --api "$AGENT_BOUNTIES_API_URL"
+
+      - name: Publish only canonically claimable issues
+        run: |
+          for issue in 771 772 773 774; do
+            test -f "target/direct-growth-v2/issue-${issue}.md"
+            gh issue edit "$issue" \
+              --body-file "target/direct-growth-v2/issue-${issue}.md" \
+              --add-label bounty \
+              --add-label ai-agent-welcome \
+              --add-label good-first-agent-bounty \
+              --add-label payments \
+              --add-label distribution \
+              --add-label funded-live \
+              --add-label claimable-live
+            if gh issue view "$issue" --json labels --jq '.labels[].name' | grep -Fxq funding-needed; then
+              gh issue edit "$issue" --remove-label funding-needed
+            fi
+          done
+
+      - name: Publish activation evidence
+        run: |
+          gh issue comment 756 --body-file target/direct-growth-v2.md
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: direct-growth-v2-activation-${{ github.run_id }}
+          path: |
+            target/direct-growth-v2.json
+            target/direct-growth-v2.md
+            target/direct-growth-v2/
+          if-no-files-found: warn

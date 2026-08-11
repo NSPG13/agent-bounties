@@ -8,7 +8,7 @@ use alloy::{
 use chrono::{DateTime, Utc};
 use domain::{
     AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, AutonomousSubmissionEvidenceRecord,
-    Id, Money,
+    BountyImageReference, Id, Money,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -23,8 +23,12 @@ use uuid::Uuid;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
+mod open_competition;
+mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
+pub use open_competition::*;
+pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ChainBaseError {
@@ -108,7 +112,7 @@ pub enum ChainBaseError {
     RelayerProvider(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmTransactionIntent {
     pub from: Option<String>,
     pub to: String,
@@ -399,9 +403,12 @@ pub struct AutonomousBountyCreate {
 
 pub const CANONICAL_CHILD_PROTOCOL_VERSION: &str = "agent-bounties/canonical-child-v1";
 pub const STANDING_META_V2_PROTOCOL_VERSION: &str = "agent-bounties/independent-child-v2";
+pub const STANDING_META_V3_ROUTED_PROTOCOL_VERSION: &str =
+    "agent-bounties/independent-child-v3-routed";
 pub const STANDING_META_V2_REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER: &str =
     "0xe573cb4f471d38b5bf10ce82237251ac902c9867";
+pub const BASE_MAINNET_STANDING_META_V3_ROUTER: &str = "0x380c1af742593dd88b6f20387e9ee693a0536731";
 pub const BASE_MAINNET_AUTONOMOUS_BOUNTY_FACTORY: &str =
     "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9";
 pub const BASE_MAINNET_AUTONOMOUS_BOUNTY_IMPLEMENTATION: &str =
@@ -412,13 +419,18 @@ pub const BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY: &str =
     "0x9875dcaf570bde8ff1aa62275d3c8985f4fd1294";
 pub const BASE_MAINNET_STANDING_META_V2_ACCEPTANCE_CRITERIA_HASH: &str =
     "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54";
+pub const BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH: &str =
+    "0xba3b04ab970dfd91f5ccf1b7eda6670b5a38a854bca16dc980ec8362ed2bcaf9";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH: &str =
     "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd";
+pub const BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH: &str =
+    "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIERS: [&str; 2] = [
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
     "0xb7c2ce6430b66fb986e27b6140b29309550d487a",
 ];
 pub const STANDING_META_V2_DEFAULT_VERIFIER_REWARD: i64 = 100_000;
+pub const STANDING_META_V3_DEFAULT_VERIFIER_REWARD: i64 = 10_000;
 pub const STANDING_META_V2_DEFAULT_WORK_WINDOW_SECONDS: u64 = 3 * 24 * 60 * 60;
 pub const STANDING_META_V2_MAX_ONCHAIN_TERMS_BYTES: usize = 32_768;
 pub const AUTONOMOUS_FUND_WITH_AUTHORIZATION_FUNCTION: &str =
@@ -494,11 +506,13 @@ pub struct StandingMetaV2ChildPreparationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandingMetaV2ParentContext {
+    pub protocol_version: String,
     pub bounty_contract: String,
     pub bounty_id: String,
     pub creator: String,
     pub round: u64,
     pub solver_reward: Money,
+    pub child_target: Money,
     pub funding_deadline: u64,
 }
 
@@ -1054,7 +1068,7 @@ impl AutonomousBountyTxPlanner {
                 .eq_ignore_ascii_case(BASE_MAINNET_AUTONOMOUS_BOUNTY_IMPLEMENTATION)
         {
             return Err(ChainBaseError::InvalidVerificationConfiguration(
-                "standing-meta-v2 child preparation requires the canonical Base-mainnet factory"
+                "standing-meta child preparation requires the canonical Base-mainnet factory"
                     .to_string(),
             ));
         }
@@ -1091,9 +1105,16 @@ impl AutonomousBountyTxPlanner {
             ));
         }
 
-        let target = autonomous_money_to_uint256(&parent.solver_reward, false)?;
-        let default_verifier_reward = Money::new(STANDING_META_V2_DEFAULT_VERIFIER_REWARD, "usdc")
-            .map_err(|_| ChainBaseError::InvalidAmount)?;
+        let target = autonomous_money_to_uint256(&parent.child_target, false)?;
+        let default_verifier_reward = Money::new(
+            if parent.protocol_version == STANDING_META_V3_ROUTED_PROTOCOL_VERSION {
+                STANDING_META_V3_DEFAULT_VERIFIER_REWARD
+            } else {
+                STANDING_META_V2_DEFAULT_VERIFIER_REWARD
+            },
+            "usdc",
+        )
+        .map_err(|_| ChainBaseError::InvalidAmount)?;
         let verifier_reward = request
             .verifier_reward
             .as_ref()
@@ -1156,7 +1177,7 @@ impl AutonomousBountyTxPlanner {
         let creation_nonce = match request.creation_nonce.as_deref() {
             Some(value) => format!("0x{}", hex::encode(parse_bytes32(value)?)),
             None => keccak256_canonical_json(&json!({
-                "protocol": STANDING_META_V2_PROTOCOL_VERSION,
+                "protocol": parent.protocol_version.as_str(),
                 "parent_bounty_contract": parent_bounty_contract,
                 "parent_bounty_id": parent_bounty_id,
                 "parent_round": parent.round,
@@ -1173,7 +1194,7 @@ impl AutonomousBountyTxPlanner {
         let benchmark = json!({
             "engine": STANDING_META_V2_REGRESSION_ENGINE,
             "parent_binding": {
-                "protocol": STANDING_META_V2_PROTOCOL_VERSION,
+                "protocol": parent.protocol_version.as_str(),
                 "parent_bounty_contract": parent_bounty_contract,
                 "parent_bounty_id": parent_bounty_id,
                 "parent_round": parent.round,
@@ -1225,7 +1246,8 @@ impl AutonomousBountyTxPlanner {
             discovery_source: request
                 .discovery_source
                 .clone()
-                .or_else(|| Some("standing-meta-v2 child preparation".to_string())),
+                .or_else(|| Some("routed standing-meta child preparation".to_string())),
+            image: None,
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -1258,7 +1280,7 @@ impl AutonomousBountyTxPlanner {
         pre_claim_wallet_calls.extend(child_creation.wallet_calls.clone());
 
         Ok(StandingMetaV2ChildPreparationPlan {
-            protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
+            protocol_version: parent.protocol_version.clone(),
             network,
             parent_bounty_contract,
             parent_bounty_id,
@@ -1294,8 +1316,8 @@ impl AutonomousBountyTxPlanner {
             child_creation,
             pre_claim_wallet_calls,
             supports_single_wallet_batch: true,
-            current_state: "child_terms_prepared_parent_unclaimed".to_string(),
-            next_action: "Confirm both distinct participant IDs were registered, then send pre_claim_wallet_calls in order from the parent solver wallet. After TermsPublished, CanonicalBountyCreated, FundingAdded, and BountyBecameClaimable are confirmed, wait for a Base block with a strictly later timestamp before claiming the parent; a same-timestamp claim cannot satisfy standing-meta-v2.".to_string(),
+            current_state: "routed_v3_child_terms_prepared_parent_unclaimed".to_string(),
+            next_action: "Confirm both distinct participant IDs were registered, then send pre_claim_wallet_calls in order from the parent solver wallet. After TermsPublished, CanonicalBountyCreated, FundingAdded, and BountyBecameClaimable are confirmed, wait for a Base block with a strictly later timestamp before claiming the parent; a same-timestamp claim cannot satisfy the routed standing-meta policy.".to_string(),
             required_canonical_events: vec![
                 "TermsPublished".to_string(),
                 "CanonicalBountyCreated".to_string(),
@@ -1950,6 +1972,42 @@ impl AutonomousBountyTxPlanner {
         self.plan_permissionless_call(bounty_contract, Some(contributor), "withdrawRefund()")
     }
 
+    pub fn plan_bounded_wallet_cancel_refund(
+        &self,
+        bounded_wallet: &str,
+        bounty_contract: &str,
+        owner: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: Some(normalize_address(owner)?),
+            to: normalize_address(bounded_wallet)?,
+            value_wei: 0,
+            data: encode_call(
+                "cancelAndWithdrawUnclaimedBounty(address)",
+                vec![encode_address(bounty_contract)?],
+            ),
+            function: "cancelAndWithdrawUnclaimedBounty(address)".to_string(),
+        })
+    }
+
+    pub fn plan_bounded_wallet_refund(
+        &self,
+        bounded_wallet: &str,
+        bounty_contract: &str,
+        owner: &str,
+    ) -> Result<EvmTransactionIntent, ChainBaseError> {
+        Ok(EvmTransactionIntent {
+            from: Some(normalize_address(owner)?),
+            to: normalize_address(bounded_wallet)?,
+            value_wei: 0,
+            data: encode_call(
+                "withdrawCancelledBountyRefund(address)",
+                vec![encode_address(bounty_contract)?],
+            ),
+            function: "withdrawCancelledBountyRefund(address)".to_string(),
+        })
+    }
+
     fn plan_permissionless_call(
         &self,
         bounty_contract: &str,
@@ -2319,9 +2377,18 @@ pub struct RpcTransactionReceipt {
     pub transaction_hash: String,
     #[serde(rename = "blockNumber")]
     pub block_number: Option<String>,
+    #[serde(rename = "blockHash")]
+    pub block_hash: Option<String>,
     pub status: Option<String>,
     #[serde(default)]
     pub logs: Vec<RpcEvmLog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseBlockIdentity {
+    pub number: u64,
+    pub hash: String,
+    pub timestamp: u64,
 }
 
 pub fn base_network_descriptor(network: &str) -> Result<BaseNetworkDescriptor, ChainBaseError> {
@@ -2439,6 +2506,18 @@ pub trait JsonRpcTransport: Send + Sync {
         rpc_url: &str,
         request: &Value,
     ) -> Result<Value, ChainBaseError>;
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.post_json_value(rpc_url, request).await?);
+        }
+        Ok(responses)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2454,12 +2533,11 @@ impl Default for ReqwestJsonRpcTransport {
     }
 }
 
-#[async_trait::async_trait]
-impl JsonRpcTransport for ReqwestJsonRpcTransport {
-    async fn post_json_value(
+impl ReqwestJsonRpcTransport {
+    async fn post_json_request<T: Serialize + ?Sized>(
         &self,
         rpc_url: &str,
-        request: &Value,
+        request: &T,
     ) -> Result<Value, ChainBaseError> {
         let response = self
             .client
@@ -2487,6 +2565,30 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
             .json::<Value>()
             .await
             .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))
+    }
+}
+
+#[async_trait::async_trait]
+impl JsonRpcTransport for ReqwestJsonRpcTransport {
+    async fn post_json_value(
+        &self,
+        rpc_url: &str,
+        request: &Value,
+    ) -> Result<Value, ChainBaseError> {
+        self.post_json_request(rpc_url, request).await
+    }
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let response = self.post_json_request(rpc_url, requests).await?;
+        response.as_array().cloned().ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse(
+                "JSON-RPC batch response is not an array".to_string(),
+            )
+        })
     }
 }
 
@@ -2669,7 +2771,11 @@ where
     })
 }
 
-fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, ChainBaseError> {
+pub(crate) fn rpc_result(
+    value: Value,
+    request_id: u64,
+    method: &str,
+) -> Result<Value, ChainBaseError> {
     let object = value.as_object().ok_or_else(|| {
         ChainBaseError::InvalidRpcResponse(format!("{method} response is not an object"))
     })?;
@@ -2696,7 +2802,7 @@ fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, Chai
     })
 }
 
-async fn fetch_account_code_hash<T>(
+pub(crate) async fn fetch_account_code_hash<T>(
     rpc_url: &str,
     address: &str,
     block: &str,
@@ -2733,7 +2839,7 @@ where
     )
 }
 
-async fn fetch_contract_word<T>(
+pub(crate) async fn fetch_contract_word<T>(
     rpc_url: &str,
     contract: &str,
     data: &str,
@@ -2863,6 +2969,85 @@ pub async fn fetch_block_timestamp(
         &ReqwestJsonRpcTransport::default(),
     )
     .await
+}
+
+pub async fn fetch_safe_block_identity(
+    rpc_url: &str,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        "safe",
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_exact_block_identity(
+    rpc_url: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        &hex_quantity(block_number),
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_block_identity_with_transport<T>(
+    rpc_url: &str,
+    block_tag: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<BaseBlockIdentity, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    if block_tag != "safe"
+        && !(block_tag.starts_with("0x")
+            && block_tag.len() > 2
+            && block_tag[2..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()))
+    {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "block identity tag must be safe or a hex quantity".to_string(),
+        ));
+    }
+    let block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getBlockByNumber",
+                    "params": [block_tag, false]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getBlockByNumber",
+    )?;
+    Ok(BaseBlockIdentity {
+        number: parse_rpc_quantity(block.get("number").and_then(Value::as_str).ok_or_else(
+            || ChainBaseError::InvalidRpcResponse("block identity is missing number".to_string()),
+        )?)?,
+        hash: normalize_hash(block.get("hash").and_then(Value::as_str).ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse("block identity is missing hash".to_string())
+        })?)?,
+        timestamp: parse_rpc_quantity(block.get("timestamp").and_then(Value::as_str).ok_or_else(
+            || {
+                ChainBaseError::InvalidRpcResponse(
+                    "block identity is missing timestamp".to_string(),
+                )
+            },
+        )?)?,
+    })
 }
 
 pub async fn fetch_block_timestamp_with_transport<T>(
@@ -3378,15 +3563,54 @@ pub struct AutonomousBountyFeedItem {
     pub timeout_bond_pool: String,
     pub target_amount: String,
     pub funded_amount: String,
+    #[serde(default)]
+    pub required_external_spend: String,
+    #[serde(default)]
+    pub gross_cash_margin: String,
     pub terms_hash: String,
     pub terms: Option<AutonomousBountyTermsRecord>,
     pub terms_valid: bool,
     pub verification_mode: String,
     pub verifier_module: Option<String>,
+    #[serde(default)]
+    pub verifier_set_hash: Option<String>,
+    #[serde(default)]
+    pub verifier_threshold: Option<u8>,
+    #[serde(default)]
+    pub runner_identifier: Option<String>,
     pub verification_ready: bool,
     pub verification_readiness_reason: String,
     pub validation_errors: Vec<String>,
     pub events: Vec<AutonomousBountyEvent>,
+}
+
+pub fn validate_autonomous_cancel_authority(
+    status: &str,
+    creator: &str,
+    caller: &str,
+    funding_deadline: Option<u64>,
+    observed_at_unix: u64,
+) -> Result<String, ChainBaseError> {
+    if !matches!(status, "open" | "claimable") {
+        return Err(ChainBaseError::InvalidVerificationConfiguration(
+            "claimed or finalized bounties cannot be cancelled".to_string(),
+        ));
+    }
+    let creator = normalize_address(creator)?;
+    let caller = normalize_address(caller)?;
+    if caller != creator {
+        let funding_deadline = funding_deadline.ok_or_else(|| {
+            ChainBaseError::InvalidVerificationConfiguration(
+                "funding deadline is unavailable for non-creator cancellation".to_string(),
+            )
+        })?;
+        if observed_at_unix <= funding_deadline {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "only the creator can cancel before the immutable funding deadline".to_string(),
+            ));
+        }
+    }
+    Ok(caller)
 }
 
 pub fn standing_meta_v2_parent_context(
@@ -3394,25 +3618,18 @@ pub fn standing_meta_v2_parent_context(
 ) -> Result<StandingMetaV2ParentContext, ChainBaseError> {
     let terms = item.terms.as_ref().ok_or_else(|| {
         ChainBaseError::InvalidVerificationConfiguration(
-            "standing-meta-v2 parent terms are unavailable".to_string(),
+            "standing-meta parent terms are unavailable".to_string(),
         )
     })?;
     let benchmark = terms.document.benchmark.as_object().ok_or_else(|| {
         ChainBaseError::InvalidVerificationConfiguration(
-            "standing-meta-v2 parent benchmark is unavailable".to_string(),
+            "standing-meta parent benchmark is unavailable".to_string(),
         )
     })?;
-    let exact_parent = item.status == "claimable"
+    let common_parent = item.status == "claimable"
         && item.terms_valid
         && item.verification_ready
         && item.validation_errors.is_empty()
-        && item.verifier_module.as_deref().is_some_and(|module| {
-            module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER)
-        })
-        && terms
-            .acceptance_criteria_hash
-            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_ACCEPTANCE_CRITERIA_HASH)
-        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v2_parent")
         && benchmark
             .get("required_child_engine")
             .and_then(Value::as_str)
@@ -3439,9 +3656,35 @@ pub fn standing_meta_v2_parent_context(
             .is_some_and(|address| {
                 address.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY)
             });
-    if !exact_parent {
+    let exact_v2 = common_parent
+        && item.verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER)
+        })
+        && terms
+            .acceptance_criteria_hash
+            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_ACCEPTANCE_CRITERIA_HASH)
+        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v2_parent");
+    let exact_v3 = common_parent
+        && item.verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ROUTER)
+        })
+        && terms
+            .acceptance_criteria_hash
+            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH)
+        && benchmark.get("engine").and_then(Value::as_str)
+            == Some("standing_meta_v3_routed_parent")
+        && benchmark
+            .get("minimum_child_target")
+            .and_then(Value::as_u64)
+            == Some(1_000_000)
+        && benchmark
+            .get("minimum_parent_gross_margin")
+            .and_then(Value::as_u64)
+            == Some(1_000_000);
+    if !exact_v2 && !exact_v3 {
         return Err(ChainBaseError::InvalidVerificationConfiguration(
-            "bounty is not an exact, valid, claimable standing-meta-v2 parent".to_string(),
+            "bounty is not an exact, valid, claimable standing-meta parent with an executable child path"
+                .to_string(),
         ));
     }
     let round = item
@@ -3453,28 +3696,40 @@ pub fn standing_meta_v2_parent_context(
         .checked_add(1)
         .ok_or_else(|| {
             ChainBaseError::InvalidVerificationConfiguration(
-                "standing-meta-v2 parent round overflow".to_string(),
+                "standing-meta parent round overflow".to_string(),
             )
         })?;
-    let reward = item
+    let solver_reward = item
         .solver_reward
         .parse::<i64>()
         .ok()
         .and_then(|amount| Money::new(amount, "usdc").ok())
         .ok_or(ChainBaseError::InvalidAmount)?;
+    let child_target = if exact_v3 {
+        Money::new(1_000_000, "usdc").map_err(|_| ChainBaseError::InvalidAmount)?
+    } else {
+        solver_reward.clone()
+    };
     let funding_deadline = terms.document.contract_terms["funding_deadline"]
         .as_u64()
         .ok_or_else(|| {
             ChainBaseError::InvalidVerificationConfiguration(
-                "standing-meta-v2 parent funding deadline is unavailable".to_string(),
+                "standing-meta parent funding deadline is unavailable".to_string(),
             )
         })?;
     Ok(StandingMetaV2ParentContext {
+        protocol_version: if exact_v3 {
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        } else {
+            STANDING_META_V2_PROTOCOL_VERSION
+        }
+        .to_string(),
         bounty_contract: normalize_address(&item.bounty_contract)?,
         bounty_id: item.bounty_id.clone(),
         creator: normalize_address(&item.creator)?,
         round,
-        solver_reward: reward,
+        solver_reward,
+        child_target,
         funding_deadline,
     })
 }
@@ -3482,10 +3737,32 @@ pub fn standing_meta_v2_parent_context(
 pub const RECOVERY_RESERVED_VERIFICATION_REASON: &str =
     "incident recovery reservation is active; do not claim, sign, or post a bond";
 
-pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 3] = [
+pub const STANDING_META_V2_RECOVERY_REASON: &str =
+    "standing-meta-v2 migration reservation is active: required child funding cannot produce positive gross margin, participant IDs do not prove unrelated ownership, and the project-governed verifier pair is not organizationally independent; do not claim, sign, post a bond, or run verification";
+
+pub const BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 5] = [
+    "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562",
+    "0xbe17ef2d154265ebe3142d7bda5e99610d571455",
+    "0x43d42cb227d76588ab16693f14efd6cff851fa7a",
+    "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b",
+    "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
+];
+
+pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 14] = [
     "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
     "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1",
     "0xb35b94e1225b66e50644a331feccdab0439e63d7",
+    "0xfffecb0fcd36477c5f6ecec808f6f0cf53819562",
+    "0xbe17ef2d154265ebe3142d7bda5e99610d571455",
+    "0x43d42cb227d76588ab16693f14efd6cff851fa7a",
+    "0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b",
+    "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
+    "0xc13ccf6c6a03b53f836d433c5e628f06bbc1dbf4",
+    "0xad4532e45d371ff5b5c40ebbf0c20687ed9e6fc4",
+    "0xf2e47a253988e98f535ab60f4b9bd7f8975c1263",
+    "0x2afb91d160200fac4b91e6134b2cc9d9bff86f42",
+    "0xc710d54d192ffb0b84cd6e051754ab70acf1130c",
+    "0xd15306a8cc4274ec46d913817ca4490c4fc41303",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3532,12 +3809,24 @@ impl AutonomousBountyRecoveryReservations {
             .contains(&bounty_contract.to_ascii_lowercase())
     }
 
+    pub fn verification_reason(&self, bounty_contract: &str) -> Option<&'static str> {
+        if !self.contains(bounty_contract) {
+            return None;
+        }
+        if BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+            .iter()
+            .any(|contract| contract.eq_ignore_ascii_case(bounty_contract))
+        {
+            return Some(STANDING_META_V2_RECOVERY_REASON);
+        }
+        Some(RECOVERY_RESERVED_VERIFICATION_REASON)
+    }
+
     pub fn apply(&self, feed: &mut Vec<AutonomousBountyFeedItem>, claimable_only: bool) {
         for item in feed.iter_mut() {
-            if self.contains(&item.bounty_contract) {
+            if let Some(reason) = self.verification_reason(&item.bounty_contract) {
                 item.verification_ready = false;
-                item.verification_readiness_reason =
-                    RECOVERY_RESERVED_VERIFICATION_REASON.to_string();
+                item.verification_readiness_reason = reason.to_string();
             }
         }
         if claimable_only {
@@ -3547,6 +3836,16 @@ impl AutonomousBountyRecoveryReservations {
 
     pub fn exclude_from_verification_jobs(&self, feed: &mut Vec<AutonomousBountyFeedItem>) {
         feed.retain(|item| !self.contains(&item.bounty_contract));
+    }
+
+    pub fn exclude_from_reported_outcomes(&self, feed: &mut Vec<AutonomousBountyFeedItem>) {
+        feed.retain(|item| !self.contains(&item.bounty_contract));
+    }
+
+    pub fn contracts(&self) -> Vec<String> {
+        let mut contracts = self.contracts.iter().cloned().collect::<Vec<_>>();
+        contracts.sort();
+        contracts
     }
 }
 
@@ -3733,6 +4032,168 @@ fn verifier_set_hash_from_policy(policy: &Value) -> Result<String, ChainBaseErro
         encoded.extend_from_slice(&word);
     }
     Ok(format!("0x{}", hex::encode(Keccak256::digest(encoded))))
+}
+
+#[cfg(test)]
+fn is_supported_regression_quorum(
+    creation_data: &Value,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> bool {
+    regression_quorum_readiness(creation_data, terms).0
+}
+
+fn regression_quorum_readiness(
+    creation_data: &Value,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> (bool, &'static str) {
+    let Some(terms) = terms else {
+        return (false, "quorum terms are unavailable");
+    };
+    let policy = &terms.document.verification_policy;
+    let benchmark = &terms.document.benchmark;
+    let Some(threshold) = creation_data["threshold"]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len()).contains(value))
+    else {
+        return (false, "verifier threshold mismatch");
+    };
+    let configured_signers = policy
+        .get("verifiers")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if configured_signers.len() != threshold
+        || configured_signers
+            .iter()
+            .zip(BASE_MAINNET_STANDING_META_V2_VERIFIERS.iter())
+            .any(|(actual, expected)| {
+                !actual
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+            })
+    {
+        return (false, "required verifier signer is missing");
+    }
+    if policy.get("threshold").and_then(Value::as_u64) != Some(threshold as u64) {
+        return (false, "verifier threshold mismatch");
+    }
+    let Ok(expected_set_hash) = verifier_set_hash_from_policy(policy) else {
+        return (false, "verifier set mismatch");
+    };
+    if !creation_data["verifier_set_hash"]
+        .as_str()
+        .is_some_and(|hash| hash.eq_ignore_ascii_case(&expected_set_hash))
+    {
+        return (false, "verifier set mismatch");
+    }
+    if policy.get("mechanism").and_then(Value::as_str) != Some("signed_quorum") {
+        return (false, "signed-quorum policy is unavailable");
+    }
+    if policy.get("engine").and_then(Value::as_str) != Some(STANDING_META_V2_REGRESSION_ENGINE)
+        || benchmark.get("engine").and_then(Value::as_str)
+            != Some(STANDING_META_V2_REGRESSION_ENGINE)
+    {
+        return (
+            false,
+            "regression runner identifier is stale or unsupported",
+        );
+    }
+    if !valid_regression_benchmark(benchmark) {
+        return (
+            false,
+            "regression runner manifest is unavailable or invalid",
+        );
+    }
+    if threshold == 1 {
+        (
+            true,
+            "the default single sandboxed-regression verifier is supported",
+        )
+    } else {
+        (
+            true,
+            "the optional two-verifier sandboxed-regression policy is supported",
+        )
+    }
+}
+
+fn valid_regression_benchmark(benchmark: &Value) -> bool {
+    if benchmark.get("engine").and_then(Value::as_str) != Some(STANDING_META_V2_REGRESSION_ENGINE) {
+        return false;
+    }
+    let Some(source) = benchmark.get("source").cloned() else {
+        return false;
+    };
+    let Ok(source) = serde_json::from_value::<StandingMetaV2BenchmarkSource>(source) else {
+        return false;
+    };
+    if standing_meta_v2_benchmark_source(&source).is_err() {
+        return false;
+    }
+    let Some(runner_manifest) = benchmark.get("runner_manifest").cloned() else {
+        return false;
+    };
+    serde_json::from_value::<RegressionSandboxPolicy>(runner_manifest)
+        .is_ok_and(|policy| policy.validate().is_ok())
+}
+
+fn is_supported_routed_v3_parent_terms(
+    verifier_module: Option<&str>,
+    solver_reward: u128,
+    terms: Option<&AutonomousBountyTermsRecord>,
+) -> bool {
+    let Some(terms) = terms else {
+        return false;
+    };
+    let policy = &terms.document.verification_policy;
+    let benchmark = &terms.document.benchmark;
+    verifier_module
+        .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ROUTER))
+        && solver_reward >= 2_000_000
+        && terms
+            .acceptance_criteria_hash
+            .eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH)
+        && policy.get("mechanism").and_then(Value::as_str) == Some("deterministic_module")
+        && policy
+            .get("verifier_module")
+            .and_then(Value::as_str)
+            .is_some_and(|module| module.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V3_ROUTER))
+        && benchmark.get("engine").and_then(Value::as_str) == Some("standing_meta_v3_routed_parent")
+        && benchmark
+            .get("required_child_engine")
+            .and_then(Value::as_str)
+            == Some(STANDING_META_V2_REGRESSION_ENGINE)
+        && benchmark
+            .get("required_child_verifier_set_hash")
+            .and_then(Value::as_str)
+            .is_some_and(|hash| {
+                hash.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH)
+            })
+        && benchmark
+            .get("required_child_verifier_threshold")
+            .and_then(Value::as_u64)
+            == Some(2)
+        && benchmark
+            .get("participant_registry")
+            .and_then(Value::as_str)
+            .is_some_and(|address| {
+                address.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY)
+            })
+        && benchmark
+            .get("terms_registry")
+            .and_then(Value::as_str)
+            .is_some_and(|address| {
+                address.eq_ignore_ascii_case(BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY)
+            })
+        && benchmark
+            .get("minimum_child_target")
+            .and_then(Value::as_u64)
+            == Some(1_000_000)
+        && benchmark
+            .get("minimum_parent_gross_margin")
+            .and_then(Value::as_u64)
+            == Some(1_000_000)
 }
 
 pub fn validate_attestation_request_against_feed(
@@ -4711,17 +5172,81 @@ pub fn build_autonomous_bounty_feed(
             validation_errors.push(error);
         }
         let terms_valid = validation_errors.is_empty();
+        let verifier_set_hash = creation_data["verifier_set_hash"]
+            .as_str()
+            .map(str::to_string);
+        let verifier_threshold = creation_data["threshold"]
+            .as_u64()
+            .and_then(|value| u8::try_from(value).ok());
+        let runner_identifier = terms_record.as_ref().and_then(|terms| {
+            terms
+                .document
+                .benchmark
+                .get("runner_manifest")
+                .and_then(|manifest| manifest.get("runner_id"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    terms
+                        .document
+                        .benchmark
+                        .get("engine")
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    terms
+                        .document
+                        .verification_policy
+                        .get("mechanism")
+                        .and_then(Value::as_str)
+                })
+                .map(str::to_string)
+        });
+        let required_external_spend = terms_record
+            .as_ref()
+            .and_then(|terms| {
+                let benchmark = &terms.document.benchmark;
+                benchmark
+                    .get("minimum_child_target")
+                    .or_else(|| benchmark.get("required_child_target"))
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        (benchmark.get("engine").and_then(Value::as_str)
+                            == Some("standing_meta_v2_parent"))
+                        .then_some(solver_reward)
+                    })
+            })
+            .unwrap_or(0);
+        let gross_cash_margin = i128::from(solver_reward) - i128::from(required_external_spend);
         let (verification_ready, verification_readiness_reason) = if !terms_valid {
             (false, "content-addressed terms are invalid or unavailable")
+        } else if verification_mode == "signed_quorum" {
+            regression_quorum_readiness(&creation_data, terms_record.as_ref())
         } else if verification_mode != "deterministic_module" {
             (
                 false,
                 "quorum verifier service availability is not canonically attested",
             )
-        } else if verifier_module.is_none() {
-            (false, "deterministic verifier module is not configured")
+        } else if verifier_module.as_deref().is_some_and(|module| {
+            module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
+        }) {
+            (
+                true,
+                "the deployed leading-zero deterministic verifier is supported",
+            )
+        } else if is_supported_routed_v3_parent_terms(
+            verifier_module.as_deref(),
+            u128::from(solver_reward),
+            terms_record.as_ref(),
+        ) {
+            (
+                true,
+                "the routed-v3 verifier and profitable child dependency are supported",
+            )
         } else {
-            (true, "deterministic verifier module is committed on-chain")
+            (
+                false,
+                "deterministic verifier module is not in the live supported allowlist",
+            )
         };
         let item = AutonomousBountyFeedItem {
             bounty_id,
@@ -4734,11 +5259,16 @@ pub fn build_autonomous_bounty_feed(
             timeout_bond_pool: timeout_bond_pool.to_string(),
             target_amount: target_amount.to_string(),
             funded_amount: funded_amount.to_string(),
+            required_external_spend: required_external_spend.to_string(),
+            gross_cash_margin: gross_cash_margin.to_string(),
             terms_hash: terms_hash.clone(),
             terms: terms_record,
             terms_valid,
             verification_mode: verification_mode.to_string(),
             verifier_module,
+            verifier_set_hash,
+            verifier_threshold,
+            runner_identifier,
             verification_ready,
             verification_readiness_reason: verification_readiness_reason.to_string(),
             validation_errors,
@@ -4823,6 +5353,9 @@ pub fn build_autonomous_bounty_terms_record(
                 .to_string(),
         ));
     }
+    if let Some(image) = &document.image {
+        validate_bounty_image_reference(image)?;
+    }
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
     validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
@@ -4847,6 +5380,33 @@ pub fn build_autonomous_bounty_terms_record(
         document,
         created_at,
     })
+}
+
+fn validate_bounty_image_reference(image: &BountyImageReference) -> Result<(), ChainBaseError> {
+    let valid_sha256 = image.sha256.len() == 64
+        && image
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if image.source != "chatgpt_user_generated"
+        || image.prompt.trim().is_empty()
+        || image.prompt.len() > 4_000
+        || image.alt_text.trim().is_empty()
+        || image.alt_text.len() > 500
+        || !image.asset_url.starts_with("https://")
+        || image.asset_url.len() > 2_048
+        || !valid_sha256
+        || !matches!(
+            image.mime_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp"
+        )
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "image must be a bounded user-generated ChatGPT asset with an HTTPS URL, SHA-256 digest, supported MIME type, prompt, and alt text"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn leading_zero_work_v1_benchmark() -> Value {
@@ -5293,7 +5853,7 @@ fn decode_expiry_event(
     ))
 }
 
-fn event_topic(signature: &str) -> String {
+pub fn event_topic(signature: &str) -> String {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
     format!("0x{}", hex::encode(hasher.finalize()))
@@ -5304,7 +5864,7 @@ fn normalize_topic(topic: &str) -> Result<String, ChainBaseError> {
     Ok(word_hex(word))
 }
 
-fn normalize_hash(hash: &str) -> Result<String, ChainBaseError> {
+pub(crate) fn normalize_hash(hash: &str) -> Result<String, ChainBaseError> {
     normalize_topic(hash)
 }
 
@@ -5337,7 +5897,7 @@ fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
-fn parse_rpc_quantity(value: &str) -> Result<u64, ChainBaseError> {
+pub(crate) fn parse_rpc_quantity(value: &str) -> Result<u64, ChainBaseError> {
     let trimmed = value.strip_prefix("0x").ok_or_else(|| {
         ChainBaseError::InvalidRpcQuantity("quantity must have 0x prefix".to_string())
     })?;
@@ -5388,7 +5948,7 @@ fn word_to_u128(word: [u8; 32]) -> Result<u128, ChainBaseError> {
     Ok(u128::from_be_bytes(value))
 }
 
-fn address_from_word(word: [u8; 32]) -> String {
+pub(crate) fn address_from_word(word: [u8; 32]) -> String {
     format!("0x{}", hex::encode(&word[12..]))
 }
 
@@ -5417,7 +5977,7 @@ fn normalize_address(address: impl AsRef<str>) -> Result<String, ChainBaseError>
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
-fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
     if trimmed.len() != 64
         || !trimmed
@@ -5454,7 +6014,7 @@ fn eip712_field(name: &str, field_type: &str) -> Eip712TypeField {
     }
 }
 
-fn eip3009_typed_data(
+pub(crate) fn eip3009_typed_data(
     network: &BaseNetworkDescriptor,
     from: &str,
     to: &str,
@@ -5787,6 +6347,84 @@ pub fn validate_autonomous_creation_against_terms(
     Ok(())
 }
 
+pub fn validate_autonomous_creation_for_public_earning(
+    network: &str,
+    create: &AutonomousBountyCreate,
+    terms: &AutonomousBountyTermsRecord,
+) -> Result<(), ChainBaseError> {
+    validate_autonomous_creation_against_terms(network, create, terms)?;
+
+    let solver_reward = autonomous_money_to_uint256(&create.solver_reward, false)?;
+    let verifier_reward = autonomous_money_to_uint256(&create.verifier_reward, true)?;
+    let initial_funding = autonomous_money_to_uint256(&create.initial_funding, true)?;
+    let target = solver_reward.checked_add(verifier_reward).ok_or_else(|| {
+        ChainBaseError::InvalidTermsDocument("bounty funding target overflowed".to_string())
+    })?;
+    if solver_reward == 0 || initial_funding != target {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "public earning inventory requires a positive solver reward and full atomic funding"
+                .to_string(),
+        ));
+    }
+
+    match create.verification_mode {
+        AutonomousVerificationMode::DeterministicModule => {
+            let supported_canary = create.verifier_module.as_deref().is_some_and(|module| {
+                module.eq_ignore_ascii_case(BASE_MAINNET_LEADING_ZERO_WORK_VERIFIER)
+            });
+            let supported_routed_v3 = is_supported_routed_v3_parent_terms(
+                create.verifier_module.as_deref(),
+                solver_reward,
+                Some(terms),
+            );
+            if !supported_canary && !supported_routed_v3 {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "public earning inventory permits only the deployed leading-zero verifier, the exact routed-v3 parent, or the live sandboxed-regression quorum; unknown modules must remain unfunded drafts"
+                        .to_string(),
+                ));
+            }
+        }
+        AutonomousVerificationMode::SignedQuorum => {
+            let threshold = usize::from(create.threshold);
+            let exact_verifiers = (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())
+                .contains(&threshold)
+                && create.verifiers.len() == threshold
+                && create
+                    .verifiers
+                    .iter()
+                    .zip(BASE_MAINNET_STANDING_META_V2_VERIFIERS.iter().copied())
+                    .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected));
+            let exact_policy = create.threshold
+                == u8::try_from(threshold).expect("supported threshold fits uint8")
+                && terms
+                    .document
+                    .verification_policy
+                    .get("threshold")
+                    .and_then(Value::as_u64)
+                    == Some(threshold as u64)
+                && terms
+                    .document
+                    .verification_policy
+                    .get("engine")
+                    .and_then(Value::as_str)
+                    == Some(STANDING_META_V2_REGRESSION_ENGINE)
+                && valid_regression_benchmark(&terms.document.benchmark);
+            if !exact_verifiers || !exact_policy {
+                return Err(ChainBaseError::InvalidVerificationConfiguration(
+                    "public earning inventory permits the default single sandboxed-regression verifier or the optional exact two-verifier policy with a valid committed benchmark; unsupported verifier policies must remain unfunded drafts"
+                        .to_string(),
+                ));
+            }
+        }
+        AutonomousVerificationMode::AiJudgeQuorum => {
+            return Err(ChainBaseError::InvalidVerificationConfiguration(
+                "AI-judge verification is not enabled for public earning inventory".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
@@ -6032,7 +6670,7 @@ fn autonomous_bounty_id(
     Ok(Keccak256::digest(encoded).into())
 }
 
-fn predict_minimal_proxy_address(
+pub(crate) fn predict_minimal_proxy_address(
     factory: &str,
     implementation: &str,
     salt: [u8; 32],
@@ -6058,7 +6696,7 @@ fn predict_minimal_proxy_address(
     Ok(format!("0x{}", hex::encode(&hash[12..])))
 }
 
-fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
+pub(crate) fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
     let mut bytes = selector(signature).to_vec();
     for word in words {
         bytes.extend_from_slice(&word);
@@ -6233,14 +6871,14 @@ fn encode_attestation_array_call(attestations: &[EncodedAutonomousAttestation]) 
     format!("0x{}", hex::encode(bytes))
 }
 
-fn selector(signature: &str) -> [u8; 4] {
+pub(crate) fn selector(signature: &str) -> [u8; 4] {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
     let hash = hasher.finalize();
     [hash[0], hash[1], hash[2], hash[3]]
 }
 
-fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
     let normalized = normalize_address(address)?;
     let raw = hex::decode(&normalized[2..])
         .map_err(|_| ChainBaseError::InvalidAddress(address.to_string()))?;
@@ -6249,7 +6887,7 @@ fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
     Ok(word)
 }
 
-fn encode_uint256(value: u128) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn encode_uint256(value: u128) -> Result<[u8; 32], ChainBaseError> {
     let mut word = [0u8; 32];
     word[16..].copy_from_slice(&value.to_be_bytes());
     Ok(word)
@@ -6277,6 +6915,45 @@ mod tests {
     use domain::Money;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn cancellation_authority_matches_contract_rules() {
+        let creator = "0x1111111111111111111111111111111111111111";
+        let outsider = "0x2222222222222222222222222222222222222222";
+
+        assert_eq!(
+            validate_autonomous_cancel_authority(
+                "claimable",
+                creator,
+                creator,
+                Some(2_000),
+                1_000,
+            )
+            .unwrap(),
+            creator
+        );
+        assert!(validate_autonomous_cancel_authority(
+            "claimable",
+            creator,
+            outsider,
+            Some(2_000),
+            2_000,
+        )
+        .is_err());
+        assert_eq!(
+            validate_autonomous_cancel_authority("open", creator, outsider, Some(2_000), 2_001,)
+                .unwrap(),
+            outsider
+        );
+        assert!(validate_autonomous_cancel_authority(
+            "claimed",
+            creator,
+            creator,
+            Some(2_000),
+            1_000,
+        )
+        .is_err());
+    }
 
     #[test]
     fn hosted_relayer_derives_public_address_and_redacts_private_key() {
@@ -6549,12 +7226,14 @@ mod tests {
             discovery_source: None,
         };
         let parent = StandingMetaV2ParentContext {
+            protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
             bounty_contract: request.parent_bounty_contract.clone(),
             bounty_id: "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0"
                 .to_string(),
             creator: "0x3333333333333333333333333333333333333333".to_string(),
             round: 1,
             solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_target: Money::new(900_000, "usdc").unwrap(),
             funding_deadline: 1_791_676_800,
         };
 
@@ -6603,6 +7282,28 @@ mod tests {
         assert!(plan.next_action.contains("strictly later timestamp"));
         assert!(plan.child_creation.supports_single_wallet_batch);
         assert!(!plan.hosted_terms_published);
+
+        let mut routed_v3_parent = parent.clone();
+        routed_v3_parent.protocol_version = STANDING_META_V3_ROUTED_PROTOCOL_VERSION.to_string();
+        routed_v3_parent.solver_reward = Money::new(2_000_000, "usdc").unwrap();
+        routed_v3_parent.child_target = Money::new(1_000_000, "usdc").unwrap();
+        let routed_v3_plan = planner
+            .plan_standing_meta_v2_child(&request, &routed_v3_parent, created_at)
+            .unwrap();
+        assert_eq!(
+            routed_v3_plan.protocol_version,
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
+        assert_eq!(routed_v3_plan.child_create.solver_reward.amount, 990_000);
+        assert_eq!(routed_v3_plan.child_create.verifier_reward.amount, 10_000);
+        assert_eq!(
+            routed_v3_plan.child_create.initial_funding.amount,
+            1_000_000
+        );
+        assert_eq!(
+            routed_v3_plan.terms.document.benchmark["parent_binding"]["protocol"],
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
     }
 
     #[test]
@@ -6659,11 +7360,13 @@ mod tests {
             discovery_source: None,
         };
         let parent = StandingMetaV2ParentContext {
+            protocol_version: STANDING_META_V2_PROTOCOL_VERSION.to_string(),
             bounty_contract: request.parent_bounty_contract.clone(),
             bounty_id: format!("0x{}", "a".repeat(64)),
             creator: "0x3333333333333333333333333333333333333333".to_string(),
             round: 1,
             solver_reward: Money::new(900_000, "usdc").unwrap(),
+            child_target: Money::new(900_000, "usdc").unwrap(),
             funding_deadline: 1_791_676_800,
         };
 
@@ -6743,11 +7446,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "900000".to_string(),
+            gross_cash_margin: "0".to_string(),
             terms_hash: terms.terms_hash.clone(),
             terms: Some(terms),
             terms_valid: true,
             verification_mode: "deterministic_module".to_string(),
             verifier_module: Some(BASE_MAINNET_STANDING_META_V2_VERIFIER.to_string()),
+            verifier_set_hash: Some(BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH.to_string()),
+            verifier_threshold: Some(1),
+            runner_identifier: Some("standing_meta_v2_parent".to_string()),
             verification_ready: true,
             verification_readiness_reason: "exact deployed verifier".to_string(),
             validation_errors: vec![],
@@ -6757,7 +7465,44 @@ mod tests {
         let context = standing_meta_v2_parent_context(&item).unwrap();
         assert_eq!(context.round, 1);
         assert_eq!(context.solver_reward.amount, 900_000);
+        assert_eq!(context.child_target.amount, 900_000);
+        assert_eq!(context.protocol_version, STANDING_META_V2_PROTOCOL_VERSION);
         assert_eq!(context.funding_deadline, 1_791_676_800);
+
+        let mut routed_v3 = item.clone();
+        let routed_terms = routed_v3.terms.as_mut().unwrap();
+        routed_terms.acceptance_criteria_hash =
+            BASE_MAINNET_STANDING_META_V3_ACCEPTANCE_CRITERIA_HASH.to_string();
+        routed_terms.document.benchmark = json!({
+            "engine": "standing_meta_v3_routed_parent",
+            "required_child_engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "required_child_verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+            "required_child_verifier_threshold": 2,
+            "minimum_child_target": 1_000_000,
+            "minimum_parent_gross_margin": 1_000_000,
+            "participant_registry": BASE_MAINNET_STANDING_META_V2_PARTICIPANT_REGISTRY,
+            "terms_registry": BASE_MAINNET_STANDING_META_V2_TERMS_REGISTRY,
+        });
+        routed_terms.document.verification_policy["verifier_module"] =
+            json!(BASE_MAINNET_STANDING_META_V3_ROUTER);
+        routed_v3.verifier_module = Some(BASE_MAINNET_STANDING_META_V3_ROUTER.to_string());
+        routed_v3.solver_reward = "2000000".to_string();
+        routed_v3.verifier_reward = "10000".to_string();
+        routed_v3.claim_bond = "10000".to_string();
+        routed_v3.target_amount = "2010000".to_string();
+        routed_v3.funded_amount = "2010000".to_string();
+        assert!(is_supported_routed_v3_parent_terms(
+            routed_v3.verifier_module.as_deref(),
+            2_000_000,
+            routed_v3.terms.as_ref(),
+        ));
+        let routed_context = standing_meta_v2_parent_context(&routed_v3).unwrap();
+        assert_eq!(
+            routed_context.protocol_version,
+            STANDING_META_V3_ROUTED_PROTOCOL_VERSION
+        );
+        assert_eq!(routed_context.solver_reward.amount, 2_000_000);
+        assert_eq!(routed_context.child_target.amount, 1_000_000);
 
         item.verification_ready = false;
         assert!(standing_meta_v2_parent_context(&item)
@@ -7099,6 +7844,63 @@ mod tests {
             planner.plan_expire_submission(bounty, None).unwrap().data,
             encode_call("expireSubmission()", vec![])
         );
+        let bounded_wallet = "0x2222222222222222222222222222222222222222";
+        let owner = "0x3333333333333333333333333333333333333333";
+        let cancel_refund = planner
+            .plan_bounded_wallet_cancel_refund(bounded_wallet, bounty, owner)
+            .unwrap();
+        assert_eq!(cancel_refund.from.as_deref(), Some(owner));
+        assert_eq!(cancel_refund.to, bounded_wallet);
+        assert_eq!(cancel_refund.value_wei, 0);
+        assert_eq!(
+            cancel_refund.data,
+            encode_call(
+                "cancelAndWithdrawUnclaimedBounty(address)",
+                vec![encode_address(bounty).unwrap()]
+            )
+        );
+        assert_eq!(
+            cancel_refund.function,
+            "cancelAndWithdrawUnclaimedBounty(address)"
+        );
+        let refund = planner
+            .plan_bounded_wallet_refund(bounded_wallet, bounty, owner)
+            .unwrap();
+        assert_eq!(refund.from.as_deref(), Some(owner));
+        assert_eq!(refund.to, bounded_wallet);
+        assert_eq!(
+            refund.data,
+            encode_call(
+                "withdrawCancelledBountyRefund(address)",
+                vec![encode_address(bounty).unwrap()]
+            )
+        );
+        assert_eq!(refund.function, "withdrawCancelledBountyRefund(address)");
+    }
+
+    #[test]
+    fn bounded_wallet_cancel_refund_plan_validates_every_address() {
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x1111111111111111111111111111111111111111",
+            "0x5555555555555555555555555555555555555555",
+        )
+        .unwrap();
+        let wallet = "0x2222222222222222222222222222222222222222";
+        let bounty = "0x4444444444444444444444444444444444444444";
+        let owner = "0x3333333333333333333333333333333333333333";
+
+        assert!(planner
+            .plan_bounded_wallet_cancel_refund("not-a-wallet", bounty, owner)
+            .is_err());
+        assert!(planner
+            .plan_bounded_wallet_cancel_refund(wallet, "not-a-bounty", owner)
+            .is_err());
+        assert!(planner
+            .plan_bounded_wallet_cancel_refund(wallet, bounty, "not-an-owner")
+            .is_err());
+        assert!(planner
+            .plan_bounded_wallet_refund(wallet, "not-a-bounty", owner)
+            .is_err());
     }
 
     #[test]
@@ -7275,7 +8077,15 @@ mod tests {
         assert_eq!(feed.len(), 1);
         assert_eq!(feed[0].status, "paid");
         assert_eq!(feed[0].funded_amount, "1000000");
+        assert_eq!(feed[0].required_external_spend, "0");
+        assert_eq!(feed[0].gross_cash_margin, "900000");
         assert_eq!(feed[0].verification_mode, "ai_judge_quorum");
+        assert_eq!(feed[0].verifier_threshold, Some(2));
+        assert_eq!(
+            feed[0].verifier_set_hash,
+            Some(format!("0x{}", "0a".repeat(32)))
+        );
+        assert_eq!(feed[0].runner_identifier, None);
         assert!(!feed[0].verification_ready);
     }
 
@@ -7310,6 +8120,18 @@ mod tests {
             }),
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/1".to_string()),
             discovery_source: Some("MCP discovery".to_string()),
+            image: Some(BountyImageReference {
+                source: "chatgpt_user_generated".to_string(),
+                prompt: "Minimal editorial image of a deterministic test turning green."
+                    .to_string(),
+                alt_text: "A deterministic test changing from red to green.".to_string(),
+                asset_url: format!(
+                    "https://mcp.agentbounties.app/public/bounty-images/{}",
+                    "ab".repeat(32)
+                ),
+                sha256: "ab".repeat(32),
+                mime_type: "image/webp".to_string(),
+            }),
             agent_eligibility: None,
             claim_coordination: None,
         };
@@ -7327,6 +8149,42 @@ mod tests {
             record.creator_wallet,
             "0x3333333333333333333333333333333333333333"
         );
+        assert!(!is_supported_regression_quorum(
+            &json!({
+                "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                "threshold": 2
+            }),
+            Some(&record)
+        ));
+        let mut supported_record = record.clone();
+        supported_record.document.benchmark = json!({"engine": STANDING_META_V2_REGRESSION_ENGINE});
+        supported_record.document.verification_policy = json!({
+            "mechanism": "signed_quorum",
+            "threshold": 2,
+            "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
+        });
+        assert!(!is_supported_regression_quorum(
+            &json!({
+                "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                "threshold": 2
+            }),
+            Some(&supported_record)
+        ));
+        assert_eq!(
+            record.document.image.as_ref().unwrap().source,
+            "chatgpt_user_generated"
+        );
+        let mut invalid_image = record.document.clone();
+        invalid_image.image.as_mut().unwrap().sha256 = format!("0x{}", "ab".repeat(32));
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                "0x3333333333333333333333333333333333333333",
+                invalid_image,
+                now,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("user-generated ChatGPT asset")
+        ));
         let mut create = AutonomousBountyCreate {
             creator: record.creator_wallet.clone(),
             solver_reward: Money::new(900_000, "usdc").unwrap(),
@@ -7348,6 +8206,10 @@ mod tests {
             creation_nonce: format!("0x{}", "11".repeat(32)),
         };
         validate_autonomous_creation_against_terms("base-mainnet", &create, &record).unwrap();
+        assert!(
+            validate_autonomous_creation_for_public_earning("base-mainnet", &create, &record,)
+                .is_err()
+        );
         let derived = autonomous_bounty_create_from_terms(&record).unwrap();
         assert_eq!(derived.creator, create.creator);
         assert_eq!(derived.solver_reward, create.solver_reward);
@@ -7359,6 +8221,125 @@ mod tests {
         assert!(
             validate_autonomous_creation_against_terms("base-mainnet", &create, &record).is_err()
         );
+
+        let mut supported_document = record.document.clone();
+        supported_document.benchmark = json!({
+            "engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "source": {
+                "kind": "github_commit",
+                "repository": "NSPG13/agent-bounties",
+                "commit": "a".repeat(40),
+                "subdirectory": "benchmarks/regression"
+            },
+            "runner_manifest": {
+                "schema_version": "agent-bounties/regression-sandbox-v1",
+                "image": format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
+                "command": ["python", "/benchmark/check.py"],
+                "workdir": "/workspace",
+                "benchmark_digest": format!("sha256:{}", "c".repeat(64)),
+                "timeout_seconds": 60,
+                "cpu_millis": 1000,
+                "memory_bytes": 134217728,
+                "pids_limit": 64,
+                "max_output_bytes": 1048576,
+                "tmpfs_bytes": 67108864,
+                "max_source_bytes": 104857600,
+                "max_source_files": 10000,
+                "max_benchmark_bytes": 1048576,
+                "max_benchmark_files": 100,
+                "platform": "linux/amd64",
+                "test_seed": 1
+            }
+        });
+        supported_document.verification_policy = json!({
+            "mechanism": "signed_quorum",
+            "engine": STANDING_META_V2_REGRESSION_ENGINE,
+            "threshold": 2,
+            "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
+        });
+        let supported_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
+                .unwrap();
+        let healthy_quorum = json!({
+            "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+            "threshold": 2
+        });
+        assert_eq!(
+            regression_quorum_readiness(&healthy_quorum, Some(&supported_record)),
+            (
+                true,
+                "the optional two-verifier sandboxed-regression policy is supported"
+            )
+        );
+        let mut single_document = supported_record.document.clone();
+        single_document.verification_policy["threshold"] = json!(1);
+        single_document.verification_policy["verifiers"] =
+            json!([BASE_MAINNET_STANDING_META_V2_VERIFIERS[0]]);
+        let single_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, single_document, now)
+                .unwrap();
+        let single_create = autonomous_bounty_create_from_terms(&single_record).unwrap();
+        validate_autonomous_creation_for_public_earning(
+            "base-mainnet",
+            &single_create,
+            &single_record,
+        )
+        .unwrap();
+        assert_eq!(
+            verifier_set_hash_from_policy(&single_record.document.verification_policy).unwrap(),
+            BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH
+        );
+        assert_eq!(
+            regression_quorum_readiness(
+                &json!({
+                    "verifier_set_hash": BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH,
+                    "threshold": 1
+                }),
+                Some(&single_record),
+            ),
+            (
+                true,
+                "the default single sandboxed-regression verifier is supported"
+            )
+        );
+        let mut missing_signer = supported_record.clone();
+        missing_signer.document.verification_policy["verifiers"] =
+            json!([BASE_MAINNET_STANDING_META_V2_VERIFIERS[0]]);
+        assert_eq!(
+            regression_quorum_readiness(&healthy_quorum, Some(&missing_signer)).1,
+            "required verifier signer is missing"
+        );
+        let mut stale_runner = supported_record.clone();
+        stale_runner.document.verification_policy["engine"] = json!("sandboxed_regression_v0");
+        assert_eq!(
+            regression_quorum_readiness(&healthy_quorum, Some(&stale_runner)).1,
+            "regression runner identifier is stale or unsupported"
+        );
+        assert_eq!(
+            regression_quorum_readiness(
+                &json!({
+                    "verifier_set_hash": format!("0x{}", "00".repeat(32)),
+                    "threshold": 2
+                }),
+                Some(&supported_record),
+            )
+            .1,
+            "verifier set mismatch"
+        );
+        let mut supported_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
+        validate_autonomous_creation_for_public_earning(
+            "base-mainnet",
+            &supported_create,
+            &supported_record,
+        )
+        .unwrap();
+        supported_create.initial_funding = Money::new(999_999, "usdc").unwrap();
+        assert!(validate_autonomous_creation_for_public_earning(
+            "base-mainnet",
+            &supported_create,
+            &supported_record,
+        )
+        .is_err());
     }
 
     #[test]
@@ -7586,6 +8567,9 @@ mod tests {
         assert!(BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS
             .iter()
             .all(|contract| AutonomousBountyRecoveryReservations::default().contains(contract)));
+        assert!(BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS
+            .iter()
+            .all(|contract| AutonomousBountyRecoveryReservations::default().contains(contract)));
         assert!(matches!(
             AutonomousBountyRecoveryReservations::parse_csv(Some(&format!("{reserved_contract},"))),
             Err(ChainBaseError::InvalidVerificationConfiguration(_))
@@ -7602,11 +8586,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: None,
             terms_valid: true,
             verification_mode: "deterministic_module".to_string(),
             verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("fixture".to_string()),
             verification_ready: true,
             verification_readiness_reason: "deterministic verifier module is committed on-chain"
                 .to_string(),
@@ -7637,6 +8626,20 @@ mod tests {
         assert_eq!(verification_feed[0].bounty_contract, available_contract);
     }
 
+    #[test]
+    fn standing_meta_v2_builtin_reservations_publish_the_specific_migration_reason() {
+        let reservations = AutonomousBountyRecoveryReservations::default();
+        for contract in BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS {
+            assert_eq!(
+                reservations.verification_reason(contract),
+                Some(STANDING_META_V2_RECOVERY_REASON)
+            );
+            assert!(STANDING_META_V2_RECOVERY_REASON.contains("positive gross margin"));
+            assert!(STANDING_META_V2_RECOVERY_REASON.contains("unrelated ownership"));
+            assert!(STANDING_META_V2_RECOVERY_REASON.contains("organizationally independent"));
+        }
+    }
+
     fn claimed_submission_fixture(claim_expires_at: u64) -> AutonomousBountyFeedItem {
         let bounty_id = format!("0x{}", "ab".repeat(32));
         let bounty_contract = "0x2222222222222222222222222222222222222222";
@@ -7652,6 +8655,8 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "2000000".to_string(),
             funded_amount: "2000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "1900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: Some(AutonomousBountyTermsRecord {
                 terms_hash: format!("0x{}", "aa".repeat(32)),
@@ -7677,6 +8682,7 @@ mod tests {
                         "https://github.com/NSPG13/agent-bounties/issues/244".to_string(),
                     ),
                     discovery_source: Some("github-label:bounty".to_string()),
+                    image: None,
                     agent_eligibility: None,
                     claim_coordination: None,
                 },
@@ -7685,6 +8691,9 @@ mod tests {
             terms_valid: true,
             verification_mode: "deterministic_module".to_string(),
             verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("deterministic_module".to_string()),
             verification_ready: true,
             verification_readiness_reason: "deterministic verifier module is committed on-chain"
                 .to_string(),
@@ -7835,6 +8844,8 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: Some(AutonomousBountyTermsRecord {
                 terms_hash: format!("0x{}", "aa".repeat(32)),
@@ -7871,6 +8882,7 @@ mod tests {
                     }),
                     source_url: None,
                     discovery_source: None,
+                    image: None,
                     agent_eligibility: None,
                     claim_coordination: None,
                 },
@@ -7879,6 +8891,9 @@ mod tests {
             terms_valid: true,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("github_ci".to_string()),
             verification_ready: false,
             verification_readiness_reason:
                 "quorum verifier service availability is not canonically attested".to_string(),
@@ -7984,11 +8999,16 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: format!("0x{}", "aa".repeat(32)),
             terms: None,
             terms_valid: false,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: None,
             verification_ready: false,
             verification_readiness_reason: "content-addressed terms are invalid or unavailable"
                 .to_string(),

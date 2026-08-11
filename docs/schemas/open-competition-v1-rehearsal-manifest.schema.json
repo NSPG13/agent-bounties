@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbounties.app/schemas/open-competition-v1-rehearsal-manifest-v1.json",
+  "title": "Open Competition V1 Base Sepolia rehearsal manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "network",
+    "chain_id",
+    "deployment_state",
+    "source_commit",
+    "compiler",
+    "deployer",
+    "settlement_token",
+    "deployments",
+    "actors",
+    "scenarios",
+    "adversarial_checks",
+    "bytecode_freeze",
+    "evidence_boundary"
+  ],
+  "properties": {
+    "schema_version": { "const": "agent-bounties/open-competition-v1-rehearsal-manifest-v1" },
+    "protocol_version": { "const": "agent-bounties/open-competition-v1" },
+    "network": { "const": "base-sepolia" },
+    "chain_id": { "const": 84532 },
+    "deployment_state": { "const": "sepolia_rehearsed_not_ready_to_earn" },
+    "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "compiler": { "type": "object" },
+    "deployer": { "$ref": "#/$defs/address" },
+    "settlement_token": { "$ref": "#/$defs/address" },
+    "deployments": {
+      "type": "object",
+      "required": ["verifier", "factory", "implementation"],
+      "properties": {
+        "verifier": { "$ref": "#/$defs/deployment" },
+        "factory": { "$ref": "#/$defs/deployment" },
+        "implementation": { "$ref": "#/$defs/deployment" }
+      }
+    },
+    "actors": {
+      "type": "object",
+      "required": ["creator", "failed_competitor", "passing_competitor", "expiring_competitor", "relayer"],
+      "additionalProperties": { "$ref": "#/$defs/address" }
+    },
+    "scenarios": {
+      "type": "object",
+      "required": ["settlement_and_losing_bond_withdrawal", "expiry_cancellation_and_refund"],
+      "additionalProperties": { "$ref": "#/$defs/scenario" }
+    },
+    "adversarial_checks": {
+      "type": "object",
+      "required": [
+        "copied_reveal_rejected",
+        "same_block_reveal_rejected",
+        "authorization_substitution_rejected",
+        "capacity_enforced",
+        "verifier_revert_recoverable"
+      ],
+      "additionalProperties": { "const": true }
+    },
+    "bytecode_freeze": {
+      "type": "object",
+      "required": ["verifier_runtime_code_hash", "factory_runtime_code_hash", "implementation_runtime_code_hash"],
+      "additionalProperties": { "$ref": "#/$defs/hash" }
+    },
+    "evidence_boundary": { "type": "string", "minLength": 40 }
+  },
+  "$defs": {
+    "address": { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+    "hash": { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+    "deployment": {
+      "type": "object",
+      "required": ["address", "transaction_hash", "block_number", "block_hash", "runtime_code_hash", "runtime_matches"],
+      "properties": {
+        "address": { "$ref": "#/$defs/address" },
+        "transaction_hash": { "$ref": "#/$defs/hash" },
+        "block_number": { "type": "integer", "minimum": 1 },
+        "block_hash": { "$ref": "#/$defs/hash" },
+        "runtime_code_hash": { "$ref": "#/$defs/hash" },
+        "runtime_matches": { "const": true }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["bounty_contract", "transactions", "events", "balance_deltas", "reconciled", "assertions"],
+      "properties": {
+        "bounty_contract": { "$ref": "#/$defs/address" },
+        "transactions": { "type": "array", "items": { "$ref": "#/$defs/hash" }, "minItems": 1 },
+        "events": { "type": "array", "items": { "type": "object" }, "minItems": 1 },
+        "balance_deltas": { "type": "object" },
+        "reconciled": { "const": true },
+        "assertions": { "type": "object", "additionalProperties": { "const": true } }
+      }
+    }
+  }
+}

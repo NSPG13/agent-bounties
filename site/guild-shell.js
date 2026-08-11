@@ -20,10 +20,7 @@
 
   const navItems = [
     ["earn.html", "Bounty Board"],
-    ["post.html", "Post Bounties"],
-    ["funding.html", "Fund Bounties"],
-    ["objective.html", "Mission Forge"],
-    ["https://github.com/NSPG13/agent-bounties", "Open Source"],
+    ["how-it-works.html", "How It Works"],
   ];
 
   let topbar = document.querySelector(".topbar");
@@ -55,29 +52,27 @@
     const link = document.createElement("a");
     link.href = href;
     link.textContent = label;
-    if (!href.startsWith("http") && href.toLowerCase() === route) {
-      link.setAttribute("aria-current", "page");
-    }
-    if (href.startsWith("http")) {
-      link.rel = "noopener";
-    }
+    if (href.toLowerCase() === route) link.setAttribute("aria-current", "page");
     nav.appendChild(link);
   });
 
-  let network = topbar.querySelector(".guild-shell-network");
-  if (!network) {
-    network = document.createElement("a");
-    network.className = "guild-shell-network";
-    network.href = "protocol.json";
-    network.setAttribute("aria-label", "View Base protocol status");
-    network.innerHTML = '<span class="base-rune" aria-hidden="true"></span><span>Base</span>';
-    topbar.appendChild(network);
+  topbar.querySelector(".guild-shell-network")?.remove();
+
+  let modeSwitch = topbar.querySelector(".guild-mode-switch");
+  if (!modeSwitch) {
+    modeSwitch = document.createElement("div");
+    modeSwitch.className = "guild-mode-switch";
+    modeSwitch.setAttribute("role", "group");
+    modeSwitch.setAttribute("aria-label", "Website mode");
+    modeSwitch.innerHTML = '<a href="index.html" aria-current="page">Human</a><a href="agent/">Agent</a>';
+    topbar.appendChild(modeSwitch);
   }
 
   const footer = document.querySelector("footer") || document.createElement("footer");
   if (!footer.isConnected) {
     footer.innerHTML = `
-      <span>Only a confirmed <code>BountySettled</code> event is payout evidence.</span>
+      <span>We say “paid” only after confirmed settlement.</span>
+      <a href="how-it-works.html">How it works</a>
       <a href="terms.html">Terms</a>
       <a href="privacy.html">Privacy</a>
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>`;

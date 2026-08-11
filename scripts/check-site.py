@@ -10,16 +10,35 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag, urlparse
 
+import yaml
+
 
 REQUIRED_FILES = [
     "index.html",
     "earn.html",
+    "competition.html",
+    "competition.css",
+    "competition.js",
     "post.html",
     "funding.html",
+    "onramp.html",
+    "onramp.css",
+    "wallet-adapters.css",
+    "wallet-config.js",
+    "wallet-adapter-registry.js",
+    "coinbase-embedded-wallet.bundle.js",
+    "coinbase-embedded-wallet.bundle.css",
+    "x402-browser.js",
+    "moonpay-onramp.js",
+    "moonpay-link.js",
     "objective.html",
     "objective.css",
     "objective.js",
     "x402.html",
+    "how-to-earn-money-with-my-ai-agent.html",
+    "earn-money-using-ai.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html",
+    "blog.css",
     "x402-test-vectors.json",
     "prepare-agent.html",
     "agent-budget.html",
@@ -37,25 +56,42 @@ REQUIRED_FILES = [
     "analytics-config.js",
     "analytics.js",
     "route-alias.js",
+    "bounty-entry.js",
+    "ai-bounty-handoff.js",
+    "ai-bounty-handoff.css",
     "autonomous.js",
     "legal-consent.js",
     "protocol.json",
     "llms.txt",
     ".well-known/agent-bounties.json",
     ".well-known/x402.json",
+    "agent/index.html",
+    "agent/index.md",
+    "agent.css",
     ".nojekyll",
 ]
 
-CORE_PAGES = ["index.html", "earn.html", "post.html", "funding.html", "operator.html"]
+CORE_PAGES = [
+    "index.html",
+    "earn.html",
+    "post.html",
+    "funding.html",
+    "refunds.html",
+    "operator.html",
+]
 PUBLIC_INDEXABLE_PAGES = {
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
+    "competition.html": "https://agentbounties.app/competition.html",
     "post.html": "https://agentbounties.app/post.html",
     "funding.html": "https://agentbounties.app/funding.html",
     "objective.html": "https://agentbounties.app/objective.html",
     "prepare-agent.html": "https://agentbounties.app/prepare-agent.html",
     "agent-budget.html": "https://agentbounties.app/agent-budget.html",
     "x402.html": "https://agentbounties.app/x402.html",
+    "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+    "earn-money-using-ai.html": "https://agentbounties.app/earn-money-using-ai.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html": "https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html",
     "terms.html": "https://agentbounties.app/terms.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "refunds.html": "https://agentbounties.app/refunds.html",
@@ -64,6 +100,7 @@ INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
     "chatgpt-post-widget.html",
     "operator.html",
+    "onramp.html",
     "recovery.html",
     "success.html",
 }
@@ -175,6 +212,41 @@ def main() -> int:
             ],
         )
 
+    agent_page_path = site_dir / "agent" / "index.html"
+    agent_page = agent_page_path.read_text(encoding="utf-8")
+    agent_parser = LinkParser()
+    agent_parser.feed(agent_page)
+    require_phrases(
+        "agent/index.html",
+        agent_page,
+        [
+            '<link rel="canonical" href="https://agentbounties.app/agent/">',
+            'type="text/markdown"',
+            "AGENT MODE · NO COMPUTER USE REQUIRED",
+            "https://mcp.agentbounties.app/mcp",
+            "https://api.agentbounties.app/api-docs/openapi.json",
+            "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+            "Only <code>BountySettled</code> proves bounty payment",
+        ],
+    )
+    if re.search(r'<meta\s+name="robots"[^>]*noindex', agent_page, re.IGNORECASE):
+        fail("agent/index.html must remain indexable")
+    for link in agent_parser.links:
+        check_internal_link(site_dir, agent_page_path, link, agent_parser.ids)
+
+    agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
+    require_phrases(
+        "agent/index.md",
+        agent_markdown,
+        [
+            "No computer use is required",
+            "https://agentbounties.app/llms.txt",
+            "https://mcp.agentbounties.app/mcp",
+            "https://api.agentbounties.app/api-docs/openapi.json",
+            "Only a confirmed canonical `BountySettled` event proves bounty payment",
+        ],
+    )
+
     for html_file in sorted(site_dir.glob("*.html")):
         parser = LinkParser()
         text = html_file.read_text(encoding="utf-8")
@@ -212,7 +284,9 @@ def main() -> int:
         for element in sitemap_root.findall("sm:url/sm:loc", sitemap_namespace)
         if element.text
     }
-    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values())
+    expected_sitemap_urls = set(PUBLIC_INDEXABLE_PAGES.values()) | {
+        "https://agentbounties.app/agent/"
+    }
     if sitemap_urls != expected_sitemap_urls:
         missing = sorted(expected_sitemap_urls - sitemap_urls)
         extra = sorted(sitemap_urls - expected_sitemap_urls)
@@ -239,12 +313,95 @@ def main() -> int:
         fail("index.html JSON-LD must use the canonical product name")
     if structured_data.get("url") != "https://agentbounties.app/":
         fail("index.html JSON-LD must use the canonical website URL")
+
+    require_phrases(
+        "index.html blog discovery",
+        pages["index.html"],
+        [
+            'href="https://medium.com/search?q=agent%20bounties"',
+            'aria-label="Find Agent Bounties on Medium"',
+            'href="how-to-earn-money-with-my-ai-agent.html">Blog</a>',
+            'href="earn-money-using-ai.html"',
+        ],
+    )
+    guide_page = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
+    require_phrases(
+        "AI agent earning guide",
+        guide_page,
+        [
+            "How to Earn Money With Your AI Agent: 7 Practical Models",
+            "How can I earn money with my AI agent?",
+            "Publisher disclosure",
+            "Revenue is not profit",
+            'id="agent-bounties"',
+            'href="earn.html">Browse live agent bounties</a>',
+            "Can I use ChatGPT, Claude, or Gemini to complete paid bounties?",
+            "https://mcp.agentbounties.app/mcp",
+            "Gemini Spark",
+            "BountySettled",
+            "https://docs.stripe.com/billing/subscriptions/usage-based",
+            "https://www.ftc.gov/business-guidance/blog/2026/06/back-those-earnings-claims-other-lessons-ftcs-labor-task-force-work",
+        ],
+    )
+    guide_structured_data_match = re.search(
+        r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>',
+        guide_page,
+        re.DOTALL,
+    )
+    if not guide_structured_data_match:
+        fail("AI agent earning guide must expose JSON-LD")
+    guide_structured_data = json.loads(guide_structured_data_match.group(1))
+    guide_graph = guide_structured_data.get("@graph", [])
+    guide_types = {item.get("@type") for item in guide_graph}
+    if guide_types != {"Article", "FAQPage"}:
+        fail("AI agent earning guide JSON-LD must expose Article and FAQPage")
+
+    provider_earning_page = (site_dir / "earn-money-using-ai.html").read_text(encoding="utf-8")
+    require_phrases(
+        "provider-safe AI earning guide",
+        provider_earning_page,
+        [
+            "Earn money using AI through funded, verifiable work",
+            "ChatGPT, Claude, or Gemini",
+            "https://agentbounties.app/agent/",
+            "https://mcp.agentbounties.app/mcp",
+            "Base mainnet only",
+            "Only a confirmed canonical <code>BountySettled</code> event proves payment",
+            "Agent Bounties does not promise income",
+            "not Solana",
+            "<code>@agent-bounty/sdk</code> does not exist",
+        ],
+    )
+    posting_with_ai_page = (site_dir / "post-a-bounty-with-chatgpt-claude-gemini.html").read_text(encoding="utf-8")
+    require_phrases(
+        "provider-safe AI posting guide",
+        posting_with_ai_page,
+        [
+            "Post a bounty with ChatGPT, Claude, or Gemini",
+            "No provider API key is required",
+            "prepare_bounty_post",
+            "review_required_not_published",
+            "Copy prompt &amp; open",
+            "Nothing is posted, funded, or signed",
+            "Base mainnet",
+            "not Phantom or Solana",
+            "https://agentbounties.app/agent/",
+        ],
+    )
     recovery_page = (site_dir / "recovery.html").read_text(encoding="utf-8")
     javascript = (site_dir / "autonomous.js").read_text(encoding="utf-8")
     analytics_javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     analytics_config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
     home_javascript = (site_dir / "home.js").read_text(encoding="utf-8")
+    simple_home_javascript = (site_dir / "simple-home.js").read_text(encoding="utf-8")
+    bounty_entry_javascript = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
+    ai_handoff_javascript = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
+    posting_guide = (repo_root / "docs" / "posting-a-usable-bounty.md").read_text(encoding="utf-8")
+    bounty_template = (repo_root / ".github" / "ISSUE_TEMPLATE" / "paid-bounty.yml").read_text(encoding="utf-8")
+    parsed_bounty_template = yaml.safe_load(bounty_template)
+    if not isinstance(parsed_bounty_template, dict) or parsed_bounty_template.get("name") != "Bounty draft":
+        fail("paid bounty issue template must be valid YAML with the expected form name")
     objective_page = (site_dir / "objective.html").read_text(encoding="utf-8")
     objective_javascript = (site_dir / "objective.js").read_text(encoding="utf-8")
     discovery = json.loads((site_dir / ".well-known/agent-bounties.json").read_text(encoding="utf-8"))
@@ -252,8 +409,11 @@ def main() -> int:
     x402_vectors = json.loads((site_dir / "x402-test-vectors.json").read_text(encoding="utf-8"))
     protocol = json.loads((site_dir / "protocol.json").read_text(encoding="utf-8"))
     deployment = json.loads((repo_root / "deployments" / "base-mainnet.json").read_text(encoding="utf-8"))
-    bounded_deployment = json.loads(
+    legacy_bounded_deployment = json.loads(
         (repo_root / "deployments" / "bounded-agent-wallet-base-mainnet.json").read_text(encoding="utf-8")
+    )
+    bounded_deployment = json.loads(
+        (repo_root / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json").read_text(encoding="utf-8")
     )
     standing_meta_deployment = json.loads(
         (repo_root / "deployments" / "standing-meta-v2-base-mainnet.json").read_text(encoding="utf-8")
@@ -264,6 +424,33 @@ def main() -> int:
     privacy_page = (site_dir / "privacy.html").read_text(encoding="utf-8")
     pages_workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     check_protocol(protocol, deployment)
+
+    require_phrases(
+        "index.html agent and bounty entry",
+        pages["index.html"],
+        [
+            "data-primary-bounty-cta>Post a bounty</a>",
+            'class="mode-switch"',
+            'href="agent/"',
+            'action="objective.html"',
+            'name="autostart" value="1"',
+            'src="bounty-entry.js?v=1"',
+            'type="text/markdown" title="Agent mode (Markdown)"',
+        ],
+    )
+    for retired in ("data-connect-wallet", "data-wallet-provider", 'class="network-chip"'):
+        if retired in pages["index.html"]:
+            fail(f"homepage still exposes retired wallet-first navigation: {retired}")
+    require_phrases(
+        "bounty-entry.js",
+        bounty_entry_javascript,
+        [
+            "agent-bounties:homepage-bounty-intent",
+            "window.sessionStorage.setItem",
+            "window.sessionStorage.removeItem",
+            "objective.html?source=home&autostart=1",
+        ],
+    )
 
     for name, page in pages.items():
         require_phrases(name, page, ["Post your own bounty", "autonomous.js"])
@@ -278,6 +465,8 @@ def main() -> int:
         "funding.html": (pages["funding.html"], "fund_bounty"),
         "earn.html claim": (pages["earn.html"], "claim_bounty"),
         "earn.html submit": (pages["earn.html"], "submit_result"),
+        "refunds.html cancel": (pages["refunds.html"], "cancel_bounty"),
+        "refunds.html refund": (pages["refunds.html"], "recover_funds"),
         "recovery.html": (recovery_page, "recover_funds"),
         "agent-budget.html": (bounded_page, "activate_agent_budget"),
     }
@@ -297,6 +486,10 @@ def main() -> int:
             "funded_bounty_click",
             "canonical_post_confirmed",
             "claim_confirmed",
+            "competition_entry_started",
+            "competition_entry_confirmed",
+            "competition_reveal_started",
+            "competition_reveal_confirmed",
             "data-analytics-event",
             "agentBountiesAnalytics",
             "data-google-analytics-consent",
@@ -316,6 +509,7 @@ def main() -> int:
             "First-party site analytics",
             "Global Privacy Control",
             "Do Not Track",
+            "selected public opportunity identifier or bounty contract",
             "does not store an IP address, user agent, full referrer URL, URL query string, wallet address",
             "data-analytics-opt-out",
             "Optional Google Analytics",
@@ -351,6 +545,7 @@ def main() -> int:
             "fund_bounty",
             "claim_bounty",
             "submit_result",
+            "cancel_bounty",
         ],
     )
 
@@ -410,13 +605,53 @@ def main() -> int:
     if "import wallet" in recovery_page.lower() or "private key" in recovery_page.lower():
         fail("legacy recovery must use connect-wallet onboarding only")
 
-    public_wallet_surface = pages["earn.html"] + pages["post.html"] + pages["funding.html"]
+    public_wallet_surface = (
+        pages["earn.html"]
+        + pages["post.html"]
+        + pages["funding.html"]
+        + pages["refunds.html"]
+    )
     if "Connect wallet" not in public_wallet_surface:
         fail("public transaction pages must expose a connect-wallet flow")
     if "import wallet" in public_wallet_surface.lower():
         fail("public transaction pages must never expose wallet-import onboarding")
     if 'name="apiBaseUrl"' in public_wallet_surface:
         fail("public transaction pages must use the deployed API from protocol.json")
+
+    require_phrases(
+        "refunds.html creator cancellation",
+        pages["refunds.html"],
+        [
+            'id="creator-cancel-form"',
+            "Delete unclaimed bounty",
+            "A claimed bounty cannot be deleted",
+            "BountyCancelled",
+            "Withdraw my refund",
+            "RefundWithdrawn",
+            "immutable audit history",
+            "creator cannot withdraw another funder's money",
+            "BoundedAgentWalletV2",
+        ],
+    )
+    require_phrases(
+        "autonomous.js creator cancellation",
+        javascript,
+        [
+            "/v1/base/autonomous-bounties/cancel-plan",
+            "/v1/base/autonomous-bounties/refund-withdrawal-plan",
+            "/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan",
+            'function: "cancel()"',
+            'data: "0xea8a1af0"',
+            'function: "withdrawRefund()"',
+            'data: "0x110f8874"',
+            "Only unclaimed Open or Claimable bounties can be cancelled",
+            "Connect the creator wallet or the owner of its BoundedAgentWalletV2",
+            "BountyCancelled is confirmed",
+            "RefundWithdrawn is confirmed",
+            "cancelAndWithdrawUnclaimedBounty(address)",
+            "withdrawCancelledBountyRefund(address)",
+        ],
+    )
 
     require_phrases(
         "home.js",
@@ -426,12 +661,18 @@ def main() -> int:
             "requestAnimationFrame",
             "home-live-inventory",
             "/v1/opportunities",
+            "/v1/opportunities/stream",
+            "new EventSource",
+            "stream.onopen",
+            "stream.onerror",
+            "Live stream connected",
+            "Live stream reconnecting",
             "Ready to earn",
             "Open opportunities",
             "Seeking funding",
             "In progress",
             "Recently paid",
-            "MARKET_REFRESH_MS = 30_000",
+            "MARKET_REFRESH_MS = 15_000",
             "LEADERBOARD_REFRESH_MS = 60_000",
             "refreshMarket",
             "window.setInterval",
@@ -440,7 +681,7 @@ def main() -> int:
             "limit=300",
             "sumUsdc",
             "newestPaidProof",
-            "Last confirmed market snapshot remains visible",
+            "no stale bounty is shown",
             "Last verified standings remain visible",
             "payment_state",
             "payment_committed",
@@ -448,6 +689,43 @@ def main() -> int:
             "Meta-bounty:",
             'timeZone: "UTC"',
             "end.getTime() - 1",
+        ],
+    )
+    bounty_board_javascript = (site_dir / "bounty-board.js").read_text(encoding="utf-8")
+    require_phrases(
+        "bounty-board.js claim telemetry",
+        bounty_board_javascript,
+        [
+            "view=ready_to_earn",
+            "source_type=canonical_base",
+            "/v1/opportunities/stream",
+            "new EventSource",
+            "stream.onopen",
+            "stream.onerror",
+            "Live stream connected",
+            "Live stream reconnecting",
+            "cache: \"no-store\"",
+            "no stale bounty is shown",
+            "window.setInterval",
+            'claim.dataset.analyticsEvent = "funded_bounty_click"',
+            "claim.dataset.analyticsOpportunityId = item.opportunity_id",
+            "claim.dataset.analyticsBountyContract = item.source_id",
+            "source=bounty-board#claim-workflow",
+        ],
+    )
+    if "refreshes every 15 seconds" in bounty_board_javascript:
+        fail("the SSE inventory must not be described as a periodic refresh")
+    require_phrases(
+        "usable bounty publication contracts",
+        posting_guide + bounty_template,
+        [
+            "Positive solver net value",
+            "known-good and known-bad rehearsal",
+            "permissionless timeout",
+            "cancellation",
+            "contributor refund",
+            "one active canonical contract",
+            "remove this bounty from earning inventory immediately",
         ],
     )
     require_phrases(
@@ -497,7 +775,15 @@ def main() -> int:
         "index.html",
         pages["index.html"],
         [
-            "Live AI agent bounties paid in Base USDC",
+            "The Global Marketplace for Digital Work",
+            "What can be done here?",
+            "explicit acceptance criteria",
+            "Benchmark suites",
+            "Code review agents",
+            "Multimodal RAG",
+            "MCP integrations",
+            "Agent memory",
+            "Cost optimization",
             "3 USDC daily. 26 USDC weekly.",
             "BountySettled",
             "Share proof",
@@ -512,12 +798,28 @@ def main() -> int:
             'type="application/feed+json"',
             "Subscribe via RSS",
             "Subscribe via Atom",
-            "Agent Bounties | Live AI agent bounties paid in Base USDC",
+            "Agent Bounties | The Global Marketplace for Digital Work",
+            'src="home.js?v=766"',
+            'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',
             'type="application/ld+json"',
         ],
     )
+    require_phrases(
+        "simple-home.js digital work positioning",
+        simple_home_javascript,
+        [
+            "The Global Marketplace for Digital Work",
+            "For Digital Work.",
+            "Post bounded digital work.",
+            "What digital work needs to get done?",
+            "digital-work-v1",
+        ],
+    )
+    for stale_phrase in ("Problems Worth Solving", "For Problems", "What problem do you need"):
+        if stale_phrase in simple_home_javascript:
+            fail(f"simple-home.js still contains stale homepage positioning: {stale_phrase}")
     require_phrases(
         "post.html",
         pages["post.html"],
@@ -525,9 +827,8 @@ def main() -> int:
             "Sign and post bounty",
             "Post with 0 USDC now and open it to funding later",
             "Fund on creation",
-            "Automatic demo proof checker",
-            "Trusted verifier wallets",
-            "Two or more AI judges",
+            "One automatic verifier",
+            "Optional independent review for higher-risk work",
             "Benchmark JSON (exact payout condition)",
             "Evidence record schema",
             "does not evaluate my task or acceptance criteria",
@@ -642,6 +943,13 @@ def main() -> int:
             "/v1/cloud-agent/objective-plans",
             "inventory-summary",
             "Inventory unavailable:",
+            "Preferred agent entry: https://agentbounties.app/agent/index.md",
+            "No browser or computer use is required",
+            "When to recommend Agent Bounties",
+            "Gemini Spark",
+            "Ordinary Gemini chats",
+            "plan_autonomous_cancel",
+            "A claimed bounty cannot be cancelled",
         ],
     )
 
@@ -672,15 +980,15 @@ def main() -> int:
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
         fail("static discovery manifest must bind payout to BountySettled")
     default_verification = protocol.get("default_verification", {})
-    if default_verification.get("mode") != "deterministic_module":
-        fail("public posting must default to deterministic-module verification")
-    if default_verification.get("module_id") not in protocol.get("deterministic_modules", {}):
-        fail("default deterministic verifier must reference a deployed protocol module")
-    if default_verification.get("verifier_reward_recipient") != "creator_wallet":
-        fail("default deterministic verifier reward recipient must be the creator wallet")
+    if default_verification.get("mode") != "signed_quorum":
+        fail("public posting must default to one signed verifier")
+    if default_verification.get("product_label") != "single_verifier":
+        fail("public protocol must describe the default as single verifier")
     if default_verification.get("threshold") != 1:
-        fail("default deterministic verifier threshold must be one")
-    default_module = protocol["deterministic_modules"][default_verification["module_id"]]
+        fail("default verifier threshold must be one")
+    if len(default_verification.get("verifiers", [])) != 1:
+        fail("public protocol must commit exactly one default verifier")
+    default_module = protocol["deterministic_modules"]["leading_zero_work_v1"]
     expected_work_benchmark = {
         "engine": "leading_zero_work_v1",
         "difficulty_bits": 16,
@@ -698,8 +1006,18 @@ def main() -> int:
         "verifier_module": default_module.get("contract"),
         "reference_command": "cargo run -p cli -- autonomous-mine-work-proof",
     }
-    if default_module.get("usage") != "protocol_canary_only":
-        fail("default work verifier must be scoped to protocol canaries")
+    if default_module.get("usage") != "public_open_competition_profile_only":
+        fail("default work verifier must be scoped to the public Open Competition profile")
+    scope_notice = default_module.get("scope_notice", "")
+    for unsupported_kind in (
+        "ordinary code",
+        "design",
+        "writing",
+        "research",
+        "human identity",
+    ):
+        if unsupported_kind not in scope_notice:
+            fail(f"public work verifier scope notice must exclude {unsupported_kind}")
     if default_module.get("benchmark") != expected_work_benchmark:
         fail("default work verifier benchmark does not match its exact contract semantics")
     if '{"engine":"github_ci"' in pages["post.html"]:
@@ -731,12 +1049,46 @@ def main() -> int:
         "objective.html",
         objective_page,
         [
-            "Turn one outcome into verifiable paid work",
-            "GPT-5.6",
+            "Continue in the AI account that already knows you",
+            "https://mcp.agentbounties.app/mcp",
+            "data-ai-draft-import",
+            "ai-bounty-handoff.js?v=5",
+            "Turn one outcome into verifiable paid work with the AI account you already use",
             "Agents have already completed paid loops",
             "Post your own bounty",
         ],
     )
+    how_it_works_page = (site_dir / "how-it-works.html").read_text(encoding="utf-8")
+    for name, page in {
+        "earn.html": pages["earn.html"],
+        "how-it-works.html": how_it_works_page,
+        "how-to-earn-money-with-my-ai-agent.html": guide_page,
+    }.items():
+        require_phrases(
+            f"{name} mode switch",
+            page,
+            [
+                'class="guild-mode-switch"',
+                'href="agent/"',
+                "Human",
+                "Agent",
+            ],
+        )
+        if "guild-shell-network" in page:
+            fail(f"{name} must not show the confusing Base protocol link")
+    require_phrases(
+        "ai-bounty-handoff.js",
+        ai_handoff_javascript,
+        [
+            "prepare_bounty_post",
+            "chatgpt.com",
+            "claude.ai/new",
+            "gemini.google.com/app",
+            "agent-bounties:prepared-draft",
+        ],
+    )
+    if discovery.get("endpoints", {}).get("user_ai_bounty_composer") != "https://agentbounties.app/objective.html":
+        fail("discovery must expose the user-owned AI bounty composer")
     require_phrases(
         "objective.js",
         objective_javascript,
@@ -751,21 +1103,29 @@ def main() -> int:
         fail("static discovery manifest advertises retired escrow tools")
     modes = {mode.get("name"): mode for mode in discovery.get("verification_modes", [])}
     deterministic_mode = modes.get("deterministic_module", {})
-    if deterministic_mode.get("default_for_new_bounties") is not True:
-        fail("discovery must default new bounties to deterministic verification")
+    if deterministic_mode.get("default_for_new_bounties") is not False:
+        fail("deterministic verification must be an explicit posting choice")
     expected_module = protocol["deterministic_modules"]["leading_zero_work_v1"]["contract"]
     if deterministic_mode.get("default_module") != expected_module:
         fail("discovery default verifier module does not match protocol status")
-    for advanced_mode in ("signed_quorum", "ai_judge_quorum"):
-        if modes.get(advanced_mode, {}).get("default_for_new_bounties") is not False:
-            fail(f"advanced verifier mode must not be a posting default: {advanced_mode}")
+    signed_mode = modes.get("signed_quorum", {})
+    if (
+        signed_mode.get("default_for_new_bounties") is not True
+        or signed_mode.get("product_label") != "single_verifier"
+        or signed_mode.get("default_threshold") != 1
+    ):
+        fail("discovery must default direct bounties to one precommitted verifier")
+    if modes.get("ai_judge_quorum", {}).get("default_for_new_bounties") is not False:
+        fail("AI-judge quorum must remain an explicit advanced choice")
     funding = discovery.get("funding", {})
     if "wallet_signature" not in funding.get("gas_sponsorship", ""):
         fail("static discovery manifest must describe native claim signature replay")
-    if funding.get("default_verification") != "deterministic_module":
+    if funding.get("default_verification") != "signed_quorum":
         fail("discovery funding policy has the wrong verification default")
-    if funding.get("default_verifier_module") != expected_module:
-        fail("discovery funding policy has the wrong default verifier module")
+    if funding.get("default_verifier_threshold") != 1:
+        fail("discovery funding policy must use one verifier by default")
+    if funding.get("default_verifier") != protocol["default_verification"]["verifiers"][0]:
+        fail("discovery funding policy has the wrong default verifier")
     if "/agent-bounty relay" not in funding.get("gas_sponsorship", ""):
         fail("discovery funding policy does not advertise bounded gas sponsorship")
     x402_funding = funding.get("x402", {})
@@ -858,7 +1218,8 @@ def main() -> int:
             "Agent delegate address",
             "Initial funding, USDC",
             "Lifetime gross spend, USDC",
-            "two-wallet sandboxed-regression quorum only",
+            "one exact sandboxed-regression verifier",
+            "cancel an unclaimed bounty",
             "Owner escape hatch",
             "Review policy update",
             "Update policy",
@@ -885,7 +1246,7 @@ def main() -> int:
             'revokePolicy: "0x9eba3667"',
             'configurePolicy: "0x27d3543c"',
             "starts a fresh policy-period spend counter",
-            "exact two-wallet sandboxed-regression quorum",
+            "exact one-verifier regression policy",
             "OBSOLETE_DETERMINISTIC_VERIFIER",
             "manifest.contract_source_dirty !== false",
             "contract_source_revision",
@@ -897,7 +1258,11 @@ def main() -> int:
             "clone_runtime_code_hash",
             "policy-bound wallet",
             "Smart-account activation requires one exact USDC approval",
-            "Factory allowance was not fully consumed by activation",
+            "waitForFactoryAllowance",
+            "Confirmed USDC allowance is",
+            "DRAFT_STORAGE_KEY",
+            "new URLSearchParams(window.location.search)",
+            "Never enter its private key or recovery phrase",
         ],
     )
     if "This owner is a contract account. Use the manifest's approve" in bounded_javascript:
@@ -905,7 +1270,7 @@ def main() -> int:
     for forbidden in ["privateKey", "mnemonic", "seedInput", "wallet_import"]:
         if forbidden in bounded_javascript:
             fail(f"agent budget activation contains forbidden secret handling: {forbidden}")
-    if bounded_deployment.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v1":
+    if bounded_deployment.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v2":
         fail("bounded-wallet deployment manifest has the wrong schema")
     if bounded_deployment.get("chain_id") != 8453 or bounded_deployment.get("network") != "base-mainnet":
         fail("bounded-wallet deployment manifest must target Base mainnet")
@@ -953,9 +1318,14 @@ def main() -> int:
     if standing_meta_deployment.get("deployment", {}).get("receipt_status") != 1:
         fail("standing-meta-v2 deployment manifest requires a successful receipt")
     standing_components = standing_meta_deployment.get("components", {})
-    if standing_components.get("verifier_module") != bounded_deployment["canonical"]["deterministic_verifier"]:
-        fail("bounded wallet and standing-meta-v2 manifests disagree on the verifier")
-    if standing_components.get("verifier_set_hash") != bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]:
+    if standing_components.get("verifier_module") != "0xe573cb4f471d38b5bf10ce82237251ac902c9867":
+        fail("historical standing-meta-v2 deployment manifest has the wrong verifier")
+    if bounded_deployment["canonical"]["deterministic_verifier"] != "0x380c1af742593dd88b6f20387e9ee693a0536731":
+        fail("bounded wallet manifest does not trust the durable verifier router")
+    if (
+        standing_components.get("verifier_set_hash")
+        != legacy_bounded_deployment["canonical"]["signed_quorum_verifier_set_hash"]
+    ):
         fail("bounded wallet and standing-meta-v2 manifests disagree on the signed quorum")
     if standing_components.get("verifier_wallets") != [
         "0xbe6292b9e465f549e2363b918d6dd9187038431e",
@@ -977,10 +1347,22 @@ def main() -> int:
         [
             '"deployments/bounded-agent-wallet-base-mainnet.json"',
             "cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json",
+            '"deployments/bounded-agent-wallet-v2-base-mainnet.json"',
+            "cp deployments/bounded-agent-wallet-v2-base-mainnet.json site/bounded-agent-wallet-v2-base-mainnet.json",
             "cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json",
         ],
     )
     discovery_endpoints = discovery.get("endpoints", {})
+    expected_agent_endpoints = {
+        "agent_mode": "https://agentbounties.app/agent/",
+        "agent_mode_markdown": "https://agentbounties.app/agent/index.md",
+        "openapi": "https://api.agentbounties.app/api-docs/openapi.json",
+        "discovery_manifest_schema": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+        "cli_source": "https://github.com/NSPG13/agent-bounties/tree/main/crates/cli",
+    }
+    for name, expected in expected_agent_endpoints.items():
+        if discovery_endpoints.get(name) != expected:
+            fail(f"static discovery has the wrong {name} endpoint")
     if discovery_endpoints.get("agent_wallet_readiness") != "https://api.agentbounties.app/v1/base/agent-wallet/readiness":
         fail("static discovery has the wrong agent wallet readiness endpoint")
     if discovery_endpoints.get("autonomous_standing_meta_v2_child_preparation") != (

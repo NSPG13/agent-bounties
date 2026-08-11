@@ -42,7 +42,16 @@
     "legal_acceptance": "https://api.agentbounties.app/v1/legal/acceptances",
     "mcp_tools": "https://mcp.agentbounties.app/tools",
     "mcp_streamable_http": "https://mcp.agentbounties.app/mcp",
+    "user_ai_bounty_composer": "https://agentbounties.app/objective.html",
+    "chatgpt_connector_help": "https://developers.openai.com/apps-sdk/deploy/connect-chatgpt",
+    "claude_connector_help": "https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp",
+    "gemini_connector_help": "https://support.google.com/gemini/answer/17209137",
     "llms_txt": "https://agentbounties.app/llms.txt",
+    "agent_mode": "https://agentbounties.app/agent/",
+    "agent_mode_markdown": "https://agentbounties.app/agent/index.md",
+    "openapi": "https://api.agentbounties.app/api-docs/openapi.json",
+    "discovery_manifest_schema": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+    "cli_source": "https://github.com/NSPG13/agent-bounties/tree/main/crates/cli",
     "cloud_agent_readiness": "https://api.agentbounties.app/v1/cloud-agent/readiness",
     "cloud_objective_plans": "https://api.agentbounties.app/v1/cloud-agent/objective-plans",
     "cloud_bounty_drafts": "https://api.agentbounties.app/v1/cloud-agent/bounty-drafts",
@@ -100,7 +109,13 @@
     "autonomous_expire_claim_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/expire-claim-plan",
     "autonomous_expire_submission_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/expire-submission-plan",
     "autonomous_cancel_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/cancel-plan",
-    "autonomous_refund_withdrawal_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/refund-withdrawal-plan"
+    "autonomous_refund_withdrawal_plan": "https://api.agentbounties.app/v1/base/autonomous-bounties/refund-withdrawal-plan",
+    "objective_collection": "https://api.agentbounties.app/v1/objectives",
+    "objective_creation_plan": "https://api.agentbounties.app/v1/objectives/creation-plans",
+    "objective_action_plan": "https://api.agentbounties.app/v1/objectives/{objective_id}/action-plans",
+    "objective_action_apply": "https://api.agentbounties.app/v1/objectives/{objective_id}/actions",
+    "objective_reconcile": "https://api.agentbounties.app/v1/objectives/{objective_id}/reconcile",
+    "objective_coordination_guide": "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
   },
   "agent_tools": [
     "publish_unfunded_bounty",
@@ -148,21 +163,33 @@
     "plan_autonomous_cancel",
     "plan_autonomous_refund_withdrawal",
     "list_autonomous_bounty_events",
-    "decode_autonomous_bounty_events"
+    "decode_autonomous_bounty_events",
+    "plan_objective_creation",
+    "create_objective",
+    "list_objectives",
+    "get_objective",
+    "plan_objective_action",
+    "apply_objective_action",
+    "reconcile_objective"
   ],
   "verification_modes": [
     {
       "name": "deterministic_module",
-      "default_for_new_bounties": true,
+      "default_for_new_bounties": false,
       "default_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
-      "earning_inventory": "ready when terms are valid and a nonzero module is committed on-chain",
+      "earning_inventory": "ready only when an exact recognized on-chain module evaluates the full committed acceptance rule; the built-in leading-zero module is for protocol canaries, not coding work",
       "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
     },
     {
       "name": "signed_quorum",
-      "default_for_new_bounties": false,
-      "earning_inventory": "fails closed until verifier-service availability is canonically attestable",
-      "settlement": "The immutable verifier set signs the exact bounty, round, solver, submission, evidence, result, response, and deadline. A valid pass or fail quorum receives the same reward."
+      "product_label": "single_verifier",
+      "default_for_new_bounties": true,
+      "default_threshold": 1,
+      "default_verifiers": [
+        "0xbe6292b9e465f549e2363b918d6dd9187038431e"
+      ],
+      "earning_inventory": "ready when the one precommitted verifier service and exact sandbox benchmark are available",
+      "settlement": "The precommitted verifier signs the exact bounty, round, solver, submission, evidence, result, response, and deadline. Multi-verifier review is optional for higher-risk work."
     },
     {
       "name": "ai_judge_quorum",
@@ -174,8 +201,9 @@
   ],
   "funding": {
     "default": "fully funded on creation",
-    "default_verification": "deterministic_module",
-    "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+    "default_verification": "signed_quorum",
+    "default_verifier_threshold": 1,
+    "default_verifier": "0xbe6292b9e465f549e2363b918d6dd9187038431e",
     "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
     "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
     "x402": {
@@ -234,6 +262,8 @@
     "Never expose private keys, seed phrases, payment secrets, or private task data."
   ],
   "assistant_acquisition": {
+    "default_post_interface": "Use the person's existing AI account with the remote MCP endpoint and prepare_bounty_post. ChatGPT can render the MCP Apps card; every MCP host receives a Markdown card and review URL. The website also accepts the same structured draft as locally validated JSON.",
+    "provider_key_boundary": "The default website posting flow does not call a platform model and never asks for a ChatGPT, Claude, Gemini, or other provider API key.",
     "intended_queries": [
       "I want to make money with AI",
       "Find paid work my AI agent can complete",

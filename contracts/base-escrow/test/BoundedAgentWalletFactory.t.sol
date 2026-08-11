@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "../src/BoundedAgentWalletFactory.sol";
+import "../src/BoundedAgentWalletV2Factory.sol";
 
 contract WalletFactoryToken {
     mapping(address => uint256) public balanceOf;
@@ -52,6 +53,17 @@ contract WalletFactoryToken {
 contract WalletFactoryCaller {
     function createAndFund(
         BoundedAgentWalletFactory factory,
+        BoundedAgentWallet.Policy calldata policy,
+        bytes32 salt,
+        uint256 amount
+    ) external returns (address) {
+        return factory.createWalletAndFund(policy, salt, amount);
+    }
+}
+
+contract WalletV2FactoryCaller {
+    function createAndFund(
+        BoundedAgentWalletV2Factory factory,
         BoundedAgentWallet.Policy calldata policy,
         bytes32 salt,
         uint256 amount
@@ -119,10 +131,7 @@ contract BoundedAgentWalletFactoryTest {
         token.mint(address(caller), 500);
         (bool ok,) = address(caller)
             .call(
-                abi.encodeCall(
-                    caller.createAndFund,
-                    (walletFactory, policy, keccak256("caller-owned"), uint256(500))
-                )
+                abi.encodeCall(caller.createAndFund, (walletFactory, policy, keccak256("caller-owned"), uint256(500)))
             );
         require(!ok, "nonowner pulled approved funds");
         require(token.balanceOf(address(this)) == 10_000, "owner funds moved");
@@ -190,6 +199,99 @@ contract BoundedAgentWalletFactoryTest {
             );
         require(!ok, "changed policy accepted old authorization plan");
         require(token.balanceOf(wallet) == 0, "changed wallet funded");
+    }
+
+    function _policy(address delegate) private view returns (BoundedAgentWallet.Policy memory) {
+        return BoundedAgentWallet.Policy({
+            delegate: delegate,
+            validAfter: uint64(block.timestamp),
+            validUntil: uint64(block.timestamp + 30 days),
+            periodSeconds: 1 days,
+            maxPerAction: 1_000,
+            maxPerPeriod: 2_000,
+            maxLifetimeSpend: 5_000,
+            maxBountyTarget: 5_000,
+            allowedActions: 15,
+            allowedVerificationModes: 1,
+            deterministicVerifierModule: address(verifier),
+            signedQuorumVerifierSetHash: bytes32(0),
+            aiJudgeVerifierSetHash: bytes32(0)
+        });
+    }
+}
+
+contract BoundedAgentWalletV2FactoryTest {
+    WalletFactoryToken private token;
+    AgentBountyFactory private bountyFactory;
+    BoundedAgentWalletV2Factory private walletFactory;
+    WalletV2FactoryCaller private caller;
+    WalletFactoryVerifier private verifier;
+
+    function setUp() public {
+        token = new WalletFactoryToken();
+        bountyFactory = new AgentBountyFactory(address(token));
+        walletFactory = new BoundedAgentWalletV2Factory(address(bountyFactory));
+        caller = new WalletV2FactoryCaller();
+        verifier = new WalletFactoryVerifier();
+        token.mint(address(this), 10_000);
+    }
+
+    function testPredictionDeploymentAndVersionMatch() public {
+        BoundedAgentWallet.Policy memory policy = _policy(address(0xD311));
+        bytes32 salt = keccak256("v2-predict");
+        address predicted = walletFactory.predictWallet(address(this), policy, salt);
+        address deployed = walletFactory.createWallet(address(this), policy, salt);
+        BoundedAgentWalletV2 wallet = BoundedAgentWalletV2(payable(deployed));
+
+        require(deployed == predicted, "prediction mismatch");
+        require(walletFactory.isFactoryWallet(deployed), "wallet not registered");
+        require(wallet.owner() == address(this), "owner mismatch");
+        require(wallet.factory() == bountyFactory, "bounty factory mismatch");
+        require(wallet.settlementToken() == address(token), "token mismatch");
+        require(wallet.WALLET_VERSION() == keccak256("agent-bounties/bounded-wallet/v2"), "version mismatch");
+    }
+
+    function testImplementationCannotBeInitialized() public {
+        BoundedAgentWallet.Policy memory policy = _policy(address(0xD311));
+        address implementation = walletFactory.implementation();
+        (bool ok,) = implementation.call(abi.encodeCall(BoundedAgentWallet.initialize, (address(this), policy)));
+        require(!ok, "implementation initialized");
+    }
+
+    function testOwnerAllowanceFundingIsAtomic() public {
+        BoundedAgentWallet.Policy memory policy = _policy(address(0xD311));
+        token.approve(address(walletFactory), 500);
+        address wallet = walletFactory.createWalletAndFund(policy, keccak256("v2-allowance"), 500);
+        require(token.balanceOf(wallet) == 500, "wallet not funded");
+    }
+
+    function testAuthorizationFundingUsesPredictedWallet() public {
+        BoundedAgentWallet.Policy memory policy = _policy(address(0xD311));
+        bytes32 salt = keccak256("v2-authorization");
+        address predicted = walletFactory.predictWallet(address(this), policy, salt);
+        address wallet = walletFactory.createWalletWithAuthorization(
+            address(this),
+            policy,
+            salt,
+            750,
+            0,
+            type(uint256).max,
+            keccak256("v2-auth-nonce"),
+            27,
+            bytes32(0),
+            bytes32(0)
+        );
+        require(wallet == predicted, "authorization destination drift");
+        require(token.balanceOf(wallet) == 750, "authorization funding missing");
+    }
+
+    function testAnotherCallerCannotPullOwnerAllowance() public {
+        BoundedAgentWallet.Policy memory policy = _policy(address(0xD311));
+        token.approve(address(walletFactory), 500);
+        (bool ok,) = address(caller)
+            .call(abi.encodeCall(caller.createAndFund, (walletFactory, policy, keccak256("v2-caller"), uint256(500))));
+        require(!ok, "nonowner pulled approved funds");
+        require(token.balanceOf(address(this)) == 10_000, "owner funds moved");
     }
 
     function _policy(address delegate) private view returns (BoundedAgentWallet.Policy memory) {

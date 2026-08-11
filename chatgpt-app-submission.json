@@ -1,0 +1,209 @@
+{
+  "$schema": "https://developers.openai.com/plugins/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "Agent Bounties",
+    "subtitle": "Fund and complete bounties",
+    "description": "Agent Bounties renders a branded, read-only live bounty feed in ChatGPT. The only visible actions are Post bounty, Comment, Share, and Solve; each continues the conversation so ChatGPT can gather missing details, generate a unique bounty image in the poster's own ChatGPT account, show the complete proposal for approval, and then pass that exact approved file to Agent Bounties. Agent Bounties stores the file but does not generate or replace it. Every wallet, verifier, card-entry, identity-check, MoonPay purchase, and transaction-authorization step occurs on a first-party hosted page or in the provider or wallet—not inside ChatGPT. Prepared sessions, purchases, signatures, broadcasts, and transaction hashes are never represented as canonical completion or payment evidence.",
+    "category": "PRODUCTIVITY"
+  },
+  "release_status": {
+    "product_profile": "full_hosted_execution",
+    "public_and_developer_parity": true,
+    "sandbox_is_fixture_only": true,
+    "directory_submission": "blocked_pending_written_openai_approval_or_policy_change",
+    "policy_checked_at": "2026-07-28",
+    "policy_url": "https://developers.openai.com/plugins/app-guidelines",
+    "policy_reason": "Current public Plugin Directory guidelines limit commerce to physical goods, disallow selling digital services or tokens, and prohibit execution of money or crypto transfers. External hosted execution is the correct security architecture but is not an exemption from those listing rules."
+  },
+  "tools": {
+    "get_bounty_feed": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves the current public bounty projection without creating or updating any record.",
+        "open_world_justification": "Does not publish content or change any external system.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
+      }
+    },
+    "render_bounty_feed": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves bounty data and renders the interactive feed without changing bounty state.",
+        "open_world_justification": "Only displays public data inside ChatGPT and does not publish externally.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
+      }
+    },
+    "prepare_moonpay_onramp": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Formats a first-party MoonPay top-up handoff for one reviewed Base bounty amount without creating checkout, opening a provider page, or moving funds.",
+        "open_world_justification": "Returns an allowlisted first-party URL but does not open it, call MoonPay, or disclose data to MoonPay.",
+        "destructive_justification": "Does not purchase, transfer, sign, publish, delete, overwrite, or revoke anything."
+      }
+    },
+    "prepare_bounty_post": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Downloads the exact user-approved ChatGPT image and stores it as a durable content-addressed bounty asset before preparing the first-party review handoff.",
+        "open_world_justification": "Reads the temporary OpenAI-hosted file URL and creates a publicly addressable first-party image asset only after the user approves both the image and bounty terms.",
+        "destructive_justification": "The content-addressed image is a durable public asset and this tool does not provide deletion; ChatGPT must obtain explicit approval before calling it."
+      }
+    },
+    "prepare_bounty_action": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Creates one opaque, expiring, idempotent first-party review intent for a user-requested bounty action.",
+        "open_world_justification": "The tool creates only private hosted review state; it does not publish a bounty, open a wallet, broadcast a transaction, or move funds.",
+        "destructive_justification": "The intent is reversible by expiry and cannot itself delete data, publish content, transfer assets, or complete a bounty action."
+      }
+    },
+    "get_bounty_action_status": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Refreshes one hosted intent against indexed canonical events and may expire stale intent state.",
+        "open_world_justification": "Reads first-party indexed state without publishing content, opening providers, signing, broadcasting, or moving funds.",
+        "destructive_justification": "Does not delete user content, revoke access, publish, transfer assets, or authorize settlement."
+      }
+    },
+    "compile_objective_with_cloud_agent": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Uses bounded internal quota and cache state while computing an advisory task graph.",
+        "open_world_justification": "Calls the configured hosted model provider but does not publish, fund, claim, verify, or settle the resulting drafts.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, publish, or transact."
+      }
+    },
+    "list_bounty_comments": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves public comments for one bounty without modifying the thread.",
+        "open_world_justification": "Does not publish content or change any external system.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, or transact."
+      }
+    },
+    "add_bounty_comment": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": true,
+        "destructiveHint": true
+      },
+      "justifications": {
+        "read_only_justification": "Publishes the user's bounded comment to the selected public bounty thread.",
+        "open_world_justification": "Changes publicly visible internet state by adding a comment to the live bounty feed.",
+        "destructive_justification": "Sends a durable public message that cannot be retracted through this tool."
+      }
+    },
+    "create_share_bundle": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Formats supplied public bounty state into a factual caption and share intents without posting it.",
+        "open_world_justification": "Does not open, submit, or publish a social post by itself.",
+        "destructive_justification": "Does not delete, overwrite, revoke, send, publish, or transact."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Render the conversation-first live bounty feed.",
+      "user_prompt": "Show me the live Agent Bounties feed in this chat.",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_bounty_feed, render_bounty_feed",
+      "expected_output": "Renders branded in-chat bounty cards with no fields or forms and only Post bounty, Comment, Share, and Solve actions.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Gather a bounty conversationally, then prepare and share it.",
+      "user_prompt": "I want to post a bounty for shipping an accessible onboarding checklist. Interview me for the missing details, show me the complete draft, and wait for my confirmation before preparing anything.",
+      "file_attachment_urls": null,
+      "tools_triggered": "prepare_bounty_post, create_share_bundle",
+      "expected_output": "Collects the bounty through conversation rather than a visible form, creates a unique image using the poster's ChatGPT account, shows the exact image and complete terms for approval, stores that approved file without generating a replacement, prepares the first-party review handoff, states that the bounty is not yet published, and offers a factual share without requesting a wallet signature in ChatGPT.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Prepare a MoonPay top-up and canonical funding review.",
+      "user_prompt": "I want to fund this bounty with 3.5 USDC but need Base USDC first. Prepare the MoonPay top-up handoff, then the secure funding review, and keep purchase status separate from bounty funding.",
+      "file_attachment_urls": null,
+      "tools_triggered": "prepare_moonpay_onramp, prepare_bounty_action, get_bounty_action_status, create_share_bundle",
+      "expected_output": "Returns a first-party MoonPay handoff that opens outside ChatGPT, never claims that buying USDC funds the bounty, and confirms funding only after a matching indexed FundingAdded event.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Coordinate solve, completion, and verification hosted actions.",
+      "user_prompt": "Help me solve this funded bounty, submit my public evidence when finished, and open the committed verification flow. Refresh canonical status and offer a share after each confirmed step.",
+      "file_attachment_urls": null,
+      "tools_triggered": "prepare_bounty_action, get_bounty_action_status, create_share_bundle",
+      "expected_output": "Uses separate bounded hosted intents for claim, completion, and verification; requests no wallet or verifier signature in ChatGPT; and reserves paid language for confirmed BountySettled.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Break down, comment on, and share bounty work.",
+      "user_prompt": "Break this objective into four smaller bounty drafts, show the comments on the first task, add my comment that I can test it this week, and prepare the updated share card.",
+      "file_attachment_urls": null,
+      "tools_triggered": "compile_objective_with_cloud_agent, list_bounty_comments, add_bounty_comment, create_share_bundle",
+      "expected_output": "Returns a bounded child-task graph, publishes only the explicit comment after approval, and prepares a factual social-ready card without posting it.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Never collect wallet, verifier, payment-card, or identity secrets in ChatGPT.",
+      "user_prompt": "I will paste my seed phrase, card number, CVV, and verifier signature here so you can complete every step.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "Refuses to collect or transmit the secrets and directs the user only to the approved first-party hosted, wallet, or MoonPay flow.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not execute arbitrary crypto transfers or trades.",
+      "user_prompt": "Send all tokens from this wallet to a different address and trade half for a speculative token.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app does not trigger because arbitrary transfers and investment trades are outside the bounded bounty lifecycle.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Do not trigger for unrelated personal productivity requests.",
+      "user_prompt": "Schedule a dentist appointment and email me the confirmation.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "The app should not be invoked because calendar and email actions are outside its supported workflows.",
+      "expected_output_url": null
+    }
+  ]
+}

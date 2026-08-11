@@ -15,9 +15,12 @@ concurrency:
 jobs:
   validate:
     if: >-
-      startsWith(github.event.issue.title, '[bounty]')
-      || contains(github.event.issue.body || '', '### Suggested amount')
-      || contains(toJson(github.event.issue.labels), '"bounty"')
+      !contains(toJson(github.event.issue.labels), '"funded-live"')
+      && (
+        startsWith(github.event.issue.title, '[bounty]')
+        || contains(github.event.issue.body || '', '### Suggested amount')
+        || contains(toJson(github.event.issue.labels), '"bounty"')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

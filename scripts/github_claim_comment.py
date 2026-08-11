@@ -43,6 +43,7 @@ CONTRIBUTOR_RE = re.compile(r"Contributor:\s*`?([^\s`]+)`?")
 DEFAULT_API_BASE_URL = "https://api.agentbounties.app"
 STATIC_EARN_PAGE_URL = "https://agentbounties.app/earn.html"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+EVM_ADDRESS_SEARCH_RE = re.compile(r"(?<![0-9A-Za-z])0x[0-9a-fA-F]{40}(?![0-9A-Za-z])")
 
 
 class UserError(RuntimeError):
@@ -92,8 +93,13 @@ def write_issue_files(
         "comment_url": comment.get("html_url") or "",
         "contributor_login": comment_user.get("login") or "",
         "labels": label_names,
+        "issue_body": issue.get("body") or "",
     }
-    missing = [key for key, value in meta.items() if key != "comment_url" and value in ("", None)]
+    missing = [
+        key
+        for key, value in meta.items()
+        if key not in {"comment_url", "issue_body"} and value in ("", None)
+    ]
     if missing:
         raise UserError(f"claim comment event missing required metadata: {', '.join(missing)}")
     if not CLAIM_COMMAND_RE.search(str(meta["comment_body"])):
@@ -334,7 +340,7 @@ def claim_recovery_descriptor(
 ) -> Dict[str, object]:
     repository = str(meta["repo"])
     issue_url = str(meta["url"])
-    query = "is:issue is:open label:claimable-live"
+    query = "is:issue is:open label:ready-to-earn"
     alternatives: List[Dict[str, object]] = []
     for source_url, record in (records or {}).items():
         contract = str(record.get("bounty_contract") or "").lower()
@@ -387,13 +393,75 @@ def claim_recovery_descriptor(
     }
 
 
+def open_competition_wrong_mode_plan(meta: Mapping[str, object]) -> Dict[str, object]:
+    body = str(meta.get("issue_body") or "")
+    match = re.search(
+        r"(?:bountyContract=|agent-bounties/open-competition-v1:)(0x[0-9a-fA-F]{40})",
+        body,
+    )
+    contract = match.group(1).lower() if match else None
+    query = {
+        "network": "base-mainnet",
+        "utm_source": "github",
+        "utm_medium": "issue-comment",
+        "utm_campaign": "wrong-mode-recovery-v1",
+    }
+    if contract:
+        query["bountyContract"] = contract
+        query["discovery_id"] = (
+            f"eip155:8453:agent-bounties/open-competition-v1:{contract}"
+        )
+    competition_url = f"https://agentbounties.app/competition.html?{urllib.parse.urlencode(query)}"
+    details = "\n".join(
+        [
+            f"Issue: {meta['url']}",
+            "Error: wrong_competition_mode",
+            "Competition mode: first_valid_submission",
+            "Correct action: enter_competition",
+            f"Competition URL: {competition_url}",
+            "",
+            "This bounty has no exclusive Claim action. Generate and save the private commitment recovery envelope, enter with only its commitment, wait at least one block, and reveal from the same wallet.",
+            "Only a confirmed canonical BountySettled event proves payment.",
+        ]
+    )
+    return {
+        "ready": False,
+        "signal": {
+            "decision": "WrongCompetitionMode",
+            "error_code": "wrong_competition_mode",
+            "competition_mode": "first_valid_submission",
+            "correct_action": "enter_competition",
+            "competition_url": competition_url,
+            "bounty_contract": contract,
+            "settlement_authority": False,
+        },
+        "check": {
+            "conclusion": "ActionRequired",
+            "title": "Enter this Open Competition",
+            "summary": "Use Enter competition; an exclusive claim is not available.",
+            "text": details,
+        },
+    }
+
+
 def apply_canonical_claim_state(
     env: Mapping[str, str],
     meta: Mapping[str, object],
     plan: Dict[str, object],
 ) -> Dict[str, object]:
     signal = plan.get("signal") if isinstance(plan.get("signal"), dict) else None
-    if not signal or signal.get("decision") != "OnChainClaimRequired":
+    labels = {
+        str(label).strip().lower()
+        for label in meta.get("labels", [])
+        if str(label).strip()
+    }
+    if "open-competition" in labels:
+        return open_competition_wrong_mode_plan(meta)
+    expects_canonical = (
+        signal is not None
+        and signal.get("decision") == "OnChainClaimRequired"
+    ) or bool(labels & {"claimable-live", "funded-live", "claimed-live"})
+    if not expects_canonical:
         return plan
     try:
         api_base_url = normalize_api_base_url(
@@ -424,6 +492,43 @@ def apply_canonical_claim_state(
             reason="the full canonical feed has no exact source_url match",
             claim_recovery=claim_recovery,
         )
+    if signal is None or signal.get("decision") != "OnChainClaimRequired":
+        comment_body = str(meta.get("comment_body") or "")
+        wallet_match = EVM_ADDRESS_SEARCH_RE.search(comment_body)
+        solver_wallet = (
+            wallet_match.group(0).lower()
+            if wallet_match
+            else "0xYOUR_PUBLIC_BASE_WALLET"
+        )
+        reservation_id = (
+            f"github-claim-comment:{meta['repo']}:{issue_url}:"
+            f"comment:{meta['comment_id']}"
+        )
+        command_match = CLAIM_COMMAND_RE.search(comment_body)
+        signal = {
+            "issue_url": issue_url,
+            "contributor_login": str(meta.get("contributor_login") or "") or None,
+            "command": command_match.group(1).lower() if command_match else "claim",
+            "decision": "OnChainClaimRequired",
+            "reservation_id": reservation_id,
+            "reservation_window_minutes": 0,
+            "progress_required_within_minutes": 0,
+            "progress_signal_count": 0,
+            "has_progress_signal": False,
+            "settlement_authority": False,
+            "bounty_contract": None,
+            "claim_handoff_url": None,
+            "claim_plan_request": {
+                "body": {
+                    "idempotency_key": reservation_id,
+                    "solver_wallet": solver_wallet,
+                }
+            },
+            "operator_note": (
+                "The exact canonical source record supersedes legacy GitHub issue-form "
+                "parsing. Canonical state still controls whether a wallet request is safe."
+            ),
+        }
     contract = str(record.get("bounty_contract") or "").lower()
     status = str(record.get("status") or "unknown").lower()
     executable = (
@@ -1041,6 +1146,42 @@ def run_self_test() -> int:
     if "not published yet" in executable_comment:
         raise UserError("self-test canonical claim route retained stale issue guidance")
 
+    legacy_form_meta = {
+        **canonical_meta,
+        "labels": ["bounty", "funded-live", "claimable-live"],
+        "comment_body": (
+            "/claim #187 wallet: 0x2222222222222222222222222222222222222222"
+        ),
+    }
+    legacy_form_plan = {
+        "ready": False,
+        "signal": {
+            "decision": "NonBounty",
+            "operator_note": "legacy issue form did not expose a template field",
+        },
+        "check": {
+            "conclusion": "Neutral",
+            "title": "No bounty claim detected",
+            "summary": "Legacy issue parsing failed.",
+            "text": "Canonical state has not been checked.",
+        },
+    }
+    legacy_form_plan = apply_canonical_claim_state(
+        canonical_env,
+        legacy_form_meta,
+        legacy_form_plan,
+    )
+    legacy_form_comment = render_comment(legacy_form_meta, legacy_form_plan)
+    for required_text in [
+        "OnChainClaimRequired",
+        contract,
+        "0x2222222222222222222222222222222222222222",
+    ]:
+        if required_text not in legacy_form_comment:
+            raise UserError(
+                f"self-test legacy canonical claim route missing: {required_text}"
+            )
+
     missing_fixture = {
         "full_feed": [alternative_record],
         "claimable_feed": [alternative_record],
@@ -1055,7 +1196,7 @@ def run_self_test() -> int:
     for required_text in [
         "agent-bounties/claim-recovery-v1",
         "claimable_only=true",
-        "label%3Aclaimable-live",
+        "label%3Aready-to-earn",
         alternative_url,
         alternative_contract,
         "/claim #188 wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",

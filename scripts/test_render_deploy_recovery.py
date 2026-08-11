@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -79,6 +80,61 @@ class EnvironmentClient:
         return {"key": key, "value": value, "changed": self.changed}
 
 
+class OperatorRotationClient:
+    def __init__(self, changed=True) -> None:
+        self.changed = changed
+        self.values = []
+
+    def ensure_env_group_env_var(self, group, key, value):
+        self.values.append((group["id"], key, value))
+        return {"key": key, "value": value, "changed": self.changed}
+
+
+def blueprint_record(**overrides):
+    record = {
+        "id": "exs-" + "a" * 20,
+        "name": "agent-bounties-production",
+        "status": "in_sync",
+        "autoSync": True,
+        "repo": "https://github.com/NSPG13/agent-bounties.git",
+        "branch": "main",
+        "path": "render.yaml",
+        "resources": [],
+    }
+    record.update(overrides)
+    return record
+
+
+def worker_service_record(name=None, **overrides):
+    record = {
+        "id": "srv-" + "c" * 20,
+        "name": name or recovery.OPEN_COMPETITION_WORKER_NAME,
+        "type": "background_worker",
+        "branch": "main",
+        "repo": "https://github.com/NSPG13/agent-bounties.git",
+        "ownerId": "tea-owner123",
+        "environmentId": "evm-project123",
+        "autoDeploy": "no",
+    }
+    record.update(overrides)
+    return record
+
+
+def env_group_record(service=None, **overrides):
+    linked_service = None
+    if service is not None:
+        linked_service = dict(service)
+        linked_service["type"] = "worker"
+    record = {
+        "id": "evg-" + "d" * 20,
+        "name": recovery.OPEN_COMPETITION_ENV_GROUP_NAME,
+        "ownerId": "tea-owner123",
+        "serviceLinks": [] if linked_service is None else [linked_service],
+    }
+    record.update(overrides)
+    return record
+
+
 class ResolutionFailureClient:
     def __init__(self) -> None:
         self.resolved = []
@@ -146,6 +202,87 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(recovery.RecoveryError, "deploy mode"):
             recovery.validate_deploy_mode("latest")
 
+    def test_operator_environment_group_selection_is_exact(self) -> None:
+        group = {
+            "id": "evg-" + "e" * 20,
+            "name": recovery.OPERATOR_ENV_GROUP_NAME,
+            "ownerId": "tea-owner123",
+        }
+        self.assertEqual(
+            recovery.select_operator_env_group(
+                [{"envGroup": group}], "tea-owner123"
+            ),
+            group,
+        )
+        with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+            recovery.select_operator_env_group([], "tea-owner123")
+
+    def test_operator_token_rotation_never_returns_the_secret(self) -> None:
+        client = OperatorRotationClient()
+        result = recovery.rotate_operator_token(
+            client,
+            {"id": "evg-" + "e" * 20},
+            token_factory=lambda: "n" * 64,
+        )
+        self.assertEqual(
+            client.values[0][1:],
+            (recovery.OPERATOR_TOKEN_KEY, "n" * 64),
+        )
+        self.assertEqual(
+            result,
+            {
+                "performed": True,
+                "key": recovery.OPERATOR_TOKEN_KEY,
+                "characters": 64,
+                "secret_published": False,
+            },
+        )
+        self.assertEqual(client.operator_token_rotation_evidence, result)
+        self.assertNotIn("n" * 64, recovery.json.dumps(result))
+
+    def test_operator_token_rotation_requires_a_changed_value(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "did not rotate"):
+            recovery.rotate_operator_token(
+                OperatorRotationClient(changed=False),
+                {"id": "evg-" + "e" * 20},
+                token_factory=lambda: "n" * 64,
+            )
+
+    def test_operator_token_rotation_requires_deploy_only(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "requires deploy_only"):
+            recovery.deploy(
+                ResolutionFailureClient(),
+                "a" * 40,
+                rotate_operator_api_token=True,
+                deploy_timeout_seconds=1,
+                health_timeout_seconds=1,
+                poll_seconds=0,
+            )
+
+    def test_operator_rotation_redeploys_only_linked_runtime_services(self) -> None:
+        decisions = {
+            name: recovery.deploy_only_can_reuse_current(
+                name,
+                open_competition_environment_changed=False,
+                operator_token_changed=True,
+            )
+            for name in (
+                "agent-bounties-api",
+                "agent-bounties-mcp",
+                "agent-bounties-base-indexer",
+                "agent-bounties-open-competition-v1-indexer",
+            )
+        }
+        self.assertEqual(
+            decisions,
+            {
+                "agent-bounties-api": False,
+                "agent-bounties-mcp": False,
+                "agent-bounties-base-indexer": True,
+                "agent-bounties-open-competition-v1-indexer": True,
+            },
+        )
+
     def test_service_resolution_is_exact_and_repository_bound(self) -> None:
         spec = recovery.SERVICE_SPECS[0]
         service = {
@@ -161,6 +298,295 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             recovery.select_service(spec, [{"service": wrong}])
         with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
             recovery.select_service(spec, [{"service": service}, {"service": service}])
+
+    def test_missing_service_has_a_typed_fail_closed_error(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        with self.assertRaises(recovery.RenderServiceMissing) as raised:
+            recovery.select_service(spec, [])
+        self.assertEqual(raised.exception.service_name, spec.name)
+
+    def test_blueprint_selection_is_exact_and_repository_bound(self) -> None:
+        selected = recovery.select_blueprint(
+            [{"blueprint": blueprint_record()}, {"blueprint": blueprint_record(
+                id="exs-" + "b" * 20,
+                branch="staging",
+            )}]
+        )
+        self.assertEqual(selected["id"], "exs-" + "a" * 20)
+
+        with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+            recovery.select_blueprint(
+                [
+                    {"blueprint": blueprint_record()},
+                    {"blueprint": blueprint_record(id="exs-" + "b" * 20)},
+                ]
+            )
+        with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+            recovery.select_blueprint(
+                [{"blueprint": blueprint_record(repo="https://github.com/attacker/fork")}]
+            )
+
+    def test_blueprint_recovery_materializes_only_the_pinned_worker(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        resource = {"id": "srv-" + "c" * 20, "name": spec.name, "type": spec.service_type}
+        service = {
+            "id": resource["id"],
+            "name": spec.name,
+            "type": spec.service_type,
+            "branch": "main",
+            "repo": "https://github.com/NSPG13/agent-bounties.git",
+        }
+        client = RecordingClient()
+        sleeps = []
+        client._sleep = sleeps.append
+        responses = [
+            [{"blueprint": blueprint_record()}],
+            blueprint_record(autoSync=False),
+            blueprint_record(autoSync=True),
+            blueprint_record(status="syncing"),
+            blueprint_record(resources=[resource]),
+            [{"service": service}],
+        ]
+        with mock.patch.object(client, "_request_json", side_effect=responses) as request:
+            self.assertEqual(
+                client.ensure_blueprint_service(spec, attempts=3, poll_seconds=0.25),
+                service,
+            )
+
+        blueprint_id = "exs-" + "a" * 20
+        self.assertEqual(
+            request.call_args_list,
+            [
+                mock.call("GET", "/blueprints?limit=100"),
+                mock.call("PATCH", f"/blueprints/{blueprint_id}", {"autoSync": False}),
+                mock.call(
+                    "PATCH",
+                    f"/blueprints/{blueprint_id}",
+                    {"autoSync": True, "path": "render.yaml"},
+                ),
+                mock.call("GET", f"/blueprints/{blueprint_id}"),
+                mock.call("GET", f"/blueprints/{blueprint_id}"),
+                mock.call(
+                    "GET",
+                    "/services?name=agent-bounties-open-competition-v1-indexer&includePreviews=false&limit=20",
+                ),
+            ],
+        )
+        self.assertEqual(sleeps, [0.25])
+
+    def test_blueprint_recovery_refuses_other_missing_services(self) -> None:
+        client = RecordingClient()
+        with self.assertRaisesRegex(recovery.RecoveryError, "not authorized"):
+            client.ensure_blueprint_service(recovery.SERVICE_SPECS[0])
+        self.assertEqual(client.requests, [])
+
+    def test_blueprint_recovery_restores_auto_sync_after_enable_failure(self) -> None:
+        client = RecordingClient()
+        responses = [
+            [{"blueprint": blueprint_record()}],
+            blueprint_record(autoSync=False),
+            recovery.RenderHttpError(400, "invalid update"),
+            blueprint_record(autoSync=True),
+        ]
+        with mock.patch.object(client, "_request_json", side_effect=responses) as request:
+            with self.assertRaises(recovery.RenderHttpError):
+                client.ensure_blueprint_service(recovery.SERVICE_SPECS[-1])
+
+        blueprint_id = "exs-" + "a" * 20
+        self.assertEqual(
+            request.call_args_list[-1],
+            mock.call(
+                "PATCH",
+                f"/blueprints/{blueprint_id}",
+                {"autoSync": True, "path": "render.yaml"},
+            ),
+        )
+
+    def test_blueprint_resource_type_mismatch_fails_closed(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        blueprint = blueprint_record(
+            resources=[{"name": spec.name, "type": "web_service"}]
+        )
+        with self.assertRaisesRegex(recovery.RecoveryError, "unexpected type"):
+            recovery.blueprint_has_service(blueprint, spec)
+
+    def test_direct_worker_provisioning_is_exact_and_secret_free_in_result(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME,
+            id="srv-" + "b" * 20,
+        )
+        created = worker_service_record()
+        database_url = "postgresql://worker:private-value@database.internal/bounties"
+        env_responses = [
+            {"envVar": {"key": key, "value": value}}
+            for key, value in recovery.OPEN_COMPETITION_WORKER_ENVIRONMENT.items()
+        ]
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+            {"service": created},
+            {"envGroup": env_group_record()},
+            {},
+            {"envGroup": env_group_record(created)},
+            [{"service": created}],
+            *env_responses,
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses) as request:
+            result = client.provision_open_competition_service(spec, reference)
+
+        self.assertEqual(result, created)
+        create_call = request.call_args_list[2]
+        self.assertEqual(create_call.args[:2], ("POST", "/services"))
+        create_payload = create_call.args[2]
+        self.assertEqual(create_payload["type"], "background_worker")
+        self.assertEqual(create_payload["ownerId"], reference["ownerId"])
+        self.assertEqual(create_payload["environmentId"], reference["environmentId"])
+        self.assertEqual(create_payload["autoDeploy"], "no")
+        self.assertEqual(
+            create_payload["serviceDetails"],
+            {
+                "runtime": "docker",
+                "envSpecificDetails": {
+                    "dockerContext": ".",
+                    "dockerfilePath": "./Dockerfile",
+                },
+                "plan": "starter",
+                "region": "oregon",
+                "maxShutdownDelaySeconds": 60,
+            },
+        )
+        self.assertEqual(
+            {item["key"]: item["value"] for item in create_payload["envVars"]},
+            {
+                **recovery.OPEN_COMPETITION_WORKER_ENVIRONMENT,
+                "DATABASE_URL": database_url,
+            },
+        )
+        self.assertNotIn("private-value", recovery.json.dumps(result))
+
+    def test_direct_worker_provisioning_refuses_any_other_service(self) -> None:
+        client = RecordingClient()
+        with self.assertRaisesRegex(recovery.RecoveryError, "not authorized"):
+            client.provision_open_competition_service(
+                recovery.SERVICE_SPECS[0],
+                worker_service_record(recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME),
+            )
+        self.assertEqual(client.requests, [])
+
+    def test_direct_worker_provisioning_requires_one_matching_env_group(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", return_value=[]):
+            with self.assertRaisesRegex(recovery.RecoveryError, "exactly one"):
+                client.provision_open_competition_service(spec, reference)
+        self.assertEqual(
+            client.requests,
+            [],
+        )
+
+    def test_direct_worker_provisioning_accepts_only_an_exact_409_race(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME,
+            id="srv-" + "b" * 20,
+        )
+        created = worker_service_record()
+        database_url = "postgres://worker:private-value@database.internal/bounties"
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+            recovery.RenderHttpError(409, "service name already exists"),
+            [{"service": created}],
+            {"envGroup": env_group_record()},
+            {},
+            {"envGroup": env_group_record(created)},
+            [{"service": created}],
+            *[
+                {"envVar": {"key": key, "value": value}}
+                for key, value in recovery.OPEN_COMPETITION_WORKER_ENVIRONMENT.items()
+            ],
+            {"envVar": {"key": "DATABASE_URL", "value": database_url}},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            self.assertEqual(
+                client.provision_open_competition_service(spec, reference),
+                created,
+            )
+
+    def test_direct_worker_provisioning_rejects_created_owner_mismatch(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {
+                "envVar": {
+                    "key": "DATABASE_URL",
+                    "value": "postgres://worker:private-value@db/app",
+                }
+            },
+            {"service": worker_service_record(ownerId="tea-attacker123")},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            with self.assertRaisesRegex(recovery.RecoveryError, "workspace"):
+                client.provision_open_competition_service(spec, reference)
+
+    def test_direct_worker_provisioning_requires_verified_group_link(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        created = worker_service_record()
+        responses = [
+            [{"envGroup": env_group_record()}],
+            {
+                "envVar": {
+                    "key": "DATABASE_URL",
+                    "value": "postgres://worker:private-value@db/app",
+                }
+            },
+            {"service": created},
+            {"envGroup": env_group_record()},
+            {},
+            {"envGroup": env_group_record()},
+        ]
+        client = RecordingClient()
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            with self.assertRaisesRegex(recovery.RecoveryError, "attach"):
+                client.provision_open_competition_service(spec, reference)
+
+    def test_blueprint_error_never_invokes_direct_provisioning(self) -> None:
+        spec = recovery.SERVICE_SPECS[-1]
+        reference = worker_service_record(
+            recovery.OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+        )
+        client = RecordingClient()
+        responses = [
+            [{"blueprint": blueprint_record(autoSync=False)}],
+            blueprint_record(status="syncing", autoSync=True),
+            blueprint_record(status="error", autoSync=False),
+        ]
+        with mock.patch.object(client, "_request_json", side_effect=responses):
+            with mock.patch.object(
+                client, "provision_open_competition_service"
+            ) as provision:
+                with self.assertRaisesRegex(recovery.RecoveryError, "error state"):
+                    client.ensure_blueprint_service(
+                        spec,
+                        reference_service=reference,
+                        attempts=1,
+                        poll_seconds=0,
+                    )
+                provision.assert_not_called()
 
     def test_existing_deploy_reuses_only_active_exact_revision(self) -> None:
         revision = "a" * 40
@@ -422,10 +848,283 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             },
         )
 
-    def test_api_runtime_environment_enables_social_mention_drafts(self) -> None:
+    def test_open_competition_shared_environment_matches_reviewed_public_activation(self) -> None:
+        values = recovery.open_competition_shared_environment()
+        self.assertEqual(len(values), 13)
+        self.assertEqual(
+            values["BASE_MAINNET_RPC_URL"], recovery.HOSTED_BASE_MAINNET_RPC_URL
+        )
+        release = recovery.json.loads(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON"]
+        )
+        catalog = recovery.json.loads(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON"]
+        )
+        self.assertEqual(release["deployment_state"], "active_ready_to_earn")
+        self.assertTrue(catalog["profiles"][0]["public_inventory_eligible"])
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"],
+            "49759875",
+        )
+        disabled = {
+            "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED",
+            "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED",
+        }
+        for key, value in values.items():
+            if (
+                key.endswith("_JSON")
+                or key == "BASE_MAINNET_RPC_URL"
+                or key.endswith("_PUBLIC_ACTIVATION_BLOCK")
+            ):
+                continue
+            expected = "false" if key in disabled else "true"
+            self.assertEqual(value, expected)
+
+    def test_open_competition_entrant_canary_requires_exact_deployment_audit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            with self.assertRaisesRegex(recovery.RecoveryError, "requires a deployment audit"):
+                recovery.open_competition_entrant_environment(
+                    missing,
+                    canary_enabled=True,
+                )
+
+            release = {
+                "schema_version": "agent-bounties/open-competition-entrant-wallet-release-v1",
+                "protocol_version": "agent-bounties/open-competition-entrant-wallet-v1",
+                "network": "base-mainnet",
+                "chain_id": 8453,
+                "deployment_state": "mainnet_canary_not_ready_to_earn",
+                "factory_contract": recovery.OPEN_COMPETITION_ENTRANT_FACTORY,
+                "implementation_contract": recovery.OPEN_COMPETITION_ENTRANT_IMPLEMENTATION,
+                "competition_factory": recovery.OPEN_COMPETITION_FACTORY,
+                "settlement_token": recovery.BASE_MAINNET_USDC,
+                "deployment_block": 49_690_500,
+                **recovery.OPEN_COMPETITION_ENTRANT_RUNTIME_HASHES,
+            }
+            audit = {
+                "schema_version": "agent-bounties/open-competition-entrant-wallet-mainnet-deployment-audit-v1",
+                "network": "base-mainnet",
+                "chain_id": 8453,
+                "release_manifest": release,
+                "assertions": {
+                    "exact_admin_zero_value_create2_transaction": True,
+                    "deployment_receipt_matches_browser_receipt": True,
+                    "deployment_block_is_canonical_at_safe_block": True,
+                    "factory_and_implementation_runtimes_match": True,
+                    "factory_dependencies_match_frozen_bundle": True,
+                    "public_activation_remains_disabled": True,
+                },
+                "passed": True,
+            }
+            path = Path(directory) / "entrant-audit.json"
+            path.write_text(recovery.json.dumps(audit), encoding="utf-8")
+            values = recovery.open_competition_entrant_environment(
+                path,
+                canary_enabled=True,
+            )
+            self.assertEqual(
+                values[
+                    "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED"
+                ],
+                "true",
+            )
+            self.assertEqual(
+                recovery.json.loads(
+                    values[
+                        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_WALLET_RELEASE_MANIFEST_JSON"
+                    ]
+                ),
+                release,
+            )
+
+            audit["assertions"]["public_activation_remains_disabled"] = False
+            path.write_text(recovery.json.dumps(audit), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "assertions are incomplete"):
+                recovery.open_competition_entrant_environment(
+                    path,
+                    canary_enabled=False,
+                )
+
+    def test_open_competition_shared_environment_accepts_exact_reviewed_activation(self) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["deployment_state"] = "active_ready_to_earn"
+        source["release_manifest"]["deployment_state"] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "deployment_state"
+        ] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "public_inventory_eligible"
+        ] = True
+        source["release_evidence"]["independent_review"] = {
+            "status": "passed",
+            "review_url": "https://github.com/NSPG13/agent-bounties/pull/999",
+            "reviewed_source_commit": source["source_commit"],
+            "factory_runtime_code_hash": source["release_manifest"][
+                "factory_runtime_code_hash"
+            ],
+            "implementation_runtime_code_hash": source["release_manifest"][
+                "implementation_runtime_code_hash"
+            ],
+        }
+        source["hosted_activation"].update(
+            {
+                "public_creation_enabled": True,
+                "public_commitments_enabled": True,
+                "public_inventory_eligible": True,
+                "relay_support_available": True,
+                "gas_sponsorship_available": True,
+                "r4_release_evidence_complete": True,
+                "public_activation_block": source["release_manifest"][
+                    "deployment_block"
+                ]
+                + 1,
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            values = recovery.open_competition_shared_environment(path)
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED"], "true"
+        )
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED"],
+            "true",
+        )
+        self.assertEqual(
+            values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"],
+            str(source["hosted_activation"]["public_activation_block"]),
+        )
+
+    def test_open_competition_shared_environment_rejects_unreviewed_activation(self) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["release_evidence"]["independent_review"]["status"] = "pending"
+        source["deployment_state"] = "active_ready_to_earn"
+        source["release_manifest"]["deployment_state"] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "deployment_state"
+        ] = "active_ready_to_earn"
+        source["verifier_catalog"]["profiles"][0][
+            "public_inventory_eligible"
+        ] = True
+        source["hosted_activation"].update(
+            {
+                "public_creation_enabled": True,
+                "public_commitments_enabled": True,
+                "public_inventory_eligible": True,
+                "relay_support_available": True,
+                "gas_sponsorship_available": True,
+                "r4_release_evidence_complete": True,
+                "public_activation_block": source["release_manifest"][
+                    "deployment_block"
+                ]
+                + 1,
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(
+                recovery.RecoveryError, "independent-review evidence"
+            ):
+                recovery.open_competition_shared_environment(path)
+
+    def test_open_competition_shared_environment_rejects_unconfigured_monitoring(
+        self,
+    ) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["hosted_activation"]["monitoring_gate_configured"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "must be configured"):
+                recovery.open_competition_shared_environment(path)
+
+    def test_open_competition_shared_environment_rejects_pre_attested_monitoring(
+        self,
+    ) -> None:
+        source = recovery.json.loads(
+            recovery.OPEN_COMPETITION_RELEASE_MANIFEST_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+        source["hosted_activation"]["monitoring_active"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(recovery.json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(recovery.RecoveryError, "cannot be pre-attested"):
+                recovery.open_competition_shared_environment(path)
+
+    def test_shared_environment_variable_is_read_verified(self) -> None:
+        client = RecordingClient()
+        group = env_group_record()
+        expected = {"envVar": {"key": "SAFE_GATE", "value": "false"}}
+        with mock.patch.object(
+            client, "_request_json", side_effect=[expected, expected]
+        ) as request:
+            self.assertEqual(
+                client.ensure_env_group_env_var(group, "SAFE_GATE", "false"),
+                {"key": "SAFE_GATE", "value": "false", "changed": False},
+            )
+        path = f"/env-groups/{group['id']}/env-vars/SAFE_GATE"
+        self.assertEqual(
+            request.call_args_list,
+            [mock.call("GET", path), mock.call("GET", path)],
+        )
+
+    def test_shared_environment_variable_update_requires_exact_readback(self) -> None:
+        client = RecordingClient()
+        group = env_group_record()
+        expected = {"envVar": {"key": "SAFE_GATE", "value": "false"}}
+        updated_group = {
+            "envGroup": env_group_record(
+                envVars=[{"key": "SAFE_GATE", "value": "false"}]
+            )
+        }
+        responses = [
+            recovery.RenderHttpError(404, "missing"),
+            updated_group,
+            expected,
+        ]
+        with mock.patch.object(
+            client, "_request_json", side_effect=responses
+        ) as request:
+            self.assertEqual(
+                client.ensure_env_group_env_var(group, "SAFE_GATE", "false"),
+                {"key": "SAFE_GATE", "value": "false", "changed": True},
+            )
+        path = f"/env-groups/{group['id']}/env-vars/SAFE_GATE"
+        self.assertEqual(
+            request.call_args_list,
+            [
+                mock.call("GET", path),
+                mock.call("PUT", path, {"value": "false"}),
+                mock.call("GET", path),
+            ],
+        )
+
+    def test_api_runtime_environment_preserves_bounded_relay_capacity(self) -> None:
         self.assertEqual(
             recovery.API_RUNTIME_ENVIRONMENT,
-            {"AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true"},
+            {
+                "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
+                "X402_RELAYER_MAX_GAS": "700000",
+            },
         )
 
     def test_leaderboard_environment_requires_exact_addresses(self) -> None:
@@ -869,6 +1568,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 health_timeout_seconds=1,
                 poll_seconds=0,
             )
+        # Resolution stops at the intentionally failing third binding; no
+        # service mutation may occur before every prior binding validates.
         self.assertEqual(len(client.resolved), 3)
         self.assertEqual(client.mutations, [])
 
@@ -1179,6 +1880,12 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(
             recovery.redact("RENDER_API_KEY is required"),
             "RENDER_API_KEY is required",
+        )
+        self.assertNotIn(
+            "private-value",
+            recovery.redact(
+                'bad payload {"value":"postgresql://worker:private-value@db/app"}'
+            ),
         )
 
 

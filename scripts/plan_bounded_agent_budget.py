@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
+DEFAULT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
 POLICY_TYPE = (
     "(address,uint64,uint64,uint64,uint256,uint256,uint256,uint256,uint8,uint8,address,bytes32,bytes32)"
 )
@@ -27,11 +27,43 @@ EXPECTED_CHAIN_ID = 8453
 EXPECTED_CANONICAL = {
     "bounty_factory": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    "deterministic_verifier": "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
+    "deterministic_verifier": "0x380c1af742593dd88b6f20387e9ee693a0536731",
 }
 EXPECTED_CREATE2_DEPLOYER = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 EXPECTED_CREATE2_DEPLOYER_HASH = "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989"
-EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+MANIFEST_SCHEMA_V1 = "agent-bounties/bounded-agent-wallet-deployment-v1"
+MANIFEST_SCHEMA_V2 = "agent-bounties/bounded-agent-wallet-deployment-v2"
+EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH_V1 = "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd"
+EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH_V2 = "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2"
+EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH = EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH_V2
+ACTION_MANIFEST_DEPLOYMENTS = {
+    MANIFEST_SCHEMA_V1: {
+        "signed_quorum": EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH_V1,
+        "source_revision": "dc05b4e01474f09f02bb1bbb69651e4ce4deb338",
+        "wallet_factory": {
+            "address": "0x3840936351049aed639780a16845e6094c1f17f6",
+            "implementation": "0x40d3e16082cf71ece0129ca3044e1b8233e29db8",
+            "salt": "0xc8d6503b5f3f8146d641b204ce16fd78ad17d1ff722747953d1568f4138e7a35",
+            "init_code_hash": "0x491d40083c4232420f0557bd4510ea052ccd1f7bf446e5656b0451e30aa4daa8",
+            "runtime_code_hash": "0x243e248a890daf57cb14cee262bc7bb70b8822c65a014a8bf1c39653bc30aa52",
+            "implementation_runtime_code_hash": "0x7fb59d5add3ac348ac3d7e6a5aa6b22ad542a6e6093a1ceb8d535f747ed536df",
+            "clone_runtime_code_hash": "0xc663bed9b4097e22e5a18c0ecb662561bf45df1829e6412cdd0d8568d05ca1b6",
+        },
+    },
+    MANIFEST_SCHEMA_V2: {
+        "signed_quorum": EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH_V2,
+        "source_revision": "7fbfd7e106e387e12ad5c9b29cbef4344dfead69",
+        "wallet_factory": {
+            "address": "0xe3d4f7b203c5e8576e0225d3e64a8532429d3876",
+            "implementation": "0x00c250bda8fa3c49d80a11d9b6ebd961736b7202",
+            "salt": "0x5ae7271dd6ab1471a4c967a7728c3a8314fe473a2c95874ce922fd7aaf82a42e",
+            "init_code_hash": "0xd3019a33cdd97c704085d88b4bef445779e5f2d28db979f45a9f94dfcd92e954",
+            "runtime_code_hash": "0x254e247c3df7b38c257cd24b5d47c6ca1bc3ed335d6cb062498695bced540cf9",
+            "implementation_runtime_code_hash": "0xade4fb51d0c5c866bb0cc44ca17ad0b254c6bba92ac5b47ddc2ced4963b05d18",
+            "clone_runtime_code_hash": "0xc11ada07afafbcf407387ff2fa7afc52e55301c80a4edd0888520b478fba9209",
+        },
+    },
+}
 
 
 def executable(name: str) -> str:
@@ -85,8 +117,8 @@ def require_bytes32(value: str, label: str) -> str:
     return normalized
 
 
-def validate_manifest(manifest: dict) -> dict:
-    if manifest.get("schema") != "agent-bounties/bounded-agent-wallet-deployment-v1":
+def _validate_manifest(manifest: dict, expected_schema: str, expected_deployment: dict) -> dict:
+    if manifest.get("schema") != expected_schema:
         raise SystemExit("bounded-wallet manifest schema is unsupported")
     if manifest.get("network") != EXPECTED_NETWORK or manifest.get("chain_id") != EXPECTED_CHAIN_ID:
         raise SystemExit("bounded-wallet manifest must target Base mainnet")
@@ -94,8 +126,11 @@ def validate_manifest(manifest: dict) -> dict:
         raise SystemExit("bounded-wallet manifest was generated from dirty contract inputs")
     if manifest.get("contract_source_revision_kind") != "git-tree":
         raise SystemExit("bounded-wallet manifest must use a content-addressed Git tree revision")
-    if not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("contract_source_revision", ""))):
+    source_revision = str(manifest.get("contract_source_revision", ""))
+    if not re.fullmatch(r"[0-9a-f]{40}", source_revision):
         raise SystemExit("bounded-wallet manifest does not pin a source revision")
+    if source_revision != expected_deployment["source_revision"]:
+        raise SystemExit("bounded-wallet manifest has an unexpected source revision")
     canonical = manifest.get("canonical") or {}
     for name, expected in EXPECTED_CANONICAL.items():
         if require_address(str(canonical.get(name, "")), name) != expected:
@@ -103,7 +138,7 @@ def validate_manifest(manifest: dict) -> dict:
     if require_bytes32(
         str(canonical.get("signed_quorum_verifier_set_hash", "")),
         "signed quorum verifier set hash",
-    ) != EXPECTED_SIGNED_QUORUM_VERIFIER_SET_HASH:
+    ) != expected_deployment["signed_quorum"]:
         raise SystemExit("bounded-wallet manifest has an unexpected signed quorum")
     deployer = manifest.get("deterministic_deployer") or {}
     if require_address(str(deployer.get("address", "")), "deterministic deployer") != EXPECTED_CREATE2_DEPLOYER:
@@ -111,14 +146,35 @@ def validate_manifest(manifest: dict) -> dict:
     if require_bytes32(str(deployer.get("runtime_code_hash", "")), "deployer runtime hash") != EXPECTED_CREATE2_DEPLOYER_HASH:
         raise SystemExit("bounded-wallet manifest has an unexpected deterministic deployer runtime")
     wallet_factory = manifest.get("wallet_factory") or {}
-    require_address(str(wallet_factory.get("address", "")), "wallet factory")
-    require_address(str(wallet_factory.get("implementation", "")), "wallet implementation")
+    expected_factory = expected_deployment["wallet_factory"]
+    for name, label in (("address", "wallet factory"), ("implementation", "wallet implementation")):
+        if require_address(str(wallet_factory.get(name, "")), label) != expected_factory[name]:
+            raise SystemExit(f"bounded-wallet manifest has an unexpected {label}")
     for name in ("salt", "init_code_hash", "runtime_code_hash", "implementation_runtime_code_hash", "clone_runtime_code_hash"):
-        require_bytes32(str(wallet_factory.get(name, "")), name.replace("_", " "))
+        if require_bytes32(str(wallet_factory.get(name, "")), name.replace("_", " ")) != expected_factory[name]:
+            raise SystemExit(f"bounded-wallet manifest has an unexpected {name.replace('_', ' ')}")
     transaction = str(wallet_factory.get("deployment_transaction", "")).lower()
     if not re.fullmatch(r"0x(?:[0-9a-f]{2})+", transaction):
         raise SystemExit("bounded-wallet manifest deployment transaction is invalid")
     return manifest
+
+
+def validate_manifest(manifest: dict) -> dict:
+    """Validate the V2 manifest required for creating new bounded budgets."""
+    return _validate_manifest(
+        manifest,
+        MANIFEST_SCHEMA_V2,
+        ACTION_MANIFEST_DEPLOYMENTS[MANIFEST_SCHEMA_V2],
+    )
+
+
+def validate_action_manifest(manifest: dict) -> dict:
+    """Validate an exact deployed-wallet manifest for action planning or inspection."""
+    schema = str(manifest.get("schema", ""))
+    expected_deployment = ACTION_MANIFEST_DEPLOYMENTS.get(schema)
+    if expected_deployment is None:
+        raise SystemExit("bounded-wallet manifest schema is unsupported")
+    return _validate_manifest(manifest, schema, expected_deployment)
 
 
 def usdc_units(value: str, label: str) -> int:

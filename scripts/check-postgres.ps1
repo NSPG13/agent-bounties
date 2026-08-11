@@ -25,7 +25,16 @@ try {
             cargo test -p db tests::site_analytics_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::opportunity_comment_round_trip_is_durable_and_idempotent -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed_transaction -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p db tests::objective_aggregate_compare_and_swap_is_durable -- --ignored --exact --nocapture
         }
         Invoke-Checked {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture

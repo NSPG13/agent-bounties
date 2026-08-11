@@ -1,0 +1,47 @@
+{
+  "complete": false,
+  "environments": {
+    "standing-meta-v4-mainnet": {
+      "admin_bypass_disabled": true,
+      "blockers": [
+        "required reviewers are absent",
+        "no required user reviewer is independent of the maintainer author",
+        "self-review prevention is not active"
+      ],
+      "branch_policies": [
+        "main"
+      ],
+      "complete": false,
+      "independent_required_reviewers": [],
+      "main_only": true,
+      "name": "standing-meta-v4-mainnet",
+      "prevent_self_review": false,
+      "required_reviewers": []
+    },
+    "standing-meta-v4-sepolia": {
+      "admin_bypass_disabled": true,
+      "blockers": [
+        "required reviewers are absent",
+        "no required user reviewer is independent of the maintainer author",
+        "self-review prevention is not active"
+      ],
+      "branch_policies": [
+        "main"
+      ],
+      "complete": false,
+      "independent_required_reviewers": [],
+      "main_only": true,
+      "name": "standing-meta-v4-sepolia",
+      "prevent_self_review": false,
+      "required_reviewers": []
+    }
+  },
+  "evidence_boundary": "GitHub API read-back of environment policy. This is not independent contract review, deployment, funding, settlement, or payment evidence.",
+  "maintainer_author": {
+    "id": 189029667,
+    "login": "NSPG13"
+  },
+  "observed_at": "2026-07-23T23:57:53Z",
+  "repository": "NSPG13/agent-bounties",
+  "schema": "agent-bounties/standing-meta-v4-environment-evidence-v1"
+}

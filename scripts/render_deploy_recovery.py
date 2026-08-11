@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -19,6 +20,69 @@ from typing import Any, Callable
 SCHEMA = "agent-bounties/render-deploy-evidence-v1"
 REPOSITORY = "github.com/nspg13/agent-bounties"
 PROTOCOL = "agent-bounties/autonomous-v1"
+BLUEPRINT_PATH = "render.yaml"
+BLUEPRINT_RECOVERABLE_SERVICE_NAMES = frozenset(
+    {"agent-bounties-open-competition-v1-indexer"}
+)
+BLUEPRINT_STATUSES = {"created", "paused", "in_sync", "syncing", "error"}
+ENV_GROUP_SERVICE_TYPES = {
+    "static_site": "static",
+    "web_service": "web",
+    "private_service": "pserv",
+    "background_worker": "worker",
+    "cron_job": "cron",
+}
+OPEN_COMPETITION_WORKER_NAME = "agent-bounties-open-competition-v1-indexer"
+OPEN_COMPETITION_REFERENCE_SERVICE_NAME = "agent-bounties-base-indexer"
+OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
+OPERATOR_ENV_GROUP_NAME = "agent-bounties-operator"
+OPERATOR_TOKEN_KEY = "OPERATOR_API_TOKEN"
+OPERATOR_TOKEN_SERVICE_NAMES = frozenset(
+    {"agent-bounties-api", "agent-bounties-mcp"}
+)
+OPEN_COMPETITION_RELEASE_MANIFEST_PATH = Path(
+    "deployments/open-competition-v1-base-mainnet.json"
+)
+OPEN_COMPETITION_ENTRANT_RELEASE_AUDIT_PATH = Path(
+    "deployments/open-competition-entrant-wallet-v1-base-mainnet.json"
+)
+OPEN_COMPETITION_ENTRANT_FACTORY = "0x9b92a65a42de770157f30dd75f44a3136f2cda79"
+OPEN_COMPETITION_ENTRANT_IMPLEMENTATION = (
+    "0xd7890aa6c4d4c981c246a05576a6fc689255923c"
+)
+OPEN_COMPETITION_FACTORY = "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
+BASE_MAINNET_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+OPEN_COMPETITION_ENTRANT_RUNTIME_HASHES = {
+    "factory_runtime_code_hash": (
+        "0xa0596a53e2f4685d104c2f24176307edfcb4fe8f0fd86162378347996c8f3c40"
+    ),
+    "implementation_runtime_code_hash": (
+        "0xd1789de47b6c956b090f4fcf693361ef93ad4aeeec74ddc359bdcf73cb1ea998"
+    ),
+    "clone_runtime_code_hash": (
+        "0xe94f67382a2692b2ebe7f71ab4163ae0c9c16bded92d45695454deed927b01d4"
+    ),
+}
+HOSTED_BASE_MAINNET_RPC_URL = "https://base.drpc.org"
+OPEN_COMPETITION_WORKER_ENVIRONMENT = {
+    "APP_PACKAGE": "worker",
+    "APP_BINARY": "worker",
+    "RUST_LOG": "info",
+    "PUBLIC_BASE_URL": "https://api.agentbounties.app",
+    "BASE_INDEXER_PROTOCOL": "open-competition-v1",
+    "OPEN_COMPETITION_INDEXER_NETWORK": "base-mainnet",
+    "OPEN_COMPETITION_V1_FACTORY_CONTRACT": (
+        "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
+    ),
+    "OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK": "49663931",
+    "OPEN_COMPETITION_INDEXER_RPC_URL": HOSTED_BASE_MAINNET_RPC_URL,
+    "OPEN_COMPETITION_INDEXER_POLL_SECONDS": "15",
+    "OPEN_COMPETITION_INDEXER_CONFIRMATIONS": "2",
+    "OPEN_COMPETITION_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
+    "BASE_INDEXER_RETRY_INITIAL_SECONDS": "5",
+    "BASE_INDEXER_RETRY_MAX_SECONDS": "120",
+    "BASE_INDEXER_EXIT_AFTER_FAILURES": "8",
+}
 HEALTH_STABILITY_PROBES = 8
 DEPLOY_MODES = {"build_and_deploy", "deploy_only"}
 ACTIVE_STATUSES = {
@@ -49,6 +113,11 @@ PUBLIC_ENV_SERVICE_NAMES = {
 CLOUD_AGENT_API_SERVICE_NAME = "agent-bounties-api"
 API_RUNTIME_ENVIRONMENT = {
     "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
+    # The hosted relayer applies its own 120% padding after eth_estimateGas.
+    # Relayed Open Competition commits use roughly 420k gas in the frozen
+    # mainnet-fork replay, so the former 300k x402-only cap rejected the exact
+    # canary action before broadcast.
+    "X402_RELAYER_MAX_GAS": "700000",
 }
 CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_ENABLED": "true",
@@ -67,6 +136,12 @@ CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
 
 class RecoveryError(RuntimeError):
     pass
+
+
+class RenderServiceMissing(RecoveryError):
+    def __init__(self, service_name: str) -> None:
+        self.service_name = service_name
+        super().__init__(f"expected exactly one Render service named {service_name}; found 0")
 
 
 class RenderHttpError(RecoveryError):
@@ -156,6 +231,11 @@ SERVICE_SPECS = (
         "https://agent-bounties-mcp.onrender.com/health",
     ),
     ServiceSpec("agent-bounties-base-indexer", "background_worker", None),
+    ServiceSpec(
+        "agent-bounties-open-competition-v1-indexer",
+        "background_worker",
+        None,
+    ),
 )
 
 
@@ -167,6 +247,7 @@ def redact(value: str) -> str:
     value = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)([?&](?:key|token)=)[^&\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)(render_api_key\s*[=:]\s*)[^\s,;]+", r"\1[redacted]", value)
+    value = re.sub(r"(?i)postgres(?:ql)?://[^\s\"']+", "[database-url-redacted]", value)
     return value[:1000]
 
 
@@ -272,6 +353,8 @@ def select_service(spec: ServiceSpec, payload: object) -> dict[str, Any]:
         for service in unwrap_service_entries(payload)
         if service.get("name") == spec.name
     ]
+    if not matches:
+        raise RenderServiceMissing(spec.name)
     if len(matches) != 1:
         raise RecoveryError(
             f"expected exactly one Render service named {spec.name}; found {len(matches)}"
@@ -287,6 +370,80 @@ def select_service(spec: ServiceSpec, payload: object) -> dict[str, Any]:
     if not isinstance(service_id, str) or not re.fullmatch(r"srv-[0-9a-z]+", service_id):
         raise RecoveryError(f"{spec.name} has an invalid Render service id")
     return service
+
+
+def unwrap_blueprint_entries(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render Blueprint-list response must be an array")
+    blueprints: list[dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        blueprint = entry.get("blueprint", entry)
+        if isinstance(blueprint, dict):
+            blueprints.append(blueprint)
+    return blueprints
+
+
+def validate_blueprint(blueprint: object) -> dict[str, Any]:
+    if not isinstance(blueprint, dict):
+        raise RecoveryError("Render Blueprint response must be an object")
+    blueprint = blueprint.get("blueprint", blueprint)
+    if not isinstance(blueprint, dict):
+        raise RecoveryError("Render Blueprint response is missing metadata")
+    blueprint_id = blueprint.get("id")
+    if not isinstance(blueprint_id, str) or not re.fullmatch(
+        r"exs-[0-9a-z]{20}", blueprint_id
+    ):
+        raise RecoveryError("Render Blueprint has an invalid id")
+    if normalize_repo(blueprint.get("repo")) != REPOSITORY:
+        raise RecoveryError("Render Blueprint is connected to an unexpected repository")
+    if blueprint.get("branch") != "main":
+        raise RecoveryError("Render Blueprint is not connected to the main branch")
+    if blueprint.get("path") != BLUEPRINT_PATH:
+        raise RecoveryError("Render Blueprint uses an unexpected file path")
+    status = blueprint.get("status")
+    if status not in BLUEPRINT_STATUSES:
+        raise RecoveryError("Render Blueprint has an unknown status")
+    if not isinstance(blueprint.get("autoSync"), bool):
+        raise RecoveryError("Render Blueprint is missing its Auto Sync state")
+    resources = blueprint.get("resources", [])
+    if not isinstance(resources, list):
+        raise RecoveryError("Render Blueprint resources must be an array")
+    return blueprint
+
+
+def select_blueprint(payload: object) -> dict[str, Any]:
+    candidates = [
+        blueprint
+        for blueprint in unwrap_blueprint_entries(payload)
+        if normalize_repo(blueprint.get("repo")) == REPOSITORY
+        and blueprint.get("branch") == "main"
+        and blueprint.get("path") == BLUEPRINT_PATH
+    ]
+    if len(candidates) != 1:
+        raise RecoveryError(
+            "expected exactly one Render Blueprint for the repository main branch and "
+            f"{BLUEPRINT_PATH}; found {len(candidates)}"
+        )
+    return validate_blueprint(candidates[0])
+
+
+def blueprint_has_service(
+    blueprint: dict[str, Any], spec: ServiceSpec
+) -> bool:
+    matches = [
+        resource
+        for resource in blueprint.get("resources", [])
+        if isinstance(resource, dict) and resource.get("name") == spec.name
+    ]
+    if len(matches) > 1:
+        raise RecoveryError(f"Render Blueprint has duplicate resources named {spec.name}")
+    if not matches:
+        return False
+    if matches[0].get("type") != spec.service_type:
+        raise RecoveryError(f"Render Blueprint has an unexpected type for {spec.name}")
+    return True
 
 
 def unwrap_deploy(payload: object) -> dict[str, Any]:
@@ -324,6 +481,156 @@ def unwrap_env_var(payload: object) -> dict[str, str]:
     return {"key": key, "value": value}
 
 
+def validate_owner_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z]+-[0-9a-z]+", value):
+        raise RecoveryError("Render service is missing its workspace id")
+    return value
+
+
+def deploy_only_can_reuse_current(
+    service_name: str,
+    *,
+    open_competition_environment_changed: bool,
+    operator_token_changed: bool,
+) -> bool:
+    if service_name == CLOUD_AGENT_API_SERVICE_NAME:
+        return False
+    if open_competition_environment_changed:
+        return False
+    return not (
+        operator_token_changed and service_name in OPERATOR_TOKEN_SERVICE_NAMES
+    )
+
+
+def validate_environment_id(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z]+-[0-9a-z]+", value):
+        raise RecoveryError("Render service has an invalid project environment id")
+    return value
+
+
+def validate_database_url(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise RecoveryError("reference Render worker has no DATABASE_URL")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        raise RecoveryError("reference Render worker has an invalid DATABASE_URL") from None
+    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+        raise RecoveryError("reference Render worker has an invalid DATABASE_URL")
+    return value
+
+
+def unwrap_env_group_entries(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        raise RecoveryError("Render environment-group list response must be an array")
+    groups: list[dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        group = entry.get("envGroup", entry)
+        if isinstance(group, dict):
+            groups.append(group)
+    return groups
+
+
+def select_env_group(payload: object, owner_id: str) -> dict[str, Any]:
+    matches = [
+        group
+        for group in unwrap_env_group_entries(payload)
+        if group.get("name") == OPEN_COMPETITION_ENV_GROUP_NAME
+        and group.get("ownerId") == owner_id
+    ]
+    if len(matches) != 1:
+        raise RecoveryError(
+            "expected exactly one Render environment group named "
+            f"{OPEN_COMPETITION_ENV_GROUP_NAME} in the reference workspace; "
+            f"found {len(matches)}"
+        )
+    group = matches[0]
+    group_id = group.get("id")
+    if not isinstance(group_id, str) or not re.fullmatch(r"evg-[0-9a-z]+", group_id):
+        raise RecoveryError("Render environment group has an invalid id")
+    return group
+
+
+def select_operator_env_group(payload: object, owner_id: str) -> dict[str, Any]:
+    matches = [
+        group
+        for group in unwrap_env_group_entries(payload)
+        if group.get("name") == OPERATOR_ENV_GROUP_NAME
+        and group.get("ownerId") == owner_id
+    ]
+    if len(matches) != 1:
+        raise RecoveryError(
+            "expected exactly one Render environment group named "
+            f"{OPERATOR_ENV_GROUP_NAME} in the reference workspace; "
+            f"found {len(matches)}"
+        )
+    group = matches[0]
+    group_id = group.get("id")
+    if not isinstance(group_id, str) or not re.fullmatch(r"evg-[0-9a-z]+", group_id):
+        raise RecoveryError("Render operator environment group has an invalid id")
+    return group
+
+
+def unwrap_env_group(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise RecoveryError("Render environment-group response must be an object")
+    group = payload.get("envGroup", payload)
+    if not isinstance(group, dict):
+        raise RecoveryError("Render environment-group response is missing metadata")
+    return group
+
+
+def env_group_env_var(payload: object, key: str) -> dict[str, str]:
+    group = unwrap_env_group(payload)
+    env_vars = group.get("envVars")
+    if not isinstance(env_vars, list):
+        raise RecoveryError("Render environment group is missing environment variables")
+    matches = [
+        item
+        for item in env_vars
+        if isinstance(item, dict) and item.get("key") == key
+    ]
+    if len(matches) != 1:
+        raise RecoveryError(
+            f"Render environment group returned {len(matches)} values for {key}"
+        )
+    value = matches[0].get("value")
+    if not isinstance(value, str):
+        raise RecoveryError(f"Render environment group returned an invalid value for {key}")
+    return {"key": key, "value": value}
+
+
+def env_group_has_service(
+    payload: object,
+    spec: ServiceSpec,
+    service_id: str,
+) -> bool:
+    group = unwrap_env_group(payload)
+    links = group.get("serviceLinks")
+    if not isinstance(links, list):
+        raise RecoveryError("Render environment group is missing service links")
+    matches: list[dict[str, Any]] = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        service = link.get("service", link)
+        if isinstance(service, dict) and service.get("id") == service_id:
+            matches.append(service)
+    if len(matches) > 1:
+        raise RecoveryError("Render environment group has duplicate worker links")
+    if not matches:
+        return False
+    service = matches[0]
+    if (
+        service.get("name") != spec.name
+        or service.get("type") != ENV_GROUP_SERVICE_TYPES.get(spec.service_type)
+    ):
+        raise RecoveryError("Render environment group linked an unexpected service")
+    return True
+
+
 def normalize_public_base_url(name: str, value: str) -> str:
     candidate = value.strip().rstrip("/")
     try:
@@ -359,6 +666,237 @@ def public_environment_values(
             "WEBSITE_BASE_URL", website_base_url
         ),
     }
+
+
+def open_competition_shared_environment(
+    manifest_path: Path = OPEN_COMPETITION_RELEASE_MANIFEST_PATH,
+    entrant_release_audit_path: Path = OPEN_COMPETITION_ENTRANT_RELEASE_AUDIT_PATH,
+    *,
+    entrant_relay_canary_enabled: bool = False,
+) -> dict[str, str]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RecoveryError(
+            f"Open Competition release manifest is unavailable: {redact(str(error))}"
+        ) from None
+    if not isinstance(manifest, dict):
+        raise RecoveryError("Open Competition release manifest must be an object")
+    if (
+        manifest.get("schema_version")
+        != "agent-bounties/open-competition-v1-base-mainnet-release-v1"
+        or manifest.get("protocol_version")
+        != "agent-bounties/open-competition-v1"
+        or manifest.get("network") != "base-mainnet"
+        or manifest.get("chain_id") != 8453
+    ):
+        raise RecoveryError("Open Competition release manifest identity is invalid")
+    deployment_state = manifest.get("deployment_state")
+    active = deployment_state == "active_ready_to_earn"
+    if deployment_state not in {
+        "mainnet_canary_not_ready_to_earn",
+        "active_ready_to_earn",
+    }:
+        raise RecoveryError("Open Competition release deployment state is invalid")
+
+    release = manifest.get("release_manifest")
+    catalog = manifest.get("verifier_catalog")
+    activation = manifest.get("hosted_activation")
+    if not isinstance(release, dict) or not isinstance(catalog, dict):
+        raise RecoveryError("Open Competition release manifest is incomplete")
+    if not isinstance(activation, dict):
+        raise RecoveryError("Open Competition hosted activation evidence is missing")
+    if (
+        release.get("protocol_version") != "agent-bounties/open-competition-v1"
+        or release.get("network") != "base-mainnet"
+        or release.get("chain_id") != 8453
+        or release.get("deployment_state") != deployment_state
+    ):
+        raise RecoveryError("Open Competition hosted release identity is invalid")
+    profiles = catalog.get("profiles")
+    if (
+        catalog.get("schema_version")
+        != "agent-bounties/open-competition-v1-verifier-catalog-v1"
+        or catalog.get("protocol_version")
+        != "agent-bounties/open-competition-v1"
+        or catalog.get("network") != "base-mainnet"
+        or not isinstance(profiles, list)
+        or not profiles
+    ):
+        raise RecoveryError("Open Competition verifier catalog identity is invalid")
+    for profile in profiles:
+        if (
+            not isinstance(profile, dict)
+            or profile.get("deployment_state") != deployment_state
+            or profile.get("public_inventory_eligible") is not active
+        ):
+            raise RecoveryError(
+                "Open Competition verifier profile does not match the hosted release state"
+            )
+
+    activation_fields = {
+        "BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE": (
+            "gas_sponsorship_available"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE": (
+            "relay_support_available"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE": (
+            "r4_release_evidence_complete"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED": (
+            "public_creation_enabled"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED": (
+            "public_commitments_enabled"
+        ),
+    }
+    if activation.get("public_inventory_eligible") is not active:
+        raise RecoveryError(
+            "Open Competition public inventory does not match the hosted release state"
+        )
+    if activation.get("monitoring_gate_configured") is not True:
+        raise RecoveryError("Open Competition monitoring gate must be configured")
+    if activation.get("monitoring_active") is not False:
+        raise RecoveryError("Open Competition runtime monitoring cannot be pre-attested")
+    for field in activation_fields.values():
+        if activation.get(field) is not active:
+            raise RecoveryError(
+                f"Open Competition hosted activation requires {field}={str(active).lower()}"
+            )
+
+    public_activation_block = activation.get("public_activation_block")
+    if active:
+        release_evidence = manifest.get("release_evidence")
+        independent_review = (
+            release_evidence.get("independent_review")
+            if isinstance(release_evidence, dict)
+            else None
+        )
+        if (
+            not isinstance(release_evidence, dict)
+            or release_evidence.get("base_sepolia_rehearsal_passed") is not True
+            or release_evidence.get("slither_high_findings") != 0
+            or release_evidence.get("slither_medium_findings") != 0
+            or not isinstance(release_evidence.get("foundry_tests_passed"), int)
+            or release_evidence["foundry_tests_passed"] < 159
+            or not isinstance(release_evidence.get("fuzz_runs"), int)
+            or release_evidence["fuzz_runs"] < 1000
+            or release_evidence.get("exact_mainnet_fork_replay_passed") is not True
+            or release_evidence.get("bytecode_frozen") is not True
+            or not isinstance(independent_review, dict)
+            or independent_review.get("status") != "passed"
+            or not isinstance(independent_review.get("review_url"), str)
+            or not independent_review["review_url"].startswith("https://github.com/")
+            or independent_review.get("reviewed_source_commit")
+            != manifest.get("source_commit")
+            or independent_review.get("factory_runtime_code_hash")
+            != release.get("factory_runtime_code_hash")
+            or independent_review.get("implementation_runtime_code_hash")
+            != release.get("implementation_runtime_code_hash")
+        ):
+            raise RecoveryError(
+                "Open Competition active release requires exact R4 and independent-review evidence"
+            )
+        if (
+            not isinstance(public_activation_block, int)
+            or public_activation_block < release.get("deployment_block", 0)
+        ):
+            raise RecoveryError(
+                "Open Competition active release requires a canonical public activation block"
+            )
+    elif public_activation_block is not None:
+        raise RecoveryError(
+            "Open Competition hidden canary cannot predeclare a public activation block"
+        )
+
+    values = {
+        "BASE_MAINNET_RPC_URL": HOSTED_BASE_MAINNET_RPC_URL,
+        "BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON": json.dumps(
+            release, ensure_ascii=False, separators=(",", ":")
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON": json.dumps(
+            catalog, ensure_ascii=False, separators=(",", ":")
+        ),
+    }
+    values.update({key: "true" if active else "false" for key in activation_fields})
+    values["BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK"] = (
+        str(public_activation_block) if active else "0"
+    )
+    values["BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE"] = "true"
+    values.update(
+        open_competition_entrant_environment(
+            entrant_release_audit_path,
+            canary_enabled=entrant_relay_canary_enabled,
+        )
+    )
+    return values
+
+
+def open_competition_entrant_environment(
+    audit_path: Path,
+    *,
+    canary_enabled: bool,
+) -> dict[str, str]:
+    values = {
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED": (
+            "true" if canary_enabled else "false"
+        ),
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED": "false",
+    }
+    if not audit_path.exists():
+        if canary_enabled:
+            raise RecoveryError(
+                "Open Competition entrant relay canary requires a deployment audit"
+            )
+        return values
+    try:
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RecoveryError(
+            f"Open Competition entrant deployment audit is unavailable: {redact(str(error))}"
+        ) from None
+    if not isinstance(audit, dict):
+        raise RecoveryError("Open Competition entrant deployment audit must be an object")
+    if (
+        audit.get("schema_version")
+        != "agent-bounties/open-competition-entrant-wallet-mainnet-deployment-audit-v1"
+        or audit.get("network") != "base-mainnet"
+        or audit.get("chain_id") != 8453
+        or audit.get("passed") is not True
+    ):
+        raise RecoveryError("Open Competition entrant deployment audit identity is invalid")
+    assertions = audit.get("assertions")
+    if (
+        not isinstance(assertions, dict)
+        or not assertions
+        or not all(value is True for value in assertions.values())
+        or assertions.get("public_activation_remains_disabled") is not True
+    ):
+        raise RecoveryError("Open Competition entrant deployment assertions are incomplete")
+    release = audit.get("release_manifest")
+    if not isinstance(release, dict):
+        raise RecoveryError("Open Competition entrant release manifest is missing")
+    expected_identity = {
+        "schema_version": "agent-bounties/open-competition-entrant-wallet-release-v1",
+        "protocol_version": "agent-bounties/open-competition-entrant-wallet-v1",
+        "network": "base-mainnet",
+        "chain_id": 8453,
+        "deployment_state": "mainnet_canary_not_ready_to_earn",
+        "factory_contract": OPEN_COMPETITION_ENTRANT_FACTORY,
+        "implementation_contract": OPEN_COMPETITION_ENTRANT_IMPLEMENTATION,
+        "competition_factory": OPEN_COMPETITION_FACTORY,
+        "settlement_token": BASE_MAINNET_USDC,
+        **OPEN_COMPETITION_ENTRANT_RUNTIME_HASHES,
+    }
+    if any(release.get(key) != value for key, value in expected_identity.items()):
+        raise RecoveryError("Open Competition entrant release identity is invalid")
+    if not isinstance(release.get("deployment_block"), int) or release["deployment_block"] <= 0:
+        raise RecoveryError("Open Competition entrant deployment block is invalid")
+    values[
+        "BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_WALLET_RELEASE_MANIFEST_JSON"
+    ] = json.dumps(release, ensure_ascii=False, separators=(",", ":"))
+    return values
 
 
 def normalize_evm_address(name: str, value: str) -> str:
@@ -517,11 +1055,303 @@ class RenderClient:
             self._sleep(float(attempt * 2))
         raise AssertionError("unreachable")
 
+    def _write_with_retry(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        attempts: int = 3,
+    ) -> Any:
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._request_json(method, path, payload)
+            except RenderHttpError as error:
+                if error.status not in TRANSIENT_HTTP_STATUSES or attempt == attempts:
+                    raise
+            except RenderTransportError:
+                if attempt == attempts:
+                    raise
+            self._sleep(float(attempt * 2))
+        raise AssertionError("unreachable")
+
     def resolve_service(self, spec: ServiceSpec) -> dict[str, Any]:
         query = urllib.parse.urlencode(
             {"name": spec.name, "includePreviews": "false", "limit": "20"}
         )
         return select_service(spec, self._read_with_retry(f"/services?{query}"))
+
+    def resolve_env_group(self, owner_id: str) -> dict[str, Any]:
+        owner_id = validate_owner_id(owner_id)
+        query = urllib.parse.urlencode(
+            {
+                "name": OPEN_COMPETITION_ENV_GROUP_NAME,
+                "ownerId": owner_id,
+                "limit": "20",
+            }
+        )
+        return select_env_group(
+            self._read_with_retry(f"/env-groups?{query}"), owner_id
+        )
+
+    def resolve_operator_env_group(self, owner_id: str) -> dict[str, Any]:
+        owner_id = validate_owner_id(owner_id)
+        query = urllib.parse.urlencode(
+            {
+                "name": OPERATOR_ENV_GROUP_NAME,
+                "ownerId": owner_id,
+                "limit": "20",
+            }
+        )
+        return select_operator_env_group(
+            self._read_with_retry(f"/env-groups?{query}"), owner_id
+        )
+
+    def get_env_group(self, group_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"evg-[0-9a-z]+", group_id):
+            raise RecoveryError("Render environment group has an invalid id")
+        return unwrap_env_group(self._read_with_retry(f"/env-groups/{group_id}"))
+
+    def get_env_var(self, service: dict[str, Any], key: str) -> dict[str, str]:
+        service_id = service.get("id")
+        if not isinstance(service_id, str) or not service_id.startswith("srv-"):
+            raise RecoveryError("Render service is missing its id")
+        encoded_key = urllib.parse.quote(key, safe="")
+        return unwrap_env_var(
+            self._read_with_retry(f"/services/{service_id}/env-vars/{encoded_key}")
+        )
+
+    def ensure_env_group_env_var(
+        self,
+        group: dict[str, Any],
+        key: str,
+        value: str,
+    ) -> dict[str, Any]:
+        group_id = group.get("id")
+        if not isinstance(group_id, str) or not re.fullmatch(
+            r"evg-[0-9a-z]+", group_id
+        ):
+            raise RecoveryError("Render environment group has an invalid id")
+        encoded_key = urllib.parse.quote(key, safe="")
+        path = f"/env-groups/{group_id}/env-vars/{encoded_key}"
+        changed = True
+        try:
+            current = unwrap_env_var(self._read_with_retry(path))
+            if current == {"key": key, "value": value}:
+                changed = False
+        except RenderHttpError as error:
+            if error.status != 404:
+                raise
+        if changed:
+            updated = env_group_env_var(
+                self._write_with_retry("PUT", path, {"value": value}), key
+            )
+            if updated != {"key": key, "value": value}:
+                raise RecoveryError(
+                    f"Render did not update shared Open Competition variable {key}"
+                )
+        verified = unwrap_env_var(self._read_with_retry(path))
+        if verified != {"key": key, "value": value}:
+            raise RecoveryError(
+                f"Render did not retain shared Open Competition variable {key}"
+            )
+        return {"key": key, "value": value, "changed": changed}
+
+    def provision_open_competition_service(
+        self,
+        spec: ServiceSpec,
+        reference_service: dict[str, Any],
+    ) -> dict[str, Any]:
+        if spec.name != OPEN_COMPETITION_WORKER_NAME:
+            raise RecoveryError(f"direct Render provisioning is not authorized for {spec.name}")
+        if (
+            reference_service.get("name") != OPEN_COMPETITION_REFERENCE_SERVICE_NAME
+            or reference_service.get("type") != "background_worker"
+            or reference_service.get("branch") != "main"
+            or normalize_repo(reference_service.get("repo")) != REPOSITORY
+        ):
+            raise RecoveryError("direct Render provisioning reference service is invalid")
+
+        owner_id = validate_owner_id(reference_service.get("ownerId"))
+        environment_id = reference_service.get("environmentId")
+        if environment_id is not None:
+            environment_id = validate_environment_id(environment_id)
+        env_group = self.resolve_env_group(owner_id)
+        group_environment_id = env_group.get("environmentId")
+        if group_environment_id is not None:
+            group_environment_id = validate_environment_id(group_environment_id)
+        if (
+            environment_id is not None
+            and group_environment_id is not None
+            and group_environment_id != environment_id
+        ):
+            raise RecoveryError(
+                "reference Render worker and environment group are in different projects"
+            )
+        if environment_id is None:
+            environment_id = group_environment_id
+        database_url = validate_database_url(
+            self.get_env_var(reference_service, "DATABASE_URL").get("value")
+        )
+
+        env_vars = [
+            {"key": key, "value": value}
+            for key, value in OPEN_COMPETITION_WORKER_ENVIRONMENT.items()
+        ]
+        env_vars.append({"key": "DATABASE_URL", "value": database_url})
+        payload: dict[str, Any] = {
+            "type": "background_worker",
+            "name": OPEN_COMPETITION_WORKER_NAME,
+            "ownerId": owner_id,
+            "repo": "https://github.com/NSPG13/agent-bounties",
+            "branch": "main",
+            "autoDeploy": "no",
+            "envVars": env_vars,
+            "serviceDetails": {
+                "runtime": "docker",
+                "envSpecificDetails": {
+                    "dockerContext": ".",
+                    "dockerfilePath": "./Dockerfile",
+                },
+                "plan": "starter",
+                "region": "oregon",
+                "maxShutdownDelaySeconds": 60,
+            },
+        }
+        if environment_id is not None:
+            payload["environmentId"] = environment_id
+
+        try:
+            created = select_service(
+                spec,
+                [self._write_with_retry("POST", "/services", payload)],
+            )
+        except RenderHttpError as error:
+            if error.status != 409:
+                raise
+            # A concurrent Blueprint sync is acceptable only if it created the
+            # exact service identity that this controller was about to create.
+            created = self.resolve_service(spec)
+
+        if created.get("ownerId") != owner_id:
+            raise RecoveryError("new Render worker is in an unexpected workspace")
+        if environment_id is not None and created.get("environmentId") != environment_id:
+            raise RecoveryError("new Render worker is in an unexpected project environment")
+
+        group_id = env_group["id"]
+        linked_group = self.get_env_group(group_id)
+        if not env_group_has_service(linked_group, spec, created["id"]):
+            try:
+                self._write_with_retry(
+                    "POST",
+                    f"/env-groups/{group_id}/services/{created['id']}",
+                    None,
+                )
+            except RenderHttpError as error:
+                if error.status != 409:
+                    raise
+            linked_group = self.get_env_group(group_id)
+        if not env_group_has_service(linked_group, spec, created["id"]):
+            raise RecoveryError("Render did not attach the required environment group")
+
+        verified = self.resolve_service(spec)
+        if verified.get("ownerId") != owner_id:
+            raise RecoveryError("provisioned Render worker changed workspaces")
+        if environment_id is not None and verified.get("environmentId") != environment_id:
+            raise RecoveryError("provisioned Render worker changed project environments")
+        for key, expected in OPEN_COMPETITION_WORKER_ENVIRONMENT.items():
+            actual = self.get_env_var(verified, key)
+            if actual != {"key": key, "value": expected}:
+                raise RecoveryError(
+                    f"provisioned Render worker did not retain required {key}"
+                )
+        retained_database_url = validate_database_url(
+            self.get_env_var(verified, "DATABASE_URL").get("value")
+        )
+        if retained_database_url != database_url:
+            raise RecoveryError("provisioned Render worker changed its DATABASE_URL")
+        return verified
+
+    def ensure_blueprint_service(
+        self,
+        spec: ServiceSpec,
+        *,
+        reference_service: dict[str, Any] | None = None,
+        attempts: int = 12,
+        poll_seconds: float = 5,
+    ) -> dict[str, Any]:
+        if spec.name not in BLUEPRINT_RECOVERABLE_SERVICE_NAMES:
+            raise RecoveryError(f"Blueprint recovery is not authorized for {spec.name}")
+        if attempts < 1 or poll_seconds < 0:
+            raise RecoveryError("Blueprint recovery polling configuration is invalid")
+
+        blueprint = select_blueprint(self._read_with_retry("/blueprints?limit=100"))
+        blueprint_id = blueprint["id"]
+        if not blueprint_has_service(blueprint, spec):
+            disabled_for_recovery = False
+            try:
+                if blueprint["autoSync"]:
+                    disabled = validate_blueprint(
+                        self._write_with_retry(
+                            "PATCH",
+                            f"/blueprints/{blueprint_id}",
+                            {"autoSync": False},
+                        )
+                    )
+                    if disabled["autoSync"]:
+                        raise RecoveryError("Render did not disable Blueprint Auto Sync")
+                    disabled_for_recovery = True
+                enabled = validate_blueprint(
+                    self._write_with_retry(
+                        "PATCH",
+                        f"/blueprints/{blueprint_id}",
+                        {"autoSync": True, "path": BLUEPRINT_PATH},
+                    )
+                )
+                if not enabled["autoSync"]:
+                    raise RecoveryError("Render did not enable Blueprint Auto Sync")
+            except RecoveryError as error:
+                if disabled_for_recovery:
+                    try:
+                        restored = validate_blueprint(
+                            self._write_with_retry(
+                                "PATCH",
+                                f"/blueprints/{blueprint_id}",
+                                {"autoSync": True, "path": BLUEPRINT_PATH},
+                            )
+                        )
+                    except RecoveryError as restore_error:
+                        raise RecoveryError(
+                            "Blueprint recovery failed and Render Auto Sync could not be "
+                            "restored"
+                        ) from restore_error
+                    if not restored["autoSync"]:
+                        raise RecoveryError(
+                            "Blueprint recovery failed and Render Auto Sync remains disabled"
+                        ) from error
+                raise
+
+        last_status = blueprint.get("status")
+        for attempt in range(1, attempts + 1):
+            current = validate_blueprint(
+                self._read_with_retry(f"/blueprints/{blueprint_id}")
+            )
+            last_status = current["status"]
+            if blueprint_has_service(current, spec):
+                try:
+                    return self.resolve_service(spec)
+                except RenderServiceMissing:
+                    pass
+            if current["status"] == "error":
+                raise RecoveryError(
+                    f"Render Blueprint entered error state before creating {spec.name}"
+                )
+            if attempt < attempts:
+                self._sleep(poll_seconds)
+        if reference_service is not None:
+            return self.provision_open_competition_service(spec, reference_service)
+        raise RecoveryError(
+            f"Render Blueprint did not create {spec.name}; last status {last_status}"
+        )
 
     def disable_native_auto_deploy(self, service: dict[str, Any]) -> None:
         if auto_deploy_disabled(service.get("autoDeploy")):
@@ -1053,6 +1883,42 @@ def reconcile_cloud_agent_environment(
     return runtime_environment, secret_environment, changed
 
 
+def rotate_operator_token(
+    client: RenderClient,
+    group: dict[str, Any],
+    *,
+    token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(48),
+) -> dict[str, Any]:
+    token_text = token_factory()
+    if (
+        not isinstance(token_text, str)
+        or len(token_text) < 64
+        or any(character.isspace() for character in token_text)
+    ):
+        raise RecoveryError("generated operator token is malformed")
+    token = bytearray(token_text.encode("utf-8"))
+    token_text = ""
+    try:
+        record = client.ensure_env_group_env_var(
+            group,
+            OPERATOR_TOKEN_KEY,
+            token.decode("utf-8"),
+        )
+        if record.get("key") != OPERATOR_TOKEN_KEY or record.get("changed") is not True:
+            raise RecoveryError("Render did not rotate the operator token")
+        evidence = {
+            "performed": True,
+            "key": OPERATOR_TOKEN_KEY,
+            "characters": len(token),
+            "secret_published": False,
+        }
+        setattr(client, "operator_token_rotation_evidence", evidence)
+        return evidence
+    finally:
+        for index in range(len(token)):
+            token[index] = 0
+
+
 def reconcile_neynar_social_environment(
     client: RenderClient,
     service: dict[str, Any],
@@ -1304,15 +2170,38 @@ def deploy(
     neynar_bot_username: str | None = None,
     base_mainnet_leaderboard_reward_contract: str | None = None,
     base_sepolia_leaderboard_reward_contract: str | None = None,
+    open_competition_entrant_relay_canary_enabled: bool = False,
+    rotate_operator_api_token: bool = False,
 ) -> dict[str, Any]:
     deploy_mode = validate_deploy_mode(deploy_mode)
+    if rotate_operator_api_token and deploy_mode != "deploy_only":
+        raise RecoveryError("operator token rotation requires deploy_only")
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
     preexisting_live: dict[str, dict[str, Any]] = {}
 
+    resolved: dict[str, dict[str, Any]] = {}
+    missing: list[ServiceSpec] = []
     for spec in specs:
-        services.append((spec, client.resolve_service(spec)))
+        try:
+            resolved[spec.name] = client.resolve_service(spec)
+        except RenderServiceMissing:
+            if spec.name not in BLUEPRINT_RECOVERABLE_SERVICE_NAMES:
+                raise
+            missing.append(spec)
+
+    for spec in missing:
+        resolved[spec.name] = client.ensure_blueprint_service(
+            spec,
+            reference_service=resolved.get(OPEN_COMPETITION_REFERENCE_SERVICE_NAME),
+        )
+
+    # Revalidate every binding after a Blueprint sync and before changing any
+    # service configuration or triggering a deployment.
+    if missing:
+        resolved = {spec.name: client.resolve_service(spec) for spec in specs}
+    services = [(spec, resolved[spec.name]) for spec in specs]
 
     if deploy_mode == "deploy_only":
         for spec, service in services:
@@ -1327,6 +2216,45 @@ def deploy(
                     fetch_health(spec.health_url, 10),
                 )
             preexisting_live[spec.name] = current
+
+    reference_service = resolved.get(OPEN_COMPETITION_REFERENCE_SERVICE_NAME)
+    if reference_service is None:
+        raise RecoveryError("validated reference Render worker is unavailable")
+    shared_group = client.resolve_env_group(
+        validate_owner_id(reference_service.get("ownerId"))
+    )
+    shared_group = client.get_env_group(shared_group["id"])
+    for spec, service in services:
+        if not env_group_has_service(shared_group, spec, service["id"]):
+            raise RecoveryError(
+                f"required Render environment group is not linked to {spec.name}"
+            )
+
+    operator_token_rotation: dict[str, Any] = {}
+    operator_token_changed = False
+    if rotate_operator_api_token:
+        operator_group = client.resolve_operator_env_group(
+            validate_owner_id(reference_service.get("ownerId"))
+        )
+        operator_group = client.get_env_group(operator_group["id"])
+        for spec, service in services:
+            if spec.name not in OPERATOR_TOKEN_SERVICE_NAMES:
+                continue
+            if not env_group_has_service(operator_group, spec, service["id"]):
+                raise RecoveryError(
+                    f"operator environment group is not linked to {spec.name}"
+                )
+        operator_token_rotation = rotate_operator_token(client, operator_group)
+        operator_token_changed = True
+    desired_open_competition_environment = open_competition_shared_environment(
+        entrant_relay_canary_enabled=open_competition_entrant_relay_canary_enabled
+    )
+    reconciled_open_competition_environment = []
+    open_competition_environment_changed = False
+    for key, value in desired_open_competition_environment.items():
+        record = client.ensure_env_group_env_var(shared_group, key, value)
+        open_competition_environment_changed |= record["changed"]
+        reconciled_open_competition_environment.append(record)
 
     neynar_inputs = normalize_neynar_social_inputs(
         api_key=neynar_api_key,
@@ -1436,7 +2364,16 @@ def deploy(
         else frozenset()
     )
     for spec, service in services:
-        if deploy_mode == "deploy_only" and spec.name != CLOUD_AGENT_API_SERVICE_NAME:
+        if (
+            deploy_mode == "deploy_only"
+            and deploy_only_can_reuse_current(
+                spec.name,
+                open_competition_environment_changed=(
+                    open_competition_environment_changed
+                ),
+                operator_token_changed=operator_token_changed,
+            )
+        ):
             created = preexisting_live[spec.name]
         else:
             created = client.ensure_deploy(
@@ -1445,7 +2382,10 @@ def deploy(
                 force=(
                     True
                     if deploy_mode == "deploy_only"
-                    else public_environment_changed.get(spec.name, False)
+                    else (
+                        public_environment_changed.get(spec.name, False)
+                        or open_competition_environment_changed
+                    )
                 ),
                 deploy_mode=deploy_mode,
             )
@@ -1559,6 +2499,7 @@ def deploy(
         "health": health,
         "custom_domains": custom_domains,
         "public_environment": reconciled_public_environment,
+        "open_competition_environment": reconciled_open_competition_environment,
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
         "social_environment": social_environment,
@@ -1566,6 +2507,7 @@ def deploy(
         "cloud_readiness": cloud_readiness,
         "social_readiness": social_readiness,
         "leaderboard_readiness": leaderboard_readiness,
+        "operator_token_rotation": operator_token_rotation,
     }
 
 
@@ -1601,6 +2543,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-mainnet-leaderboard-reward-contract")
     parser.add_argument("--base-sepolia-leaderboard-reward-contract")
+    parser.add_argument(
+        "--enable-open-competition-entrant-relay-canary",
+        action="store_true",
+        help="Enable only the operator-authenticated entrant relay canary.",
+    )
+    parser.add_argument(
+        "--rotate-operator-api-token",
+        action="store_true",
+        help="Rotate the Render-generated operator token without publishing its value.",
+    )
     parser.add_argument("--deploy-timeout-seconds", type=float, default=2400)
     parser.add_argument("--health-timeout-seconds", type=float, default=300)
     parser.add_argument("--poll-seconds", type=float, default=10)
@@ -1614,6 +2566,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    client: RenderClient | None = None
     evidence: dict[str, Any] = {
         "schema": SCHEMA,
         "started_at": utc_now(),
@@ -1632,6 +2585,7 @@ def main() -> int:
         "cloud_readiness": {},
         "social_readiness": {},
         "leaderboard_readiness": [],
+        "operator_token_rotation": {},
         "failure": None,
         "error": None,
     }
@@ -1663,6 +2617,10 @@ def main() -> int:
             base_sepolia_leaderboard_reward_contract=(
                 args.base_sepolia_leaderboard_reward_contract
             ),
+            open_competition_entrant_relay_canary_enabled=(
+                args.enable_open_competition_entrant_relay_canary
+            ),
+            rotate_operator_api_token=args.rotate_operator_api_token,
         )
         evidence.update(result)
         evidence["revision"] = revision
@@ -1672,6 +2630,12 @@ def main() -> int:
         if isinstance(error, RenderDeployFailure):
             evidence["failure"] = error.evidence
     finally:
+        if client is not None:
+            evidence["operator_token_rotation"] = getattr(
+                client,
+                "operator_token_rotation_evidence",
+                evidence["operator_token_rotation"],
+            )
         evidence["completed_at"] = utc_now()
         write_evidence(args.output, evidence)
 

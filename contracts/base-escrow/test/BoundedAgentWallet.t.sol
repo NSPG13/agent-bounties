@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "../src/BoundedAgentWallet.sol";
 import "../src/BoundedAgentWalletFactory.sol";
+import "../src/BoundedAgentWalletV2Factory.sol";
 
 interface VmBoundedWallet {
     function warp(uint256) external;
@@ -76,6 +77,36 @@ contract WalletPassVerifier is IAgentBountyVerifier {
         returns (bool passed, bytes32 responseHash)
     {
         return (true, keccak256(proof));
+    }
+}
+
+contract WalletBountyParticipant {
+    function approve(WalletTestToken token, address spender, uint256 amount) external {
+        token.approve(spender, amount);
+    }
+
+    function fund(AgentBounty bounty, uint256 amount) external {
+        bounty.fund(amount);
+    }
+
+    function withdrawRefund(AgentBounty bounty) external {
+        bounty.withdrawRefund();
+    }
+
+    function claim(AgentBounty bounty) external {
+        bounty.claim();
+    }
+
+    function cancelAndWithdraw(BoundedAgentWalletV2 wallet, address bounty) external {
+        wallet.cancelAndWithdrawUnclaimedBounty(bounty);
+    }
+
+    function cancel(AgentBounty bounty) external {
+        bounty.cancel();
+    }
+
+    function withdrawCancelled(BoundedAgentWalletV2 wallet, address bounty) external {
+        wallet.withdrawCancelledBountyRefund(bounty);
     }
 }
 
@@ -503,6 +534,228 @@ contract BoundedAgentWalletTest {
 
     function walletActions() private pure returns (uint8) {
         return 1 | 2 | 4 | 8;
+    }
+
+    function _nextNonce() private returns (bytes32) {
+        creationNonce += 1;
+        return bytes32(creationNonce);
+    }
+
+    function _same(string memory left, string memory right) private pure returns (bool) {
+        return keccak256(bytes(left)) == keccak256(bytes(right));
+    }
+}
+
+contract BoundedAgentWalletV2Test {
+    VmBoundedWallet constant vm = VmBoundedWallet(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    WalletTestToken private token;
+    AgentBountyFactory private bountyFactory;
+    BoundedAgentWalletV2Factory private walletFactory;
+    WalletPassVerifier private verifier;
+    WalletDelegate private delegateActor;
+    WalletBountyParticipant private participant;
+    BoundedAgentWalletV2 private wallet;
+    uint256 private creationNonce;
+
+    function setUp() public {
+        vm.warp(1_800_000_000);
+        token = new WalletTestToken();
+        bountyFactory = new AgentBountyFactory(address(token));
+        walletFactory = new BoundedAgentWalletV2Factory(address(bountyFactory));
+        verifier = new WalletPassVerifier();
+        delegateActor = new WalletDelegate();
+        participant = new WalletBountyParticipant();
+        wallet = BoundedAgentWalletV2(
+            payable(walletFactory.createWallet(
+                    address(this), _policy(address(delegateActor)), keccak256("wallet-v2-test")
+                ))
+        );
+        token.mint(address(wallet), 1_000);
+    }
+
+    function testOwnerCancelsAndRecoversWalletContributionAtomically() public {
+        AgentBounty bounty = _create(100);
+        require(token.balanceOf(address(wallet)) == 900, "initial funding not charged");
+
+        uint256 recovered = wallet.cancelAndWithdrawUnclaimedBounty(address(bounty));
+
+        require(recovered == 100, "wrong recovered amount");
+        require(bounty.status() == uint8(AgentBounty.BountyStatus.Cancelled), "not cancelled");
+        require(bounty.contributions(address(wallet)) == 0, "wallet contribution remains");
+        require(token.balanceOf(address(wallet)) == 1_000, "wallet refund missing");
+    }
+
+    function testPooledContributorKeepsIndependentRefund() public {
+        AgentBounty bounty = _create(70);
+        token.mint(address(participant), 30);
+        participant.approve(token, address(bounty), 30);
+        participant.fund(bounty, 30);
+
+        uint256 recovered = wallet.cancelAndWithdrawUnclaimedBounty(address(bounty));
+
+        require(recovered == 70, "wallet recovered pooled funds");
+        require(bounty.fundedAmount() == 30, "other principal changed");
+        require(token.balanceOf(address(bounty)) == 30, "other principal moved");
+        require(token.balanceOf(address(participant)) == 0, "other contributor paid early");
+
+        participant.withdrawRefund(bounty);
+        require(token.balanceOf(address(participant)) == 30, "other refund missing");
+        require(token.balanceOf(address(bounty)) == 0, "refund residue remains");
+    }
+
+    function testFuzzPooledContributorPrincipalCannotBeRecovered(uint96 rawWalletPrincipal) public {
+        uint256 walletPrincipal = 1 + uint256(rawWalletPrincipal) % 99;
+        uint256 otherPrincipal = 100 - walletPrincipal;
+        AgentBounty bounty = _create(walletPrincipal);
+        token.mint(address(participant), otherPrincipal);
+        participant.approve(token, address(bounty), otherPrincipal);
+        participant.fund(bounty, otherPrincipal);
+
+        uint256 recovered = wallet.cancelAndWithdrawUnclaimedBounty(address(bounty));
+
+        require(recovered == walletPrincipal, "wallet refund crossed contributor boundary");
+        require(bounty.contributions(address(participant)) == otherPrincipal, "other contribution changed");
+        require(token.balanceOf(address(bounty)) == otherPrincipal, "other principal left custody");
+    }
+
+    function testOwnerRecoveryIncludesProtocolTimeoutBonus() public {
+        AgentBounty bounty = _create(100);
+        token.mint(address(participant), 10);
+        participant.approve(token, address(bounty), 10);
+        participant.claim(bounty);
+        vm.warp(uint256(bounty.claimExpiresAt()) + 1);
+        bounty.expireClaim();
+
+        uint256 recovered = wallet.cancelAndWithdrawUnclaimedBounty(address(bounty));
+
+        require(recovered == 110, "timeout bonus missing");
+        require(token.balanceOf(address(wallet)) == 1_010, "wallet balance missing bonus");
+        require(bounty.refundBonusRemaining() == 0, "bonus residue remains");
+    }
+
+    function testOwnerRecoversAfterPermissionlessDeadlineCancellation() public {
+        AgentBounty bounty = _create(100);
+        vm.warp(uint256(bounty.fundingDeadline()) + 1);
+        participant.cancel(bounty);
+        require(bounty.status() == uint8(AgentBounty.BountyStatus.Cancelled), "not cancelled");
+
+        uint256 recovered = wallet.withdrawCancelledBountyRefund(address(bounty));
+
+        require(recovered == 100, "wrong recovered amount");
+        require(bounty.contributions(address(wallet)) == 0, "wallet contribution remains");
+        require(token.balanceOf(address(wallet)) == 1_000, "wallet refund missing");
+    }
+
+    function testNonOwnerCannotCancelThroughWallet() public {
+        AgentBounty bounty = _create(100);
+        try participant.cancelAndWithdraw(wallet, address(bounty)) {
+            revert("nonowner cancelled bounty");
+        } catch Error(string memory reason) {
+            require(_same(reason, "not owner"), "wrong nonowner rejection");
+        }
+        require(bounty.status() == uint8(AgentBounty.BountyStatus.Claimable), "status changed");
+    }
+
+    function testNonOwnerCannotWithdrawCancelledRefund() public {
+        AgentBounty bounty = _create(100);
+        vm.warp(uint256(bounty.fundingDeadline()) + 1);
+        participant.cancel(bounty);
+
+        try participant.withdrawCancelled(wallet, address(bounty)) {
+            revert("nonowner withdrew bounty");
+        } catch Error(string memory reason) {
+            require(_same(reason, "not owner"), "wrong nonowner rejection");
+        }
+        require(bounty.contributions(address(wallet)) == 100, "wallet contribution changed");
+    }
+
+    function testOwnerCannotCancelAfterClaim() public {
+        AgentBounty bounty = _create(100);
+        token.mint(address(participant), 10);
+        participant.approve(token, address(bounty), 10);
+        participant.claim(bounty);
+
+        try wallet.cancelAndWithdrawUnclaimedBounty(address(bounty)) {
+            revert("claimed bounty cancelled");
+        } catch Error(string memory reason) {
+            require(_same(reason, "bounty not cancellable"), "wrong claimed rejection");
+        }
+        require(bounty.status() == uint8(AgentBounty.BountyStatus.Claimed), "claim changed");
+        require(bounty.activeClaimBond() == 10, "bond changed");
+    }
+
+    function testOwnerCannotRecoverAnotherCreatorsCanonicalBounty() public {
+        AgentBountyFactory.CreateBountyParams memory params = _params();
+        address[] memory noVerifiers = new address[](0);
+        (address bounty,) = bountyFactory.createBounty(params, noVerifiers, 0, _nextNonce());
+
+        try wallet.cancelAndWithdrawUnclaimedBounty(bounty) {
+            revert("other creator bounty cancelled");
+        } catch Error(string memory reason) {
+            require(_same(reason, "wallet not creator"), "wrong creator rejection");
+        }
+    }
+
+    function testOwnerCannotTargetNonCanonicalContract() public {
+        try wallet.cancelAndWithdrawUnclaimedBounty(address(participant)) {
+            revert("noncanonical target accepted");
+        } catch Error(string memory reason) {
+            require(_same(reason, "not canonical bounty"), "wrong canonical rejection");
+        }
+    }
+
+    function testFactoryPredictionAndVersionArePinned() public view {
+        BoundedAgentWallet.Policy memory currentPolicy = _policy(address(delegateActor));
+        address predicted = walletFactory.predictWallet(address(this), currentPolicy, keccak256("wallet-v2-test"));
+        require(predicted == address(wallet), "prediction mismatch");
+        require(walletFactory.isFactoryWallet(address(wallet)), "wallet not registered");
+        require(wallet.WALLET_VERSION() == keccak256("agent-bounties/bounded-wallet/v2"), "wallet version mismatch");
+    }
+
+    function _create(uint256 initialFunding) private returns (AgentBounty bounty) {
+        address[] memory noVerifiers = new address[](0);
+        (address bountyAddress,) = delegateActor.create(
+            BoundedAgentWallet(payable(address(wallet))), _params(), noVerifiers, initialFunding, _nextNonce()
+        );
+        bounty = AgentBounty(bountyAddress);
+    }
+
+    function _params() private view returns (AgentBountyFactory.CreateBountyParams memory) {
+        return AgentBountyFactory.CreateBountyParams({
+            solverReward: 90,
+            verifierReward: 10,
+            termsHash: keccak256("wallet-v2-terms"),
+            policyHash: keccak256("wallet-v2-policy"),
+            acceptanceCriteriaHash: keccak256("wallet-v2-criteria"),
+            benchmarkHash: keccak256("wallet-v2-benchmark"),
+            evidenceSchemaHash: keccak256("wallet-v2-evidence"),
+            fundingDeadline: uint64(block.timestamp + 1 days),
+            claimWindowSeconds: uint64(1 days),
+            verificationWindowSeconds: uint64(1 days),
+            verificationMode: AgentBounty.VerificationMode.DeterministicModule,
+            verifierModule: address(verifier),
+            verifierRewardRecipient: address(verifier),
+            threshold: 1
+        });
+    }
+
+    function _policy(address delegate) private view returns (BoundedAgentWallet.Policy memory) {
+        return BoundedAgentWallet.Policy({
+            delegate: delegate,
+            validAfter: uint64(block.timestamp),
+            validUntil: uint64(block.timestamp + 30 days),
+            periodSeconds: 1 days,
+            maxPerAction: 1_000,
+            maxPerPeriod: 2_000,
+            maxLifetimeSpend: 5_000,
+            maxBountyTarget: 5_000,
+            allowedActions: 15,
+            allowedVerificationModes: 1,
+            deterministicVerifierModule: address(verifier),
+            signedQuorumVerifierSetHash: bytes32(0),
+            aiJudgeVerifierSetHash: bytes32(0)
+        });
     }
 
     function _nextNonce() private returns (bytes32) {

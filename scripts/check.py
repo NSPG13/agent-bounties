@@ -65,7 +65,9 @@ def compile_python(platform: str) -> None:
     ]
     scripts = [
         "scripts/_shared/github_actions.py", "scripts/_shared/evm.py", "scripts/_shared/rpc.py",
-        "scripts/github_issue_plan_comment.py", "scripts/github_funding_comment.py",
+        "scripts/github_issue_plan_comment.py", "scripts/test_github_issue_plan_comment.py",
+        "scripts/github_pr_claim_guard.py", "scripts/test_github_pr_claim_guard.py",
+        "scripts/github_funding_comment.py",
         "scripts/github_claim_comment.py", "scripts/github_proof_comment.py",
         "scripts/sync_hosted_bounty_inventory.py", "scripts/test_sync_hosted_bounty_inventory.py",
         "scripts/reconcile_github_bounty_labels.py", "scripts/test_reconcile_github_bounty_labels.py",
@@ -80,7 +82,21 @@ def compile_python(platform: str) -> None:
         "scripts/test_bounded_agent_budget.py", "scripts/local_delegate_wallet.py",
         "scripts/test_local_delegate_wallet.py", "scripts/self_heal.py", "scripts/test_self_heal.py",
         "scripts/leaderboard_reward_pipeline.py", "scripts/test_leaderboard_reward_pipeline.py",
-        "scripts/check-site.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
+        "scripts/standing_meta_v3_deploy.py", "scripts/test_standing_meta_v3_deploy.py",
+        "scripts/activate_standing_meta_v3_replacements.py",
+        "scripts/test_activate_standing_meta_v3_replacements.py",
+        "scripts/activate_routed_v3_replacements.py",
+        "scripts/test_activate_routed_v3_replacements.py",
+        "scripts/activate_direct_growth_v2.py",
+        "scripts/test_activate_direct_growth_v2.py",
+        "scripts/test_activate_direct_inventory_v1.py",
+        "scripts/direct_recovery_689.py", "scripts/test_direct_recovery_689.py",
+        "scripts/test_profitable_inventory_contract.py",
+        "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
+        "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
+        "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
+        "scripts/check-site.py", "scripts/check-coinbase-embedded-wallet.py", "scripts/configure-wallet-providers.py",
+        "scripts/check-moonpay-onramp.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
@@ -100,7 +116,19 @@ scripts/relay_bounded_wallet_action.py scripts/test_relay_bounded_wallet_action.
 scripts/bounded_agent_create.py scripts/plan_bounded_agent_budget.py scripts/test_bounded_agent_budget.py
 scripts/local_delegate_wallet.py scripts/test_local_delegate_wallet.py scripts/self_heal.py scripts/test_self_heal.py
 scripts/leaderboard_reward_pipeline.py scripts/test_leaderboard_reward_pipeline.py
-scripts/github_issue_plan_comment.py scripts/github_funding_comment.py scripts/github_claim_comment.py
+scripts/standing_meta_v3_deploy.py scripts/test_standing_meta_v3_deploy.py
+scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing_meta_v3_replacements.py
+scripts/activate_routed_v3_replacements.py scripts/test_activate_routed_v3_replacements.py
+scripts/activate_direct_growth_v2.py scripts/test_activate_direct_growth_v2.py
+scripts/test_activate_direct_inventory_v1.py
+scripts/direct_recovery_689.py scripts/test_direct_recovery_689.py
+scripts/test_profitable_inventory_contract.py
+scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
+scripts/standing_meta_v4_release_audit.py scripts/test_standing_meta_v4_release_audit.py
+scripts/standing_meta_v4_rehearsal_audit.py scripts/test_standing_meta_v4_rehearsal_audit.py
+scripts/github_issue_plan_comment.py scripts/test_github_issue_plan_comment.py
+scripts/github_pr_claim_guard.py scripts/test_github_pr_claim_guard.py
+scripts/github_funding_comment.py scripts/github_claim_comment.py
 scripts/github_proof_comment.py scripts/sync_hosted_bounty_inventory.py
 scripts/test_sync_hosted_bounty_inventory.py scripts/reconcile_github_bounty_labels.py
 scripts/test_reconcile_github_bounty_labels.py scripts/validate_real_funding_rehearsal.py
@@ -186,8 +214,24 @@ def main() -> int:
     run_many(commands)
     for name in ("github_issue_plan_comment", "github_create_comment", "github_funding_comment", "github_claim_comment", "github_proof_comment"):
         py(f"scripts/{name}.py", "--self-test")
+    py("scripts/test_github_pr_claim_guard.py", "-v")
     for name in ("sync_hosted_bounty_inventory", "reconcile_github_bounty_labels", "diagnose_hosted_api", "github_audience_audit", "ruleset_drift_check", "code_size_report", "mcp_tool_registry", "shared_rpc", "relay_autonomous_action", "relay_bounded_wallet_action", "bounded_agent_budget"):
         py(f"scripts/test_{name}.py", "-v")
+    for name in ("standing_meta_v3_deploy", "activate_standing_meta_v3_replacements"):
+        py(f"scripts/test_{name}.py", "-v")
+    for name in (
+        "activate_routed_v3_replacements",
+        "direct_recovery_689",
+        "profitable_inventory_contract",
+    ):
+        py(f"scripts/test_{name}.py", "-v")
+    py(
+        "-m",
+        "unittest",
+        "scripts.test_activate_direct_growth_v2",
+        "scripts.test_activate_direct_inventory_v1",
+        "-v",
+    )
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):
         py(f"scripts/test_{name}.py", "-v")
@@ -197,7 +241,9 @@ def main() -> int:
         [cargo, "run", "-p", "cli", "--", "discovery", "--public-base-url", "https://agentbounties.local", "--mcp-base-url", "https://agentbounties.local/mcp"],
         [cargo, "run", "-p", "cli", "--", "discovery-report", "--input-fixture", "crates/cli/fixtures/discovery_answers.json", "--json-out", "target/tmp/discovery-report.json", "--markdown-out", "target/tmp/discovery-report.md"],
     ])
+    py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     py("scripts/check-site.py")
+    py("scripts/check-moonpay-onramp.py")
     py("scripts/check-migration-history.py")
     run_many([[node, *args] for args in (
         ["--check", "skills/agent-bounties/scripts/check-in.mjs"], ["--test", "scripts/test_agent_bounties_openclaw_skill.mjs"],
@@ -206,6 +252,10 @@ def main() -> int:
         ["scripts/test-autonomous-activation-console.js"], ["--check", "tools/canonical-child-verifier-deployment.js"],
         ["scripts/test-canonical-child-verifier-deployment-console.js"], ["--check", "tools/base-sepolia-sponsor-activation.js"],
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
+        ["--check", "scripts/open-competition-v1-signer.js"],
+        ["scripts/test-open-competition-v1-signer-console.js"],
+        ["scripts/test-create-competition-flow.js"],
+        ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
     py("scripts/test_shared_evm.py", "-v")

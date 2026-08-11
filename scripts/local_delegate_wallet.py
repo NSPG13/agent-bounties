@@ -38,7 +38,7 @@ from plan_bounded_agent_budget import (
     keccak_hex,
     require_address,
     require_bytes32,
-    validate_manifest,
+    validate_action_manifest,
 )
 
 
@@ -258,7 +258,7 @@ def manifest_data(path: Path) -> tuple[dict, str]:
         manifest = json.loads(raw)
     except json.JSONDecodeError:
         fail("bounded-wallet manifest is invalid JSON")
-    validate_manifest(manifest)
+    validate_action_manifest(manifest)
     return manifest, hashlib.sha256(raw).hexdigest()
 
 

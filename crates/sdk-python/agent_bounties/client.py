@@ -1,10 +1,85 @@
 import hashlib
 import os
+import secrets
 import time
 import uuid
 from typing import Callable
 
 import httpx
+from eth_hash.auto import keccak
+
+
+OPEN_COMPETITION_COMMITMENT_SCHEMA = (
+    "agent-bounties/open-competition-v1-commitment-v1"
+)
+
+
+def _open_competition_address_word(value: str) -> bytes:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 42:
+        raise ValueError("expected a 20-byte EVM address")
+    try:
+        raw = bytes.fromhex(value[2:])
+    except ValueError as error:
+        raise ValueError("expected a 20-byte EVM address") from error
+    return bytes(12) + raw
+
+
+def _open_competition_bytes32(value: str, label: str) -> bytes:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
+        raise ValueError(f"{label} must be a 32-byte 0x-prefixed hex value")
+    try:
+        raw = bytes.fromhex(value[2:])
+    except ValueError as error:
+        raise ValueError(f"{label} must be a 32-byte 0x-prefixed hex value") from error
+    if not any(raw):
+        raise ValueError(f"{label} must be nonzero")
+    return raw
+
+
+def generate_open_competition_commitment(
+    *,
+    network: str,
+    bounty: str,
+    solver: str,
+    submission_hash: str,
+    evidence_hash: str,
+) -> dict:
+    """Generate a local recovery envelope; never send it to commit preparation."""
+    chain_ids = {"base-mainnet": 8453, "base-sepolia": 84532}
+    if network not in chain_ids:
+        raise ValueError("network must be base-mainnet or base-sepolia")
+    salt = secrets.token_bytes(32)
+    submission = _open_competition_bytes32(submission_hash, "submission_hash")
+    evidence = _open_competition_bytes32(evidence_hash, "evidence_hash")
+    domain = keccak(b"agent-bounties/open-competition-v1-solution")
+    encoded = b"".join(
+        [
+            domain,
+            chain_ids[network].to_bytes(32, "big"),
+            _open_competition_address_word(bounty),
+            _open_competition_address_word(solver),
+            submission,
+            evidence,
+            salt,
+        ]
+    )
+    return {
+        "schema_version": OPEN_COMPETITION_COMMITMENT_SCHEMA,
+        "network": network,
+        "chain_id": chain_ids[network],
+        "bounty": bounty.lower(),
+        "solver": solver.lower(),
+        "submission_hash": submission_hash.lower(),
+        "evidence_hash": evidence_hash.lower(),
+        "salt": f"0x{salt.hex()}",
+        "commitment": f"0x{keccak(encoded).hex()}",
+        "committed_block": None,
+        "reveal_deadline": None,
+        "evidence_boundary": (
+            "This recovery envelope contains the secret salt. Store it locally and "
+            "send only commitment during entry preparation."
+        ),
+    }
 
 
 class AgentBountiesHttpError(httpx.HTTPStatusError):
@@ -296,6 +371,245 @@ class AgentBountiesClient:
                 "wallet_profile": wallet_profile,
                 "policy": policy,
             },
+        )
+
+    def get_standing_meta_v4_readiness(self, network: str = "base-mainnet"):
+        """Return fail-closed V4 readiness; a report is never payment evidence."""
+        return self._request(
+            "GET",
+            "/v1/base/standing-meta-v4/readiness",
+            params={"network": network},
+        )
+
+    def list_open_competition_verifiers(self, network: str = "base-mainnet"):
+        """List exact catalog-approved deterministic verifier profiles."""
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v1/verifiers",
+            params={"network": network},
+        )
+
+    def prepare_open_competition_creation(self, request: dict):
+        """Prepare direct or EIP-3009 authorized deterministic competition creation."""
+        path = (
+            "/v1/base/open-competition-v1/authorized-creation-preparation"
+            if request.get("funding_authorization") is not None
+            else "/v1/base/open-competition-v1/creation-preparation"
+        )
+        return self._request("POST", path, json=request)
+
+    def get_open_competition_state(
+        self,
+        bounty_contract: str,
+        network: str = "base-mainnet",
+        solver: str | None = None,
+        verifier_profile_id: str | None = None,
+    ):
+        """Return safe-block canonical state; this is not settlement evidence."""
+        params = {
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "solver": solver,
+            "verifier_profile_id": verifier_profile_id,
+        }
+        return self._request(
+            "GET", "/v1/base/open-competition-v1/state", params=params
+        )
+
+    def get_open_competition_readiness(
+        self,
+        bounty_contract: str,
+        network: str = "base-mainnet",
+        solver: str | None = None,
+        verifier_profile_id: str | None = None,
+    ):
+        """Return fail-closed first-valid competition readiness."""
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v1/readiness",
+            params={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver": solver,
+                "verifier_profile_id": verifier_profile_id,
+            },
+        )
+
+    def _open_competition_action(
+        self,
+        path: str,
+        bounty_contract: str,
+        arguments: dict,
+        network: str,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/base/open-competition-v1/{path}",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "arguments": arguments,
+            },
+        )
+
+    def prepare_open_competition_commit(
+        self,
+        bounty_contract: str,
+        solver: str,
+        commitment: str,
+        network: str = "base-mainnet",
+    ):
+        """Send only the public commitment; keep the recovery envelope local."""
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v1/commit-preparation",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver": solver,
+                "commitment": commitment,
+            },
+        )
+
+    def prepare_open_competition_reveal(
+        self,
+        bounty_contract: str,
+        solver: str,
+        commitment_envelope: dict,
+        proof: str,
+        network: str = "base-mainnet",
+    ):
+        """Prepare a reveal only from a locally recovered commitment envelope."""
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v1/reveal-preparation",
+            json={
+                "network": network,
+                "bounty_contract": bounty_contract,
+                "solver": solver,
+                "commitment_envelope": commitment_envelope,
+                "proof": proof,
+            },
+        )
+
+    def get_open_competition_status(
+        self, bounty_contract: str, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._open_competition_action(
+            "status", bounty_contract, arguments, network
+        )
+
+    def withdraw_open_competition_bond(
+        self, bounty_contract: str, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._open_competition_action(
+            "bond-withdrawal-preparation", bounty_contract, arguments, network
+        )
+
+    def prepare_open_competition_entrant_action(self, request: dict):
+        """Prepare one exact policy-bound entrant-wallet EIP-712 action."""
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v1/entrant-action-preparation",
+            json=payload,
+        )
+
+    def relay_open_competition_entrant_action(
+        self, idempotency_key: str, plan: dict, signature: str
+    ):
+        """Relay one signed entrant action; only canonical events prove execution."""
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v1/entrant-action-relays",
+            json={
+                "idempotency_key": idempotency_key,
+                "plan": plan,
+                "signature": signature,
+            },
+        )
+
+    def get_open_competition_entrant_relay(self, relay_id: str):
+        """Poll durable relay state through Base safe-block reconciliation."""
+        return self._request(
+            "GET",
+            f"/v1/base/open-competition-v1/entrant-action-relays/{relay_id}",
+        )
+
+    def _standing_meta_v4_action(
+        self,
+        path: str,
+        arguments: dict,
+        network: str,
+    ):
+        return self._request(
+            "POST",
+            f"/v1/base/standing-meta-v4/{path}",
+            json={"network": network, "arguments": arguments},
+        )
+
+    def prepare_standing_meta_v4_claim(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "claim-preparation", arguments, network
+        )
+
+    def prepare_anonymous_stake_registration(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "stake-registration-preparation", arguments, network
+        )
+
+    def set_anonymous_stake_availability(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "stake-availability-preparation", arguments, network
+        )
+
+    def list_verification_assignments(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "verification-assignments", arguments, network
+        )
+
+    def submit_primary_verdict(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "primary-verdict-preparation", arguments, network
+        )
+
+    def waive_verification_appeal(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "appeal-waiver-preparation", arguments, network
+        )
+
+    def open_verification_appeal(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "appeal-opening-preparation", arguments, network
+        )
+
+    def submit_appeal_vote(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "appeal-vote-preparation", arguments, network
+        )
+
+    def finalize_verification_case(
+        self, arguments: dict, network: str = "base-mainnet"
+    ):
+        return self._standing_meta_v4_action(
+            "finalization-preparation", arguments, network
         )
 
     def get_risk_events(
@@ -1126,6 +1440,19 @@ class AgentBountiesClient:
 
     def plan_autonomous_cancel(self, bounty_contract: str, **kwargs):
         return self._plan_autonomous_lifecycle("cancel", bounty_contract, **kwargs)
+
+    def delete_unclaimed_bounty(
+        self,
+        bounty_contract: str,
+        creator_wallet: str,
+        network: str | None = None,
+    ):
+        return self._plan_autonomous_lifecycle(
+            "cancel",
+            bounty_contract,
+            network=network,
+            caller=creator_wallet,
+        )
 
     def plan_autonomous_refund_withdrawal(self, bounty_contract: str, **kwargs):
         return self._plan_autonomous_lifecycle(

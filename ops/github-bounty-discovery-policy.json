@@ -1,0 +1,26 @@
+{
+  "schema_version": "agent-bounties/github-bounty-discovery-policy-v1",
+  "repository": "NSPG13/agent-bounties",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "activation": {
+    "timestamp": "2026-08-10T18:40:35Z",
+    "safe_block": 49798944,
+    "safe_block_hash": "0xb3e165bdc34333300394f468455f308486803b47cd08979d755d94f5008afd33"
+  },
+  "required_backfill_discovery_ids": [
+    "eip155:8453:agent-bounties/open-competition-v1:0x3551ca7bb9090fb8c1648eea40837c8a1cbcc973"
+  ],
+  "open_competition_compatibility_trial": {
+    "starts_at": "2026-08-10T18:40:35Z",
+    "ends_at": "2026-09-09T18:40:35Z",
+    "labels": [
+      "ready-to-earn",
+      "claimable-live",
+      "open-competition"
+    ],
+    "post_trial_action": "hold_for_day_30_decision"
+  },
+  "publication_lag_target_minutes_p95": 10,
+  "evidence_boundary": "This policy activates a GitHub discovery mirror only. It cannot change contracts, escrow, contributions, claims, verification, refunds, settlements, or payouts."
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": "agent-bounties/open-competition-entrant-wallet-mainnet-deployment-audit-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "transaction_hash": "0x2b70216b428ff87963cd1e9272d8fd2a899cf20856705f78ab13f6499c95421d",
+  "deployment_block": 49716900,
+  "deployment_block_hash": "0xd40a17af075b54674d6620519132321ee995b88c1981353afeb703fbc9f084a8",
+  "canonical_safe_block": {
+    "number": 49717094,
+    "hash": "0x833394b211748975a2b79913ce019653020ccc37b5e0084e72c0cbf06acba967",
+    "timestamp": 1786223535
+  },
+  "release_manifest": {
+    "schema_version": "agent-bounties/open-competition-entrant-wallet-release-v1",
+    "protocol_version": "agent-bounties/open-competition-entrant-wallet-v1",
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "deployment_state": "mainnet_canary_not_ready_to_earn",
+    "factory_contract": "0x9b92a65a42de770157f30dd75f44a3136f2cda79",
+    "implementation_contract": "0xd7890aa6c4d4c981c246a05576a6fc689255923c",
+    "competition_factory": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "deployment_block": 49716900,
+    "factory_runtime_code_hash": "0xa0596a53e2f4685d104c2f24176307edfcb4fe8f0fd86162378347996c8f3c40",
+    "implementation_runtime_code_hash": "0xd1789de47b6c956b090f4fcf693361ef93ad4aeeec74ddc359bdcf73cb1ea998",
+    "clone_runtime_code_hash": "0xe94f67382a2692b2ebe7f71ab4163ae0c9c16bded92d45695454deed927b01d4"
+  },
+  "assertions": {
+    "exact_admin_zero_value_create2_transaction": true,
+    "deployment_receipt_matches_browser_receipt": true,
+    "deployment_block_is_canonical_at_safe_block": true,
+    "factory_and_implementation_runtimes_match": true,
+    "factory_dependencies_match_frozen_bundle": true,
+    "public_activation_remains_disabled": true
+  },
+  "passed": true,
+  "evidence_boundary": "This proves exact entrant-factory deployment and runtime identity at a Base safe block. It is not an entrant-wallet canary, hosted relay, public activation, bounty settlement, or payment receipt."
+}

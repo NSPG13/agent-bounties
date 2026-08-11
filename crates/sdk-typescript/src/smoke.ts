@@ -158,6 +158,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
     "planAutonomousModuleSettlement",
     "planAutonomousAttestationSettlement",
     "planAutonomousCancel",
+    "deleteUnclaimedBounty",
     "planAutonomousRefundWithdrawal",
   ] as const) {
     requireCondition(typeof client[method] === "function", `TypeScript SDK missing ${method}`);

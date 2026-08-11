@@ -1,0 +1,317 @@
+name: Direct recovery 689
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/direct-recovery-689.yml"
+      - "ops/recovery/direct-mainnet-689.json"
+      - "scripts/direct_recovery_689.py"
+      - "scripts/test_direct_recovery_689.py"
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Exact public recovery authorization
+        required: true
+        type: string
+      revision:
+        description: Exact current main commit to verify and recover
+        required: true
+        type: string
+      pull_request_url:
+        description: Public implementation PR containing the accepted work
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: direct-recovery-689-mainnet
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - run: python scripts/test_direct_recovery_689.py -v
+      - run: python -m py_compile scripts/direct_recovery_689.py
+
+  authorize:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      revision: ${{ steps.scope.outputs.revision }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          REVISION: ${{ inputs.revision }}
+          PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$CONFIRMATION" = "RECOVER ISSUE 689 EXACTLY 10 USDC"
+          [[ "$PULL_REQUEST_URL" =~ ^https://github\.com/NSPG13/agent-bounties/pull/[1-9][0-9]*$ ]]
+          test "$REVISION" = "$(git rev-parse origin/main)"
+          test "$REVISION" = "$(git rev-parse HEAD)"
+          test "$(gh pr view "$PULL_REQUEST_URL" --json state --jq .state)" = "MERGED"
+          test "$(gh pr view "$PULL_REQUEST_URL" --json mergeCommit --jq .mergeCommit.oid)" = "$REVISION"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+
+  announce:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REVISION: ${{ needs.authorize.outputs.revision }}
+      PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - run: |
+          cat > /tmp/recovery-activation.md <<EOF
+          ## Exact direct-recovery activation
+
+          The separately reviewed recovery harness is starting for commit \`$REVISION\`.
+
+          - Implementation review: $PULL_REQUEST_URL
+          - Operator solver: \`0xc26a630e85134ed30968735c8e7de4576cfa5dbc\`
+          - Return recipient: \`0x884834e884d6e93462655a2820140ad03e6747bc\`
+          - Initial refundable solver bonds: **0.05 USDC total**
+          - Maximum exact return after five passing settlements: **10.00 USDC**
+          - Scope: only issues #634-#638 and the five contracts allowlisted in the notice
+          - Exclusions: no organic-loop, adoption, retention, revenue, reputation, leaderboard, or external-solver credit
+
+          Each of the two immutable verifier keys reruns the published checks independently. Any check, hash, signer, contract, revision, state, or payout mismatch fails closed.
+          EOF
+          gh issue comment 689 --repo "$GITHUB_REPOSITORY" --body-file /tmp/recovery-activation.md
+
+  prepare:
+    needs: [authorize, announce]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      REVISION: ${{ needs.authorize.outputs.revision }}
+      PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
+      CHECK_RUN_URL: https://github.com/NSPG13/agent-bounties/actions/runs/30441776495
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ needs.authorize.outputs.revision }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - name: Recheck, claim, and submit the exact five contracts
+        run: >-
+          python scripts/direct_recovery_689.py
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          prepare
+          --revision "$REVISION"
+          --pull-request-url "$PULL_REQUEST_URL"
+          --check-run-url "$CHECK_RUN_URL"
+          --output target/direct-recovery-candidates
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: direct-recovery-candidates
+          path: target/direct-recovery-candidates
+          if-no-files-found: error
+
+  sign-one:
+    needs: [authorize, prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      RECOVERY_VERIFIER_KEY: ${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}
+      EXPECTED_SIGNER: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
+      REVISION: ${{ needs.authorize.outputs.revision }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ needs.authorize.outputs.revision }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: direct-recovery-candidates
+          path: target/direct-recovery-candidates
+      - run: >-
+          python scripts/direct_recovery_689.py
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          sign
+          --revision "$REVISION"
+          --candidates target/direct-recovery-candidates
+          --output target/direct-recovery-attestations-one
+          --private-key-env RECOVERY_VERIFIER_KEY
+          --expected-signer "$EXPECTED_SIGNER"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: direct-recovery-attestations-one
+          path: target/direct-recovery-attestations-one
+          if-no-files-found: error
+
+  sign-two:
+    needs: [authorize, prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      RECOVERY_VERIFIER_KEY: ${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}
+      EXPECTED_SIGNER: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
+      REVISION: ${{ needs.authorize.outputs.revision }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ needs.authorize.outputs.revision }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: direct-recovery-candidates
+          path: target/direct-recovery-candidates
+      - run: >-
+          python scripts/direct_recovery_689.py
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          sign
+          --revision "$REVISION"
+          --candidates target/direct-recovery-candidates
+          --output target/direct-recovery-attestations-two
+          --private-key-env RECOVERY_VERIFIER_KEY
+          --expected-signer "$EXPECTED_SIGNER"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: direct-recovery-attestations-two
+          path: target/direct-recovery-attestations-two
+          if-no-files-found: error
+
+  relay:
+    needs: [authorize, sign-one, sign-two]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      REVISION: ${{ needs.authorize.outputs.revision }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ needs.authorize.outputs.revision }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: direct-recovery-candidates
+          path: target/direct-recovery-candidates
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: direct-recovery-attestations-one
+          path: target/direct-recovery-attestations-one
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: direct-recovery-attestations-two
+          path: target/direct-recovery-attestations-two
+      - name: Recheck, settle, and return exactly 10 USDC
+        run: >-
+          python scripts/direct_recovery_689.py
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          relay
+          --revision "$REVISION"
+          --candidates target/direct-recovery-candidates
+          --attestations target/direct-recovery-attestations-one
+          --attestations target/direct-recovery-attestations-two
+          --output target/direct-recovery-evidence.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: direct-recovery-evidence
+          path: target/direct-recovery-evidence.json
+          if-no-files-found: error
+      - name: Publish final recovery evidence
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("target/direct-recovery-evidence.json").read_text())
+          lines = [
+              "## Direct recovery completed",
+              "",
+              f"- Exact revision: `{report['revision']}`",
+              f"- Operator solver: `{report['operator_solver']}`",
+              f"- Returned: **{report['return_amount'] / 1_000_000:.2f} USDC** to `{report['return_recipient']}`",
+              f"- Preserved operator residual: **{report['operator_residual_after'] / 1_000_000:.2f} USDC**",
+              f"- Return transaction: `https://basescan.org/tx/{report['return_transfer_tx']}`",
+              f"- Workflow evidence: {os.environ['RUN_URL']}",
+              "",
+              "Settlements:",
+          ]
+          for item in report["settlements"]:
+              evidence_url = (
+                  f"https://basescan.org/tx/{item['tx']}"
+                  if item.get("tx")
+                  else f"https://basescan.org/address/{item['contract']}#events"
+              )
+              lines.append(
+                  f"- #{item['issue']} `{item['contract']}` "
+                  f"({item['state']}): {evidence_url}"
+              )
+          lines.extend(
+              [
+                  "",
+                  "Classification: disclosed operator recovery only. These events receive no "
+                  "organic-loop, adoption, retention, revenue, reputation, leaderboard, or "
+                  "external-solver credit.",
+              ]
+          )
+          Path("/tmp/recovery-result.md").write_text("\n".join(lines) + "\n")
+          PY
+          gh issue comment 689 --repo "$GITHUB_REPOSITORY" --body-file /tmp/recovery-result.md

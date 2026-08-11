@@ -13,6 +13,7 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Mapping, Sequence
 
+import bounded_wallet_policy as active_wallet
 from bounded_agent_create import (
     BOUNTY_ID_SIGNATURE,
     CREATE_SELECTOR,
@@ -55,26 +56,19 @@ SCHEMA = "agent-bounties/bounded-wallet-relay-v1"
 COMMAND = "/agent-bounty wallet-relay"
 NETWORK = "base-mainnet"
 RPC_URL = "https://mainnet.base.org"
-WALLET = "0x1eaa1c68772cf76bc5f4e4174766076e33ace662"
+WALLET = active_wallet.WALLET
 WALLET_FACTORY = "0x3840936351049aed639780a16845e6094c1f17f6"
 WALLET_CODEHASH = "0xc663bed9b4097e22e5a18c0ecb662561bf45df1829e6412cdd0d8568d05ca1b6"
-DELEGATE = "0xe98314df0e2f5657dd5ee3325f1e95f5a4249ef5"
-POLICY_HASH = "0xd5b39deb8630b258d165e94b5b74d81cb42073e895f26922e6722904b5fcc4b4"
-REGRESSION_DELEGATE = "0xe46741de0f379bff0ab8b01bce1b79a12d892fdb"
-REGRESSION_POLICY_HASH = "0x4f789c7d284541becfaee6d6136ec59a933ef06027a00d09a94d424c0a878951"
-VERIFIER = "0xe573cb4f471d38b5bf10ce82237251ac902c9867"
+DELEGATE = active_wallet.DELEGATE
+POLICY_HASH = active_wallet.POLICY_HASH
+POLICY_VERSION = active_wallet.POLICY_VERSION
+VERIFIER = active_wallet.DETERMINISTIC_VERIFIER
 POLICY_PROFILES = {
     POLICY_HASH: {
         "delegate": DELEGATE,
-        "policy_version": 2,
-        "allowed_verification_modes": 1,
-        "signed_quorum_verifier_set_hash": ZERO_HASH,
-    },
-    REGRESSION_POLICY_HASH: {
-        "delegate": REGRESSION_DELEGATE,
-        "policy_version": 3,
-        "allowed_verification_modes": 3,
-        "signed_quorum_verifier_set_hash": SIGNED_QUORUM_VERIFIER_SET_HASH,
+        "policy_version": POLICY_VERSION,
+        "allowed_verification_modes": active_wallet.ALLOWED_VERIFICATION_MODES,
+        "signed_quorum_verifier_set_hash": active_wallet.SIGNED_QUORUM_VERIFIER_SET_HASH,
     },
 }
 MAX_COMMENT_BYTES = 12_000
@@ -280,6 +274,7 @@ def validate_wallet(
         "factory": FACTORY,
         "settlement_token": USDC,
         "deployment_factory": WALLET_FACTORY,
+        "owner": active_wallet.OWNER,
         "delegate": profile["delegate"],
         "deterministic_verifier": VERIFIER,
         "signed_quorum_verifier_set_hash": profile["signed_quorum_verifier_set_hash"],

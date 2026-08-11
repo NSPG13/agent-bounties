@@ -19,28 +19,33 @@ Implemented and enabled for the precommitted Base-mainnet verifier set:
 - no verdict on timeout, output overflow, resource kill, input mismatch, or
   runtime failure;
 - a scheduled no-secrets GitHub runner that emits candidates only;
-- two isolated signing jobs that re-fetch current state before signing;
-- a separate keeper relay that revalidates the exact quorum before broadcast.
+- isolated signing jobs that re-fetch current state before signing;
+- a separate keeper relay that revalidates the exact committed verifier set
+  before broadcast.
 
-The two signer keys are cryptographically distinct but currently share project
-governance; this is automated quorum, not organizationally independent review.
-Only jobs committed to the exact deployed verifier set and threshold two are
-eligible. Workflow success without a canonical job or a confirmed
-`BountySettled` event is not completion or payment evidence.
+Direct coding bounties default to one precommitted automated verifier. A second
+verifier is optional for higher-risk work; the two project signer keys are
+cryptographically distinct but share project governance, so threshold two is
+redundancy rather than organizationally independent review. Workflow success
+without a canonical job or a confirmed `BountySettled` event is not completion
+or payment evidence.
 
 ## Immutable Terms
 
-The verification policy must name the engine and at least two distinct verifier
-wallets:
+The default verification policy names one verifier:
 
 ```json
 {
   "mechanism": "signed_quorum",
   "engine": "sandboxed_regression_v1",
-  "verifiers": ["0xVerifierOne", "0xVerifierTwo"],
-  "threshold": 2
+  "verifiers": ["0xVerifierOne"],
+  "threshold": 1
 }
 ```
+
+For higher-risk work, commit two distinct verifier wallets and threshold two.
+The contract calls both forms `signed_quorum`; product surfaces call threshold
+one **single verifier**.
 
 The benchmark commits the full runner manifest:
 
@@ -114,7 +119,16 @@ Do not mount a Docker socket into the Base indexer or any service holding RPC,
 database, wallet, Stripe, or operator secrets. A hosted runner must be a
 separate no-secrets service with a runner-owned staging volume. Signing must be
 a separate capability that verifies a fresh candidate against the current
-canonical job and requires at least two distinct precommitted verifier paths.
+canonical job and requires exactly the verifier path or paths committed before
+funding.
+
+The signer and keeper workflows read their Base endpoint from the dedicated
+`REGRESSION_VERIFIER_RPC_URL` Actions variable and otherwise use
+`https://mainnet.base.org`. Keep this separate from the application's general
+`BASE_MAINNET_RPC_URL`: an unavailable shared provider must not disable the
+isolated verification path. Any configured endpoint remains subject to the
+same exact current-job revalidation and on-chain signature checks; an RPC
+response, signature, or broadcast is never settlement evidence.
 
 Only confirmed canonical `BountySettled` is payout evidence. A runner receipt,
 response hash, verifier signature, quorum plan, relay transaction hash, or

@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_pipeline.py")
@@ -37,6 +38,63 @@ def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
 
 
 class RegressionVerifierPipelineTests(unittest.TestCase):
+    def test_runner_selects_single_verifier_and_legacy_two_verifier_jobs(self) -> None:
+        configured = ["0x" + "1" * 40, "0x" + "2" * 40]
+        jobs = [
+            {
+                "job_id": "single",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured[:1],
+                "threshold": 1,
+            },
+            {
+                "job_id": "legacy",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured,
+                "threshold": 2,
+            },
+            {
+                "job_id": "unsupported",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": [configured[1]],
+                "threshold": 1,
+            },
+        ]
+        self.assertEqual(
+            [job["job_id"] for job in pipeline.selected_jobs(jobs, configured, 5)],
+            ["single", "legacy"],
+        )
+
+    def test_regression_job_rejects_zero_or_ambiguous_verifiers(self) -> None:
+        base = {
+            "verification_mode": "signed_quorum",
+            "eligible_verifiers": ["0x" + "1" * 40],
+            "threshold": 1,
+        }
+        self.assertEqual(pipeline.required_job_signers(base), base["eligible_verifiers"])
+        for changed in (
+            {**base, "threshold": 0},
+            {**base, "threshold": 2},
+            {
+                **base,
+                "threshold": 2,
+                "eligible_verifiers": ["0x" + "1" * 40, "0x" + "1" * 40],
+            },
+        ):
+            with self.subTest(changed=changed), self.assertRaises(pipeline.PipelineError):
+                pipeline.required_job_signers(changed)
+
+    def test_verifier_signing_uses_a_dedicated_rpc_configuration(self) -> None:
+        workflow_root = SCRIPT.parent.parent / ".github" / "workflows"
+        for name in (
+            "regression-verifier-signing-reusable.yml",
+            "regression-verifier-signer.yml",
+        ):
+            with self.subTest(workflow=name):
+                workflow = (workflow_root / name).read_text(encoding="utf-8")
+                self.assertIn("vars.REGRESSION_VERIFIER_RPC_URL", workflow)
+                self.assertNotIn("vars.BASE_MAINNET_RPC_URL", workflow)
+
     def test_stale_runner_revision_skips_every_signing_job(self) -> None:
         workflow = (
             SCRIPT.parent.parent / ".github" / "workflows" / "regression-verifier-signer.yml"
@@ -136,6 +194,33 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         job["terms"]["document"]["benchmark"]["source"]["branch"] = "main"
         with self.assertRaises(pipeline.PipelineError):
             pipeline.benchmark_source(job)
+
+    def test_runner_pulls_only_the_exact_committed_image(self) -> None:
+        manifest = {
+            "image": f"docker.io/library/python@sha256:{'a' * 64}",
+            "platform": "linux/amd64",
+        }
+        with mock.patch.object(pipeline, "run", return_value="") as run:
+            pipeline.pull_pinned_image(manifest, "docker")
+        run.assert_called_once_with(
+            [
+                "docker",
+                "pull",
+                "--platform",
+                "linux/amd64",
+                manifest["image"],
+            ]
+        )
+        for image in [
+            "docker.io/library/python:3.12",
+            f"DOCKER.IO/library/python@sha256:{'a' * 64}",
+            f"docker.io/library/python@sha256:{'g' * 64}",
+        ]:
+            with self.subTest(image=image), self.assertRaises(pipeline.PipelineError):
+                pipeline.pull_pinned_image(
+                    {"image": image, "platform": "linux/amd64"},
+                    "docker",
+                )
 
 
 if __name__ == "__main__":

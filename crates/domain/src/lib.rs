@@ -5,6 +5,8 @@ use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+pub mod objective;
+pub use objective::*;
 mod leaderboard;
 
 pub use leaderboard::*;
@@ -423,6 +425,16 @@ impl AgentEligibilityPolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BountyImageReference {
+    pub source: String,
+    pub prompt: String,
+    pub alt_text: String,
+    pub asset_url: String,
+    pub sha256: String,
+    pub mime_type: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutonomousBountyTermsDocument {
     pub schema_version: String,
@@ -435,6 +447,8 @@ pub struct AutonomousBountyTermsDocument {
     pub verification_policy: Value,
     pub source_url: Option<String>,
     pub discovery_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<BountyImageReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_eligibility: Option<AgentEligibilityPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1614,6 +1628,7 @@ mod tests {
             verification_policy: serde_json::json!({}),
             source_url: None,
             discovery_source: None,
+            image: None,
             agent_eligibility: None,
             claim_coordination: None,
         })

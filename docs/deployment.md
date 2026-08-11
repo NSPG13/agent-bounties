@@ -31,7 +31,13 @@ The root `render.yaml` creates:
 - `agent-bounties-postgres`,
 - `agent-bounties-api`,
 - `agent-bounties-mcp`,
-- `agent-bounties-base-indexer`.
+- `agent-bounties-base-indexer`, and
+- `agent-bounties-open-competition-v1-indexer`.
+
+The two workers are deliberately additive. The original worker continues from
+the autonomous-v1 factory and cursor. The Open Competition V1 worker starts at
+its own factory deployment block and writes only versioned open-competition
+records; it does not migrate or rewrite historical bounty rows.
 
 `CLOUD_AGENT_API_KEY` is a direct `sync: false` secret on
 `agent-bounties-api`; Render ignores `sync: false` inside environment groups.
@@ -64,26 +70,38 @@ succeeds on a push to `main`, the workflow:
 
 1. checks out the exact successful-CI SHA;
 2. verifies it is the latest successful CI revision reachable from `main`;
-3. resolves all three Render services by exact name and verifies repository,
+3. resolves all four Render services by exact name and verifies repository,
    branch, and service type;
-4. disables any drifted native auto-deploy setting;
-5. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
+4. if and only if the additive Open Competition V1 indexer is absent, validates
+   exactly one Blueprint bound to this repository, `main`, and `render.yaml`,
+   cycles its supported Auto Sync setting, and waits for the exact typed worker;
+   if an otherwise healthy Blueprint remains in sync without materializing that
+   worker, provisions only that allowlisted worker through Render's service API
+   by copying the validated legacy worker's workspace, project environment, and
+   database binding, attaches the exact existing environment group, verifies
+   every nonsecret value by readback, and then revalidates all four bindings;
+5. verifies that the exact shared Base environment group is linked to all four
+   services, derives the Open Competition manifest, verifier catalog, and
+   disabled activation gates from the checked-in mainnet release evidence, and
+   reconciles each nonsecret value through Render with exact readback;
+6. disables any drifted native auto-deploy setting;
+7. reconciles `PUBLIC_BASE_URL`, `MCP_BASE_URL`, and `WEBSITE_BASE_URL` on
    both public services;
-6. reconciles all nonsecret cloud-agent settings on API and copies the optional
+8. reconciles all nonsecret cloud-agent settings on API and copies the optional
    GitHub-held model key without including its value in evidence;
-7. creates or updates the optional FID-filtered Neynar provider webhook and
+9. creates or updates the optional FID-filtered Neynar provider webhook and
    reconciles its bot identity, reply signer, and generated signing secret on
    API without including their values in evidence;
-8. calls Render's deploy API with the exact commit for API, MCP, and worker;
-9. waits for all three deploys to reach `live` and fails on terminal errors;
-10. verifies exact revision and protocol headers from API and MCP `/health`;
-11. attests cloud readiness and fails if a supplied model credential did not
+10. calls Render's deploy API with the exact commit for API, MCP, and both workers;
+11. waits for all four deploys to reach `live` and fails on terminal errors;
+12. verifies exact revision and protocol headers from API and MCP `/health`;
+13. attests cloud readiness and fails if a supplied model credential did not
     become usable;
-12. attests social mention readiness when provider values were supplied;
-13. stores a redacted 30-day deployment evidence artifact.
+14. attests social mention readiness when provider values were supplied;
+15. stores a redacted 30-day deployment evidence artifact.
 
 Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
-Render Dashboard for the workspace that owns these three services, then store
+Render Dashboard for the workspace that owns these four services, then store
 it only under repository **Settings > Secrets and variables > Actions**. Never
 put the key in Render variables, workflow inputs, logs, issues, or Git. A
 missing key is a visible workflow failure, not a silent manual-deploy fallback.
@@ -138,11 +156,19 @@ Use `deploy_only` for runtime-only configuration after capacity is available:
 
 `deploy_only` rejects a service whose current live artifact does not match the
 supplied SHA. It reuses that artifact, applies saved environment values, and
-does not build new code. It restarts only API, then requires the supplied SHA
-from `/health` and the exact leaderboard contracts from the live API. Render's
+does not build new code. It restarts only API unless a shared environment
+change requires another linked service, then requires the supplied SHA from
+`/health` and the exact leaderboard contracts from the live API. Render's
 branch label is recorded but is not artifact evidence. Render currently applies
 the workspace pipeline quota before both deployment modes, so `deploy_only` is
 not a quota bypass.
+
+If the hosted operator credential may have been disclosed, dispatch this same
+exact-revision recovery workflow in `deploy_only` mode with
+`rotate_operator_api_token=true`. The replacement is generated only inside the
+runner, installed in the existing Render operator environment group, and never
+returned in logs or evidence. The API and MCP are both redeployed and attested;
+the evidence records only that rotation occurred.
 
 The API and MCP services need the same `DATABASE_URL`, public URLs, factory,
 implementation, and Base RPC configuration. Canonical planners fail closed

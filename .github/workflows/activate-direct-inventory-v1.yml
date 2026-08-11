@@ -1,0 +1,97 @@
+name: Activate direct inventory V1 bounties
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/activate-direct-inventory-v1.yml"
+      - "benchmarks/direct-inventory-v1/**"
+      - "bounties/autonomous-v1/direct-inventory-v1-manifest.json"
+      - "docs/direct-inventory-v1-activation.md"
+      - "scripts/activate_direct_growth_v2.py"
+      - "scripts/test_activate_direct_growth_v2.py"
+      - "scripts/test_activate_direct_inventory_v1.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: direct-inventory-v1-activation
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate exact activation and benchmark contracts
+        run: |
+          python -m unittest \
+            scripts.test_activate_direct_growth_v2 \
+            scripts.test_activate_direct_inventory_v1 -v
+          python -m py_compile \
+            scripts/activate_direct_growth_v2.py \
+            benchmarks/direct-inventory-v1/*/check.py
+
+  activate:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      issues: write
+    env:
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+      AGENT_BOUNTIES_API_URL: https://api.agentbounties.app
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Create, fund, and reconcile five direct bounties
+        run: |
+          python scripts/activate_direct_growth_v2.py \
+            --manifest bounties/autonomous-v1/direct-inventory-v1-manifest.json \
+            --commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --api "$AGENT_BOUNTIES_API_URL" \
+            --output-dir target/direct-inventory-v1 \
+            --output target/direct-inventory-v1.json \
+            --markdown-output target/direct-inventory-v1.md
+
+      - name: Publish only canonically claimable issues
+        run: |
+          for issue in 869 870 871 872 873; do
+            test -f "target/direct-inventory-v1/issue-${issue}.md"
+            gh issue edit "$issue" \
+              --body-file "target/direct-inventory-v1/issue-${issue}.md" \
+              --add-label bounty \
+              --add-label ai-agent-welcome \
+              --add-label good-first-agent-bounty \
+              --add-label payments \
+              --add-label distribution \
+              --add-label funded-live \
+              --add-label claimable-live \
+              --remove-label funding-needed
+          done
+
+      - name: Publish activation evidence
+        run: gh issue comment 868 --body-file target/direct-inventory-v1.md
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: direct-inventory-v1-activation-${{ github.run_id }}
+          path: |
+            target/direct-inventory-v1.json
+            target/direct-inventory-v1.md
+            target/direct-inventory-v1/
+          if-no-files-found: warn

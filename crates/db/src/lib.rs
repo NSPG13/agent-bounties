@@ -1,4 +1,7 @@
-use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
+use chain_base::{
+    AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
+    OpenCompetitionEventKind,
+};
 use chrono::{DateTime, Utc};
 use domain::{
     Agent, AgentEligibilityDecision, AgentEligibilityEvidence, AgentStatus, AgentWebhookEventType,
@@ -8,10 +11,11 @@ use domain::{
     BountyStatus, CanonicalSolverCompletion, Capability, CapabilityClass, Claim, ClaimCandidate,
     ClaimCandidateStatus, ContributorContact, DiscoveryResponse, Escrow, EscrowStatus, EvalRun,
     FundingContribution, FundingContributionStatus, FundingIntent, FundingIntentStatus,
-    FundingMode, HelpRequest, Id, Money, OutreachAttempt, OutreachChannel, OutreachStatus,
-    PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel, ProofRecord, Quote,
-    ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome, RiskReviewRecord, RiskSurface,
-    Settlement, Submission, TemplateSignal, VerificationDecision, VerifierKind, VerifierResult,
+    FundingMode, HelpRequest, Id, Money, Objective, ObjectiveStatus, OutreachAttempt,
+    OutreachChannel, OutreachStatus, PaymentEvent, PaymentEventStatus, PaymentRail, PrivacyLevel,
+    ProofRecord, Quote, ReputationEvent, RiskAction, RiskEvent, RiskReviewOutcome,
+    RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal, VerificationDecision,
+    VerifierKind, VerifierResult,
 };
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
@@ -41,6 +45,22 @@ pub const SITE_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0010_site_analytics.sql");
 pub const SOCIAL_MENTION_INGESTION_MIGRATION: &str =
     include_str!("../../../migrations/0011_social_mention_ingestion.sql");
+pub const OBJECTIVE_COORDINATION_MIGRATION: &str =
+    include_str!("../../../migrations/0013_objective_coordination.sql");
+pub const PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION: &str =
+    include_str!("../../../migrations/0014_remove_public_competitor_intelligence.sql");
+pub const OPPORTUNITY_COMMENTS_MIGRATION: &str =
+    include_str!("../../../migrations/0015_opportunity_comments.sql");
+pub const CHATGPT_ACTION_INTENTS_MIGRATION: &str =
+    include_str!("../../../migrations/0016_chatgpt_action_intents.sql");
+pub const BOUNTY_IMAGE_ASSETS_MIGRATION: &str =
+    include_str!("../../../migrations/0017_bounty_image_assets.sql");
+pub const SOLVE_ACTION_RENAME_MIGRATION: &str =
+    include_str!("../../../migrations/0018_rename_compete_action_to_solve.sql");
+pub const OPEN_COMPETITION_V1_MIGRATION: &str =
+    include_str!("../../../migrations/0019_open_competition_v1.sql");
+pub const OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION: &str =
+    include_str!("../../../migrations/0020_open_competition_entrant_relays.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -137,10 +157,25 @@ pub enum DbError {
     AudienceConflict(String),
     #[error("conflicting autonomous submission evidence replay: {0}")]
     AutonomousEvidenceConflict(String),
+    #[error("conflicting open-competition event replay: {0}")]
+    OpenCompetitionEventConflict(String),
     #[error("conflicting x402 relay replay: {0}")]
     X402RelayConflict(String),
     #[error("x402 hosted relay quota exceeded: {0}")]
     X402RelayQuotaExceeded(String),
+    #[error("conflicting open-competition entrant relay replay: {0}")]
+    OpenCompetitionEntrantRelayConflict(String),
+    #[error("open-competition entrant relay quota exceeded: {0}")]
+    OpenCompetitionEntrantRelayQuotaExceeded(String),
+    #[error("objective {0} already exists")]
+    ObjectiveAlreadyExists(Id),
+    #[error("objective {0} was not found")]
+    ObjectiveNotFound(Id),
+    #[error("objective {objective_id} revision conflict: expected {expected_revision}")]
+    ObjectiveRevisionConflict {
+        objective_id: Id,
+        expected_revision: u64,
+    },
     #[error("claim candidate conflict: {0}")]
     ClaimCandidateConflict(String),
     #[error("claim waitlist is full")]
@@ -153,6 +188,14 @@ pub enum DbError {
     BondSponsorshipQuotaExceeded(String),
     #[error("opportunity conversion correlation conflict: {0}")]
     OpportunityConversionConflict(String),
+    #[error("opportunity comment idempotency conflict")]
+    OpportunityCommentConflict,
+    #[error("ChatGPT action intent conflict: {0}")]
+    ChatgptActionIntentConflict(String),
+    #[error("ChatGPT action intent is unavailable")]
+    ChatgptActionIntentUnavailable,
+    #[error("bounty image asset conflict: {0}")]
+    BountyImageAssetConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -211,6 +254,85 @@ pub struct TrialBounty {
     pub demo_agent_solution: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewOpportunityComment {
+    pub id: Uuid,
+    pub opportunity_id: String,
+    pub author: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpportunityComment {
+    pub id: Uuid,
+    pub opportunity_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewChatgptActionIntent {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub action: String,
+    pub network: String,
+    pub opportunity_id: Option<String>,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+    pub actor_wallet: Option<String>,
+    pub amount_base_units: Option<u64>,
+    pub details: serde_json::Value,
+    pub request_fingerprint: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatgptActionIntent {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub action: String,
+    pub network: String,
+    pub opportunity_id: Option<String>,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+    pub actor_wallet: Option<String>,
+    pub amount_base_units: Option<u64>,
+    pub details: serde_json::Value,
+    pub request_fingerprint: String,
+    pub status: String,
+    pub transaction_hash: Option<String>,
+    pub canonical_event_id: Option<Uuid>,
+    pub canonical_event_kind: Option<String>,
+    pub confirmed_block: Option<u64>,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatgptActionObservation {
+    pub transaction_hash: String,
+    pub bounty_contract: Option<String>,
+    pub bounty_id: Option<String>,
+    pub actor_wallet: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewBountyImageAsset {
+    pub sha256: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BountyImageAsset {
+    pub sha256: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -544,6 +666,64 @@ pub struct X402RelayAttempt {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenCompetitionEntrantRelayStatus {
+    Prepared,
+    Relaying,
+    Broadcast,
+    Confirmed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewOpenCompetitionEntrantRelay {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub wallet: String,
+    pub bounty_contract: String,
+    pub delegate: String,
+    pub action: u8,
+    pub wallet_nonce: u64,
+    pub deadline: u64,
+    pub payload_hash: String,
+    pub request_fingerprint: String,
+    pub relayer_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionEntrantRelay {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub wallet: String,
+    pub bounty_contract: String,
+    pub delegate: String,
+    pub action: u8,
+    pub wallet_nonce: u64,
+    pub deadline: u64,
+    pub payload_hash: String,
+    pub request_fingerprint: String,
+    pub relayer_address: String,
+    pub status: OpenCompetitionEntrantRelayStatus,
+    pub retryable: bool,
+    pub attempt_count: u32,
+    pub tx_hash: Option<String>,
+    pub estimated_gas: Option<u64>,
+    pub gas_limit: Option<u64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub receipt_block: Option<u64>,
+    pub receipt_block_hash: Option<String>,
+    pub canonical_safe_block: Option<u64>,
+    pub canonical_safe_block_hash: Option<String>,
+    pub canonical_event: Option<String>,
+    pub payment_proven: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewClaimCandidate {
     pub id: Uuid,
@@ -709,6 +889,14 @@ impl PostgresStore {
                 LEGAL_ACCEPTANCES_MIGRATION,
                 SITE_ANALYTICS_MIGRATION,
                 SOCIAL_MENTION_INGESTION_MIGRATION,
+                OBJECTIVE_COORDINATION_MIGRATION,
+                PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION,
+                OPPORTUNITY_COMMENTS_MIGRATION,
+                CHATGPT_ACTION_INTENTS_MIGRATION,
+                BOUNTY_IMAGE_ASSETS_MIGRATION,
+                SOLVE_ACTION_RENAME_MIGRATION,
+                OPEN_COMPETITION_V1_MIGRATION,
+                OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1437,6 +1625,7 @@ impl PostgresStore {
     pub async fn opportunity_lifecycle_stats(
         &self,
         window_started_at: DateTime<Utc>,
+        excluded_bounty_contracts: &[String],
     ) -> DbResult<OpportunityLifecycleStats> {
         let cohort = sqlx::query(
             r#"
@@ -1462,6 +1651,7 @@ impl PostgresStore {
                 ON created.network = progress.network
                AND created.kind = 'canonical_bounty_created'
                AND lower(created.data->>'terms_hash') = lower(progress.terms_hash)
+               AND NOT lower(created.contract_address) = ANY($2)
             ), root_flags AS (
               SELECT roots.unfunded_bounty_id,
                      BOOL_OR(event.kind = 'bounty_became_claimable') AS funded,
@@ -1493,6 +1683,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -1502,31 +1693,37 @@ impl PostgresStore {
               SELECT network, bounty_id, MIN(occurred_at) AS created_at
               FROM autonomous_bounty_events
               WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY network, bounty_id
             ), settled AS (
               SELECT network, bounty_id, MIN(occurred_at) AS settled_at
               FROM autonomous_bounty_events
               WHERE kind = 'bounty_settled'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY network, bounty_id
             ), posters AS (
               SELECT lower(data->>'creator') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
               FROM autonomous_bounty_events
               WHERE kind = 'canonical_bounty_created' AND occurred_at >= $1
                 AND data ? 'creator'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY lower(data->>'creator')
             ), paid_solvers AS (
               SELECT lower(data->>'solver') AS wallet, COUNT(DISTINCT bounty_id) AS bounties
               FROM autonomous_bounty_events
               WHERE kind = 'bounty_settled' AND occurred_at >= $1
                 AND data ? 'solver'
+                AND NOT lower(contract_address) = ANY($2)
               GROUP BY lower(data->>'solver')
             )
             SELECT
               (SELECT COUNT(*) FROM created) AS canonical_created_in_window,
               (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
-                WHERE kind = 'bounty_claimed' AND occurred_at >= $1) AS canonical_claimed_in_window,
+                WHERE kind = 'bounty_claimed' AND occurred_at >= $1
+                  AND NOT lower(contract_address) = ANY($2)) AS canonical_claimed_in_window,
               (SELECT COUNT(DISTINCT (network, bounty_id)) FROM autonomous_bounty_events
-                WHERE kind = 'bounty_settled' AND occurred_at >= $1) AS canonical_settled_in_window,
+                WHERE kind = 'bounty_settled' AND occurred_at >= $1
+                  AND NOT lower(contract_address) = ANY($2)) AS canonical_settled_in_window,
               (SELECT COUNT(*) FROM posters) AS unique_canonical_poster_wallets,
               (SELECT COUNT(*) FROM posters WHERE bounties > 1) AS repeat_canonical_poster_wallets,
               (SELECT COUNT(*) FROM paid_solvers) AS unique_paid_solver_wallets,
@@ -1537,6 +1734,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -1692,6 +1890,351 @@ impl PostgresStore {
         .collect()
     }
 
+    pub async fn create_or_get_opportunity_comment(
+        &self,
+        comment: &NewOpportunityComment,
+    ) -> DbResult<OpportunityComment> {
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO opportunity_comments (id, opportunity_id, author, body)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (id) DO NOTHING
+            RETURNING id, opportunity_id, author, body, created_at
+            "#,
+        )
+        .bind(comment.id)
+        .bind(&comment.opportunity_id)
+        .bind(&comment.author)
+        .bind(&comment.body)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match inserted {
+            Some(row) => row,
+            None => {
+                sqlx::query(
+                    r#"
+                    SELECT id, opportunity_id, author, body, created_at
+                    FROM opportunity_comments
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(comment.id)
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        let persisted = opportunity_comment_from_row(row)?;
+        if persisted.opportunity_id != comment.opportunity_id
+            || persisted.author != comment.author
+            || persisted.body != comment.body
+        {
+            return Err(DbError::OpportunityCommentConflict);
+        }
+        Ok(persisted)
+    }
+
+    pub async fn list_opportunity_comments(
+        &self,
+        opportunity_id: &str,
+        limit: u32,
+    ) -> DbResult<Vec<OpportunityComment>> {
+        let limit = i64::from(limit.clamp(1, 100));
+        sqlx::query(
+            r#"
+            SELECT id, opportunity_id, author, body, created_at
+            FROM opportunity_comments
+            WHERE opportunity_id = $1
+            ORDER BY created_at DESC, id DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(opportunity_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(opportunity_comment_from_row)
+        .collect()
+    }
+
+    pub async fn reserve_chatgpt_action_intent(
+        &self,
+        intent: &NewChatgptActionIntent,
+    ) -> DbResult<ChatgptActionIntent> {
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO chatgpt_action_intents
+              (id, idempotency_key, action, network, opportunity_id,
+               bounty_contract, bounty_id, actor_wallet, amount_base_units,
+               details, request_fingerprint, expires_at)
+            VALUES (
+              $1, $2, $3, $4, $5, lower($6), lower($7), lower($8), $9,
+              $10, $11, $12
+            )
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(intent.id)
+        .bind(&intent.idempotency_key)
+        .bind(&intent.action)
+        .bind(&intent.network)
+        .bind(&intent.opportunity_id)
+        .bind(&intent.bounty_contract)
+        .bind(&intent.bounty_id)
+        .bind(&intent.actor_wallet)
+        .bind(intent.amount_base_units.map(i64_from_u64).transpose()?)
+        .bind(&intent.details)
+        .bind(&intent.request_fingerprint)
+        .bind(intent.expires_at)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match inserted {
+            Some(row) => row,
+            None => {
+                sqlx::query(
+                    r#"
+                    SELECT id, idempotency_key, action, network, opportunity_id,
+                           bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                           details, request_fingerprint, status, transaction_hash,
+                           canonical_event_id, canonical_event_kind, confirmed_block,
+                           expires_at, created_at, updated_at
+                    FROM chatgpt_action_intents
+                    WHERE idempotency_key = $1
+                    "#,
+                )
+                .bind(&intent.idempotency_key)
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        let persisted = chatgpt_action_intent_from_row(row)?;
+        if persisted.request_fingerprint != intent.request_fingerprint {
+            return Err(DbError::ChatgptActionIntentConflict(
+                "idempotency key is already bound to a different action".to_string(),
+            ));
+        }
+        Ok(persisted)
+    }
+
+    pub async fn get_chatgpt_action_intent(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<ChatgptActionIntent>> {
+        sqlx::query(
+            r#"
+            SELECT id, idempotency_key, action, network, opportunity_id,
+                   bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                   details, request_fingerprint, status, transaction_hash,
+                   canonical_event_id, canonical_event_kind, confirmed_block,
+                   expires_at, created_at, updated_at
+            FROM chatgpt_action_intents
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(chatgpt_action_intent_from_row)
+        .transpose()
+    }
+
+    pub async fn observe_chatgpt_action_transaction(
+        &self,
+        id: Uuid,
+        observation: &ChatgptActionObservation,
+    ) -> DbResult<ChatgptActionIntent> {
+        let row = sqlx::query(
+            r#"
+            UPDATE chatgpt_action_intents
+            SET transaction_hash = lower($2),
+                bounty_contract = COALESCE(bounty_contract, lower($3)),
+                bounty_id = COALESCE(bounty_id, lower($4)),
+                actor_wallet = COALESCE(actor_wallet, lower($5)),
+                status = 'pending_confirmation',
+                updated_at = now()
+            WHERE id = $1
+              AND status IN ('review_required', 'pending_confirmation')
+              AND expires_at > now()
+              AND (
+                transaction_hash IS NULL
+                OR transaction_hash = lower($2)
+              )
+              AND (
+                bounty_contract IS NULL
+                OR $3 IS NULL
+                OR bounty_contract = lower($3)
+              )
+              AND (
+                bounty_id IS NULL
+                OR $4 IS NULL
+                OR bounty_id = lower($4)
+              )
+              AND (
+                actor_wallet IS NULL
+                OR $5 IS NULL
+                OR actor_wallet = lower($5)
+              )
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(&observation.transaction_hash)
+        .bind(&observation.bounty_contract)
+        .bind(&observation.bounty_id)
+        .bind(&observation.actor_wallet)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(row) = row {
+            return chatgpt_action_intent_from_row(row);
+        }
+        match self.get_chatgpt_action_intent(id).await? {
+            None => Err(DbError::ChatgptActionIntentUnavailable),
+            Some(intent) if intent.status == "confirmed" => Ok(intent),
+            Some(intent) if intent.expires_at <= Utc::now() => {
+                Err(DbError::ChatgptActionIntentUnavailable)
+            }
+            Some(_) => Err(DbError::ChatgptActionIntentConflict(
+                "transaction observation does not match the original action".to_string(),
+            )),
+        }
+    }
+
+    pub async fn confirm_chatgpt_action_intent(
+        &self,
+        id: Uuid,
+        event: &AutonomousBountyEvent,
+    ) -> DbResult<ChatgptActionIntent> {
+        sqlx::query(
+            r#"
+            UPDATE chatgpt_action_intents
+            SET status = 'confirmed',
+                canonical_event_id = $2,
+                canonical_event_kind = $3,
+                confirmed_block = $4,
+                updated_at = now()
+            WHERE id = $1
+              AND status IN ('review_required', 'pending_confirmation', 'confirmed')
+              AND transaction_hash = lower($5)
+              AND (
+                canonical_event_id IS NULL
+                OR canonical_event_id = $2
+              )
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(event.id)
+        .bind(autonomous_event_kind_storage_name(event.kind))
+        .bind(i64_from_u64(event.block_number)?)
+        .bind(&event.tx_hash)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(chatgpt_action_intent_from_row)
+        .transpose()?
+        .ok_or_else(|| {
+            DbError::ChatgptActionIntentConflict(
+                "canonical event does not match the observed transaction".to_string(),
+            )
+        })
+    }
+
+    pub async fn expire_chatgpt_action_intent(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<ChatgptActionIntent>> {
+        sqlx::query(
+            r#"
+            UPDATE chatgpt_action_intents
+            SET status = 'expired', updated_at = now()
+            WHERE id = $1
+              AND status IN ('review_required', 'pending_confirmation')
+              AND expires_at <= now()
+            RETURNING id, idempotency_key, action, network, opportunity_id,
+                      bounty_contract, bounty_id, actor_wallet, amount_base_units,
+                      details, request_fingerprint, status, transaction_hash,
+                      canonical_event_id, canonical_event_kind, confirmed_block,
+                      expires_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(chatgpt_action_intent_from_row)
+        .transpose()
+    }
+
+    pub async fn put_bounty_image_asset(
+        &self,
+        asset: &NewBountyImageAsset,
+    ) -> DbResult<BountyImageAsset> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO bounty_image_assets (sha256, mime_type, content)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (sha256) DO UPDATE SET
+              mime_type = bounty_image_assets.mime_type
+            RETURNING sha256, mime_type, content, created_at
+            "#,
+        )
+        .bind(&asset.sha256)
+        .bind(&asset.mime_type)
+        .bind(&asset.content)
+        .fetch_one(&self.pool)
+        .await?;
+        let stored = bounty_image_asset_from_row(&row)?;
+        if stored.mime_type != asset.mime_type || stored.content != asset.content {
+            return Err(DbError::BountyImageAssetConflict(
+                "bounty image hash already exists with different content metadata".to_string(),
+            ));
+        }
+        Ok(stored)
+    }
+
+    pub async fn get_bounty_image_asset(&self, sha256: &str) -> DbResult<Option<BountyImageAsset>> {
+        let row = sqlx::query(
+            r#"
+            SELECT sha256, mime_type, content, created_at
+            FROM bounty_image_assets
+            WHERE sha256 = $1
+            "#,
+        )
+        .bind(sha256)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| bounty_image_asset_from_row(&row)).transpose()
+    }
+
+    pub async fn delete_expired_chatgpt_action_intents_before(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM chatgpt_action_intents
+            WHERE expires_at < $1
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn upsert_unfunded_bounty_solution(
         &self,
         solution: &NewUnfundedBountySolution,
@@ -1743,6 +2286,110 @@ impl PostgresStore {
         .into_iter()
         .map(unfunded_bounty_solution_from_row)
         .collect()
+    }
+
+    pub async fn create_objective(&self, objective: &Objective) -> DbResult<()> {
+        let status = objective_status_value(objective.status)?;
+        let result = sqlx::query(
+            r#"
+            INSERT INTO objective_aggregates
+              (id, schema_version, revision, status, requesting_party_id, record, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(objective.id)
+        .bind(&objective.schema_version)
+        .bind(i64_from_u64(objective.revision)?)
+        .bind(status)
+        .bind(objective.requesting_party_id)
+        .bind(serde_json::to_value(objective)?)
+        .bind(objective.created_at)
+        .bind(objective.updated_at)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(DbError::ObjectiveAlreadyExists(objective.id));
+        }
+        Ok(())
+    }
+
+    pub async fn replace_objective(
+        &self,
+        objective: &Objective,
+        expected_revision: u64,
+    ) -> DbResult<()> {
+        if objective.revision <= expected_revision {
+            return Err(DbError::ObjectiveRevisionConflict {
+                objective_id: objective.id,
+                expected_revision,
+            });
+        }
+        let status = objective_status_value(objective.status)?;
+        let result = sqlx::query(
+            r#"
+            UPDATE objective_aggregates
+            SET schema_version = $2,
+                revision = $3,
+                status = $4,
+                requesting_party_id = $5,
+                record = $6,
+                updated_at = $7
+            WHERE id = $1 AND revision = $8
+            "#,
+        )
+        .bind(objective.id)
+        .bind(&objective.schema_version)
+        .bind(i64_from_u64(objective.revision)?)
+        .bind(status)
+        .bind(objective.requesting_party_id)
+        .bind(serde_json::to_value(objective)?)
+        .bind(objective.updated_at)
+        .bind(i64_from_u64(expected_revision)?)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 1 {
+            return Ok(());
+        }
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM objective_aggregates WHERE id = $1)")
+                .bind(objective.id)
+                .fetch_one(&self.pool)
+                .await?;
+        if exists {
+            Err(DbError::ObjectiveRevisionConflict {
+                objective_id: objective.id,
+                expected_revision,
+            })
+        } else {
+            Err(DbError::ObjectiveNotFound(objective.id))
+        }
+    }
+
+    pub async fn get_objective(&self, id: Id) -> DbResult<Option<Objective>> {
+        let record = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT record FROM objective_aggregates WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        record
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn list_objectives(&self) -> DbResult<Vec<Objective>> {
+        let records = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT record FROM objective_aggregates ORDER BY created_at DESC, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        records
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     pub async fn reserve_x402_relay_attempt(
@@ -2090,6 +2737,342 @@ impl PostgresStore {
             DbError::X402RelayConflict("relay was not broadcast before confirmation".to_string())
         })?;
         x402_relay_attempt_from_row(row)
+    }
+
+    pub async fn reserve_open_competition_entrant_relay(
+        &self,
+        relay: &NewOpenCompetitionEntrantRelay,
+        max_network_attempts: u32,
+        max_wallet_attempts: u32,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        if max_network_attempts == 0
+            || max_wallet_attempts == 0
+            || max_wallet_attempts > max_network_attempts
+        {
+            return Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(
+                "configured quota is invalid".to_string(),
+            ));
+        }
+        if relay.action > 2 || relay.deadline == 0 || relay.idempotency_key.trim().is_empty() {
+            return Err(DbError::OpenCompetitionEntrantRelayConflict(
+                "relay action, deadline, or idempotency key is invalid".to_string(),
+            ));
+        }
+        let normalized_wallet = normalize_key_address(&relay.wallet);
+        let normalized_bounty = normalize_key_address(&relay.bounty_contract);
+        let normalized_delegate = normalize_key_address(&relay.delegate);
+        let normalized_payload_hash = relay.payload_hash.to_ascii_lowercase();
+        let normalized_relayer = normalize_key_address(&relay.relayer_address);
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!(
+                "open-competition-entrant-relay-quota:{}",
+                relay.network
+            ))
+            .execute(&mut *transaction)
+            .await?;
+
+        let existing_idempotency = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays
+            WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(&relay.idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(open_competition_entrant_relay_from_row)
+        .transpose()?;
+        if let Some(existing) = existing_idempotency {
+            validate_open_competition_entrant_relay_replay(&existing, relay)?;
+            transaction.commit().await?;
+            return Ok(existing);
+        }
+
+        let existing_live_nonce = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays
+            WHERE network = $1 AND wallet = $2 AND wallet_nonce = $3
+              AND (status <> 'failed' OR retryable)
+            "#,
+        )
+        .bind(&relay.network)
+        .bind(&normalized_wallet)
+        .bind(i64_from_u64(relay.wallet_nonce)?)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(open_competition_entrant_relay_from_row)
+        .transpose()?;
+        if let Some(existing) = existing_live_nonce {
+            validate_open_competition_entrant_relay_replay(&existing, relay)?;
+            transaction.commit().await?;
+            return Ok(existing);
+        }
+
+        let quota = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS network_count,
+                   COUNT(*) FILTER (WHERE wallet = $2) AS wallet_count
+            FROM open_competition_entrant_relays
+            WHERE network = $1 AND created_at >= now() - interval '24 hours'
+            "#,
+        )
+        .bind(&relay.network)
+        .bind(&normalized_wallet)
+        .fetch_one(&mut *transaction)
+        .await?;
+        let network_count: i64 = quota.try_get("network_count")?;
+        let wallet_count: i64 = quota.try_get("wallet_count")?;
+        if network_count >= i64::from(max_network_attempts) {
+            return Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(
+                "network rolling-24-hour relay limit reached".to_string(),
+            ));
+        }
+        if wallet_count >= i64::from(max_wallet_attempts) {
+            return Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(
+                "wallet rolling-24-hour relay limit reached".to_string(),
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO open_competition_entrant_relays
+              (id, idempotency_key, network, wallet, bounty_contract, delegate,
+               action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+               relayer_address, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'prepared')
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(relay.id)
+        .bind(&relay.idempotency_key)
+        .bind(&relay.network)
+        .bind(&normalized_wallet)
+        .bind(&normalized_bounty)
+        .bind(&normalized_delegate)
+        .bind(i16::from(relay.action))
+        .bind(i64_from_u64(relay.wallet_nonce)?)
+        .bind(i64_from_u64(relay.deadline)?)
+        .bind(&normalized_payload_hash)
+        .bind(&relay.request_fingerprint)
+        .bind(&normalized_relayer)
+        .execute(&mut *transaction)
+        .await?;
+
+        let persisted = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays
+            WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(&relay.idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(open_competition_entrant_relay_from_row)
+        .transpose()?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict(
+                "idempotency key is already bound to another relay".to_string(),
+            )
+        })?;
+        validate_open_competition_entrant_relay_replay(&persisted, relay)?;
+        transaction.commit().await?;
+        Ok(persisted)
+    }
+
+    pub async fn get_open_competition_entrant_relay(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<OpenCompetitionEntrantRelay>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, idempotency_key, network, wallet, bounty_contract, delegate,
+                   action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                   relayer_address, status, retryable, attempt_count, tx_hash,
+                   estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                   receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                   canonical_event, payment_proven, created_at, updated_at
+            FROM open_competition_entrant_relays WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_entrant_relay_from_row).transpose()
+    }
+
+    pub async fn claim_open_competition_entrant_relay(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        lease_seconds: u64,
+    ) -> DbResult<Option<OpenCompetitionEntrantRelay>> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'relaying', retryable = true,
+                attempt_count = attempt_count + 1, lease_token = $2,
+                lease_expires_at = now() + make_interval(secs => $3),
+                error_code = NULL, error_message = NULL, updated_at = now()
+            WHERE id = $1
+              AND (
+                status = 'prepared'
+                OR (status = 'failed' AND retryable)
+                OR (status = 'relaying' AND lease_expires_at <= now())
+              )
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(i64_from_u64(lease_seconds)?)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_entrant_relay_from_row).transpose()
+    }
+
+    pub async fn mark_open_competition_entrant_relay_broadcast(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+        tx_hash: &str,
+        estimated_gas: u64,
+        gas_limit: u64,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'broadcast', retryable = true, tx_hash = $3,
+                estimated_gas = $4, gas_limit = $5,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1 AND lease_token = $2 AND status = 'relaying'
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(tx_hash.to_ascii_lowercase())
+        .bind(i64_from_u64(estimated_gas)?)
+        .bind(i64_from_u64(gas_limit)?)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict(
+                "relay lease was lost before broadcast persisted".to_string(),
+            )
+        })?;
+        open_competition_entrant_relay_from_row(row)
+    }
+
+    pub async fn mark_open_competition_entrant_relay_failed(
+        &self,
+        id: Uuid,
+        lease_token: Option<Uuid>,
+        retryable: bool,
+        error_code: &str,
+        error_message: &str,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'failed', retryable = $3, error_code = $4, error_message = $5,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+            WHERE id = $1
+              AND status IN ('relaying', 'broadcast', 'failed')
+              AND ($2::uuid IS NULL OR lease_token = $2)
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .bind(retryable)
+        .bind(error_code)
+        .bind(error_message.chars().take(500).collect::<String>())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict("relay failure lease mismatch".to_string())
+        })?;
+        open_competition_entrant_relay_from_row(row)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mark_open_competition_entrant_relay_confirmed(
+        &self,
+        id: Uuid,
+        receipt_block: u64,
+        receipt_block_hash: &str,
+        canonical_safe_block: u64,
+        canonical_safe_block_hash: &str,
+        canonical_event: &str,
+        payment_proven: bool,
+    ) -> DbResult<OpenCompetitionEntrantRelay> {
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_entrant_relays
+            SET status = 'confirmed', retryable = false,
+                receipt_block = $2, receipt_block_hash = $3,
+                canonical_safe_block = $4, canonical_safe_block_hash = $5,
+                canonical_event = $6, payment_proven = $7,
+                lease_token = NULL, lease_expires_at = NULL,
+                error_code = NULL, error_message = NULL, updated_at = now()
+            WHERE id = $1 AND status IN ('broadcast', 'confirmed')
+            RETURNING id, idempotency_key, network, wallet, bounty_contract, delegate,
+                      action, wallet_nonce, deadline, payload_hash, request_fingerprint,
+                      relayer_address, status, retryable, attempt_count, tx_hash,
+                      estimated_gas, gas_limit, error_code, error_message, receipt_block,
+                      receipt_block_hash, canonical_safe_block, canonical_safe_block_hash,
+                      canonical_event, payment_proven, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(i64_from_u64(receipt_block)?)
+        .bind(receipt_block_hash.to_ascii_lowercase())
+        .bind(i64_from_u64(canonical_safe_block)?)
+        .bind(canonical_safe_block_hash.to_ascii_lowercase())
+        .bind(canonical_event)
+        .bind(payment_proven)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::OpenCompetitionEntrantRelayConflict(
+                "relay was not broadcast before confirmation".to_string(),
+            )
+        })?;
+        open_competition_entrant_relay_from_row(row)
     }
 
     pub async fn reserve_claim_candidate(
@@ -2481,7 +3464,11 @@ impl PostgresStore {
             .transpose()
     }
 
-    pub async fn claim_funnel_stats(&self, window_hours: u32) -> DbResult<ClaimFunnelStats> {
+    pub async fn claim_funnel_stats(
+        &self,
+        window_hours: u32,
+        excluded_bounty_contracts: &[String],
+    ) -> DbResult<ClaimFunnelStats> {
         let window_hours = window_hours.clamp(1, 720);
         let generated_at = Utc::now();
         let window_started_at = generated_at - chrono::Duration::hours(i64::from(window_hours));
@@ -2502,9 +3489,11 @@ impl PostgresStore {
               COUNT(*) FILTER (WHERE status = 'failed') AS failed
             FROM claim_candidates
             WHERE created_at >= $1
+              AND NOT lower(bounty_contract) = ANY($2)
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let stages = ClaimFunnelStageCounts {
@@ -2536,9 +3525,11 @@ impl PostgresStore {
             FROM bond_sponsorships sponsorship
             JOIN claim_candidates candidate ON candidate.id = sponsorship.claim_candidate_id
             WHERE sponsorship.created_at >= $1
+              AND NOT lower(candidate.bounty_contract) = ANY($2)
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let sponsored_claims_confirmed =
@@ -2560,6 +3551,7 @@ impl PostgresStore {
               FROM autonomous_bounty_events
               WHERE occurred_at >= $1
                 AND kind IN ('bounty_claimed', 'submission_added', 'bounty_settled')
+                AND NOT lower(contract_address) = ANY($2)
             ), paid_solvers AS (
               SELECT solver_wallet, COUNT(*) AS settlement_count
               FROM window_events
@@ -2596,6 +3588,7 @@ impl PostgresStore {
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
         let canonical_outcomes = CanonicalClaimOutcomeCounts {
@@ -2623,11 +3616,13 @@ impl PostgresStore {
             SELECT failure_code, COUNT(*) AS count
             FROM claim_candidates
             WHERE created_at >= $1 AND status = 'failed' AND failure_code IS NOT NULL
+              AND NOT lower(bounty_contract) = ANY($2)
             GROUP BY failure_code
             ORDER BY failure_code
             "#,
         )
         .bind(window_started_at)
+        .bind(excluded_bounty_contracts)
         .fetch_all(&self.pool)
         .await?;
         let mut failure_codes = BTreeMap::new();
@@ -4148,6 +5143,159 @@ impl PostgresStore {
         Ok(())
     }
 
+    pub async fn upsert_open_competition_event(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        event: &OpenCompetitionEvent,
+    ) -> DbResult<()> {
+        let kind = serde_json::to_value(event.kind)?
+            .as_str()
+            .ok_or_else(|| DbError::InvalidEnum("open competition event kind".to_string()))?
+            .to_string();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO open_competition_events
+              (id, protocol_version, log_key, network, factory_contract, tx_hash,
+               block_number, log_index, contract_address, bounty_id, kind, data, occurred_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (log_key) DO UPDATE SET
+              tx_hash = EXCLUDED.tx_hash,
+              block_number = EXCLUDED.block_number,
+              log_index = EXCLUDED.log_index,
+              contract_address = EXCLUDED.contract_address,
+              bounty_id = EXCLUDED.bounty_id,
+              kind = EXCLUDED.kind,
+              data = EXCLUDED.data,
+              occurred_at = CASE
+                WHEN open_competition_events.block_time_verified
+                  THEN open_competition_events.occurred_at
+                ELSE EXCLUDED.occurred_at
+              END
+            WHERE open_competition_events.protocol_version = EXCLUDED.protocol_version
+              AND open_competition_events.network = EXCLUDED.network
+              AND open_competition_events.factory_contract = EXCLUDED.factory_contract
+            "#,
+        )
+        .bind(event.id)
+        .bind(&event.protocol_version)
+        .bind(&event.log_key)
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(&event.tx_hash)
+        .bind(i64_from_u64(event.block_number)?)
+        .bind(i64_from_u64(event.log_index)?)
+        .bind(normalize_key_address(&event.contract_address))
+        .bind(&event.bounty_id)
+        .bind(kind)
+        .bind(&event.data)
+        .bind(event.occurred_at)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(DbError::OpenCompetitionEventConflict(event.log_key.clone()));
+        }
+        Ok(())
+    }
+
+    pub async fn list_open_competition_events(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_event_from_row)
+            .collect()
+    }
+
+    pub async fn list_canonical_open_competition_contracts(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<String>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT data->>'bounty_contract' AS bounty_contract
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2
+              AND kind = 'canonical_competition_created'
+              AND data ? 'bounty_contract'
+            ORDER BY bounty_contract
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let address: String = row.try_get("bounty_contract")?;
+                Ok(normalize_key_address(&address))
+            })
+            .collect()
+    }
+
+    pub async fn list_unverified_open_competition_event_blocks(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        limit: u32,
+    ) -> DbResult<Vec<u64>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT block_number
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2 AND block_time_verified = FALSE
+            ORDER BY block_number
+            LIMIT $3
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| u64_from_i64(row.try_get("block_number")?))
+            .collect()
+    }
+
+    pub async fn confirm_open_competition_event_block_time(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        block_number: u64,
+        occurred_at: DateTime<Utc>,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE open_competition_events
+            SET occurred_at = $4, block_time_verified = TRUE
+            WHERE network = $1 AND factory_contract = $2 AND block_number = $3
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(i64_from_u64(block_number)?)
+        .bind(occurred_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn list_autonomous_bounty_events(
         &self,
         network: &str,
@@ -4162,6 +5310,27 @@ impl PostgresStore {
             "#,
         )
         .bind(network)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(autonomous_event_from_row).collect()
+    }
+
+    pub async fn list_autonomous_bounty_events_by_transaction(
+        &self,
+        network: &str,
+        transaction_hash: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
+                   bounty_id, kind, data, occurred_at
+            FROM autonomous_bounty_events
+            WHERE network = $1 AND tx_hash = lower($2)
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(transaction_hash)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(autonomous_event_from_row).collect()
@@ -5227,6 +6396,55 @@ fn trial_bounty_from_row(row: PgRow) -> DbResult<TrialBounty> {
     })
 }
 
+fn opportunity_comment_from_row(row: PgRow) -> DbResult<OpportunityComment> {
+    Ok(OpportunityComment {
+        id: row.try_get("id")?,
+        opportunity_id: row.try_get("opportunity_id")?,
+        author: row.try_get("author")?,
+        body: row.try_get("body")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn chatgpt_action_intent_from_row(row: PgRow) -> DbResult<ChatgptActionIntent> {
+    Ok(ChatgptActionIntent {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        action: row.try_get("action")?,
+        network: row.try_get("network")?,
+        opportunity_id: row.try_get("opportunity_id")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        bounty_id: row.try_get("bounty_id")?,
+        actor_wallet: row.try_get("actor_wallet")?,
+        amount_base_units: row
+            .try_get::<Option<i64>, _>("amount_base_units")?
+            .map(u64_from_i64)
+            .transpose()?,
+        details: row.try_get("details")?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        status: row.try_get("status")?,
+        transaction_hash: row.try_get("transaction_hash")?,
+        canonical_event_id: row.try_get("canonical_event_id")?,
+        canonical_event_kind: row.try_get("canonical_event_kind")?,
+        confirmed_block: row
+            .try_get::<Option<i64>, _>("confirmed_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        expires_at: row.try_get("expires_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn bounty_image_asset_from_row(row: &PgRow) -> DbResult<BountyImageAsset> {
+    Ok(BountyImageAsset {
+        sha256: row.try_get("sha256")?,
+        mime_type: row.try_get("mime_type")?,
+        content: row.try_get("content")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 fn unfunded_bounty_solution_from_row(row: PgRow) -> DbResult<UnfundedBountySolution> {
     Ok(UnfundedBountySolution {
         id: row.try_get("id")?,
@@ -5316,6 +6534,96 @@ fn validate_x402_relay_replay(
     {
         return Err(DbError::X402RelayConflict(
             "authorization nonce replay does not match the original request".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_open_competition_entrant_relay_status(
+    value: String,
+) -> DbResult<OpenCompetitionEntrantRelayStatus> {
+    match value.as_str() {
+        "prepared" => Ok(OpenCompetitionEntrantRelayStatus::Prepared),
+        "relaying" => Ok(OpenCompetitionEntrantRelayStatus::Relaying),
+        "broadcast" => Ok(OpenCompetitionEntrantRelayStatus::Broadcast),
+        "confirmed" => Ok(OpenCompetitionEntrantRelayStatus::Confirmed),
+        "failed" => Ok(OpenCompetitionEntrantRelayStatus::Failed),
+        other => Err(DbError::InvalidEnum(format!(
+            "open-competition entrant relay status {other}"
+        ))),
+    }
+}
+
+fn open_competition_entrant_relay_from_row(row: PgRow) -> DbResult<OpenCompetitionEntrantRelay> {
+    Ok(OpenCompetitionEntrantRelay {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        network: row.try_get("network")?,
+        wallet: row.try_get("wallet")?,
+        bounty_contract: row.try_get("bounty_contract")?,
+        delegate: row.try_get("delegate")?,
+        action: u8::try_from(row.try_get::<i16, _>("action")?)
+            .map_err(|_| DbError::IntegerOverflow("entrant relay action".to_string()))?,
+        wallet_nonce: u64_from_i64(row.try_get("wallet_nonce")?)?,
+        deadline: u64_from_i64(row.try_get("deadline")?)?,
+        payload_hash: row.try_get("payload_hash")?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        relayer_address: row.try_get("relayer_address")?,
+        status: parse_open_competition_entrant_relay_status(row.try_get("status")?)?,
+        retryable: row.try_get("retryable")?,
+        attempt_count: u32::try_from(row.try_get::<i32, _>("attempt_count")?)
+            .map_err(|_| DbError::IntegerOverflow("entrant relay attempt count".to_string()))?,
+        tx_hash: row.try_get("tx_hash")?,
+        estimated_gas: row
+            .try_get::<Option<i64>, _>("estimated_gas")?
+            .map(u64_from_i64)
+            .transpose()?,
+        gas_limit: row
+            .try_get::<Option<i64>, _>("gas_limit")?
+            .map(u64_from_i64)
+            .transpose()?,
+        error_code: row.try_get("error_code")?,
+        error_message: row.try_get("error_message")?,
+        receipt_block: row
+            .try_get::<Option<i64>, _>("receipt_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        receipt_block_hash: row.try_get("receipt_block_hash")?,
+        canonical_safe_block: row
+            .try_get::<Option<i64>, _>("canonical_safe_block")?
+            .map(u64_from_i64)
+            .transpose()?,
+        canonical_safe_block_hash: row.try_get("canonical_safe_block_hash")?,
+        canonical_event: row.try_get("canonical_event")?,
+        payment_proven: row.try_get("payment_proven")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn validate_open_competition_entrant_relay_replay(
+    persisted: &OpenCompetitionEntrantRelay,
+    requested: &NewOpenCompetitionEntrantRelay,
+) -> DbResult<()> {
+    if persisted.idempotency_key != requested.idempotency_key
+        || !persisted.wallet.eq_ignore_ascii_case(&requested.wallet)
+        || !persisted
+            .bounty_contract
+            .eq_ignore_ascii_case(&requested.bounty_contract)
+        || !persisted.delegate.eq_ignore_ascii_case(&requested.delegate)
+        || persisted.action != requested.action
+        || persisted.wallet_nonce != requested.wallet_nonce
+        || persisted.deadline != requested.deadline
+        || !persisted
+            .payload_hash
+            .eq_ignore_ascii_case(&requested.payload_hash)
+        || persisted.request_fingerprint != requested.request_fingerprint
+        || !persisted
+            .relayer_address
+            .eq_ignore_ascii_case(&requested.relayer_address)
+    {
+        return Err(DbError::OpenCompetitionEntrantRelayConflict(
+            "wallet nonce replay does not match the original request".to_string(),
         ));
     }
     Ok(())
@@ -5578,6 +6886,13 @@ fn persisted_nonnegative_money(amount: i64, currency: String) -> DbResult<Money>
     }
 }
 
+fn objective_status_value(status: ObjectiveStatus) -> DbResult<String> {
+    serde_json::to_value(status)?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| DbError::InvalidEnum("objective status".to_string()))
+}
+
 fn parse_capability_class(value: String) -> DbResult<CapabilityClass> {
     match value.as_str() {
         "Coding" => Ok(CapabilityClass::Coding),
@@ -5753,6 +7068,50 @@ fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     })
 }
 
+fn open_competition_event_from_row(row: PgRow) -> DbResult<OpenCompetitionEvent> {
+    let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
+    let kind: OpenCompetitionEventKind = serde_json::from_value(kind_value)?;
+    Ok(OpenCompetitionEvent {
+        id: row.try_get("id")?,
+        protocol_version: row.try_get("protocol_version")?,
+        log_key: row.try_get("log_key")?,
+        tx_hash: row.try_get("tx_hash")?,
+        block_number: u64_from_i64(row.try_get("block_number")?)?,
+        log_index: u64_from_i64(row.try_get("log_index")?)?,
+        contract_address: row.try_get("contract_address")?,
+        bounty_id: row.try_get("bounty_id")?,
+        kind,
+        data: row.try_get("data")?,
+        occurred_at: row.try_get("occurred_at")?,
+    })
+}
+
+fn autonomous_event_kind_storage_name(kind: AutonomousBountyEventKind) -> &'static str {
+    match kind {
+        AutonomousBountyEventKind::CanonicalBountyCreated => "canonical_bounty_created",
+        AutonomousBountyEventKind::CanonicalBountyTermsCommitted => {
+            "canonical_bounty_terms_committed"
+        }
+        AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured => {
+            "canonical_bounty_economics_configured"
+        }
+        AutonomousBountyEventKind::CanonicalBountyVerificationConfigured => {
+            "canonical_bounty_verification_configured"
+        }
+        AutonomousBountyEventKind::ExternalBountySubmitted => "external_bounty_submitted",
+        AutonomousBountyEventKind::FundingAdded => "funding_added",
+        AutonomousBountyEventKind::BountyBecameClaimable => "bounty_became_claimable",
+        AutonomousBountyEventKind::BountyClaimed => "bounty_claimed",
+        AutonomousBountyEventKind::SubmissionAdded => "submission_added",
+        AutonomousBountyEventKind::SubmissionRejected => "submission_rejected",
+        AutonomousBountyEventKind::BountySettled => "bounty_settled",
+        AutonomousBountyEventKind::ClaimExpired => "claim_expired",
+        AutonomousBountyEventKind::SubmissionExpired => "submission_expired",
+        AutonomousBountyEventKind::BountyCancelled => "bounty_cancelled",
+        AutonomousBountyEventKind::RefundWithdrawn => "refund_withdrawn",
+    }
+}
+
 fn autonomous_terms_from_row(row: PgRow) -> DbResult<AutonomousBountyTermsRecord> {
     let document: serde_json::Value = row.try_get("document")?;
     Ok(AutonomousBountyTermsRecord {
@@ -5882,7 +7241,17 @@ fn bounty_from_row(row: &PgRow) -> DbResult<Bounty> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{FundingMode, Money};
+    use alloy::{
+        primitives::B256,
+        signers::{local::PrivateKeySigner, SignerSync},
+    };
+    use domain::{
+        DeliverableAccessPolicy, FundingMode, IdentityDisclosure, Money, Objective,
+        ObjectiveAuthority, ObjectiveAuthorityKind, ObjectiveCreationDraft, ObjectiveParticipant,
+        ObjectivePrivacyDeclaration, ObjectiveVerificationMechanism, ObjectiveVerificationPolicy,
+        ParticipantKind, PublicEvidencePolicy, RightsPolicy, SignedObjectiveCreation,
+        WalletApproval,
+    };
 
     #[test]
     fn store_tracks_agents_and_bounties() {
@@ -6161,6 +7530,348 @@ mod tests {
         }
     }
 
+    #[test]
+    fn public_competitor_intelligence_cleanup_drops_only_retired_tables() {
+        for table in [
+            "competitors",
+            "competitor_links",
+            "competitor_capabilities",
+            "competitor_intelligence_runs",
+            "competitor_source_observations",
+            "competitor_metric_observations",
+            "competitor_intelligence_changes",
+        ] {
+            assert!(
+                PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION
+                    .contains(&format!("DROP TABLE IF EXISTS {table}")),
+                "cleanup must retire {table}"
+            );
+        }
+        assert!(
+            !PUBLIC_COMPETITOR_INTELLIGENCE_REMOVAL_MIGRATION.contains("bounties"),
+            "cleanup must not affect platform bounty data"
+        );
+    }
+
+    #[test]
+    fn objective_migration_keeps_one_versioned_aggregate_with_cas_fields() {
+        for invariant in [
+            "objective_aggregates",
+            "schema_version TEXT NOT NULL",
+            "revision BIGINT NOT NULL CHECK (revision > 0)",
+            "requesting_party_id UUID NOT NULL",
+            "record JSONB NOT NULL",
+            "agent-bounties/objective-v1",
+            "idx_objective_aggregates_status_updated",
+        ] {
+            assert!(
+                OBJECTIVE_COORDINATION_MIGRATION.contains(invariant),
+                "missing objective persistence invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn opportunity_comments_migration_is_public_bounded_and_idempotent() {
+        for invariant in [
+            "opportunity_comments",
+            "id UUID PRIMARY KEY",
+            "opportunity_id TEXT NOT NULL",
+            "author TEXT NOT NULL",
+            "body TEXT NOT NULL",
+            "opportunity_comments_recent_idx",
+            "opportunity_id ~ '^[A-Za-z0-9:._-]+$'",
+            "length(body) BETWEEN 1 AND 500",
+        ] {
+            assert!(
+                OPPORTUNITY_COMMENTS_MIGRATION.contains(invariant),
+                "missing opportunity comment invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn chatgpt_action_intents_are_bounded_idempotent_and_canonical_event_backed() {
+        for invariant in [
+            "chatgpt_action_intents",
+            "idempotency_key TEXT NOT NULL UNIQUE",
+            "action IN ('post', 'fund', 'compete', 'complete', 'verify')",
+            "status = 'confirmed'",
+            "transaction_hash IS NOT NULL",
+            "canonical_event_id IS NOT NULL",
+            "confirmed_block IS NOT NULL",
+            "pg_column_size(details) <= 16384",
+            "chatgpt_action_intents_transaction_idx",
+        ] {
+            assert!(
+                CHATGPT_ACTION_INTENTS_MIGRATION.contains(invariant),
+                "missing ChatGPT action intent invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounty_image_assets_are_content_addressed_and_bounded() {
+        for invariant in [
+            "CREATE TABLE IF NOT EXISTS bounty_image_assets",
+            "sha256 TEXT PRIMARY KEY",
+            "mime_type TEXT NOT NULL",
+            "content BYTEA NOT NULL",
+            "octet_length(content) BETWEEN 1 AND 5242880",
+            "bounty_image_assets_created_idx",
+        ] {
+            assert!(
+                BOUNTY_IMAGE_ASSETS_MIGRATION.contains(invariant),
+                "missing bounty image asset invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn chatgpt_solve_action_migration_renames_legacy_compete_intents() {
+        for invariant in [
+            "DROP CONSTRAINT IF EXISTS chatgpt_action_intents_action_check",
+            "SET action = 'solve'",
+            "WHERE action = 'compete'",
+            "action IN ('post', 'fund', 'solve', 'complete', 'verify')",
+        ] {
+            assert!(
+                SOLVE_ACTION_RENAME_MIGRATION.contains(invariant),
+                "missing ChatGPT solve-action migration invariant {invariant}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn objective_aggregate_compare_and_swap_is_durable() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let signer: PrivateKeySigner =
+            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+                .parse()
+                .unwrap();
+        let requester_id = Uuid::new_v4();
+        let draft = ObjectiveCreationDraft {
+            id: Uuid::new_v4(),
+            title: "Durable objective".to_string(),
+            desired_outcome: "A revisioned aggregate survives process boundaries.".to_string(),
+            human_purpose: "Prevent lost signed actions.".to_string(),
+            participants: vec![ObjectiveParticipant {
+                id: requester_id,
+                kind: ParticipantKind::Organization,
+                display_name: "Persistence test requester".to_string(),
+                wallet: format!("{:#x}", signer.address()),
+                identity_disclosure: IdentityDisclosure::Pseudonymous,
+                public_identity_reference: None,
+            }],
+            requesting_party_id: requester_id,
+            beneficiary_ids: vec![requester_id],
+            affected_parties: Vec::new(),
+            authority: ObjectiveAuthority {
+                kind: ObjectiveAuthorityKind::SingleWallet,
+                member_ids: vec![requester_id],
+                threshold: 1,
+                public_statement: "One declared organization wallet controls this test objective."
+                    .to_string(),
+            },
+            available_resources: Vec::new(),
+            expected_final_deliverable: "Durable revision evidence".to_string(),
+            requested_access_policy: DeliverableAccessPolicy::Public,
+            requested_rights_policy: RightsPolicy {
+                owner_ids: vec![requester_id],
+                license_or_terms: "CC0-1.0".to_string(),
+                restrictions: Vec::new(),
+            },
+            requested_final_verification: ObjectiveVerificationPolicy {
+                mechanism: ObjectiveVerificationMechanism::CommittedVerifier {
+                    verifier_id: requester_id,
+                },
+                acceptance_criteria: vec!["The stored revision can be read back.".to_string()],
+                evidence_schema: "https://example.test/objective-cas.schema.json".to_string(),
+                evidence_schema_hash: format!("0x{}", "11".repeat(32)),
+                trust_assumptions: vec![
+                    "The declared test wallet signs the verification statement.".to_string(),
+                ],
+            },
+            privacy: ObjectivePrivacyDeclaration {
+                blockchain_information_is_public: true,
+                evidence_policy: PublicEvidencePolicy::Public,
+                redaction_limits: "No private data is used in this test.".to_string(),
+            },
+        };
+        let plan = Objective::plan_creation(draft).unwrap();
+        let commitment = plan.commitment_hash.parse::<B256>().unwrap();
+        let signature = signer.sign_message_sync(commitment.as_slice()).unwrap();
+        let objective = Objective::create(
+            SignedObjectiveCreation {
+                approvals: vec![WalletApproval {
+                    participant_id: requester_id,
+                    signature: signature.to_string(),
+                }],
+                plan,
+            },
+            Utc::now(),
+        )
+        .unwrap();
+
+        store.create_objective(&objective).await.unwrap();
+        assert_eq!(
+            store.get_objective(objective.id).await.unwrap(),
+            Some(objective.clone())
+        );
+
+        let mut next = objective.clone();
+        next.revision += 1;
+        next.title = "Durable objective, revision two".to_string();
+        next.updated_at = Utc::now();
+        store
+            .replace_objective(&next, objective.revision)
+            .await
+            .unwrap();
+
+        let mut stale = next.clone();
+        stale.revision += 1;
+        assert!(matches!(
+            store.replace_objective(&stale, objective.revision).await,
+            Err(DbError::ObjectiveRevisionConflict { .. })
+        ));
+        assert_eq!(store.get_objective(objective.id).await.unwrap(), Some(next));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn chatgpt_action_intent_replays_and_confirms_only_observed_transaction() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let intent_id = Uuid::new_v4();
+        let contract = "0x1111111111111111111111111111111111111111";
+        let actor = "0x2222222222222222222222222222222222222222";
+        let transaction_hash = format!("0x{}", "33".repeat(32));
+        let bounty_id = format!("0x{}", "44".repeat(32));
+        let request = NewChatgptActionIntent {
+            id: intent_id,
+            idempotency_key: format!("chatgpt-action-{intent_id}"),
+            action: "fund".to_string(),
+            network: "base-mainnet".to_string(),
+            opportunity_id: Some(format!("canonical_base:base-mainnet:{contract}")),
+            bounty_contract: Some(contract.to_string()),
+            bounty_id: Some(bounty_id.clone()),
+            actor_wallet: None,
+            amount_base_units: Some(1_000_000),
+            details: serde_json::json!({"title": "Durable action test"}),
+            request_fingerprint: "55".repeat(32),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        };
+        let created = store.reserve_chatgpt_action_intent(&request).await.unwrap();
+        let replay = store.reserve_chatgpt_action_intent(&request).await.unwrap();
+        assert_eq!(created, replay);
+        assert_eq!(created.status, "review_required");
+
+        let observed = store
+            .observe_chatgpt_action_transaction(
+                intent_id,
+                &ChatgptActionObservation {
+                    transaction_hash: transaction_hash.clone(),
+                    bounty_contract: Some(contract.to_string()),
+                    bounty_id: Some(bounty_id.clone()),
+                    actor_wallet: Some(actor.to_string()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(observed.status, "pending_confirmation");
+
+        let wrong_event = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: format!("base-mainnet:{}:0", Uuid::new_v4()),
+            tx_hash: format!("0x{}", "66".repeat(32)),
+            block_number: 100,
+            log_index: 0,
+            contract_address: contract.to_string(),
+            bounty_id: bounty_id.clone(),
+            kind: AutonomousBountyEventKind::FundingAdded,
+            data: serde_json::json!({"contributor": actor, "amount": 1_000_000}),
+            occurred_at: Utc::now(),
+        };
+        store
+            .upsert_autonomous_bounty_event("base-mainnet", &wrong_event)
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .confirm_chatgpt_action_intent(intent_id, &wrong_event)
+                .await,
+            Err(DbError::ChatgptActionIntentConflict(_))
+        ));
+
+        let matching_event = AutonomousBountyEvent {
+            id: Uuid::new_v4(),
+            log_key: format!("base-mainnet:{}:0", Uuid::new_v4()),
+            tx_hash: transaction_hash,
+            block_number: 101,
+            log_index: 0,
+            contract_address: contract.to_string(),
+            bounty_id,
+            kind: AutonomousBountyEventKind::FundingAdded,
+            data: serde_json::json!({"contributor": actor, "amount": 1_000_000}),
+            occurred_at: Utc::now(),
+        };
+        store
+            .upsert_autonomous_bounty_event("base-mainnet", &matching_event)
+            .await
+            .unwrap();
+        let confirmed = store
+            .confirm_chatgpt_action_intent(intent_id, &matching_event)
+            .await
+            .unwrap();
+        assert_eq!(confirmed.status, "confirmed");
+        assert_eq!(confirmed.canonical_event_id, Some(matching_event.id));
+        assert_eq!(
+            confirmed.canonical_event_kind.as_deref(),
+            Some("funding_added")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn opportunity_comment_round_trip_is_durable_and_idempotent() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let id = Uuid::new_v4();
+        let comment = NewOpportunityComment {
+            id,
+            opportunity_id: "canonical:base-mainnet:0xabc".to_string(),
+            author: "Ada".to_string(),
+            body: "The acceptance criteria are clear.".to_string(),
+        };
+        let created = store
+            .create_or_get_opportunity_comment(&comment)
+            .await
+            .unwrap();
+        let replay = store
+            .create_or_get_opportunity_comment(&comment)
+            .await
+            .unwrap();
+        assert_eq!(created, replay);
+        let conflict = store
+            .create_or_get_opportunity_comment(&NewOpportunityComment {
+                body: "different content".to_string(),
+                ..comment.clone()
+            })
+            .await;
+        assert!(matches!(conflict, Err(DbError::OpportunityCommentConflict)));
+        let comments = store
+            .list_opportunity_comments(&comment.opportunity_id, 100)
+            .await
+            .unwrap();
+        assert!(comments.iter().any(|item| item.id == id));
+    }
+
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn social_mention_ingestion_round_trip_executes_against_migrated_postgres() {
@@ -6169,7 +7880,8 @@ mod tests {
         store.migrate().await.unwrap();
 
         let id = Uuid::new_v4();
-        let mention_id = format!("0x{}", "42".repeat(20));
+        let mention_seed = id.simple().to_string();
+        let mention_id = format!("0x{}{}", mention_seed, &mention_seed[..8]);
         let new_ingestion = NewSocialMentionIngestion {
             id,
             provider: "neynar".to_string(),
@@ -6289,7 +8001,7 @@ mod tests {
         store.migrate().await.unwrap();
 
         let stats = store
-            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1))
+            .opportunity_lifecycle_stats(Utc::now() - chrono::Duration::hours(1), &[])
             .await
             .unwrap();
         assert!(stats.solution_received <= stats.published);
@@ -6521,11 +8233,186 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn open_competition_entrant_relay_is_secret_free_idempotent_and_quota_bounded() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let network = format!("entrant-relay-test-{}", Uuid::new_v4());
+        let relay = NewOpenCompetitionEntrantRelay {
+            id: Uuid::new_v4(),
+            idempotency_key: format!("entrant-relay-{}", Uuid::new_v4()),
+            network: network.clone(),
+            wallet: "0x1111111111111111111111111111111111111111".to_string(),
+            bounty_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            delegate: "0x3333333333333333333333333333333333333333".to_string(),
+            action: 0,
+            wallet_nonce: 7,
+            deadline: 2_000_000_000,
+            payload_hash: format!("0x{}", "44".repeat(32)),
+            request_fingerprint: "fingerprint-a".to_string(),
+            relayer_address: "0x5555555555555555555555555555555555555555".to_string(),
+        };
+        let first = store
+            .reserve_open_competition_entrant_relay(&relay, 2, 1)
+            .await
+            .unwrap();
+        let replay = store
+            .reserve_open_competition_entrant_relay(&relay, 2, 1)
+            .await
+            .unwrap();
+        assert_eq!(first.id, replay.id);
+
+        let mut conflict = relay.clone();
+        conflict.id = Uuid::new_v4();
+        conflict.request_fingerprint = "fingerprint-b".to_string();
+        assert!(matches!(
+            store
+                .reserve_open_competition_entrant_relay(&conflict, 2, 1)
+                .await,
+            Err(DbError::OpenCompetitionEntrantRelayConflict(_))
+        ));
+
+        let mut wallet_quota = relay.clone();
+        wallet_quota.id = Uuid::new_v4();
+        wallet_quota.idempotency_key = format!("entrant-relay-{}", Uuid::new_v4());
+        wallet_quota.wallet_nonce = 8;
+        wallet_quota.payload_hash = format!("0x{}", "66".repeat(32));
+        wallet_quota.request_fingerprint = "fingerprint-wallet-quota".to_string();
+        assert!(matches!(
+            store
+                .reserve_open_competition_entrant_relay(&wallet_quota, 2, 1)
+                .await,
+            Err(DbError::OpenCompetitionEntrantRelayQuotaExceeded(_))
+        ));
+
+        let mut second = wallet_quota;
+        second.wallet = "0x7777777777777777777777777777777777777777".to_string();
+        second.request_fingerprint = "fingerprint-second".to_string();
+        store
+            .reserve_open_competition_entrant_relay(&second, 2, 1)
+            .await
+            .unwrap();
+
+        let lease = store
+            .acquire_x402_relayer_lease(&network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        let claimed = store
+            .claim_open_competition_entrant_relay(first.id, lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.status, OpenCompetitionEntrantRelayStatus::Relaying);
+        let broadcast = store
+            .mark_open_competition_entrant_relay_broadcast(
+                first.id,
+                lease,
+                &format!("0x{}", "88".repeat(32)),
+                90_000,
+                120_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            broadcast.status,
+            OpenCompetitionEntrantRelayStatus::Broadcast
+        );
+        store
+            .release_x402_relayer_lease(&network, lease)
+            .await
+            .unwrap();
+        let confirmed = store
+            .mark_open_competition_entrant_relay_confirmed(
+                first.id,
+                123,
+                &format!("0x{}", "99".repeat(32)),
+                130,
+                &format!("0x{}", "aa".repeat(32)),
+                "SolutionCommitted",
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            confirmed.status,
+            OpenCompetitionEntrantRelayStatus::Confirmed
+        );
+        assert!(!confirmed.retryable);
+        assert!(!confirmed.payment_proven);
+
+        let recovery_network = format!("entrant-relay-recovery-{}", Uuid::new_v4());
+        let mut failed = relay.clone();
+        failed.id = Uuid::new_v4();
+        failed.idempotency_key = format!("entrant-relay-{}", Uuid::new_v4());
+        failed.network = recovery_network.clone();
+        failed.request_fingerprint = "fingerprint-retryable-failure".to_string();
+        let failed = store
+            .reserve_open_competition_entrant_relay(&failed, 3, 3)
+            .await
+            .unwrap();
+        let recovery_lease = store
+            .acquire_x402_relayer_lease(&recovery_network, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .claim_open_competition_entrant_relay(failed.id, recovery_lease, 30)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .mark_open_competition_entrant_relay_failed(
+                failed.id,
+                Some(recovery_lease),
+                true,
+                "temporary_provider_failure",
+                "retry the exact request",
+            )
+            .await
+            .unwrap();
+        store
+            .release_x402_relayer_lease(&recovery_network, recovery_lease)
+            .await
+            .unwrap();
+
+        let mut replacement = relay.clone();
+        replacement.id = Uuid::new_v4();
+        replacement.idempotency_key = format!("entrant-relay-{}", Uuid::new_v4());
+        replacement.network = recovery_network;
+        replacement.payload_hash = format!("0x{}", "77".repeat(32));
+        replacement.request_fingerprint = "fingerprint-corrected-action".to_string();
+        assert!(matches!(
+            store
+                .reserve_open_competition_entrant_relay(&replacement, 3, 3)
+                .await,
+            Err(DbError::OpenCompetitionEntrantRelayConflict(_))
+        ));
+        store
+            .mark_open_competition_entrant_relay_failed(
+                failed.id,
+                None,
+                false,
+                "transaction_reverted",
+                "wallet nonce was not consumed",
+            )
+            .await
+            .unwrap();
+        let recovered = store
+            .reserve_open_competition_entrant_relay(&replacement, 3, 3)
+            .await
+            .unwrap();
+        assert_eq!(recovered.wallet_nonce, failed.wallet_nonce);
+        assert_ne!(recovered.id, failed.id);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
     async fn claim_funnel_counts_direct_and_atomic_sponsored_confirmations() {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
-        let baseline = store.claim_funnel_stats(1).await.unwrap();
+        let baseline = store.claim_funnel_stats(1, &[]).await.unwrap();
         let network = format!("funnel-test-{}", Uuid::new_v4());
         let address = |id: Uuid| {
             let value = id.simple().to_string();
@@ -6702,7 +8589,7 @@ mod tests {
                 .unwrap();
         }
 
-        let observed = store.claim_funnel_stats(1).await.unwrap();
+        let observed = store.claim_funnel_stats(1, &[]).await.unwrap();
         assert_eq!(observed.stages.observed, baseline.stages.observed + 2);
         assert_eq!(
             observed.stages.unique_solver_wallets,

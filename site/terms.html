@@ -40,7 +40,7 @@
       </section>
 
       <h2>1. How you agree</h2>
-      <p>You agree to these Terms when you check the agreement box, submit an explicit legal acceptance through the API, or use the hosted Service to post, fund, claim, submit, recover funds, or authorize an agent wallet. Reading a public page or the open-source code by itself does not create agreement. Electronic records and signatures can have legal effect; keep your own transaction and receipt records.</p>
+      <p>You agree to these Terms when you check the agreement box, submit an explicit legal acceptance through the API, or use the hosted Service to post, fund, claim, submit, cancel an unclaimed bounty, recover funds, or authorize an agent wallet. Reading a public page or the open-source code by itself does not create agreement. Electronic records and signatures can have legal effect; keep your own transaction and receipt records.</p>
       <p>If an AI agent acts for you or your organization, you are the operator and are responsible for ensuring the agent stays within its delegated authority. An agent cannot grant itself authority that its operator does not have.</p>
 
       <h2>2. Eligibility and authority</h2>
@@ -60,6 +60,7 @@
       <h2>6. Funding, bonds, settlement, and refunds</h2>
       <p>Autonomous-v1 uses native USDC on Base in per-bounty contracts. Check the network, contract, amount, token, and destination in your wallet. Wallet prompts, approvals, signatures, plans, broadcasts, transaction hashes, comments, and AI outputs are not funding or payout evidence. Confirmed canonical events determine protocol state. <code>FundingAdded</code> proves accepted funding; <code>BountySettled</code> proves solver payment.</p>
       <p>Claiming may post the displayed USDC bond. Acceptance or verifier timeout returns it. Rejection may pay verifiers while preserving the bounty reserve. A claim that expires without a submission may forfeit the bond under the posted policy. Refund eligibility and timing follow the immutable contract and the <a href="refunds.html">refund policy</a>.</p>
+      <p>The creator may cancel only while the canonical bounty remains open or claimable. A claim blocks cancellation. Cancellation removes the bounty from active inventory but does not erase public chain history. Each contributor must withdraw its own refund; the creator cannot withdraw another contributor's funds.</p>
 
       <h2>7. Blockchain and wallet risk</h2>
       <p>Blockchain transactions may be public, permanent, delayed, reordered, failed, or irreversible. Smart contracts, wallets, RPC providers, relayers, bridges, stablecoins, networks, and third-party software can contain bugs or become unavailable. Token values and fees can change. Review every wallet prompt and cancel if it differs from the amount, network, or destination shown by the Service. The Service will never ask for your recovery phrase or private key.</p>

@@ -18,6 +18,21 @@
 
   const announcedProviders = [];
 
+  const BOUNTY_LIFECYCLE = Object.freeze({
+    cancel: Object.freeze({ function: "cancel()", data: "0xea8a1af0" }),
+    withdrawRefund: Object.freeze({ function: "withdrawRefund()", data: "0x110f8874" }),
+  });
+
+  const BOUNDED_WALLET_V2 = Object.freeze({
+    version: "0xbfa7c23ab51aed73d26d3a18212c525361df14b0d4d79efa3f9a229cebe161ec",
+    selectors: Object.freeze({
+      owner: "0x8da5cb5b",
+      walletVersion: "0x1127b57e",
+      cancelRefund: "0x683e2054",
+      withdrawRefund: "0x06536a56",
+    }),
+  });
+
   const LEGACY_RECOVERY = Object.freeze({
     creator: "0x884834e884d6e93462655a2820140ad03e6747bc",
     factory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
@@ -72,17 +87,27 @@
   function populateProviderSelectors() {
     document.querySelectorAll("[data-wallet-provider]").forEach((selector) => {
       const selectedProvider = state.provider;
-      selector.replaceChildren(...state.providers.map((item, index) => {
+      const required = selector.dataset.walletRequires || "";
+      const visible = state.providers
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => {
+          if (required !== "direct-transactions") return true;
+          const capabilities = window.AgentBountiesWalletAdapters?.capabilitiesFor?.(item.provider);
+          return capabilities?.directTransactions !== false;
+        });
+      selector.replaceChildren(...visible.map(({ item, index }) => {
         const option = document.createElement("option");
         option.value = String(index);
         option.textContent = providerName(item.provider, item.info);
         option.selected = item.provider === selectedProvider;
         return option;
       }));
-      selector.disabled = state.providers.length === 0;
-      if (state.providers.length === 0) {
+      selector.disabled = visible.length === 0;
+      if (visible.length === 0) {
         const option = document.createElement("option");
-        option.textContent = "No browser wallet detected";
+        option.textContent = required === "direct-transactions"
+          ? "No compatible transaction wallet available"
+          : "No wallet provider is available";
         selector.append(option);
       }
     });
@@ -109,7 +134,7 @@
     const selector = (context.querySelector && context.querySelector("[data-wallet-provider]"))
       || document.querySelector("[data-wallet-provider]");
     const item = state.providers[Number.parseInt(selector && selector.value, 10)];
-    if (!item) throw new Error("Unlock a browser wallet, reload, and select it here.");
+    if (!item) throw new Error("Select a wallet provider. You can create an embedded wallet without installing an extension.");
     state.provider = item.provider;
     const index = String(state.providers.findIndex((provider) => provider.provider === item.provider));
     document.querySelectorAll("[data-wallet-provider]").forEach((candidate) => {
@@ -192,6 +217,61 @@
       throw error;
     }
     return body;
+  }
+
+  function hostedActionIntentId() {
+    const value = new URLSearchParams(location.search).get("intent");
+    if (!value) return null;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+      throw new Error("The ChatGPT authorization intent is invalid.");
+    }
+    return value;
+  }
+
+  async function loadHostedActionIntent(expectedActions = []) {
+    const id = hostedActionIntentId();
+    if (!id) return null;
+    await loadProtocol();
+    const intent = await requestJson(`${apiBase()}/v1/chatgpt/action-intents/${id}`);
+    if (!expectedActions.includes(intent.action)) {
+      throw new Error(`This authorization intent cannot be used for ${expectedActions.join(" or ")}.`);
+    }
+    return intent;
+  }
+
+  async function observeHostedAction({
+    transactionHash,
+    bountyContract = null,
+    bountyId = null,
+    actorWallet = null,
+  }) {
+    const id = hostedActionIntentId();
+    if (!id) return null;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(transactionHash || "")) {
+      throw new Error("A canonical 32-byte transaction hash is required to reconcile this action.");
+    }
+    return requestJson(`${apiBase()}/v1/chatgpt/action-intents/${id}/observations`, {
+      method: "POST",
+      body: JSON.stringify({
+        transaction_hash: transactionHash,
+        bounty_contract: bountyContract,
+        bounty_id: bountyId,
+        actor_wallet: actorWallet,
+      }),
+    });
+  }
+
+  async function pollHostedAction(timeoutMs = 90_000) {
+    const id = hostedActionIntentId();
+    if (!id) return null;
+    const started = Date.now();
+    let intent = null;
+    while (Date.now() - started < timeoutMs) {
+      intent = await requestJson(`${apiBase()}/v1/chatgpt/action-intents/${id}`);
+      if (["confirmed", "failed", "expired"].includes(intent.status)) return intent;
+      await sleep(2_500);
+    }
+    return intent;
   }
 
   async function acceptLegalAction(scope, action, account) {
@@ -336,6 +416,17 @@
       return;
     }
     if (handoff.candidate.status === "claimed" && handoff.canonical_event_id) {
+      if (hostedActionIntentId()) {
+        if (!handoff.claim_transaction_hash) {
+          throw new Error("Canonical claim exists, but its transaction hash is unavailable for ChatGPT reconciliation.");
+        }
+        await observeHostedAction({
+          transactionHash: handoff.claim_transaction_hash,
+          bountyContract: item.bounty_contract,
+          bountyId: item.bounty_id,
+          actorWallet: account,
+        });
+      }
       output(result, [
         "Canonical BountyClaimed is confirmed. Start the task.",
         `Event: ${handoff.canonical_event_id}`,
@@ -366,6 +457,17 @@
     });
     for (let attempt = 0; attempt < 36; attempt += 1) {
       if (handoff.candidate.status === "claimed" && handoff.canonical_event_id) {
+        if (hostedActionIntentId()) {
+          if (!handoff.claim_transaction_hash) {
+            throw new Error("Canonical claim exists, but its transaction hash is unavailable for ChatGPT reconciliation.");
+          }
+          await observeHostedAction({
+            transactionHash: handoff.claim_transaction_hash,
+            bountyContract: item.bounty_contract,
+            bountyId: item.bounty_id,
+            actorWallet: account,
+          });
+        }
         output(result, [
           "Canonical BountyClaimed is confirmed. Start the task.",
           `Event: ${handoff.canonical_event_id}`,
@@ -411,20 +513,30 @@
 
   function defaultVerification(protocol) {
     const config = protocol.default_verification;
-    if (!config || config.mode !== "deterministic_module" || config.threshold !== 1) {
-      throw new Error("The active protocol does not declare a safe deterministic default.");
+    if (
+      !config
+      || config.mode !== "signed_quorum"
+      || config.threshold !== 1
+      || !Array.isArray(config.verifiers)
+      || config.verifiers.length !== 1
+    ) {
+      throw new Error("The active protocol does not declare one default verifier.");
     }
-    const module = protocol.deterministic_modules && protocol.deterministic_modules[config.module_id];
-    if (!module) throw new Error("The default deterministic verifier is unavailable.");
-    if (!module.benchmark || module.benchmark.engine !== config.module_id) {
-      throw new Error("The default deterministic verifier has no exact benchmark commitment.");
+    const moduleId = "leading_zero_work_v1";
+    const module = protocol.deterministic_modules && protocol.deterministic_modules[moduleId];
+    if (!module || !module.benchmark || module.benchmark.engine !== moduleId) {
+      throw new Error("The optional deterministic verifier is unavailable.");
     }
     return {
       ...config,
-      contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
-      benchmark: module.benchmark,
-      scope_notice: module.scope_notice || "The selected module controls payout.",
-      usage: module.usage || "custom",
+      verifiers: config.verifiers.map((value) => requiredAddress(value, "Default verifier")),
+      deterministic: {
+        module_id: moduleId,
+        contract: requiredAddress(module.contract || "", "Deterministic verifier module"),
+        benchmark: module.benchmark,
+        scope_notice: module.scope_notice || "The selected module controls payout.",
+        usage: module.usage || "custom",
+      },
     };
   }
 
@@ -442,7 +554,7 @@
     const demoWarning = form.querySelector("[data-demo-verifier-warning]");
     const demoAccepted = form.elements.demoVerifierAccepted;
 
-    module.value = defaults.contract;
+    module.value = defaults.deterministic.contract;
     module.readOnly = true;
     module.disabled = !deterministic;
     recipient.disabled = !deterministic;
@@ -452,14 +564,20 @@
     if (demoWarning) demoWarning.hidden = !deterministic;
     if (demoAccepted) demoAccepted.disabled = !deterministic;
     if (deterministic) {
-      threshold.value = String(defaults.threshold);
-      benchmark.value = canonicalJsonString(defaults.benchmark);
-      if (scope) scope.textContent = defaults.scope_notice;
-      if (defaults.verifier_reward_recipient === "creator_wallet" && account && !recipient.value.trim()) {
+      threshold.value = "1";
+      benchmark.value = canonicalJsonString(defaults.deterministic.benchmark);
+      if (scope) scope.textContent = defaults.deterministic.scope_notice;
+      if (account && !recipient.value.trim()) {
         recipient.value = account;
       }
-    } else if (scope) {
-      scope.textContent = "Advanced modes pay only from the verifier wallets and threshold committed in the terms. Confirm verifier availability before funding.";
+    } else {
+      if (!verifiers.value.trim()) verifiers.value = defaults.verifiers.join("\n");
+      if (!threshold.value || mode === defaults.mode) threshold.value = String(defaults.threshold);
+      if (scope) {
+        scope.textContent = mode === "signed_quorum"
+          ? "One precommitted verifier runs the exact benchmark. Add a second only for higher-risk work."
+          : "AI judge verification requires at least two independent committed judges.";
+      }
     }
   }
 
@@ -790,6 +908,294 @@
     return item;
   }
 
+  function validateLifecyclePlan(plan, bountyContract, account, expected) {
+    if (!plan
+      || String(plan.from || "").toLowerCase() !== account.toLowerCase()
+      || String(plan.to || "").toLowerCase() !== bountyContract.toLowerCase()
+      || String(plan.value_wei) !== "0"
+      || plan.function !== expected.function
+      || String(plan.data || "").toLowerCase() !== expected.data) {
+      throw new Error("The hosted transaction plan does not match the exact requested bounty action.");
+    }
+    return plan;
+  }
+
+  async function pollBountyStatus(api, bountyContract, expectedStatus, timeoutMs = 90_000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const item = await canonicalBountyByContract(api, bountyContract);
+      if (item.status === expectedStatus) return item;
+      await sleep(2_500);
+    }
+    return null;
+  }
+
+  async function contributionBalance(bountyContract, account) {
+    const word = await recoveryCall(
+      bountyContract,
+      `${LEGACY_RECOVERY.selectors.contributions}${addressWord(account)}`,
+    );
+    return recoveryUint(word);
+  }
+
+  async function boundedWalletV2Owner(walletAddress) {
+    try {
+      const [version, owner] = await Promise.all([
+        recoveryCall(walletAddress, BOUNDED_WALLET_V2.selectors.walletVersion),
+        recoveryCall(walletAddress, BOUNDED_WALLET_V2.selectors.owner),
+      ]);
+      if (version !== BOUNDED_WALLET_V2.version) return null;
+      return recoveryAddress(owner);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async function pollRefundEvent(api, bountyId, contributor, transactionHash, timeoutMs = 90_000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const events = await requestJson(
+        `${api}/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=${encodeURIComponent(bountyId)}`,
+      );
+      const event = events.find((item) =>
+        item.kind === "refund_withdrawn"
+        && String(item.data?.contributor || "").toLowerCase() === contributor.toLowerCase()
+        && String(item.tx_hash || "").toLowerCase() === transactionHash.toLowerCase());
+      if (event) return event;
+      await sleep(2_500);
+    }
+    return null;
+  }
+
+  async function cancelUnclaimedBounty(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const result = byId("creator-cancel-output");
+    const refundButton = byId("creator-refund-button");
+    try {
+      const protocol = requireActiveProtocol(await loadProtocol());
+      const account = await connectWallet(form);
+      await acceptLegalAction(form, "cancel_bounty", account);
+      const api = apiBase();
+      const bountyContract = requiredAddress(
+        form.elements.bountyContract.value,
+        "Bounty contract",
+      );
+      const bounty = await canonicalBountyByContract(api, bountyContract);
+      const creator = requiredAddress(bounty.creator, "Indexed creator");
+      const creatorIsAccount = creator.toLowerCase() === account.toLowerCase();
+      const boundedOwner = creatorIsAccount ? null : await boundedWalletV2Owner(creator);
+      const ownerControlsBoundedWallet =
+        boundedOwner && boundedOwner.toLowerCase() === account.toLowerCase();
+      if (!creatorIsAccount && !ownerControlsBoundedWallet) {
+        throw new Error("Connect the creator wallet or the owner of its BoundedAgentWalletV2.");
+      }
+      if (ownerControlsBoundedWallet) {
+        await acceptLegalAction(form, "recover_funds", account);
+        const contribution = await contributionBalance(bountyContract, creator);
+        if (contribution === 0n) {
+          throw new Error("This bounded wallet has no remaining contribution to withdraw.");
+        }
+        const isCancelled = bounty.status === "cancelled";
+        if (!isCancelled && !matchesCancellableStatus(bounty.status)) {
+          throw new Error(`This bounty is ${bounty.status}. Claimed work cannot be cancelled.`);
+        }
+        const selector = isCancelled
+          ? BOUNDED_WALLET_V2.selectors.withdrawRefund
+          : BOUNDED_WALLET_V2.selectors.cancelRefund;
+        const expected = {
+          function: isCancelled
+            ? "withdrawCancelledBountyRefund(address)"
+            : "cancelAndWithdrawUnclaimedBounty(address)",
+          data: `${selector}${addressWord(bountyContract)}`,
+        };
+        output(result, [
+          "Review one zero-value Base transaction.",
+          isCancelled
+            ? "Action: withdraw the bounded wallet's existing refund."
+            : "Action: cancel the unclaimed bounty and refund the bounded wallet atomically.",
+          `Refund principal: ${(Number(contribution) / 1_000_000).toFixed(6)} USDC`,
+          "Other funders keep their independent refunds.",
+        ], "pending");
+        const plan = validateLifecyclePlan(
+          await requestJson(
+            `${api}/v1/base/autonomous-bounties/bounded-wallet-cancel-refund-plan`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                network: "base-mainnet",
+                bounty_contract: bountyContract,
+                bounded_wallet: creator,
+                caller: account,
+              }),
+            },
+          ),
+          creator,
+          account,
+          expected,
+        );
+        const transactionHash = await sendTransaction(plan, account);
+        await waitReceipt(transactionHash);
+        const cancelled = isCancelled
+          ? bounty
+          : await pollBountyStatus(api, bountyContract, "cancelled");
+        const refund = await pollRefundEvent(
+          api,
+          bounty.bounty_id,
+          creator,
+          transactionHash,
+        );
+        if (!cancelled || !refund) {
+          output(result, [
+            "Transaction confirmed; canonical cancellation/refund indexing is still pending.",
+            `${protocol.explorer_url}/tx/${transactionHash}`,
+          ], "pending");
+          return;
+        }
+        refundButton.hidden = true;
+        output(result, [
+          "RefundWithdrawn is confirmed.",
+          `${protocol.explorer_url}/tx/${transactionHash}`,
+          `Transferred to bounded wallet: ${(Number(refund.data?.amount || 0) / 1_000_000).toFixed(6)} USDC`,
+        ], "success");
+        track("bounded_wallet_cancel_refund_confirmed", { bounty_contract: bountyContract });
+        return;
+      }
+      if (bounty.status === "cancelled") {
+        const contribution = await contributionBalance(bountyContract, account);
+        refundButton.hidden = contribution === 0n;
+        refundButton.disabled = contribution === 0n;
+        output(result, [
+          "BountyCancelled is already confirmed. The bounty is not active.",
+          contribution > 0n
+            ? `Your refundable contribution is ${(Number(contribution) / 1_000_000).toFixed(6)} USDC. Withdraw it now.`
+            : "This creator wallet has no remaining contribution to withdraw.",
+        ], "success");
+        return;
+      }
+      if (!matchesCancellableStatus(bounty.status)) {
+        throw new Error(`This bounty is ${bounty.status}. Only unclaimed Open or Claimable bounties can be cancelled.`);
+      }
+      const contribution = await contributionBalance(bountyContract, account);
+      output(result, [
+        "Review one zero-value Base transaction.",
+        `Action: cancel ${bountyContract}`,
+        "Result: remove it from active inventory and enable each funder's pull refund.",
+        "The immutable chain history remains public.",
+      ], "pending");
+      const plan = validateLifecyclePlan(
+        await requestJson(`${api}/v1/base/autonomous-bounties/cancel-plan`, {
+          method: "POST",
+          body: JSON.stringify({
+            network: "base-mainnet",
+            bounty_contract: bountyContract,
+            caller: account,
+          }),
+        }),
+        bountyContract,
+        account,
+        BOUNTY_LIFECYCLE.cancel,
+      );
+      const transactionHash = await sendTransaction(plan, account);
+      await waitReceipt(transactionHash);
+      const cancelled = await pollBountyStatus(api, bountyContract, "cancelled");
+      if (!cancelled) {
+        output(result, [
+          "Cancellation transaction confirmed; canonical indexing is still pending.",
+          `${protocol.explorer_url}/tx/${transactionHash}`,
+          "Refresh this page before requesting a refund.",
+        ], "pending");
+        return;
+      }
+      refundButton.hidden = contribution === 0n;
+      refundButton.disabled = contribution === 0n;
+      output(result, [
+        "BountyCancelled is confirmed. The bounty is no longer active.",
+        `${protocol.explorer_url}/tx/${transactionHash}`,
+        contribution > 0n
+          ? `Your refundable contribution is ${(Number(contribution) / 1_000_000).toFixed(6)} USDC. Withdraw it now.`
+          : "This creator wallet contributed 0 USDC. Other funders withdraw from their own wallets.",
+        "Chain history is retained as an immutable audit record.",
+      ], "success");
+      track("canonical_cancel_confirmed", { bounty_contract: bountyContract });
+    } catch (error) {
+      output(result, error.message || String(error), "error");
+    }
+  }
+
+  function matchesCancellableStatus(status) {
+    return status === "open" || status === "claimable";
+  }
+
+  async function withdrawCreatorRefund(event) {
+    const button = event.currentTarget;
+    const form = button.closest("form");
+    const result = byId("creator-cancel-output");
+    try {
+      const protocol = requireActiveProtocol(await loadProtocol());
+      const account = await connectWallet(form);
+      await acceptLegalAction(form, "recover_funds", account);
+      const api = apiBase();
+      const bountyContract = requiredAddress(
+        form.elements.bountyContract.value,
+        "Bounty contract",
+      );
+      const bounty = await canonicalBountyByContract(api, bountyContract);
+      if (bounty.status !== "cancelled") {
+        throw new Error("Confirm BountyCancelled before withdrawing a refund.");
+      }
+      if (String(bounty.creator).toLowerCase() !== account.toLowerCase()) {
+        throw new Error("Connect the creator wallet that funded this bounty.");
+      }
+      const contribution = await contributionBalance(bountyContract, account);
+      if (contribution === 0n) {
+        throw new Error("This creator wallet has no remaining contribution to withdraw.");
+      }
+      output(result, [
+        "Review one zero-value Base transaction.",
+        `Refund principal: ${(Number(contribution) / 1_000_000).toFixed(6)} USDC`,
+        "Any forfeited timeout-bond bonus is calculated by the contract.",
+      ], "pending");
+      const plan = validateLifecyclePlan(
+        await requestJson(`${api}/v1/base/autonomous-bounties/refund-withdrawal-plan`, {
+          method: "POST",
+          body: JSON.stringify({
+            network: "base-mainnet",
+            bounty_contract: bountyContract,
+            caller: account,
+          }),
+        }),
+        bountyContract,
+        account,
+        BOUNTY_LIFECYCLE.withdrawRefund,
+      );
+      const transactionHash = await sendTransaction(plan, account);
+      await waitReceipt(transactionHash);
+      const refund = await pollRefundEvent(
+        api,
+        bounty.bounty_id,
+        account,
+        transactionHash,
+      );
+      if (!refund) {
+        output(result, [
+          "Refund transaction confirmed; canonical RefundWithdrawn indexing is still pending.",
+          `${protocol.explorer_url}/tx/${transactionHash}`,
+        ], "pending");
+        return;
+      }
+      button.hidden = true;
+      output(result, [
+        "RefundWithdrawn is confirmed.",
+        `${protocol.explorer_url}/tx/${transactionHash}`,
+        `Transferred: ${(Number(refund.data?.amount || 0) / 1_000_000).toFixed(6)} USDC`,
+      ], "success");
+      track("canonical_refund_confirmed", { bounty_contract: bountyContract });
+    } catch (error) {
+      output(result, error.message || String(error), "error");
+    }
+  }
+
   async function pollSubmission(api, bountyId, submissionHash, evidenceHash, timeoutMs = 90_000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -803,6 +1209,32 @@
           String(event.data.submission_hash).toLowerCase() === submissionHash.toLowerCase()
           && String(event.data.evidence_hash).toLowerCase() === evidenceHash.toLowerCase());
       if (submission) return submission;
+      await sleep(2_500);
+    }
+    return null;
+  }
+
+  async function pollFundingEvent(
+    api,
+    bountyId,
+    contributor,
+    amount,
+    transactionHash = null,
+    startedAt = Date.now(),
+    timeoutMs = 90_000,
+  ) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const events = await requestJson(
+        `${api}/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=${encodeURIComponent(bountyId)}`,
+      );
+      const event = events.find((item) =>
+        item.kind === "funding_added"
+        && String(item.data?.contributor || "").toLowerCase() === contributor.toLowerCase()
+        && Number(item.data?.amount) === Number(amount)
+        && (!transactionHash || String(item.tx_hash).toLowerCase() === transactionHash.toLowerCase())
+        && Date.parse(item.occurred_at) >= startedAt);
+      if (event) return event;
       await sleep(2_500);
     }
     return null;
@@ -845,7 +1277,7 @@
       throw new Error("Confirm that the demo work-proof checker does not evaluate your task.");
     }
     if (mode !== "deterministic_module" && verifiers.length === 0) {
-      throw new Error("Quorum mode requires verifier wallet addresses.");
+      throw new Error("Signed verification requires a verifier wallet.");
     }
     if (mode === "ai_judge_quorum" && threshold < 2) {
       throw new Error("AI judge settlement requires at least two matching verifier signatures.");
@@ -875,7 +1307,7 @@
   function termsDocument(form, committed, protocol) {
     const mode = form.elements.verificationMode.value;
     const deterministicDefaults = mode === "deterministic_module"
-      ? defaultVerification(protocol)
+      ? defaultVerification(protocol).deterministic
       : null;
     const verifiers = splitAddresses(form.elements.verifiers.value);
     const threshold = Number(form.elements.threshold.value);
@@ -889,7 +1321,7 @@
       }
     } else {
       if (!verifiers.length || threshold < 1 || threshold > verifiers.length) {
-        throw new Error("Quorum threshold must fit the verifier wallet set.");
+        throw new Error("The signature threshold must fit the verifier wallet list.");
       }
       if (new Set(verifiers.map((address) => address.toLowerCase())).size !== verifiers.length) {
         throw new Error("Verifier wallet addresses must be unique.");
@@ -992,6 +1424,14 @@
         `Contract: ${plan.predicted_bounty_contract}`,
         txHash ? `Transaction: ${protocol.explorer_url}/tx/${txHash}` : "Wallet batch submitted.",
       ]);
+      if (txHash && hostedActionIntentId()) {
+        await observeHostedAction({
+          transactionHash: txHash,
+          bountyContract: plan.predicted_bounty_contract,
+          bountyId: plan.bounty_id,
+          actorWallet: account,
+        });
+      }
       const expected = ["canonical_bounty_created"];
       if (Number(create.initial_funding.amount) === Number(create.solver_reward.amount) + Number(create.verifier_reward.amount)) {
         expected.push("bounty_became_claimable");
@@ -1007,12 +1447,32 @@
         return;
       }
       const claimable = events.some((item) => item.kind === "bounty_became_claimable");
+      if (hostedActionIntentId()) {
+        const creationEvent = events.find((item) =>
+          item.kind === "canonical_bounty_created"
+          && String(item.data?.bounty_contract || "").toLowerCase()
+            === plan.predicted_bounty_contract.toLowerCase());
+        if (!txHash && creationEvent?.tx_hash) {
+          await observeHostedAction({
+            transactionHash: creationEvent.tx_hash,
+            bountyContract: plan.predicted_bounty_contract,
+            bountyId: plan.bounty_id,
+            actorWallet: account,
+          });
+        }
+        const action = await pollHostedAction();
+        if (action?.status !== "confirmed") {
+          throw new Error("The bounty is indexed, but the ChatGPT action is still reconciling. Refresh this same authorization link.");
+        }
+      }
       output(result, [
         claimable ? "Bounty is funded and claimable." : "Bounty contract is canonical and open for co-funding.",
         `Bounty id: ${plan.bounty_id}`,
         `Contract: ${plan.predicted_bounty_contract}`,
+        `Manage before claim: https://agentbounties.app/refunds.html?bountyContract=${plan.predicted_bounty_contract}`,
+        hostedActionIntentId() ? "ChatGPT action status: canonical creation confirmed." : "",
         "Default next step: Post your own bounty or share this one with solvers and funders.",
-      ], "success");
+      ].filter(Boolean), "success");
       track("canonical_post_confirmed", { bounty_contract: plan.predicted_bounty_contract });
       markChatgptReturn(true);
     } catch (error) {
@@ -1085,39 +1545,92 @@
       const account = await connectWallet(form);
       await acceptLegalAction(form, "fund_bounty", account);
       const api = apiBase(form);
+      const bounty = await canonicalBountyByContract(
+        api,
+        requiredAddress(form.elements.bountyContract.value, "Bounty contract"),
+      );
+      const startedAt = Date.now();
       const contribution = {
-        bounty_contract: requiredAddress(form.elements.bountyContract.value, "Bounty contract"),
+        bounty_contract: bounty.bounty_contract,
         contributor: account,
         amount: { amount: usdcMinor(form.elements.amount.value), currency: "usdc" },
         authorization_nonce: randomBytes32(),
         authorization_valid_before: Math.floor(Date.now() / 1000) + 3_600,
       };
-      const plan = await requestJson(`${api}/v1/base/autonomous-bounties/contribution-plan`, {
-        method: "POST",
-        body: JSON.stringify({ network: "base-mainnet", contribution }),
-      });
-      output(result, ["Wallet confirmation required.", `Contribution: ${form.elements.amount.value} USDC`]);
+      const contractAccount = await isContractAccount(account);
+      output(result, [
+        contractAccount ? "Wallet confirmation required." : "Gas-sponsored authorization required.",
+        `Contribution: ${form.elements.amount.value} USDC`,
+        contractAccount
+          ? "This wallet account will review its supported call path."
+          : "Your wallet signs exact Base USDC authorization; the Agent Bounties relayer pays ETH gas.",
+      ]);
       let txHash = null;
-      if (!(await isContractAccount(account)) && plan.eip3009_authorization) {
-        const signature = await signTypedData(account, plan.eip3009_authorization);
-        const authorized = await requestJson(
-          `${api}/v1/base/autonomous-bounties/authorized-contribution-plan`,
-          {
-            method: "POST",
-            body: JSON.stringify({ network: "base-mainnet", contribution, signature, relayer: account }),
-          },
-        );
-        txHash = await sendTransaction(authorized.relay_transaction, account);
-        await waitReceipt(txHash);
+      let fundingEvent = null;
+      if (!contractAccount) {
+        if (!window.AgentBountiesX402 || typeof window.AgentBountiesX402.fund !== "function") {
+          throw new Error("The gas-sponsored funding client is unavailable. Reload before authorizing USDC.");
+        }
+        const x402Result = await window.AgentBountiesX402.fund({
+          apiBase: api,
+          provider: state.provider,
+          account,
+          bountyContract: bounty.bounty_contract,
+          amountBaseUnits: String(contribution.amount.amount),
+          usdcAddress: protocol.native_usdc,
+        });
+        txHash = x402Result.transactionHash;
+        fundingEvent = { tx_hash: txHash, source: "x402-hosted-relay" };
       } else {
+        const plan = await requestJson(`${api}/v1/base/autonomous-bounties/contribution-plan`, {
+          method: "POST",
+          body: JSON.stringify({ network: "base-mainnet", contribution }),
+        });
         const sent = await sendWalletCalls(plan.wallet_calls, account, protocol);
         if (sent.kind === "transactions") txHash = sent.hashes[sent.hashes.length - 1];
       }
+      if (hostedActionIntentId() && txHash) {
+        await observeHostedAction({
+          transactionHash: txHash,
+          bountyContract: bounty.bounty_contract,
+          bountyId: bounty.bounty_id,
+          actorWallet: account,
+        });
+      }
+      if (!txHash || !hostedActionIntentId()) {
+        fundingEvent = await pollFundingEvent(
+          api,
+          bounty.bounty_id,
+          account,
+          contribution.amount.amount,
+          txHash,
+          startedAt,
+        );
+      }
+      if (hostedActionIntentId() && !txHash) {
+        if (!fundingEvent?.tx_hash) {
+          throw new Error("Wallet batch was submitted, but its canonical FundingAdded event is still indexing. Refresh this same link; do not fund again.");
+        }
+        txHash = fundingEvent.tx_hash;
+        await observeHostedAction({
+          transactionHash: txHash,
+          bountyContract: bounty.bounty_contract,
+          bountyId: bounty.bounty_id,
+          actorWallet: account,
+        });
+      }
+      const hostedStatus = hostedActionIntentId() ? await pollHostedAction() : null;
+      const confirmed = hostedStatus?.status === "confirmed" || Boolean(fundingEvent);
       output(result, [
-        "Transaction confirmed. Funding evidence is waiting for the indexer.",
+        confirmed
+          ? "Canonical FundingAdded is confirmed."
+          : "Transaction confirmed. Funding evidence is waiting for the indexer.",
         txHash ? `${protocol.explorer_url}/tx/${txHash}` : "Wallet batch submitted.",
-        "A transaction hash alone is not funding evidence.",
-      ], "pending");
+        hostedStatus?.status === "confirmed" ? "ChatGPT action status: canonical funding confirmed." : "",
+        confirmed
+          ? "Share the confirmed funding result, then invite a solver."
+          : "A transaction hash alone is not funding evidence.",
+      ].filter(Boolean), confirmed ? "success" : "pending");
     } catch (error) {
       output(result, error.message || String(error), "error");
     }
@@ -1158,6 +1671,14 @@
       });
       const hash = await sendTransaction(plan, account);
       await waitReceipt(hash);
+      if (hostedActionIntentId()) {
+        await observeHostedAction({
+          transactionHash: hash,
+          bountyContract,
+          bountyId: bounty.bounty_id,
+          actorWallet: account,
+        });
+      }
       const submission = await pollSubmission(api, bounty.bounty_id, submissionHash, evidenceHash);
       if (!submission) {
         output(result, [
@@ -1179,13 +1700,20 @@
           evidence: evidenceValue,
         }),
       });
+      if (hostedActionIntentId()) {
+        const action = await pollHostedAction();
+        if (action?.status !== "confirmed") {
+          throw new Error("SubmissionAdded is indexed, but the ChatGPT action is still reconciling. Refresh this same authorization link.");
+        }
+      }
       output(result, [
         "Submission and public evidence are indexed.",
         `Transaction: ${protocol.explorer_url}/tx/${hash}`,
         `Round: ${submission.data.round}`,
+        hostedActionIntentId() ? "ChatGPT action status: canonical completion confirmed." : "",
         "Committed verifier agents can now evaluate and settle automatically.",
         "Only a confirmed BountySettled event proves payout.",
-      ], "pending");
+      ].filter(Boolean), "success");
     } catch (error) {
       output(result, error.message || String(error), "error");
     }
@@ -1293,6 +1821,13 @@
     const params = new URLSearchParams(location.search);
     if (params.get("bountyContract")) form.elements.bountyContract.value = params.get("bountyContract");
     if (params.get("amount")) form.elements.amount.value = params.get("amount");
+  }
+
+  function prefillCreatorCancellation() {
+    const form = byId("creator-cancel-form");
+    if (!form) return;
+    const bountyContract = new URLSearchParams(location.search).get("bountyContract");
+    if (bountyContract) form.elements.bountyContract.value = bountyContract;
   }
 
   function chatgptReturnUrl() {
@@ -1448,6 +1983,84 @@
     markChatgptReturn(false);
   }
 
+  async function applyHostedActionIntent() {
+    if (!hostedActionIntentId()) return;
+    const postForm = byId("autonomous-post-form");
+    const fundForm = byId("autonomous-fund-form");
+    const submitForm = byId("autonomous-submit-form");
+    const expected = postForm
+      ? ["post"]
+      : fundForm
+        ? ["fund"]
+        : ["solve", "compete", "complete"];
+    const intent = await loadHostedActionIntent(expected);
+    if (postForm) {
+      const draft = intent.details?.draft || intent.details || {};
+      const assignments = [
+        ["draftObjective", draft.objective],
+        ["title", draft.title],
+        ["goal", draft.goal],
+        ["sourceUrl", draft.source_url],
+        ["solverReward", draft.solver_reward_usdc],
+        ["verifierReward", draft.verifier_reward_usdc],
+        ["discoverySource", draft.discovery_source || "ChatGPT bounty app"],
+      ];
+      for (const [field, value] of assignments) {
+        if (value !== undefined && value !== null) postForm.elements[field].value = String(value);
+      }
+      if (Array.isArray(draft.acceptance_criteria)) {
+        postForm.elements.acceptance.value = draft.acceptance_criteria.join("\n");
+      }
+      if (typeof draft.crowdfund === "boolean") postForm.elements.crowdfund.checked = draft.crowdfund;
+      output(byId("autonomous-post-output"), [
+        "Bound ChatGPT draft loaded from the durable authorization intent.",
+        "Review every field. No bounty exists until CanonicalBountyCreated is indexed.",
+      ], "pending");
+    }
+    if (fundForm) {
+      fundForm.elements.bountyContract.value = intent.bounty_contract;
+      fundForm.elements.amount.value = (Number(intent.amount_base_units) / 1_000_000).toFixed(6);
+      fundForm.elements.bountyContract.readOnly = true;
+      fundForm.elements.amount.readOnly = true;
+      output(byId("autonomous-fund-output"), [
+        "Bound ChatGPT funding intent loaded.",
+        `Exact contribution: ${(Number(intent.amount_base_units) / 1_000_000).toFixed(6)} USDC.`,
+        "Funding is confirmed only after the matching indexed FundingAdded event.",
+      ], "pending");
+    }
+    if (submitForm && intent.action === "complete") {
+      submitForm.elements.bountyContract.value = intent.bounty_contract;
+      submitForm.elements.bountyContract.readOnly = true;
+      if (typeof intent.details?.artifact_reference === "string") {
+        submitForm.elements.artifact.value = intent.details.artifact_reference;
+      }
+      if (intent.details?.evidence && typeof intent.details.evidence === "object") {
+        submitForm.elements.evidence.value = JSON.stringify(intent.details.evidence, null, 2);
+      }
+      output(byId("autonomous-submit-output"), [
+        "Bound ChatGPT completion intent loaded.",
+        "Review the artifact and exact public evidence before signing.",
+      ], "pending");
+    }
+    if (intent.status !== "review_required") {
+      document.querySelectorAll("[data-protocol-action]").forEach((button) => {
+        button.disabled = true;
+      });
+      const target = postForm
+        ? byId("autonomous-post-output")
+        : fundForm
+          ? byId("autonomous-fund-output")
+          : byId("autonomous-submit-output");
+      output(target, [
+        `ChatGPT action status: ${intent.status}.`,
+        intent.next_action,
+        intent.status === "confirmed"
+          ? `Canonical event: ${intent.canonical_event_kind}. Return to ChatGPT and share the result.`
+          : "Do not sign or submit this action again.",
+      ], intent.status === "confirmed" ? "success" : "pending");
+    }
+  }
+
   async function initialize() {
     const postForm = byId("autonomous-post-form");
     try {
@@ -1484,6 +2097,10 @@
     if (submitForm) submitForm.addEventListener("submit", submitBounty);
     const legacyRecoveryForm = byId("legacy-recovery-form");
     if (legacyRecoveryForm) legacyRecoveryForm.addEventListener("submit", recoverLegacyBounties);
+    const creatorCancelForm = byId("creator-cancel-form");
+    if (creatorCancelForm) creatorCancelForm.addEventListener("submit", cancelUnclaimedBounty);
+    const creatorRefundButton = byId("creator-refund-button");
+    if (creatorRefundButton) creatorRefundButton.addEventListener("click", withdrawCreatorRefund);
     document.querySelectorAll("[data-connect-wallet]").forEach((button) => {
       button.addEventListener("click", async () => {
         const target = byId(button.dataset.output);
@@ -1501,6 +2118,17 @@
     discoverProviders().catch(() => populateProviderSelectors());
     await prefillPost();
     prefillFunding();
+    prefillCreatorCancellation();
+    await applyHostedActionIntent().catch((error) => {
+      const target = byId("autonomous-post-output")
+        || byId("autonomous-fund-output")
+        || byId("autonomous-submit-output")
+        || byId("claim-feed-output");
+      output(target, error.message || String(error), "error");
+      document.querySelectorAll("[data-protocol-action]").forEach((button) => {
+        button.disabled = true;
+      });
+    });
     loadClaimableFeed();
     loadUnfundedFeed();
   }

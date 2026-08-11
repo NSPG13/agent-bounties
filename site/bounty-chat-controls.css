@@ -1,0 +1,14 @@
+.chat-send {
+  font-size: 0;
+}
+
+.chat-send svg {
+  display: none;
+}
+
+.chat-send::before {
+  content: "↑";
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+}

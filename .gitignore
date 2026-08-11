@@ -14,4 +14,7 @@ __pycache__/
 .tools/
 contracts/**/out/
 contracts/**/cache/
+/out/
+/cache/
 broadcast/
+/tools/coinbase-embedded-wallet/.build-check

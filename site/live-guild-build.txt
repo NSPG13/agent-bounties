@@ -1,2 +1,1 @@
-20260722-2
-The interior guild shell is loaded directly from page HTML. This canary forces and identifies the first production deployment using the corrected Pages workflow that preserves the guild bootstrap.
+20260726-coinbase-wallet-1

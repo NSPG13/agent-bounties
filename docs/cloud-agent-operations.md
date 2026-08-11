@@ -10,8 +10,11 @@ draft bounty terms without running a model on a contributor's computer.
   not receive the model credential.
 - `GET /v1/cloud-agent/readiness` reports the provider, model, public access,
   limits, missing configuration, and the fact that there is no local fallback.
-- The website calls the same API from **Draft measurable terms** on
-  `post.html`.
+- The hosted endpoints remain available for explicit API, evaluation, and
+  objective-compilation workflows. They are not the default website composer.
+- The default website flow hands the request to the person's own ChatGPT,
+  Claude, Gemini, or other MCP-capable AI account and validates the returned
+  draft locally. It never receives the person's provider credential.
 
 Cloud output is untrusted draft data. It cannot publish terms, hold a key,
 request a wallet signature, fund a contract, verify a submission, settle a

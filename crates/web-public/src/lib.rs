@@ -100,6 +100,8 @@ pub struct DiscoveryEndpoints {
     pub cloud_bounty_drafts: String,
     pub cloud_objective_plans: String,
     pub opportunities: String,
+    pub github_bounty_discovery: String,
+    pub opportunity_stream: String,
     pub opportunity_feed_rss: String,
     pub opportunity_feed_atom: String,
     pub opportunity_feed_json: String,
@@ -143,6 +145,16 @@ pub struct DiscoveryEndpoints {
     pub autonomous_contribution_plan: String,
     pub autonomous_authorized_contribution_plan: String,
     pub autonomous_agent_native_claim: String,
+    pub standing_meta_v4_readiness: String,
+    pub standing_meta_v4_claim_preparation: String,
+    pub anonymous_stake_registration_preparation: String,
+    pub anonymous_stake_availability_preparation: String,
+    pub verification_assignments: String,
+    pub primary_verdict_preparation: String,
+    pub verification_appeal_waiver_preparation: String,
+    pub verification_appeal_opening_preparation: String,
+    pub appeal_vote_preparation: String,
+    pub verification_case_finalization_preparation: String,
     pub autonomous_claim_funnel: String,
     pub autonomous_claim_plan: String,
     pub autonomous_authorized_claim_plan: String,
@@ -157,6 +169,21 @@ pub struct DiscoveryEndpoints {
     pub autonomous_expire_submission_plan: String,
     pub autonomous_cancel_plan: String,
     pub autonomous_refund_withdrawal_plan: String,
+    pub open_competition_verifiers: String,
+    pub open_competition_creation_preparation: String,
+    pub open_competition_authorized_creation_preparation: String,
+    pub open_competition_state: String,
+    pub open_competition_readiness: String,
+    pub open_competition_commit_preparation: String,
+    pub open_competition_reveal_preparation: String,
+    pub open_competition_status: String,
+    pub open_competition_bond_withdrawal_preparation: String,
+    pub objective_collection: String,
+    pub objective_creation_plan: String,
+    pub objective_action_plan: String,
+    pub objective_action_apply: String,
+    pub objective_reconcile: String,
+    pub objective_coordination_guide: String,
     pub github_issue_template: String,
 }
 
@@ -597,6 +624,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
         cloud_objective_plans: format!("{api}/v1/cloud-agent/objective-plans"),
         opportunities: format!("{api}/v1/opportunities"),
+        github_bounty_discovery: format!(
+            "{api}/v1/github/bounty-discovery-v1?network=base-mainnet"
+        ),
+        opportunity_stream: format!(
+            "{api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
+        ),
         opportunity_feed_rss: format!("{api}/v1/opportunities/feed.rss"),
         opportunity_feed_atom: format!("{api}/v1/opportunities/feed.atom"),
         opportunity_feed_json: format!("{api}/v1/opportunities/feed.json"),
@@ -674,6 +707,34 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_agent_native_claim: format!(
             "{api}/v1/base/autonomous-bounties/claims"
         ),
+        standing_meta_v4_readiness: format!("{api}/v1/base/standing-meta-v4/readiness"),
+        standing_meta_v4_claim_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/claim-preparation"
+        ),
+        anonymous_stake_registration_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/stake-registration-preparation"
+        ),
+        anonymous_stake_availability_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/stake-availability-preparation"
+        ),
+        verification_assignments: format!(
+            "{api}/v1/base/standing-meta-v4/verification-assignments"
+        ),
+        primary_verdict_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/primary-verdict-preparation"
+        ),
+        verification_appeal_waiver_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/appeal-waiver-preparation"
+        ),
+        verification_appeal_opening_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/appeal-opening-preparation"
+        ),
+        appeal_vote_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/appeal-vote-preparation"
+        ),
+        verification_case_finalization_preparation: format!(
+            "{api}/v1/base/standing-meta-v4/finalization-preparation"
+        ),
         autonomous_claim_funnel: format!(
             "{api}/v1/base/autonomous-bounties/claim-funnel?window_hours=168"
         ),
@@ -709,6 +770,37 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_refund_withdrawal_plan: format!(
             "{api}/v1/base/autonomous-bounties/refund-withdrawal-plan"
         ),
+        open_competition_verifiers: format!(
+            "{api}/v1/base/open-competition-v1/verifiers"
+        ),
+        open_competition_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v1/creation-preparation"
+        ),
+        open_competition_authorized_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v1/authorized-creation-preparation"
+        ),
+        open_competition_state: format!("{api}/v1/base/open-competition-v1/state"),
+        open_competition_readiness: format!(
+            "{api}/v1/base/open-competition-v1/readiness"
+        ),
+        open_competition_commit_preparation: format!(
+            "{api}/v1/base/open-competition-v1/commit-preparation"
+        ),
+        open_competition_reveal_preparation: format!(
+            "{api}/v1/base/open-competition-v1/reveal-preparation"
+        ),
+        open_competition_status: format!("{api}/v1/base/open-competition-v1/status"),
+        open_competition_bond_withdrawal_preparation: format!(
+            "{api}/v1/base/open-competition-v1/bond-withdrawal-preparation"
+        ),
+        objective_collection: format!("{api}/v1/objectives"),
+        objective_creation_plan: format!("{api}/v1/objectives/creation-plans"),
+        objective_action_plan: format!("{api}/v1/objectives/{{objective_id}}/action-plans"),
+        objective_action_apply: format!("{api}/v1/objectives/{{objective_id}}/actions"),
+        objective_reconcile: format!("{api}/v1/objectives/{{objective_id}}/reconcile"),
+        objective_coordination_guide:
+            "https://github.com/NSPG13/agent-bounties/blob/main/docs/objective-coordination.md"
+                .to_string(),
         github_issue_template: GITHUB_ISSUE_TEMPLATE_URL.to_string(),
     };
     DiscoveryManifest {
@@ -738,6 +830,13 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "crowdfunding_allowed": true,
             "external_contract_policy": "discoverable as untrusted but never canonical",
             "payout_authority": "confirmed canonical BountySettled event",
+            "additive_modes": [{
+                "version": "agent-bounties/open-competition-v1",
+                "scope": "approved deterministic verifier profiles only",
+                "deployment_state": "source_only_not_ready_to_earn",
+                "entry_action": "enter competition",
+                "winner_rule": "lowest confirmed passing reveal sequence"
+            }],
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
@@ -758,6 +857,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "get_site_analytics",
             "analyze_bounty_fit",
             "list_autonomous_bounties",
+            "/v1/github/bounty-discovery-v1",
+            "label:ready-to-earn",
+            "label:open-competition",
             "list_autonomous_verification_jobs",
             "publish_autonomous_bounty_terms",
             "get_autonomous_bounty_terms",
@@ -772,6 +874,16 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "fund_bounty_with_x402",
             "get_x402_relay_status",
             "prepare_agent_to_earn",
+            "get_standing_meta_v4_readiness",
+            "prepare_standing_meta_v4_claim",
+            "prepare_anonymous_stake_registration",
+            "set_anonymous_stake_availability",
+            "list_verification_assignments",
+            "submit_primary_verdict",
+            "waive_verification_appeal",
+            "open_verification_appeal",
+            "submit_appeal_vote",
+            "finalize_verification_case",
             "agent_native_claim",
             "plan_autonomous_bounty_claim",
             "plan_autonomous_bounty_authorized_claim",
@@ -786,8 +898,21 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_expire_submission",
             "plan_autonomous_cancel",
             "plan_autonomous_refund_withdrawal",
+            "list_open_competition_verifiers",
+            "prepare_open_competition_creation",
+            "prepare_open_competition_commit",
+            "prepare_open_competition_reveal",
+            "get_open_competition_status",
+            "withdraw_open_competition_bond",
             "list_autonomous_bounty_events",
             "decode_autonomous_bounty_events",
+            "plan_objective_creation",
+            "create_objective",
+            "list_objectives",
+            "get_objective",
+            "plan_objective_action",
+            "apply_objective_action",
+            "reconcile_objective",
         ]
         .into_iter()
         .map(str::to_string)
@@ -795,16 +920,19 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         verification_modes: vec![
             serde_json::json!({
                 "name": "deterministic_module",
-                "default_for_new_bounties": true,
+                "default_for_new_bounties": false,
                 "default_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
-                "earning_inventory": "ready when terms are valid and a nonzero module is committed on-chain",
+                "earning_inventory": "ready only when an exact recognized on-chain module evaluates the full committed acceptance rule; the built-in leading-zero module is for protocol canaries, not coding work",
                 "settlement": "Any caller supplies proof to the immutable on-chain verifier module; pass settles and fail reopens atomically. The verifier receives the same committed reward for either verdict."
             }),
             serde_json::json!({
                 "name": "signed_quorum",
-                "default_for_new_bounties": false,
-                "earning_inventory": "fails closed until verifier-service availability is canonically attestable",
-                "settlement": "Committed verifier wallets sign the exact round, solver, submission, evidence, result, response, and deadline. A valid pass or fail quorum receives the same reward."
+                "product_label": "single_verifier",
+                "default_for_new_bounties": true,
+                "default_threshold": 1,
+                "default_verifiers": ["0xbe6292b9e465f549e2363b918d6dd9187038431e"],
+                "earning_inventory": "ready when the one precommitted verifier service and exact sandbox benchmark are available",
+                "settlement": "The precommitted verifier signs the exact round, solver, submission, evidence, result, response, and deadline. Multi-verifier review is optional for higher-risk work."
             }),
             serde_json::json!({
                 "name": "ai_judge_quorum",
@@ -816,8 +944,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         ],
         funding: serde_json::json!({
             "default": "fully funded on creation",
-            "default_verification": "deterministic_module",
-            "default_verifier_module": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+            "default_verification": "signed_quorum",
+            "default_verifier_threshold": 1,
+            "default_verifier": "0xbe6292b9e465f549e2363b918d6dd9187038431e",
             "crowdfunding": "zero-funded bounties may be created; any wallet may contribute until the target is reached",
             "eoa_fast_path": "Circle USDC EIP-3009 bounded authorization",
             "x402": {
@@ -1229,6 +1358,18 @@ Default CTA: Post your own bounty.
 
 For a multi-task outcome, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. GPT-5.6 returns a deterministically validated task DAG with explicit execution, verification, and settlement policies. Review the plan; it has no wallet, funding, verification, or settlement authority.
 
+## Coordinate A Broader Objective
+
+Use objective-v1 when one desired outcome needs a provider plus several monetary or non-monetary contributions. A bounty remains the paid, verifiable execution primitive; the objective records an immutable value bundle without weakening settlement rules.
+
+1. Call `plan_objective_creation`, sign its 32-byte commitment with the requesting-party wallet, and call `create_objective`.
+2. Providers and contributors call `plan_objective_action`, sign the revision-bound plan, and call `apply_objective_action` for each distinct offer, selection, submission, and verification state.
+3. In-kind verification is non-transferable evidence, never a paid claim.
+4. Call `reconcile_objective`; paid contribution and final-outcome states advance only when an exact canonical `BountySettled` event matches the bounty, recipient, amount, artifact, and evidence commitments.
+
+Objective REST collection: {objective_collection}
+Objective guide: {objective_guide}
+
 ## Earn
 
 Do not skip steps.
@@ -1262,18 +1403,33 @@ MCP: `get_solver_leaderboard`
 
 ## Post
 
-1. Call `draft_bounty_with_cloud_agent` with the objective.
-2. Edit the draft until every criterion is measurable.
-3. Call `publish_autonomous_bounty_terms`.
-4. Commit one verifier policy.
-5. Call `plan_autonomous_bounty_creation`.
-6. Sign the returned ordered calls and fund on creation.
-7. Confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`.
-8. Share the canonical bounty URL.
+Preferred person-led path: connect the person's ChatGPT, Claude, Gemini, or other remote-MCP host to `{mcp_streamable_http}` and call `prepare_bounty_post`. Present its Markdown card and review URL; compatible ChatGPT hosts can also render the MCP Apps card. This step moves no funds and requests no signature.
+
+1. Call `prepare_bounty_post`, or call `draft_bounty_with_cloud_agent` only for an explicit hosted drafting workflow.
+2. Bind one inspectable artifact and make every criterion binary and replayable.
+3. Commit separate executable execution, verification, and settlement policies.
+4. Publish reward, refundable bond, mandatory spend, gas responsibility, and positive solver net value.
+5. Rehearse creation, claim, submission, every dependency, verification, and settlement.
+6. Call `publish_autonomous_bounty_terms`.
+7. Call `plan_autonomous_bounty_creation`; stop if readiness rejects the draft.
+8. Sign the returned ordered calls and fully fund on creation.
+9. Confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`.
+10. Confirm the exact contract appears in the ready-to-earn stream, then share it.
 
 Creation plan schema: `autonomous-bounty-plan`.
 
-Drafting unavailable: write the terms schema and continue at step 3.
+Drafting unavailable: write the terms schema and continue at step 2.
+Crowdfunding stays outside ready-to-earn inventory until canonical full funding and claimability exist.
+
+## Cancel
+
+1. Read the canonical bounty and continue only when status is `open` or `claimable`.
+2. Call `plan_autonomous_cancel` with the creator wallet as `caller`.
+3. Require `from=creator`, `to=bounty contract`, `value_wei=0`, `function=cancel()`, and data `0xea8a1af0`.
+4. Sign the exact call and confirm `BountyCancelled`.
+5. Each funding wallet calls `plan_autonomous_refund_withdrawal` for itself and confirms `RefundWithdrawn`.
+
+A claimed bounty cannot be cancelled. Cancellation removes active inventory but does not erase public chain history. Human flow: https://agentbounties.app/refunds.html
 
 ## Fund
 
@@ -1316,9 +1472,11 @@ Never request broader GitHub access.
 
 - Discovery: {discovery}
 - OpenAPI: {openapi}
-- MCP: {mcp}
+- MCP tools: {mcp}
+- User-owned AI remote MCP endpoint: {mcp_streamable_http}
 - Leaderboard: {leaderboard}
 - Inventory: {inventory}
+- Ready-to-earn stream: {api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base
 - Terms: {terms}
 - Events: {events}
 - Verification jobs: {jobs}
@@ -1332,9 +1490,12 @@ After verified value, grow future earning supply: share the evidence, tell the o
 "#,
         api = endpoints.api_base,
         cloud_objective_plans = endpoints.cloud_objective_plans,
+        objective_collection = endpoints.objective_collection,
+        objective_guide = endpoints.objective_coordination_guide,
         discovery = endpoints.discovery,
         openapi = endpoints.openapi_json,
         mcp = endpoints.mcp_tools,
+        mcp_streamable_http = endpoints.mcp_streamable_http,
         leaderboard = endpoints.solver_leaderboard,
         inventory = endpoints.autonomous_inventory_summary,
         inventory_helper = endpoints.portable_inventory_helper,
@@ -1374,6 +1535,8 @@ If hosted protocol status is not active, run the portable inventory helper. Do n
 
 Use {opportunities} for combined discovery across open, claimable, in-progress, submitted, and completed work. Follow each item's authoritative source URL and exact next action; the projection cannot change lifecycle or payment state. Unfunded bounties are real public requests open to voluntary solutions, but they have no payment promise and must not be called funded, claimable, or canonical until the corresponding on-chain events exist.
 
+Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard prior inventory on an error event.
+
 - Discovery manifest: {discovery}
 - Discovery schema: {discovery_schema}
 - Live canonical inventory summary: {inventory_summary}
@@ -1382,6 +1545,8 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - GPT-5.6 objective graph compiler: {cloud_objective_plans}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
+- Lifecycle-complete GitHub discovery projection: {github_bounty_discovery}
+- Server-sent ready-to-earn stream: {opportunity_stream}
 - Live opportunity feeds: RSS {opportunity_feed_rss}, Atom {opportunity_feed_atom}, JSON Feed {opportunity_feed_json}
 - Filtered signed-webhook subscriptions: {discovery_subscriptions}
 - Per-opportunity HTML, SVG, and Markdown embeds: use each unified projection item's `embeds` object
@@ -1394,7 +1559,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 - Prepare an agent to earn: {agent_wallet_readiness_page}
 - OpenAPI JSON: {openapi_json}
 - MCP tools: {mcp_tools}
-- ChatGPT app MCP endpoint: {mcp_streamable_http}
+- User-owned AI remote MCP endpoint: {mcp_streamable_http} (`prepare_bounty_post` returns a portable Markdown card and review URL; compatible ChatGPT hosts also receive an MCP Apps card)
 - OpenClaw skill source: {openclaw_skill}
 - OpenClaw install: `openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties`
 - Portable inventory helper: {portable_inventory_helper}
@@ -1410,7 +1575,7 @@ Use {opportunities} for combined discovery across open, claimable, in-progress, 
 
 Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClaimed -> solve -> submit -> verify -> confirm BountySettled`.
 
-1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`. The GitHub-only fallback is `is:issue is:open label:claimable-live`; never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone as earnable inventory, and treat `funding-needed` as a funder path.
+1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`. The GitHub fallback for all modes is `is:issue is:open label:ready-to-earn`; add `label:open-competition` for first-valid-reveal work. Never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone as earnable inventory, and treat `funding-needed` as a funder path.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Call `prepare_agent_to_earn` with the public wallet, canonical bounty contract, actual signing capabilities, and non-secret wallet policy. The prior indexed bond is optional; the service independently derives it and fails on drift. Require its same-block canonical, protocol, token, claimable, non-creator, bond, and balance checks to pass. This check never requests a key, seed phrase, signature, approval, transfer, or claim.
 4. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`; the bot idempotently returns the hosted candidate or waitlist, exact bond, sponsorship state, `wallet_request`, and replay request. Without a valid wallet it creates no candidate. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
@@ -1420,21 +1585,42 @@ Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClai
 
 ## Post And Fund
 
-0. When the outcome needs several contributors, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. It returns a deterministically validated task DAG with explicit execution, verification, and settlement policies. For one task, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; cloud output has no wallet, funding, verification, or settlement authority and there is no local-model fallback.
-1. Publish exact terms with `publish_autonomous_bounty_terms`.
-2. Commit one verification mode: deterministic module, signed verifier quorum, or AI judge quorum.
-3. AI judge quorum requires at least two independent committed signers and immutable model, prompt, rubric, decoding, benchmark, and evidence commitments.
-4. Use `plan_autonomous_bounty_creation`. Fully fund on creation by default; zero initial funding explicitly creates a crowdfunded bounty.
-5. EOAs can use the Circle USDC EIP-3009 authorization returned by the plan. Smart accounts can batch approve and create.
-6. Anyone can pool USDC with `plan_autonomous_bounty_contribution` until the target is reached.
-7. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge and retry with `PAYMENT-SIGNATURE`. The hosted gas-only relayer recovers the signer, enforces amount and rolling quotas, then simulates and broadcasts the exact `fundWithAuthorization` call.
-8. Accept success only as HTTP 200 plus `PAYMENT-RESPONSE` backed by confirmed `FundingAdded`. On 202, poll {x402_relay_status}; never infer funding from a relay ID or transaction hash.
+0. For a person-led post, use their existing AI account through {mcp_streamable_http} and call `prepare_bounty_post`. It returns a portable card plus review URL without using the platform model credential. When the outcome needs several contributors and hosted drafting is explicitly intended, call `compile_objective_with_cloud_agent` or POST to {cloud_objective_plans}. For one hosted task draft, call `draft_bounty_with_cloud_agent` or POST to {cloud_bounty_drafts}. Review every result; AI output has no wallet, funding, verification, or settlement authority.
+1. Bind one inspectable artifact and write binary, replayable acceptance criteria.
+2. Commit separate execution, verification, and settlement policies. The verifier and every dependent child path must execute now.
+3. Publish solver reward, refundable bond, verifier reward, mandatory external spend, gas responsibility, and positive solver net value.
+4. Rehearse creation, claim, submission, every dependency, verification, and settlement.
+5. Publish exact terms with `publish_autonomous_bounty_terms`.
+6. Use `plan_autonomous_bounty_creation`; stop when the readiness gate rejects the draft.
+7. Fully fund on creation. EOAs may use the Circle USDC EIP-3009 authorization; smart accounts may batch approve and create.
+8. Confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`, then require the exact contract in `view=ready_to_earn`.
+9. Crowdfunding remains a draft outside earning inventory until fully funded. Anyone may pool USDC with `plan_autonomous_bounty_contribution`.
+10. For an HTTP-native EOA flow, request {x402_funding}; sign the returned EIP-3009 challenge and retry with `PAYMENT-SIGNATURE`.
+11. Accept funding only as HTTP 200 plus `PAYMENT-RESPONSE` backed by confirmed `FundingAdded`. On 202, poll {x402_relay_status}; never infer funding from a relay ID or transaction hash.
 
-For a current standing-meta-v2 bounty, call `prepare_standing_meta_v2_child` before claiming the parent. Supply the exact parent contract, two distinct pre-registered solver wallets, concrete task criteria, a public `github_commit` benchmark source with full commit SHA and normalized non-root subdirectory, and an immutable `sandboxed_regression_v1` runner manifest whose benchmark digest matches that source. The tool validates the parent, stores the exact child terms, pins the deployed two-verifier quorum, and returns one ordered wallet batch: publish the same canonical bytes on Base, approve native USDC, and create the fully funded child. Wait for `TermsPublished`, `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`, then wait for a Base block with a strictly later timestamp before claiming the parent. Terms publication and both registrations must strictly predate the parent claim; a same-timestamp claim cannot qualify. Do not use the historical `plan_autonomous_canonical_child_terms` tool for standing-meta-v2.
+The five funded standing-meta-v2 parents are recovery-reserved. They remain visible in the full canonical audit feed with `verification_ready=false` but are excluded from earning and verification jobs. Do not claim a V2 parent, post its bond, sign its verdict, or run its verification. V2 requires child funding that cannot produce positive gross margin, and its project-governed two-key quorum is automated governance rather than organizational independence. Different wallets and participant IDs do not prove unrelated ownership.
 
-Agent Bounties maintains a standing funded post-and-complete meta-bounty when canonical inventory is available. Claiming it rewards you for posting useful funded work that another wallet completes and gets paid for. Look for the `standing_meta_bounty` marker in verified claimable inventory; never infer it from a GitHub label alone.
+For a routed standing-meta-v3 parent returned by the ready-to-earn feed, call `prepare_standing_meta_v2_child` before claiming. The legacy tool name is retained for compatibility and now accepts routed V3. It must return published child terms, positive child economics, a complete digest-pinned regression runner, and ordered pre-claim wallet calls. Confirm the child creation, full funding, and claimability events before claiming the parent. Recovery-reserved and already-claimed parents are ineligible.
+
+A future standing-meta-v4 item is eligible only when its own machine-readable readiness says that profitable economics, gas sponsorship, funded and authorized VRF, adequate anonymous stake, safe timing, and an executable appeal path all pass. Chainlink selects wallets; it does not judge submissions, decide appeals, or authorize payment. Staking and random assignment raise coordination cost but do not prove unrelated ownership. Only confirmed canonical `BountySettled` proves payment.
+
+Standing Meta V4 has no per-bounty solver-enrollment delay. Its atomic claim creates a claim-restricted V4 child, snapshots the already-active and available solver pool, and requests VRF immediately. The child has no generic public claim path; only the immutable child factory can activate the currently ranked wallet. A selected solver can claim as soon as fulfillment is derived; nonresponse promotion uses the same ranking after ten minutes. An eligible appellant can waive an undisputed appeal window, and three matching appellate votes may finalize immediately. Generic `agent_native_claim` refuses configured V4 parents; use `get_standing_meta_v4_readiness` and `prepare_standing_meta_v4_claim`.
 
 If hosted planning is unavailable, the repository CLI command above verifies exact factory code and immutable getters at one Base `safe` block, validates terms against that block time, and emits the same unsigned wallet batch plus registration payload. It refuses a pending or mismatched deployment and never treats output as funding.
+
+## Coordinate A Broader Objective
+
+Use objective-v1 when one desired outcome needs a provider plus several monetary or non-monetary contributions. A bounty remains the paid, verifiable execution primitive; an objective coordinates multiple primitives without weakening their settlement rules.
+
+1. Call `plan_objective_creation` with explicit participants, requesting party, beneficiaries, affected parties, authority members and threshold, resources, access, rights, privacy boundary, and requested final verification.
+2. Sign the returned 32-byte commitment with the requesting-party wallet and call `create_objective`.
+3. Providers use `plan_objective_action` with `add_provider_proposal`, sign, and apply it. The declared authority separately signs `accept_provider_proposal`; this creates one immutable value bundle.
+4. Contributors offer, are selected, submit, and are verified through separate revision-bound actions. These states are never interchangeable.
+5. In-kind verification creates a non-transferable evidence record but never a paid claim. Paid contribution and final-outcome records advance only through `reconcile_objective` after an exact canonical `BountySettled` event matches the bounty, recipient, amount, artifact, and evidence commitments.
+6. Read `get_objective` after each transition. Its graph and readiness report name every exact blocker; supporting work can make final execution ready but cannot complete the objective.
+
+Objective REST collection: {objective_collection}
+Objective guide: {objective_guide}
 
 ## Verify
 
@@ -1471,6 +1657,16 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `fund_bounty_with_x402`
 - `get_x402_relay_status`
 - `prepare_agent_to_earn`
+- `get_standing_meta_v4_readiness`
+- `prepare_standing_meta_v4_claim`
+- `prepare_anonymous_stake_registration`
+- `set_anonymous_stake_availability`
+- `list_verification_assignments`
+- `submit_primary_verdict`
+- `waive_verification_appeal`
+- `open_verification_appeal`
+- `submit_appeal_vote`
+- `finalize_verification_case`
 - `agent_native_claim`
 - `plan_autonomous_bounty_claim`
 - `plan_autonomous_bounty_authorized_claim`
@@ -1487,6 +1683,13 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - `plan_autonomous_refund_withdrawal`
 - `list_autonomous_bounty_events`
 - `decode_autonomous_bounty_events`
+- `plan_objective_creation`
+- `create_objective`
+- `list_objectives`
+- `get_objective`
+- `plan_objective_action`
+- `apply_objective_action`
+- `reconcile_objective`
 
 ## API
 
@@ -1529,6 +1732,11 @@ If hosted planning is unavailable, the repository CLI command above verifies exa
 - Expire submission: {expire_submission_plan}
 - Cancel: {cancel_plan}
 - Withdraw refund: {refund_withdrawal_plan}
+- Objective creation plan: {objective_creation_plan}
+- Objective collection: {objective_collection}
+- Objective action plan: {objective_action_plan}
+- Apply signed objective action: {objective_action_apply}
+- Reconcile canonical objective evidence: {objective_reconcile}
 
 ## Evidence Boundaries
 
@@ -1566,6 +1774,8 @@ Default CTA: Post your own bounty at {post_page}
         cloud_objective_plans = endpoints.cloud_objective_plans,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         opportunities = endpoints.opportunities,
+        github_bounty_discovery = endpoints.github_bounty_discovery,
+        opportunity_stream = endpoints.opportunity_stream,
         opportunity_feed_rss = endpoints.opportunity_feed_rss,
         opportunity_feed_atom = endpoints.opportunity_feed_atom,
         opportunity_feed_json = endpoints.opportunity_feed_json,
@@ -1621,6 +1831,12 @@ Default CTA: Post your own bounty at {post_page}
         expire_submission_plan = endpoints.autonomous_expire_submission_plan,
         cancel_plan = endpoints.autonomous_cancel_plan,
         refund_withdrawal_plan = endpoints.autonomous_refund_withdrawal_plan,
+        objective_creation_plan = endpoints.objective_creation_plan,
+        objective_collection = endpoints.objective_collection,
+        objective_action_plan = endpoints.objective_action_plan,
+        objective_action_apply = endpoints.objective_action_apply,
+        objective_reconcile = endpoints.objective_reconcile,
+        objective_guide = endpoints.objective_coordination_guide,
         feedback_questions = feedback_questions,
     )
 }
@@ -3411,6 +3627,10 @@ mod tests {
             "http://127.0.0.1:8080/v1/unfunded-bounties"
         );
         assert_eq!(
+            manifest.endpoints.opportunity_stream,
+            "http://127.0.0.1:8080/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
+        );
+        assert_eq!(
             manifest.endpoints.opportunity_feed_rss,
             "http://127.0.0.1:8080/v1/opportunities/feed.rss"
         );
@@ -3472,6 +3692,18 @@ mod tests {
             .x402_relay_status
             .contains("/v1/x402/base/relays/{relay_id}"));
         assert_eq!(
+            manifest.endpoints.objective_collection,
+            "https://network.example/v1/objectives"
+        );
+        assert!(manifest
+            .endpoints
+            .objective_action_plan
+            .contains("/v1/objectives/{objective_id}/action-plans"));
+        assert!(manifest
+            .endpoints
+            .objective_coordination_guide
+            .ends_with("/docs/objective-coordination.md"));
+        assert_eq!(
             manifest.endpoints.agent_wallet_readiness,
             "https://network.example/v1/base/agent-wallet/readiness"
         );
@@ -3516,6 +3748,13 @@ mod tests {
             "get_x402_relay_status",
             "prepare_agent_to_earn",
             "list_autonomous_bounty_events",
+            "plan_objective_creation",
+            "create_objective",
+            "list_objectives",
+            "get_objective",
+            "plan_objective_action",
+            "apply_objective_action",
+            "reconcile_objective",
         ] {
             assert!(manifest.agent_tools.iter().any(|item| item == tool));
         }
@@ -3532,15 +3771,25 @@ mod tests {
             .iter()
             .find(|mode| mode["name"] == "deterministic_module")
             .unwrap();
-        assert_eq!(deterministic["default_for_new_bounties"], true);
+        assert_eq!(deterministic["default_for_new_bounties"], false);
         assert_eq!(
             deterministic["default_module"],
             "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e"
         );
-        assert_eq!(
-            manifest.funding["default_verification"],
-            "deterministic_module"
-        );
+        assert!(deterministic["earning_inventory"]
+            .as_str()
+            .unwrap()
+            .contains("protocol canaries"));
+        let single = manifest
+            .verification_modes
+            .iter()
+            .find(|mode| mode["name"] == "signed_quorum")
+            .unwrap();
+        assert_eq!(single["default_for_new_bounties"], true);
+        assert_eq!(single["default_threshold"], 1);
+        assert_eq!(single["product_label"], "single_verifier");
+        assert_eq!(manifest.funding["default_verification"], "signed_quorum");
+        assert_eq!(manifest.funding["default_verifier_threshold"], 1);
         assert!(manifest.funding["gas_sponsorship"]
             .as_str()
             .unwrap()
@@ -3568,6 +3817,8 @@ mod tests {
             "agent-bounties/autonomous-v1",
             "Default CTA: Post your own bounty",
             "compile_objective_with_cloud_agent",
+            "prepare_bounty_post",
+            "User-owned AI remote MCP endpoint",
             "/v1/cloud-agent/objective-plans",
             "GPT-5.6",
             "Do not skip steps",
@@ -3581,6 +3832,10 @@ mod tests {
             "fund_bounty_with_x402",
             "prepare_agent_to_earn",
             "prepare_autonomous_bounty_submission",
+            "Coordinate A Broader Objective",
+            "plan_objective_creation",
+            "immutable value bundle",
+            "artifact, and evidence commitments",
             "wallet_request",
             "Only `BountySettled` proves bounty payment",
             "star the repository, upvote the bounty",
@@ -3607,6 +3862,10 @@ mod tests {
         assert!(schema.contains("autonomous_authorized_claim_plan"));
         assert!(schema.contains("x402_discovery"));
         assert!(schema.contains("x402_bounty_funding"));
+        assert!(schema.contains("objective_collection"));
+        assert!(schema.contains("objective_creation_plan"));
+        assert!(schema.contains("objective_action_apply"));
+        assert!(schema.contains("objective_coordination_guide"));
         assert!(schema.contains("operator_settlement_signer"));
     }
 

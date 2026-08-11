@@ -15,20 +15,30 @@
   };
   const announcedProviders = [];
   const CHAIN_ID = "0x2105";
+  const DRAFT_STORAGE_KEY = "agent-bounties:bounded-budget-draft:v1";
+  const DRAFT_FIELDS = Object.freeze([
+    "delegate",
+    "initialFunding",
+    "maxPerAction",
+    "maxPerPeriod",
+    "maxLifetime",
+    "maxBountyTarget",
+    "expiryDays",
+  ]);
   const ZERO_HASH = `0x${"00".repeat(32)}`;
   const EXPECTED = Object.freeze({
-    sourceRevision: "dc05b4e01474f09f02bb1bbb69651e4ce4deb338",
+    sourceRevision: "7fbfd7e106e387e12ad5c9b29cbef4344dfead69",
     bountyFactory: "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
     settlementToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    deterministicVerifier: "0xe573cb4f471d38b5bf10ce82237251ac902c9867",
-    signedQuorumVerifierSetHash: "0x2c5a10915ca1fb99d4a11e2222b4f32b986b4e0f5599f55d70e9c8f9725a28cd",
+    deterministicVerifier: "0x380c1af742593dd88b6f20387e9ee693a0536731",
+    signedQuorumVerifierSetHash: "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2",
     deterministicDeployer: "0x4e59b44847b379578588920ca78fbf26c0b4956c",
     deterministicDeployerHash: "0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989",
-    walletFactory: "0x3840936351049aed639780a16845e6094c1f17f6",
-    implementation: "0x40d3e16082cf71ece0129ca3044e1b8233e29db8",
-    factoryRuntimeHash: "0x243e248a890daf57cb14cee262bc7bb70b8822c65a014a8bf1c39653bc30aa52",
-    implementationRuntimeHash: "0x7fb59d5add3ac348ac3d7e6a5aa6b22ad542a6e6093a1ceb8d535f747ed536df",
-    cloneRuntimeHash: "0xc663bed9b4097e22e5a18c0ecb662561bf45df1829e6412cdd0d8568d05ca1b6",
+    walletFactory: "0xe3d4f7b203c5e8576e0225d3e64a8532429d3876",
+    implementation: "0x00c250bda8fa3c49d80a11d9b6ebd961736b7202",
+    factoryRuntimeHash: "0x254e247c3df7b38c257cd24b5d47c6ca1bc3ed335d6cb062498695bced540cf9",
+    implementationRuntimeHash: "0xade4fb51d0c5c866bb0cc44ca17ad0b254c6bba92ac5b47ddc2ced4963b05d18",
+    cloneRuntimeHash: "0xc11ada07afafbcf407387ff2fa7afc52e55301c80a4edd0888520b478fba9209",
   });
   const OBSOLETE_DETERMINISTIC_VERIFIER = "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e";
   const SELECTORS = Object.freeze({
@@ -158,8 +168,8 @@
   async function loadManifest() {
     if (state.manifest) return state.manifest;
     const urls = [
-      "bounded-agent-wallet-base-mainnet.json",
-      "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/deployments/bounded-agent-wallet-base-mainnet.json",
+      "bounded-agent-wallet-v2-base-mainnet.json",
+      "https://raw.githubusercontent.com/NSPG13/agent-bounties/main/deployments/bounded-agent-wallet-v2-base-mainnet.json",
     ];
     let manifest = null;
     for (const url of urls) {
@@ -173,7 +183,7 @@
         // Try the source-controlled fallback.
       }
     }
-    if (!manifest || manifest.schema !== "agent-bounties/bounded-agent-wallet-deployment-v1") {
+    if (!manifest || manifest.schema !== "agent-bounties/bounded-agent-wallet-deployment-v2") {
       throw new Error("The reviewed bounded-wallet deployment manifest is unavailable.");
     }
     if (manifest.chain_id !== 8453 || manifest.network !== "base-mainnet") {
@@ -259,6 +269,45 @@
     const units = BigInt(match[1]) * 1_000_000n + BigInt((match[2] || "").padEnd(6, "0"));
     if (units <= 0n) throw new Error(`${label} must be positive.`);
     return units;
+  }
+
+  function validDraftValue(name, value) {
+    const normalized = String(value || "").trim();
+    if (name === "delegate") {
+      return /^0x[0-9a-fA-F]{40}$/.test(normalized) && normalized.toLowerCase() !== `0x${"00".repeat(20)}`;
+    }
+    if (name === "expiryDays") return /^\d+$/.test(normalized) && Number(normalized) >= 1 && Number(normalized) <= 30;
+    return /^\d+(?:\.\d{1,6})?$/.test(normalized) && Number(normalized) > 0 && Number(normalized) <= 89;
+  }
+
+  function persistDraft() {
+    try {
+      const draft = Object.fromEntries(DRAFT_FIELDS.map((name) => [name, form().elements[name].value.trim()]));
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch (_error) {
+      // Storage can be unavailable in private browsing; the form still works for the current page load.
+    }
+  }
+
+  function restoreDraft() {
+    let stored = {};
+    try {
+      stored = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || "{}") || {};
+    } catch (_error) {
+      stored = {};
+    }
+    const parameters = new URLSearchParams(window.location.search);
+    for (const name of DRAFT_FIELDS) {
+      const fromUrl = parameters.has(name);
+      const value = fromUrl ? parameters.get(name) : stored[name];
+      if (value === undefined || value === null || value === "") continue;
+      if (!validDraftValue(name, value)) {
+        if (fromUrl) throw new Error(`Recovery link contains an invalid ${name} value.`);
+        continue;
+      }
+      form().elements[name].value = String(value).trim();
+    }
+    persistDraft();
   }
 
   function snapshot() {
@@ -428,6 +477,10 @@
 
   function buildPolicy(chainTimestamp) {
     const values = new FormData(form());
+    if (!String(values.get("delegate") || "").trim()) {
+      form().elements.delegate.focus();
+      throw new Error("Enter the public Base address of the agent signer. Never enter its private key or recovery phrase.");
+    }
     const delegate = requiredAddress(values.get("delegate"), "Agent delegate");
     if (delegate === state.account) throw new Error("Use a dedicated delegate address, not the owner wallet.");
     const initialFunding = usdcUnits(values.get("initialFunding"), "Initial funding");
@@ -543,6 +596,27 @@
     return resultUint(await call(state.manifest.canonical.settlement_token, data));
   }
 
+  function formatUsdc(units) {
+    const whole = units / 1_000_000n;
+    const fraction = (units % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+    return fraction ? `${whole}.${fraction}` : String(whole);
+  }
+
+  async function waitForFactoryAllowance(expected, timeoutMs = 45_000) {
+    const started = Date.now();
+    let observed = await ownerFactoryAllowance();
+    while (observed !== expected && Date.now() - started < timeoutMs) {
+      await sleep(1_500);
+      observed = await ownerFactoryAllowance();
+    }
+    if (observed !== expected) {
+      throw new Error(
+        `Confirmed USDC allowance is ${formatUsdc(observed)} USDC; ${formatUsdc(expected)} USDC was expected.`,
+      );
+    }
+    return observed;
+  }
+
   async function activateWithAllowance(plan) {
     const factory = state.manifest.wallet_factory.address;
     const token = state.manifest.canonical.settlement_token;
@@ -558,8 +632,7 @@
       const approvalData = `${SELECTORS.approve}${addressWord(factory)}${uintWord(plan.initialFunding)}`;
       approvalHash = await sendTransaction(token, approvalData);
       await waitReceipt(approvalHash);
-      allowance = await ownerFactoryAllowance();
-      if (allowance !== plan.initialFunding) throw new Error("Confirmed USDC allowance differs from the reviewed amount.");
+      allowance = await waitForFactoryAllowance(plan.initialFunding);
     }
     const activationData = `${SELECTORS.createAndFund}`
       + `${plan.policyWords.join("")}${bytes32Word(plan.userSalt)}${uintWord(plan.initialFunding)}`;
@@ -571,8 +644,7 @@
     await ensureConnectedOwner();
     const transactionHash = await sendTransaction(factory, activationData);
     await waitReceipt(transactionHash);
-    const remainingAllowance = await ownerFactoryAllowance();
-    if (remainingAllowance !== 0n) throw new Error("Factory allowance was not fully consumed by activation.");
+    await waitForFactoryAllowance(0n);
     return { transactionHash, approvalHash };
   }
 
@@ -814,7 +886,7 @@
       `Current / next policy version: ${observed.version} / ${observed.version + 1n}`,
       `Current / next policy hash: ${currentHash} / ${nextHash}`,
       `Wallet balance remains ${Number(observed.balance) / 1_000_000} USDC.`,
-      "The next policy permits only the existing deterministic module and the exact two-wallet sandboxed-regression quorum. AI-judge authority remains disabled.",
+      "The next policy permits only the existing deterministic module and the exact one-verifier regression policy. AI-judge authority remains disabled.",
       `Lifetime spend remains ${Number(observed.lifetimeSpent) / 1_000_000} USDC. The deployed wallet starts a fresh policy-period counter; current period spend is ${Number(observed.periodSpent) / 1_000_000} USDC.`,
       "All financial caps, actions, expiry, owner, and wallet balance remain unchanged.",
       "The transaction transfers no USDC or ETH.",
@@ -924,6 +996,7 @@
   }
 
   function invalidatePlan(event) {
+    if (DRAFT_FIELDS.includes(event.target.name)) persistDraft();
     if (event.target.name === "reviewed" || event.target.name === "rotationReviewed") {
       updateButtons();
       return;
@@ -969,6 +1042,7 @@
       updateButtons();
     });
     try {
+      restoreDraft();
       await loadManifest();
       await discoverProviders();
       status("Ready for owner connection", "pending");

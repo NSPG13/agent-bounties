@@ -30,6 +30,7 @@ serde_json.workspace = true
 service-runtime = { path = "../service-runtime" }
 sha2.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 tower-http.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
@@ -37,5 +38,6 @@ web-public = { path = "../web-public" }
 worker = { path = "../worker" }
 
 [dev-dependencies]
+alloy.workspace = true
 hex.workspace = true
 sha2.workspace = true

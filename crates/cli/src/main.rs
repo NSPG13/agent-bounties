@@ -8,10 +8,12 @@ use app::{
 use chain_base::{
     autonomous_bounty_create_from_terms, base_network_descriptor, broadcast_signed_transaction,
     build_autonomous_bounty_terms_record, eth_get_transaction_receipt_request,
-    eth_send_raw_transaction_request, fetch_transaction_receipt, keccak256_canonical_json,
+    eth_send_raw_transaction_request, fetch_transaction_receipt,
+    generate_open_competition_commitment_envelope, keccak256_canonical_json, normalize_evm_address,
     verify_autonomous_factory_safe_state, AutonomousBountyCreationBatchPlan,
     AutonomousBountyCreationPlan, AutonomousBountyTxPlanner, AutonomousFactoryExpectedState,
     AutonomousFactorySafeObservation, BaseRpcUrlConfig, EvmTransactionIntent,
+    OpenCompetitionCommitmentEnvelope, OpenCompetitionCommitmentInput,
     AUTONOMOUS_BOUNTY_PROTOCOL_HASH, BASE_MAINNET_USDC_TOKEN_ADDRESS,
 };
 #[cfg(test)]
@@ -352,6 +354,120 @@ enum Command {
         #[arg(long, default_value = "http://127.0.0.1:8090")]
         mcp_base_url: String,
     },
+    OpenCompetitionReadiness {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+    },
+    OpenCompetitionVerifiers {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+    },
+    OpenCompetitionState {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        solver: Option<String>,
+        #[arg(long)]
+        verifier_profile_id: Option<String>,
+    },
+    OpenCompetitionCreation {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        request_file: String,
+    },
+    OpenCompetitionCommitmentGenerate {
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        solver: String,
+        #[arg(long)]
+        submission_hash: String,
+        #[arg(long)]
+        evidence_hash: String,
+        #[arg(long)]
+        output: String,
+    },
+    OpenCompetitionCommitmentRecord {
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        committed_block: u64,
+        #[arg(long)]
+        reveal_deadline: u64,
+    },
+    OpenCompetitionAction {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "{}")]
+        arguments_json: String,
+    },
+    OpenCompetitionEntrantAction {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        wallet: String,
+        #[arg(long)]
+        bounty_contract: String,
+        #[arg(long)]
+        action: String,
+        #[arg(long)]
+        commitment: Option<String>,
+        #[arg(long)]
+        commitment_envelope_file: Option<String>,
+        #[arg(long)]
+        proof: Option<String>,
+        #[arg(long)]
+        deadline_seconds: Option<u64>,
+    },
+    OpenCompetitionEntrantRelay {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        request_file: String,
+    },
+    OpenCompetitionEntrantRelayStatus {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        relay_id: String,
+    },
+    StandingMetaV4Readiness {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+    },
+    StandingMetaV4Action {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "{}")]
+        arguments_json: String,
+    },
     /// Show the 3 USDC daily and 26 USDC Monday-Sunday rankings.
     Leaderboard {
         #[arg(long, default_value = "https://api.agentbounties.app")]
@@ -676,6 +792,104 @@ async fn async_main() -> Result<()> {
             public_base_url,
             mcp_base_url,
         } => discovery(public_base_url, mcp_base_url),
+        Command::OpenCompetitionReadiness {
+            api_base_url,
+            network,
+            bounty_contract,
+        } => open_competition_readiness_cli(api_base_url, network, bounty_contract),
+        Command::OpenCompetitionVerifiers {
+            api_base_url,
+            network,
+        } => open_competition_verifiers_cli(api_base_url, network),
+        Command::OpenCompetitionState {
+            api_base_url,
+            network,
+            bounty_contract,
+            solver,
+            verifier_profile_id,
+        } => open_competition_state_cli(
+            api_base_url,
+            network,
+            bounty_contract,
+            solver,
+            verifier_profile_id,
+        ),
+        Command::OpenCompetitionCreation {
+            api_base_url,
+            request_file,
+        } => open_competition_creation_cli(api_base_url, request_file),
+        Command::OpenCompetitionCommitmentGenerate {
+            network,
+            bounty_contract,
+            solver,
+            submission_hash,
+            evidence_hash,
+            output,
+        } => open_competition_commitment_generate_cli(
+            network,
+            bounty_contract,
+            solver,
+            submission_hash,
+            evidence_hash,
+            output,
+        ),
+        Command::OpenCompetitionCommitmentRecord {
+            file,
+            committed_block,
+            reveal_deadline,
+        } => open_competition_commitment_record_cli(file, committed_block, reveal_deadline),
+        Command::OpenCompetitionAction {
+            api_base_url,
+            network,
+            bounty_contract,
+            operation,
+            arguments_json,
+        } => open_competition_action_cli(
+            api_base_url,
+            network,
+            bounty_contract,
+            operation,
+            arguments_json,
+        ),
+        Command::OpenCompetitionEntrantAction {
+            api_base_url,
+            network,
+            wallet,
+            bounty_contract,
+            action,
+            commitment,
+            commitment_envelope_file,
+            proof,
+            deadline_seconds,
+        } => open_competition_entrant_action_cli(
+            api_base_url,
+            network,
+            wallet,
+            bounty_contract,
+            action,
+            commitment,
+            commitment_envelope_file,
+            proof,
+            deadline_seconds,
+        ),
+        Command::OpenCompetitionEntrantRelay {
+            api_base_url,
+            request_file,
+        } => open_competition_entrant_relay_cli(api_base_url, request_file),
+        Command::OpenCompetitionEntrantRelayStatus {
+            api_base_url,
+            relay_id,
+        } => open_competition_entrant_relay_status_cli(api_base_url, relay_id),
+        Command::StandingMetaV4Readiness {
+            api_base_url,
+            network,
+        } => standing_meta_v4_readiness_cli(api_base_url, network),
+        Command::StandingMetaV4Action {
+            api_base_url,
+            network,
+            operation,
+            arguments_json,
+        } => standing_meta_v4_action_cli(api_base_url, network, operation, arguments_json),
         Command::Leaderboard {
             api_base_url,
             network,
@@ -2039,6 +2253,405 @@ fn agent_paid_status(agent_id: Uuid, api_base_url: String) -> Result<()> {
     let api = normalize_base_url(&api_base_url);
     let status = get_json(&format!("{api}/v1/agents/{agent_id}/paid-status"))?;
     println!("{}", serde_json::to_string_pretty(&status)?);
+    Ok(())
+}
+
+fn open_competition_verifiers_cli(api_base_url: String, network: String) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let catalog = get_json(&format!(
+        "{api}/v1/base/open-competition-v1/verifiers?network={network}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&catalog)?);
+    Ok(())
+}
+
+fn open_competition_state_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+    solver: Option<String>,
+    verifier_profile_id: Option<String>,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let solver = solver
+        .map(|value| normalize_evm_address(&value))
+        .transpose()?;
+    if let Some(profile_id) = &verifier_profile_id {
+        require(
+            !profile_id.is_empty()
+                && profile_id.len() <= 128
+                && profile_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                }),
+            "verifier_profile_id contains unsupported characters",
+        )?;
+    }
+    let api = normalize_base_url(&api_base_url);
+    let mut url = format!(
+        "{api}/v1/base/open-competition-v1/state?network={network}&bounty_contract={bounty_contract}"
+    );
+    if let Some(solver) = solver {
+        url.push_str("&solver=");
+        url.push_str(&solver);
+    }
+    if let Some(profile_id) = verifier_profile_id {
+        url.push_str("&verifier_profile_id=");
+        url.push_str(&profile_id);
+    }
+    let state = get_json(&url)?;
+    println!("{}", serde_json::to_string_pretty(&state)?);
+    Ok(())
+}
+
+fn open_competition_creation_cli(api_base_url: String, request_file: String) -> Result<()> {
+    let raw = fs::read_to_string(&request_file)
+        .with_context(|| format!("failed to read {request_file}"))?;
+    let request: serde_json::Value =
+        serde_json::from_str(&raw).context("request_file must contain valid JSON")?;
+    require(
+        request.is_object(),
+        "request_file must contain one JSON object",
+    )?;
+    let path = if request
+        .get("funding_authorization")
+        .is_some_and(|value| !value.is_null())
+    {
+        "authorized-creation-preparation"
+    } else {
+        "creation-preparation"
+    };
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/open-competition-v1/{path}"),
+        request,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn open_competition_commitment_generate_cli(
+    network: String,
+    bounty_contract: String,
+    solver: String,
+    submission_hash: String,
+    evidence_hash: String,
+    output: String,
+) -> Result<()> {
+    let envelope = generate_open_competition_commitment_envelope(OpenCompetitionCommitmentInput {
+        network,
+        bounty: bounty_contract,
+        solver,
+        submission_hash,
+        evidence_hash,
+    })?;
+    let path = PathBuf::from(&output);
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| {
+            format!(
+                "failed to create {}; choose a new path so an existing recovery envelope is never overwritten",
+                path.display()
+            )
+        })?;
+    let json = serde_json::to_vec_pretty(&envelope)?;
+    file.write_all(&json)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    file.write_all(b"\n")
+        .with_context(|| format!("failed to finish {}", path.display()))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "commitment": envelope.commitment,
+            "recovery_envelope_file": path,
+            "next_action": "Back up the file privately and send only commitment to prepare_open_competition_commit."
+        }))?
+    );
+    Ok(())
+}
+
+fn open_competition_commitment_record_cli(
+    file: String,
+    committed_block: u64,
+    reveal_deadline: u64,
+) -> Result<()> {
+    require(committed_block > 0, "committed_block must be positive")?;
+    require(reveal_deadline > 0, "reveal_deadline must be positive")?;
+    let path = PathBuf::from(&file);
+    let raw =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut envelope: OpenCompetitionCommitmentEnvelope =
+        serde_json::from_str(&raw).context("file is not a valid commitment recovery envelope")?;
+    require(
+        envelope.committed_block.is_none() && envelope.reveal_deadline.is_none(),
+        "commitment observation is already recorded; refusing to overwrite it",
+    )?;
+    envelope.committed_block = Some(committed_block);
+    envelope.reveal_deadline = Some(reveal_deadline);
+    let json = serde_json::to_string_pretty(&envelope)?;
+    fs::write(&path, format!("{json}\n"))
+        .with_context(|| format!("failed to update {}", path.display()))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "commitment": envelope.commitment,
+            "committed_block": committed_block,
+            "reveal_deadline": reveal_deadline,
+            "recovery_envelope_file": path
+        }))?
+    );
+    Ok(())
+}
+
+fn open_competition_readiness_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let api = normalize_base_url(&api_base_url);
+    let report = get_json(&format!(
+        "{api}/v1/base/open-competition-v1/readiness?network={network}&bounty_contract={bounty_contract}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn open_competition_action_cli(
+    api_base_url: String,
+    network: String,
+    bounty_contract: String,
+    operation: String,
+    arguments_json: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    let path = match operation.as_str() {
+        "prepare_open_competition_commit" => "commit-preparation",
+        "prepare_open_competition_reveal" => "reveal-preparation",
+        "get_open_competition_status" => "status",
+        "withdraw_open_competition_bond" => "bond-withdrawal-preparation",
+        _ => bail!("unknown Open Competition V1 operation"),
+    };
+    let arguments: serde_json::Value =
+        serde_json::from_str(&arguments_json).context("arguments_json must be valid JSON")?;
+    require(
+        arguments.is_object(),
+        "arguments_json must contain one JSON object",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let payload = match operation.as_str() {
+        "prepare_open_competition_commit" => serde_json::json!({
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "solver": arguments.get("solver").and_then(|value| value.as_str()).ok_or_else(|| anyhow!("arguments_json must include solver"))?,
+            "commitment": arguments.get("commitment").and_then(|value| value.as_str()).ok_or_else(|| anyhow!("arguments_json must include commitment"))?
+        }),
+        "prepare_open_competition_reveal" => serde_json::json!({
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "solver": arguments.get("solver").and_then(|value| value.as_str()).ok_or_else(|| anyhow!("arguments_json must include solver"))?,
+            "commitment_envelope": arguments.get("commitment_envelope").cloned().ok_or_else(|| anyhow!("arguments_json must include commitment_envelope"))?,
+            "proof": arguments.get("proof").and_then(|value| value.as_str()).ok_or_else(|| anyhow!("arguments_json must include proof"))?
+        }),
+        _ => serde_json::json!({
+            "network": network,
+            "bounty_contract": bounty_contract,
+            "arguments": arguments
+        }),
+    };
+    let plan = post_json(
+        &format!("{api}/v1/base/open-competition-v1/{path}"),
+        payload,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_competition_entrant_action_cli(
+    api_base_url: String,
+    network: String,
+    wallet: String,
+    bounty_contract: String,
+    action: String,
+    commitment: Option<String>,
+    commitment_envelope_file: Option<String>,
+    proof: Option<String>,
+    deadline_seconds: Option<u64>,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let wallet = normalize_evm_address(&wallet)?;
+    let bounty_contract = normalize_evm_address(&bounty_contract)?;
+    require(
+        matches!(action.as_str(), "commit" | "reveal" | "withdraw_bond"),
+        "action must be commit, reveal, or withdraw_bond",
+    )?;
+    if let Some(seconds) = deadline_seconds {
+        require(
+            (30..=600).contains(&seconds),
+            "deadline_seconds must be between 30 and 600",
+        )?;
+    }
+    let commitment_envelope = commitment_envelope_file
+        .as_deref()
+        .map(|file| {
+            let raw = fs::read_to_string(file)
+                .with_context(|| format!("failed to read commitment envelope {file}"))?;
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .context("commitment envelope file must contain valid JSON")
+        })
+        .transpose()?;
+    match action.as_str() {
+        "commit" => require(
+            commitment.is_some() && commitment_envelope.is_none() && proof.is_none(),
+            "commit requires --commitment and forbids reveal fields",
+        )?,
+        "reveal" => require(
+            commitment.is_none() && commitment_envelope.is_some() && proof.is_some(),
+            "reveal requires --commitment-envelope-file and --proof",
+        )?,
+        "withdraw_bond" => require(
+            commitment.is_none() && commitment_envelope.is_none() && proof.is_none(),
+            "withdraw_bond forbids commitment and reveal fields",
+        )?,
+        _ => unreachable!(),
+    }
+    let payload = serde_json::json!({
+        "network": network,
+        "wallet": wallet,
+        "bounty_contract": bounty_contract,
+        "action": action,
+        "commitment": commitment,
+        "commitment_envelope": commitment_envelope,
+        "proof": proof,
+        "deadline_seconds": deadline_seconds,
+    });
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/open-competition-v1/entrant-action-preparation"),
+        payload,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
+}
+
+fn open_competition_entrant_relay_cli(api_base_url: String, request_file: String) -> Result<()> {
+    let raw = fs::read_to_string(&request_file)
+        .with_context(|| format!("failed to read entrant relay request {request_file}"))?;
+    let request: serde_json::Value =
+        serde_json::from_str(&raw).context("request_file must contain valid JSON")?;
+    let object = request
+        .as_object()
+        .context("request_file must contain one JSON object")?;
+    require(
+        object.len() == 3
+            && object.contains_key("idempotency_key")
+            && object.contains_key("plan")
+            && object.contains_key("signature"),
+        "request_file must contain only idempotency_key, plan, and signature",
+    )?;
+    require(
+        object.get("plan").is_some_and(serde_json::Value::is_object),
+        "request_file plan must be an object",
+    )?;
+    let signature = object
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .context("request_file signature must be a 65-byte 0x-prefixed signature")?;
+    require(
+        signature.len() == 132
+            && signature.starts_with("0x")
+            && signature[2..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "request_file signature must be a 65-byte 0x-prefixed signature",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let response = post_json(
+        &format!("{api}/v1/base/open-competition-v1/entrant-action-relays"),
+        request,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn open_competition_entrant_relay_status_cli(api_base_url: String, relay_id: String) -> Result<()> {
+    let relay_id = Uuid::parse_str(&relay_id).context("relay_id must be a UUID")?;
+    let api = normalize_base_url(&api_base_url);
+    let response = get_json(&format!(
+        "{api}/v1/base/open-competition-v1/entrant-action-relays/{relay_id}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn standing_meta_v4_readiness_cli(api_base_url: String, network: String) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let report = get_json(&format!(
+        "{api}/v1/base/standing-meta-v4/readiness?network={network}"
+    ))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn standing_meta_v4_action_cli(
+    api_base_url: String,
+    network: String,
+    operation: String,
+    arguments_json: String,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let path = match operation.as_str() {
+        "prepare_standing_meta_v4_claim" => "claim-preparation",
+        "prepare_anonymous_stake_registration" => "stake-registration-preparation",
+        "set_anonymous_stake_availability" => "stake-availability-preparation",
+        "list_verification_assignments" => "verification-assignments",
+        "submit_primary_verdict" => "primary-verdict-preparation",
+        "waive_verification_appeal" => "appeal-waiver-preparation",
+        "open_verification_appeal" => "appeal-opening-preparation",
+        "submit_appeal_vote" => "appeal-vote-preparation",
+        "finalize_verification_case" => "finalization-preparation",
+        _ => bail!("unknown Standing Meta V4 operation"),
+    };
+    let arguments: serde_json::Value =
+        serde_json::from_str(&arguments_json).context("arguments_json must be valid JSON")?;
+    require(
+        arguments.is_object(),
+        "arguments_json must contain one JSON object",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let plan = post_json(
+        &format!("{api}/v1/base/standing-meta-v4/{path}"),
+        serde_json::json!({"network": network, "arguments": arguments}),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
     Ok(())
 }
 
@@ -4879,26 +5492,28 @@ fn is_doc_contract_file(path: &Path) -> bool {
 }
 
 fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
-    let source_path = contract_root.join("crates/api/src/main.rs");
-    let source = fs::read_to_string(&source_path)
-        .with_context(|| format!("failed to read {}", source_path.display()))?;
     let mut routes = BTreeSet::new();
-    let mut expecting_route = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if let Some(route_start) = trimmed.find(".route(") {
-            if let Some(route) = first_string_literal(&trimmed[route_start..]) {
-                routes.insert(normalize_route(route));
-                expecting_route = false;
-            } else {
-                expecting_route = true;
+    for relative_path in ["crates/api/src/main.rs", "crates/mcp-server/src/main.rs"] {
+        let source_path = contract_root.join(relative_path);
+        let source = fs::read_to_string(&source_path)
+            .with_context(|| format!("failed to read {}", source_path.display()))?;
+        let mut expecting_route = false;
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if let Some(route_start) = trimmed.find(".route(") {
+                if let Some(route) = first_string_literal(&trimmed[route_start..]) {
+                    routes.insert(normalize_route(route));
+                    expecting_route = false;
+                } else {
+                    expecting_route = true;
+                }
+                continue;
             }
-            continue;
-        }
-        if expecting_route {
-            if let Some(route) = first_string_literal(trimmed) {
-                routes.insert(normalize_route(route));
-                expecting_route = false;
+            if expecting_route {
+                if let Some(route) = first_string_literal(trimmed) {
+                    routes.insert(normalize_route(route));
+                    expecting_route = false;
+                }
             }
         }
     }

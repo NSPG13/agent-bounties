@@ -1,5 +1,6 @@
 (function () {
-  const MARKET_REFRESH_MS = 30_000;
+  const MARKET_REFRESH_MS = 15_000;
+  const MARKET_STREAM_STALE_MS = 35_000;
   const LEADERBOARD_REFRESH_MS = 60_000;
   const MARKET_WINDOW_HOURS = 720;
   const marketState = {
@@ -7,10 +8,15 @@
     fingerprint: null,
     leaderboardRendered: false,
     lastReceivedAt: null,
+    projection: null,
+    readyProjection: null,
+    claim: null,
+    protocol: null,
     protocolPromise: null,
     refreshing: false,
     rendered: false,
     status: "connecting",
+    streamConnected: false,
   };
   const reduceMotion = window.matchMedia
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -75,6 +81,12 @@
   }
 
   function actionHref(item) {
+    if (item.competition_mode === "first_valid_submission" && item.source_type === "canonical_base") {
+      const profile = item.verifier_profile_id
+        ? `&verifierProfileId=${encodeURIComponent(item.verifier_profile_id)}`
+        : "";
+      return `competition.html?bountyContract=${encodeURIComponent(item.source_id)}&network=${encodeURIComponent(item.network || "base-mainnet")}${profile}`;
+    }
     if (item.source_type === "canonical_base" && item.work_state === "claimable") {
       return `earn.html?bountyContract=${encodeURIComponent(item.source_id)}&source=homepage-opportunities`;
     }
@@ -85,6 +97,9 @@
   }
 
   function actionLabel(item) {
+    if (item.competition_mode === "first_valid_submission" && item.work_state === "claimable") {
+      return "Enter competition";
+    }
     if (item.source_type === "canonical_base" && item.work_state === "claimable") {
       return "Inspect and claim";
     }
@@ -119,6 +134,10 @@
       : item.payment_state === "seeking_funding"
         ? `${formatAmount(item.reward)} proposed reward · not yet committed`
         : "No payment committed";
+    if (item.cash_economics) {
+      const cash = item.cash_economics;
+      economics.textContent += ` · ${formatAmount(cash.required_external_spend)} required external spend · ${formatAmount(cash.gross_cash_margin)} gross cash margin, not net profit`;
+    }
 
     const goal = document.createElement("p");
     goal.className = "fine";
@@ -126,14 +145,43 @@
 
     const method = document.createElement("p");
     method.className = "fine opportunity-method";
-    method.textContent = `${item.verification_method} · next: ${item.next_action.action}`;
+    const openCompetition = item.competition_mode === "first_valid_submission";
+    const competitionMode = openCompetition ? "Open competition" : "Exclusive claim";
+    method.textContent = `${competitionMode} · ${item.verification_method} · next: ${item.next_action.action}`;
 
     article.append(state, title, economics, goal, method);
+
+    if (openCompetition) {
+      const competition = document.createElement("p");
+      competition.className = "fine opportunity-meta";
+      const entryBond = item.entry_bond ? formatAmount(item.entry_bond) : formatAmount(item.bond);
+      const entryCount = Number(item.entry_count || 0);
+      const maxEntries = Number(item.max_entries || 0);
+      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "bounded entry capacity";
+      const deadline = item.competition_ends_at
+        ? new Date(Number(item.competition_ends_at) * 1000).toLocaleString()
+        : "published competition deadline";
+      const profile = item.verifier_profile_name || item.verifier_profile_id || "approved deterministic verifier";
+      competition.textContent = `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
+      article.append(competition);
+    }
 
     if (item.standing_meta_bounty) {
       const meta = document.createElement("p");
       meta.className = "fine opportunity-meta";
-      meta.textContent = "Meta-bounty: create and fund qualifying work that a different wallet completes and receives canonical settlement for.";
+      meta.textContent = "Meta-bounty: inspect its exact version, margin, verifier governance, and appeal path. Wallet separation alone does not prove unrelated ownership.";
+      article.append(meta);
+    }
+
+    if (item.standing_meta_v4) {
+      const meta = document.createElement("p");
+      meta.className = "fine opportunity-meta";
+      const v4 = item.standing_meta_v4;
+      const candidateCount = Number(v4.anonymous_separation?.candidate_count || 0);
+      const margin = v4.economics?.successful_settlement_margin
+        ? formatAmount(v4.economics.successful_settlement_margin)
+        : "unknown margin";
+      meta.textContent = `Standing Meta V4: ${margin} successful-settlement onchain margin · vrf_assigned_child mode, not an open race · claim-restricted V4 child · ${candidateCount} frozen anonymous candidates · immediate active-pool VRF draw · symmetric appeal with immediate waiver. An open parent race would make losing entrants pay the child outlay without a parent reward. Wallets may share an owner. Only BountySettled proves payment.`;
       article.append(meta);
     }
 
@@ -294,6 +342,18 @@
     }, 0);
   }
 
+  function isReadyToEarn(item) {
+    return item.source_type === "canonical_base"
+      && item.source_status === "claimable"
+      && item.work_state === "claimable"
+      && item.payment_state === "escrowed"
+      && item.payment_committed === true
+      && item.verification_ready === true
+      && Boolean(item.terms_hash)
+      && amountValue(item.funded_amount) >= amountValue(item.funding_target)
+      && amountValue(item.reward) > 0;
+  }
+
   function marketFingerprint(items) {
     return JSON.stringify(items.map((item) => [
       item.opportunity_id,
@@ -449,11 +509,14 @@
       return;
     }
     if (marketState.refreshing) {
-      updated.textContent = `Refreshing · last sync ${formatElapsed(age)}`;
+      updated.textContent = marketState.streamConnected
+        ? `Refreshing supporting metrics - live inventory updated ${formatElapsed(age)}`
+        : `Live stream reconnecting - fallback sync ${formatElapsed(age)}`;
       return;
     }
-    const refreshIn = Math.max(0, Math.ceil((MARKET_REFRESH_MS - age) / 1_000));
-    updated.textContent = `Synced ${formatElapsed(age)} · refresh in ${refreshIn}s`;
+    updated.textContent = marketState.streamConnected
+      ? `Live stream connected - updated ${formatElapsed(age)}`
+      : `Live stream reconnecting - fallback updated ${formatElapsed(age)}`;
   }
 
   function setMarketStatus(status) {
@@ -489,20 +552,26 @@
     return latest && safePublicUrl((latest.proof_urls || [])[0] || latest.public_url);
   }
 
-  function renderMarketSnapshot(protocol, projection, claim) {
+  function renderMarketSnapshot(protocol, projection, readyProjection, claim) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
     const proof = document.querySelector("[data-market-proof]");
     const items = projection.items || [];
+    const readyItems = readyProjection.items || [];
+    if (readyProjection.applied_view !== "ready_to_earn"
+      || readyProjection.degraded
+      || readyItems.some((item) => !isReadyToEarn(item))) {
+      throw new Error("Live earning inventory failed its claimability gate.");
+    }
     const referenceAt = new Date(claim.generated_at || projection.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
     const paidItems = items.filter((item) => item.source_type === "canonical_base"
       && item.work_state === "completed"
       && item.payment_state === "paid");
-    const activeBounties = items.filter((item) => item.work_state !== "completed"
-      && item.payment_state !== "paid");
-    const addedThisWeek = activeBounties.filter((item) => {
+    const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
+      && (item.work_state === "in_progress" || item.work_state === "submitted"));
+    const addedThisWeek = readyItems.filter((item) => {
       const created = Date.parse(item.created_at);
       return Number.isFinite(created) && created >= oneWeekAgo;
     }).length;
@@ -514,17 +583,20 @@
     const activeContributors = Number(claim?.canonical_outcomes?.unique_paid_solver_wallets) || 0;
     const settlements = paidItems.length;
 
-    setMetric("ready", activeBounties.length);
-    setMetricText("[data-adoption-ready-weekly]", `${formatMetric(addedThisWeek, 0)} added this week`);
+    setMetric("ready", readyItems.length);
+    setMetricText(
+      "[data-adoption-ready-weekly]",
+      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(inProgressItems.length, 0)} in progress`,
+    );
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
     setMetric("paid", activeContributors);
-    setMetricText("[data-board-active]", formatMetric(activeBounties.length, 0));
-    renderOpportunityBoard(container, items);
+    setMetricText("[data-board-active]", formatMetric(readyItems.length, 0));
+    renderOpportunityBoard(container, readyItems);
 
     if (heroSummary) {
-      heroSummary.textContent = `${activeBounties.length} active bounties · ${formatMetric(transactionVolumeUsdc, 2)} USDC on Base · ${settlements} problems solved`;
+      heroSummary.textContent = `${readyItems.length} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC settled · ${settlements} bounties settled`;
     }
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;
@@ -534,8 +606,8 @@
     const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
     if (detail) {
       detail.textContent = unavailable.length
-        ? `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
-        : `${protocolStatus} · ${items.length} live opportunities · ${availableSources}/${sourceStatuses.length} sources online · auto-refreshes every 30 seconds`;
+        ? `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
+        : `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream`;
     }
 
     const proofUrl = newestPaidProof(paidItems);
@@ -558,48 +630,107 @@
     try {
       const protocol = await resolveProtocol();
       const api = protocol.api_base_url.replace(/\/$/, "");
-      const [projectionResponse, claimResponse] = await Promise.all([
+      const [projectionResponse, readyResponse, claimResponse] = await Promise.all([
         fetch(`${api}/v1/opportunities?network=base-mainnet&limit=300`, { cache: "no-store" }),
+        fetch(`${api}/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        }),
         fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=${MARKET_WINDOW_HOURS}`, { cache: "no-store" }),
       ]);
-      if (!projectionResponse.ok || !claimResponse.ok) {
+      if (!projectionResponse.ok || !readyResponse.ok || !claimResponse.ok) {
         throw new Error("Live market evidence is unavailable.");
       }
-      const [projection, claim] = await Promise.all([
+      const [projection, readyProjection, claim] = await Promise.all([
         projectionResponse.json(),
+        readyResponse.json(),
         claimResponse.json(),
       ]);
       const firstLiveMarketView = !marketState.rendered;
-      renderMarketSnapshot(protocol, projection, claim);
+      marketState.protocol = protocol;
+      marketState.projection = projection;
+      marketState.readyProjection = readyProjection;
+      marketState.claim = claim;
+      renderMarketSnapshot(protocol, projection, readyProjection, claim);
       marketState.lastReceivedAt = Date.now();
       marketState.rendered = true;
       if (firstLiveMarketView) track("market_view");
       setMarketStatus(projection.degraded ? "delayed" : "live");
     } catch (error) {
       setMarketStatus("delayed");
-      if (!marketState.rendered) {
-        container.textContent = "Opportunity discovery could not be loaded. Use the authoritative unfunded and canonical feeds directly; use the portable skill for a Base safe-block check.";
-        if (heroSummary) heroSummary.textContent = "Live market feed unavailable · retrying automatically";
-        if (detail) detail.textContent = error.message || String(error);
-      } else if (detail) {
-        detail.textContent = "Live feed delayed. Last confirmed market snapshot remains visible while the page retries automatically.";
-      }
+      marketState.fingerprint = "";
+      container.textContent = "Live earning inventory is unavailable. Retrying automatically; no stale bounty is shown.";
+      if (heroSummary) heroSummary.textContent = "Live market feed unavailable · retrying automatically";
+      if (detail) detail.textContent = error.message || String(error);
     } finally {
       marketState.refreshing = false;
       updateMarketClock();
     }
   }
 
+  async function connectMarketStream() {
+    const protocol = await resolveProtocol();
+    const api = protocol.api_base_url.replace(/\/$/, "");
+    const stream = new EventSource(
+      `${api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`,
+    );
+    stream.onopen = () => {
+      marketState.streamConnected = true;
+      updateMarketClock();
+    };
+    stream.addEventListener("inventory", (event) => {
+      try {
+        const readyProjection = JSON.parse(event.data);
+        marketState.streamConnected = true;
+        marketState.readyProjection = readyProjection;
+        if (!marketState.projection || !marketState.claim) {
+          refreshMarket();
+          return;
+        }
+        renderMarketSnapshot(protocol, marketState.projection, readyProjection, marketState.claim);
+        marketState.lastReceivedAt = Date.now();
+        marketState.rendered = true;
+        setMarketStatus("live");
+        updateMarketClock();
+      } catch (_error) {
+        marketState.lastReceivedAt = null;
+        setMarketStatus("delayed");
+        document.getElementById("home-live-inventory").textContent =
+          "Live earning inventory is unavailable. Retrying automatically; no stale bounty is shown.";
+      }
+    });
+    stream.addEventListener("projection_error", () => {
+      marketState.lastReceivedAt = null;
+      setMarketStatus("delayed");
+      document.getElementById("home-live-inventory").textContent =
+        "Live earning inventory is unavailable. Retrying automatically; no stale bounty is shown.";
+    });
+    stream.onerror = () => {
+      marketState.streamConnected = false;
+      if (!marketState.lastReceivedAt
+        || Date.now() - marketState.lastReceivedAt >= MARKET_STREAM_STALE_MS) {
+        setMarketStatus("delayed");
+      }
+      updateMarketClock();
+    };
+  }
+
   function loadInventory() {
     if (!document.getElementById("home-live-inventory")) return;
     refreshMarket();
+    connectMarketStream().catch(() => setMarketStatus("delayed"));
     window.setInterval(() => {
-      if (!document.hidden) refreshMarket();
+      if (!document.hidden
+        && (!marketState.lastReceivedAt
+          || Date.now() - marketState.lastReceivedAt >= MARKET_STREAM_STALE_MS)) {
+        refreshMarket();
+      }
     }, MARKET_REFRESH_MS);
     window.setInterval(updateMarketClock, 1_000);
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden
-        && (!marketState.lastReceivedAt || Date.now() - marketState.lastReceivedAt >= MARKET_REFRESH_MS)) {
+        && (!marketState.lastReceivedAt
+          || Date.now() - marketState.lastReceivedAt >= MARKET_STREAM_STALE_MS)) {
         refreshMarket();
       }
     });

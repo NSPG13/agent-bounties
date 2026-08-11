@@ -9,6 +9,7 @@ import {
   normalizeApiBaseUrl,
   rpcBatchTransport,
   STANDING_META_BOUNTY,
+  SUPPORTED_REGRESSION_QUORUM,
   verifyClaimableItem,
   verifyDirectChainInventory,
 } from "../skills/agent-bounties/scripts/check-in.mjs";
@@ -335,7 +336,8 @@ test("portable skill metadata and install contracts remain publishable", async (
   assert.ok(llms.includes("--solver-wallet 0xYourPublicBaseAddress"));
   assert.ok(llms.includes("autonomous-bounty-plan"));
   assert.ok(skill.includes("autonomous-bounty-plan"));
-  assert.ok(skill.includes("label:claimable-live"));
+  assert.ok(skill.includes("label:ready-to-earn"));
+  assert.ok(skill.includes("label:open-competition"));
   assert.ok(skill.includes("funding-needed` is a crowdfunding opportunity"));
 
   assert.equal(chainManifest.factory, activation.deployment.expected_factory);
@@ -661,7 +663,7 @@ test("hosted check-in emits an exact side-effect-free claim handoff", async () =
   assert.equal(handoff.ready_scope, "claim_handoff_only");
   assert.equal(handoff.wallet_readiness_checked, false);
   assert.equal(handoff.reason, "claim_handoff_complete");
-  assert.equal(handoff.preferred_path, "github_claim_comment");
+  assert.equal(handoff.preferred_path, "agent_native_claim");
   assert.equal(handoff.github_claim.issue_url, bounty.source_url);
   assert.equal(handoff.github_claim.comment_body, `/claim #275 wallet: ${solver}`);
   assert.equal(handoff.mcp.tool, "agent_native_claim");
@@ -682,13 +684,13 @@ test("hosted check-in emits an exact side-effect-free claim handoff", async () =
   assert.match(handoff.evidence_boundary, /did not post a comment/);
   assert.deepEqual(report.next_action, {
     schema_version: "agent-bounties/check-in-claim-handoff-v1",
-    action: "post_github_claim_comment",
+    action: "call_agent_native_claim",
     ready: true,
     ready_scope: "claim_handoff_only",
     bounty_id: bounty.id,
-    source_issue_number: 275,
-    issue_url: bounty.source_url,
-    comment_body: `/claim #275 wallet: ${solver}`,
+    mcp: handoff.mcp,
+    api: handoff.api,
+    github_fallback: handoff.github_claim,
     follow_up: handoff.follow_up,
   });
 });
@@ -822,6 +824,96 @@ test("hosted quorum bounty is excluded without a service availability attestatio
     ok: false,
     reason: "verification_path_not_executable",
   });
+});
+
+test("exact hosted sandboxed-regression quorum is portable earning inventory", async () => {
+  const input = await fixture("verified-claimable.json");
+  const item = structuredClone(input.autonomous_feed.body[0]);
+  item.verification_mode = "signed_quorum";
+  item.verifier_module = null;
+  item.verification_ready = true;
+  item.verification_readiness_reason =
+    "the default single sandboxed-regression verifier is supported";
+  item.terms.document.benchmark = { engine: SUPPORTED_REGRESSION_QUORUM.engine };
+  item.terms.document.verification_policy = {
+    mechanism: "signed_quorum",
+    verifiers: [...SUPPORTED_REGRESSION_QUORUM.verifiers],
+    threshold: SUPPORTED_REGRESSION_QUORUM.threshold,
+  };
+  item.events = item.events.map((event) => (
+    event.kind === "canonical_bounty_verification_configured"
+      ? {
+        ...event,
+        data: {
+          verification_mode: 1,
+          verifier_module: "0x0000000000000000000000000000000000000000",
+          verifier_set_hash: SUPPORTED_REGRESSION_QUORUM.verifierSetHash,
+          threshold: SUPPORTED_REGRESSION_QUORUM.threshold,
+        },
+      }
+      : event
+  ));
+
+  assert.deepEqual(verifyClaimableItem(item, input.protocol.body), {
+    ok: true,
+    reason: "confirmed_canonical_autonomous_bounty",
+  });
+
+  input.autonomous_feed.body = [item];
+  const report = await collectInventory({
+    apiBaseUrl: "https://api.example.test",
+    fixture: input,
+  });
+  const bounty = report.verified_claimable_bounties[0];
+  assert.equal(bounty.verification_mode, "signed_quorum");
+  assert.equal(bounty.verification_engine, SUPPORTED_REGRESSION_QUORUM.engine);
+  assert.equal(bounty.verifier_set_hash, SUPPORTED_REGRESSION_QUORUM.verifierSetHash);
+  assert.equal(bounty.verifier_threshold, SUPPORTED_REGRESSION_QUORUM.threshold);
+});
+
+test("portable quorum validation rejects verifier, threshold, engine, and event drift", async () => {
+  const input = await fixture("verified-claimable.json");
+  const base = structuredClone(input.autonomous_feed.body[0]);
+  base.verification_mode = "signed_quorum";
+  base.verifier_module = null;
+  base.verification_ready = true;
+  base.terms.document.benchmark = { engine: SUPPORTED_REGRESSION_QUORUM.engine };
+  base.terms.document.verification_policy = {
+    mechanism: "signed_quorum",
+    verifiers: [...SUPPORTED_REGRESSION_QUORUM.verifiers],
+    threshold: SUPPORTED_REGRESSION_QUORUM.threshold,
+  };
+  base.events = base.events.map((event) => (
+    event.kind === "canonical_bounty_verification_configured"
+      ? {
+        ...event,
+        data: {
+          verification_mode: 1,
+          verifier_module: "0x0000000000000000000000000000000000000000",
+          verifier_set_hash: SUPPORTED_REGRESSION_QUORUM.verifierSetHash,
+          threshold: SUPPORTED_REGRESSION_QUORUM.threshold,
+        },
+      }
+      : event
+  ));
+  const mutations = [
+    (item) => { item.terms.document.verification_policy.verifiers[0] = "0x1111111111111111111111111111111111111111"; },
+    (item) => { item.terms.document.verification_policy.threshold = 2; },
+    (item) => { item.terms.document.benchmark.engine = "different_runner"; },
+    (item) => {
+      item.events.find(
+        (event) => event.kind === "canonical_bounty_verification_configured",
+      ).data.verifier_set_hash = `0x${"66".repeat(32)}`;
+    },
+  ];
+  for (const mutate of mutations) {
+    const item = structuredClone(base);
+    mutate(item);
+    assert.deepEqual(verifyClaimableItem(item, input.protocol.body), {
+      ok: false,
+      reason: "verification_path_not_executable",
+    });
+  }
 });
 
 test("unavailable hosted API cannot create imaginary inventory", async () => {

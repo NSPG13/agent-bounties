@@ -56,11 +56,25 @@
 
   if (search) {
     search.addEventListener("submit", (event) => {
-      if (!searchInput || searchInput.value.trim()) return;
+      const value = searchInput ? searchInput.value.trim() : "";
+      if (!value) {
+        event.preventDefault();
+        searchInput?.focus();
+        searchInput?.setAttribute("aria-invalid", "true");
+        window.setTimeout(() => searchInput?.removeAttribute("aria-invalid"), 900);
+        return;
+      }
+
+      if (window.AgentBountyEntry?.start) {
+        event.preventDefault();
+        window.AgentBountyEntry.start(value);
+      }
+    });
+
+    searchInput?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
       event.preventDefault();
-      searchInput.focus();
-      searchInput.setAttribute("aria-invalid", "true");
-      window.setTimeout(() => searchInput.removeAttribute("aria-invalid"), 900);
+      search.requestSubmit();
     });
   }
 

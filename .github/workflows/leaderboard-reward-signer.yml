@@ -112,17 +112,17 @@ jobs:
         with:
           python-version: "3.12"
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: leaderboard-candidates-${{ needs.authorize-run.outputs.run_id }}
           path: target/leaderboard-candidates
           github-token: ${{ github.token }}
           run-id: ${{ needs.authorize-run.outputs.run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: leaderboard-attestations-one
           path: target/leaderboard-attestations-one
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: leaderboard-attestations-two
           path: target/leaderboard-attestations-two

@@ -1,11 +1,15 @@
 use app::BountyStatusResponse;
-use chain_base::{standing_meta_v2_parent_context, AutonomousBountyFeedItem};
+use chain_base::{
+    standing_meta_v2_parent_context, AutonomousBountyFeedItem, OpenCompetitionDeploymentState,
+    OpenCompetitionEvent, OpenCompetitionEventKind, OpenCompetitionVerifierProfile,
+};
 use chrono::{DateTime, Utc};
 use db::{TrialBounty, UnfundedBountySolution};
 use domain::{BountyStatus, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, PrivacyLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use utoipa::ToSchema;
 use web_public::escape_html;
 
@@ -70,6 +74,88 @@ pub struct OpportunityEmbedLinks {
     pub iframe: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityImage {
+    pub source: String,
+    pub prompt: Option<String>,
+    pub alt_text: String,
+    pub asset_url: String,
+    pub sha256: Option<String>,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityCashEconomics {
+    pub solver_reward: OpportunityAmount,
+    pub refundable_claim_bond: OpportunityAmount,
+    pub required_external_spend: OpportunityAmount,
+    pub gross_cash_margin: OpportunityAmount,
+    pub gross_cash_margin_positive: bool,
+    pub scope_disclaimer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityStandingMetaV4Economics {
+    pub parent_solver_reward: OpportunityAmount,
+    pub parent_verifier_reward: OpportunityAmount,
+    pub maximum_required_child_outlay: OpportunityAmount,
+    pub successful_settlement_margin: OpportunityAmount,
+    pub gas_sponsorship_available: bool,
+    pub scope_disclaimer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityAnonymousSeparation {
+    pub stake_per_wallet_role: OpportunityAmount,
+    pub sortition_mechanism: String,
+    pub candidate_count: u16,
+    pub selection_proof: Option<String>,
+    pub selection_status: String,
+    pub identity_required: bool,
+    pub unrelated_owner_proven: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityVerifierGovernance {
+    pub governance: String,
+    pub vrf_request_id: Option<String>,
+    pub vrf_proof: Option<String>,
+    pub primary_policy: String,
+    pub appellate_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityAppealPolicy {
+    pub eligible_appellants: Vec<String>,
+    pub bond: OpportunityAmount,
+    pub appeal_deadline_seconds: u64,
+    pub jury_size: u8,
+    pub threshold: u8,
+    pub current_state: String,
+    pub immediate_waiver_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityStandingMetaV4Coordination {
+    pub competition_mode: String,
+    pub atomic_claim_required: bool,
+    pub child_lifecycle: String,
+    pub per_bounty_enrollment_seconds: u64,
+    pub selected_solver_response_seconds: u64,
+    pub timing_safety: String,
+    pub why_not_first_valid: String,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct OpportunityStandingMetaV4 {
+    pub economics: OpportunityStandingMetaV4Economics,
+    pub anonymous_separation: OpportunityAnonymousSeparation,
+    pub verifier_governance: OpportunityVerifierGovernance,
+    pub appeal_policy: OpportunityAppealPolicy,
+    pub coordination: OpportunityStandingMetaV4Coordination,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct OpportunityItem {
     pub opportunity_id: String,
@@ -85,7 +171,26 @@ pub struct OpportunityItem {
     pub work_state: String,
     pub payment_state: String,
     pub payment_committed: bool,
+    pub competition_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verifier_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verifier_profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_count: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub competition_ends_at: Option<u64>,
     pub standing_meta_bounty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cash_economics: Option<OpportunityCashEconomics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub standing_meta_v4: Option<OpportunityStandingMetaV4>,
+    pub decision_authority: String,
+    pub payment_authority: String,
     pub reward: OpportunityAmount,
     pub completion_bonus: Option<OpportunityAmount>,
     pub funded_amount: OpportunityAmount,
@@ -100,6 +205,7 @@ pub struct OpportunityItem {
     pub proof_urls: Vec<String>,
     pub next_action: OpportunityNextAction,
     pub embeds: OpportunityEmbedLinks,
+    pub image: OpportunityImage,
     pub discovery_factors: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -196,6 +302,7 @@ pub fn render_opportunity_feeds(
             "id": item.opportunity_id,
             "url": item.public_url,
             "title": item.title,
+            "image": item.image.asset_url,
             "content_text": summary,
             "date_published": published,
             "date_modified": modified,
@@ -206,9 +313,11 @@ pub fn render_opportunity_feeds(
                 "payment_state": item.payment_state,
                 "payment_committed": item.payment_committed,
                 "reward": item.reward,
+                "cash_economics": item.cash_economics,
                 "verification_method": item.verification_method,
                 "verification_ready": item.verification_ready,
                 "terms_hash": item.terms_hash,
+                "image": item.image,
                 "next_action": item.next_action,
                 "evidence_boundary": item.evidence_boundary,
             }
@@ -265,9 +374,26 @@ fn feed_summary(item: &OpportunityItem) -> String {
         .goal
         .as_deref()
         .unwrap_or("No additional goal text was supplied.");
+    let cash_economics = item
+        .cash_economics
+        .as_ref()
+        .map_or_else(String::new, |economics| {
+            format!(
+                " Solver reward: {} {} base units. Refundable claim bond: {} {} base units. Required external spend: {} {} base units. Gross cash margin (not net profit): {} {} base units. {}",
+                economics.solver_reward.amount,
+                economics.solver_reward.currency,
+                economics.refundable_claim_bond.amount,
+                economics.refundable_claim_bond.currency,
+                economics.required_external_spend.amount,
+                economics.required_external_spend.currency,
+                economics.gross_cash_margin.amount,
+                economics.gross_cash_margin.currency,
+                economics.scope_disclaimer,
+            )
+        });
     truncate_feed_text(
         &format!(
-            "{goal}\n\nWork state: {}. Payment state: {}. {reward} Verification: {}. Next action: {}",
+            "{goal}\n\nWork state: {}. Payment state: {}. {reward}{cash_economics} Verification: {}. Next action: {}",
             item.work_state,
             item.payment_state,
             item.verification_method,
@@ -394,6 +520,8 @@ pub fn unfunded_opportunity(
         Some(&trial.goal),
         &evidence_requirements,
     );
+    let embeds = opportunity_embed_links(api, &opportunity_id, None);
+    let image = fallback_opportunity_image(&embeds, &trial.title);
     OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "unfunded_offchain".to_string(),
@@ -408,7 +536,18 @@ pub fn unfunded_opportunity(
         work_state: work_state.to_string(),
         payment_state: "none".to_string(),
         payment_committed: false,
+        competition_mode: "open_unfunded_submission".to_string(),
+        network: None,
+        verifier_profile_id: None,
+        verifier_profile_name: None,
+        entry_count: None,
+        max_entries: None,
+        competition_ends_at: None,
         standing_meta_bounty: false,
+        cash_economics: None,
+        standing_meta_v4: None,
+        decision_authority: "The poster reviews this offchain submission; no canonical verifier is configured.".to_string(),
+        payment_authority: "None. This opportunity is unfunded and creates no payment promise.".to_string(),
         reward: OpportunityAmount::usdc_base_units("0"),
         completion_bonus: None,
         funded_amount: OpportunityAmount::usdc_base_units("0"),
@@ -433,7 +572,8 @@ pub fn unfunded_opportunity(
             })),
             instructions: "A registered agent may submit public work. No payment claim or promise is created.".to_string(),
         },
-        embeds: opportunity_embed_links(api, &opportunity_id, None),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "unfunded_offchain",
             work_state,
@@ -505,6 +645,8 @@ pub fn legacy_opportunity(
     });
     let (categories, skills, keyword_matches) =
         web_public::discovery_taxonomy_with_matches(&bounty.title, None, &evidence_requirements);
+    let embeds = opportunity_embed_links(api, &opportunity_id, None);
+    let image = fallback_opportunity_image(&embeds, &bounty.title);
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "legacy_bounty".to_string(),
@@ -519,7 +661,18 @@ pub fn legacy_opportunity(
         work_state: work_state.to_string(),
         payment_state: payment_state.to_string(),
         payment_committed,
+        competition_mode: "exclusive_claim".to_string(),
+        network: None,
+        verifier_profile_id: None,
+        verifier_profile_name: None,
+        entry_count: None,
+        max_entries: None,
+        competition_ends_at: None,
         standing_meta_bounty: false,
+        cash_economics: None,
+        standing_meta_v4: None,
+        decision_authority: format!("Legacy configured verification path: {verification_method}."),
+        payment_authority: "The configured legacy reconciled rail; this is not canonical Base BountySettled evidence.".to_string(),
         reward: OpportunityAmount::minor_units(bounty.amount.amount, &bounty.amount.currency),
         completion_bonus: None,
         funded_amount: OpportunityAmount::minor_units(
@@ -548,7 +701,8 @@ pub fn legacy_opportunity(
         terms_hash: bounty.terms_hash.clone(),
         proof_urls,
         next_action,
-        embeds: opportunity_embed_links(api, &opportunity_id, None),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "legacy_bounty",
             work_state,
@@ -624,6 +778,35 @@ pub fn canonical_opportunity(
         .into_iter()
         .collect();
     let opportunity_id = format!("canonical:{network}:{}", item.bounty_contract);
+    let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
+    let image = terms
+        .and_then(|record| record.document.image.as_ref())
+        .map(|image| OpportunityImage {
+            source: image.source.clone(),
+            prompt: Some(image.prompt.clone()),
+            alt_text: image.alt_text.clone(),
+            asset_url: image.asset_url.clone(),
+            sha256: Some(image.sha256.clone()),
+            mime_type: image.mime_type.clone(),
+        })
+        .unwrap_or_else(|| fallback_opportunity_image(&embeds, &title));
+    let gross_cash_margin = item.gross_cash_margin.parse::<i128>().ok()?;
+    let cash_economics = OpportunityCashEconomics {
+        solver_reward: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
+        refundable_claim_bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
+        required_external_spend: OpportunityAmount::usdc_base_units(
+            item.required_external_spend.clone(),
+        ),
+        gross_cash_margin: OpportunityAmount::usdc_base_units(item.gross_cash_margin.clone()),
+        gross_cash_margin_positive: gross_cash_margin > 0,
+        scope_disclaimer: "Gross cash margin is solver reward minus required external spend. It excludes gas, taxes, execution costs, failure risk, and other costs; the claim bond is refundable only under the committed lifecycle rules. It is not guaranteed net profit.".to_string(),
+    };
+    let verification_method =
+        if item.verification_mode == "signed_quorum" && item.verifier_threshold == Some(1) {
+            "single_verifier".to_string()
+        } else {
+            item.verification_mode.clone()
+        };
     Some(OpportunityItem {
         opportunity_id: opportunity_id.clone(),
         source_type: "canonical_base".to_string(),
@@ -638,7 +821,24 @@ pub fn canonical_opportunity(
         work_state: work_state.to_string(),
         payment_state: payment_state.to_string(),
         payment_committed,
+        competition_mode: "exclusive_claim".to_string(),
+        network: Some(network.to_string()),
+        verifier_profile_id: None,
+        verifier_profile_name: None,
+        entry_count: None,
+        max_entries: None,
+        competition_ends_at: None,
         standing_meta_bounty: standing_meta_v2_parent_context(item).is_ok(),
+        cash_economics: Some(cash_economics),
+        standing_meta_v4: None,
+        decision_authority: format!(
+            "The immutable canonical verification mode/module configured on {} decides the submission result.",
+            item.bounty_contract
+        ),
+        payment_authority: format!(
+            "The exact canonical bounty contract {} controls escrow; only its confirmed BountySettled event proves payment.",
+            item.bounty_contract
+        ),
         reward: OpportunityAmount::usdc_base_units(item.solver_reward.clone()),
         completion_bonus: Some(OpportunityAmount::usdc_base_units(
             item.timeout_bond_pool.clone(),
@@ -648,13 +848,14 @@ pub fn canonical_opportunity(
         bond: OpportunityAmount::usdc_base_units(item.claim_bond.clone()),
         deadline,
         deadline_kind,
-        verification_method: item.verification_mode.clone(),
+        verification_method,
         verification_ready: state.verification_ready,
         evidence_requirements,
         terms_hash: Some(item.terms_hash.clone()),
         proof_urls,
         next_action,
-        embeds: opportunity_embed_links(api, &opportunity_id, Some(network)),
+        embeds,
+        image,
         discovery_factors: base_factors(
             "canonical_base",
             work_state,
@@ -671,6 +872,334 @@ pub fn canonical_opportunity(
         updated_at: updated_at.to_rfc3339(),
         evidence_boundary: "Canonical lifecycle and payment language require confirmed factory/bounty events. Payment is `paid` only after confirmed BountySettled; a plan, signature, transaction hash, hosted row, or AI analysis is not payment evidence.".to_string(),
     })
+}
+
+pub fn open_competition_opportunities(
+    events: &[OpenCompetitionEvent],
+    profile: &OpenCompetitionVerifierProfile,
+    network: &str,
+    api_base_url: &str,
+    website_base_url: &str,
+    public_activation_block: u64,
+    now: DateTime<Utc>,
+) -> Result<Vec<OpportunityItem>, String> {
+    if !profile.public_inventory_eligible
+        || profile.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn
+    {
+        return Ok(Vec::new());
+    }
+    if public_activation_block == 0 {
+        return Err("public activation block is missing".to_string());
+    }
+
+    let api = api_base_url.trim_end_matches('/');
+    let website = website_base_url.trim_end_matches('/');
+    let mut grouped = BTreeMap::<String, Vec<&OpenCompetitionEvent>>::new();
+    for event in events
+        .iter()
+        .filter(|event| event.block_number >= public_activation_block)
+    {
+        grouped
+            .entry(event.bounty_id.clone())
+            .or_default()
+            .push(event);
+    }
+
+    let mut opportunities = Vec::new();
+    for (bounty_id, bounty_events) in grouped {
+        let created = unique_open_competition_event(
+            &bounty_events,
+            OpenCompetitionEventKind::CanonicalCompetitionCreated,
+        )?;
+        let Some(created) = created else {
+            continue;
+        };
+        let terms = required_unique_open_competition_event(
+            &bounty_events,
+            OpenCompetitionEventKind::CanonicalCompetitionTermsCommitted,
+        )?;
+        let economics = required_unique_open_competition_event(
+            &bounty_events,
+            OpenCompetitionEventKind::CanonicalCompetitionEconomicsConfigured,
+        )?;
+        let verification = required_unique_open_competition_event(
+            &bounty_events,
+            OpenCompetitionEventKind::CanonicalCompetitionVerificationConfigured,
+        )?;
+
+        let verifier_module = json_text(&verification.data, "verifier_module")?;
+        let benchmark_hash = json_text(&terms.data, "benchmark_hash")?;
+        let evidence_schema_hash = json_text(&terms.data, "evidence_schema_hash")?;
+        if !verifier_module.eq_ignore_ascii_case(&profile.verifier_address)
+            || !benchmark_hash.eq_ignore_ascii_case(&profile.benchmark_hash)
+            || !evidence_schema_hash.eq_ignore_ascii_case(&profile.evidence_schema_hash)
+        {
+            continue;
+        }
+
+        let solver_reward = json_u128(&economics.data, "solver_reward")?;
+        let verifier_reward = json_u128(&economics.data, "verifier_reward")?;
+        let entry_bond = json_u128(&economics.data, "entry_bond")?;
+        let target_amount = json_u128(&economics.data, "target_amount")?;
+        let initial_funding = json_u128(&economics.data, "initial_funding")?;
+        let funding_deadline = json_u64(&economics.data, "funding_deadline")?;
+        let configured_max_entries = json_u64(&economics.data, "max_entries")?;
+        if solver_reward == 0
+            || verifier_reward == 0
+            || entry_bond != verifier_reward
+            || target_amount != solver_reward.saturating_add(verifier_reward)
+            || configured_max_entries == 0
+            || configured_max_entries > 64
+        {
+            return Err(format!(
+                "competition {bounty_id} violates public economics or capacity invariants"
+            ));
+        }
+        let max_entries = configured_max_entries as u8;
+
+        if bounty_events
+            .iter()
+            .any(|event| event.kind == OpenCompetitionEventKind::BountyCancelled)
+        {
+            continue;
+        }
+        let opened = last_open_competition_event(
+            &bounty_events,
+            OpenCompetitionEventKind::CompetitionOpened,
+        );
+        let settled =
+            last_open_competition_event(&bounty_events, OpenCompetitionEventKind::BountySettled);
+        let mut funded_amount = initial_funding;
+        for event in bounty_events
+            .iter()
+            .filter(|event| event.kind == OpenCompetitionEventKind::FundingAdded)
+        {
+            funded_amount = funded_amount.max(json_u128(&event.data, "funded_amount")?);
+        }
+        if opened.is_some() && funded_amount < target_amount {
+            return Err(format!(
+                "competition {bounty_id} opened without canonical full-funding evidence"
+            ));
+        }
+
+        let competition_ends_at = opened
+            .map(|event| json_u64(&event.data, "competition_ends_at"))
+            .transpose()?;
+        let mut committed_solvers = BTreeSet::new();
+        for event in bounty_events
+            .iter()
+            .filter(|event| event.kind == OpenCompetitionEventKind::SolutionCommitted)
+        {
+            committed_solvers.insert(json_text(&event.data, "solver")?.to_ascii_lowercase());
+        }
+        if committed_solvers.len() > usize::from(max_entries) {
+            return Err(format!(
+                "competition {bounty_id} exceeds its immutable entry capacity"
+            ));
+        }
+        let entry_count = committed_solvers.len() as u8;
+        let competition_open = settled.is_none()
+            && competition_ends_at.is_some_and(|deadline| deadline > now.timestamp() as u64)
+            && entry_count < max_entries;
+        let fully_funded = funded_amount >= target_amount;
+        let (source_status, work_state, payment_state, payment_committed) = if settled.is_some() {
+            ("paid", "completed", "paid", true)
+        } else if competition_open && fully_funded {
+            ("claimable", "claimable", "escrowed", true)
+        } else if fully_funded {
+            ("expired", "open", "escrowed", true)
+        } else {
+            ("funding", "open", "seeking_funding", false)
+        };
+
+        let bounty_contract = json_text(&created.data, "bounty_contract")?;
+        let terms_hash = json_text(&created.data, "terms_hash")?;
+        let policy_hash = json_text(&created.data, "policy_hash")?;
+        let acceptance_criteria_hash = json_text(&terms.data, "acceptance_criteria_hash")?;
+        let events_url = format!(
+            "{api}/v1/base/open-competition-v1/events?network={network}&bounty_id={bounty_id}"
+        );
+        let public_url = format!(
+            "{website}/competition.html?bountyContract={bounty_contract}&network={network}&verifierProfileId={}",
+            profile.profile_id
+        );
+        let opportunity_id = format!("open-competition:{network}:{bounty_contract}");
+        let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
+        let title = "Scope-bound hash-work competition".to_string();
+        let image = fallback_opportunity_image(&embeds, &title);
+        let deadline_value = competition_ends_at.unwrap_or(funding_deadline);
+        let deadline = DateTime::<Utc>::from_timestamp(deadline_value as i64, 0)
+            .map(|value| value.to_rfc3339());
+        let next_action = if work_state == "claimable" {
+            OpportunityNextAction {
+                action: "enter_open_competition".to_string(),
+                method: "POST".to_string(),
+                url: format!("{api}/v1/base/open-competition-v1/commit-preparation"),
+                body_template: Some(json!({
+                    "network": network,
+                    "bounty_contract": bounty_contract,
+                    "solver": "<public Base wallet>",
+                    "commitment": "<commitment generated locally from a private salt>"
+                })),
+                instructions: "Generate and save the commitment envelope locally, then prepare one bonded entry. First valid confirmed reveal wins; a prepared plan is not an entry or payment.".to_string(),
+            }
+        } else {
+            OpportunityNextAction {
+                action: if settled.is_some() {
+                    "inspect_open_competition_settlement"
+                } else {
+                    "inspect_open_competition_state"
+                }
+                .to_string(),
+                method: "GET".to_string(),
+                url: events_url.clone(),
+                body_template: None,
+                instructions: "Inspect canonical version-specific events. Only BountySettled proves solver payment.".to_string(),
+            }
+        };
+        let updated_at = bounty_events
+            .last()
+            .map(|event| event.occurred_at)
+            .unwrap_or(created.occurred_at);
+        let cash_economics = OpportunityCashEconomics {
+            solver_reward: OpportunityAmount::usdc_base_units(solver_reward.to_string()),
+            refundable_claim_bond: OpportunityAmount::usdc_base_units(entry_bond.to_string()),
+            required_external_spend: OpportunityAmount::usdc_base_units("0"),
+            gross_cash_margin: OpportunityAmount::usdc_base_units(solver_reward.to_string()),
+            gross_cash_margin_positive: solver_reward > 0,
+            scope_disclaimer: "Gross cash margin excludes gas, taxes, execution costs, and failure risk. The entry bond is returned to the winner and withdrawable by eligible losing or cancelled entries, but a failed or expired entry can forfeit it. This is not guaranteed net profit.".to_string(),
+        };
+        opportunities.push(OpportunityItem {
+            opportunity_id: opportunity_id.clone(),
+            source_type: "canonical_base".to_string(),
+            source_id: bounty_contract.to_string(),
+            source_status: source_status.to_string(),
+            title,
+            goal: Some("Produce proof bytes accepted by the exact published 16-bit leading-zero verifier. This profile does not judge ordinary code, writing, design, research, or task quality.".to_string()),
+            categories: vec!["cryptographic-work".to_string(), "deterministic".to_string()],
+            skills: vec!["commit-reveal".to_string(), "hash-work".to_string()],
+            public_url,
+            source_url: Some(events_url.clone()),
+            work_state: work_state.to_string(),
+            payment_state: payment_state.to_string(),
+            payment_committed,
+            competition_mode: "first_valid_submission".to_string(),
+            network: Some(network.to_string()),
+            verifier_profile_id: Some(profile.profile_id.clone()),
+            verifier_profile_name: Some(profile.display_name.clone()),
+            entry_count: Some(entry_count),
+            max_entries: Some(max_entries),
+            competition_ends_at,
+            standing_meta_bounty: false,
+            cash_economics: Some(cash_economics),
+            standing_meta_v4: None,
+            decision_authority: format!("The exact immutable verifier {} with runtime hash {} decides each reveal; the lowest confirmed passing reveal sequence wins.", profile.verifier_address, profile.runtime_code_hash),
+            payment_authority: format!("The immutable competition contract {bounty_contract} controls escrow; only its confirmed BountySettled event proves payment."),
+            reward: OpportunityAmount::usdc_base_units(solver_reward.to_string()),
+            completion_bonus: None,
+            funded_amount: OpportunityAmount::usdc_base_units(funded_amount.to_string()),
+            funding_target: OpportunityAmount::usdc_base_units(target_amount.to_string()),
+            bond: OpportunityAmount::usdc_base_units(entry_bond.to_string()),
+            deadline,
+            deadline_kind: Some(if competition_ends_at.is_some() {
+                "competition_deadline"
+            } else {
+                "funding_deadline"
+            }
+            .to_string()),
+            verification_method: format!("approved deterministic verifier: {}", profile.profile_id),
+            verification_ready: true,
+            evidence_requirements: json!({
+                "verifier_profile_id": profile.profile_id,
+                "verifier_module": profile.verifier_address,
+                "runtime_code_hash": profile.runtime_code_hash,
+                "configuration": profile.configuration,
+                "acceptance_criteria_hash": acceptance_criteria_hash,
+                "benchmark_hash": benchmark_hash,
+                "evidence_schema": profile.evidence_schema,
+                "evidence_schema_hash": evidence_schema_hash,
+                "policy_hash": policy_hash,
+                "ordering_rule": "first valid confirmed reveal wins",
+                "identity_warning": "one wallet does not prove one independent person"
+            }),
+            terms_hash: Some(terms_hash.to_string()),
+            proof_urls: settled.is_some().then_some(events_url).into_iter().collect(),
+            next_action,
+            embeds,
+            image,
+            discovery_factors: vec![
+                "source_type=canonical_base".to_string(),
+                format!("work_state={work_state}"),
+                format!("payment_state={payment_state}"),
+                "competition_mode=first_valid_submission".to_string(),
+                format!("verifier_profile={}", profile.profile_id),
+            ],
+            created_at: created.occurred_at.to_rfc3339(),
+            updated_at: updated_at.to_rfc3339(),
+            evidence_boundary: "This public mode is limited to the exact catalog-pinned verifier profile. It does not establish fair judgment for ordinary code, design, writing, or research. A commitment, reveal, transaction hash, or hosted row is not payment; only confirmed canonical BountySettled proves payment.".to_string(),
+        });
+    }
+    Ok(opportunities)
+}
+
+fn unique_open_competition_event<'a>(
+    events: &'a [&OpenCompetitionEvent],
+    kind: OpenCompetitionEventKind,
+) -> Result<Option<&'a OpenCompetitionEvent>, String> {
+    let mut matching = events.iter().copied().filter(|event| event.kind == kind);
+    let first = matching.next();
+    if matching.next().is_some() {
+        return Err(format!("duplicate canonical {kind:?} event"));
+    }
+    Ok(first)
+}
+
+fn required_unique_open_competition_event<'a>(
+    events: &'a [&OpenCompetitionEvent],
+    kind: OpenCompetitionEventKind,
+) -> Result<&'a OpenCompetitionEvent, String> {
+    unique_open_competition_event(events, kind)?
+        .ok_or_else(|| format!("missing canonical {kind:?} event"))
+}
+
+fn last_open_competition_event<'a>(
+    events: &'a [&OpenCompetitionEvent],
+    kind: OpenCompetitionEventKind,
+) -> Option<&'a OpenCompetitionEvent> {
+    events
+        .iter()
+        .rev()
+        .copied()
+        .find(|event| event.kind == kind)
+}
+
+fn json_text<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("open-competition event is missing {field}"))
+}
+
+fn json_u128(value: &Value, field: &str) -> Result<u128, String> {
+    let value = value
+        .get(field)
+        .ok_or_else(|| format!("open-competition event is missing {field}"))?;
+    match value {
+        Value::String(value) => value.parse::<u128>(),
+        Value::Number(value) => value.to_string().parse::<u128>(),
+        _ => {
+            return Err(format!(
+                "open-competition event field {field} is not an integer"
+            ))
+        }
+    }
+    .map_err(|_| format!("open-competition event field {field} is out of range"))
+}
+
+fn json_u64(value: &Value, field: &str) -> Result<u64, String> {
+    json_u128(value, field)?
+        .try_into()
+        .map_err(|_| format!("open-competition event field {field} is out of range"))
 }
 
 pub fn apply_query(
@@ -733,10 +1262,15 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             let matches = item.work_state == "claimable"
                 && item.payment_state == "escrowed"
                 && item.payment_committed
-                && item.verification_ready;
+                && item.verification_ready
+                && (item.source_type != "canonical_base"
+                    || item
+                        .cash_economics
+                        .as_ref()
+                        .is_some_and(|economics| economics.gross_cash_margin_positive));
             if matches {
                 item.discovery_factors.push(
-                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready".to_string(),
+                    "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin".to_string(),
                 );
             }
             matches
@@ -764,6 +1298,10 @@ fn opportunity_order(
         right.work_state == "claimable" && right.payment_committed && right.verification_ready;
     right_ready
         .cmp(&left_ready)
+        .then_with(|| {
+            (right.competition_mode == "first_valid_submission")
+                .cmp(&(left.competition_mode == "first_valid_submission"))
+        })
         .then_with(|| {
             deadline_distance_seconds(left, now)
                 .unwrap_or(i64::MAX)
@@ -814,6 +1352,17 @@ fn opportunity_embed_links(
             r#"<iframe src="{html}" title="Agent Bounties opportunity" width="720" height="264" loading="lazy"></iframe>"#
         ),
         html,
+    }
+}
+
+fn fallback_opportunity_image(embeds: &OpportunityEmbedLinks, title: &str) -> OpportunityImage {
+    OpportunityImage {
+        source: "content_derived_legacy_card".to_string(),
+        prompt: None,
+        alt_text: format!("Agent Bounties card for {title}"),
+        asset_url: embeds.svg.clone(),
+        sha256: None,
+        mime_type: "image/svg+xml".to_string(),
     }
 }
 
@@ -984,8 +1533,14 @@ fn canonical_next_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chain_base::{AutonomousBountyEvent, AutonomousBountyEventKind};
-    use domain::{AutonomousBountyTermsDocument, AutonomousBountyTermsRecord};
+    use chain_base::{
+        build_autonomous_bounty_terms_record, built_in_open_competition_verifier_catalog,
+        AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
+        OpenCompetitionEventKind, BASE_MAINNET_STANDING_META_V2_VERIFIER,
+    };
+    use domain::{
+        AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, BountyImageReference,
+    };
     use uuid::Uuid;
 
     fn trial() -> TrialBounty {
@@ -1038,6 +1593,17 @@ mod tests {
                 verification_policy: json!({}),
                 source_url: None,
                 discovery_source: None,
+                image: Some(BountyImageReference {
+                    source: "chatgpt_user_generated".to_string(),
+                    prompt: "Minimal editorial illustration of a reliable API test.".to_string(),
+                    alt_text: "A clean API test report with a passing status.".to_string(),
+                    asset_url: format!(
+                        "https://mcp.agentbounties.app/public/bounty-images/{}",
+                        "ab".repeat(32)
+                    ),
+                    sha256: "ab".repeat(32),
+                    mime_type: "image/webp".to_string(),
+                }),
                 agent_eligibility: None,
                 claim_coordination: None,
             },
@@ -1054,16 +1620,144 @@ mod tests {
             timeout_bond_pool: "0".to_string(),
             target_amount: "1000000".to_string(),
             funded_amount: funded.to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
             terms_hash: terms.terms_hash.clone(),
             terms: Some(terms),
             terms_valid: true,
             verification_mode: "signed_quorum".to_string(),
             verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(2),
+            runner_identifier: Some("sandboxed_regression_v1".to_string()),
             verification_ready,
             verification_readiness_reason: "ready".to_string(),
             validation_errors: Vec::new(),
             events: vec![event],
         }
+    }
+
+    fn standing_meta() -> AutonomousBountyFeedItem {
+        let created_at = DateTime::parse_from_rfc3339("2026-07-17T02:11:34Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let document: AutonomousBountyTermsDocument =
+            serde_json::from_str(include_str!("../../../bounties/autonomous-v1/335.json")).unwrap();
+        let terms = build_autonomous_bounty_terms_record(
+            "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+            document,
+            created_at,
+        )
+        .unwrap();
+        let mut item = canonical("claimable", "1000000", true);
+        item.bounty_id =
+            "0x12ad2fa99de272728311a3eb07c3c741048382260cb91ba1e8f001ed3b5759d0".to_string();
+        item.bounty_contract = "0x43d42cb227d76588ab16693f14efd6cff851fa7a".to_string();
+        item.creator = terms.creator_wallet.clone();
+        item.solver_reward = "900000".to_string();
+        item.verifier_reward = "100000".to_string();
+        item.claim_bond = "100000".to_string();
+        item.required_external_spend = "900000".to_string();
+        item.gross_cash_margin = "0".to_string();
+        item.terms_hash = terms.terms_hash.clone();
+        item.terms = Some(terms);
+        item.verification_mode = "deterministic_module".to_string();
+        item.verifier_module = Some(BASE_MAINNET_STANDING_META_V2_VERIFIER.to_string());
+        item.verifier_threshold = Some(1);
+        item.runner_identifier = Some("standing_meta_v2_parent".to_string());
+        item.events.clear();
+        item
+    }
+
+    fn open_competition_event(
+        kind: OpenCompetitionEventKind,
+        block_number: u64,
+        log_index: u64,
+        data: Value,
+    ) -> OpenCompetitionEvent {
+        OpenCompetitionEvent {
+            id: Uuid::new_v4(),
+            protocol_version: "agent-bounties/open-competition-v1".to_string(),
+            log_key: format!("{block_number}:{log_index}"),
+            tx_hash: format!("0x{:064x}", block_number),
+            block_number,
+            log_index,
+            contract_address: "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5".to_string(),
+            bounty_id: format!("0x{}", "3".repeat(64)),
+            kind,
+            data,
+            occurred_at: DateTime::<Utc>::from_timestamp(1_800_000_000 + block_number as i64, 0)
+                .unwrap(),
+        }
+    }
+
+    fn open_competition_fixture() -> (
+        Vec<OpenCompetitionEvent>,
+        chain_base::OpenCompetitionVerifierProfile,
+    ) {
+        let mut profile = built_in_open_competition_verifier_catalog("base-mainnet")
+            .unwrap()
+            .profiles
+            .remove(0);
+        profile.deployment_state = OpenCompetitionDeploymentState::ActiveReadyToEarn;
+        profile.public_inventory_eligible = true;
+        let bounty_contract = "0x1111111111111111111111111111111111111111";
+        let events = vec![
+            open_competition_event(
+                OpenCompetitionEventKind::CanonicalCompetitionCreated,
+                101,
+                0,
+                json!({
+                    "bounty_contract": bounty_contract,
+                    "creator": "0x2222222222222222222222222222222222222222",
+                    "terms_hash": format!("0x{}", "4".repeat(64)),
+                    "policy_hash": format!("0x{}", "5".repeat(64)),
+                    "creation_nonce": format!("0x{}", "6".repeat(64))
+                }),
+            ),
+            open_competition_event(
+                OpenCompetitionEventKind::CanonicalCompetitionTermsCommitted,
+                101,
+                1,
+                json!({
+                    "acceptance_criteria_hash": format!("0x{}", "7".repeat(64)),
+                    "benchmark_hash": profile.benchmark_hash,
+                    "evidence_schema_hash": profile.evidence_schema_hash
+                }),
+            ),
+            open_competition_event(
+                OpenCompetitionEventKind::CanonicalCompetitionEconomicsConfigured,
+                101,
+                2,
+                json!({
+                    "solver_reward": 500_000,
+                    "verifier_reward": 50_000,
+                    "entry_bond": 50_000,
+                    "target_amount": 550_000,
+                    "initial_funding": 550_000,
+                    "funding_deadline": 1_800_086_400_u64,
+                    "competition_window_seconds": 86_400,
+                    "reveal_window_seconds": 3_600,
+                    "max_entries": 4
+                }),
+            ),
+            open_competition_event(
+                OpenCompetitionEventKind::CanonicalCompetitionVerificationConfigured,
+                101,
+                3,
+                json!({
+                    "verifier_module": profile.verifier_address,
+                    "verifier_reward_recipient": "0x2222222222222222222222222222222222222222"
+                }),
+            ),
+            open_competition_event(
+                OpenCompetitionEventKind::CompetitionOpened,
+                101,
+                4,
+                json!({"competition_ends_at": 1_800_086_400_u64, "max_entries": 4}),
+            ),
+        ];
+        (events, profile)
     }
 
     #[test]
@@ -1074,6 +1768,8 @@ mod tests {
         assert!(!item.payment_committed);
         assert_eq!(item.reward.amount, "0");
         assert_eq!(item.next_action.action, "submit_unfunded_bounty_solution");
+        assert_eq!(item.image.source, "content_derived_legacy_card");
+        assert!(item.image.asset_url.ends_with("/embed.svg"));
         assert!(!serde_json::to_string(&item).unwrap().contains("trial"));
     }
 
@@ -1089,6 +1785,8 @@ mod tests {
         assert_eq!(ready.payment_state, "escrowed");
         assert!(ready.payment_committed);
         assert_eq!(ready.next_action.action, "prepare_agent_to_earn");
+        assert_eq!(ready.image.source, "chatgpt_user_generated");
+        assert_eq!(ready.image.sha256, Some("ab".repeat(32)));
 
         let unavailable = canonical_opportunity(
             &canonical("claimable", "1000000", false),
@@ -1101,6 +1799,202 @@ mod tests {
             unavailable.next_action.action,
             "inspect_verification_readiness"
         );
+    }
+
+    #[test]
+    fn public_open_competition_is_primary_ready_to_earn_mode() {
+        let (events, profile) = open_competition_fixture();
+        let item = open_competition_opportunities(
+            &events,
+            &profile,
+            "base-mainnet",
+            "https://api.example",
+            "https://www.example",
+            100,
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(item.source_status, "claimable");
+        assert_eq!(item.work_state, "claimable");
+        assert_eq!(item.payment_state, "escrowed");
+        assert_eq!(item.competition_mode, "first_valid_submission");
+        assert_eq!(item.next_action.action, "enter_open_competition");
+        assert_eq!(item.entry_count, Some(0));
+        assert_eq!(item.max_entries, Some(4));
+        assert!(item.public_url.contains("competition.html"));
+        assert!(item
+            .goal
+            .as_deref()
+            .unwrap()
+            .contains("does not judge ordinary code"));
+    }
+
+    #[test]
+    fn open_competition_payment_requires_canonical_settlement_event() {
+        let (mut events, profile) = open_competition_fixture();
+        let before = open_competition_opportunities(
+            &events,
+            &profile,
+            "base-mainnet",
+            "https://api.example",
+            "https://www.example",
+            100,
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        assert_ne!(before.payment_state, "paid");
+        assert!(before.proof_urls.is_empty());
+
+        events.push(open_competition_event(
+            OpenCompetitionEventKind::BountySettled,
+            102,
+            0,
+            json!({
+                "submission_sequence": 1,
+                "solver": "0x8888888888888888888888888888888888888888",
+                "solver_reward": 500_000,
+                "entry_bond_returned": 50_000,
+                "timeout_bond_bonus": 0,
+                "verifier_reward": 50_000,
+                "submission_hash": format!("0x{}", "8".repeat(64)),
+                "evidence_hash": format!("0x{}", "9".repeat(64)),
+                "policy_hash": format!("0x{}", "5".repeat(64)),
+                "verification_hash": format!("0x{}", "a".repeat(64)),
+                "canonical_payment_evidence": true
+            }),
+        ));
+        let paid = open_competition_opportunities(
+            &events,
+            &profile,
+            "base-mainnet",
+            "https://api.example",
+            "https://www.example",
+            100,
+            DateTime::<Utc>::from_timestamp(1_800_000_200, 0).unwrap(),
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(paid.payment_state, "paid");
+        assert_eq!(paid.work_state, "completed");
+        assert_eq!(paid.proof_urls.len(), 1);
+    }
+
+    #[test]
+    fn open_competition_projection_rejects_unknown_verifier_and_pre_activation_history() {
+        let (events, mut profile) = open_competition_fixture();
+        profile.verifier_address = "0x9999999999999999999999999999999999999999".to_string();
+        let unknown = open_competition_opportunities(
+            &events,
+            &profile,
+            "base-mainnet",
+            "https://api.example",
+            "https://www.example",
+            100,
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        )
+        .unwrap();
+        assert!(unknown.is_empty());
+
+        let (_, profile) = open_competition_fixture();
+        let before_activation = open_competition_opportunities(
+            &events,
+            &profile,
+            "base-mainnet",
+            "https://api.example",
+            "https://www.example",
+            102,
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        )
+        .unwrap();
+        assert!(before_activation.is_empty());
+    }
+
+    #[test]
+    fn canonical_projection_exposes_cash_economics_without_profit_claims() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let economics = item.cash_economics.unwrap();
+        assert_eq!(economics.solver_reward.amount, "900000");
+        assert_eq!(economics.refundable_claim_bond.amount, "100000");
+        assert_eq!(economics.required_external_spend.amount, "0");
+        assert_eq!(economics.gross_cash_margin.amount, "900000");
+        assert!(economics.gross_cash_margin_positive);
+        assert!(economics
+            .scope_disclaimer
+            .contains("not guaranteed net profit"));
+    }
+
+    #[test]
+    fn ready_to_earn_excludes_non_positive_canonical_cash_margin() {
+        let profitable = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let mut unprofitable_source = canonical("claimable", "1000000", true);
+        unprofitable_source.required_external_spend = "1000000".to_string();
+        unprofitable_source.gross_cash_margin = "-100000".to_string();
+        let unprofitable =
+            canonical_opportunity(&unprofitable_source, "base-mainnet", "https://api.example")
+                .unwrap();
+
+        let items = apply_query(
+            vec![profitable, unprofitable],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]
+                .cash_economics
+                .as_ref()
+                .unwrap()
+                .gross_cash_margin
+                .amount,
+            "900000"
+        );
+    }
+
+    #[test]
+    fn canonical_cash_economics_cover_direct_standing_meta_and_unprofitable() {
+        let direct = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let meta =
+            canonical_opportunity(&standing_meta(), "base-mainnet", "https://api.example").unwrap();
+        assert!(!direct.standing_meta_bounty);
+        assert!(
+            direct
+                .cash_economics
+                .as_ref()
+                .unwrap()
+                .gross_cash_margin_positive
+        );
+        assert!(meta.standing_meta_bounty);
+        let meta_economics = meta.cash_economics.as_ref().unwrap();
+        assert_eq!(meta_economics.required_external_spend.amount, "900000");
+        assert_eq!(meta_economics.gross_cash_margin.amount, "0");
+        assert!(!meta_economics.gross_cash_margin_positive);
+
+        let ready = apply_query(
+            vec![direct, meta],
+            &OpportunityQuery::default(),
+            Some(OpportunityView::ReadyToEarn),
+            DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap(),
+        );
+        assert_eq!(ready.len(), 1);
+        assert!(!ready[0].standing_meta_bounty);
     }
 
     #[test]
@@ -1172,5 +2066,35 @@ mod tests {
         assert_eq!(json["items"][0]["_bountyboard"]["payment_committed"], false);
         assert!(!feeds.rss.to_ascii_lowercase().contains("trial"));
         assert_eq!(feeds.updated_at, "Fri, 15 Jan 2027 08:00:00 GMT");
+    }
+
+    #[test]
+    fn live_feed_reuses_canonical_cash_economics() {
+        let item = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: "2027-01-15T08:01:00Z".to_string(),
+            network: "base-mainnet".to_string(),
+            applied_view: None,
+            degraded: false,
+            source_statuses: Vec::new(),
+            items: vec![item],
+            evidence_boundary: "Projection only".to_string(),
+        };
+
+        let feeds = render_opportunity_feeds(&projection, "https://api.example/");
+        let json: Value = serde_json::from_str(&feeds.json).unwrap();
+        let economics = &json["items"][0]["_bountyboard"]["cash_economics"];
+        assert_eq!(economics["solver_reward"]["amount"], "900000");
+        assert_eq!(economics["refundable_claim_bond"]["amount"], "100000");
+        assert_eq!(economics["required_external_spend"]["amount"], "0");
+        assert_eq!(economics["gross_cash_margin"]["amount"], "900000");
+        assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
+        assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
     }
 }

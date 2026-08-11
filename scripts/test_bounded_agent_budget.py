@@ -12,7 +12,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "plan_bounded_agent_budget.py"
-MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
+MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
+LEGACY_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-base-mainnet.json"
 
 
 def load_planner():
@@ -57,12 +58,51 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         cls.action_planner = load_action_planner()
         cls.create_helper = load_create_helper()
         cls.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cls.legacy_manifest = json.loads(LEGACY_MANIFEST.read_text(encoding="utf-8"))
 
     def test_usdc_amounts_are_exact(self) -> None:
         self.assertEqual(self.planner.usdc_units("89", "amount"), 89_000_000)
         self.assertEqual(self.planner.usdc_units("0.000001", "amount"), 1)
         with self.assertRaises(SystemExit):
             self.planner.usdc_units("0.0000001", "amount")
+
+    def test_browser_activation_waits_for_confirmed_allowance_state(self) -> None:
+        source = (ROOT / "site" / "agent-budget.js").read_text(encoding="utf-8")
+        helper = source.split("async function waitForFactoryAllowance", 1)[1].split(
+            "async function activateWithAllowance", 1
+        )[0]
+        activation = source.split("async function activateWithAllowance", 1)[1].split(
+            "async function deployFactory", 1
+        )[0]
+
+        self.assertIn("while (observed !== expected", helper)
+        self.assertIn("await sleep(1_500)", helper)
+        self.assertIn("Confirmed USDC allowance is", helper)
+        self.assertIn("await waitForFactoryAllowance(plan.initialFunding)", activation)
+        self.assertIn("await waitForFactoryAllowance(0n)", activation)
+        self.assertNotIn("Confirmed USDC allowance differs", activation)
+
+    def test_browser_persists_only_non_secret_budget_draft_fields(self) -> None:
+        source = (ROOT / "site" / "agent-budget.js").read_text(encoding="utf-8")
+        persistence = source.split("function persistDraft", 1)[1].split(
+            "function snapshot", 1
+        )[0]
+
+        for field in (
+            "delegate",
+            "initialFunding",
+            "maxPerAction",
+            "maxPerPeriod",
+            "maxLifetime",
+            "maxBountyTarget",
+            "expiryDays",
+        ):
+            draft_fields = source.split("const DRAFT_FIELDS", 1)[1].split("];", 1)[0]
+            self.assertIn(f'"{field}"', draft_fields)
+        self.assertIn("new URLSearchParams(window.location.search)", persistence)
+        self.assertIn("validDraftValue", persistence)
+        for secret in ("signature", "privateKey", "mnemonic", "approvalHash", "transactionHash"):
+            self.assertNotIn(secret, persistence)
 
     def test_policy_changes_authorization_destination(self) -> None:
         base = {
@@ -175,6 +215,40 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.planner.validate_manifest(changed)
 
+    def test_budget_manifest_validation_remains_v2_only(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "schema is unsupported"):
+            self.planner.validate_manifest(self.legacy_manifest)
+
+    def test_action_manifest_validation_accepts_exact_deployed_versions(self) -> None:
+        self.planner.validate_action_manifest(self.legacy_manifest)
+        self.planner.validate_action_manifest(self.manifest)
+
+    def test_action_manifest_validation_binds_quorum_to_schema(self) -> None:
+        legacy_with_v2_quorum = json.loads(json.dumps(self.legacy_manifest))
+        legacy_with_v2_quorum["canonical"]["signed_quorum_verifier_set_hash"] = (
+            self.manifest["canonical"]["signed_quorum_verifier_set_hash"]
+        )
+        with self.assertRaisesRegex(SystemExit, "unexpected signed quorum"):
+            self.planner.validate_action_manifest(legacy_with_v2_quorum)
+
+        v2_with_legacy_quorum = json.loads(json.dumps(self.manifest))
+        v2_with_legacy_quorum["canonical"]["signed_quorum_verifier_set_hash"] = (
+            self.legacy_manifest["canonical"]["signed_quorum_verifier_set_hash"]
+        )
+        with self.assertRaisesRegex(SystemExit, "unexpected signed quorum"):
+            self.planner.validate_action_manifest(v2_with_legacy_quorum)
+
+    def test_action_manifest_validation_rejects_unknown_schema(self) -> None:
+        changed = {**self.manifest, "schema": "agent-bounties/bounded-agent-wallet-deployment-v3"}
+        with self.assertRaisesRegex(SystemExit, "schema is unsupported"):
+            self.planner.validate_action_manifest(changed)
+
+    def test_action_manifest_validation_rejects_deployment_drift(self) -> None:
+        changed = json.loads(json.dumps(self.legacy_manifest))
+        changed["wallet_factory"]["address"] = "0x1111111111111111111111111111111111111111"
+        with self.assertRaisesRegex(SystemExit, "unexpected wallet factory"):
+            self.planner.validate_action_manifest(changed)
+
     def test_action_planner_fails_closed_on_remaining_caps(self) -> None:
         report = {
             "safe_block": {"timestamp": 1_800_000_000},
@@ -268,20 +342,24 @@ class BoundedAgentBudgetPlannerTests(unittest.TestCase):
             "verifier_module": self.create_helper.ZERO_ADDRESS,
             "verifier_reward_recipient": self.create_helper.ZERO_ADDRESS,
             "verifier_reward": 100_000,
-            "threshold": 2,
+            "threshold": 1,
         }
         policy = {
             "allowed_verification_modes": 3,
             "deterministic_verifier_module": self.manifest["canonical"]["deterministic_verifier"],
             "signed_quorum_verifier_set_hash": self.manifest["canonical"]["signed_quorum_verifier_set_hash"],
         }
-        verifiers = list(self.create_helper.SIGNED_QUORUM_VERIFIERS)
+        verifiers = list(
+            self.create_helper.SUPPORTED_SIGNED_VERIFIER_SETS[
+                self.manifest["canonical"]["signed_quorum_verifier_set_hash"]
+            ]
+        )
         self.create_helper.validate_creation_verification(params, verifiers, policy, self.manifest["canonical"])
 
         with self.assertRaisesRegex(SystemExit, "exact signed regression"):
             self.create_helper.validate_creation_verification(
                 params,
-                list(reversed(verifiers)),
+                ["0x1111111111111111111111111111111111111111"],
                 policy,
                 self.manifest["canonical"],
             )

@@ -1,15 +1,15 @@
 use app::{
-    build_live_money_readiness_report, AddFundingContributionRequest, ApproveRiskBountyRequest,
-    ApproveRiskPayoutRequest, BountyNetwork, BountyStatusResponse, ClaimBountyRequest,
-    CreateFundingIntentRequest, CreateHelpRequestRequest, FundQuoteRequest,
-    LiveMoneyReadinessConfig, OpenPooledBountyRequest, PlanStripeTransferRequest,
-    PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest, RejectRiskEventRequest,
-    RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
+    build_live_money_readiness_report, build_objective_canonical_evidence,
+    AddFundingContributionRequest, ApproveRiskBountyRequest, ApproveRiskPayoutRequest,
+    BountyNetwork, BountyStatusResponse, ClaimBountyRequest, CreateFundingIntentRequest,
+    CreateHelpRequestRequest, FundQuoteRequest, LiveMoneyReadinessConfig, OpenPooledBountyRequest,
+    PlanStripeTransferRequest, PostBountyRequest, RegisterAgentRequest, RegisterCapabilityRequest,
+    RejectRiskEventRequest, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
-    extract::State,
-    http::{header, HeaderMap, HeaderValue},
-    response::IntoResponse,
+    extract::{Path, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -23,19 +23,21 @@ use chain_base::{
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     standing_meta_v2_parent_context, validate_attestation_request_against_feed,
-    validate_autonomous_creation_against_terms, AutonomousBountyAuthorizationSignature,
-    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
-    AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
-    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
-    AutonomousVerificationAttestationRequest, BaseRpcUrlConfig, CanonicalChildBountyTermsRequest,
-    EvmLog, PrepareAgentToEarnInput, StandingMetaV2ChildPreparationRequest,
+    validate_autonomous_cancel_authority, validate_autonomous_creation_against_terms,
+    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
+    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
+    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
+    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseRpcUrlConfig,
+    CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
+    StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
 use db::PostgresStore;
 use domain::{
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
-    DiscoverySubscriptionFilters, EvalRun, HelpRequest, Money, PaymentRail, PayoutStatus,
-    PrivacyLevel,
+    DiscoverySubscriptionFilters, EvalRun, HelpRequest, Id, Money, Objective, ObjectiveAction,
+    ObjectiveCanonicalEvidence, ObjectiveCreationDraft, PaymentRail, PayoutStatus, PrivacyLevel,
+    SignedObjectiveAction, SignedObjectiveCreation,
 };
 use github_app::{
     bounty_check_output, claim_comment_plan, create_comment_plan, funding_comment_plan,
@@ -57,12 +59,14 @@ use service_runtime::{
 use service_runtime::{
     eval_run_from_loop_suite, eval_run_from_suite, LiveMoneyRuntimeSettings, PlannerAddressError,
 };
+use std::collections::BTreeSet;
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 mod chatgpt_app;
+mod moonpay;
 
 #[derive(Debug)]
 struct AppState {
@@ -84,6 +88,81 @@ const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
 
 async fn health() -> impl IntoResponse {
     health_response(&deployment_revision())
+}
+
+async fn chatgpt_bounty_card_preview() -> impl IntoResponse {
+    chatgpt_bounty_card_preview_response()
+}
+
+async fn chatgpt_favicon() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("../../../site/favicon.svg"),
+    )
+}
+
+async fn public_bounty_image_asset(
+    State(state): State<SharedState>,
+    Path(sha256): Path<String>,
+) -> Response {
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let asset = match store.get_bounty_image_asset(&sha256).await {
+        Ok(Some(asset)) => asset,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let content_type = match HeaderValue::from_str(&asset.mime_type) {
+        Ok(value) => value,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, content_type);
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    (headers, asset.content).into_response()
+}
+
+fn chatgpt_bounty_card_preview_response() -> (HeaderMap, String) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'none'; img-src 'self' data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        ),
+    );
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    (headers, chatgpt_app::bounty_card_preview_html())
 }
 
 fn deployment_revision() -> String {
@@ -221,6 +300,56 @@ tool_args! {
 }
 
 tool_args! {
+    struct PlanObjectiveCreationArgs {
+        draft: ObjectiveCreationDraft,
+    }
+    schema object_tool_schema(
+        json!({
+            "draft": object_property("Complete objective-v1 declaration with explicit participants, authority, beneficiaries, affected parties, resources, access, rights, privacy boundary, and requested verification policy.")
+        }),
+        &["draft"],
+    );
+}
+
+tool_args! {
+    struct ObjectiveIdArgs {
+        objective_id: Id,
+    }
+    schema object_tool_schema(
+        json!({"objective_id": uuid_property("Objective UUID.")}),
+        &["objective_id"],
+    );
+}
+
+tool_args! {
+    struct PlanObjectiveActionArgs {
+        objective_id: Id,
+        action: ObjectiveAction,
+    }
+    schema object_tool_schema(
+        json!({
+            "objective_id": uuid_property("Objective UUID."),
+            "action": object_property("Tagged objective-v1 action such as add_provider_proposal, accept_provider_proposal, offer_contribution, select_contribution_offer, submit_contribution, verify_contribution, submit_final_outcome, or verify_final_outcome.")
+        }),
+        &["objective_id", "action"],
+    );
+}
+
+tool_args! {
+    struct ApplyObjectiveActionArgs {
+        objective_id: Id,
+        signed_action: SignedObjectiveAction,
+    }
+    schema object_tool_schema(
+        json!({
+            "objective_id": uuid_property("Objective UUID."),
+            "signed_action": object_property("Exact action plan plus its EIP-191 wallet approvals.")
+        }),
+        &["objective_id", "signed_action"],
+    );
+}
+
+tool_args! {
     struct DraftBountyWithCloudAgentArgs {
         objective: String,
         context: Option<String>,
@@ -271,6 +400,14 @@ fn default_objective_task_limit() -> u8 {
     5
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatgptFileInput {
+    download_url: String,
+    file_id: String,
+    mime_type: Option<String>,
+    file_name: Option<String>,
+}
+
 tool_args! {
     struct PrepareBountyPostArgs {
         title: String,
@@ -278,10 +415,14 @@ tool_args! {
         acceptance_criteria: Vec<String>,
         solver_reward_usdc: String,
         verifier_reward_usdc: String,
+        task_window_days: Option<u8>,
         source_url: Option<String>,
         #[serde(default)]
         crowdfund: bool,
         discovery_source: Option<String>,
+        image_prompt: String,
+        image_alt_text: String,
+        bounty_image: ChatgptFileInput,
     }
     schema object_tool_schema(
         json!({
@@ -294,11 +435,35 @@ tool_args! {
             },
             "solver_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Solver reward in display USDC, for example 2.00."},
             "verifier_reward_usdc": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]{1,6})?$", "description": "Verifier reward and refundable claim bond in display USDC, for example 0.10."},
+            "task_window_days": {"type": ["integer", "null"], "minimum": 1, "maximum": 30, "description": "Optional bounded work window in days; defaults to 30."},
             "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
             "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
-            "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties.")
+            "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties."),
+            "image_prompt": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "The exact prompt used in this ChatGPT conversation to generate the user-approved bounty image."},
+            "image_alt_text": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Concise accessible description of the approved image."},
+            "bounty_image": {
+                "type": "object",
+                "description": "The approved image generated from the poster's own ChatGPT account. Agent Bounties stores this exact file; it does not generate another image.",
+                "properties": {
+                    "download_url": {"type": "string"},
+                    "file_id": {"type": "string"},
+                    "mime_type": {"type": ["string", "null"]},
+                    "file_name": {"type": ["string", "null"]}
+                },
+                "required": ["download_url", "file_id"],
+                "additionalProperties": false
+            }
         }),
-        &["title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc"],
+        &[
+            "title",
+            "goal",
+            "acceptance_criteria",
+            "solver_reward_usdc",
+            "verifier_reward_usdc",
+            "image_prompt",
+            "image_alt_text",
+            "bounty_image"
+        ],
     );
 }
 
@@ -443,6 +608,205 @@ tool_args! {
             "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
         }),
         &[],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct OpenCompetitionReadinessArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        solver: Option<String>,
+        verifier_profile_id: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "solver": nullable_string_property("Optional solver wallet for one-entry and capacity checks."),
+            "verifier_profile_id": nullable_string_property("Approved deterministic verifier profile id.")
+        }),
+        &["bounty_contract"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct OpenCompetitionVerifierArgs {
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionCreationArgs {
+        network: Option<String>,
+        creator: String,
+        creation_nonce: String,
+        initial_funding: u64,
+        verifier_profile_id: String,
+        params: Value,
+        funding_authorization: Option<Value>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the frozen release."),
+            "creator": string_property("Creator wallet address."),
+            "creation_nonce": string_property("Nonzero 32-byte creation nonce."),
+            "initial_funding": { "type": "integer", "minimum": 0, "description": "Native USDC base units supplied at creation." },
+            "verifier_profile_id": string_property("Exact approved verifier catalog profile id."),
+            "params": { "type": "object", "description": "Deterministic terms, economics, deadlines, capacity, and verifier reward recipient.", "additionalProperties": true },
+            "funding_authorization": { "type": ["object", "null"], "description": "Optional EIP-3009 authorization window, nonce, and signature. Omit for approval-and-create.", "additionalProperties": true }
+        }),
+        &["creator", "creation_nonce", "initial_funding", "verifier_profile_id", "params"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionCommitArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        solver: String,
+        commitment: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "solver": string_property("Wallet entering the competition."),
+            "commitment": string_property("Public commitment only. Never include submission hashes or salt in this request.")
+        }),
+        &["bounty_contract", "solver", "commitment"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionRevealArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        solver: String,
+        commitment_envelope: Value,
+        proof: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "solver": string_property("Same wallet recorded in the commitment envelope."),
+            "commitment_envelope": { "type": "object", "description": "Locally recovered agent-bounties/open-competition-v1-commitment-v1 envelope.", "additionalProperties": true },
+            "proof": string_property("Verifier-specific proof calldata as 0x-prefixed bytes.")
+        }),
+        &["bounty_contract", "solver", "commitment_envelope", "proof"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionActionArgs {
+        network: Option<String>,
+        bounty_contract: String,
+        #[serde(default)]
+        arguments: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "arguments": {
+                "type": "object",
+                "description": "Public commitment or reveal arguments only. Keep the reveal salt private until reveal; never include wallet secrets."
+            }
+        }),
+        &["bounty_contract", "arguments"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionEntrantActionArgs {
+        network: Option<String>,
+        wallet: String,
+        bounty_contract: String,
+        action: String,
+        commitment: Option<String>,
+        commitment_envelope: Option<Value>,
+        proof: Option<String>,
+        deadline_seconds: Option<u64>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the competition and entrant wallet."),
+            "wallet": string_property("Canonical entrant-wallet contract owned by the solver."),
+            "bounty_contract": string_property("Canonical open-competition bounty address."),
+            "action": enum_property(&["commit", "reveal", "withdraw_bond"], "Exact policy-bound entrant action."),
+            "commitment": nullable_string_property("Commit only: public nonzero commitment. Never include its salt."),
+            "commitment_envelope": { "type": ["object", "null"], "description": "Reveal only: locally recovered commitment envelope.", "additionalProperties": true },
+            "proof": nullable_string_property("Reveal only: verifier-specific 0x-prefixed proof bytes."),
+            "deadline_seconds": { "type": ["integer", "null"], "minimum": 30, "maximum": 600, "description": "Optional action-signature lifetime; defaults to 300 seconds." }
+        }),
+        &["wallet", "bounty_contract", "action"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionEntrantRelayArgs {
+        idempotency_key: String,
+        plan: Value,
+        signature: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "idempotency_key": string_property("Stable replay key for this exact wallet nonce, plan, and signature."),
+            "plan": { "type": "object", "description": "Exact plan returned by prepare_open_competition_entrant_action.", "additionalProperties": true },
+            "signature": string_property("Delegate EIP-712 signature for this exact plan. Never provide a private key or seed phrase.")
+        }),
+        &["idempotency_key", "plan", "signature"],
+    );
+}
+
+tool_args! {
+    struct GetOpenCompetitionEntrantRelayArgs {
+        relay_id: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "relay_id": string_property("Relay UUID returned by relay_open_competition_entrant_action.")
+        }),
+        &["relay_id"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
+    struct StandingMetaV4ReadinessArgs {
+        network: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network to inspect. Defaults to base-mainnet.")
+        }),
+        &[],
+    );
+}
+
+tool_args! {
+    struct StandingMetaV4ActionArgs {
+        network: Option<String>,
+        #[serde(default)]
+        arguments: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Base network containing the configured V4 contracts."),
+            "arguments": {
+                "type": "object",
+                "description": "Public contract-call arguments only. Never include a private key, seed phrase, or secret."
+            }
+        }),
+        &["arguments"],
     );
 }
 
@@ -910,6 +1274,35 @@ tool_args! {
 }
 
 tool_args! {
+    struct PlanAutonomousCancelArgs {
+        network: Option<String>, bounty_contract: String, caller: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Open or claimable canonical bounty contract."),
+            "caller": string_property("Wallet sending the transaction. Before the funding deadline this must be the indexed creator.")
+        }),
+        &["bounty_contract", "caller"],
+    );
+}
+
+tool_args! {
+    struct PlanBoundedWalletCancelRefundArgs {
+        network: Option<String>, bounty_contract: String, bounded_wallet: String, caller: String,
+    }
+    schema object_tool_schema(
+        json!({
+            "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
+            "bounty_contract": string_property("Open or claimable canonical bounty created by the bounded wallet."),
+            "bounded_wallet": string_property("BoundedAgentWalletV2 contract that created and funded the bounty."),
+            "caller": string_property("Bounded wallet owner that will sign the transaction.")
+        }),
+        &["bounty_contract", "bounded_wallet", "caller"],
+    );
+}
+
+tool_args! {
     struct DecodeAutonomousBountyEventsArgs { logs: Vec<EvmLog> }
     schema object_tool_schema(
         json!({
@@ -1187,7 +1580,20 @@ async fn main() -> anyhow::Result<()> {
     });
     let app = Router::new()
         .route("/health", get(health))
+        .route(
+            "/chatgpt/bounty-card-preview",
+            get(chatgpt_bounty_card_preview),
+        )
+        .route("/chatgpt/favicon.svg", get(chatgpt_favicon))
+        .route(
+            "/public/bounty-images/:sha256",
+            get(public_bounty_image_asset),
+        )
         .route("/llms.txt", get(llms_txt))
+        .route(
+            "/.well-known/openai-apps-challenge",
+            get(openai_apps_challenge),
+        )
         .route(
             "/schemas/discovery-manifest.v2.json",
             get(discovery_manifest_schema),
@@ -1202,8 +1608,25 @@ async fn main() -> anyhow::Result<()> {
                 .post(chatgpt_app::mcp_post)
                 .delete(chatgpt_app::mcp_delete),
         )
+        .route(
+            "/v1/onramps/moonpay/checkout",
+            post(moonpay::prepare_checkout),
+        )
         .route("/tools", get(tools))
         .route("/tools/route_blocked_goal", post(route_blocked_goal))
+        .route(
+            "/tools/plan_objective_creation",
+            post(plan_objective_creation),
+        )
+        .route("/tools/create_objective", post(create_objective))
+        .route("/tools/list_objectives", get(list_objectives))
+        .route("/tools/get_objective", post(get_objective))
+        .route("/tools/plan_objective_action", post(plan_objective_action))
+        .route(
+            "/tools/apply_objective_action",
+            post(apply_objective_action),
+        )
+        .route("/tools/reconcile_objective", post(reconcile_objective))
         .route("/tools/prepare_bounty_post", post(prepare_bounty_post))
         .route(
             "/tools/publish_unfunded_bounty",
@@ -1351,6 +1774,83 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/get_x402_relay_status", post(get_x402_relay_status))
         .route("/tools/prepare_agent_to_earn", post(prepare_agent_to_earn))
         .route(
+            "/tools/list_open_competition_verifiers",
+            post(list_open_competition_verifiers),
+        )
+        .route(
+            "/tools/prepare_open_competition_creation",
+            post(prepare_open_competition_creation),
+        )
+        .route(
+            "/tools/get_open_competition_readiness",
+            post(get_open_competition_readiness),
+        )
+        .route(
+            "/tools/prepare_open_competition_commit",
+            post(prepare_open_competition_commit),
+        )
+        .route(
+            "/tools/prepare_open_competition_reveal",
+            post(prepare_open_competition_reveal),
+        )
+        .route(
+            "/tools/get_open_competition_status",
+            post(get_open_competition_status),
+        )
+        .route(
+            "/tools/withdraw_open_competition_bond",
+            post(withdraw_open_competition_bond),
+        )
+        .route(
+            "/tools/prepare_open_competition_entrant_action",
+            post(prepare_open_competition_entrant_action),
+        )
+        .route(
+            "/tools/relay_open_competition_entrant_action",
+            post(relay_open_competition_entrant_action),
+        )
+        .route(
+            "/tools/get_open_competition_entrant_relay",
+            post(get_open_competition_entrant_relay),
+        )
+        .route(
+            "/tools/get_standing_meta_v4_readiness",
+            post(get_standing_meta_v4_readiness),
+        )
+        .route(
+            "/tools/prepare_standing_meta_v4_claim",
+            post(prepare_standing_meta_v4_claim),
+        )
+        .route(
+            "/tools/prepare_anonymous_stake_registration",
+            post(prepare_anonymous_stake_registration),
+        )
+        .route(
+            "/tools/set_anonymous_stake_availability",
+            post(set_anonymous_stake_availability),
+        )
+        .route(
+            "/tools/list_verification_assignments",
+            post(list_verification_assignments),
+        )
+        .route(
+            "/tools/submit_primary_verdict",
+            post(submit_primary_verdict),
+        )
+        .route(
+            "/tools/waive_verification_appeal",
+            post(waive_verification_appeal),
+        )
+        .route(
+            "/tools/open_verification_appeal",
+            post(open_verification_appeal),
+        )
+        .route("/tools/submit_appeal_vote", post(submit_appeal_vote))
+        .route(
+            "/tools/finalize_verification_case",
+            post(finalize_verification_case),
+        )
+        .route(
             "/tools/plan_autonomous_bounty_claim",
             post(plan_autonomous_bounty_claim),
         )
@@ -1398,6 +1898,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/plan_autonomous_refund_withdrawal",
             post(plan_autonomous_refund_withdrawal),
+        )
+        .route(
+            "/tools/plan_bounded_wallet_cancel_refund",
+            post(plan_bounded_wallet_cancel_refund),
         )
         .route(
             "/tools/decode_autonomous_bounty_events",
@@ -1501,6 +2005,32 @@ async fn llms_txt() -> String {
     web_public::render_llms_txt(&api_base_url, &mcp_base_url)
 }
 
+async fn openai_apps_challenge() -> impl IntoResponse {
+    openai_apps_challenge_response(env::var("OPENAI_APPS_CHALLENGE_TOKEN").ok())
+}
+
+fn openai_apps_challenge_response(configured: Option<String>) -> (StatusCode, HeaderMap, String) {
+    let token = configured.map(|value| value.trim().to_string());
+    let valid = token.as_deref().is_some_and(|value| {
+        (8..=512).contains(&value.len())
+            && value.chars().all(|character| character.is_ascii_graphic())
+    });
+    if !valid {
+        return (StatusCode::NOT_FOUND, HeaderMap::new(), String::new());
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    (
+        StatusCode::OK,
+        headers,
+        token.expect("validated challenge token"),
+    )
+}
+
 fn public_base_url_from_env() -> String {
     env::var("PUBLIC_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string())
 }
@@ -1524,8 +2054,49 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             RouteBlockedGoalArgs::input_schema(),
         ),
         tool(
+            "plan_objective_creation",
+            "Validate an objective declaration and return the exact EIP-191 commitment the requesting party must sign. This plans no payment and creates no state.",
+            PlanObjectiveCreationArgs::input_schema(),
+        ),
+        tool(
+            "create_objective",
+            "Create one objective from an unchanged creation plan and a valid requesting-party wallet signature.",
+            object_tool_schema(
+                json!({
+                    "plan": object_property("Exact plan returned by plan_objective_creation."),
+                    "approvals": array_property(object_property("EIP-191 wallet approval with participant_id and signature."), "Requesting-party approvals.")
+                }),
+                &["plan", "approvals"],
+            ),
+        ),
+        tool(
+            "list_objectives",
+            "List coordinated objectives with explicit role records, dependency graphs, exact readiness blockers, and canonical payment evidence boundaries.",
+            empty_tool_schema(),
+        ),
+        tool(
+            "get_objective",
+            "Get one objective, its immutable accepted value bundle, contribution states, dependency graph, and next actions.",
+            ObjectiveIdArgs::input_schema(),
+        ),
+        tool(
+            "plan_objective_action",
+            "Validate one objective transition and return the revision-bound EIP-191 commitment and exact signer threshold. Actions keep offers, selection, submission, verification, in-kind value, and payment distinct.",
+            PlanObjectiveActionArgs::input_schema(),
+        ),
+        tool(
+            "apply_objective_action",
+            "Apply an unchanged revision-bound objective action after recovering the precommitted participant, authority, provider, contributor, or verifier wallet threshold.",
+            ApplyObjectiveActionArgs::input_schema(),
+        ),
+        tool(
+            "reconcile_objective",
+            "Permissionlessly refresh paid contribution and final completion states from indexed canonical BountySettled events. Plans, signatures, submissions, hosted rows, and raw verifier responses cannot prove payment.",
+            ObjectiveIdArgs::input_schema(),
+        ),
+        tool(
             "prepare_bounty_post",
-            "Use this when posting from ChatGPT. Review the terms, sign, fund, then confirm canonical events. This tool moves no funds.",
+            "Use this when a person wants their current AI assistant to prepare a reviewable Agent Bounties draft. It returns a portable card and secure review URL, moves no funds, and requests no wallet signature.",
             PrepareBountyPostArgs::input_schema(),
         ),
         tool(
@@ -1944,13 +2515,13 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_standing_meta_v2_child",
-            "Prepare the complete current standing-meta-v2 child loop from one parent contract and task: validate the exact claimable parent, publish the content-addressed terms to the hosted store, pin the canonical two-verifier sandboxed-regression quorum, and return ordered wallet calls that publish the same bytes on Base and create a fully funded child before the parent claim.",
+            "Prepare the exact fully funded 1 USDC regression child for a claimable routed-V3 parent. The legacy tool name is retained so existing agents do not break. It publishes immutable terms first and returns ordered wallet calls; recovery-reserved V2 and already-claimed parents fail closed.",
             object_tool_schema(
                 json!({
-                    "network": nullable_enum_property(&["base-mainnet"], "Optional network; standing-meta-v2 currently requires Base mainnet."),
-                    "parent_bounty_contract": string_property("Exact claimable standing-meta-v2 parent contract from canonical inventory."),
+                    "network": nullable_enum_property(&["base-mainnet"], "Optional network; routed standing-meta currently requires Base mainnet."),
+                    "parent_bounty_contract": string_property("Exact claimable routed-V3 parent contract from ready-to-earn inventory."),
                     "parent_solver": string_property("Registered wallet that will publish the child terms, create/fund the child, and claim the parent."),
-                    "intended_child_solver": string_property("Different pre-registered wallet expected to claim and complete the child. Its participant ID must also differ."),
+                    "intended_child_solver": string_property("Different pre-registered child-solver wallet whose participant ID also differs."),
                     "title": string_property("Concrete coding child title."),
                     "goal": string_property("Precise child outcome."),
                     "acceptance_criteria": {
@@ -1998,7 +2569,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
                         "additionalProperties": false
                     },
                     "evidence_schema": nullable_object_property("Optional submission schema; defaults to a required sha256 source_snapshot_digest."),
-                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and must divide across two verifiers."),
+                    "verifier_reward": nullable_object_property("Optional USDC money object; defaults to 100000 base units and is paid to the precommitted verifier path."),
                     "funding_deadline": nullable_integer_property("Optional child funding deadline; defaults to the immutable parent deadline."),
                     "claim_window_seconds": nullable_integer_property("Optional child claim window; defaults to 259200 seconds."),
                     "verification_window_seconds": nullable_integer_property("Optional child verification window; defaults to 259200 seconds."),
@@ -2074,6 +2645,106 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             ),
         ),
         tool(
+            "list_open_competition_verifiers",
+            "List exact approved deterministic verifier profiles. Factory provenance alone is never verifier approval.",
+            OpenCompetitionVerifierArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_creation",
+            "Prepare either approval-and-create or EIP-3009 authorized creation against the frozen release manifest and exact verifier catalog profile.",
+            OpenCompetitionCreationArgs::input_schema(),
+        ),
+        tool(
+            "get_open_competition_readiness",
+            "Fail closed unless canonical runtime, terms, funding, deterministic verification, timing, entry capacity, sponsorship, relay support, R4 evidence, and monitoring all pass.",
+            OpenCompetitionReadinessArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_commit",
+            "Prepare a commitment-bound entry bond. Generic agent_native_claim is forbidden because open competition has no exclusive claim.",
+            OpenCompetitionCommitArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_reveal",
+            "Prepare the same wallet's later-block reveal. The first passing onchain reveal sequence wins; verifier response time does not order competitors.",
+            OpenCompetitionRevealArgs::input_schema(),
+        ),
+        tool(
+            "get_open_competition_status",
+            "Read canonical competition, entry, reveal-sequence, winner, and settlement state.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "withdraw_open_competition_bond",
+            "Prepare a pull withdrawal for a still-committed losing entry after canonical settlement.",
+            OpenCompetitionActionArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_entrant_action",
+            "Prepare one exact policy-bound entrant-wallet action from canonical Base safe-block state.",
+            OpenCompetitionEntrantActionArgs::input_schema(),
+        ),
+        tool(
+            "relay_open_competition_entrant_action",
+            "Submit one delegate-signed entrant action to the bounded hosted relayer. A broadcast is not canonical execution or payment evidence.",
+            OpenCompetitionEntrantRelayArgs::input_schema(),
+        ),
+        tool(
+            "get_open_competition_entrant_relay",
+            "Poll one entrant relay through canonical Base safe-block reconciliation. Only BountySettled proves solver payment.",
+            GetOpenCompetitionEntrantRelayArgs::input_schema(),
+        ),
+        tool(
+            "get_standing_meta_v4_readiness",
+            "Fail closed unless exact V4 terms, economics, sponsorship, VRF reserves and authorization, pool sizes, timing, appeals, R4 evidence, and monitoring all pass.",
+            StandingMetaV4ReadinessArgs::input_schema(),
+        ),
+        tool(
+            "prepare_standing_meta_v4_claim",
+            "Prepare the required atomic V4 claim. It snapshots the active solver pool and requests VRF immediately; generic agent_native_claim is forbidden.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "prepare_anonymous_stake_registration",
+            "Prepare one fixed 5 USDC solver or verifier role ticket without identity fields.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "set_anonymous_stake_availability",
+            "Prepare an availability update for an already registered anonymous role ticket.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "list_verification_assignments",
+            "Read request-bound primary or appellate assignment state; wallet assignment is not identity or unrelated-owner proof.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "submit_primary_verdict",
+            "Prepare the selected primary wallet's verdict. Chainlink selected the wallet but did not judge the work.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "waive_verification_appeal",
+            "Let the sole eligible appellant finalize an undisputed verdict immediately instead of waiting for the appeal deadline.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "open_verification_appeal",
+            "Prepare the solver's appeal of rejection or creator's appeal of acceptance with the exact 0.10 USDC bond.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "submit_appeal_vote",
+            "Prepare one selected appellate wallet's vote; three matching votes form an immediately finalizable majority.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
+            "finalize_verification_case",
+            "Prepare unappealed, appealed, or timeout finalization. A verdict is not payment; only canonical BountySettled proves payment.",
+            StandingMetaV4ActionArgs::input_schema(),
+        ),
+        tool(
             "agent_native_claim",
             "Claim one bounty. Reuse the idempotency key, sign wallet_request once, then replay next_request until BountyClaimed is confirmed.",
             AgentNativeClaimArgs::input_schema(),
@@ -2130,13 +2801,18 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "plan_autonomous_cancel",
-            "Build cancellation for the creator or any caller after the immutable funding deadline. Contributors then withdraw their own refunds.",
-            PlanAutonomousLifecycleArgs::input_schema("Open or claimable canonical bounty contract."),
+            "Delete an unclaimed bounty from active inventory by cancelling it on-chain. The caller must be the creator before the immutable funding deadline; after the deadline any caller may clean it up. Claimed bounties fail closed. Each funder then withdraws its own refund.",
+            PlanAutonomousCancelArgs::input_schema(),
         ),
         tool(
             "plan_autonomous_refund_withdrawal",
             "Build a contributor's pull-refund transaction after cancellation.",
             PlanAutonomousLifecycleArgs::input_schema("Cancelled canonical bounty contract."),
+        ),
+        tool(
+            "plan_bounded_wallet_cancel_refund",
+            "Build one owner-signed BoundedAgentWalletV2 transaction that cancels an unclaimed canonical bounty and withdraws only that wallet's refund. Other contributors keep their independent refunds.",
+            PlanBoundedWalletCancelRefundArgs::input_schema(),
         ),
         tool(
             "decode_autonomous_bounty_events",
@@ -2449,11 +3125,11 @@ fn autonomous_bounty_create_property() -> Value {
             "funding_deadline": integer_property("Unix timestamp after which an incomplete crowdfund can be cancelled."),
             "claim_window_seconds": integer_property("Seconds a solver has to submit after claiming."),
             "verification_window_seconds": integer_property("Seconds committed verifiers have to settle after submission."),
-            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism."),
+            "verification_mode": enum_property(&["deterministic_module", "signed_quorum", "ai_judge_quorum"], "Immutable on-chain verification mechanism. Use signed_quorum with threshold 1 for one verifier; add verifiers only when higher-risk work needs independent review."),
             "verifier_module": nullable_string_property("Deterministic verifier contract; null for quorum modes."),
             "verifier_reward_recipient": nullable_string_property("Deterministic verifier reward wallet; null for quorum modes."),
             "verifiers": string_array_property("One to eight precommitted verifier wallets for quorum modes; empty for deterministic mode."),
-            "threshold": integer_property("Number of matching verifier signatures required; AI judge mode requires at least two."),
+            "threshold": integer_property("Number of matching verifier signatures required. Default to 1 for signed verification; AI judge mode requires at least 2."),
             "initial_funding": money_property("Creation-time funding. Zero creates a crowdfundable bounty; target funding makes it immediately claimable.", true),
             "creation_nonce": string_property("Unique nonzero random bytes32. It binds the CREATE2 bounty id and address.")
         },
@@ -2660,8 +3336,154 @@ async fn route_blocked_goal(
     mcp_json(decision)
 }
 
-async fn prepare_bounty_post(Json(args): Json<PrepareBountyPostArgs>) -> Json<serde_json::Value> {
-    match chatgpt_app::build_bounty_post_handoff(&args) {
+async fn plan_objective_creation(
+    Json(args): Json<PlanObjectiveCreationArgs>,
+) -> Json<serde_json::Value> {
+    match Objective::plan_creation(args.draft) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn create_objective(
+    State(state): State<SharedState>,
+    Json(args): Json<SignedObjectiveCreation>,
+) -> Json<serde_json::Value> {
+    let now = Utc::now();
+    let objective = match Objective::create(args, now) {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    if let Err(error) = persist_new_objective(&state, &objective).await {
+        return mcp_error(error);
+    }
+    match objective.view(&ObjectiveCanonicalEvidence::default(), now) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn list_objectives(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let objectives = match load_objectives(&state).await {
+        Ok(objectives) => objectives,
+        Err(error) => return mcp_error(error),
+    };
+    let evidence = match load_objective_canonical_evidence(&state, &objectives).await {
+        Ok(evidence) => evidence,
+        Err(error) => return mcp_error(error),
+    };
+    let now = Utc::now();
+    let views = match objectives
+        .iter()
+        .map(|objective| objective.view(&evidence, now))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(views) => views,
+        Err(error) => return mcp_error(error),
+    };
+    mcp_json(views)
+}
+
+async fn get_objective(
+    State(state): State<SharedState>,
+    Json(args): Json<ObjectiveIdArgs>,
+) -> Json<serde_json::Value> {
+    let objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    let evidence =
+        match load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await {
+            Ok(evidence) => evidence,
+            Err(error) => return mcp_error(error),
+        };
+    match objective.view(&evidence, Utc::now()) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_objective_action(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanObjectiveActionArgs>,
+) -> Json<serde_json::Value> {
+    let objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    match objective.plan_action(args.action, Utc::now()) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn apply_objective_action(
+    State(state): State<SharedState>,
+    Json(args): Json<ApplyObjectiveActionArgs>,
+) -> Json<serde_json::Value> {
+    if args.signed_action.plan.objective_id != args.objective_id {
+        return mcp_error("signed action objective_id does not match the requested objective");
+    }
+    let mut objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    let expected_revision = objective.revision;
+    let evidence =
+        match load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await {
+            Ok(evidence) => evidence,
+            Err(error) => return mcp_error(error),
+        };
+    let now = Utc::now();
+    if let Err(error) = objective.apply_action(args.signed_action, now, &evidence) {
+        return mcp_error(error);
+    }
+    if let Err(error) = persist_objective_replacement(&state, &objective, expected_revision).await {
+        return mcp_error(error);
+    }
+    match objective.view(&evidence, now) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn reconcile_objective(
+    State(state): State<SharedState>,
+    Json(args): Json<ObjectiveIdArgs>,
+) -> Json<serde_json::Value> {
+    let mut objective = match load_objective(&state, args.objective_id).await {
+        Ok(objective) => objective,
+        Err(error) => return mcp_error(error),
+    };
+    let expected_revision = objective.revision;
+    let evidence =
+        match load_objective_canonical_evidence(&state, std::slice::from_ref(&objective)).await {
+            Ok(evidence) => evidence,
+            Err(error) => return mcp_error(error),
+        };
+    let now = Utc::now();
+    match objective.reconcile_canonical_evidence(&evidence, now) {
+        Ok(true) => {
+            if let Err(error) =
+                persist_objective_replacement(&state, &objective, expected_revision).await
+            {
+                return mcp_error(error);
+            }
+        }
+        Ok(false) => {}
+        Err(error) => return mcp_error(error),
+    }
+    match objective.view(&evidence, now) {
+        Ok(view) => mcp_json(view),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn prepare_bounty_post(
+    State(state): State<SharedState>,
+    Json(args): Json<PrepareBountyPostArgs>,
+) -> Json<serde_json::Value> {
+    match chatgpt_app::prepare_bounty_post_handoff(&state, &args).await {
         Ok(handoff) => mcp_json(handoff),
         Err(error) => mcp_error(error),
     }
@@ -3719,7 +4541,7 @@ async fn prepare_standing_meta_v2_child(
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     if network != "base-mainnet" {
-        return mcp_error("standing-meta-v2 is deployed only on canonical Base mainnet");
+        return mcp_error("standing-meta child preparation is deployed only on Base mainnet");
     }
     let parent =
         match indexed_autonomous_bounty(&state, network, &args.parent_bounty_contract).await {
@@ -3752,7 +4574,7 @@ async fn prepare_standing_meta_v2_child(
         ));
     }
     plan.hosted_terms_published = true;
-    plan.current_state = "hosted_child_terms_published_parent_unclaimed".to_string();
+    plan.current_state = "hosted_routed_v3_child_terms_published_parent_unclaimed".to_string();
     mcp_json(plan)
 }
 
@@ -3917,12 +4739,274 @@ async fn prepare_agent_to_earn(
     .await
 }
 
+async fn list_open_competition_verifiers(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionVerifierArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/open-competition-v1/verifiers",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new()
+            .get(url)
+            .query(&[("network", network)]),
+        "open-competition verifier catalog API",
+    )
+    .await
+}
+
+async fn prepare_open_competition_creation(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionCreationArgs>,
+) -> Json<serde_json::Value> {
+    let path = if args.funding_authorization.is_some() {
+        "authorized-creation-preparation"
+    } else {
+        "creation-preparation"
+    };
+    proxy_open_competition_json(path, &args).await
+}
+
+async fn get_open_competition_readiness(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionReadinessArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/open-competition-v1/readiness",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    let mut query = vec![
+        ("network", network.to_string()),
+        ("bounty_contract", args.bounty_contract),
+    ];
+    if let Some(solver) = args.solver {
+        query.push(("solver", solver));
+    }
+    if let Some(profile_id) = args.verifier_profile_id {
+        query.push(("verifier_profile_id", profile_id));
+    }
+    proxy_public_json_response(
+        reqwest::Client::new().get(url).query(&query),
+        "open-competition readiness API",
+    )
+    .await
+}
+
+async fn prepare_open_competition_commit(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionCommitArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_json("commit-preparation", &args).await
+}
+
+async fn prepare_open_competition_reveal(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionRevealArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_json("reveal-preparation", &args).await
+}
+
+async fn get_open_competition_status(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("status", args).await
+}
+
+async fn withdraw_open_competition_bond(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_action("bond-withdrawal-preparation", args).await
+}
+
+async fn prepare_open_competition_entrant_action(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionEntrantActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_json_with_timeout("entrant-action-preparation", &args, 60).await
+}
+
+async fn relay_open_competition_entrant_action(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionEntrantRelayArgs>,
+) -> Json<serde_json::Value> {
+    proxy_open_competition_json_with_timeout("entrant-action-relays", &args, 90).await
+}
+
+async fn get_open_competition_entrant_relay(
+    State(_state): State<SharedState>,
+    Json(args): Json<GetOpenCompetitionEntrantRelayArgs>,
+) -> Json<serde_json::Value> {
+    let relay_id = match uuid::Uuid::parse_str(&args.relay_id) {
+        Ok(relay_id) => relay_id,
+        Err(_) => return mcp_error("relay_id must be a UUID"),
+    };
+    let url = format!(
+        "{}/v1/base/open-competition-v1/entrant-action-relays/{relay_id}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response_with_timeout(
+        reqwest::Client::new().get(url),
+        "open-competition entrant relay API",
+        60,
+    )
+    .await
+}
+
+async fn proxy_open_competition_action(
+    path: &str,
+    args: OpenCompetitionActionArgs,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/open-competition-v1/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "open-competition action API",
+    )
+    .await
+}
+
+async fn proxy_open_competition_json<T>(path: &str, args: &T) -> Json<serde_json::Value>
+where
+    T: Serialize + ?Sized,
+{
+    proxy_open_competition_json_with_timeout(path, args, 20).await
+}
+
+async fn proxy_open_competition_json_with_timeout<T>(
+    path: &str,
+    args: &T,
+    timeout_seconds: u64,
+) -> Json<serde_json::Value>
+where
+    T: Serialize + ?Sized,
+{
+    let url = format!(
+        "{}/v1/base/open-competition-v1/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response_with_timeout(
+        reqwest::Client::new().post(url).json(args),
+        "open-competition action API",
+        timeout_seconds,
+    )
+    .await
+}
+
+async fn get_standing_meta_v4_readiness(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ReadinessArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let url = format!(
+        "{}/v1/base/standing-meta-v4/readiness?network={network}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().get(url),
+        "standing-meta-v4 readiness API",
+    )
+    .await
+}
+
+async fn prepare_standing_meta_v4_claim(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("claim-preparation", args).await
+}
+
+async fn prepare_anonymous_stake_registration(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("stake-registration-preparation", args).await
+}
+
+async fn set_anonymous_stake_availability(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("stake-availability-preparation", args).await
+}
+
+async fn list_verification_assignments(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("verification-assignments", args).await
+}
+
+async fn submit_primary_verdict(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("primary-verdict-preparation", args).await
+}
+
+async fn waive_verification_appeal(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("appeal-waiver-preparation", args).await
+}
+
+async fn open_verification_appeal(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("appeal-opening-preparation", args).await
+}
+
+async fn submit_appeal_vote(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("appeal-vote-preparation", args).await
+}
+
+async fn finalize_verification_case(
+    State(_state): State<SharedState>,
+    Json(args): Json<StandingMetaV4ActionArgs>,
+) -> Json<serde_json::Value> {
+    proxy_standing_meta_v4_action("finalization-preparation", args).await
+}
+
+async fn proxy_standing_meta_v4_action(
+    path: &str,
+    args: StandingMetaV4ActionArgs,
+) -> Json<serde_json::Value> {
+    let url = format!(
+        "{}/v1/base/standing-meta-v4/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response(
+        reqwest::Client::new().post(url).json(&args),
+        "standing-meta-v4 action API",
+    )
+    .await
+}
+
 async fn proxy_public_json_response(
     request: reqwest::RequestBuilder,
     service: &str,
 ) -> Json<serde_json::Value> {
+    proxy_public_json_response_with_timeout(request, service, 20).await
+}
+
+async fn proxy_public_json_response_with_timeout(
+    request: reqwest::RequestBuilder,
+    service: &str,
+    timeout_seconds: u64,
+) -> Json<serde_json::Value> {
     let response = match request
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
         .send()
         .await
     {
@@ -4328,7 +5412,7 @@ async fn plan_autonomous_expire_submission(
 
 async fn plan_autonomous_cancel(
     State(state): State<SharedState>,
-    Json(args): Json<PlanAutonomousLifecycleArgs>,
+    Json(args): Json<PlanAutonomousCancelArgs>,
 ) -> Json<serde_json::Value> {
     let network = args.network.as_deref().unwrap_or("base-mainnet");
     let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
@@ -4338,9 +5422,28 @@ async fn plan_autonomous_cancel(
     if !matches!(item.status.as_str(), "open" | "claimable") {
         return mcp_error("bounty is not cancellable");
     }
+    let caller = args.caller.as_str();
+    let funding_deadline = item
+        .terms
+        .as_ref()
+        .and_then(|terms| terms.document.contract_terms["funding_deadline"].as_u64());
+    let observed_at = match u64::try_from(Utc::now().timestamp()) {
+        Ok(value) => value,
+        Err(_) => return mcp_error("current time is unavailable"),
+    };
+    let caller = match validate_autonomous_cancel_authority(
+        &item.status,
+        &item.creator,
+        caller,
+        funding_deadline,
+        observed_at,
+    ) {
+        Ok(caller) => caller,
+        Err(error) => return mcp_error(error),
+    };
     match configured_autonomous_planner(network).and_then(|planner| {
         planner
-            .plan_cancel(&args.bounty_contract, args.caller.as_deref())
+            .plan_cancel(&args.bounty_contract, Some(&caller))
             .map_err(|error| error.to_string())
     }) {
         Ok(plan) => mcp_json(plan),
@@ -4367,6 +5470,43 @@ async fn plan_autonomous_refund_withdrawal(
         planner
             .plan_refund_withdrawal(&args.bounty_contract, contributor)
             .map_err(|error| error.to_string())
+    }) {
+        Ok(plan) => mcp_json(plan),
+        Err(error) => mcp_error(error),
+    }
+}
+
+async fn plan_bounded_wallet_cancel_refund(
+    State(state): State<SharedState>,
+    Json(args): Json<PlanBoundedWalletCancelRefundArgs>,
+) -> Json<serde_json::Value> {
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let item = match indexed_autonomous_bounty(&state, network, &args.bounty_contract).await {
+        Ok(item) => item,
+        Err(error) => return mcp_error(error),
+    };
+    if !item.creator.eq_ignore_ascii_case(&args.bounded_wallet) {
+        return mcp_error("bounded wallet is not the indexed bounty creator");
+    }
+    match configured_autonomous_planner(network).and_then(|planner| {
+        match item.status.as_str() {
+            "open" | "claimable" => planner.plan_bounded_wallet_cancel_refund(
+                &args.bounded_wallet,
+                &args.bounty_contract,
+                &args.caller,
+            ),
+            "cancelled" => planner.plan_bounded_wallet_refund(
+                &args.bounded_wallet,
+                &args.bounty_contract,
+                &args.caller,
+            ),
+            _ => Err(
+                chain_base::ChainBaseError::InvalidVerificationConfiguration(
+                    "bounty is not cancellable or refundable".to_string(),
+                ),
+            ),
+        }
+        .map_err(|error| error.to_string())
     }) {
         Ok(plan) => mcp_json(plan),
         Err(error) => mcp_error(error),
@@ -4856,6 +5996,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn chatgpt_card_preview_is_a_no_store_first_party_download_page() {
+        let (headers, body) = chatgpt_bounty_card_preview_response();
+        assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(headers["referrer-policy"], "no-referrer");
+        assert!(headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors 'none'"));
+        assert!(body.contains("First-party share handoff"));
+        assert!(body.contains("Download PNG"));
+        assert!(body.contains("canvas.toBlob"));
+        assert!(body.contains("data:image/webp;base64,"));
+        assert!(!body.contains("__BOUNTY_CARD_ART_DATA_URI__"));
+    }
+
+    #[test]
+    fn openai_apps_challenge_returns_only_the_exact_configured_token() {
+        let token = "openai-apps-challenge_test-123";
+        let (status, headers, body) = openai_apps_challenge_response(Some(format!(" {token}\n")));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(body, token);
+
+        for invalid in [
+            None,
+            Some(String::new()),
+            Some("too-short".chars().take(7).collect()),
+            Some("contains whitespace".to_string()),
+            Some("x".repeat(513)),
+        ] {
+            let (status, _, body) = openai_apps_challenge_response(invalid);
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert!(body.is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
         let descriptors = tools().await.0;
@@ -4873,7 +6052,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 91);
+        assert_eq!(descriptors.len(), 119);
         assert_eq!(
             descriptors
                 .iter()
@@ -4901,6 +6080,22 @@ mod tests {
                 "{} missing required array",
                 descriptor.name
             );
+        }
+
+        for objective_tool in [
+            "plan_objective_creation",
+            "create_objective",
+            "list_objectives",
+            "get_objective",
+            "plan_objective_action",
+            "apply_objective_action",
+            "reconcile_objective",
+        ] {
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.name == objective_tool)
+                .unwrap_or_else(|| panic!("{objective_tool} descriptor exists"));
+            assert!(descriptor.authorization.is_none());
         }
 
         let route = descriptors
@@ -6034,6 +7229,155 @@ mod tests {
 
 async fn hydrate_network(store: &PostgresStore) -> anyhow::Result<BountyNetwork> {
     service_runtime::hydrate_bounty_network(store).await
+}
+
+async fn load_objective(state: &SharedState, id: Id) -> Result<Objective, String> {
+    if let Some(store) = &state.store {
+        return store
+            .get_objective(id)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("objective {id} was not found"));
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("objective {id} was not found"))
+}
+
+async fn load_objectives(state: &SharedState) -> Result<Vec<Objective>, String> {
+    if let Some(store) = &state.store {
+        return store
+            .list_objectives()
+            .await
+            .map_err(|error| error.to_string());
+    }
+    let mut objectives = state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    objectives.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(objectives)
+}
+
+async fn persist_new_objective(state: &SharedState, objective: &Objective) -> Result<(), String> {
+    if let Some(store) = &state.store {
+        store
+            .create_objective(objective)
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        let mut network = state.network.lock().expect("state poisoned");
+        if network.objectives.contains_key(&objective.id) {
+            return Err(format!("objective {} already exists", objective.id));
+        }
+        network.objectives.insert(objective.id, objective.clone());
+        return Ok(());
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .insert(objective.id, objective.clone());
+    Ok(())
+}
+
+async fn persist_objective_replacement(
+    state: &SharedState,
+    objective: &Objective,
+    expected_revision: u64,
+) -> Result<(), String> {
+    if let Some(store) = &state.store {
+        store
+            .replace_objective(objective, expected_revision)
+            .await
+            .map_err(|error| error.to_string())?;
+    } else {
+        let mut network = state.network.lock().expect("state poisoned");
+        let current_revision = network
+            .objectives
+            .get(&objective.id)
+            .map(|current| current.revision)
+            .ok_or_else(|| format!("objective {} was not found", objective.id))?;
+        if current_revision != expected_revision {
+            return Err(format!(
+                "objective {} revision conflict: expected {expected_revision}",
+                objective.id
+            ));
+        }
+        network.objectives.insert(objective.id, objective.clone());
+        return Ok(());
+    }
+    state
+        .network
+        .lock()
+        .expect("state poisoned")
+        .objectives
+        .insert(objective.id, objective.clone());
+    Ok(())
+}
+
+async fn load_objective_canonical_evidence(
+    state: &SharedState,
+    objectives: &[Objective],
+) -> Result<ObjectiveCanonicalEvidence, String> {
+    let Some(store) = &state.store else {
+        return Ok(ObjectiveCanonicalEvidence::default());
+    };
+    let mut networks = BTreeSet::new();
+    for objective in objectives {
+        let Some(bundle) = objective.accepted_value_bundle.as_ref() else {
+            continue;
+        };
+        if let Some(payment) = &bundle.monetary_payment {
+            networks.insert(payment.bounty.network.clone());
+        }
+        for need in &bundle.contribution_needs {
+            if let domain::ContributionCompensation::Paid { payment } = &need.compensation {
+                networks.insert(payment.bounty.network.clone());
+            }
+        }
+    }
+    if networks.is_empty() {
+        return Ok(ObjectiveCanonicalEvidence::default());
+    }
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut evidence = ObjectiveCanonicalEvidence::default();
+    for network in networks {
+        let events = store
+            .list_autonomous_bounty_events(&network)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut feed = build_autonomous_bounty_feed(events, terms.clone(), false)
+            .map_err(|error| error.to_string())?;
+        state.recovery_reservations.apply(&mut feed, false);
+        state
+            .recovery_reservations
+            .exclude_from_reported_outcomes(&mut feed);
+        let mut network_evidence = build_objective_canonical_evidence(&network, &feed);
+        evidence.funding.append(&mut network_evidence.funding);
+        evidence
+            .settlements
+            .append(&mut network_evidence.settlements);
+    }
+    Ok(evidence)
 }
 
 async fn persist_ledger_entries(

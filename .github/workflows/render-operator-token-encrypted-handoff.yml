@@ -1,0 +1,58 @@
+name: Render Operator Token Encrypted Handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipient_public_key_base64:
+        description: One-time RSA public key in base64-encoded PEM SPKI form
+        required: true
+        type: string
+      recipient_fingerprint_sha256:
+        description: Lowercase SHA-256 fingerprint of the public key DER
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-operator-token-encrypted-handoff
+  cancel-in-progress: false
+
+jobs:
+  encrypt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verify encrypted-handoff tests
+        run: python -m unittest scripts/test_export_render_operator_token_encrypted.py
+
+      - name: Encrypt existing operator token
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RECIPIENT_PUBLIC_KEY_BASE64: ${{ inputs.recipient_public_key_base64 }}
+          RECIPIENT_FINGERPRINT_SHA256: ${{ inputs.recipient_fingerprint_sha256 }}
+        run: |
+          python scripts/export_render_operator_token_encrypted.py \
+            --recipient-public-key-base64 "$RECIPIENT_PUBLIC_KEY_BASE64" \
+            --recipient-fingerprint-sha256 "$RECIPIENT_FINGERPRINT_SHA256" \
+            --ciphertext-output target/operations/render-operator-token.enc \
+            --metadata-output target/operations/render-operator-token-handoff.json
+
+      - name: Upload ciphertext only
+        uses: actions/upload-artifact@v7
+        with:
+          name: render-operator-token-encrypted-${{ github.run_id }}
+          path: |
+            target/operations/render-operator-token.enc
+            target/operations/render-operator-token-handoff.json
+          if-no-files-found: error
+          retention-days: 1

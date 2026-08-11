@@ -17,7 +17,7 @@ from plan_bounded_agent_budget import (
     require_address,
     require_bytes32,
     usdc_units,
-    validate_manifest,
+    validate_action_manifest,
 )
 
 
@@ -110,7 +110,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=ROOT / "target" / "bounded-agent-action-plan.json")
     args = parser.parse_args()
 
-    manifest = validate_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
+    manifest = validate_action_manifest(json.loads(args.manifest.read_text(encoding="utf-8")))
     wallet = require_address(args.wallet, "wallet")
     rpc_url = args.rpc_url or manifest["rpc_url"]
     expected_owner = require_address(args.expect_owner, "expected owner") if args.expect_owner else None

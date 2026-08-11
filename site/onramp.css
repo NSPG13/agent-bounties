@@ -1,0 +1,151 @@
+
+.onramp-callout {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.25rem 0;
+  padding: 1rem;
+  border: 1px solid rgba(181, 226, 199, 0.2);
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.onramp-callout p,
+.onramp-callout output {
+  margin: 0;
+}
+
+.onramp-page {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.onramp-hero {
+  align-items: end;
+}
+
+.onramp-boundary,
+.onramp-panel,
+.onramp-action,
+.onramp-return-status {
+  border: 1px solid rgba(181, 226, 199, 0.2);
+  border-radius: 1.25rem;
+  background: rgba(4, 24, 17, 0.82);
+  padding: clamp(1.1rem, 2.5vw, 2rem);
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.16);
+}
+
+.onramp-boundary {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1.5rem;
+}
+
+.onramp-boundary ol {
+  margin: 0;
+  padding-left: 1.3rem;
+}
+
+.onramp-boundary > p {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.onramp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.onramp-panel {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+}
+
+.onramp-panel h2,
+.onramp-action h2,
+.onramp-return-status h2,
+.onramp-boundary h2 {
+  margin-top: 0;
+}
+
+.onramp-facts,
+.onramp-balances {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.onramp-facts > div,
+.onramp-balances > div {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.8rem;
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.onramp-facts dt,
+.onramp-balances dt {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.onramp-facts dd,
+.onramp-balances dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.onramp-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.onramp-action-buttons {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.onramp-action output {
+  grid-column: 1 / -1;
+}
+
+.onramp-acknowledgement {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.onramp-acknowledgement input {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: 0.15rem;
+}
+
+.onramp-return-status[hidden] {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .onramp-boundary,
+  .onramp-grid,
+  .onramp-action {
+    grid-template-columns: 1fr;
+  }
+
+  .onramp-action output,
+  .onramp-boundary > p {
+    grid-column: auto;
+  }
+
+  .onramp-action-buttons .button {
+    width: 100%;
+    text-align: center;
+  }
+}

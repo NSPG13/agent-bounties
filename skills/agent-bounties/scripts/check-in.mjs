@@ -10,9 +10,18 @@ export const DEFAULT_BASE_RPC_FALLBACK_URLS = Object.freeze([
   "https://mainnet.base.org",
 ]);
 export const CLAIM_HANDOFF_SCHEMA_VERSION = "agent-bounties/check-in-claim-handoff-v1";
+export const SUPPORTED_REGRESSION_QUORUM = Object.freeze({
+  engine: "sandboxed_regression_v1",
+  verifierSetHash: "0x0838846e439ed67544d8a06da2a0f344fb25cd44723ad65839da3f242a72b1f2",
+  threshold: 1,
+  verifiers: Object.freeze([
+    "0xbe6292b9e465f549e2363b918d6dd9187038431e",
+  ]),
+});
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const EMPTY_CODE_HASH = "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
 const UINT64_MASK = (1n << 64n) - 1n;
 const KECCAK_RATE_BYTES = 136;
@@ -268,7 +277,7 @@ export function buildClaimHandoff(bounty, solverWallet, apiBaseUrl) {
     wallet_readiness_checked: false,
     reason,
     required_input: requiredInput,
-    preferred_path: githubAvailable ? "github_claim_comment" : "agent_native_claim",
+    preferred_path: "agent_native_claim",
     rerun_command: ready
       ? null
       : `node skills/agent-bounties/scripts/check-in.mjs --solver-wallet ${addressTemplate}`,
@@ -322,19 +331,6 @@ function nextActionFor(verified) {
       never_request: ["private_key", "seed_phrase"],
     };
   }
-  if (handoff.github_claim) {
-    return {
-      schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
-      action: "post_github_claim_comment",
-      ready: true,
-      ready_scope: "claim_handoff_only",
-      bounty_id: selected.id,
-      source_issue_number: selected.source_issue_number,
-      issue_url: handoff.github_claim.issue_url,
-      comment_body: handoff.github_claim.comment_body,
-      follow_up: handoff.follow_up,
-    };
-  }
   return {
     schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
     action: "call_agent_native_claim",
@@ -343,6 +339,7 @@ function nextActionFor(verified) {
     bounty_id: selected.id,
     mcp: handoff.mcp,
     api: handoff.api,
+    github_fallback: handoff.github_claim,
     follow_up: handoff.follow_up,
   };
 }
@@ -1056,11 +1053,7 @@ export function verifyClaimableItem(item, protocol) {
   if (!item.terms_valid || !item.terms?.document?.contract_terms) {
     return { ok: false, reason: "terms_or_contract_commitments_invalid" };
   }
-  if (
-    item.verification_ready !== true
-    || item.verification_mode !== "deterministic_module"
-    || !ADDRESS.test(item.verifier_module || "")
-  ) {
+  if (item.verification_ready !== true || !supportedVerificationPath(item)) {
     return { ok: false, reason: "verification_path_not_executable" };
   }
   if (!ADDRESS.test(item.bounty_contract || "") || !ADDRESS.test(item.creator || "")) {
@@ -1116,6 +1109,47 @@ export function verifyClaimableItem(item, protocol) {
   return { ok: true, reason: "confirmed_canonical_autonomous_bounty" };
 }
 
+function supportedVerificationPath(item) {
+  if (
+    item.verification_mode === "deterministic_module"
+    && ADDRESS.test(item.verifier_module || "")
+    && String(item.verifier_module).toLowerCase() !== ZERO_ADDRESS
+  ) {
+    return true;
+  }
+  if (
+    item.verification_mode !== "signed_quorum"
+    || (item.verifier_module !== null
+      && String(item.verifier_module || "").toLowerCase() !== ZERO_ADDRESS)
+  ) {
+    return false;
+  }
+  const policy = item.terms?.document?.verification_policy;
+  const benchmark = item.terms?.document?.benchmark;
+  const verifiers = Array.isArray(policy?.verifiers)
+    ? policy.verifiers.map((value) => String(value).toLowerCase())
+    : [];
+  const configured = (Array.isArray(item.events) ? item.events : []).filter(
+    (event) => event?.kind === "canonical_bounty_verification_configured",
+  );
+  if (configured.length !== 1) return false;
+  const data = configured[0]?.data;
+  return (
+    policy?.mechanism === "signed_quorum"
+    && Number(policy?.threshold) === SUPPORTED_REGRESSION_QUORUM.threshold
+    && benchmark?.engine === SUPPORTED_REGRESSION_QUORUM.engine
+    && verifiers.length === SUPPORTED_REGRESSION_QUORUM.verifiers.length
+    && verifiers.every(
+      (verifier, index) => verifier === SUPPORTED_REGRESSION_QUORUM.verifiers[index],
+    )
+    && Number(data?.verification_mode) === 1
+    && Number(data?.threshold) === SUPPORTED_REGRESSION_QUORUM.threshold
+    && String(data?.verifier_set_hash || "").toLowerCase()
+      === SUPPORTED_REGRESSION_QUORUM.verifierSetHash
+    && String(data?.verifier_module || ZERO_ADDRESS).toLowerCase() === ZERO_ADDRESS
+  );
+}
+
 function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
   const sourceUrl = sourceUrlFromDocument(item.terms.document);
   const normalized = {
@@ -1135,7 +1169,15 @@ function normalizedBounty(item, apiBaseUrl, standingMetaAttestation = null) {
     claim_plan_url: `${apiBaseUrl}/v1/base/autonomous-bounties/claim-plan`,
     verification_mode: item.verification_mode,
     verifier_module: item.verifier_module?.toLowerCase() || null,
+    verifier_set_hash: item.verification_mode === "signed_quorum"
+      ? SUPPORTED_REGRESSION_QUORUM.verifierSetHash
+      : null,
+    verifier_threshold: item.verification_mode === "signed_quorum"
+      ? SUPPORTED_REGRESSION_QUORUM.threshold
+      : 1,
+    verification_engine: item.terms.document.benchmark?.engine || null,
     verification_ready: item.verification_ready === true,
+    verification_readiness_reason: item.verification_readiness_reason || null,
   };
   if (hostedStandingMetaCandidate(item) && standingMetaAttestation?.ready) {
     normalized.standing_meta_bounty = standingMetaDescriptor({
