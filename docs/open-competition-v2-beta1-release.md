@@ -14,8 +14,21 @@ replaces that quarantine.
 CI downloads the official SP1 installer to a file and requires SHA-256
 `5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b`
 before executing it. One exact compiled prover runner is then checksummed,
-published as a workflow artifact, and reused by the three isolated proof jobs.
+published as a workflow artifact, and reused by isolated proof jobs. The runner
+advertises machine-readable `cpu` and `network` capabilities. A local CPU
+backend produces Groth16. PLONK uses the SP1 Prover Network because SP1 6.3.1
+documents at least 64 GB for PLONK and GitHub's standard public runner has only
+16 GB. Swap is not treated as proof capacity. A trusted release dispatch fails
+before submitting a proof request unless `SP1_NETWORK_PRIVATE_KEY` is present
+and the runner was compiled with the pinned SDK's `network` feature.
 An installer-byte change fails closed and requires a separately reviewed pin.
+
+The Prover Network signer must be separately funded with sufficient PROVE.
+Neither a configured secret nor a submitted provider request is proof evidence.
+Only a returned proof that self-verifies, matches the exact release fixture,
+and succeeds through the fork or Sepolia transaction replay satisfies a proof
+gate. See the official [hardware requirements](https://docs.succinct.xyz/docs/sp1/getting-started/hardware-requirements)
+and [Prover Network quickstart](https://docs.succinct.xyz/docs/sp1/prover-network/quickstart).
 
 ## Evidence Order
 
@@ -64,13 +77,31 @@ python scripts/run_open_competition_v2_mainnet_fork_replay.py `
   --output target/open-competition-v2-mainnet-real-proof-replay.json
 ```
 
-The local command is sequential. CI first prepares one hash-bound context,
-then generates `groth16_first`, `plonk_best_a`, and `plonk_best_b` in three
-independent jobs. A final job rejects any proof whose mode, vkey, ELF hashes,
-or full 640-byte journal differs from the prepared fixture before replaying
-transactions. This keeps every expensive job below the runner execution
-ceiling and makes one failed prover retryable without regenerating valid
-proofs.
+The local command is sequential and requires hardware appropriate to the
+selected proof system. CI first prepares one hash-bound context, generates
+`groth16_first` on CPU, and generates `plonk_best_a` and `plonk_best_b` as two
+independent network jobs during a trusted release dispatch. A final job rejects
+any proof whose mode, vkey, ELF hashes, or full 640-byte journal differs from
+the prepared fixture before replaying transactions. Pull requests do not
+receive the network credential and therefore run only deterministic gates and
+the real CPU Groth16 proof; a trusted dispatch against the exact candidate
+commit is required before merge or Sepolia rehearsal.
+
+Configure the proving credential without exposing it to source or pull-request
+workflows:
+
+```bash
+gh secret set SP1_NETWORK_PRIVATE_KEY --repo NSPG13/agent-bounties
+gh workflow run open-competition-v2-beta1-release.yml --ref <candidate-branch> \
+  -f run_real_proof_fork_rehearsal=true \
+  -f run_live_sepolia_rehearsal=false
+```
+
+`scripts/check_open_competition_v2_prover_backend.py` returns exact readiness
+codes. `V2_PROVER_NETWORK_KEY_MISSING` means the secret is absent;
+`V2_PROVER_RUNNER_LACKS_NETWORK` means the release runner was not built with
+network support; and `V2_PROVER_MEMORY_INSUFFICIENT` prevents a CPU backend
+from silently attempting a proof system beyond its documented capacity.
 
 The live Base Sepolia rehearsal is a protected default-branch workflow. Its
 protected preparation step uses `BASE_KEEPER_PRIVATE_KEY`, derives test-only

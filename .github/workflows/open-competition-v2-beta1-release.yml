@@ -56,6 +56,7 @@ jobs:
             --fuzz-runs 10000 -vv
           python -m unittest \
             scripts.test_build_open_competition_v2_beta1_release \
+            scripts.test_check_open_competition_v2_prover_backend \
             scripts.test_prepare_open_competition_v2_metric_fixture \
             scripts.test_run_open_competition_v2_mainnet_fork_replay \
             scripts.test_open_competition_v2_proof_rehearsal \
@@ -130,7 +131,7 @@ jobs:
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
     needs: deterministic-release
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
@@ -152,12 +153,14 @@ jobs:
           CARGO_BUILD_JOBS: "4"
         run: |
           set -euo pipefail
-          cargo build --locked --release -p public-vector-metric-v1-script
+          cargo build --locked --release -p public-vector-metric-v1-script --features network
           mkdir -p "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner"
           install -m 0755 \
             "$CARGO_TARGET_DIR/release/public-vector-metric-v1-script" \
             "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner/public-vector-metric-v1-script"
           cd "$GITHUB_WORKSPACE/target/open-competition-v2-prover-runner"
+          ./public-vector-metric-v1-script --capabilities | tee capabilities.json
+          python -c 'import json; value=json.load(open("capabilities.json")); assert value["backends"] == ["cpu", "network"]'
           sha256sum public-vector-metric-v1-script > public-vector-metric-v1-script.sha256
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -205,15 +208,11 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  generate-real-proof:
+  generate-real-groth16-proof:
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
     needs: [prepare-real-proof-fork, build-proof-runner]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        proof: [groth16_first, plonk_best_a, plonk_best_b]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -246,6 +245,90 @@ jobs:
         env:
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/open-competition-v2-prover-runner/public-vector-metric-v1-script
           RAYON_NUM_THREADS: "2"
+          SP1_PROVER: cpu
+        run: >-
+          python scripts/generate_open_competition_v2_proof.py
+          --bundle target/open-competition-v2-mainnet-plan.json
+          --prepared-dir target/open-competition-v2-proof-prepared
+          --proof-name groth16_first
+          --output target/open-competition-v2-proof-evidence/groth16_first.json
+          --log-dir target/open-competition-v2-proof-logs/groth16_first
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: open-competition-v2-beta1-proof-groth16_first-${{ github.sha }}
+          path: |
+            target/open-competition-v2-proof-evidence/groth16_first.json
+            target/open-competition-v2-proof-logs/groth16_first/*.log
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-plonk-backend:
+    if: github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal)
+    needs: build-proof-runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta1-prover-runner-${{ github.sha }}
+          path: target/open-competition-v2-prover-runner
+      - name: Verify network-capable PLONK backend
+        env:
+          NETWORK_PRIVATE_KEY: ${{ secrets.SP1_NETWORK_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          chmod 0755 target/open-competition-v2-prover-runner/public-vector-metric-v1-script
+          python scripts/check_open_competition_v2_prover_backend.py \
+            --proof-system plonk --backend network \
+            --runner target/open-competition-v2-prover-runner/public-vector-metric-v1-script \
+            --output target/open-competition-v2-plonk-backend-readiness.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: open-competition-v2-beta1-plonk-backend-readiness-${{ github.sha }}
+          path: target/open-competition-v2-plonk-backend-readiness.json
+          if-no-files-found: error
+          retention-days: 90
+
+  generate-real-plonk-proof:
+    if: github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal)
+    needs: [prepare-real-proof-fork, build-proof-runner, verify-plonk-backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        proof: [plonk_best_a, plonk_best_b]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta1-real-proof-inputs-${{ github.sha }}
+          path: target
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta1-prover-runner-${{ github.sha }}
+          path: target/open-competition-v2-prover-runner
+      - name: Verify exact runner and install helper dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -r scripts/requirements-wallet.txt
+          cd target/open-competition-v2-prover-runner
+          sha256sum -c public-vector-metric-v1-script.sha256
+          chmod 0755 public-vector-metric-v1-script
+      - name: Generate and self-verify one network PLONK proof
+        env:
+          NETWORK_PRIVATE_KEY: ${{ secrets.SP1_NETWORK_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/open-competition-v2-prover-runner/public-vector-metric-v1-script
+          SP1_PROVER: network
         run: >-
           python scripts/generate_open_competition_v2_proof.py
           --bundle target/open-competition-v2-mainnet-plan.json
@@ -264,8 +347,8 @@ jobs:
           retention-days: 90
 
   real-proof-fork-rehearsal:
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
-    needs: [prepare-real-proof-fork, generate-real-proof]
+    if: github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal)
+    needs: [prepare-real-proof-fork, generate-real-groth16-proof, generate-real-plonk-proof]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -352,7 +435,7 @@ jobs:
 
   generate-live-sepolia-proof:
     if: github.event_name == 'workflow_dispatch' && inputs.run_live_sepolia_rehearsal && github.ref == 'refs/heads/main'
-    needs: [prepare-live-sepolia, build-proof-runner]
+    needs: [prepare-live-sepolia, build-proof-runner, verify-plonk-backend]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -379,7 +462,8 @@ jobs:
           cd target/open-competition-v2-prover-runner
           sha256sum -c public-vector-metric-v1-script.sha256
           chmod 0755 public-vector-metric-v1-script
-      - name: Configure bounded proof memory
+      - name: Configure bounded Groth16 proof memory
+        if: matrix.proof == 'groth16_first'
         run: |
           set -euo pipefail
           sudo fallocate -l 12G /mnt/open-competition-v2.swap
@@ -389,8 +473,10 @@ jobs:
           free -h
       - name: Generate and self-verify one exact Sepolia proof
         env:
+          NETWORK_PRIVATE_KEY: ${{ secrets.SP1_NETWORK_PRIVATE_KEY }}
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/open-competition-v2-prover-runner/public-vector-metric-v1-script
           RAYON_NUM_THREADS: "2"
+          SP1_PROVER: ${{ startsWith(matrix.proof, 'plonk_') && 'network' || 'cpu' }}
         run: >-
           python scripts/generate_open_competition_v2_proof.py
           --bundle target/open-competition-v2-sepolia-plan.json
