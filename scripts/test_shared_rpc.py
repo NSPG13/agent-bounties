@@ -4,9 +4,16 @@
 from __future__ import annotations
 
 import io
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
+
+# Allow `python -m unittest scripts.test_shared_rpc` and direct file runs from repo root.
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
 
 from _shared.rpc import (
     BASE_CHAIN_ID,
@@ -16,6 +23,7 @@ from _shared.rpc import (
     _validate_chain,
     rpc,
     rpc_failover,
+    select_working_base_rpc,
 )
 
 
@@ -253,6 +261,46 @@ class RpcTest(unittest.TestCase):
                     endpoints=["https://a.local", "https://b.local"],
                     max_retries=1,
                 )
+
+    def test_select_working_returns_fallback_not_failed_preferred(self) -> None:
+        """When preferred fails/429s, selection returns the endpoint that passed."""
+
+        class Fail429:
+            def getcode(self):
+                return 429
+
+            def read(self):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def mock_fn(req, **_kwargs):
+            url = getattr(req, "full_url", str(req))
+            if "preferred.fail" in url:
+                return Fail429()
+            return io.BytesIO(b'{"result":"0x2105"}')
+
+        with patch("_shared.rpc.urlopen", side_effect=mock_fn), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            selected = select_working_base_rpc(
+                preferred="https://preferred.fail",
+                endpoints=["https://preferred.fail", "https://fallback.ok"],
+                max_retries=1,
+            )
+            # Follow-up read must use the selected fallback, not the preferred URL.
+            result = rpc_failover(
+                "eth_blockNumber",
+                [],
+                endpoints=[selected],
+                max_retries=1,
+            )
+        self.assertEqual(selected, "https://fallback.ok")
+        self.assertEqual(result, "0x2105")
 
 
 if __name__ == "__main__":

@@ -13,20 +13,12 @@ import subprocess
 import time
 from typing import Any
 
-from _shared.rpc import BASE_RPC_ENDPOINTS, rpc, rpc_failover
+from _shared.rpc import rpc, select_working_base_rpc
 
 
 def public_base_rpc(preferred: str | None = None) -> str:
-    """Validate Base chain ID 8453 via ordered HTTPS failover before reads."""
-    preferred = (preferred or "").strip()
-    endpoints: list[str] = []
-    if preferred.startswith("https://"):
-        endpoints.append(preferred)
-    for endpoint in BASE_RPC_ENDPOINTS:
-        if endpoint not in endpoints:
-            endpoints.append(endpoint)
-    rpc_failover("eth_chainId", [], endpoints=endpoints)
-    return preferred if preferred.startswith("https://") else endpoints[0]
+    """Return the chain-valid HTTPS Base endpoint that passed validation."""
+    return select_working_base_rpc(preferred=(preferred or "").strip() or None)
 
 
 def free_port() -> int:
