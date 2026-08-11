@@ -1381,6 +1381,7 @@ def main(argv: list[str] | None = None, request: HttpRequest = default_http_requ
             plan.issue_number is not None for plan in eligible
         ),
         "planned_create_count": sum(plan.issue_number is None for plan in eligible),
+        "covered_record_count": len(eligible),
         "covered_record_count_after_successful_reconciliation": len(eligible),
         "excluded_historical_terminal_count": len(excluded),
         "coverage_percent": 100.0,
