@@ -12,7 +12,14 @@ def rpc(url: str, method: str, params: list[Any], request_id: int = 1) -> Any:
     payload = json.dumps(
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
     ).encode("utf-8")
-    request = Request(url, data=payload, headers={"content-type": "application/json"})
+    request = Request(
+        url,
+        data=payload,
+        headers={
+            "content-type": "application/json",
+            "user-agent": "agent-bounties-release-tooling/1",
+        },
+    )
     try:
         with urlopen(request, timeout=30) as response:
             body = json.load(response)

@@ -1,0 +1,78 @@
+name: Open Competition V2 metric release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/open-competition-v2-metric-release.yml"
+      - "crates/competition-metric-core/**"
+      - "programs/public-vector-metric-v1/**"
+      - "scripts/verify-open-competition-v2-metric-release.py"
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-build:
+    name: Isolated SP1 build ${{ matrix.builder }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [a, b]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned SP1 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L https://sp1.succinct.xyz | bash
+          "$HOME/.sp1/bin/sp1up" -v 6.1.0
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+      - name: Build and execute public vector guest
+        working-directory: programs/public-vector-metric-v1
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          set -euo pipefail
+          {
+            cargo prove --version
+            cargo run --locked --release -p public-vector-metric-v1-script -- \
+              fixtures/golden-v1.json execute
+          } | tee "evidence-${{ matrix.builder }}.jsonl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metric-evidence-${{ matrix.builder }}
+          path: programs/public-vector-metric-v1/evidence-${{ matrix.builder }}.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  compare:
+    name: Compare isolated release evidence
+    needs: isolated-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: metric-evidence-*
+          path: evidence
+          merge-multiple: true
+      - name: Verify exact build and journal bindings
+        run: |
+          set -euo pipefail
+          python scripts/verify-open-competition-v2-metric-release.py \
+            --first evidence/evidence-a.jsonl \
+            --second evidence/evidence-b.jsonl \
+            --output release/public-vector-metric-v1.json
+      - name: Run adversarial metric corpus
+        run: cargo test --locked -p competition-metric-core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-vector-metric-v1-reviewed-release
+          path: release/public-vector-metric-v1.json
+          if-no-files-found: error
+          retention-days: 90

@@ -91,6 +91,15 @@ See [Open Competition V1](docs/open-competition-v1.md), its
 [release runbook](docs/open-competition-v1-release-runbook.md), and its
 [threat model](docs/security/open-competition-v1-threat-model.md).
 
+Open Competition V2 Beta1 is the opt-in successor for permissionless,
+unlimited-entry deterministic work verified by pinned SP1 Groth16 or PLONK
+programs. It supports pooled Base USDC, first-proven and best-score winners,
+BYO proofs, x402 proving, permissionless keepers, and contributor-directed
+refunds. It is implemented but not deployed: creation and hosted proving stay
+disabled until reproducible-build, adversarial, contract, Sepolia, fork, and
+review gates pass. See [the Beta1 protocol and agent order](docs/open-competition-v2-beta1.md)
+and [threat model](docs/threat-model-open-competition-v2-beta1.md).
+
 ## Objective Coordination
 
 Broader outcomes can coordinate a provider, canonical paid bounties, and

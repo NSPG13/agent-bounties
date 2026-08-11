@@ -65,6 +65,10 @@ pub enum X402Error {
     InvalidSignature,
     #[error("x402 funding challenge is invalid: {0}")]
     InvalidChallenge(&'static str),
+    #[error("proof SLA does not fit before the competition deadline")]
+    ProofSlaMiss,
+    #[error("proof quote arithmetic exceeds supported bounds")]
+    QuoteOverflow,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -168,6 +172,212 @@ pub struct ValidatedFundingAuthorization {
     pub v: u8,
     pub r: String,
     pub s: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedExactAuthorization {
+    pub payer: String,
+    pub recipient: String,
+    pub amount: u64,
+    pub valid_before: u64,
+    pub nonce: String,
+    pub v: u8,
+    pub r: String,
+    pub s: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompetitionWinnerMode {
+    FirstProven,
+    BestScore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProofBrokerQuoteRequest {
+    pub network: String,
+    pub competition_contract: String,
+    pub solver: String,
+    pub solver_nonce: String,
+    pub artifact_hash: String,
+    pub proof_system: String,
+    pub gross_prize: String,
+    pub proof_fee_quote: String,
+    pub relay_fee_quote: String,
+    pub winner_mode: CompetitionWinnerMode,
+    pub proof_deadline: u64,
+    pub measured_proof_sla_seconds: u64,
+    pub now_unix_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProofBrokerQuote {
+    pub schema_version: String,
+    pub quote_id: String,
+    pub network: String,
+    pub competition_contract: String,
+    pub solver: String,
+    pub solver_nonce: String,
+    pub artifact_hash: String,
+    pub proof_system: String,
+    pub gross_prize: String,
+    pub proof_fee_quote: String,
+    pub relay_fee_quote: String,
+    pub net_prize_if_win: String,
+    pub maximum_charge: String,
+    pub profitable_if_win: bool,
+    pub winner_mode: CompetitionWinnerMode,
+    pub competition_risk: String,
+    pub quote_expiration: u64,
+    pub proof_sla_deadline: u64,
+    pub evidence_boundary: String,
+}
+
+pub fn quote_proof_broker_job(
+    request: ProofBrokerQuoteRequest,
+) -> Result<ProofBrokerQuote, X402Error> {
+    let competition = normalize_address(&request.competition_contract)?;
+    let solver = normalize_address(&request.solver)?;
+    let artifact_hash = normalize_word(&request.artifact_hash)?;
+    if !matches!(request.proof_system.as_str(), "groth16" | "plonk") {
+        return Err(X402Error::InvalidChallenge("unsupported proof system"));
+    }
+    let gross = parse_u128(&request.gross_prize)?;
+    let proof_fee = parse_u128(&request.proof_fee_quote)?;
+    let relay_fee = parse_u128(&request.relay_fee_quote)?;
+    let maximum_charge = proof_fee
+        .checked_add(relay_fee)
+        .ok_or(X402Error::QuoteOverflow)?;
+    let gross_signed = i128::try_from(gross).map_err(|_| X402Error::QuoteOverflow)?;
+    let charge_signed = i128::try_from(maximum_charge).map_err(|_| X402Error::QuoteOverflow)?;
+    let net = gross_signed
+        .checked_sub(charge_signed)
+        .ok_or(X402Error::QuoteOverflow)?;
+    let proof_sla_deadline = request
+        .now_unix_seconds
+        .checked_add(request.measured_proof_sla_seconds)
+        .ok_or(X402Error::QuoteOverflow)?;
+    if request.measured_proof_sla_seconds == 0 || proof_sla_deadline >= request.proof_deadline {
+        return Err(X402Error::ProofSlaMiss);
+    }
+    let quote_expiration = request.now_unix_seconds.saturating_add(300).min(
+        request
+            .proof_deadline
+            .saturating_sub(request.measured_proof_sla_seconds),
+    );
+    if quote_expiration <= request.now_unix_seconds {
+        return Err(X402Error::ProofSlaMiss);
+    }
+    let quote_material = json!({
+        "network": request.network,
+        "competition_contract": competition,
+        "solver": solver,
+        "solver_nonce": request.solver_nonce,
+        "artifact_hash": artifact_hash,
+        "proof_system": request.proof_system,
+        "gross_prize": gross.to_string(),
+        "proof_fee_quote": proof_fee.to_string(),
+        "relay_fee_quote": relay_fee.to_string(),
+        "maximum_charge": maximum_charge.to_string(),
+        "winner_mode": request.winner_mode,
+        "proof_deadline": request.proof_deadline,
+        "quote_expiration": quote_expiration,
+    });
+    let encoded = serde_json::to_vec(&quote_material).map_err(|_| X402Error::InvalidJson)?;
+    let competition_risk = match request.winner_mode {
+        CompetitionWinnerMode::FirstProven => {
+            "Another qualifying proof can settle first before this transaction confirms."
+        }
+        CompetitionWinnerMode::BestScore => {
+            "A later qualifying entry can win with a better score; positive net prize is not guaranteed profit."
+        }
+    };
+    Ok(ProofBrokerQuote {
+        schema_version: "agent-bounties/open-competition-v2-proof-quote-v1".to_string(),
+        quote_id: format!("{:#x}", keccak256(encoded)),
+        network: request.network,
+        competition_contract: competition,
+        solver,
+        solver_nonce: request.solver_nonce,
+        artifact_hash,
+        proof_system: request.proof_system,
+        gross_prize: gross.to_string(),
+        proof_fee_quote: proof_fee.to_string(),
+        relay_fee_quote: relay_fee.to_string(),
+        net_prize_if_win: net.to_string(),
+        maximum_charge: maximum_charge.to_string(),
+        profitable_if_win: net > 0,
+        winner_mode: request.winner_mode,
+        competition_risk: competition_risk.to_string(),
+        quote_expiration,
+        proof_sla_deadline,
+        evidence_boundary: "This quote is not a proof, entry, settlement, refund, or guarantee of winning. A paid broker failure is refundable; losing a valid competition entry is not a broker failure.".to_string(),
+    })
+}
+
+pub fn base_usdc_exact_service_challenge(
+    resource_url: impl Into<String>,
+    network: impl Into<String>,
+    asset: &str,
+    broker_payment_address: &str,
+    quote: &ProofBrokerQuote,
+) -> Result<PaymentRequired, X402Error> {
+    let network = network.into();
+    let asset = normalize_address(asset)?;
+    let pay_to = normalize_address(broker_payment_address)?;
+    if quote.maximum_charge == "0" {
+        return Err(X402Error::InvalidChallenge(
+            "proof service charge must be positive",
+        ));
+    }
+    let eip712_name = match network.as_str() {
+        "eip155:8453" => "USD Coin",
+        "eip155:84532" => "USDC",
+        _ => {
+            return Err(X402Error::InvalidChallenge(
+                "network must be Base mainnet or Base Sepolia",
+            ));
+        }
+    };
+    let mut extra = BTreeMap::new();
+    extra.insert("assetTransferMethod".to_string(), json!("eip3009"));
+    extra.insert("name".to_string(), json!(eip712_name));
+    extra.insert("version".to_string(), json!("2"));
+    extra.insert("quoteId".to_string(), json!(quote.quote_id));
+    extra.insert("competition".to_string(), json!(quote.competition_contract));
+    extra.insert("solver".to_string(), json!(quote.solver));
+    extra.insert("artifactHash".to_string(), json!(quote.artifact_hash));
+    extra.insert("proofSystem".to_string(), json!(quote.proof_system));
+    extra.insert("maximumCharge".to_string(), json!(quote.maximum_charge));
+    extra.insert("refundSlaSeconds".to_string(), json!(1800));
+    Ok(PaymentRequired {
+        x402_version: X402_VERSION,
+        error: Some("Pay the exact bounded proof-service quote.".to_string()),
+        resource: ResourceInfo {
+            url: resource_url.into(),
+            description: Some(
+                "Generate and optionally relay one SP1 competition proof.".to_string(),
+            ),
+            mime_type: Some("application/json".to_string()),
+            service_name: Some("Agent Bounties V2 Proof Broker".to_string()),
+            tags: Some(vec![
+                "sp1".to_string(),
+                "proof".to_string(),
+                "x402".to_string(),
+            ]),
+            icon_url: None,
+        },
+        accepts: vec![PaymentRequirements {
+            scheme: STANDARD_EXACT_SCHEME.to_string(),
+            network,
+            asset,
+            amount: quote.maximum_charge.clone(),
+            pay_to,
+            max_timeout_seconds: 300,
+            extra,
+        }],
+        extensions: None,
+    })
 }
 
 pub fn base_usdc_funding_challenge(
@@ -367,6 +577,98 @@ pub fn validate_funding_payload(
     })
 }
 
+pub fn validate_exact_service_payload(
+    payload: &PaymentPayload,
+    required: &PaymentRequired,
+    now_unix_seconds: u64,
+) -> Result<ValidatedExactAuthorization, X402Error> {
+    if payload.x402_version != X402_VERSION {
+        return Err(X402Error::UnsupportedVersion(payload.x402_version));
+    }
+    if required.x402_version != X402_VERSION {
+        return Err(X402Error::UnsupportedVersion(required.x402_version));
+    }
+    if required.accepts.len() != 1 {
+        return Err(X402Error::AmbiguousRequirements);
+    }
+    let expected = &required.accepts[0];
+    if expected.scheme != STANDARD_EXACT_SCHEME || payload.accepted != *expected {
+        return Err(X402Error::RequirementsMismatch);
+    }
+    if payload
+        .resource
+        .as_ref()
+        .is_some_and(|resource| resource != &required.resource)
+    {
+        return Err(X402Error::ResourceMismatch);
+    }
+    if payload.extensions != required.extensions {
+        return Err(X402Error::ExtensionsMismatch);
+    }
+
+    let authorization_payload: Eip3009Payload = serde_json::from_value(payload.payload.clone())
+        .map_err(|_| X402Error::InvalidAuthorization)?;
+    let payer = normalize_address(&authorization_payload.authorization.from)?;
+    let recipient = normalize_address(&authorization_payload.authorization.to)?;
+    if recipient != normalize_address(&expected.pay_to)? {
+        return Err(X402Error::RecipientMismatch);
+    }
+    let amount = parse_positive_u64(&authorization_payload.authorization.value)?;
+    if amount != parse_positive_u64(&expected.amount)? {
+        return Err(X402Error::AmountMismatch);
+    }
+    let valid_after = authorization_payload
+        .authorization
+        .valid_after
+        .parse::<u64>()
+        .map_err(|_| X402Error::InvalidValidAfter)?;
+    if valid_after != 0 {
+        return Err(X402Error::InvalidValidAfter);
+    }
+    let valid_before = authorization_payload
+        .authorization
+        .valid_before
+        .parse::<u64>()
+        .map_err(|_| X402Error::AuthorizationExpired)?;
+    if valid_before < now_unix_seconds.saturating_add(MIN_SETTLEMENT_BUFFER_SECONDS) {
+        return Err(X402Error::AuthorizationExpired);
+    }
+    if valid_before
+        > now_unix_seconds
+            .saturating_add(expected.max_timeout_seconds)
+            .saturating_add(MAX_CLOCK_SKEW_SECONDS)
+    {
+        return Err(X402Error::AuthorizationTooLong);
+    }
+    let nonce = normalize_word(&authorization_payload.authorization.nonce)
+        .map_err(|_| X402Error::InvalidNonce)?;
+    let (v, r, s) = split_signature(&authorization_payload.signature)?;
+    let digest = eip3009_authorization_digest(expected, &authorization_payload.authorization)?;
+    let recovered = authorization_payload
+        .signature
+        .parse::<Signature>()
+        .map_err(|_| X402Error::InvalidSignature)?
+        .recover_address_from_prehash(&digest)
+        .map_err(|_| X402Error::InvalidSignature)?;
+    if recovered
+        != payer
+            .parse::<Address>()
+            .map_err(|_| X402Error::InvalidSignature)?
+    {
+        return Err(X402Error::InvalidSignature);
+    }
+    Ok(ValidatedExactAuthorization {
+        payer,
+        recipient,
+        amount,
+        valid_before,
+        nonce,
+        v,
+        r,
+        s,
+    })
+}
+
 fn eip3009_authorization_digest(
     requirements: &PaymentRequirements,
     authorization: &Eip3009Authorization,
@@ -496,6 +798,10 @@ fn parse_positive_u64(value: &str) -> Result<u64, X402Error> {
     Ok(parsed)
 }
 
+fn parse_u128(value: &str) -> Result<u128, X402Error> {
+    value.parse::<u128>().map_err(|_| X402Error::InvalidAmount)
+}
+
 fn split_signature(signature: &str) -> Result<(u8, String, String), X402Error> {
     let raw = signature
         .strip_prefix("0x")
@@ -570,6 +876,33 @@ mod tests {
             }),
             extensions: required.extensions.clone(),
         }
+    }
+
+    fn proof_service_challenge() -> PaymentRequired {
+        let quote = quote_proof_broker_job(ProofBrokerQuoteRequest {
+            network: "eip155:8453".to_string(),
+            competition_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            solver: FUNDER.to_string(),
+            solver_nonce: "7".to_string(),
+            artifact_hash: format!("0x{}", "bb".repeat(32)),
+            proof_system: "groth16".to_string(),
+            gross_prize: "2000000".to_string(),
+            proof_fee_quote: "140000".to_string(),
+            relay_fee_quote: "10000".to_string(),
+            winner_mode: CompetitionWinnerMode::FirstProven,
+            proof_deadline: 2_000,
+            measured_proof_sla_seconds: 60,
+            now_unix_seconds: 1_000,
+        })
+        .unwrap();
+        base_usdc_exact_service_challenge(
+            "https://api.example/v1/base/open-competition-v2-beta1/proof-jobs/1/payment",
+            "eip155:8453",
+            ASSET,
+            BOUNTY,
+            &quote,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -669,6 +1002,19 @@ mod tests {
         assert!(matches!(validated.v, 27 | 28));
         assert_eq!(validated.r.len(), 66);
         assert_eq!(validated.s.len(), 66);
+    }
+
+    #[test]
+    fn validates_standard_exact_proof_service_authorization() {
+        let required = proof_service_challenge();
+        assert_eq!(required.accepts[0].scheme, STANDARD_EXACT_SCHEME);
+        assert_eq!(required.accepts[0].extra["name"], "USD Coin");
+        let validated =
+            validate_exact_service_payload(&payment(&required), &required, 1_000).unwrap();
+        assert_eq!(validated.payer, FUNDER);
+        assert_eq!(validated.recipient, BOUNTY);
+        assert_eq!(validated.amount, 150_000);
+        assert_eq!(validated.nonce, NONCE);
     }
 
     #[test]
@@ -800,6 +1146,49 @@ mod tests {
         assert_eq!(
             decode_payment_signature_header(&"A".repeat(MAX_HEADER_LENGTH + 1)).unwrap_err(),
             X402Error::HeaderTooLarge
+        );
+    }
+
+    #[test]
+    fn proof_quote_binds_solver_artifact_cost_and_competition_risk() {
+        let request = ProofBrokerQuoteRequest {
+            network: "eip155:8453".to_string(),
+            competition_contract: BOUNTY.to_string(),
+            solver: FUNDER.to_string(),
+            solver_nonce: "7".to_string(),
+            artifact_hash: NONCE.to_string(),
+            proof_system: "groth16".to_string(),
+            gross_prize: "2000000".to_string(),
+            proof_fee_quote: "100000".to_string(),
+            relay_fee_quote: "10000".to_string(),
+            winner_mode: CompetitionWinnerMode::BestScore,
+            proof_deadline: 2_000,
+            measured_proof_sla_seconds: 60,
+            now_unix_seconds: 1_000,
+        };
+        let quote = quote_proof_broker_job(request.clone()).unwrap();
+        assert_eq!(quote.net_prize_if_win, "1890000");
+        assert_eq!(quote.maximum_charge, "110000");
+        assert!(quote.profitable_if_win);
+        assert_eq!(quote.quote_expiration, 1_300);
+        assert!(quote.competition_risk.contains("not guaranteed profit"));
+
+        let challenge = base_usdc_exact_service_challenge(
+            "https://api.example/v1/base/open-competition-v2/proof-jobs",
+            "eip155:8453",
+            ASSET,
+            FUNDER,
+            &quote,
+        )
+        .unwrap();
+        assert_eq!(challenge.accepts[0].scheme, STANDARD_EXACT_SCHEME);
+        assert_eq!(challenge.accepts[0].amount, "110000");
+
+        let mut late = request;
+        late.proof_deadline = 1_059;
+        assert_eq!(
+            quote_proof_broker_job(late).unwrap_err(),
+            X402Error::ProofSlaMiss
         );
     }
 }

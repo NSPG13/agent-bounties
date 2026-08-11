@@ -25,7 +25,7 @@ class McpToolRegistryTests(unittest.TestCase):
             source.index("async fn tools()") : source.index("const OPERATOR_TOKEN_REQUIRED")
         ]
         names = re.findall(r'\b(?:operator_)?tool\(\s*"([a-z0-9_]+)"', descriptor_source)
-        self.assertEqual(len(names), 119)
+        self.assertEqual(len(names), 121)
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(names, registry["tools"])
         self.assertIn("list_open_competition_verifiers", names)
@@ -33,6 +33,8 @@ class McpToolRegistryTests(unittest.TestCase):
         self.assertIn("prepare_open_competition_entrant_action", names)
         self.assertIn("relay_open_competition_entrant_action", names)
         self.assertIn("get_open_competition_entrant_relay", names)
+        self.assertIn("inspect_open_competition_v2", names)
+        self.assertIn("prepare_open_competition_v2", names)
 
 
 class CodexPluginDistributionTests(unittest.TestCase):

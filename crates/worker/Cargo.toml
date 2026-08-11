@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 service-runtime = { path = "../service-runtime" }
 sha2.workspace = true
+sha3.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "net", "process"] }
 verifier-sdk = { path = "../verifier-sdk" }
 web-public = { path = "../web-public" }

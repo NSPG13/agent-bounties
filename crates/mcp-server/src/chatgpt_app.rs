@@ -1,15 +1,17 @@
 use super::{
     agent_native_claim, compile_objective_with_cloud_agent, fund_bounty_with_x402, get_paid_status,
-    get_x402_relay_status, list_autonomous_bounties, list_autonomous_verification_jobs,
-    list_opportunities, list_unfunded_bounties, mcp_base_url_from_env,
-    plan_autonomous_attestation_settlement, plan_autonomous_bounty_claim,
+    get_x402_relay_status, inspect_open_competition_v2, list_autonomous_bounties,
+    list_autonomous_verification_jobs, list_opportunities, list_unfunded_bounties,
+    mcp_base_url_from_env, plan_autonomous_attestation_settlement, plan_autonomous_bounty_claim,
     plan_autonomous_module_settlement, plan_autonomous_verification_attestation,
-    prepare_agent_to_earn, prepare_autonomous_bounty_submission, proxy_hosted_json,
-    public_base_url_from_env, publish_autonomous_submission_evidence, publish_unfunded_bounty,
-    submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs, AutonomousBountyFeedArgs,
-    AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs, GetX402RelayStatusArgs,
-    ListUnfundedBountiesArgs, ObservedInterface, ObservedProtocolEra, OpportunityListArgs,
-    PaidStatusArgs, PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
+    prepare_agent_to_earn, prepare_autonomous_bounty_submission, prepare_open_competition_v2,
+    proxy_hosted_json, public_base_url_from_env, publish_autonomous_submission_evidence,
+    publish_unfunded_bounty, submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs,
+    AutonomousBountyFeedArgs, AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs,
+    GetX402RelayStatusArgs, ListUnfundedBountiesArgs, OpenCompetitionV2InspectArgs,
+    OpenCompetitionV2MutationArgs, ObservedInterface, ObservedProtocolEra, OpportunityListArgs,
+    PaidStatusArgs,
+    PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
     PlanAutonomousModuleSettlementArgs, PlanAutonomousVerificationAttestationArgs,
     PrepareAgentToEarnInput, PrepareAutonomousBountySubmissionArgs, PrepareBountyPostArgs,
     PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
@@ -65,6 +67,10 @@ const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "create_share_bundle",
 ];
 const CHATGPT_COMPATIBILITY_TOOL_NAMES: &[&str] = &["list_autonomous_bounties"];
+const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] = &[
+    "inspect_open_competition_v2",
+    "prepare_open_competition_v2",
+];
 #[derive(Debug, Clone, Deserialize)]
 struct ChatgptFeedArgs {
     network: Option<String>,
@@ -1234,6 +1240,15 @@ fn mcp_tool_descriptor_for_mode(
     }
     if matches!(
         descriptor.name,
+        "inspect_open_competition_v2" | "prepare_open_competition_v2"
+    ) {
+        value.insert(
+            "outputSchema".to_string(),
+            open_competition_v2_output_schema(),
+        );
+    }
+    if matches!(
+        descriptor.name,
         "prepare_bounty_action" | "get_bounty_action_status"
     ) {
         value.insert("outputSchema".to_string(), bounty_action_output_schema());
@@ -1304,6 +1319,8 @@ fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
         "submit_unfunded_bounty_solution" => (false, true, true, true),
         "publish_autonomous_submission_evidence" => (false, true, true, true),
         "add_bounty_comment" => (false, true, true, false),
+        "inspect_open_competition_v2" => (true, false, false, true),
+        "prepare_open_competition_v2" => (true, false, true, true),
         _ => (true, false, false, true),
     }
 }
@@ -1494,6 +1511,28 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
             return Ok(tool_result(
                 without_action_details(legacy_result(result)?),
                 "Refreshed the hosted action against indexed canonical events. A transaction hash or receipt alone never confirms the action; only BountySettled proves solver payment.",
+                false,
+            ));
+        }
+        "inspect_open_competition_v2" => {
+            let args: OpenCompetitionV2InspectArgs =
+                serde_json::from_value(arguments).map_err(|error| {
+                    format!("invalid inspect_open_competition_v2 arguments: {error}")
+                })?;
+            return Ok(tool_result(
+                legacy_result(inspect_open_competition_v2(State(state), Json(args)).await.0)?,
+                "Returned indexed Open Competition V2 Beta1 state. Only CompetitionSettledV2 proves solver payment.",
+                false,
+            ));
+        }
+        "prepare_open_competition_v2" => {
+            let args: OpenCompetitionV2MutationArgs =
+                serde_json::from_value(arguments).map_err(|error| {
+                    format!("invalid prepare_open_competition_v2 arguments: {error}")
+                })?;
+            return Ok(tool_result(
+                legacy_result(prepare_open_competition_v2(State(state), Json(args)).await.0)?,
+                "Prepared one exact Open Competition V2 Beta1 action. A plan, signature, proof, or transaction hash is not canonical settlement evidence.",
                 false,
             ));
         }
@@ -1726,6 +1765,7 @@ fn core_mcp_tool_names() -> Vec<&'static str> {
     CHATGPT_ADVERTISED_TOOL_NAMES
         .iter()
         .chain(CHATGPT_COMPATIBILITY_TOOL_NAMES)
+        .chain(CORE_MCP_EXTENSION_TOOL_NAMES)
         .copied()
         .collect()
 }
@@ -1733,6 +1773,7 @@ fn core_mcp_tool_names() -> Vec<&'static str> {
 fn chatgpt_tool_is_callable(name: &str) -> bool {
     CHATGPT_ADVERTISED_TOOL_NAMES.contains(&name)
         || CHATGPT_COMPATIBILITY_TOOL_NAMES.contains(&name)
+        || CORE_MCP_EXTENSION_TOOL_NAMES.contains(&name)
 }
 
 fn validate_public_review_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
@@ -3610,6 +3651,21 @@ fn autonomous_bounty_feed_output_schema() -> Value {
     })
 }
 
+fn open_competition_v2_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "schema_version": {"type": "string"},
+            "status": {"type": "string"},
+            "state": {"type": "string"},
+            "error_code": {"type": "string"},
+            "next_action": {"type": "string"},
+            "evidence_boundary": {"type": "string"}
+        },
+        "additionalProperties": true
+    })
+}
+
 fn bounty_action_output_schema() -> Value {
     json!({
         "type": "object",
@@ -3901,6 +3957,8 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
         "prepare_bounty_post" => "Use this when ChatGPT has conversationally gathered complete bounty terms, generated a unique image in the poster's own ChatGPT account, shown that exact image to the poster, and received explicit approval of the image and terms. Pass the approved file as bounty_image with its exact generation prompt and alt text. Agent Bounties stores that file and prepares a reviewable wallet handoff; it does not generate an image, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
+        "inspect_open_competition_v2" => "Use this when an agent needs V2 profiles, inventory, events, or proof-job state. Read them in that order; only indexed canonical events prove lifecycle state, and only CompetitionSettledV2 proves solver payment.",
+        "prepare_open_competition_v2" => "Use this when an agent is ready for one V2 transition. Run in order: validate, create, fund, quote, pay, prepare proof, authorize relay, then finalize or refund. Poll a 202 response; submit only exact returned calls.",
         _ => fallback,
     }
 }
@@ -3933,6 +3991,8 @@ fn tool_title(name: &str) -> &'static str {
         "submit_unfunded_bounty_solution" => "Submit unfunded bounty solution",
         "prepare_bounty_post" => "Prepare bounty for wallet review",
         "list_autonomous_bounties" => "List canonical bounties",
+        "inspect_open_competition_v2" => "Inspect V2 competition",
+        "prepare_open_competition_v2" => "Prepare V2 action",
         _ => "Agent Bounties tool",
     }
 }
