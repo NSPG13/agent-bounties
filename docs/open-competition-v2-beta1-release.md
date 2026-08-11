@@ -22,6 +22,10 @@ documents at least 64 GB for PLONK and GitHub's standard public runner has only
 before submitting a proof request unless `SP1_NETWORK_PRIVATE_KEY` is present
 and the runner was compiled with the pinned SDK's `network` feature.
 An installer-byte change fails closed and requires a separately reviewed pin.
+The host runner uses Rust 1.96.1 because the locked SP1 network-client graph
+requires Rust 1.94.1 or newer. This host compiler does not compile the guest:
+the checksum-pinned SP1 toolchain continues to produce the release ELF and
+vkey.
 
 The Prover Network signer must be separately funded with sufficient PROVE.
 Neither a configured secret nor a submitted provider request is proof evidence.
