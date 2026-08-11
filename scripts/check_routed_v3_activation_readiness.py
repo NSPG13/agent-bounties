@@ -9,21 +9,14 @@ from pathlib import Path
 
 import activate_routed_v3_dynamic as dynamic
 import activate_routed_v3_replacements as activation
-from _shared.rpc import BASE_RPC_ENDPOINTS, rpc_failover
+from _shared.rpc import select_working_base_rpc
 
 
 def _prefer_failover_base_rpc(rpc_url: str) -> str:
-    """Prefer HTTPS Base endpoints with chain-id validation before inventory reads."""
+    """Return the chain-valid HTTPS endpoint that actually passed validation."""
     preferred = (rpc_url or "").strip()
-    endpoints: list[str] = []
-    if preferred.startswith("https://"):
-        endpoints.append(preferred)
-    for endpoint in BASE_RPC_ENDPOINTS:
-        if endpoint not in endpoints:
-            endpoints.append(endpoint)
     try:
-        rpc_failover("eth_chainId", [], endpoints=endpoints, max_retries=2)
-        return preferred if preferred.startswith("https://") else endpoints[0]
+        return select_working_base_rpc(preferred=preferred or None, max_retries=2)
     except Exception:
         return preferred
 

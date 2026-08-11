@@ -142,25 +142,89 @@ def _validate_chain(endpoint: str) -> int | None:
     return None
 
 
+def _ordered_https_endpoints(
+    preferred: str | None = None,
+    endpoints: Sequence[str] | None = None,
+) -> list[str]:
+    """Build ordered HTTPS endpoint list with optional preferred first."""
+    ordered: list[str] = []
+    pref = (preferred or "").strip()
+    if pref.lower().startswith("https://"):
+        ordered.append(pref)
+    for endpoint in endpoints if endpoints is not None else BASE_RPC_ENDPOINTS:
+        ep = str(endpoint).strip()
+        if ep and ep not in ordered:
+            ordered.append(ep)
+    return ordered
+
+
+def select_working_base_rpc(
+    preferred: str | None = None,
+    endpoints: Sequence[str] | None = None,
+    max_retries: int = MAX_RETRIES,
+) -> str:
+    """Return the first chain-valid HTTPS Base endpoint that accepts eth_chainId.
+
+    Probes preferred first, then the shared ordered list. Does not return a
+    preferred URL that failed validation merely because it is HTTPS.
+    """
+    ordered = _ordered_https_endpoints(preferred, endpoints)
+    if not ordered:
+        raise RuntimeError("RPC failover exhausted: no endpoints configured")
+
+    last_error: Exception | None = None
+    for endpoint in ordered:
+        if not str(endpoint).lower().startswith("https://"):
+            last_error = RuntimeError(
+                f"refusing non-HTTPS endpoint {_redact_endpoint(str(endpoint))}"
+            )
+            continue
+        for attempt in range(1, max_retries + 1):
+            try:
+                chain_id = _validate_chain(endpoint)
+                if chain_id == BASE_CHAIN_ID:
+                    return endpoint
+                last_error = RuntimeError(
+                    f"wrong chain on {_redact_endpoint(endpoint)}"
+                )
+                break
+            except TransportError as error:
+                last_error = error
+                if not error.retryable or attempt >= max_retries:
+                    break
+                time.sleep(_backoff(attempt))
+            except Exception as error:  # noqa: BLE001
+                last_error = error
+                break
+
+    raise RuntimeError(
+        f"RPC failover exhausted for eth_chainId: {last_error}"
+    ) from last_error
+
+
 def rpc_failover(
     method: str,
     params: list[Any],
     request_id: int = 1,
     endpoints: Sequence[str] | None = None,
     max_retries: int = MAX_RETRIES,
+    *,
+    preferred: str | None = None,
 ) -> Any:
     """JSON-RPC with ordered HTTPS failover, chain-id gate, and bounded retries.
 
     Retries only transport failures, HTTP 429, and HTTP 5xx. JSON-RPC execution
     errors propagate immediately. Endpoint credentials are never logged.
+
+    When ``preferred`` is set it is tried first; the working endpoint for each
+    call is the one that passes chain validation for that attempt.
     """
-    if endpoints is None:
-        endpoints = BASE_RPC_ENDPOINTS
-    if not endpoints:
+    ordered = _ordered_https_endpoints(preferred, endpoints)
+    if not ordered:
         raise RuntimeError("RPC failover exhausted: no endpoints configured")
 
     last_error: Exception | None = None
-    for endpoint in endpoints:
+    for endpoint in ordered:
         if not str(endpoint).lower().startswith("https://"):
             last_error = RuntimeError(
                 f"refusing non-HTTPS endpoint {_redact_endpoint(str(endpoint))}"

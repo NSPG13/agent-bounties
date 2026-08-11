@@ -20,6 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+# Inventory automation shares the Base RPC failover transport with readiness checks.
+from _shared.rpc import rpc_failover, select_working_base_rpc
+
 NON_ACTIONABLE_LABELS = frozenset(
     {
         "duplicate",
@@ -179,7 +186,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Exit with code 2 when count is below threshold",
     )
+    p.add_argument(
+        "--rpc-url",
+        default=os.environ.get("BASE_MAINNET_RPC_URL", ""),
+        help="Preferred Base HTTPS RPC (failover via shared transport; default BASE_MAINNET_RPC_URL)",
+    )
+    p.add_argument(
+        "--probe-rpc",
+        action="store_true",
+        help="Resolve a working Base RPC via shared failover before counting inventory",
+    )
     return p.parse_args(argv)
+
+
+def resolve_inventory_base_rpc(preferred: str | None = None) -> str:
+    """Canonical inventory chain-read endpoint selection (shared failover transport)."""
+    return select_working_base_rpc(preferred=(preferred or "").strip() or None)
+
+
+def probe_inventory_rpc(preferred: str | None = None) -> dict[str, Any]:
+    """Select a working Base endpoint and confirm eth_blockNumber via failover."""
+    endpoint = resolve_inventory_base_rpc(preferred)
+    block = rpc_failover(
+        "eth_blockNumber",
+        [],
+        preferred=endpoint,
+        endpoints=[endpoint],
+        max_retries=2,
+    )
+    return {
+        "base_rpc_endpoint": endpoint,
+        "eth_blockNumber": block,
+        "chain_id": 8453,
+    }
 
 
 def label_names(issue: dict[str, Any]) -> set[str]:
@@ -548,6 +587,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.meta_replenishment_target < args.meta_threshold:
         raise SystemExit("meta-replenishment-target must be >= meta-threshold")
 
+    rpc_probe: dict[str, Any] | None = None
+    if args.probe_rpc or (args.rpc_url and not args.fixture):
+        # Live inventory runs share the failover transport; fixtures stay offline.
+        try:
+            rpc_probe = probe_inventory_rpc(args.rpc_url or None)
+        except Exception as error:  # noqa: BLE001 — surface RPC path failures fail-closed
+            if args.probe_rpc:
+                raise SystemExit(f"inventory base RPC probe failed: {error}") from error
+            rpc_probe = {"base_rpc_endpoint": None, "error": str(error)[:500]}
+
     if args.fixture:
         issues = load_fixture(args.fixture)
     else:
@@ -563,6 +612,8 @@ def main(argv: list[str] | None = None) -> int:
         load_claimable_report(args.claimable_report),
     )
     payload = asdict(report)
+    if rpc_probe is not None:
+        payload["base_rpc_probe"] = rpc_probe
     md = report.to_markdown()
 
     print(md)
