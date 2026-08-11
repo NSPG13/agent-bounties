@@ -62,7 +62,7 @@ jobs:
             scripts.test_run_open_competition_v2_sepolia_rehearsal -v
       - name: Build safe-block release plans
         env:
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_ARCHIVE_RPC_URL || 'https://mainnet.base.org' }}
           BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
         run: |
           set -euo pipefail
@@ -76,7 +76,7 @@ jobs:
             --output target/open-competition-v2-sepolia-plan.json
       - name: Replay exact mainnet deployment transaction
         env:
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_ARCHIVE_RPC_URL || 'https://mainnet.base.org' }}
         run: >-
           python scripts/run_open_competition_v2_mainnet_fork_replay.py
           --bundle target/open-competition-v2-mainnet-plan.json
@@ -120,7 +120,7 @@ jobs:
           retention-days: 90
 
   real-proof-fork-rehearsal:
-    if: github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal)
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal))
     needs: deterministic-release
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -143,8 +143,10 @@ jobs:
           key: sp1-6.1-public-vector-${{ runner.os }}-${{ hashFiles('programs/public-vector-metric-v1/**', 'crates/competition-metric-core/**') }}
       - name: Build release bundle and run real-proof fork rehearsal
         env:
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_ARCHIVE_RPC_URL || 'https://mainnet.base.org' }}
           CARGO_TARGET_DIR: ${{ github.workspace }}/target/sp1-public-vector
+          CARGO_BUILD_JOBS: "2"
+          RAYON_NUM_THREADS: "2"
         run: |
           set -euo pipefail
           forge build --root contracts/base-escrow --force --ast
