@@ -2128,10 +2128,194 @@ pub struct AutonomousFactorySafeObservation {
     pub evidence_boundary: String,
 }
 
+/// Ordered list of HTTPS Base RPC endpoints for failover.
+/// Comma-separated env var values are split and each URL is trimmed.
+/// The first endpoint that validates chain ID 8453 is used.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BaseRpcUrlConfig {
-    pub base_sepolia: Option<String>,
-    pub base_mainnet: Option<String>,
+    pub base_sepolia: Vec<String>,
+    pub base_mainnet: Vec<String>,
+}
+
+/// Retry configuration for Base RPC failover transport.
+#[derive(Debug, Clone, Copy)]
+pub struct FailoverRetryConfig {
+    /// Maximum HTTP-level retries per endpoint (429, 5xx only)
+    pub max_retries: u32,
+    /// Base backoff in milliseconds (doubles each attempt)
+    pub base_backoff_ms: u64,
+    /// Maximum backoff in milliseconds
+    pub max_backoff_ms: u64,
+}
+
+impl Default for FailoverRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_backoff_ms: 200,
+            max_backoff_ms: 5_000,
+        }
+    }
+}
+
+impl FailoverRetryConfig {
+    pub fn deterministic_backoff_ms(&self, attempt: u32) -> u64 {
+        let base = self.base_backoff_ms * (1u64 << attempt.min(10));
+        base.min(self.max_backoff_ms)
+    }
+}
+
+/// A JSON-RPC transport that tries each endpoint in order, validates chain ID,
+/// and retries only on bounded transport errors, HTTP 429, and HTTP 5xx.
+/// Never retries confirmed JSON-RPC execution errors or logs credentials.
+#[derive(Debug, Clone)]
+pub struct FailoverJsonRpcTransport {
+    inner: ReqwestJsonRpcTransport,
+    endpoints: Vec<String>,
+    expected_chain_id: u64,
+    retry: FailoverRetryConfig,
+}
+
+impl FailoverJsonRpcTransport {
+    pub fn new(endpoints: Vec<String>, expected_chain_id: u64, retry: FailoverRetryConfig) -> Self {
+        Self {
+            inner: ReqwestJsonRpcTransport::default(),
+            endpoints,
+            expected_chain_id,
+            retry,
+        }
+    }
+
+    /// Returns the first endpoint that validates the expected chain ID.
+    /// Caches validation so chain ID is only checked once per transport instance.
+    async fn discover_valid_endpoint(&self) -> Result<&str, ChainBaseError> {
+        for endpoint in &self.endpoints {
+            match self
+                .inner
+                .post_json_value(
+                    endpoint,
+                    &serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "method": "eth_chainId",
+                        "params": []
+                    }),
+                )
+                .await
+            {
+                Ok(value) => {
+                    let chain_id_hex = value
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if let Ok(chain_id) = u64::from_str_radix(chain_id_hex.trim_start_matches("0x"), 16)
+                    {
+                        if chain_id == self.expected_chain_id {
+                            return Ok(endpoint.as_str());
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        Err(ChainBaseError::MissingRpcUrl {
+            network: format!("chain-id-{}", self.expected_chain_id),
+            env_var: String::new(),
+        })
+    }
+
+    fn is_retriable_http_status(status: u16) -> bool {
+        status == 429 || (500..=599).contains(&status)
+    }
+
+    fn classify_error(error: &ChainBaseError) -> bool {
+        matches!(
+            error,
+            ChainBaseError::RpcTransport(_)
+                | ChainBaseError::RpcHttpStatus(_)
+                | ChainBaseError::InvalidRpcResponse(_)
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl JsonRpcTransport for FailoverJsonRpcTransport {
+    async fn post_json_value(
+        &self,
+        _rpc_url: &str,
+        request: &Value,
+    ) -> Result<Value, ChainBaseError> {
+        let endpoint = self.discover_valid_endpoint().await?;
+        let mut last_error: Option<ChainBaseError> = None;
+
+        for attempt in 0..=self.retry.max_retries {
+            if attempt > 0 {
+                let delay = self.retry.deterministic_backoff_ms(attempt - 1);
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+
+            match self.inner.post_json_value(endpoint, request).await {
+                Ok(value) => return Ok(value),
+                Err(error) => {
+                    let retriable = match &error {
+                        ChainBaseError::RpcTransport(_) => true,
+                        ChainBaseError::RpcHttpStatus(status) => {
+                            Self::is_retriable_http_status(*status)
+                        }
+                        ChainBaseError::InvalidRpcResponse(_) => true,
+                        // Never retry confirmed JSON-RPC execution errors
+                        _ => false,
+                    };
+                    if !retriable || attempt == self.retry.max_retries {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            ChainBaseError::RpcTransport("failover exhausted all retries".to_string())
+        }))
+    }
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let endpoint = self.discover_valid_endpoint().await?;
+        let mut last_error: Option<ChainBaseError> = None;
+
+        for attempt in 0..=self.retry.max_retries {
+            if attempt > 0 {
+                let delay = self.retry.deterministic_backoff_ms(attempt - 1);
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+
+            match self.inner.post_json_values(endpoint, requests).await {
+                Ok(values) => return Ok(values),
+                Err(error) => {
+                    let retriable = match &error {
+                        ChainBaseError::RpcTransport(_) => true,
+                        ChainBaseError::RpcHttpStatus(status) => {
+                            Self::is_retriable_http_status(*status)
+                        }
+                        ChainBaseError::InvalidRpcResponse(_) => true,
+                        _ => false,
+                    };
+                    if !retriable || attempt == self.retry.max_retries {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            ChainBaseError::RpcTransport("failover exhausted all retries".to_string())
+        }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2412,27 +2596,70 @@ pub fn base_network_descriptor(network: &str) -> Result<BaseNetworkDescriptor, C
 impl BaseRpcUrlConfig {
     pub fn from_env() -> Self {
         Self {
-            base_sepolia: non_empty_env("BASE_SEPOLIA_RPC_URL"),
-            base_mainnet: non_empty_env("BASE_MAINNET_RPC_URL"),
+            base_sepolia: split_env_list("BASE_SEPOLIA_RPC_URL"),
+            base_mainnet: split_env_list("BASE_MAINNET_RPC_URL"),
         }
     }
 
+    /// Resolve the list of all configured endpoints for a network.
+    /// Returns the descriptor and a non-empty list of trimmed URLs.
+    pub fn resolve_endpoint_list(
+        &self,
+        network: &str,
+    ) -> Result<(BaseNetworkDescriptor, Vec<String>), ChainBaseError> {
+        let descriptor = base_network_descriptor(network)?;
+        let urls = match descriptor.rpc_url_env.as_str() {
+            "BASE_SEPOLIA_RPC_URL" => self.base_sepolia.clone(),
+            "BASE_MAINNET_RPC_URL" => self.base_mainnet.clone(),
+            _ => Vec::new(),
+        };
+        if urls.is_empty() {
+            return Err(ChainBaseError::MissingRpcUrl {
+                network: descriptor.name.clone(),
+                env_var: descriptor.rpc_url_env.clone(),
+            });
+        }
+        Ok((descriptor, urls))
+    }
+
+    /// Resolve the first configured endpoint for a network (backward-compatible).
     pub fn resolve(
         &self,
         network: &str,
     ) -> Result<(BaseNetworkDescriptor, String), ChainBaseError> {
-        let descriptor = base_network_descriptor(network)?;
-        let url = match descriptor.rpc_url_env.as_str() {
-            "BASE_SEPOLIA_RPC_URL" => self.base_sepolia.clone(),
-            "BASE_MAINNET_RPC_URL" => self.base_mainnet.clone(),
-            _ => None,
-        }
-        .ok_or_else(|| ChainBaseError::MissingRpcUrl {
-            network: descriptor.name.clone(),
-            env_var: descriptor.rpc_url_env.clone(),
-        })?;
-        Ok((descriptor, url))
+        let (descriptor, urls) = self.resolve_endpoint_list(network)?;
+        Ok((descriptor, urls.into_iter().next().unwrap()))
     }
+
+    /// Build a failover transport from the configured endpoint list for the given
+    /// Base network. Validates chain ID before using any endpoint and retries only
+    /// on bounded transport errors, HTTP 429, and HTTP 5xx.
+    pub fn failover_transport(
+        &self,
+        network: &str,
+    ) -> Result<FailoverJsonRpcTransport, ChainBaseError> {
+        let (descriptor, urls) = self.resolve_endpoint_list(network)?;
+        Ok(FailoverJsonRpcTransport::new(
+            urls,
+            descriptor.chain_id,
+            FailoverRetryConfig::default(),
+        ))
+    }
+}
+
+/// Split a comma-separated environment variable into a list of trimmed non-empty URLs.
+fn split_env_list(env_var: &str) -> Vec<String> {
+    std::env::var(env_var)
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn parse_eth_get_logs_response(value: Value) -> Result<EthGetLogsResponse, ChainBaseError> {
@@ -9135,8 +9362,8 @@ mod tests {
     #[test]
     fn base_rpc_url_config_resolves_only_configured_networks() {
         let config = BaseRpcUrlConfig {
-            base_sepolia: Some("https://sepolia.example".to_string()),
-            base_mainnet: None,
+            base_sepolia: vec!["https://sepolia.example".to_string()],
+            base_mainnet: Vec::new(),
         };
 
         let (network, url) = config.resolve("base-sepolia").unwrap();
@@ -9149,6 +9376,33 @@ mod tests {
                 env_var: "BASE_MAINNET_RPC_URL".to_string()
             }
         );
+    }
+
+    #[test]
+    fn base_rpc_url_config_supports_comma_separated_endpoint_lists() {
+        let config = BaseRpcUrlConfig {
+            base_sepolia: Vec::new(),
+            base_mainnet: vec![
+                "https://rpc1.example".to_string(),
+                "https://rpc2.example".to_string(),
+            ],
+        };
+        let (network, urls) = config.resolve_endpoint_list("base-mainnet").unwrap();
+        assert_eq!(network.name, "Base");
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "https://rpc1.example");
+        assert_eq!(urls[1], "https://rpc2.example");
+    }
+
+    #[test]
+    fn failover_retry_config_deterministic_backoff() {
+        let retry = FailoverRetryConfig::default();
+        assert_eq!(retry.deterministic_backoff_ms(0), 200);
+        assert_eq!(retry.deterministic_backoff_ms(1), 400);
+        assert_eq!(retry.deterministic_backoff_ms(2), 800);
+        assert_eq!(retry.deterministic_backoff_ms(3), 1600);
+        // Should cap at max_backoff_ms
+        assert_eq!(retry.deterministic_backoff_ms(10), 5000);
     }
 
     #[test]
