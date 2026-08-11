@@ -34,14 +34,14 @@ class Sp1AdvisoryQuarantineTests(unittest.TestCase):
     def test_current_quarantine_is_exact(self) -> None:
         report = MODULE.verify(self.root)
         self.assertEqual(report["status"], "quarantined_unresolved_high")
-        self.assertFalse(report["mainnet_creation_enabled"])
+        self.assertFalse(report["mainnet_signing_allowed"])
 
     def test_mainnet_or_resolved_high_fails_closed(self) -> None:
         path = self.root / "deployments/open-competition-v2-beta1-release-gates.json"
         gates = json.loads(path.read_text(encoding="utf-8"))
-        gates["mainnet_creation_enabled"] = True
+        gates["gates"]["critical_and_high_findings_resolved"] = True
         path.write_text(json.dumps(gates), encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "blocks V2 mainnet"):
+        with self.assertRaisesRegex(ValueError, "unresolved high-severity"):
             MODULE.verify(self.root)
 
     def test_version_checksum_or_extra_lock_fails_closed(self) -> None:

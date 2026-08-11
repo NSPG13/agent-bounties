@@ -59,8 +59,23 @@ The source of truth is
 `deployments/open-competition-v2-beta1-release-gates.json`. A gate is true only
 when its same-named `evidence` entry records an exact source commit, evidence
 hash, and public HTTPS artifact. The release builder rejects an unevidenced
-true Boolean. `mainnet_creation_enabled` stays false until every gate is true
-and the separate review approves activation.
+true Boolean. Gates are staged so Beta launch does not depend on evidence that
+can exist only after launch:
+
+1. **Prelaunch** gates authorize only signing the immutable factory deployment.
+   They include repository, reproducibility, static-analysis, Base Sepolia,
+   mainnet-fork, resolved high-severity findings, and deployment-review evidence.
+2. **Public Beta** gates additionally require both 0.25 USDC mainnet canaries,
+   exact canary accounting, production-indexer agreement, and a separately
+   announced activation review before public creation is enabled.
+3. **Graduation** gates additionally require independent reviews, external paid
+   loops, proof-job accounting, positive realized solver economics, unassisted
+   usability, and a separately announced graduation review before V2 can become
+   the default.
+
+No external paid loop or graduation criterion is required to deploy or open the
+Beta. No canary or post-launch observation can be claimed before its canonical
+evidence exists.
 
 ## Local Commands
 
@@ -152,8 +167,9 @@ same risk hash. The factory never holds USDC or token allowances.
 ## Mainnet Boundary
 
 The repository does not contain an unreviewed mainnet broadcast job. That is
-deliberate. After every gate is evidenced, add a separately announced,
-protected-environment deployment change that requires the exact release
-commit, bundle hash, independent reviewer, and explicit release
-acknowledgement. Only a safe-block `CompetitionSettledV2` event proves solver
-payment.
+deliberate. After every prelaunch gate is evidenced, add a separately announced,
+protected-environment deployment change that requires the exact release commit,
+bundle hash, deployment-review evidence, and explicit risk acknowledgement.
+Run and reconcile both mainnet canaries before enabling public Beta creation.
+Graduation remains a later, separately reviewed state. Only a safe-block
+`CompetitionSettledV2` event proves solver payment.

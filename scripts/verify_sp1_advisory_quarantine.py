@@ -56,8 +56,6 @@ def verify(root: Path) -> dict[str, object]:
 
     gates_path = root / "deployments/open-competition-v2-beta1-release-gates.json"
     gates = json.loads(gates_path.read_text(encoding="utf-8"))
-    if gates.get("mainnet_creation_enabled") is not False:
-        raise ValueError(f"{ADVISORY} blocks V2 mainnet creation")
     if gates.get("gates", {}).get("critical_and_high_findings_resolved") is not False:
         raise ValueError(f"{ADVISORY} must remain an unresolved high-severity finding")
     if gates.get("evidence", {}).get("critical_and_high_findings_resolved") is not None:
@@ -69,7 +67,7 @@ def verify(root: Path) -> dict[str, object]:
         "sp1_commit": SP1_COMMIT,
         "package": f"p3-challenger@{PACKAGE_VERSION}",
         "lockfiles": sorted(str(path).replace("\\", "/") for path in observed_locks),
-        "mainnet_creation_enabled": False,
+        "mainnet_signing_allowed": False,
     }
 
 

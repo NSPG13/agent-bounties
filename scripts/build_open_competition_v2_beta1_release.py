@@ -46,7 +46,7 @@ SOLC_IMAGE = (
 )
 MIN_DEPLOYER_ETH_WEI = 100_000_000_000_000
 CANARY_BUDGET = 525_000
-REQUIRED_GATE_NAMES = (
+PRELAUNCH_GATE_NAMES = (
     "repository_gate_complete",
     "isolated_sp1_builds_match",
     "static_analysis_triaged",
@@ -55,17 +55,29 @@ REQUIRED_GATE_NAMES = (
     "base_sepolia_pooled_funding_complete",
     "base_sepolia_expiry_refunds_complete",
     "base_mainnet_fork_exact_replay_complete",
+    "critical_and_high_findings_resolved",
+    "mainnet_deployment_review_approved",
+)
+PUBLIC_BETA_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
+    "mainnet_groth16_canary_complete",
+    "mainnet_plonk_canary_complete",
+    "mainnet_canary_accounting_reconciled",
+    "production_indexers_agree",
+    "public_beta_activation_review_approved",
+)
+GRADUATION_GATE_NAMES = PUBLIC_BETA_GATE_NAMES + (
     "independent_reviews_complete",
     "independent_bytecode_and_vkey_reproduction_complete",
     "adversarial_review_regression_merged",
-    "critical_and_high_findings_resolved",
     "external_first_proven_paid_loop_complete",
     "external_best_score_paid_loop_complete",
     "external_poster_paid_loop_complete",
     "proof_job_accounting_reconciled",
     "external_positive_net_winner_complete",
     "unassisted_agent_instructions_complete",
+    "graduation_review_approved",
 )
+REQUIRED_GATE_NAMES = GRADUATION_GATE_NAMES
 NETWORKS = {
     "base-mainnet": {
         "chain_id": 8453,
@@ -188,7 +200,7 @@ def load_gates(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta1-release-gates-v1":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta1-release-gates-v2":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
         raise ValueError("release gate inventory mismatch")
@@ -215,9 +227,13 @@ def load_gates(path: Path) -> dict[str, Any]:
             raise ValueError(f"release gate evidence requires an HTTPS URI: {name}")
     expected_risk = keccak256(value["beta_risk_preimage"].encode())
     value["beta_risk_hash"] = expected_risk
-    value["all_gates_complete"] = all(gates.values())
-    if value.get("mainnet_creation_enabled") is True and not value["all_gates_complete"]:
-        raise ValueError("mainnet creation cannot be enabled with incomplete R4 gates")
+    value["prelaunch_complete"] = all(gates[name] for name in PRELAUNCH_GATE_NAMES)
+    value["public_beta_launch_complete"] = all(
+        gates[name] for name in PUBLIC_BETA_GATE_NAMES
+    )
+    value["graduation_complete"] = all(
+        gates[name] for name in GRADUATION_GATE_NAMES
+    )
     return value
 
 
@@ -364,7 +380,15 @@ def build_bundle(
             "acknowledgement_required": True,
         },
         "release_gates": gates,
-        "deployment_state": "blocked" if not gates["all_gates_complete"] else "reviewed_ready_to_sign",
+        "deployment_state": (
+            "graduated_default_ready"
+            if gates["graduation_complete"]
+            else "public_beta_ready"
+            if gates["public_beta_launch_complete"]
+            else "reviewed_ready_to_sign"
+            if gates["prelaunch_complete"]
+            else "blocked"
+        ),
         "deployer": deployer,
         "preflight_safe_block": preflight,
         "settlement_token": network["usdc"],
@@ -393,8 +417,9 @@ def build_bundle(
             "funding_source": "any external Base USDC wallet that acknowledges the exact Beta1 risk hash",
         },
         "activation": {
-            "public_creation_enabled": gates["all_gates_complete"] and gates["mainnet_creation_enabled"],
-            "mainnet_signing_allowed": gates["all_gates_complete"],
+            "mainnet_signing_allowed": gates["prelaunch_complete"],
+            "public_creation_enabled": gates["public_beta_launch_complete"],
+            "default_protocol_enabled": gates["graduation_complete"],
             "synthetic_canaries_excluded_from_adoption_metrics": True,
         },
         "evidence_boundary": "This is unsigned release planning evidence. It is not deployment, proof acceptance, settlement, refund, payment, review, or public activation evidence.",
