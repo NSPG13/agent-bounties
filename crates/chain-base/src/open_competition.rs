@@ -1,267 +1,112 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+//! Open Competition contract bindings – V1 and V2 (SP1 proof backend).
 
-pub const OPEN_COMPETITION_READINESS_SCHEMA: &str =
-    "agent-bounties/open-competition-v1-readiness-v1";
-pub const OPEN_COMPETITION_ACTION_SCHEMA: &str = "agent-bounties/open-competition-v1-action-v1";
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OpenCompetitionReadinessEvidence {
-    pub canonical_factory_configured: bool,
-    pub canonical_bounty_runtime: bool,
-    pub valid_terms: bool,
-    pub fully_funded: bool,
-    pub deterministic_verifier_ready: bool,
-    pub competition_open: bool,
-    pub entry_capacity_available: bool,
-    pub safe_commit_reveal_timing: bool,
-    pub gas_sponsorship_available: bool,
-    pub relay_support_available: bool,
-    pub r4_release_evidence_complete: bool,
-    pub monitoring_active: bool,
+/// Represents the on-chain state of an Open Competition bounty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCompetitionV1 {
+    pub bounty_id: [u8; 32],
+    pub reward_usdc: u64,
+    pub solver: Option<[u8; 20]>,
+    pub finalized: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenCompetitionReadinessCheck {
-    pub name: String,
-    pub ready: bool,
-    pub observed: String,
-    pub required: String,
+impl OpenCompetitionV1 {
+    /// Enforce V1 invariants. Returns `Err` with a description if any invariant is violated.
+    pub fn check_invariants(&self) -> Result<(), &'static str> {
+        if self.reward_usdc == 0 {
+            return Err("V1: reward_usdc must be non-zero");
+        }
+        if self.finalized && self.solver.is_none() {
+            return Err("V1: finalized competition must have a solver");
+        }
+        Ok(())
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenCompetitionReadinessReport {
-    pub schema_version: String,
-    pub protocol_version: String,
-    pub competition_mode: String,
-    pub ready_to_compete: bool,
-    pub checks: Vec<OpenCompetitionReadinessCheck>,
-    pub blockers: Vec<String>,
-    pub first_means: String,
-    pub ordering_authority: String,
-    pub decision_authority: String,
-    pub payment_authority: String,
-    pub next_action: String,
-    pub fairness_statement: String,
-    pub evidence_boundary: String,
+/// SP1 proof receipt attached to a V2 competition settlement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sp1ProofReceipt {
+    /// The SP1 program verification key hash (32 bytes).
+    pub vk_hash: [u8; 32],
+    /// The public values committed by the guest program.
+    pub public_values: Vec<u8>,
+    /// The raw STARK/SNARK proof bytes as produced by SP1.
+    pub proof_bytes: Vec<u8>,
 }
 
-pub fn open_competition_readiness(
-    evidence: &OpenCompetitionReadinessEvidence,
-) -> OpenCompetitionReadinessReport {
-    let checks = vec![
-        check(
-            "canonical_factory",
-            evidence.canonical_factory_configured,
-            evidence.canonical_factory_configured,
-            "exact immutable open-competition factory address and runtime hash configured",
-        ),
-        check(
-            "canonical_bounty_runtime",
-            evidence.canonical_bounty_runtime,
-            evidence.canonical_bounty_runtime,
-            "bounty is a canonical clone with the expected implementation runtime",
-        ),
-        check(
-            "valid_terms",
-            evidence.valid_terms,
-            evidence.valid_terms,
-            "content-addressed first-valid terms match every onchain commitment",
-        ),
-        check(
-            "fully_funded",
-            evidence.fully_funded,
-            evidence.fully_funded,
-            "solver and verifier rewards are fully escrowed before entry",
-        ),
-        check(
-            "deterministic_verifier",
-            evidence.deterministic_verifier_ready,
-            evidence.deterministic_verifier_ready,
-            "the exact deterministic verifier is executable and matches the published benchmark",
-        ),
-        check(
-            "competition_open",
-            evidence.competition_open,
-            evidence.competition_open,
-            "competition status is open and its deadline has not elapsed",
-        ),
-        check(
-            "entry_capacity",
-            evidence.entry_capacity_available,
-            evidence.entry_capacity_available,
-            "the bounded entry cap has not been reached and this wallet has not entered",
-        ),
-        check(
-            "commit_reveal_timing",
-            evidence.safe_commit_reveal_timing,
-            evidence.safe_commit_reveal_timing,
-            "at least one later block and enough reveal time remain",
-        ),
-        check(
-            "gas_sponsorship",
-            evidence.gas_sponsorship_available,
-            evidence.gas_sponsorship_available,
-            "bounded gas sponsorship is available for the advertised agent-native path",
-        ),
-        check(
-            "relay_support",
-            evidence.relay_support_available,
-            evidence.relay_support_available,
-            "commit and reveal relay paths are configured with commitment-bound authorization",
-        ),
-        check(
-            "r4_release_evidence",
-            evidence.r4_release_evidence_complete,
-            evidence.r4_release_evidence_complete,
-            "independent review, Sepolia rehearsal, exact bytecode, mainnet fork, and signing approval complete",
-        ),
-        check(
-            "dependency_monitoring",
-            evidence.monitoring_active,
-            evidence.monitoring_active,
-            "runtime, verifier, timing, capacity, relay, and settlement monitors are active",
-        ),
-    ];
-    let blockers = checks
-        .iter()
-        .filter(|item| !item.ready)
-        .map(|item| item.name.clone())
-        .collect::<Vec<_>>();
-    let ready_to_compete = blockers.is_empty();
-    OpenCompetitionReadinessReport {
-        schema_version: OPEN_COMPETITION_READINESS_SCHEMA.to_string(),
-        protocol_version: "open-competition-v1".to_string(),
-        competition_mode: "first_valid_submission".to_string(),
-        ready_to_compete,
-        checks,
-        blockers,
-        first_means: "The lowest confirmed onchain submission_sequence whose committed deterministic verification returned pass. It does not prove who discovered the answer first offchain.".to_string(),
-        ordering_authority: "Base transaction ordering plus the immutable bounty submission_sequence; verifier response time is not an ordering input.".to_string(),
-        decision_authority: "The immutable deterministic verifier module evaluates each reveal atomically. No platform operator or AI response chooses the winner.".to_string(),
-        payment_authority: "Only the exact canonical competition contract settles escrow; confirmed canonical BountySettled is payment evidence.".to_string(),
-        next_action: if ready_to_compete {
-            "Call prepare_open_competition_commit. Keep the salt private, then reveal from the same wallet in a later block.".to_string()
+impl Sp1ProofReceipt {
+    /// Basic structural invariants – does not perform cryptographic verification.
+    pub fn check_invariants(&self) -> Result<(), &'static str> {
+        if self.vk_hash == [0u8; 32] {
+            return Err("SP1: vk_hash must not be the zero hash");
+        }
+        if self.public_values.is_empty() {
+            return Err("SP1: public_values must not be empty");
+        }
+        if self.proof_bytes.is_empty() {
+            return Err("SP1: proof_bytes must not be empty");
+        }
+        Ok(())
+    }
+}
+
+/// Represents the on-chain state of an Open Competition V2 bounty backed by an
+/// SP1 proof of correct evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCompetitionV2 {
+    pub bounty_id: [u8; 32],
+    pub reward_usdc: u64,
+    pub solver: Option<[u8; 20]>,
+    pub finalized: bool,
+    /// SP1 proof receipt that must be present when the competition is finalized.
+    pub sp1_proof: Option<Sp1ProofReceipt>,
+    /// The evaluation score committed inside the SP1 proof public values.
+    pub committed_score: Option<u64>,
+}
+
+impl OpenCompetitionV2 {
+    /// Enforce all V2 contract invariants.
+    ///
+    /// Invariants:
+    /// 1. `reward_usdc` must be non-zero.
+    /// 2. A finalized competition must have a solver address.
+    /// 3. A finalized competition must have an attached SP1 proof receipt.
+    /// 4. The SP1 proof receipt must itself satisfy its own structural invariants.
+    /// 5. A finalized competition must have a committed score.
+    /// 6. An unfinalized competition must not have a solver.
+    pub fn check_invariants(&self) -> Result<(), &'static str> {
+        if self.reward_usdc == 0 {
+            return Err("V2: reward_usdc must be non-zero");
+        }
+
+        if self.finalized {
+            if self.solver.is_none() {
+                return Err("V2: finalized competition must have a solver");
+            }
+            match &self.sp1_proof {
+                None => return Err("V2: finalized competition must include an SP1 proof receipt"),
+                Some(receipt) => receipt.check_invariants()?,
+            }
+            if self.committed_score.is_none() {
+                return Err("V2: finalized competition must have a committed_score");
+            }
         } else {
-            "Do not commit or post a bond. Resolve every blocker and request fresh onchain readiness evidence.".to_string()
-        },
-        fairness_statement: "Commit/reveal raises copying cost but does not prove offchain discovery time, unrelated wallet ownership, or censorship resistance. One wallet is one protocol entry, not one person.".to_string(),
-        evidence_boundary: "A readiness report, commitment, reveal, verifier response, or transaction hash is not payment evidence. Only confirmed canonical BountySettled proves the winner was paid.".to_string(),
-    }
-}
+            if self.solver.is_some() {
+                return Err("V2: unfinalized competition must not have a solver");
+            }
+            if self.sp1_proof.is_some() {
+                return Err("V2: unfinalized competition must not have an SP1 proof");
+            }
+        }
 
-fn check(name: &str, ready: bool, observed: bool, required: &str) -> OpenCompetitionReadinessCheck {
-    OpenCompetitionReadinessCheck {
-        name: name.to_string(),
-        ready,
-        observed: observed.to_string(),
-        required: required.to_string(),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OpenCompetitionOperation {
-    PrepareOpenCompetitionCommit,
-    PrepareOpenCompetitionReveal,
-    GetOpenCompetitionStatus,
-    WithdrawOpenCompetitionBond,
-}
-
-impl OpenCompetitionOperation {
-    pub fn requires_new_entry_readiness(self) -> bool {
-        matches!(self, Self::PrepareOpenCompetitionCommit)
+        Ok(())
     }
 
-    pub fn requires_live_reveal_readiness(self) -> bool {
-        matches!(self, Self::PrepareOpenCompetitionReveal)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OpenCompetitionActionPlan {
-    pub schema_version: String,
-    pub protocol_version: String,
-    pub competition_mode: String,
-    pub operation: OpenCompetitionOperation,
-    pub allowed: bool,
-    pub target_contract: Option<String>,
-    pub function: Option<String>,
-    pub arguments: Value,
-    pub blocker: Option<String>,
-    pub next_action: String,
-    pub evidence_boundary: String,
-}
-
-pub fn plan_open_competition_action(
-    operation: OpenCompetitionOperation,
-    readiness: &OpenCompetitionReadinessReport,
-    target_contract: Option<String>,
-    function: Option<String>,
-    arguments: Value,
-) -> OpenCompetitionActionPlan {
-    let readiness_required = operation.requires_new_entry_readiness();
-    let target_present = target_contract
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
-    let function_present = function
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
-    let canonical_target_ready = [
-        "canonical_factory",
-        "canonical_bounty_runtime",
-        "valid_terms",
-    ]
-    .iter()
-    .all(|name| !readiness.blockers.iter().any(|blocker| blocker == name));
-    let live_reveal_ready = [
-        "deterministic_verifier",
-        "competition_open",
-        "commit_reveal_timing",
-    ]
-    .iter()
-    .all(|name| !readiness.blockers.iter().any(|blocker| blocker == name));
-    let allowed = canonical_target_ready
-        && (!readiness_required || readiness.ready_to_compete)
-        && (!operation.requires_live_reveal_readiness() || live_reveal_ready)
-        && target_present
-        && function_present;
-    let blocker = if !canonical_target_ready {
-        Some(
-            "canonical competition factory, bounty runtime, and terms are not verified".to_string(),
-        )
-    } else if readiness_required && !readiness.ready_to_compete {
-        Some(format!(
-            "open competition is not ready for a new entry: {}",
-            readiness.blockers.join(", ")
-        ))
-    } else if operation.requires_live_reveal_readiness() && !live_reveal_ready {
-        Some(
-            "committed reveal requires the pinned deterministic verifier, a live competition, and safe reveal timing"
-                .to_string(),
-        )
-    } else if !target_present || !function_present {
-        Some("canonical competition target and function are not configured".to_string())
-    } else {
-        None
-    };
-    OpenCompetitionActionPlan {
-        schema_version: OPEN_COMPETITION_ACTION_SCHEMA.to_string(),
-        protocol_version: "open-competition-v1".to_string(),
-        competition_mode: "first_valid_submission".to_string(),
-        operation,
-        allowed,
-        target_contract,
-        function,
-        arguments,
-        blocker,
-        next_action: if allowed {
-            "Validate the exact target, commitment or reveal preimage, wallet policy, and live state; then sign and broadcast through the configured wallet.".to_string()
-        } else {
-            "Do not sign or broadcast. Resolve the blocker and request a fresh plan.".to_string()
-        },
-        evidence_boundary: "This is an unsigned agent-native action plan. It is not an entry, reveal, verdict, settlement, or payment receipt.".to_string(),
+    /// Decode the committed score from the SP1 public values (first 8 bytes, little-endian).
+    /// Returns `None` if no proof is attached or the public values are too short.
+    pub fn decode_committed_score(&self) -> Option<u64> {
+        let receipt = self.sp1_proof.as_ref()?;
+        let bytes: [u8; 8] = receipt.public_values.get(..8)?.try_into().ok()?;
+        Some(u64::from_le_bytes(bytes))
     }
 }
 
@@ -269,100 +114,216 @@ pub fn plan_open_competition_action(
 mod tests {
     use super::*;
 
-    fn ready_evidence() -> OpenCompetitionReadinessEvidence {
-        OpenCompetitionReadinessEvidence {
-            canonical_factory_configured: true,
-            canonical_bounty_runtime: true,
-            valid_terms: true,
-            fully_funded: true,
-            deterministic_verifier_ready: true,
-            competition_open: true,
-            entry_capacity_available: true,
-            safe_commit_reveal_timing: true,
-            gas_sponsorship_available: true,
-            relay_support_available: true,
-            r4_release_evidence_complete: true,
-            monitoring_active: true,
+    fn dummy_vk() -> [u8; 32] {
+        let mut v = [0u8; 32];
+        v[0] = 0xab;
+        v
+    }
+
+    fn valid_receipt() -> Sp1ProofReceipt {
+        let mut public_values = vec![0u8; 8];
+        // encode score = 42
+        public_values[..8].copy_from_slice(&42u64.to_le_bytes());
+        Sp1ProofReceipt {
+            vk_hash: dummy_vk(),
+            public_values,
+            proof_bytes: vec![0xde, 0xad, 0xbe, 0xef],
         }
     }
 
-    #[test]
-    fn every_new_entry_dependency_fails_closed() {
-        let ready = ready_evidence();
-        assert!(open_competition_readiness(&ready).ready_to_compete);
-        for name in [
-            "canonical_factory",
-            "canonical_bounty_runtime",
-            "valid_terms",
-            "fully_funded",
-            "deterministic_verifier",
-            "competition_open",
-            "entry_capacity",
-            "commit_reveal_timing",
-            "gas_sponsorship",
-            "relay_support",
-            "r4_release_evidence",
-            "dependency_monitoring",
-        ] {
-            let mut evidence = ready.clone();
-            match name {
-                "canonical_factory" => evidence.canonical_factory_configured = false,
-                "canonical_bounty_runtime" => evidence.canonical_bounty_runtime = false,
-                "valid_terms" => evidence.valid_terms = false,
-                "fully_funded" => evidence.fully_funded = false,
-                "deterministic_verifier" => evidence.deterministic_verifier_ready = false,
-                "competition_open" => evidence.competition_open = false,
-                "entry_capacity" => evidence.entry_capacity_available = false,
-                "commit_reveal_timing" => evidence.safe_commit_reveal_timing = false,
-                "gas_sponsorship" => evidence.gas_sponsorship_available = false,
-                "relay_support" => evidence.relay_support_available = false,
-                "r4_release_evidence" => evidence.r4_release_evidence_complete = false,
-                "dependency_monitoring" => evidence.monitoring_active = false,
-                _ => unreachable!(),
-            }
-            let report = open_competition_readiness(&evidence);
-            assert!(!report.ready_to_compete, "{name} did not fail closed");
-            assert!(report.blockers.iter().any(|blocker| blocker == name));
+    fn valid_finalized_v2() -> OpenCompetitionV2 {
+        OpenCompetitionV2 {
+            bounty_id: [1u8; 32],
+            reward_usdc: 500,
+            solver: Some([0xaau8; 20]),
+            finalized: true,
+            sp1_proof: Some(valid_receipt()),
+            committed_score: Some(42),
         }
     }
 
+    // ── V1 tests ──────────────────────────────────────────────────────────────
+
     #[test]
-    fn recovery_actions_remain_plannable_after_new_entries_close() {
-        let mut evidence = OpenCompetitionReadinessEvidence::default();
-        evidence.canonical_factory_configured = true;
-        evidence.canonical_bounty_runtime = true;
-        evidence.valid_terms = true;
-        evidence.deterministic_verifier_ready = true;
-        evidence.competition_open = true;
-        evidence.safe_commit_reveal_timing = true;
-        let readiness = open_competition_readiness(&evidence);
-        let reveal = plan_open_competition_action(
-            OpenCompetitionOperation::PrepareOpenCompetitionReveal,
-            &readiness,
-            Some("0x1111111111111111111111111111111111111111".to_string()),
-            Some("revealSolution".to_string()),
-            Value::Null,
-        );
-        assert!(reveal.allowed);
+    fn v1_valid_open() {
+        let c = OpenCompetitionV1 {
+            bounty_id: [0u8; 32],
+            reward_usdc: 100,
+            solver: None,
+            finalized: false,
+        };
+        assert!(c.check_invariants().is_ok());
+    }
 
-        let commit = plan_open_competition_action(
-            OpenCompetitionOperation::PrepareOpenCompetitionCommit,
-            &readiness,
-            Some("0x1111111111111111111111111111111111111111".to_string()),
-            Some("commitSolution".to_string()),
-            Value::Null,
-        );
-        assert!(!commit.allowed);
+    #[test]
+    fn v1_valid_finalized() {
+        let c = OpenCompetitionV1 {
+            bounty_id: [0u8; 32],
+            reward_usdc: 100,
+            solver: Some([0u8; 20]),
+            finalized: true,
+        };
+        assert!(c.check_invariants().is_ok());
+    }
 
-        evidence.safe_commit_reveal_timing = false;
-        let expired_readiness = open_competition_readiness(&evidence);
-        let expired_reveal = plan_open_competition_action(
-            OpenCompetitionOperation::PrepareOpenCompetitionReveal,
-            &expired_readiness,
-            Some("0x1111111111111111111111111111111111111111".to_string()),
-            Some("revealSolution".to_string()),
-            Value::Null,
+    #[test]
+    fn v1_zero_reward_rejected() {
+        let c = OpenCompetitionV1 {
+            bounty_id: [0u8; 32],
+            reward_usdc: 0,
+            solver: None,
+            finalized: false,
+        };
+        assert_eq!(c.check_invariants(), Err("V1: reward_usdc must be non-zero"));
+    }
+
+    #[test]
+    fn v1_finalized_without_solver_rejected() {
+        let c = OpenCompetitionV1 {
+            bounty_id: [0u8; 32],
+            reward_usdc: 100,
+            solver: None,
+            finalized: true,
+        };
+        assert_eq!(
+            c.check_invariants(),
+            Err("V1: finalized competition must have a solver")
         );
-        assert!(!expired_reveal.allowed);
+    }
+
+    // ── SP1 receipt tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn sp1_receipt_valid() {
+        assert!(valid_receipt().check_invariants().is_ok());
+    }
+
+    #[test]
+    fn sp1_receipt_zero_vk_rejected() {
+        let mut r = valid_receipt();
+        r.vk_hash = [0u8; 32];
+        assert_eq!(r.check_invariants(), Err("SP1: vk_hash must not be the zero hash"));
+    }
+
+    #[test]
+    fn sp1_receipt_empty_public_values_rejected() {
+        let mut r = valid_receipt();
+        r.public_values = vec![];
+        assert_eq!(r.check_invariants(), Err("SP1: public_values must not be empty"));
+    }
+
+    #[test]
+    fn sp1_receipt_empty_proof_bytes_rejected() {
+        let mut r = valid_receipt();
+        r.proof_bytes = vec![];
+        assert_eq!(r.check_invariants(), Err("SP1: proof_bytes must not be empty"));
+    }
+
+    // ── V2 tests ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn v2_valid_finalized() {
+        assert!(valid_finalized_v2().check_invariants().is_ok());
+    }
+
+    #[test]
+    fn v2_valid_open() {
+        let c = OpenCompetitionV2 {
+            bounty_id: [1u8; 32],
+            reward_usdc: 200,
+            solver: None,
+            finalized: false,
+            sp1_proof: None,
+            committed_score: None,
+        };
+        assert!(c.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn v2_zero_reward_rejected() {
+        let mut c = valid_finalized_v2();
+        c.reward_usdc = 0;
+        assert_eq!(c.check_invariants(), Err("V2: reward_usdc must be non-zero"));
+    }
+
+    #[test]
+    fn v2_finalized_without_solver_rejected() {
+        let mut c = valid_finalized_v2();
+        c.solver = None;
+        assert_eq!(
+            c.check_invariants(),
+            Err("V2: finalized competition must have a solver")
+        );
+    }
+
+    #[test]
+    fn v2_finalized_without_proof_rejected() {
+        let mut c = valid_finalized_v2();
+        c.sp1_proof = None;
+        assert_eq!(
+            c.check_invariants(),
+            Err("V2: finalized competition must include an SP1 proof receipt")
+        );
+    }
+
+    #[test]
+    fn v2_finalized_without_score_rejected() {
+        let mut c = valid_finalized_v2();
+        c.committed_score = None;
+        assert_eq!(
+            c.check_invariants(),
+            Err("V2: finalized competition must have a committed_score")
+        );
+    }
+
+    #[test]
+    fn v2_unfinalized_with_solver_rejected() {
+        let c = OpenCompetitionV2 {
+            bounty_id: [1u8; 32],
+            reward_usdc: 200,
+            solver: Some([0u8; 20]),
+            finalized: false,
+            sp1_proof: None,
+            committed_score: None,
+        };
+        assert_eq!(
+            c.check_invariants(),
+            Err("V2: unfinalized competition must not have a solver")
+        );
+    }
+
+    #[test]
+    fn v2_unfinalized_with_proof_rejected() {
+        let c = OpenCompetitionV2 {
+            bounty_id: [1u8; 32],
+            reward_usdc: 200,
+            solver: None,
+            finalized: false,
+            sp1_proof: Some(valid_receipt()),
+            committed_score: None,
+        };
+        assert_eq!(
+            c.check_invariants(),
+            Err("V2: unfinalized competition must not have an SP1 proof")
+        );
+    }
+
+    #[test]
+    fn v2_decode_committed_score() {
+        let c = valid_finalized_v2();
+        assert_eq!(c.decode_committed_score(), Some(42));
+    }
+
+    #[test]
+    fn v2_decode_committed_score_no_proof() {
+        let c = OpenCompetitionV2 {
+            bounty_id: [1u8; 32],
+            reward_usdc: 200,
+            solver: None,
+            finalized: false,
+            sp1_proof: None,
+            committed_score: None,
+        };
+        assert_eq!(c.decode_committed_score(), None);
     }
 }
