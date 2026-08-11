@@ -114,6 +114,8 @@ pub enum ChainBaseError {
     RelayerFeeCapExceeded { estimated: u128, maximum: u128 },
     #[error("Base relayer balance {balance} is below bounded transaction cost {required}")]
     RelayerInsufficientBalance { balance: u128, required: u128 },
+    #[error("Base relay simulation rejected the transaction: {0}")]
+    RelayerSimulation(String),
     #[error("Base relayer provider error: {0}")]
     RelayerProvider(String),
 }
@@ -233,7 +235,7 @@ impl BaseTransactionRelayer {
         provider
             .call(transaction.clone())
             .await
-            .map_err(sanitize_relayer_provider_error)?;
+            .map_err(sanitize_relayer_simulation_error)?;
         let estimated_gas = provider
             .estimate_gas(transaction.clone())
             .await
@@ -316,11 +318,18 @@ fn parse_alloy_bytes(value: &str) -> Result<Bytes, ChainBaseError> {
     Ok(Bytes::from(decoded))
 }
 
-fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
+fn sanitize_relayer_error_message(error: impl std::fmt::Display) -> String {
     let message = redact_provider_urls(&error.to_string());
     let first_line = message.lines().next().unwrap_or("provider request failed");
-    let bounded = first_line.chars().take(300).collect::<String>();
-    ChainBaseError::RelayerProvider(bounded)
+    first_line.chars().take(300).collect::<String>()
+}
+
+fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
+    ChainBaseError::RelayerProvider(sanitize_relayer_error_message(error))
+}
+
+fn sanitize_relayer_simulation_error(error: impl std::fmt::Display) -> ChainBaseError {
+    ChainBaseError::RelayerSimulation(sanitize_relayer_error_message(error))
 }
 
 pub fn redact_provider_urls(message: &str) -> String {
@@ -7143,6 +7152,19 @@ mod tests {
         assert!(!message.contains("secret"));
         assert!(!message.contains("api-key"));
         assert!(!message.contains("ws-key"));
+    }
+
+    #[test]
+    fn hosted_relayer_simulation_errors_are_typed_and_redacted() {
+        let error = sanitize_relayer_simulation_error(
+            "execution reverted at https://user:secret@rpc.example/v2/private-key",
+        );
+        let ChainBaseError::RelayerSimulation(message) = error else {
+            panic!("expected a relayer simulation error");
+        };
+        assert_eq!(message, "execution reverted at [redacted-url]");
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("private-key"));
     }
 
     #[tokio::test]

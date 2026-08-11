@@ -11,6 +11,18 @@ SPEC.loader.exec_module(MODULE)
 
 
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
+    def test_metric_identity_is_single_release_source_of_truth(self) -> None:
+        identity = MODULE.METRIC_IDENTITY
+        self.assertEqual(
+            identity["schema"],
+            "agent-bounties/open-competition-v2-metric-release-identity-v1",
+        )
+        self.assertEqual(identity["rust_version"], "1.96.1")
+        self.assertEqual(MODULE.PROGRAM_VKEY, identity["program_vkey"])
+        self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
+        self.assertEqual(MODULE.ELF_HASH, identity["elf_keccak256"])
+        self.assertEqual(MODULE.ELF_SHA256, identity["elf_sha256"])
+
     def test_current_manifest_fails_closed(self) -> None:
         gates = MODULE.load_gates(
             MODULE.ROOT / "deployments/open-competition-v2-beta1-release-gates.json"

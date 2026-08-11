@@ -42,7 +42,8 @@ jobs:
           CARGO_BUILD_JOBS: "2"
         run: |
           set -euo pipefail
-          test "$(rustc --version | awk '{print $2}')" = "1.96.1"
+          expected_rust="$(python -c 'import json; print(json.load(open("release-identity.json"))["rust_version"])')"
+          test "$(rustc --version | awk '{print $2}')" = "$expected_rust"
           {
             cargo prove --version
             cargo run --locked --release -p public-vector-metric-v1-script -- \

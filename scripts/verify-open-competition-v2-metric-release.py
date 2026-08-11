@@ -23,6 +23,7 @@ ELF_HASH_WORD = 11
 JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
 EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (8252c29 "
+IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
 
 
 def canonical_source_hash(root: Path) -> str:
@@ -108,6 +109,18 @@ def main() -> int:
     public_values = journal(first["journal_hex"])
     source_hash_hex = canonical_source_hash(args.root)
     source_hash = bytes32(source_hash_hex, "source_hash")
+    identity = json.loads((args.root / IDENTITY_PATH).read_text(encoding="utf-8"))
+    expected_identity = {
+        "program_vkey": first["program_vkey"],
+        "source_hash": source_hash_hex,
+        "elf_keccak256": first["elf_keccak256"],
+        "elf_sha256": first["elf_sha256"],
+    }
+    for field, observed in expected_identity.items():
+        if identity.get(field) != observed:
+            raise ValueError(
+                f"reproduced {field} does not match the committed metric release identity"
+            )
 
     if word(public_values, PROGRAM_VKEY_WORD) != program_vkey:
         raise ValueError("journal program_vkey does not match the SP1 setup vkey")
