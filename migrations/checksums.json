@@ -21,6 +21,7 @@
     "0017_bounty_image_assets.sql": "8a83ba6d8ac8f70b09f959791f8d6191fdcd971c582f82c4a48c82d7c8339d2c",
     "0018_rename_compete_action_to_solve.sql": "f8a0336502da26f5db5ff4bdc33fe1dbc27f003b3330730e07e21451640d116f",
     "0019_open_competition_v1.sql": "aba30d9af284eee344b11a09738fb5e8ca1c9b5fb14bd81301f902341d9dee7d",
-    "0020_open_competition_entrant_relays.sql": "96822727b50f7c4f672138082605748ea08b942505958d712715d69336a12b6f"
+    "0020_open_competition_entrant_relays.sql": "96822727b50f7c4f672138082605748ea08b942505958d712715d69336a12b6f",
+    "0021_open_competition_v2_beta1.sql": "8311b12af91a75d789cbed5af82f87dc6f9e9fed5bcc63617985abb491dcb0d1"
   }
 }

@@ -452,6 +452,46 @@ enum Command {
         #[arg(long)]
         relay_id: String,
     },
+    OpenCompetitionV2Inspect {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value = "base-mainnet")]
+        network: String,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        bounty_id: Option<String>,
+        #[arg(long)]
+        job_id: Option<Uuid>,
+    },
+    OpenCompetitionV2Prepare {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long)]
+        request_file: String,
+    },
+    OpenCompetitionV2PayProof {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        job_id: Uuid,
+        #[arg(long)]
+        payment_signature: Option<String>,
+    },
+    OpenCompetitionV2AuthorizeRelay {
+        #[arg(long, default_value = "https://api.agentbounties.app")]
+        api_base_url: String,
+        #[arg(long)]
+        job_id: Uuid,
+        #[arg(long)]
+        authorization_deadline: u64,
+        #[arg(long)]
+        solver_signature: Option<String>,
+    },
     StandingMetaV4Readiness {
         #[arg(long, default_value = "https://api.agentbounties.app")]
         api_base_url: String,
@@ -880,6 +920,48 @@ async fn async_main() -> Result<()> {
             api_base_url,
             relay_id,
         } => open_competition_entrant_relay_status_cli(api_base_url, relay_id),
+        Command::OpenCompetitionV2Inspect {
+            api_base_url,
+            operation,
+            network,
+            state,
+            bounty_id,
+            job_id,
+        } => {
+            open_competition_v2_inspect_cli(
+                api_base_url,
+                operation,
+                network,
+                state,
+                bounty_id,
+                job_id,
+            )
+            .await
+        }
+        Command::OpenCompetitionV2Prepare {
+            api_base_url,
+            operation,
+            request_file,
+        } => open_competition_v2_prepare_cli(api_base_url, operation, request_file).await,
+        Command::OpenCompetitionV2PayProof {
+            api_base_url,
+            job_id,
+            payment_signature,
+        } => open_competition_v2_pay_proof_cli(api_base_url, job_id, payment_signature).await,
+        Command::OpenCompetitionV2AuthorizeRelay {
+            api_base_url,
+            job_id,
+            authorization_deadline,
+            solver_signature,
+        } => {
+            open_competition_v2_authorize_relay_cli(
+                api_base_url,
+                job_id,
+                authorization_deadline,
+                solver_signature,
+            )
+            .await
+        }
         Command::StandingMetaV4Readiness {
             api_base_url,
             network,
@@ -2266,6 +2348,175 @@ fn open_competition_verifiers_cli(api_base_url: String, network: String) -> Resu
         "{api}/v1/base/open-competition-v1/verifiers?network={network}"
     ))?;
     println!("{}", serde_json::to_string_pretty(&catalog)?);
+    Ok(())
+}
+
+async fn open_competition_v2_inspect_cli(
+    api_base_url: String,
+    operation: String,
+    network: String,
+    state: Option<String>,
+    bounty_id: Option<String>,
+    job_id: Option<Uuid>,
+) -> Result<()> {
+    require(
+        matches!(network.as_str(), "base-mainnet" | "base-sepolia"),
+        "network must be base-mainnet or base-sepolia",
+    )?;
+    let api = normalize_base_url(&api_base_url);
+    let root = format!("{api}/v1/base/open-competition-v2-beta1");
+    let client = reqwest::Client::new();
+    let request = match operation.as_str() {
+        "profiles" => client
+            .get(format!("{root}/profiles"))
+            .query(&[("network", network)]),
+        "inventory" => {
+            if let Some(value) = state.as_deref() {
+                require(
+                    matches!(
+                        value,
+                        "announced" | "funding" | "active" | "settled" | "cancelled"
+                    ),
+                    "state must be announced, funding, active, settled, or cancelled",
+                )?;
+            }
+            client
+                .get(format!("{root}/inventory"))
+                .query(&[("network", Some(network)), ("state", state)])
+        }
+        "events" => client
+            .get(format!("{root}/events"))
+            .query(&[("network", Some(network)), ("bounty_id", bounty_id)]),
+        "proof_job" => {
+            let job_id = job_id.context("job_id is required for proof_job")?;
+            client.get(format!("{root}/proof-jobs/{job_id}"))
+        }
+        _ => bail!("operation must be profiles, inventory, events, or proof_job"),
+    };
+    let response = request.send().await.context("V2 inspect request failed")?;
+    print_json_response(response, &[200]).await
+}
+
+async fn open_competition_v2_prepare_cli(
+    api_base_url: String,
+    operation: String,
+    request_file: String,
+) -> Result<()> {
+    let path = match operation.as_str() {
+        "validate" => "validate",
+        "create" => "creation-preparation",
+        "fund" => "funding-preparation",
+        "quote_proof" => "proof-quotes",
+        "prepare_proof" => "proof-preparation",
+        "prepare_action" => "action-preparation",
+        _ => bail!(
+            "operation must be validate, create, fund, quote_proof, prepare_proof, or prepare_action"
+        ),
+    };
+    let raw = fs::read_to_string(&request_file)
+        .with_context(|| format!("failed to read {request_file}"))?;
+    let body: serde_json::Value =
+        serde_json::from_str(&raw).context("request_file must contain valid JSON")?;
+    require(
+        body.is_object(),
+        "request_file must contain one JSON object",
+    )?;
+    let url = format!(
+        "{}/v1/base/open-competition-v2-beta1/{path}",
+        normalize_base_url(&api_base_url)
+    );
+    let response = reqwest::Client::new()
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("POST {url} failed"))?;
+    print_json_response(response, &[200]).await
+}
+
+async fn open_competition_v2_pay_proof_cli(
+    api_base_url: String,
+    job_id: Uuid,
+    payment_signature: Option<String>,
+) -> Result<()> {
+    let url = format!(
+        "{}/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/payment",
+        normalize_base_url(&api_base_url)
+    );
+    let mut request = reqwest::Client::new().post(&url);
+    if let Some(signature) = payment_signature {
+        require(
+            !signature.is_empty() && !signature.bytes().any(|byte| byte.is_ascii_control()),
+            "payment_signature cannot be empty or contain control characters",
+        )?;
+        request = request.header("PAYMENT-SIGNATURE", signature);
+    }
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("POST {url} failed"))?;
+    let payment_required = response
+        .headers()
+        .get("PAYMENT-REQUIRED")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let payment_response = response
+        .headers()
+        .get("PAYMENT-RESPONSE")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let status = response.status();
+    let body = response.text().await?;
+    require(
+        [200, 202, 402, 404, 409, 422, 503].contains(&status.as_u16()),
+        &format!("POST {url} failed with HTTP {status}: {body}"),
+    )?;
+    let body = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({"text": body}));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": status.as_u16(),
+            "payment_required": payment_required,
+            "payment_response": payment_response,
+            "body": body
+        }))?
+    );
+    Ok(())
+}
+
+async fn open_competition_v2_authorize_relay_cli(
+    api_base_url: String,
+    job_id: Uuid,
+    authorization_deadline: u64,
+    solver_signature: Option<String>,
+) -> Result<()> {
+    let url = format!(
+        "{}/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/relay-authorization",
+        normalize_base_url(&api_base_url)
+    );
+    let response = reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({
+            "authorization_deadline": authorization_deadline,
+            "solver_signature": solver_signature,
+        }))
+        .send()
+        .await
+        .with_context(|| format!("POST {url} failed"))?;
+    print_json_response(response, &[200]).await
+}
+
+async fn print_json_response(response: reqwest::Response, accepted: &[u16]) -> Result<()> {
+    let status = response.status();
+    let url = response.url().to_string();
+    let body = response.text().await?;
+    require(
+        accepted.contains(&status.as_u16()),
+        &format!("request to {url} failed with HTTP {status}: {body}"),
+    )?;
+    let value: serde_json::Value =
+        serde_json::from_str(&body).context("response body was not valid JSON")?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
@@ -5462,10 +5713,19 @@ fn collect_doc_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
             .and_then(|value| value.to_str())
             .unwrap_or_default();
         if path.is_dir() {
-            if matches!(
-                file_name,
-                ".git" | "target" | "node_modules" | ".next" | "__pycache__"
-            ) {
+            let hidden_cache = file_name.starts_with('.') && file_name != ".github";
+            if hidden_cache
+                || matches!(
+                    file_name,
+                    "target"
+                        | "node_modules"
+                        | ".next"
+                        | "__pycache__"
+                        | "coverage"
+                        | "dist"
+                        | "output"
+                )
+            {
                 continue;
             }
             collect_doc_files(&path, files)?;
@@ -6844,6 +7104,41 @@ mod tests {
         assert!(active_issues.iter().any(|issue| issue
             .message
             .contains("unknown API route `/v1/base/release-plan`")));
+    }
+
+    #[test]
+    fn docs_contract_collection_excludes_generated_and_hidden_cache_files() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-bounties-doc-collection-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join("docs")).expect("should create docs directory");
+        fs::create_dir_all(root.join(".github")).expect("should create GitHub directory");
+        fs::create_dir_all(root.join(".codex-tmp")).expect("should create hidden cache");
+        fs::create_dir_all(root.join("output")).expect("should create output cache");
+        fs::write(root.join("docs/guide.md"), "# Guide\n").expect("should write docs");
+        fs::write(root.join(".github/CONTRIBUTING.md"), "# Contributing\n")
+            .expect("should write GitHub docs");
+        fs::write(root.join(".codex-tmp/analyzer.txt"), [0xff, 0xfe])
+            .expect("should write hidden binary output");
+        fs::write(root.join("output/report.txt"), [0xff, 0xfe])
+            .expect("should write generated binary output");
+
+        let mut files = Vec::new();
+        collect_doc_files(&root, &mut files).expect("collection should succeed");
+        let relative = files
+            .iter()
+            .map(|path| path.strip_prefix(&root).unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            relative,
+            vec![
+                PathBuf::from(".github/CONTRIBUTING.md"),
+                PathBuf::from("docs/guide.md")
+            ]
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

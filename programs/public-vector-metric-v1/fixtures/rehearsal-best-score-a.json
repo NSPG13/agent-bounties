@@ -1,0 +1,9 @@
+{
+  "mode": "maximize_exact_matches",
+  "threshold": 1,
+  "vectors": [
+    { "expected": 3, "observed": 3, "weight": 1 },
+    { "expected": 5, "observed": 5, "weight": 2 },
+    { "expected": 8, "observed": 9, "weight": 4 }
+  ]
+}

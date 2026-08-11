@@ -422,6 +422,127 @@ export interface OpenCompetitionEntrantRelayResponse {
   evidence_boundary: string;
 }
 
+export type OpenCompetitionV2Network = "base-mainnet" | "base-sepolia";
+export type OpenCompetitionV2WinnerMode = "first_proven" | "best_score";
+export type OpenCompetitionV2ScoreDirection = "higher_is_better" | "lower_is_better";
+export type OpenCompetitionV2ProofSystem = "groth16" | "plonk";
+export type OpenCompetitionV2MetricMode =
+  | "all_equal"
+  | "maximize_exact_matches"
+  | "minimize_absolute_error";
+
+export interface OpenCompetitionV2MetricCase {
+  expected: number;
+  observed: number;
+  weight: number;
+}
+
+export interface OpenCompetitionV2MetricRequest {
+  mode: OpenCompetitionV2MetricMode;
+  threshold: string;
+  vectors: OpenCompetitionV2MetricCase[];
+}
+
+export interface OpenCompetitionV2MetricScope {
+  chain_id: number;
+  competition: string;
+  bounty_id: string;
+  solver: string;
+  solver_nonce: string;
+  proof_system: OpenCompetitionV2ProofSystem;
+  program_vkey: string;
+  source_hash: string;
+  elf_hash: string;
+  execution_policy_hash: string;
+  settlement_policy_hash: string;
+  beta_risk_hash: string;
+}
+
+export interface OpenCompetitionV2PublicVectorInput extends OpenCompetitionV2MetricRequest {
+  scope: OpenCompetitionV2MetricScope;
+}
+
+export interface OpenCompetitionV2PublicVectorResult {
+  passed: boolean;
+  score: string;
+  verification_policy_hash: string;
+  submission_hash: string;
+  evidence_hash: string;
+  journal_hex: string;
+}
+
+export interface OpenCompetitionV2CreateParams {
+  solver_reward: string;
+  keeper_reward: string;
+  funding_deadline: number;
+  proof_window_seconds: number;
+  winner_mode: OpenCompetitionV2WinnerMode;
+  score_direction: OpenCompetitionV2ScoreDirection;
+  score_threshold: string;
+  proof_system: OpenCompetitionV2ProofSystem;
+  program_vkey: string;
+  source_hash: string;
+  elf_hash: string;
+  journal_schema_hash: string;
+  metric_program_hash: string;
+  execution_policy_hash: string;
+  verification_policy_hash: string;
+  settlement_policy_hash: string;
+  beta_risk_hash: string;
+}
+
+export interface OpenCompetitionV2CreationRequest {
+  network?: OpenCompetitionV2Network | null;
+  creator: string;
+  creation_nonce: string;
+  acknowledged_risk_hash: string;
+  initial_funding: string;
+  params: OpenCompetitionV2CreateParams;
+}
+
+export interface OpenCompetitionV2FundingRequest {
+  network?: OpenCompetitionV2Network | null;
+  contributor: string;
+  competition_contract: string;
+  amount: string;
+  acknowledged_risk_hash: string;
+}
+
+export interface OpenCompetitionV2ProofQuoteRequest {
+  network?: OpenCompetitionV2Network | null;
+  competition_contract: string;
+  solver: string;
+  solver_nonce: string;
+  artifact_hash: string;
+  relay: boolean;
+  metric: OpenCompetitionV2MetricRequest;
+}
+
+export interface OpenCompetitionV2ProofRequest {
+  network?: OpenCompetitionV2Network | null;
+  competition_contract: string;
+  solver: string;
+  solver_nonce: string;
+  proof_system: OpenCompetitionV2ProofSystem;
+  public_values: string;
+  proof: string;
+  authorization_deadline: number;
+  solver_signature?: string | null;
+}
+
+export interface OpenCompetitionV2ActionRequest {
+  network?: OpenCompetitionV2Network | null;
+  competition_contract: string;
+  caller?: string | null;
+  action:
+    | "finalize_best_score"
+    | "cancel_funding"
+    | "expire_competition"
+    | "cancel_unavailable_gateway"
+    | "withdraw_refund_for";
+  contributor?: string | null;
+}
+
 export interface StandingMetaV4ReadinessReport {
   schema_version: "agent-bounties/standing-meta-v4-readiness-v1";
   protocol_version: "standing-meta-v4";
@@ -931,6 +1052,178 @@ function openCompetitionHex(value: Uint8Array): string {
   return `0x${Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+const OPEN_COMPETITION_V2_JOURNAL_DOMAIN = openCompetitionHexBytes(
+  "0x40c861b5ff675d94ed282cd66e1e55bb38f03fe560786960e64d50b593ada7ba",
+  32,
+  "journal domain",
+);
+const OPEN_COMPETITION_V2_POLICY_DOMAIN = openCompetitionHexBytes(
+  "0xf6a226ca20aaca3b9c0b4a609939c334b6c2b03500a5df45188df8bcd7c2b369",
+  32,
+  "policy domain",
+);
+const OPEN_COMPETITION_V2_SUBMISSION_DOMAIN = openCompetitionHexBytes(
+  "0x402204460b00978c26cee42ae0089d94fe8b0b17bd90c45a6cd78d466463a507",
+  32,
+  "submission domain",
+);
+const OPEN_COMPETITION_V2_EVIDENCE_DOMAIN = openCompetitionHexBytes(
+  "0x16f60f26d350a38e6993a5454967d1efb0461d93785b7cdb38ba463284c5ab15",
+  32,
+  "evidence domain",
+);
+const OPEN_COMPETITION_V2_JOURNAL_SCHEMA_HASH = openCompetitionHexBytes(
+  "0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4",
+  32,
+  "journal schema",
+);
+const OPEN_COMPETITION_V2_METRIC_PROGRAM_HASH = openCompetitionHexBytes(
+  "0x1c27fc20ab65264c7db2997c8b76f78d7291cdb91243481bcae1e88f77beb88a",
+  32,
+  "metric program",
+);
+const OPEN_COMPETITION_V2_PROOF_SYSTEM_WORDS: Record<OpenCompetitionV2ProofSystem, Uint8Array> = {
+  groth16: openCompetitionHexBytes(
+    "0x0fbfc39a4f588598b55fce747dc8dde3f1b661a9d538dc174b464d210d12a81d",
+    32,
+    "Groth16 proof system",
+  ),
+  plonk: openCompetitionHexBytes(
+    "0x91e36d74d5d8703299314b82f85cab384a3df8064725b371f1f9f4ad49238f1b",
+    32,
+    "PLONK proof system",
+  ),
+};
+const OPEN_COMPETITION_V2_MODE_TAGS: Record<OpenCompetitionV2MetricMode, number> = {
+  all_equal: 0,
+  maximize_exact_matches: 1,
+  minimize_absolute_error: 2,
+};
+
+function openCompetitionUnsignedBytes(value: bigint, bytes: number, label: string): Uint8Array {
+  if (value < 0n || value >= 1n << BigInt(bytes * 8)) {
+    throw new Error(`${label} is out of bounds`);
+  }
+  const result = new Uint8Array(bytes);
+  let remaining = value;
+  for (let index = bytes - 1; index >= 0; index -= 1) {
+    result[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return result;
+}
+
+function openCompetitionSignedBytes(value: bigint, bytes: number, label: string): Uint8Array {
+  const bits = BigInt(bytes * 8);
+  const minimum = -(1n << (bits - 1n));
+  const maximum = 1n << (bits - 1n);
+  if (value < minimum || value >= maximum) throw new Error(`${label} is out of bounds`);
+  return openCompetitionUnsignedBytes(value < 0n ? (1n << bits) + value : value, bytes, label);
+}
+
+function openCompetitionUintWord(value: bigint, bits: number, label: string): Uint8Array {
+  if (value < 0n || value >= 1n << BigInt(bits)) throw new Error(`${label} is out of bounds`);
+  return openCompetitionUnsignedBytes(value, 32, label);
+}
+
+export function buildOpenCompetitionV2PublicVector(
+  input: OpenCompetitionV2PublicVectorInput,
+): OpenCompetitionV2PublicVectorResult {
+  if (!(input.mode in OPEN_COMPETITION_V2_MODE_TAGS)) throw new Error("mode is unsupported");
+  if (!(input.scope.proof_system in OPEN_COMPETITION_V2_PROOF_SYSTEM_WORDS)) {
+    throw new Error("proof_system is unsupported");
+  }
+  const modeTag = OPEN_COMPETITION_V2_MODE_TAGS[input.mode];
+  const threshold = BigInt(input.threshold);
+  if (input.mode !== "all_equal" && threshold < 0n) {
+    throw new Error("threshold cannot be negative for this mode");
+  }
+  if (input.vectors.length < 1 || input.vectors.length > 10_000) {
+    throw new Error("vectors must contain 1..10000 cases");
+  }
+  const policyParts = [
+    OPEN_COMPETITION_V2_POLICY_DOMAIN,
+    Uint8Array.of(modeTag),
+    openCompetitionSignedBytes(threshold, 16, "threshold"),
+    openCompetitionUnsignedBytes(BigInt(input.vectors.length), 4, "vector count"),
+  ];
+  const submissionParts = [
+    OPEN_COMPETITION_V2_SUBMISSION_DOMAIN,
+    openCompetitionUnsignedBytes(BigInt(input.vectors.length), 4, "vector count"),
+  ];
+  let score = 0n;
+  let totalWeight = 0n;
+  for (const vector of input.vectors) {
+    if (
+      !Number.isSafeInteger(vector.expected) ||
+      !Number.isSafeInteger(vector.observed) ||
+      !Number.isSafeInteger(vector.weight) ||
+      vector.weight < 1 ||
+      vector.weight >= 2 ** 32
+    ) {
+      throw new Error("vector values must be safe integers and weight must fit positive u32");
+    }
+    const expected = BigInt(vector.expected);
+    const observed = BigInt(vector.observed);
+    const weight = BigInt(vector.weight);
+    totalWeight += weight;
+    if (input.mode === "minimize_absolute_error") {
+      score += (expected >= observed ? expected - observed : observed - expected) * weight;
+    } else if (expected === observed) {
+      score += weight;
+    }
+    openCompetitionSignedBytes(score, 16, "score");
+    policyParts.push(openCompetitionSignedBytes(expected, 8, "expected"));
+    policyParts.push(openCompetitionUnsignedBytes(weight, 4, "weight"));
+    submissionParts.push(openCompetitionSignedBytes(observed, 8, "observed"));
+  }
+  const passed =
+    input.mode === "all_equal"
+      ? score === totalWeight
+      : input.mode === "maximize_exact_matches"
+        ? score >= threshold
+        : score <= threshold;
+  const verificationPolicyHash = keccak_256(openCompetitionConcat(policyParts));
+  const submissionHash = keccak_256(openCompetitionConcat(submissionParts));
+  const evidenceHash = keccak_256(
+    openCompetitionConcat([
+      OPEN_COMPETITION_V2_EVIDENCE_DOMAIN,
+      verificationPolicyHash,
+      submissionHash,
+    ]),
+  );
+  const journal = openCompetitionConcat([
+    OPEN_COMPETITION_V2_JOURNAL_DOMAIN,
+    openCompetitionUintWord(BigInt(input.scope.chain_id), 64, "chain_id"),
+    openCompetitionAddressWord(input.scope.competition),
+    openCompetitionNonzeroBytes32(input.scope.bounty_id, "bounty_id"),
+    openCompetitionAddressWord(input.scope.solver),
+    openCompetitionUintWord(BigInt(input.scope.solver_nonce), 128, "solver_nonce"),
+    submissionHash,
+    evidenceHash,
+    OPEN_COMPETITION_V2_PROOF_SYSTEM_WORDS[input.scope.proof_system],
+    openCompetitionNonzeroBytes32(input.scope.program_vkey, "program_vkey"),
+    openCompetitionNonzeroBytes32(input.scope.source_hash, "source_hash"),
+    openCompetitionNonzeroBytes32(input.scope.elf_hash, "elf_hash"),
+    OPEN_COMPETITION_V2_JOURNAL_SCHEMA_HASH,
+    OPEN_COMPETITION_V2_METRIC_PROGRAM_HASH,
+    openCompetitionNonzeroBytes32(input.scope.execution_policy_hash, "execution_policy_hash"),
+    verificationPolicyHash,
+    openCompetitionNonzeroBytes32(input.scope.settlement_policy_hash, "settlement_policy_hash"),
+    openCompetitionNonzeroBytes32(input.scope.beta_risk_hash, "beta_risk_hash"),
+    openCompetitionUintWord(passed ? 1n : 0n, 8, "passed"),
+    openCompetitionSignedBytes(score, 32, "score"),
+  ]);
+  return {
+    passed,
+    score: score.toString(),
+    verification_policy_hash: openCompetitionHex(verificationPolicyHash),
+    submission_hash: openCompetitionHex(submissionHash),
+    evidence_hash: openCompetitionHex(evidenceHash),
+    journal_hex: openCompetitionHex(journal),
+  };
+}
+
 export function generateOpenCompetitionCommitment(
   input: OpenCompetitionCommitmentInput,
 ): OpenCompetitionCommitmentEnvelope {
@@ -1302,6 +1595,124 @@ export class AgentBountiesClient {
       `/v1/base/open-competition-v1/entrant-action-relays/${encodeURIComponent(relayId)}`,
       {},
     ) as Promise<OpenCompetitionEntrantRelayResponse>;
+  }
+
+  async getOpenCompetitionV2Profiles(
+    network: OpenCompetitionV2Network = "base-mainnet",
+  ): Promise<unknown> {
+    return this.query("/v1/base/open-competition-v2-beta1/profiles", { network });
+  }
+
+  async validateOpenCompetitionV2(request: OpenCompetitionV2CreationRequest): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta1/validate", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
+  }
+
+  async prepareOpenCompetitionV2Creation(
+    request: OpenCompetitionV2CreationRequest,
+  ): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta1/creation-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
+  }
+
+  async prepareOpenCompetitionV2Funding(
+    request: OpenCompetitionV2FundingRequest,
+  ): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta1/funding-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
+  }
+
+  async listOpenCompetitionV2Inventory(
+    network: OpenCompetitionV2Network = "base-mainnet",
+    state?: string,
+  ): Promise<unknown> {
+    return this.query("/v1/base/open-competition-v2-beta1/inventory", { network, state });
+  }
+
+  async listOpenCompetitionV2Events(
+    network: OpenCompetitionV2Network = "base-mainnet",
+    bountyId?: string,
+  ): Promise<unknown> {
+    return this.query("/v1/base/open-competition-v2-beta1/events", {
+      network,
+      bounty_id: bountyId,
+    });
+  }
+
+  async createOpenCompetitionV2ProofQuote(
+    request: OpenCompetitionV2ProofQuoteRequest,
+  ): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta1/proof-quotes", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
+  }
+
+  async prepareOpenCompetitionV2Proof(
+    request: OpenCompetitionV2ProofRequest,
+  ): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta1/proof-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
+  }
+
+  async prepareOpenCompetitionV2Action(
+    request: OpenCompetitionV2ActionRequest,
+  ): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta1/action-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
+  }
+
+  async getOpenCompetitionV2ProofJob(jobId: string): Promise<unknown> {
+    return this.request(
+      `/v1/base/open-competition-v2-beta1/proof-jobs/${encodeURIComponent(jobId)}`,
+    );
+  }
+
+  async payOpenCompetitionV2ProofJob(
+    jobId: string,
+    paymentSignature?: string,
+  ): Promise<X402BountyFundingResponse> {
+    const path = `/v1/base/open-competition-v2-beta1/proof-jobs/${encodeURIComponent(jobId)}/payment`;
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(paymentSignature ? { "PAYMENT-SIGNATURE": paymentSignature } : {}),
+      },
+    });
+    if (![200, 202, 402, 404, 409, 422, 503].includes(response.status)) {
+      throw new Error(`${path} failed: ${response.status}`);
+    }
+    return {
+      status: response.status as X402BountyFundingResponse["status"],
+      payment_required: response.headers.get("PAYMENT-REQUIRED"),
+      payment_response: response.headers.get("PAYMENT-RESPONSE"),
+      body: await x402ResponseBody(response),
+    };
+  }
+
+  async authorizeOpenCompetitionV2ProofRelay(
+    jobId: string,
+    authorizationDeadline: number,
+    solverSignature?: string,
+  ): Promise<unknown> {
+    return this.post(
+      `/v1/base/open-competition-v2-beta1/proof-jobs/${encodeURIComponent(jobId)}/relay-authorization`,
+      {
+        authorization_deadline: authorizationDeadline,
+        solver_signature: solverSignature,
+      },
+    );
   }
 
   private standingMetaV4Action(

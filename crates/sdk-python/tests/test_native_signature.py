@@ -9,6 +9,7 @@ import agent_bounties
 import httpx
 from agent_bounties.client import (
     AgentBountiesClient,
+    build_open_competition_v2_public_vector,
     generate_open_competition_commitment,
 )
 
@@ -111,6 +112,56 @@ class NativeSignatureTests(unittest.TestCase):
         self.assertEqual(client.requests[0]["plan"], plan)
         self.assertEqual(client.requests[0]["signature"], signature)
         self.assertEqual(client.requests[0]["idempotency_key"], "entrant-relay-7")
+
+    def test_open_competition_v2_creation_preserves_decimal_strings(self):
+        client = StubAgentBountiesClient([{"valid": True}])
+        request = {
+            "creator": "0x1111111111111111111111111111111111111111",
+            "creation_nonce": "9007199254740993",
+            "acknowledged_risk_hash": f"0x{'11' * 32}",
+            "initial_funding": "1000001",
+            "params": {"solver_reward": "1000000", "keeper_reward": "1"},
+        }
+
+        response = client.validate_open_competition_v2(request)
+
+        self.assertTrue(response["valid"])
+        self.assertEqual(client.requests[0]["network"], "base-mainnet")
+        self.assertEqual(client.requests[0]["creation_nonce"], "9007199254740993")
+        self.assertEqual(client.requests[0]["initial_funding"], "1000001")
+        self.assertEqual(client.requests[0]["params"]["solver_reward"], "1000000")
+
+    def test_open_competition_v2_shared_release_vector_matches_exactly(self):
+        fixture = json.loads(
+            (
+                Path(__file__).parents[3]
+                / "programs/public-vector-metric-v1/fixtures/golden-v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        scope = fixture["scope"]
+        encode = lambda value: f"0x{bytes(value).hex()}"
+        result = build_open_competition_v2_public_vector(
+            {
+                "scope": {
+                    "chain_id": scope["chain_id"],
+                    "competition": encode(scope["competition"]),
+                    "bounty_id": encode(scope["bounty_id"]),
+                    "solver": encode(scope["solver"]),
+                    "solver_nonce": scope["solver_nonce"],
+                    "proof_system": "groth16",
+                    "program_vkey": encode(scope["program_vkey"]),
+                    "source_hash": encode(scope["source_hash"]),
+                    "elf_hash": encode(scope["elf_hash"]),
+                    "execution_policy_hash": encode(scope["execution_policy_hash"]),
+                    "settlement_policy_hash": encode(scope["settlement_policy_hash"]),
+                    "beta_risk_hash": encode(scope["beta_risk_hash"]),
+                },
+                "mode": fixture["mode"],
+                "threshold": fixture["threshold"],
+                "vectors": fixture["vectors"],
+            }
+        )
+        self.assertEqual(result, fixture["expected"])
 
     def test_canonical_child_plan_sends_task_acceptance_criteria(self):
         client = StubAgentBountiesClient([{"benchmark_hash": "0x1234"}])

@@ -1,6 +1,7 @@
 use chain_base::{
     AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
-    OpenCompetitionEventKind,
+    OpenCompetitionEventKind, OpenCompetitionV2Event, OpenCompetitionV2EventKind,
+    OpenCompetitionV2ProjectedState, OpenCompetitionV2Projection,
 };
 use chrono::{DateTime, Utc};
 use domain::{
@@ -61,6 +62,8 @@ pub const OPEN_COMPETITION_V1_MIGRATION: &str =
     include_str!("../../../migrations/0019_open_competition_v1.sql");
 pub const OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION: &str =
     include_str!("../../../migrations/0020_open_competition_entrant_relays.sql");
+pub const OPEN_COMPETITION_V2_BETA1_MIGRATION: &str =
+    include_str!("../../../migrations/0021_open_competition_v2_beta1.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -159,6 +162,8 @@ pub enum DbError {
     AutonomousEvidenceConflict(String),
     #[error("conflicting open-competition event replay: {0}")]
     OpenCompetitionEventConflict(String),
+    #[error("conflicting Open Competition V2 canonical replay: {0}")]
+    OpenCompetitionV2Conflict(String),
     #[error("conflicting x402 relay replay: {0}")]
     X402RelayConflict(String),
     #[error("x402 hosted relay quota exceeded: {0}")]
@@ -724,6 +729,130 @@ pub struct OpenCompetitionEntrantRelay {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCompetitionV2SafeContext {
+    pub block_hash: String,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionV2StoredProjection {
+    pub network: String,
+    pub factory_contract: String,
+    pub projection: OpenCompetitionV2Projection,
+    pub safe_block_number: u64,
+    pub safe_block_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenCompetitionV2ProofJobState {
+    Quoted,
+    PaymentPending,
+    Paid,
+    Proving,
+    Proved,
+    Relaying,
+    Confirmed,
+    RefundDue,
+    Refunded,
+    LostCompetition,
+}
+
+impl OpenCompetitionV2ProofJobState {
+    fn storage_name(self) -> &'static str {
+        match self {
+            Self::Quoted => "quoted",
+            Self::PaymentPending => "payment_pending",
+            Self::Paid => "paid",
+            Self::Proving => "proving",
+            Self::Proved => "proved",
+            Self::Relaying => "relaying",
+            Self::Confirmed => "confirmed",
+            Self::RefundDue => "refund_due",
+            Self::Refunded => "refunded",
+            Self::LostCompetition => "lost_competition",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionV2ProofJob {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub network: String,
+    pub competition_contract: String,
+    pub solver: String,
+    pub solver_nonce: String,
+    pub artifact_hash: String,
+    pub program_input: serde_json::Value,
+    pub expected_public_values: String,
+    pub requested_relay: bool,
+    pub proof_system: String,
+    pub state: OpenCompetitionV2ProofJobState,
+    pub gross_prize: String,
+    pub proof_fee_quote: String,
+    pub relay_fee_quote: String,
+    pub net_prize_if_win: String,
+    pub maximum_charge: String,
+    pub winner_mode: String,
+    pub competition_risk: String,
+    pub quote_expires_at: DateTime<Utc>,
+    pub proof_sla_deadline: DateTime<Utc>,
+    pub payer: Option<String>,
+    pub payment_authorization_nonce: Option<String>,
+    pub payment_authorization: Option<serde_json::Value>,
+    pub payment_tx_hash: Option<String>,
+    pub payment_block_number: Option<u64>,
+    pub payment_evidence: Option<serde_json::Value>,
+    pub proof_hash: Option<String>,
+    pub public_values_hash: Option<String>,
+    pub proof: Option<String>,
+    pub public_values: Option<String>,
+    pub proof_provider_job_id: Option<String>,
+    pub solver_authorization_deadline: Option<u64>,
+    pub solver_signature: Option<String>,
+    pub relay_tx_hash: Option<String>,
+    pub settlement_event_id: Option<Uuid>,
+    pub refund_evidence: Option<serde_json::Value>,
+    pub refund_tx_hash: Option<String>,
+    pub refund_block_number: Option<u64>,
+    pub refund_due_at: Option<DateTime<Utc>>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+    pub attempt_count: u32,
+    pub lease_token: Option<Uuid>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpenCompetitionV2ProofJobUpdate {
+    pub payer: Option<String>,
+    pub payment_authorization_nonce: Option<String>,
+    pub payment_authorization: Option<serde_json::Value>,
+    pub payment_tx_hash: Option<String>,
+    pub payment_block_number: Option<u64>,
+    pub payment_evidence: Option<serde_json::Value>,
+    pub proof_hash: Option<String>,
+    pub public_values_hash: Option<String>,
+    pub proof: Option<String>,
+    pub public_values: Option<String>,
+    pub proof_provider_job_id: Option<String>,
+    pub solver_authorization_deadline: Option<u64>,
+    pub solver_signature: Option<String>,
+    pub relay_tx_hash: Option<String>,
+    pub settlement_event_id: Option<Uuid>,
+    pub refund_evidence: Option<serde_json::Value>,
+    pub refund_tx_hash: Option<String>,
+    pub refund_block_number: Option<u64>,
+    pub refund_due_at: Option<DateTime<Utc>>,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewClaimCandidate {
     pub id: Uuid,
@@ -897,6 +1026,7 @@ impl PostgresStore {
                 SOLVE_ACTION_RENAME_MIGRATION,
                 OPEN_COMPETITION_V1_MIGRATION,
                 OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
+                OPEN_COMPETITION_V2_BETA1_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -5248,6 +5378,531 @@ impl PostgresStore {
             .collect()
     }
 
+    pub async fn upsert_open_competition_v2_event(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        event: &OpenCompetitionV2Event,
+        safe: &OpenCompetitionV2SafeContext,
+    ) -> DbResult<()> {
+        if event.protocol_version != chain_base::OPEN_COMPETITION_V2_PROTOCOL_VERSION {
+            return Err(DbError::OpenCompetitionV2Conflict(format!(
+                "unsupported protocol version {}",
+                event.protocol_version
+            )));
+        }
+        if event.block_number > safe.safe_block_number {
+            return Err(DbError::OpenCompetitionV2Conflict(format!(
+                "event block {} is newer than safe block {}",
+                event.block_number, safe.safe_block_number
+            )));
+        }
+        let kind = serde_json::to_value(event.kind)?
+            .as_str()
+            .ok_or_else(|| DbError::InvalidEnum("Open Competition V2 event kind".to_string()))?
+            .to_string();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO open_competition_v2_events
+              (id, protocol_version, log_key, network, factory_contract, tx_hash,
+               block_number, block_hash, log_index, contract_address, bounty_id,
+               kind, data, occurred_at, safe_block_number, safe_block_hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (network, factory_contract, log_key) DO UPDATE SET
+              safe_block_number = EXCLUDED.safe_block_number,
+              safe_block_hash = EXCLUDED.safe_block_hash
+            WHERE open_competition_v2_events.id = EXCLUDED.id
+              AND open_competition_v2_events.protocol_version = EXCLUDED.protocol_version
+              AND open_competition_v2_events.tx_hash = EXCLUDED.tx_hash
+              AND open_competition_v2_events.block_number = EXCLUDED.block_number
+              AND open_competition_v2_events.block_hash = EXCLUDED.block_hash
+              AND open_competition_v2_events.log_index = EXCLUDED.log_index
+              AND open_competition_v2_events.contract_address = EXCLUDED.contract_address
+              AND open_competition_v2_events.bounty_id = EXCLUDED.bounty_id
+              AND open_competition_v2_events.kind = EXCLUDED.kind
+              AND open_competition_v2_events.data = EXCLUDED.data
+              AND EXCLUDED.safe_block_number >= open_competition_v2_events.safe_block_number
+              AND (
+                EXCLUDED.safe_block_number > open_competition_v2_events.safe_block_number
+                OR EXCLUDED.safe_block_hash = open_competition_v2_events.safe_block_hash
+              )
+            "#,
+        )
+        .bind(event.id)
+        .bind(&event.protocol_version)
+        .bind(&event.log_key)
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(normalize_key_address(&event.tx_hash))
+        .bind(i64_from_u64(event.block_number)?)
+        .bind(normalize_key_address(&safe.block_hash))
+        .bind(i64_from_u64(event.log_index)?)
+        .bind(normalize_key_address(&event.contract_address))
+        .bind(&event.bounty_id)
+        .bind(kind)
+        .bind(&event.data)
+        .bind(event.occurred_at)
+        .bind(i64_from_u64(safe.safe_block_number)?)
+        .bind(normalize_key_address(&safe.safe_block_hash))
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(DbError::OpenCompetitionV2Conflict(event.log_key.clone()));
+        }
+        Ok(())
+    }
+
+    pub async fn list_open_competition_v2_events(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_v2_events
+            WHERE network = $1 AND factory_contract = $2
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_v2_event_from_row)
+            .collect()
+    }
+
+    pub async fn list_open_competition_v2_events_for_contract(
+        &self,
+        network: &str,
+        competition_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2Event>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_v2_events
+            WHERE network = $1 AND contract_address = $2
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(competition_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_v2_event_from_row)
+            .collect()
+    }
+
+    pub async fn upsert_open_competition_v2_projection(
+        &self,
+        network: &str,
+        factory_contract: &str,
+        projection: &OpenCompetitionV2Projection,
+        safe_block_number: u64,
+        safe_block_hash: &str,
+    ) -> DbResult<()> {
+        if projection.last_block > safe_block_number {
+            return Err(DbError::OpenCompetitionV2Conflict(format!(
+                "projection {} is newer than its safe block",
+                projection.bounty_id
+            )));
+        }
+        let result = sqlx::query(
+            r#"
+            INSERT INTO open_competition_v2_projections
+              (network, factory_contract, bounty_id, competition_contract, creator,
+               creation_nonce, beta_risk_hash, state, solver_reward, keeper_reward,
+               funding_deadline, proof_window_seconds, winner_mode, score_direction,
+               score_threshold, proof_system, verifier_adapter, program_vkey,
+               source_hash, elf_hash, journal_schema_hash, metric_program_hash,
+               execution_policy_hash, verification_policy_hash, settlement_policy_hash,
+               funded_amount, proof_deadline,
+               accepted_entries, leader, winner, refund_pool_remaining, last_block,
+               last_log_index, safe_block_number, safe_block_hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+                    $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+            ON CONFLICT (network, factory_contract, bounty_id) DO UPDATE SET
+              state = EXCLUDED.state,
+              solver_reward = EXCLUDED.solver_reward,
+              keeper_reward = EXCLUDED.keeper_reward,
+              winner_mode = EXCLUDED.winner_mode,
+              proof_system = EXCLUDED.proof_system,
+              funded_amount = EXCLUDED.funded_amount,
+              proof_deadline = EXCLUDED.proof_deadline,
+              accepted_entries = EXCLUDED.accepted_entries,
+              leader = EXCLUDED.leader,
+              winner = EXCLUDED.winner,
+              refund_pool_remaining = EXCLUDED.refund_pool_remaining,
+              last_block = EXCLUDED.last_block,
+              last_log_index = EXCLUDED.last_log_index,
+              safe_block_number = EXCLUDED.safe_block_number,
+              safe_block_hash = EXCLUDED.safe_block_hash,
+              updated_at = now()
+            WHERE open_competition_v2_projections.competition_contract = EXCLUDED.competition_contract
+              AND open_competition_v2_projections.creator = EXCLUDED.creator
+              AND open_competition_v2_projections.creation_nonce IS NOT DISTINCT FROM EXCLUDED.creation_nonce
+              AND open_competition_v2_projections.beta_risk_hash IS NOT DISTINCT FROM EXCLUDED.beta_risk_hash
+              AND open_competition_v2_projections.program_vkey IS NOT DISTINCT FROM EXCLUDED.program_vkey
+              AND open_competition_v2_projections.elf_hash IS NOT DISTINCT FROM EXCLUDED.elf_hash
+              AND open_competition_v2_projections.verification_policy_hash IS NOT DISTINCT FROM EXCLUDED.verification_policy_hash
+              AND (EXCLUDED.last_block, EXCLUDED.last_log_index)
+                    >= (open_competition_v2_projections.last_block,
+                        open_competition_v2_projections.last_log_index)
+              AND EXCLUDED.safe_block_number >= open_competition_v2_projections.safe_block_number
+              AND (
+                EXCLUDED.safe_block_number > open_competition_v2_projections.safe_block_number
+                OR EXCLUDED.safe_block_hash = open_competition_v2_projections.safe_block_hash
+              )
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .bind(&projection.bounty_id)
+        .bind(normalize_key_address(&projection.competition))
+        .bind(normalize_key_address(&projection.creator))
+        .bind(&projection.creation_nonce)
+        .bind(&projection.beta_risk_hash)
+        .bind(open_competition_v2_state_storage_name(projection.state))
+        .bind(projection.solver_reward.to_string())
+        .bind(projection.keeper_reward.to_string())
+        .bind(optional_i64_from_u64(projection.funding_deadline)?)
+        .bind(optional_i64_from_u64(projection.proof_window_seconds)?)
+        .bind(&projection.winner_mode)
+        .bind(&projection.score_direction)
+        .bind(&projection.score_threshold)
+        .bind(&projection.proof_system)
+        .bind(&projection.verifier_adapter)
+        .bind(&projection.program_vkey)
+        .bind(&projection.source_hash)
+        .bind(&projection.elf_hash)
+        .bind(&projection.journal_schema_hash)
+        .bind(&projection.metric_program_hash)
+        .bind(&projection.execution_policy_hash)
+        .bind(&projection.verification_policy_hash)
+        .bind(&projection.settlement_policy_hash)
+        .bind(projection.funded_amount.to_string())
+        .bind(optional_i64_from_u64(projection.proof_deadline)?)
+        .bind(i64_from_u64(projection.accepted_entries)?)
+        .bind(projection.leader.as_deref().map(normalize_key_address))
+        .bind(projection.winner.as_deref().map(normalize_key_address))
+        .bind(projection.refund_pool_remaining.to_string())
+        .bind(i64_from_u64(projection.last_block)?)
+        .bind(i64_from_u64(projection.last_log_index)?)
+        .bind(i64_from_u64(safe_block_number)?)
+        .bind(normalize_key_address(safe_block_hash))
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(DbError::OpenCompetitionV2Conflict(
+                projection.bounty_id.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn list_open_competition_v2_projections(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2StoredProjection>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT network, factory_contract, bounty_id, competition_contract,
+                   creator, creation_nonce, beta_risk_hash, state, solver_reward,
+                   keeper_reward, funding_deadline, proof_window_seconds, winner_mode,
+                   score_direction, score_threshold, proof_system, verifier_adapter,
+                   program_vkey, source_hash, elf_hash, journal_schema_hash,
+                   metric_program_hash, execution_policy_hash,
+                   verification_policy_hash, settlement_policy_hash, funded_amount,
+                   proof_deadline, accepted_entries, leader, winner,
+                   refund_pool_remaining, last_block, last_log_index,
+                   safe_block_number, safe_block_hash
+            FROM open_competition_v2_projections
+            WHERE network = $1 AND factory_contract = $2
+            ORDER BY last_block DESC, last_log_index DESC
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_v2_projection_from_row)
+            .collect()
+    }
+
+    pub async fn insert_open_competition_v2_proof_job(
+        &self,
+        job: &OpenCompetitionV2ProofJob,
+    ) -> DbResult<OpenCompetitionV2ProofJob> {
+        if job.state != OpenCompetitionV2ProofJobState::Quoted {
+            return Err(DbError::OpenCompetitionV2Conflict(
+                "new proof job must start in quoted state".to_string(),
+            ));
+        }
+        let result = sqlx::query(
+            r#"
+            INSERT INTO open_competition_v2_proof_jobs
+              (id, idempotency_key, network, competition_contract, solver,
+               solver_nonce, artifact_hash, program_input, expected_public_values,
+               requested_relay, proof_system, state, gross_prize,
+               proof_fee_quote, relay_fee_quote, net_prize_if_win,
+               maximum_charge, winner_mode, competition_risk,
+               quote_expires_at, proof_sla_deadline, payer,
+               payment_authorization_nonce, payment_authorization, payment_tx_hash,
+               payment_block_number, payment_evidence, proof_hash,
+               public_values_hash, proof, public_values, proof_provider_job_id,
+               solver_authorization_deadline, solver_signature, relay_tx_hash,
+               settlement_event_id, refund_evidence, refund_tx_hash,
+               refund_block_number, refund_due_at, failure_code, failure_message,
+               created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+                    $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34,
+                    $35, $36, $37, $38, $39, $40, $41, $42, $43, $44)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            "#,
+        )
+        .bind(job.id)
+        .bind(&job.idempotency_key)
+        .bind(&job.network)
+        .bind(normalize_key_address(&job.competition_contract))
+        .bind(normalize_key_address(&job.solver))
+        .bind(&job.solver_nonce)
+        .bind(normalize_key_address(&job.artifact_hash))
+        .bind(&job.program_input)
+        .bind(&job.expected_public_values)
+        .bind(job.requested_relay)
+        .bind(&job.proof_system)
+        .bind(job.state.storage_name())
+        .bind(&job.gross_prize)
+        .bind(&job.proof_fee_quote)
+        .bind(&job.relay_fee_quote)
+        .bind(&job.net_prize_if_win)
+        .bind(&job.maximum_charge)
+        .bind(&job.winner_mode)
+        .bind(&job.competition_risk)
+        .bind(job.quote_expires_at)
+        .bind(job.proof_sla_deadline)
+        .bind(&job.payer)
+        .bind(&job.payment_authorization_nonce)
+        .bind(&job.payment_authorization)
+        .bind(&job.payment_tx_hash)
+        .bind(job.payment_block_number.map(i64_from_u64).transpose()?)
+        .bind(&job.payment_evidence)
+        .bind(&job.proof_hash)
+        .bind(&job.public_values_hash)
+        .bind(&job.proof)
+        .bind(&job.public_values)
+        .bind(&job.proof_provider_job_id)
+        .bind(
+            job.solver_authorization_deadline
+                .map(i64_from_u64)
+                .transpose()?,
+        )
+        .bind(&job.solver_signature)
+        .bind(&job.relay_tx_hash)
+        .bind(job.settlement_event_id)
+        .bind(&job.refund_evidence)
+        .bind(&job.refund_tx_hash)
+        .bind(job.refund_block_number.map(i64_from_u64).transpose()?)
+        .bind(job.refund_due_at)
+        .bind(&job.failure_code)
+        .bind(&job.failure_message)
+        .bind(job.created_at)
+        .bind(job.updated_at)
+        .execute(&self.pool)
+        .await?;
+        let stored = self
+            .get_open_competition_v2_proof_job_by_idempotency(&job.idempotency_key)
+            .await?
+            .ok_or_else(|| DbError::OpenCompetitionV2Conflict(job.idempotency_key.clone()))?;
+        if result.rows_affected() == 0 && !same_open_competition_v2_quote(job, &stored) {
+            return Err(DbError::OpenCompetitionV2Conflict(
+                job.idempotency_key.clone(),
+            ));
+        }
+        Ok(stored)
+    }
+
+    pub async fn get_open_competition_v2_proof_job(
+        &self,
+        id: Uuid,
+    ) -> DbResult<Option<OpenCompetitionV2ProofJob>> {
+        let row = sqlx::query(
+            r#"
+            SELECT * FROM open_competition_v2_proof_jobs WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_v2_proof_job_from_row).transpose()
+    }
+
+    pub async fn get_open_competition_v2_proof_job_by_idempotency(
+        &self,
+        idempotency_key: &str,
+    ) -> DbResult<Option<OpenCompetitionV2ProofJob>> {
+        let row = sqlx::query(
+            r#"
+            SELECT * FROM open_competition_v2_proof_jobs WHERE idempotency_key = $1
+            "#,
+        )
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_v2_proof_job_from_row).transpose()
+    }
+
+    pub async fn lease_next_open_competition_v2_proof_job(
+        &self,
+        lease_token: Uuid,
+        lease_seconds: u32,
+    ) -> DbResult<Option<OpenCompetitionV2ProofJob>> {
+        if lease_seconds == 0 {
+            return Err(DbError::OpenCompetitionV2Conflict(
+                "proof job lease must be positive".to_string(),
+            ));
+        }
+        let row = sqlx::query(
+            r#"
+            WITH candidate AS (
+              SELECT id
+              FROM open_competition_v2_proof_jobs
+              WHERE state IN ('paid', 'proving', 'relaying', 'refund_due')
+                AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+              ORDER BY
+                CASE state
+                  WHEN 'refund_due' THEN 0
+                  WHEN 'relaying' THEN 1
+                  WHEN 'proving' THEN 2
+                  ELSE 3
+                END,
+                updated_at,
+                id
+              FOR UPDATE SKIP LOCKED
+              LIMIT 1
+            )
+            UPDATE open_competition_v2_proof_jobs AS job SET
+              lease_token = $1,
+              lease_expires_at = now() + make_interval(secs => $2),
+              attempt_count = attempt_count + 1,
+              updated_at = now()
+            FROM candidate
+            WHERE job.id = candidate.id
+            RETURNING job.*
+            "#,
+        )
+        .bind(lease_token)
+        .bind(i32::try_from(lease_seconds).map_err(|_| {
+            DbError::IntegerOverflow(format!("proof job lease seconds {lease_seconds}"))
+        })?)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(open_competition_v2_proof_job_from_row).transpose()
+    }
+
+    pub async fn release_open_competition_v2_proof_job_lease(
+        &self,
+        id: Uuid,
+        lease_token: Uuid,
+    ) -> DbResult<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE open_competition_v2_proof_jobs SET
+              lease_token = NULL,
+              lease_expires_at = NULL,
+              updated_at = now()
+            WHERE id = $1 AND lease_token = $2
+            "#,
+        )
+        .bind(id)
+        .bind(lease_token)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn transition_open_competition_v2_proof_job(
+        &self,
+        id: Uuid,
+        expected: OpenCompetitionV2ProofJobState,
+        next: OpenCompetitionV2ProofJobState,
+        update: &OpenCompetitionV2ProofJobUpdate,
+    ) -> DbResult<OpenCompetitionV2ProofJob> {
+        validate_open_competition_v2_proof_transition(expected, next, update)?;
+        let row = sqlx::query(
+            r#"
+            UPDATE open_competition_v2_proof_jobs SET
+              state = $3,
+              payer = COALESCE($4, payer),
+              payment_authorization_nonce = COALESCE($5, payment_authorization_nonce),
+              payment_authorization = COALESCE($6, payment_authorization),
+              payment_tx_hash = COALESCE($7, payment_tx_hash),
+              payment_block_number = COALESCE($8, payment_block_number),
+              payment_evidence = COALESCE($9, payment_evidence),
+              proof_hash = COALESCE($10, proof_hash),
+              public_values_hash = COALESCE($11, public_values_hash),
+              proof = COALESCE($12, proof),
+              public_values = COALESCE($13, public_values),
+              proof_provider_job_id = COALESCE($14, proof_provider_job_id),
+              solver_authorization_deadline = COALESCE($15, solver_authorization_deadline),
+              solver_signature = COALESCE($16, solver_signature),
+              relay_tx_hash = COALESCE($17, relay_tx_hash),
+              settlement_event_id = COALESCE($18, settlement_event_id),
+              refund_evidence = COALESCE($19, refund_evidence),
+              refund_tx_hash = COALESCE($20, refund_tx_hash),
+              refund_block_number = COALESCE($21, refund_block_number),
+              refund_due_at = COALESCE($22, refund_due_at),
+              failure_code = COALESCE($23, failure_code),
+              failure_message = COALESCE($24, failure_message),
+              updated_at = now()
+            WHERE id = $1 AND state = $2
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(expected.storage_name())
+        .bind(next.storage_name())
+        .bind(update.payer.as_deref().map(normalize_key_address))
+        .bind(&update.payment_authorization_nonce)
+        .bind(&update.payment_authorization)
+        .bind(&update.payment_tx_hash)
+        .bind(update.payment_block_number.map(i64_from_u64).transpose()?)
+        .bind(&update.payment_evidence)
+        .bind(&update.proof_hash)
+        .bind(&update.public_values_hash)
+        .bind(&update.proof)
+        .bind(&update.public_values)
+        .bind(&update.proof_provider_job_id)
+        .bind(
+            update
+                .solver_authorization_deadline
+                .map(i64_from_u64)
+                .transpose()?,
+        )
+        .bind(&update.solver_signature)
+        .bind(&update.relay_tx_hash)
+        .bind(update.settlement_event_id)
+        .bind(&update.refund_evidence)
+        .bind(&update.refund_tx_hash)
+        .bind(update.refund_block_number.map(i64_from_u64).transpose()?)
+        .bind(update.refund_due_at)
+        .bind(&update.failure_code)
+        .bind(&update.failure_message)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| DbError::OpenCompetitionV2Conflict(id.to_string()))?;
+        open_competition_v2_proof_job_from_row(row)
+    }
+
     pub async fn list_unverified_open_competition_event_blocks(
         &self,
         network: &str,
@@ -7086,6 +7741,341 @@ fn open_competition_event_from_row(row: PgRow) -> DbResult<OpenCompetitionEvent>
     })
 }
 
+fn open_competition_v2_event_from_row(row: PgRow) -> DbResult<OpenCompetitionV2Event> {
+    let kind: OpenCompetitionV2EventKind =
+        serde_json::from_value(serde_json::Value::String(row.try_get::<String, _>("kind")?))?;
+    Ok(OpenCompetitionV2Event {
+        id: row.try_get("id")?,
+        protocol_version: row.try_get("protocol_version")?,
+        log_key: row.try_get("log_key")?,
+        tx_hash: row.try_get("tx_hash")?,
+        block_number: u64_from_i64(row.try_get("block_number")?)?,
+        log_index: u64_from_i64(row.try_get("log_index")?)?,
+        contract_address: row.try_get("contract_address")?,
+        bounty_id: row.try_get("bounty_id")?,
+        kind,
+        data: row.try_get("data")?,
+        occurred_at: row.try_get("occurred_at")?,
+    })
+}
+
+fn open_competition_v2_projection_from_row(
+    row: PgRow,
+) -> DbResult<OpenCompetitionV2StoredProjection> {
+    let parse_amount = |field: &str| -> DbResult<u128> {
+        row.try_get::<String, _>(field)?
+            .parse::<u128>()
+            .map_err(|_| DbError::IntegerOverflow(field.to_string()))
+    };
+    Ok(OpenCompetitionV2StoredProjection {
+        network: row.try_get("network")?,
+        factory_contract: row.try_get("factory_contract")?,
+        projection: OpenCompetitionV2Projection {
+            bounty_id: row.try_get("bounty_id")?,
+            competition: row.try_get("competition_contract")?,
+            creator: row.try_get("creator")?,
+            creation_nonce: row.try_get("creation_nonce")?,
+            beta_risk_hash: row.try_get("beta_risk_hash")?,
+            state: parse_open_competition_v2_state(row.try_get("state")?)?,
+            solver_reward: parse_amount("solver_reward")?,
+            keeper_reward: parse_amount("keeper_reward")?,
+            funding_deadline: optional_u64_from_i64(row.try_get("funding_deadline")?)?,
+            proof_window_seconds: optional_u64_from_i64(row.try_get("proof_window_seconds")?)?,
+            winner_mode: row.try_get("winner_mode")?,
+            score_direction: row.try_get("score_direction")?,
+            score_threshold: row.try_get("score_threshold")?,
+            proof_system: row.try_get("proof_system")?,
+            verifier_adapter: row.try_get("verifier_adapter")?,
+            program_vkey: row.try_get("program_vkey")?,
+            source_hash: row.try_get("source_hash")?,
+            elf_hash: row.try_get("elf_hash")?,
+            journal_schema_hash: row.try_get("journal_schema_hash")?,
+            metric_program_hash: row.try_get("metric_program_hash")?,
+            execution_policy_hash: row.try_get("execution_policy_hash")?,
+            verification_policy_hash: row.try_get("verification_policy_hash")?,
+            settlement_policy_hash: row.try_get("settlement_policy_hash")?,
+            funded_amount: parse_amount("funded_amount")?,
+            proof_deadline: optional_u64_from_i64(row.try_get("proof_deadline")?)?,
+            accepted_entries: u64_from_i64(row.try_get("accepted_entries")?)?,
+            leader: row.try_get("leader")?,
+            winner: row.try_get("winner")?,
+            refund_pool_remaining: parse_amount("refund_pool_remaining")?,
+            last_block: u64_from_i64(row.try_get("last_block")?)?,
+            last_log_index: u64_from_i64(row.try_get("last_log_index")?)?,
+        },
+        safe_block_number: u64_from_i64(row.try_get("safe_block_number")?)?,
+        safe_block_hash: row.try_get("safe_block_hash")?,
+    })
+}
+
+fn open_competition_v2_state_storage_name(state: OpenCompetitionV2ProjectedState) -> &'static str {
+    match state {
+        OpenCompetitionV2ProjectedState::Announced => "announced",
+        OpenCompetitionV2ProjectedState::Funding => "funding",
+        OpenCompetitionV2ProjectedState::Active => "active",
+        OpenCompetitionV2ProjectedState::Settled => "settled",
+        OpenCompetitionV2ProjectedState::Cancelled => "cancelled",
+    }
+}
+
+fn parse_open_competition_v2_state(value: String) -> DbResult<OpenCompetitionV2ProjectedState> {
+    match value.as_str() {
+        "announced" => Ok(OpenCompetitionV2ProjectedState::Announced),
+        "funding" => Ok(OpenCompetitionV2ProjectedState::Funding),
+        "active" => Ok(OpenCompetitionV2ProjectedState::Active),
+        "settled" => Ok(OpenCompetitionV2ProjectedState::Settled),
+        "cancelled" => Ok(OpenCompetitionV2ProjectedState::Cancelled),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
+fn open_competition_v2_proof_job_from_row(row: PgRow) -> DbResult<OpenCompetitionV2ProofJob> {
+    Ok(OpenCompetitionV2ProofJob {
+        id: row.try_get("id")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        network: row.try_get("network")?,
+        competition_contract: row.try_get("competition_contract")?,
+        solver: row.try_get("solver")?,
+        solver_nonce: row.try_get("solver_nonce")?,
+        artifact_hash: row.try_get("artifact_hash")?,
+        program_input: row.try_get("program_input")?,
+        expected_public_values: row.try_get("expected_public_values")?,
+        requested_relay: row.try_get("requested_relay")?,
+        proof_system: row.try_get("proof_system")?,
+        state: parse_open_competition_v2_proof_job_state(row.try_get("state")?)?,
+        gross_prize: row.try_get("gross_prize")?,
+        proof_fee_quote: row.try_get("proof_fee_quote")?,
+        relay_fee_quote: row.try_get("relay_fee_quote")?,
+        net_prize_if_win: row.try_get("net_prize_if_win")?,
+        maximum_charge: row.try_get("maximum_charge")?,
+        winner_mode: row.try_get("winner_mode")?,
+        competition_risk: row.try_get("competition_risk")?,
+        quote_expires_at: row.try_get("quote_expires_at")?,
+        proof_sla_deadline: row.try_get("proof_sla_deadline")?,
+        payer: row.try_get("payer")?,
+        payment_authorization_nonce: row.try_get("payment_authorization_nonce")?,
+        payment_authorization: row.try_get("payment_authorization")?,
+        payment_tx_hash: row.try_get("payment_tx_hash")?,
+        payment_block_number: row
+            .try_get::<Option<i64>, _>("payment_block_number")?
+            .map(u64_from_i64)
+            .transpose()?,
+        payment_evidence: row.try_get("payment_evidence")?,
+        proof_hash: row.try_get("proof_hash")?,
+        public_values_hash: row.try_get("public_values_hash")?,
+        proof: row.try_get("proof")?,
+        public_values: row.try_get("public_values")?,
+        proof_provider_job_id: row.try_get("proof_provider_job_id")?,
+        solver_authorization_deadline: row
+            .try_get::<Option<i64>, _>("solver_authorization_deadline")?
+            .map(u64_from_i64)
+            .transpose()?,
+        solver_signature: row.try_get("solver_signature")?,
+        relay_tx_hash: row.try_get("relay_tx_hash")?,
+        settlement_event_id: row.try_get("settlement_event_id")?,
+        refund_evidence: row.try_get("refund_evidence")?,
+        refund_tx_hash: row.try_get("refund_tx_hash")?,
+        refund_block_number: row
+            .try_get::<Option<i64>, _>("refund_block_number")?
+            .map(u64_from_i64)
+            .transpose()?,
+        refund_due_at: row.try_get("refund_due_at")?,
+        failure_code: row.try_get("failure_code")?,
+        failure_message: row.try_get("failure_message")?,
+        attempt_count: u32::try_from(row.try_get::<i32, _>("attempt_count")?)
+            .map_err(|_| DbError::IntegerOverflow("attempt_count".to_string()))?,
+        lease_token: row.try_get("lease_token")?,
+        lease_expires_at: row.try_get("lease_expires_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn parse_open_competition_v2_proof_job_state(
+    value: String,
+) -> DbResult<OpenCompetitionV2ProofJobState> {
+    match value.as_str() {
+        "quoted" => Ok(OpenCompetitionV2ProofJobState::Quoted),
+        "payment_pending" => Ok(OpenCompetitionV2ProofJobState::PaymentPending),
+        "paid" => Ok(OpenCompetitionV2ProofJobState::Paid),
+        "proving" => Ok(OpenCompetitionV2ProofJobState::Proving),
+        "proved" => Ok(OpenCompetitionV2ProofJobState::Proved),
+        "relaying" => Ok(OpenCompetitionV2ProofJobState::Relaying),
+        "confirmed" => Ok(OpenCompetitionV2ProofJobState::Confirmed),
+        "refund_due" => Ok(OpenCompetitionV2ProofJobState::RefundDue),
+        "refunded" => Ok(OpenCompetitionV2ProofJobState::Refunded),
+        "lost_competition" => Ok(OpenCompetitionV2ProofJobState::LostCompetition),
+        _ => Err(DbError::InvalidEnum(value)),
+    }
+}
+
+fn open_competition_v2_proof_transition_allowed(
+    expected: OpenCompetitionV2ProofJobState,
+    next: OpenCompetitionV2ProofJobState,
+) -> bool {
+    matches!(
+        (expected, next),
+        (
+            OpenCompetitionV2ProofJobState::Quoted,
+            OpenCompetitionV2ProofJobState::PaymentPending
+        ) | (
+            OpenCompetitionV2ProofJobState::PaymentPending,
+            OpenCompetitionV2ProofJobState::PaymentPending
+        ) | (
+            OpenCompetitionV2ProofJobState::PaymentPending,
+            OpenCompetitionV2ProofJobState::Paid
+        ) | (
+            OpenCompetitionV2ProofJobState::PaymentPending,
+            OpenCompetitionV2ProofJobState::Quoted
+        ) | (
+            OpenCompetitionV2ProofJobState::Paid,
+            OpenCompetitionV2ProofJobState::Proving
+        ) | (
+            OpenCompetitionV2ProofJobState::Paid,
+            OpenCompetitionV2ProofJobState::RefundDue
+        ) | (
+            OpenCompetitionV2ProofJobState::Proving,
+            OpenCompetitionV2ProofJobState::Proving
+        ) | (
+            OpenCompetitionV2ProofJobState::Proving,
+            OpenCompetitionV2ProofJobState::Proved
+        ) | (
+            OpenCompetitionV2ProofJobState::Proving,
+            OpenCompetitionV2ProofJobState::RefundDue
+        ) | (
+            OpenCompetitionV2ProofJobState::Proved,
+            OpenCompetitionV2ProofJobState::Relaying
+        ) | (
+            OpenCompetitionV2ProofJobState::Proved,
+            OpenCompetitionV2ProofJobState::Confirmed
+        ) | (
+            OpenCompetitionV2ProofJobState::Proved,
+            OpenCompetitionV2ProofJobState::LostCompetition
+        ) | (
+            OpenCompetitionV2ProofJobState::Proved,
+            OpenCompetitionV2ProofJobState::RefundDue
+        ) | (
+            OpenCompetitionV2ProofJobState::Relaying,
+            OpenCompetitionV2ProofJobState::Relaying
+        ) | (
+            OpenCompetitionV2ProofJobState::Relaying,
+            OpenCompetitionV2ProofJobState::Confirmed
+        ) | (
+            OpenCompetitionV2ProofJobState::Relaying,
+            OpenCompetitionV2ProofJobState::RefundDue
+        ) | (
+            OpenCompetitionV2ProofJobState::Relaying,
+            OpenCompetitionV2ProofJobState::LostCompetition
+        ) | (
+            OpenCompetitionV2ProofJobState::RefundDue,
+            OpenCompetitionV2ProofJobState::RefundDue
+        ) | (
+            OpenCompetitionV2ProofJobState::RefundDue,
+            OpenCompetitionV2ProofJobState::Refunded
+        )
+    )
+}
+
+fn validate_open_competition_v2_proof_transition(
+    expected: OpenCompetitionV2ProofJobState,
+    next: OpenCompetitionV2ProofJobState,
+    update: &OpenCompetitionV2ProofJobUpdate,
+) -> DbResult<()> {
+    if !open_competition_v2_proof_transition_allowed(expected, next) {
+        return Err(DbError::OpenCompetitionV2Conflict(format!(
+            "illegal proof job transition {} -> {}",
+            expected.storage_name(),
+            next.storage_name()
+        )));
+    }
+    if next == OpenCompetitionV2ProofJobState::Confirmed && update.settlement_event_id.is_none() {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "confirmed proof job requires canonical settlement event".to_string(),
+        ));
+    }
+    if next == OpenCompetitionV2ProofJobState::RefundDue && update.refund_due_at.is_none() {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "refund_due proof job requires a refund deadline".to_string(),
+        ));
+    }
+    if next == OpenCompetitionV2ProofJobState::Refunded
+        && (update.refund_evidence.is_none()
+            || update.refund_tx_hash.is_none()
+            || update.refund_block_number.is_none())
+    {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "refunded proof job requires canonical refund evidence".to_string(),
+        ));
+    }
+    if next == OpenCompetitionV2ProofJobState::PaymentPending
+        && (update.payer.is_none() || update.payment_authorization_nonce.is_none())
+    {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "payment_pending proof job requires payer and authorization nonce".to_string(),
+        ));
+    }
+    if next == OpenCompetitionV2ProofJobState::Paid
+        && (update.payment_evidence.is_none()
+            || update.payment_tx_hash.is_none()
+            || update.payment_block_number.is_none())
+    {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "paid proof job requires canonical payment evidence".to_string(),
+        ));
+    }
+    if next == OpenCompetitionV2ProofJobState::Proved
+        && (update.proof_hash.is_none()
+            || update.public_values_hash.is_none()
+            || update.proof.is_none()
+            || update.public_values.is_none()
+            || update.proof_provider_job_id.is_none())
+    {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "proved proof job requires the complete provider-bound proof".to_string(),
+        ));
+    }
+    if next == OpenCompetitionV2ProofJobState::Relaying
+        && expected == OpenCompetitionV2ProofJobState::Proved
+        && (update.solver_authorization_deadline.is_none() || update.solver_signature.is_none())
+    {
+        return Err(DbError::OpenCompetitionV2Conflict(
+            "relaying proof job requires scoped solver authorization".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn same_open_competition_v2_quote(
+    expected: &OpenCompetitionV2ProofJob,
+    actual: &OpenCompetitionV2ProofJob,
+) -> bool {
+    expected.id == actual.id
+        && expected.idempotency_key == actual.idempotency_key
+        && expected.network == actual.network
+        && expected
+            .competition_contract
+            .eq_ignore_ascii_case(&actual.competition_contract)
+        && expected.solver.eq_ignore_ascii_case(&actual.solver)
+        && expected.solver_nonce == actual.solver_nonce
+        && expected
+            .artifact_hash
+            .eq_ignore_ascii_case(&actual.artifact_hash)
+        && expected.program_input == actual.program_input
+        && expected
+            .expected_public_values
+            .eq_ignore_ascii_case(&actual.expected_public_values)
+        && expected.requested_relay == actual.requested_relay
+        && expected.proof_system == actual.proof_system
+        && expected.gross_prize == actual.gross_prize
+        && expected.proof_fee_quote == actual.proof_fee_quote
+        && expected.relay_fee_quote == actual.relay_fee_quote
+        && expected.net_prize_if_win == actual.net_prize_if_win
+        && expected.maximum_charge == actual.maximum_charge
+        && expected.winner_mode == actual.winner_mode
+        && expected.quote_expires_at == actual.quote_expires_at
+        && expected.proof_sla_deadline == actual.proof_sla_deadline
+}
+
 fn autonomous_event_kind_storage_name(kind: AutonomousBountyEventKind) -> &'static str {
     match kind {
         AutonomousBountyEventKind::CanonicalBountyCreated => "canonical_bounty_created",
@@ -7270,6 +8260,162 @@ mod tests {
 
         assert!(store.agents.contains_key(&agent.id));
         assert!(store.bounties.contains_key(&bounty.id));
+    }
+
+    #[test]
+    fn open_competition_v2_proof_job_graph_is_closed_and_evidence_gated() {
+        use OpenCompetitionV2ProofJobState as State;
+
+        let allowed = [
+            (State::Quoted, State::PaymentPending),
+            (State::PaymentPending, State::PaymentPending),
+            (State::PaymentPending, State::Paid),
+            (State::PaymentPending, State::Quoted),
+            (State::Paid, State::Proving),
+            (State::Paid, State::RefundDue),
+            (State::Proving, State::Proving),
+            (State::Proving, State::Proved),
+            (State::Proving, State::RefundDue),
+            (State::Proved, State::Relaying),
+            (State::Proved, State::Confirmed),
+            (State::Proved, State::LostCompetition),
+            (State::Proved, State::RefundDue),
+            (State::Relaying, State::Relaying),
+            (State::Relaying, State::Confirmed),
+            (State::Relaying, State::RefundDue),
+            (State::Relaying, State::LostCompetition),
+            (State::RefundDue, State::RefundDue),
+            (State::RefundDue, State::Refunded),
+        ];
+        for expected in [
+            State::Quoted,
+            State::PaymentPending,
+            State::Paid,
+            State::Proving,
+            State::Proved,
+            State::Relaying,
+            State::Confirmed,
+            State::RefundDue,
+            State::Refunded,
+            State::LostCompetition,
+        ] {
+            for next in [
+                State::Quoted,
+                State::PaymentPending,
+                State::Paid,
+                State::Proving,
+                State::Proved,
+                State::Relaying,
+                State::Confirmed,
+                State::RefundDue,
+                State::Refunded,
+                State::LostCompetition,
+            ] {
+                assert_eq!(
+                    open_competition_v2_proof_transition_allowed(expected, next),
+                    allowed.contains(&(expected, next)),
+                    "unexpected transition {expected:?} -> {next:?}"
+                );
+            }
+        }
+
+        assert!(validate_open_competition_v2_proof_transition(
+            State::Quoted,
+            State::PaymentPending,
+            &OpenCompetitionV2ProofJobUpdate::default(),
+        )
+        .is_err());
+        let pending = OpenCompetitionV2ProofJobUpdate {
+            payer: Some(format!("0x{}", "11".repeat(20))),
+            payment_authorization_nonce: Some(format!("0x{}", "22".repeat(32))),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(
+            State::Quoted,
+            State::PaymentPending,
+            &pending,
+        )
+        .unwrap();
+
+        assert!(validate_open_competition_v2_proof_transition(
+            State::PaymentPending,
+            State::Paid,
+            &OpenCompetitionV2ProofJobUpdate::default(),
+        )
+        .is_err());
+        let paid = OpenCompetitionV2ProofJobUpdate {
+            payment_tx_hash: Some(format!("0x{}", "33".repeat(32))),
+            payment_block_number: Some(100),
+            payment_evidence: Some(serde_json::json!({"log_index": 0})),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(State::PaymentPending, State::Paid, &paid)
+            .unwrap();
+
+        assert!(validate_open_competition_v2_proof_transition(
+            State::Proving,
+            State::Proved,
+            &OpenCompetitionV2ProofJobUpdate::default(),
+        )
+        .is_err());
+        let proved = OpenCompetitionV2ProofJobUpdate {
+            proof_hash: Some(format!("0x{}", "44".repeat(32))),
+            public_values_hash: Some(format!("0x{}", "55".repeat(32))),
+            proof: Some("0x1234".to_string()),
+            public_values: Some(format!("0x{}", "66".repeat(640))),
+            proof_provider_job_id: Some("provider-job-1".to_string()),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(State::Proving, State::Proved, &proved)
+            .unwrap();
+
+        assert!(validate_open_competition_v2_proof_transition(
+            State::Proved,
+            State::Relaying,
+            &OpenCompetitionV2ProofJobUpdate::default(),
+        )
+        .is_err());
+        let relaying = OpenCompetitionV2ProofJobUpdate {
+            solver_authorization_deadline: Some(1_900_000_000),
+            solver_signature: Some(format!("0x{}", "77".repeat(65))),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(State::Proved, State::Relaying, &relaying)
+            .unwrap();
+
+        assert!(validate_open_competition_v2_proof_transition(
+            State::Relaying,
+            State::Confirmed,
+            &OpenCompetitionV2ProofJobUpdate::default(),
+        )
+        .is_err());
+        let confirmed = OpenCompetitionV2ProofJobUpdate {
+            settlement_event_id: Some(Uuid::new_v4()),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(
+            State::Relaying,
+            State::Confirmed,
+            &confirmed,
+        )
+        .unwrap();
+
+        let refund_due = OpenCompetitionV2ProofJobUpdate {
+            refund_due_at: Some(Utc::now()),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(State::Paid, State::RefundDue, &refund_due)
+            .unwrap();
+        let refunded = OpenCompetitionV2ProofJobUpdate {
+            refund_evidence: Some(
+                serde_json::json!({"transaction_hash": format!("0x{}", "44".repeat(32))}),
+            ),
+            refund_tx_hash: Some(format!("0x{}", "44".repeat(32))),
+            refund_block_number: Some(101),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(State::RefundDue, State::Refunded, &refunded)
+            .unwrap();
     }
 
     #[test]
@@ -7638,6 +8784,26 @@ mod tests {
             assert!(
                 SOLVE_ACTION_RENAME_MIGRATION.contains(invariant),
                 "missing ChatGPT solve-action migration invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn open_competition_v2_migration_is_safe_block_and_refund_complete() {
+        for invariant in [
+            "protocol_version = 'agent-bounties/open-competition-v2-beta1'",
+            "safe_block_number BIGINT NOT NULL CHECK (safe_block_number >= block_number)",
+            "UNIQUE (network, factory_contract, log_key)",
+            "UNIQUE (network, factory_contract, tx_hash, log_index)",
+            "open_competition_v2_projections",
+            "open_competition_v2_programs",
+            "open_competition_v2_proof_jobs",
+            "'refund_due'",
+            "refund_due_at TIMESTAMPTZ",
+        ] {
+            assert!(
+                OPEN_COMPETITION_V2_BETA1_MIGRATION.contains(invariant),
+                "missing Open Competition V2 persistence invariant {invariant}"
             );
         }
     }

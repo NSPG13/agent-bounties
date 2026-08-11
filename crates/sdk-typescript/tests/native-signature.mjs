@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   AgentBountiesClient,
+  buildOpenCompetitionV2PublicVector,
   generateOpenCompetitionCommitment,
 } from "../dist/index.js";
 
@@ -121,6 +122,92 @@ test("open competition entrant relay preserves the exact plan and signature", as
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("open competition V2 creation preserves decimal strings", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ valid: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const client = new AgentBountiesClient("https://api.example");
+    await client.validateOpenCompetitionV2({
+      creator: "0x1111111111111111111111111111111111111111",
+      creation_nonce: "9007199254740993",
+      acknowledged_risk_hash: `0x${"11".repeat(32)}`,
+      initial_funding: "1000001",
+      params: {
+        solver_reward: "1000000",
+        keeper_reward: "1",
+        funding_deadline: 1,
+        proof_window_seconds: 1,
+        winner_mode: "first_proven",
+        score_direction: "higher_is_better",
+        score_threshold: "0",
+        proof_system: "groth16",
+        program_vkey: `0x${"12".repeat(32)}`,
+        source_hash: `0x${"13".repeat(32)}`,
+        elf_hash: `0x${"14".repeat(32)}`,
+        journal_schema_hash: `0x${"15".repeat(32)}`,
+        metric_program_hash: `0x${"16".repeat(32)}`,
+        execution_policy_hash: `0x${"17".repeat(32)}`,
+        verification_policy_hash: `0x${"18".repeat(32)}`,
+        settlement_policy_hash: `0x${"19".repeat(32)}`,
+        beta_risk_hash: `0x${"11".repeat(32)}`,
+      },
+    });
+
+    assert.equal(
+      requests[0].url,
+      "https://api.example/v1/base/open-competition-v2-beta1/validate",
+    );
+    assert.equal(requests[0].body.network, "base-mainnet");
+    assert.equal(requests[0].body.creation_nonce, "9007199254740993");
+    assert.equal(requests[0].body.initial_funding, "1000001");
+    assert.equal(requests[0].body.params.solver_reward, "1000000");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("open competition V2 shared release vector matches exactly", async () => {
+  const fixture = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../programs/public-vector-metric-v1/fixtures/golden-v1.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const scope = fixture.scope;
+  const hex = (values) => `0x${Buffer.from(values).toString("hex")}`;
+  const result = buildOpenCompetitionV2PublicVector({
+    scope: {
+      chain_id: scope.chain_id,
+      competition: hex(scope.competition),
+      bounty_id: hex(scope.bounty_id),
+      solver: hex(scope.solver),
+      solver_nonce: String(scope.solver_nonce),
+      proof_system: "groth16",
+      program_vkey: hex(scope.program_vkey),
+      source_hash: hex(scope.source_hash),
+      elf_hash: hex(scope.elf_hash),
+      execution_policy_hash: hex(scope.execution_policy_hash),
+      settlement_policy_hash: hex(scope.settlement_policy_hash),
+      beta_risk_hash: hex(scope.beta_risk_hash),
+    },
+    mode: fixture.mode,
+    threshold: String(fixture.threshold),
+    vectors: fixture.vectors,
+  });
+  assert.deepEqual(result, fixture.expected);
 });
 
 test("canonical child planning sends task acceptance criteria", async () => {

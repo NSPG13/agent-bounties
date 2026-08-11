@@ -7,6 +7,8 @@ members = [
   "crates/risk",
   "crates/bounty-router",
   "crates/verifier-sdk",
+  "crates/competition-metric-sdk",
+  "crates/competition-metric-core",
   "crates/eval-harness",
   "crates/payments-stripe",
   "crates/payments-x402",

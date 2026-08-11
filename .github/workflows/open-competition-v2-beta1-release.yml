@@ -1,0 +1,225 @@
+name: Open Competition V2 Beta1 release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/open-competition-v2-beta1-release.yml"
+      - "contracts/base-escrow/src/OpenCompetitionBountyV2Beta1.sol"
+      - "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta1.sol"
+      - "contracts/base-escrow/src/Sp1VerifierAdapterV2Beta1.sol"
+      - "contracts/base-escrow/test/OpenCompetitionBountyV2Beta1.t.sol"
+      - "crates/competition-metric-*/**"
+      - "programs/public-vector-metric-v1/**"
+      - "deployments/open-competition-v2-beta1-release-gates.json"
+      - "scripts/*open_competition_v2*"
+      - "docs/open-competition-v2-beta1*"
+  workflow_dispatch:
+    inputs:
+      run_real_proof_fork_rehearsal:
+        description: Generate Groth16 and PLONK proofs and replay every V2 path on a Base mainnet fork
+        type: boolean
+        required: true
+        default: false
+      run_live_sepolia_rehearsal:
+        description: Deploy the exact Beta1 factory and run both proof systems, pooled funding, expiry, and refunds on Base Sepolia
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deterministic-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install exact release helper dependencies
+        run: python -m pip install -r scripts/requirements-wallet.txt
+      - name: Contract and release-tooling gates
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+        run: |
+          set -euo pipefail
+          forge build --root contracts/base-escrow --force --ast
+          forge test --root contracts/base-escrow \
+            --match-contract '(OpenCompetitionBountyV2Beta1Test|OpenCompetitionBountyV2Beta1InvariantTest)' \
+            --fuzz-runs 10000 -vv
+          python -m unittest \
+            scripts.test_build_open_competition_v2_beta1_release \
+            scripts.test_prepare_open_competition_v2_metric_fixture \
+            scripts.test_run_open_competition_v2_mainnet_fork_replay \
+            scripts.test_open_competition_v2_proof_rehearsal \
+            scripts.test_run_open_competition_v2_sepolia_rehearsal -v
+      - name: Build safe-block release plans
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+        run: |
+          set -euo pipefail
+          python scripts/build_open_competition_v2_beta1_release.py \
+            --network base-mainnet --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --source-commit "$GITHUB_SHA" \
+            --output target/open-competition-v2-mainnet-plan.json
+          python scripts/build_open_competition_v2_beta1_release.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --source-commit "$GITHUB_SHA" \
+            --output target/open-competition-v2-sepolia-plan.json
+      - name: Replay exact mainnet deployment transaction
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+        run: >-
+          python scripts/run_open_competition_v2_mainnet_fork_replay.py
+          --bundle target/open-competition-v2-mainnet-plan.json
+          --rpc-url "$BASE_MAINNET_RPC_URL"
+          --output target/open-competition-v2-mainnet-fork-replay.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta1-release-plan-${{ github.sha }}
+          path: |
+            target/open-competition-v2-*-plan.json
+            target/open-competition-v2-mainnet-fork-replay.json
+          if-no-files-found: error
+          retention-days: 90
+
+  static-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Run pinned Slither and enforce triage fingerprint
+        run: |
+          set -euo pipefail
+          python -m pip install slither-analyzer==0.11.5
+          mkdir -p target
+          slither contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta1.sol \
+            --json target/open-competition-v2-beta1-slither.json \
+            > target/open-competition-v2-beta1-slither.txt 2>&1
+          python scripts/verify_open_competition_v2_slither.py \
+            --report target/open-competition-v2-beta1-slither.json \
+            --output target/open-competition-v2-beta1-slither-triage.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: open-competition-v2-beta1-slither-${{ github.sha }}
+          path: target/open-competition-v2-beta1-slither*
+          if-no-files-found: error
+          retention-days: 90
+
+  real-proof-fork-rehearsal:
+    if: github.event_name == 'workflow_dispatch' && (inputs.run_real_proof_fork_rehearsal || inputs.run_live_sepolia_rehearsal)
+    needs: deterministic-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install exact SP1 6.1 and helper dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -r scripts/requirements-wallet.txt
+          curl -L https://sp1.succinct.xyz | bash
+          "$HOME/.sp1/bin/sp1up" -v 6.1.0
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/sp1-public-vector
+          key: sp1-6.1-public-vector-${{ runner.os }}-${{ hashFiles('programs/public-vector-metric-v1/**', 'crates/competition-metric-core/**') }}
+      - name: Build release bundle and run real-proof fork rehearsal
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/sp1-public-vector
+        run: |
+          set -euo pipefail
+          forge build --root contracts/base-escrow --force --ast
+          python scripts/build_open_competition_v2_beta1_release.py \
+            --network base-mainnet --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --source-commit "$GITHUB_SHA" \
+            --output target/open-competition-v2-mainnet-plan.json
+          python scripts/run_open_competition_v2_mainnet_fork_replay.py \
+            --bundle target/open-competition-v2-mainnet-plan.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --proof-rehearsal \
+            --output target/open-competition-v2-mainnet-real-proof-replay.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: open-competition-v2-beta1-real-proof-fork-${{ github.sha }}
+          path: |
+            target/open-competition-v2-mainnet-plan.json
+            target/open-competition-v2-mainnet-real-proof-replay.json
+            target/open-competition-v2-mainnet-real-proof-replay.anvil.log
+            target/open-competition-v2-proof-work/*.json
+            target/open-competition-v2-proof-work/*.log
+          if-no-files-found: error
+          retention-days: 90
+
+  live-sepolia-rehearsal:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_sepolia_rehearsal && github.ref == 'refs/heads/main'
+    needs: [deterministic-release, real-proof-fork-rehearsal]
+    environment: open-competition-v2-sepolia
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      PYTHONPATH: ${{ github.workspace }}/scripts
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install exact SP1 6.1 and helper dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -r scripts/requirements-wallet.txt
+          curl -L https://sp1.succinct.xyz | bash
+          "$HOME/.sp1/bin/sp1up" -v 6.1.0
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: target/sp1-public-vector
+          key: sp1-6.1-public-vector-${{ runner.os }}-${{ hashFiles('programs/public-vector-metric-v1/**', 'crates/competition-metric-core/**') }}
+      - name: Build exact bundle and run protected live rehearsal
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/sp1-public-vector
+        run: |
+          set -euo pipefail
+          forge build --root contracts/base-escrow --force --ast
+          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_KEEPER_PRIVATE_KEY"]).address.lower())')"
+          python scripts/build_open_competition_v2_beta1_release.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
+            --output target/open-competition-v2-sepolia-plan.json
+          python scripts/run_open_competition_v2_sepolia_rehearsal.py \
+            --bundle target/open-competition-v2-sepolia-plan.json \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --output target/open-competition-v2-sepolia-rehearsal.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: open-competition-v2-beta1-live-sepolia-${{ github.sha }}
+          path: |
+            target/open-competition-v2-sepolia-plan.json
+            target/open-competition-v2-sepolia-rehearsal.json
+            target/open-competition-v2-sepolia-proof-work/*.json
+            target/open-competition-v2-sepolia-proof-work/*.log
+          if-no-files-found: error
+          retention-days: 90

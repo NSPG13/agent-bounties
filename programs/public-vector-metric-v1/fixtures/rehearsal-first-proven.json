@@ -1,0 +1,9 @@
+{
+  "mode": "all_equal",
+  "threshold": 0,
+  "vectors": [
+    { "expected": 11, "observed": 11, "weight": 2 },
+    { "expected": 29, "observed": 29, "weight": 3 },
+    { "expected": 47, "observed": 47, "weight": 5 }
+  ]
+}
