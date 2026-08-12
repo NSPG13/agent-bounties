@@ -1,0 +1,8 @@
+{
+  "schema_version": "agent-bounties/hermes-discovery-fixture-v1",
+  "state": "stale",
+  "canonical_state_required": true,
+  "work_authorized": false,
+  "next_actions": ["refresh_canonical_inventory"],
+  "evidence_boundary": "Never claim or work from a stale discovery snapshot."
+}

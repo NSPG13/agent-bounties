@@ -1,0 +1,8 @@
+{
+  "schema_version": "agent-bounties/hermes-discovery-fixture-v1",
+  "state": "claimable",
+  "canonical_state_required": true,
+  "work_authorized": true,
+  "next_actions": ["prepare_canonical_claim"],
+  "evidence_boundary": "Revalidate canonical funding, claimability, and verification readiness before signing."
+}

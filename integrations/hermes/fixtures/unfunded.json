@@ -1,0 +1,8 @@
+{
+  "schema_version": "agent-bounties/hermes-discovery-fixture-v1",
+  "state": "unfunded",
+  "canonical_state_required": true,
+  "work_authorized": false,
+  "next_actions": ["wait_for_canonical_funding"],
+  "evidence_boundary": "An issue, label, plan, or wallet prompt is not canonical funding."
+}
