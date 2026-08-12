@@ -98,7 +98,7 @@ jobs:
 
       - name: Upload redacted MoonPay production evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: moonpay-production-${{ github.run_id }}
           path: target/operations/moonpay-production-*.json
