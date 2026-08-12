@@ -4,6 +4,9 @@
 Derives ready_to_earn / in_progress / submitted / paid /
 verification_unavailable counts from one accepted inventory snapshot.
 Fixtures cover empty, mixed, degraded, and stale projections.
+
+Also gates the production API projector (opportunities.rs / main.rs) and
+homepage consumer so fixture-only drift cannot pass review.
 """
 
 from __future__ import annotations
@@ -88,11 +91,47 @@ def check_fixture(name: str) -> None:
             raise AssertionError(f"{name}: {key} must be non-negative int")
     if sum(body[k] for k in COUNT_KEYS) != body["total"]:
         raise AssertionError(f"{name}: counts do not sum to total")
+    if name == "stale":
+        if not body.get("source_degraded"):
+            raise AssertionError("stale: source_degraded must be true")
+        if body.get("source") not in {"stale-cache", "degraded-on-chain-feed"}:
+            raise AssertionError("stale: source must signal degraded/stale feed")
+    if name == "degraded" and not body.get("source_degraded"):
+        raise AssertionError("degraded: source_degraded must be true")
     print(f"  {name}: OK counts={ {k: body[k] for k in COUNT_KEYS} }")
+
+
+def assert_production_projector() -> None:
+    """Review gate: versioned breakdown lives at the API projection boundary."""
+    opportunities = (ROOT / "crates/api/src/opportunities.rs").read_text(encoding="utf-8")
+    main_rs = (ROOT / "crates/api/src/main.rs").read_text(encoding="utf-8")
+    home = (ROOT / "site/home.js").read_text(encoding="utf-8")
+    opp_l = opportunities.lower()
+    main_l = main_rs.lower()
+    if "inventory-state-breakdown-v1" not in opp_l and "inventory_state_breakdown" not in opp_l:
+        raise SystemExit("opportunities.rs lacks inventory-state-breakdown-v1")
+    if "fn inventory_state_breakdown_v1" not in opp_l and "pub fn inventory_state_breakdown_v1" not in opp_l:
+        raise SystemExit("opportunities.rs missing inventory_state_breakdown_v1 projector fn")
+    if "ready_to_earn" not in opp_l or "source_degraded" not in opp_l:
+        raise SystemExit("opportunities.rs missing ready_to_earn/source_degraded fields")
+    if "inventory_state_breakdown" not in main_l:
+        raise SystemExit("main.rs must attach inventory-state-breakdown-v1 at projection boundary")
+    if "inventory_state_breakdown_v1" not in main_l:
+        raise SystemExit("main.rs must call inventory_state_breakdown_v1")
+    if "inventory-state-breakdown-v1" not in home:
+        raise SystemExit("site/home.js must consume inventory-state-breakdown-v1")
+    if '["inventory-state-breakdown-v1"]' not in home and "['inventory-state-breakdown-v1']" not in home:
+        raise SystemExit("site/home.js must read projection['inventory-state-breakdown-v1'] from API")
+    print("  production projector boundary: OK")
 
 
 def main() -> int:
     print(f"{SCHEMA} checker")
+    try:
+        assert_production_projector()
+    except SystemExit as exc:
+        print(f"  production: FAIL - {exc}", file=sys.stderr)
+        return 1
     errors = 0
     for name in ("empty", "mixed", "degraded", "stale"):
         try:

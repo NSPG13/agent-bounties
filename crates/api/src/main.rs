@@ -129,7 +129,7 @@ use github_discovery::{
 };
 use hmac::{Hmac, Mac};
 use opportunities::{
-    apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
+    apply_query as apply_opportunity_query, canonical_opportunity, inventory_state_breakdown_v1, legacy_opportunity,
     open_competition_opportunities, render_opportunity_feeds, unfunded_opportunity,
     OpportunityItem, OpportunityProjectionResponse, OpportunityQuery, OpportunitySourceStatus,
     OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
@@ -399,7 +399,7 @@ use worker::{
         ,CloudObjectiveSettlementPolicy
         ,CloudUnfundedBountyRequest
         ,CloudDemoSolution
-        ,OpportunityProjectionResponse
+        ,opportunities::InventoryStateBreakdownV1,OpportunityProjectionResponse
         ,OpportunityItem
         ,opportunities::OpportunityAmount
         ,opportunities::OpportunityNextAction
@@ -4070,16 +4070,26 @@ async fn build_opportunity_projection(
     });
     items.extend(canonical_items);
 
+    let degraded = source_statuses.iter().any(|source| !source.available);
+    let generated_at = now.to_rfc3339();
+    // Breakdown from full accepted snapshot before view/limit filters (one production projector).
+    let inventory_state_breakdown = Some(inventory_state_breakdown_v1(
+        &items,
+        &generated_at,
+        degraded,
+        None,
+    ));
     let items = apply_opportunity_query(items, &query, view, now);
     Ok(OpportunityProjectionResponse {
         schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
-        generated_at: now.to_rfc3339(),
+        generated_at,
         network: network.to_string(),
         applied_view: view.map(|view| view.as_str().to_string()),
-        degraded: source_statuses.iter().any(|source| !source.available),
+        degraded,
         source_statuses,
         items,
         evidence_boundary: "This endpoint is a read-only projection. Each listed source remains authoritative for its own records; the projection cannot create funding, claims, verification, settlement, or payment evidence. Only confirmed canonical BountySettled proves autonomous-v1 solver payment.".to_string(),
+        inventory_state_breakdown,
     })
 }
 

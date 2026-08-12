@@ -553,10 +553,31 @@
   }
 
   /**
-   * inventory-state-breakdown-v1 derived from one accepted projection.
-   * Strict ready_to_earn filtering remains in isReadyToEarn / readyProjection.
+   * Prefer the production API inventory-state-breakdown-v1 on the projection.
+   * Fallback recomputes only if the server field is absent (older API).
+   * Strict ready_to_earn board filtering remains in isReadyToEarn / readyProjection.
    */
   function inventoryStateBreakdown(projection, readyProjection, claim) {
+    const serverBody = projection && projection["inventory-state-breakdown-v1"];
+    if (serverBody && typeof serverBody === "object") {
+      // Board still uses readyProjection for claimability; surface ready count from
+      // the ready view so the hero cannot diverge from rendered ready cards.
+      const readyItems = readyProjection.items || [];
+      return {
+        "inventory-state-breakdown-v1": {
+          ready_to_earn: readyItems.length,
+          in_progress: Number(serverBody.in_progress) || 0,
+          submitted: Number(serverBody.submitted) || 0,
+          paid: Number(serverBody.paid) || 0,
+          verification_unavailable: Number(serverBody.verification_unavailable) || 0,
+          total: serverBody.total,
+          generated_at: serverBody.generated_at || claim.generated_at || projection.generated_at || null,
+          source: serverBody.source || (projection.degraded ? "degraded-on-chain-feed" : "canonical"),
+          source_degraded: Boolean(serverBody.source_degraded || projection.degraded),
+          safe_block: serverBody.safe_block != null ? serverBody.safe_block : (projection.safe_block || claim.safe_block || null),
+        },
+      };
+    }
     const items = projection.items || [];
     const readyItems = readyProjection.items || [];
     let inProgress = 0;
