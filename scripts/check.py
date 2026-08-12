@@ -97,6 +97,7 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
         "scripts/check-site.py", "scripts/check-coinbase-embedded-wallet.py", "scripts/configure-wallet-providers.py",
         "scripts/check-moonpay-onramp.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
+        "scripts/test_check_render_blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
@@ -259,6 +260,7 @@ def main() -> int:
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
     py("scripts/test_shared_evm.py", "-v")
+    py("scripts/test_check_render_blueprint.py", "-v")
     py("scripts/check-render-blueprint.py")
     py("scripts/test_mcp_tool_registry.py", "-v")
     py("scripts/test_review_external_pr.py", "-v")

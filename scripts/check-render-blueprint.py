@@ -140,6 +140,61 @@ def require_address(value: object, label: str) -> str:
     return value
 
 
+def require_docker_compile_time_assets(repo_root: Path) -> None:
+    dockerfile_path = repo_root / "Dockerfile"
+    if not dockerfile_path.exists():
+        fail("missing Dockerfile")
+    dockerfile = dockerfile_path.read_text(encoding="utf-8")
+    copied_roots: set[str] = set()
+    for line in dockerfile.splitlines():
+        if "--from=" in line:
+            continue
+        match = re.match(r"^\s*COPY\s+(?:--\S+\s+)*(?P<sources>.+?)\s+\S+\s*$", line)
+        if not match:
+            continue
+        for source in match.group("sources").split():
+            if source.startswith("/"):
+                continue
+            copied_roots.add(source.rstrip("/").split("/", 1)[0])
+
+    include_pattern = re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)')
+    for rust_source in repo_root.glob("crates/**/*.rs"):
+        contents = rust_source.read_text(encoding="utf-8")
+        production_contents = contents.split("#[cfg(test)]", 1)[0]
+        for relative_asset in include_pattern.findall(production_contents):
+            resolved_asset = (rust_source.parent / relative_asset).resolve()
+            try:
+                repository_asset = resolved_asset.relative_to(repo_root.resolve())
+            except ValueError:
+                fail(
+                    f"{rust_source.relative_to(repo_root)} includes an asset outside the repository: "
+                    f"{relative_asset}"
+                )
+            if not resolved_asset.is_file():
+                fail(
+                    f"{rust_source.relative_to(repo_root)} includes missing asset "
+                    f"{repository_asset.as_posix()}"
+                )
+            root = repository_asset.parts[0]
+            if root not in copied_roots:
+                fail(
+                    f"Dockerfile must copy {root}/ because {rust_source.relative_to(repo_root)} "
+                    f"compiles {repository_asset.as_posix()} into a production binary"
+                )
+
+    workflow = (repo_root / ".github" / "workflows" / "containers.yml").read_text(
+        encoding="utf-8"
+    )
+    for root in sorted(copied_roots):
+        if root == "." or not (repo_root / root).is_dir():
+            continue
+        path_filter = f'- "{root}/**"'
+        if workflow.count(path_filter) != 2:
+            fail(
+                f"containers workflow must monitor {root}/** for pull_request and main push builds"
+            )
+
+
 def load_mainnet_deployment(repo_root: Path) -> dict[str, object]:
     path = repo_root / "deployments" / "base-mainnet.json"
     if not path.exists():
@@ -298,6 +353,7 @@ def load_open_competition_mainnet_release(repo_root: Path) -> dict[str, object]:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
+    require_docker_compile_time_assets(repo_root)
     deployment = load_mainnet_deployment(repo_root)
     open_competition_release = load_open_competition_mainnet_release(repo_root)
     rpc_url = str(deployment["rpc_url"])

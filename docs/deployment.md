@@ -202,6 +202,11 @@ For an all-404 result, repair in this order:
    repository root as Docker context, and use `/health` as the health check.
 3. Confirm the service variables are `APP_PACKAGE=api` and `APP_BINARY=api`.
    A worker or MCP binary on this hostname does not expose the funding routes.
+   The repository-root Docker context must also copy every root-level asset
+   compiled into a Rust binary. `scripts/check-render-blueprint.py` verifies
+   those `include_str!` and `include_bytes!` dependencies, and the Containers
+   workflow monitors every copied source directory so an application or asset
+   change cannot bypass a production-image build.
 4. Copy the service's current `onrender.com` URL from **Settings** and rerun the
    diagnostic against it. Do not infer the hostname from the service name.
 5. If the Render URL passes, attach and verify `api.bountyboard.global`, set
