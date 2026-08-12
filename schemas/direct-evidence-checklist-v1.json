@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbounties.app/schemas/direct-evidence-checklist-v1.json",
+  "title": "Direct bounty evidence checklist v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "source_commit",
+    "repository",
+    "subdirectory",
+    "pull_request_url",
+    "check_runs",
+    "artifact_digest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://agentbounties.app/schemas/direct-evidence-checklist-v1.json"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "subdirectory": {
+      "type": "string",
+      "pattern": "^$|^(?!\.\.\/)(?!.*\/\.\.\/)([A-Za-z0-9._-]+)(\/[A-Za-z0-9._-]+)*$"
+    },
+    "pull_request_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+$"
+    },
+    "check_runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "conclusion",
+          "head_sha",
+          "html_url",
+          "repository"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "const": "completed"
+          },
+          "conclusion": {
+            "const": "success"
+          },
+          "head_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "html_url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://github\\.com/.+/actions/runs/[0-9]+$"
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "full_name"
+            ],
+            "properties": {
+              "full_name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "artifact_digest": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "enum": [
+            "sha256",
+            "sha512"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]+$"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "algorithm": {
+                "const": "sha256"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "minLength": 64,
+                "maxLength": 64
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "algorithm": {
+                "const": "sha512"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "minLength": 128,
+                "maxLength": 128
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}
