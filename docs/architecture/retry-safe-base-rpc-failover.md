@@ -45,6 +45,23 @@ properties:
 - **Negative**: Requires at least 2 Base RPC endpoints for meaningful
   failover; single-endpoint deployments still fail on rate limits.
 
+## Testing Strategy
+
+Offline unit fixtures (`crates/chain-base/tests/failover_fixtures.rs`) verify
+the deterministic parts of the transport without any live RPC call:
+
+- Default retry values (`max_retries = 3`, exponential backoff `200ms → 5s`).
+- Exact backoff sequence, including the cap at the maximum backoff.
+- HTTP status classification: only `429` and `5xx` are retriable; `2xx`,
+  `3xx`, and `4xx` are never retried.
+- Multi-endpoint resolution from `BaseRpcUrlConfig` and the empty-list error.
+- Transport construction with an expected chain ID.
+
+Shared integration fixtures (`crates/chain-base/tests/integration_fixtures.rs`)
+supply the known-good Base mainnet endpoints, the canonical chain-ID hex
+(`0x2105` / `8453`), simulated `429`/`503` and `eth_chainId` responses, and a
+tight CI retry profile so integration tests stay fast.
+
 ## Implementation
 See `crates/chain-base/src/lib.rs` for the Rust implementation and
 `scripts/_shared/rpc.py` for the Python maintainer-script implementation.
