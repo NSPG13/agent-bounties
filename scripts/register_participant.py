@@ -78,6 +78,19 @@ def run(command: list[str]) -> str:
     completed = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:600]
+        secrets = {
+            value
+            for value in (
+                os.environ.get("PARTICIPANT_ATTESTER_PRIVATE_KEY", "").strip(),
+                os.environ.get("BASE_KEEPER_PRIVATE_KEY", "").strip(),
+            )
+            if value
+        }
+        for index, value in enumerate(command[:-1]):
+            if value == "--private-key":
+                secrets.add(command[index + 1])
+        for secret in secrets:
+            detail = detail.replace(secret, "[REDACTED]")
         raise RegistrationError(f"participant transaction failed closed: {detail}")
     return completed.stdout.strip()
 
@@ -113,13 +126,23 @@ def parse_rpc_urls(value: str) -> list[str]:
     return endpoints
 
 
-def select_base_rpc(cast: str, configured: str) -> str:
-    """Probe ordered RPC fallbacks and commit to one Base-mainnet endpoint."""
+def select_base_rpc(cast: str, configured: str, registry: str) -> str:
+    """Probe ordered RPC fallbacks and commit to one usable Base endpoint.
+
+    A cheap chain-id probe is insufficient: public endpoints may report Base
+    while refusing the contract reads registration needs. Require one real
+    participant-registry read before selecting an endpoint.
+    """
 
     endpoints = parse_rpc_urls(configured)
     for endpoint in endpoints:
         try:
-            if run([cast, "chain-id", "--rpc-url", endpoint]) == BASE_CHAIN_ID:
+            if run([cast, "chain-id", "--rpc-url", endpoint]) != BASE_CHAIN_ID:
+                continue
+            attester = run(
+                [cast, "call", "--rpc-url", endpoint, registry, "attester()(address)"]
+            ).lower()
+            if ADDRESS.fullmatch(attester):
                 return endpoint
         except RegistrationError:
             continue
@@ -160,6 +183,40 @@ def validate_eligibility(value: object, participant_id: str, source_hash: str) -
         raise RegistrationError("participant registry did not confirm eligibility")
 
 
+def existing_registration(
+    record: object,
+    participant_id: str,
+    source_hash: str,
+    now: int,
+) -> tuple[int, int] | None:
+    """Return an active matching registration, or permit exactly one fresh registration."""
+
+    if not isinstance(record, list) or len(record) != 4:
+        raise RegistrationError("participant registry returned an invalid preflight record")
+    stored_participant, stored_source, registered_at, valid_until = record
+    stored_participant = str(stored_participant).lower()
+    stored_source = str(stored_source).lower()
+    empty_hash = "0x" + "0" * 64
+    if (
+        stored_participant == empty_hash
+        and stored_source == empty_hash
+        and registered_at == 0
+        and valid_until == 0
+    ):
+        return None
+    if stored_participant != participant_id or stored_source != source_hash:
+        raise RegistrationError("wallet already has a different immutable participant identity")
+    if (
+        not isinstance(registered_at, int)
+        or registered_at <= 0
+        or not isinstance(valid_until, int)
+        or valid_until < now
+        or registered_at >= valid_until
+    ):
+        raise RegistrationError("existing participant registration is invalid or expired")
+    return registered_at, valid_until
+
+
 def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str, Any]:
     registry = str(args.registry).lower()
     if not ADDRESS.fullmatch(registry):
@@ -169,7 +226,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     if not attester_key or not keeper_key:
         raise RegistrationError("participant attester and keeper capabilities are required")
     cast = str(args.cast)
-    rpc_url = select_base_rpc(cast, str(args.rpc_url))
+    rpc_url = select_base_rpc(cast, str(args.rpc_url), registry)
     attester = run([cast, "wallet", "address", "--private-key", attester_key]).lower()
     configured = run([cast, "call", "--rpc-url", rpc_url, registry, "attester()(address)"]).lower()
     if attester != configured:
@@ -178,10 +235,61 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
         [cast, "keccak", f"agent-bounties/github-user-v1:{request.github_user_id}"]
     ).lower()
     source_hash = run([cast, "keccak", "agent-bounties/github-user-id"]).lower()
+    now = int(time.time())
+    current_record = json.loads(
+        run(
+            [
+                cast,
+                "call",
+                "--json",
+                "--rpc-url",
+                rpc_url,
+                registry,
+                "participants(address)(bytes32,bytes32,uint64,uint64)",
+                request.wallet,
+            ]
+        )
+    )
+    prior = existing_registration(current_record, participant_id, source_hash, now)
+    if prior is not None:
+        registered_at, valid_until = prior
+        cutoff = registered_at + 1
+        eligibility = json.loads(
+            run(
+                [
+                    cast,
+                    "call",
+                    "--json",
+                    "--rpc-url",
+                    rpc_url,
+                    registry,
+                    "eligibleAt(address,uint64)(bytes32,bytes32,bool)",
+                    request.wallet,
+                    str(cutoff),
+                ]
+            )
+        )
+        validate_eligibility(eligibility, participant_id, source_hash)
+        return {
+            "schema": SCHEMA,
+            "success": True,
+            "registration_state": "already_registered",
+            "repository": request.repository,
+            "issue_number": request.issue_number,
+            "github_login": request.github_login,
+            "github_user_id": request.github_user_id,
+            "wallet": request.wallet,
+            "participant_id": participant_id,
+            "source_hash": source_hash,
+            "registry": registry,
+            "valid_until": valid_until,
+            "transaction_hash": None,
+            "eligibility_cutoff": cutoff,
+        }
     nonce = run(
         [cast, "call", "--rpc-url", rpc_url, registry, "nonces(address)(uint256)", request.wallet]
     )
-    valid_until = int(time.time()) + 30 * 24 * 60 * 60
+    valid_until = now + 30 * 24 * 60 * 60
     digest = run(
         [
             cast,
@@ -224,6 +332,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
     if not HASH.fullmatch(transaction_hash) or str(receipt.get("status", "")) not in {"1", "0x1"}:
         raise RegistrationError("participant registration did not return a successful receipt")
     receipt_evidence = {
+        "registration_state": "registered",
         "repository": request.repository,
         "issue_number": request.issue_number,
         "github_login": request.github_login,
@@ -260,7 +369,7 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
                         "call",
                         "--json",
                         "--rpc-url",
-                        args.rpc_url,
+                        rpc_url,
                         registry,
                         "eligibleAt(address,uint64)(bytes32,bytes32,bool)",
                         request.wallet,
@@ -287,6 +396,13 @@ def register(args: argparse.Namespace, request: RegistrationRequest) -> dict[str
 
 def markdown(evidence: dict[str, Any]) -> str:
     if evidence.get("success"):
+        if evidence.get("registration_state") == "already_registered":
+            return (
+                f"Participant registration was already active for `@{evidence['github_login']}` and "
+                f"`{evidence['wallet']}`. No new transaction was broadcast.\n\n"
+                "The existing source-scoped identity remains eligible. It is not payment, claim, "
+                "completion, or payout evidence."
+            )
         return (
             f"Participant registration confirmed for `@{evidence['github_login']}` and "
             f"`{evidence['wallet']}`.\n\n"

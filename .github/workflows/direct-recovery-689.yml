@@ -132,7 +132,7 @@ jobs:
           --pull-request-url "$PULL_REQUEST_URL"
           --check-run-url "$CHECK_RUN_URL"
           --output target/direct-recovery-candidates
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-candidates
           path: target/direct-recovery-candidates
@@ -160,7 +160,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: direct-recovery-candidates
           path: target/direct-recovery-candidates
@@ -173,7 +173,7 @@ jobs:
           --output target/direct-recovery-attestations-one
           --private-key-env RECOVERY_VERIFIER_KEY
           --expected-signer "$EXPECTED_SIGNER"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-attestations-one
           path: target/direct-recovery-attestations-one
@@ -201,7 +201,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: direct-recovery-candidates
           path: target/direct-recovery-candidates
@@ -214,7 +214,7 @@ jobs:
           --output target/direct-recovery-attestations-two
           --private-key-env RECOVERY_VERIFIER_KEY
           --expected-signer "$EXPECTED_SIGNER"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-attestations-two
           path: target/direct-recovery-attestations-two
@@ -245,15 +245,15 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: direct-recovery-candidates
           path: target/direct-recovery-candidates
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: direct-recovery-attestations-one
           path: target/direct-recovery-attestations-one
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: direct-recovery-attestations-two
           path: target/direct-recovery-attestations-two
@@ -267,7 +267,7 @@ jobs:
           --attestations target/direct-recovery-attestations-one
           --attestations target/direct-recovery-attestations-two
           --output target/direct-recovery-evidence.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: direct-recovery-evidence
           path: target/direct-recovery-evidence.json

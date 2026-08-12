@@ -87,6 +87,9 @@ def compile_python(platform: str) -> None:
         "scripts/test_activate_standing_meta_v3_replacements.py",
         "scripts/activate_routed_v3_replacements.py",
         "scripts/test_activate_routed_v3_replacements.py",
+        "scripts/activate_direct_growth_v2.py",
+        "scripts/test_activate_direct_growth_v2.py",
+        "scripts/test_activate_direct_inventory_v1.py",
         "scripts/direct_recovery_689.py", "scripts/test_direct_recovery_689.py",
         "scripts/test_profitable_inventory_contract.py",
         "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
@@ -116,6 +119,8 @@ scripts/leaderboard_reward_pipeline.py scripts/test_leaderboard_reward_pipeline.
 scripts/standing_meta_v3_deploy.py scripts/test_standing_meta_v3_deploy.py
 scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing_meta_v3_replacements.py
 scripts/activate_routed_v3_replacements.py scripts/test_activate_routed_v3_replacements.py
+scripts/activate_direct_growth_v2.py scripts/test_activate_direct_growth_v2.py
+scripts/test_activate_direct_inventory_v1.py
 scripts/direct_recovery_689.py scripts/test_direct_recovery_689.py
 scripts/test_profitable_inventory_contract.py
 scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
@@ -220,6 +225,13 @@ def main() -> int:
         "profitable_inventory_contract",
     ):
         py(f"scripts/test_{name}.py", "-v")
+    py(
+        "-m",
+        "unittest",
+        "scripts.test_activate_direct_growth_v2",
+        "scripts.test_activate_direct_inventory_v1",
+        "-v",
+    )
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):
         py(f"scripts/test_{name}.py", "-v")
@@ -240,6 +252,9 @@ def main() -> int:
         ["scripts/test-autonomous-activation-console.js"], ["--check", "tools/canonical-child-verifier-deployment.js"],
         ["scripts/test-canonical-child-verifier-deployment-console.js"], ["--check", "tools/base-sepolia-sponsor-activation.js"],
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
+        ["--check", "scripts/open-competition-v1-signer.js"],
+        ["scripts/test-open-competition-v1-signer-console.js"],
+        ["scripts/test-create-competition-flow.js"],
         ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")

@@ -3,435 +3,500 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from reconcile_github_bounty_labels import (
+    LABEL_DEFINITIONS,
+    MANAGED_START,
     HttpResult,
     LabelReconciliationError,
-    SETTLEMENT_RECEIPT_MARKER,
     build_plans,
     execute_plans,
+    fetch_github_issues,
+    issue_marker,
     main,
-    normalize_api_base_url,
-    plan_receipt_actions,
+    plan_has_write,
+    request_with_retry,
 )
+from github_claim_comment import open_competition_wrong_mode_plan
 
 
 REPOSITORY = "NSPG13/agent-bounties"
-CONTRACTS = {
-    1: "0x1111111111111111111111111111111111111111",
-    2: "0x2222222222222222222222222222222222222222",
-    3: "0x3333333333333333333333333333333333333333",
-    4: "0x4444444444444444444444444444444444444444",
-    5: "0x5555555555555555555555555555555555555555",
-}
+NETWORK = "base-mainnet"
+CHAIN_ID = 8453
+NOW = "2026-08-10T19:00:00Z"
 TX = "0x" + "a" * 64
 
 
-def issue(number: int, *labels: str) -> dict:
+def policy(*, required: list[str] | None = None) -> dict:
     return {
-        "number": number,
-        "state": "open",
-        "state_reason": None,
-        "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
-        "labels": [{"name": label} for label in labels],
-        "comments": [],
+        "schema_version": "agent-bounties/github-bounty-discovery-policy-v1",
+        "repository": REPOSITORY,
+        "network": NETWORK,
+        "chain_id": CHAIN_ID,
+        "activation": {
+            "timestamp": "2026-08-10T18:40:35Z",
+            "safe_block": 49_798_944,
+            "safe_block_hash": "0x" + "b" * 64,
+        },
+        "required_backfill_discovery_ids": required or [],
+        "open_competition_compatibility_trial": {
+            "starts_at": "2026-08-10T18:40:35Z",
+            "ends_at": "2026-09-09T18:40:35Z",
+            "labels": ["ready-to-earn", "claimable-live", "open-competition"],
+            "post_trial_action": "hold_for_day_30_decision",
+        },
+        "publication_lag_target_minutes_p95": 10,
     }
 
 
-def feed_item(
+def item(
     number: int,
-    status: str,
+    state: str = "ready_to_earn",
     *,
-    ready: bool = True,
-    terms_valid: bool = True,
+    mode: str = "exclusive_claim",
+    source_url: str | None = None,
+    created_block: int = 49_799_000,
+    recovery: bool = False,
+    verifier_ready: bool = True,
+    difficulty: str | None = None,
 ) -> dict:
-    contract = CONTRACTS[number]
-    events: list[dict] = []
-    if status in {"claimed", "submitted"}:
-        events.append(
-            {
-                "kind": "bounty_claimed",
-                "contract_address": contract,
-                "tx_hash": TX,
-            }
-        )
-    if status == "submitted":
-        events.append(
-            {
-                "kind": "submission_added",
-                "contract_address": contract,
-                "tx_hash": TX,
-            }
-        )
-    if status == "paid":
-        events.append(
-            {
-                "kind": "bounty_settled",
-                "contract_address": contract,
-                "tx_hash": TX,
-                "bounty_id": f"0x{number:064x}",
-                "log_index": number,
-                "data": {
-                    "solver": "0x9999999999999999999999999999999999999999",
-                    "solver_reward": 2_000_000,
-                    "claim_bond_returned": 10_000,
-                    "timeout_bond_bonus": 0,
-                    "solver_payout": 2_010_000,
-                    "verifier_reward": 10_000,
-                },
-            }
-        )
+    contract = f"0x{number:040x}"
+    protocol = (
+        "agent-bounties/open-competition-v1"
+        if mode == "first_valid_submission"
+        else "agent-bounties/autonomous-v1"
+    )
+    identity = f"eip155:{CHAIN_ID}:{protocol}:{contract}"
+    settlement = None
+    if state == "settled":
+        settlement = {
+            "event_name": "BountySettled",
+            "bounty_id": f"0x{number:064x}",
+            "bounty_contract": contract,
+            "transaction_hash": TX,
+            "block_number": created_block + 5,
+            "log_index": number,
+            "solver_wallet": "0x" + "9" * 40,
+            "solver_reward": "2000000",
+            "returned_bond": "10000",
+            "completion_bonus": "0",
+            "solver_payout": "2010000",
+            "verifier_reward": "10000",
+            "confirmed_canonical": True,
+        }
+    funded = state != "funding_needed"
     return {
+        "discovery_id": identity,
+        "network": NETWORK,
+        "chain_id": CHAIN_ID,
+        "protocol_version": protocol,
+        "source_id": contract,
+        "visibility": "public",
         "bounty_id": f"0x{number:064x}",
         "bounty_contract": contract,
-        "status": status,
-        "solver_reward": "2000000",
-        "verifier_reward": "10000",
-        "claim_bond": "10000",
-        "timeout_bond_pool": "0",
-        "target_amount": "2010000",
-        "funded_amount": "0" if status == "open" else "2010000",
-        "terms_valid": terms_valid,
-        "verification_ready": ready,
-        "terms": {
-            "document": {
-                "source_url": f"https://github.com/{REPOSITORY}/issues/{number}"
-            }
+        "created_at": "2026-08-10T18:50:00Z" if created_block >= 49_798_944 else "2026-08-01T00:00:00Z",
+        "created_block": created_block,
+        "updated_at": NOW,
+        "title": f"Digital work outcome {number}",
+        "summary": "Deliver the exact public digital outcome described by the canonical terms.",
+        "categories": ["engineering"],
+        "skills": ["testing"],
+        "difficulty": difficulty,
+        "public_url": f"https://agentbounties.app/{'competition' if mode == 'first_valid_submission' else 'earn'}.html?bountyContract={contract}",
+        "source_url": source_url,
+        "competition_mode": mode,
+        "lifecycle_state": state,
+        "funded": funded,
+        "verification_ready": verifier_ready,
+        "ready_to_earn": state == "ready_to_earn",
+        "reward_usdc_base_units": "2000000",
+        "verifier_reward_usdc_base_units": "10000",
+        "bond_usdc_base_units": "10000",
+        "funded_usdc_base_units": "2010000" if funded else "0",
+        "funding_target_usdc_base_units": "2010000",
+        "deadline": "2026-08-11T18:50:00Z",
+        "deadline_kind": "competition_deadline" if mode == "first_valid_submission" else "funding_deadline",
+        "entry_count": 1 if mode == "first_valid_submission" else None,
+        "max_entries": 4 if mode == "first_valid_submission" else None,
+        "verifier": {
+            "profile_id": "leading-zero-v1" if mode == "first_valid_submission" else None,
+            "display_name": "Leading-zero deterministic verifier",
+            "method": "deterministic",
+            "address": "0x" + "8" * 40,
+            "runtime_code_hash": "0x" + "7" * 64,
+            "ready": verifier_ready,
         },
-        "events": events,
+        "next_action": {
+            "kind": "enter_competition" if mode == "first_valid_submission" else "claim",
+            "label": "Enter competition" if mode == "first_valid_submission" else "Claim this bounty",
+            "method": "POST",
+            "url": "https://api.agentbounties.app/v1/base/open-competition-v1/commit-preparation"
+            if mode == "first_valid_submission"
+            else "https://api.agentbounties.app/v1/base/autonomous-bounties/claim-plan",
+            "instructions": "Prepare the exact canonical action.",
+        },
+        "recovery_action_available": recovery,
+        "identity_warning": "One wallet does not prove one independent person."
+        if mode == "first_valid_submission"
+        else None,
+        "settlement_evidence": settlement,
+        "evidence_boundary": "GitHub is not settlement evidence.",
+    }
+
+
+def projection(*items: dict, degraded: bool = False) -> dict:
+    autonomous_count = sum(
+        record["protocol_version"] == "agent-bounties/autonomous-v1" for record in items
+    )
+    competition_count = sum(
+        record["protocol_version"] == "agent-bounties/open-competition-v1" for record in items
+    )
+    return {
+        "schema_version": "agent-bounties/github-bounty-discovery-v1",
+        "generated_at": NOW,
+        "network": NETWORK,
+        "chain_id": CHAIN_ID,
+        "safe_block": {
+            "number": 49_799_500,
+            "hash": "0x" + "c" * 64,
+            "timestamp": 1_786_388_400,
+            "age_seconds": 2,
+            "fresh": not degraded,
+        },
+        "degraded": degraded,
+        "source_statuses": [
+            {
+                "source_type": "canonical_autonomous",
+                "protocol_version": "agent-bounties/autonomous-v1",
+                "factory_contract": "0x" + "1" * 40,
+                "available": not degraded,
+                "fresh": not degraded,
+                "item_count": autonomous_count,
+                "persisted_cursor_block": 49_799_500,
+                "error": None,
+            },
+            {
+                "source_type": "open_competition",
+                "protocol_version": "agent-bounties/open-competition-v1",
+                "factory_contract": "0x" + "2" * 40,
+                "available": not degraded,
+                "fresh": not degraded,
+                "item_count": competition_count,
+                "persisted_cursor_block": 49_799_500,
+                "error": None,
+            },
+        ],
+        "items": list(items),
+        "evidence_boundary": "Read only.",
+    }
+
+
+def issue(number: int, *, body: str = "Human-authored context.", labels: list[str] | None = None, state: str = "open") -> dict:
+    return {
+        "number": number,
+        "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
+        "created_at": "2026-08-10T18:55:00Z",
+        "title": f"Existing issue {number}",
+        "body": body,
+        "labels": [{"name": label} for label in (labels or ["bounty"])],
+        "state": state,
+        "state_reason": None,
     }
 
 
 class FakeGitHub:
-    def __init__(self, source_issue: dict) -> None:
-        self.issue = source_issue
+    def __init__(self, issues: list[dict], comments: dict[int, list[dict]] | None = None) -> None:
+        self.issues = {record["number"]: record for record in issues}
+        self.comments = comments or {}
         self.calls: list[tuple[str, str, object]] = []
-        self.next_comment_id = 101
+        self.labels = set(LABEL_DEFINITIONS)
+        self.next_issue = max(self.issues, default=0) + 1
+        self.next_comment = 1000
 
     def __call__(self, method, url, body, headers):
         self.calls.append((method, url, body))
-        if method == "DELETE" and "/labels/" in url:
-            label = url.rsplit("/", 1)[-1]
-            self.issue["labels"] = [
-                item for item in self.issue["labels"] if item["name"] != label
-            ]
-            return HttpResult(204, "", {})
+        if method == "GET" and "/labels?" in url:
+            return HttpResult(200, [{"name": name} for name in sorted(self.labels)], {})
         if method == "POST" and url.endswith("/labels"):
-            existing = {item["name"] for item in self.issue["labels"]}
-            for label in body["labels"]:
-                if label not in existing:
-                    self.issue["labels"].append({"name": label})
-            return HttpResult(200, self.issue, {})
-        if method == "GET" and "/issues/1/comments?" in url:
-            return HttpResult(200, self.issue["comments"], {})
-        if method == "POST" and url.endswith("/issues/1/comments"):
+            self.labels.add(body["name"])
+            return HttpResult(201, body, {})
+        if method == "POST" and url.endswith("/issues"):
+            number = self.next_issue
+            self.next_issue += 1
+            created = issue(number, body=body["body"], labels=body["labels"])
+            created["title"] = body["title"]
+            self.issues[number] = created
+            return HttpResult(201, created, {})
+        match = __import__("re").search(r"/issues/([0-9]+)$", url)
+        if match and method == "GET":
+            return HttpResult(200, self.issues[int(match.group(1))], {})
+        if match and method == "PATCH":
+            record = self.issues[int(match.group(1))]
+            if "body" in body:
+                record["body"] = body["body"]
+            if "labels" in body:
+                record["labels"] = [{"name": label} for label in body["labels"]]
+            if "state" in body:
+                record["state"] = body["state"]
+                record["state_reason"] = body.get("state_reason")
+            return HttpResult(200, record, {})
+        comment_match = __import__("re").search(r"/issues/([0-9]+)/comments$", url)
+        if comment_match and method == "POST":
+            number = int(comment_match.group(1))
             comment = {
-                "id": self.next_comment_id,
+                "id": self.next_comment,
                 "body": body["body"],
                 "user": {"login": "github-actions[bot]"},
             }
-            self.next_comment_id += 1
-            self.issue["comments"].append(comment)
+            self.next_comment += 1
+            self.comments.setdefault(number, []).append(comment)
             return HttpResult(201, comment, {})
-        if method == "PATCH" and "/issues/comments/" in url:
-            comment_id = int(url.rsplit("/", 1)[-1])
-            comment = next(
-                item for item in self.issue["comments"] if item["id"] == comment_id
-            )
-            comment["body"] = body["body"]
-            return HttpResult(200, comment, {})
-        if method == "PATCH" and url.endswith("/issues/1"):
-            self.issue["state"] = body["state"]
-            self.issue["state_reason"] = body["state_reason"]
-            return HttpResult(200, self.issue, {})
-        if method == "GET" and url.endswith("/issues/1"):
-            return HttpResult(200, self.issue, {})
+        edit_match = __import__("re").search(r"/issues/comments/([0-9]+)$", url)
+        if edit_match and method == "PATCH":
+            comment_id = int(edit_match.group(1))
+            for records in self.comments.values():
+                for comment in records:
+                    if comment["id"] == comment_id:
+                        comment["body"] = body["body"]
+                        return HttpResult(200, comment, {})
         raise AssertionError(f"unexpected request: {method} {url}")
 
 
-class GitHubBountyLabelReconciliationTests(unittest.TestCase):
-    def test_api_base_url_rejects_remote_http_and_credentials(self) -> None:
-        self.assertEqual(
-            normalize_api_base_url("http://127.0.0.1:8080/"),
-            "http://127.0.0.1:8080",
-        )
-        with self.assertRaises(LabelReconciliationError):
-            normalize_api_base_url("http://api.example.com")
-        with self.assertRaises(LabelReconciliationError):
-            normalize_api_base_url("https://user:secret@api.example.com")
+class GitHubDiscoveryReconciliationTests(unittest.TestCase):
+    def test_workflow_is_least_privilege_concurrent_dry_run_by_default(self) -> None:
+        workflow = Path(".github/workflows/bounty-inventory-guard.yml").read_text(encoding="utf-8")
+        self.assertIn("issues: read", workflow)
+        self.assertEqual(workflow.count("issues: write"), 1)
+        self.assertIn("group: canonical-github-bounty-reconciliation", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("vars.BOUNTY_DISCOVERY_EXECUTE == 'true'", workflow)
+        self.assertNotIn("vars.GITHUB_", workflow)
+        self.assertIn("bounty-label-reconciliation.log", workflow)
+        self.assertIn("if: always()", workflow)
 
-    def test_claimable_requires_exact_earning_feed_membership(self) -> None:
-        canonical = feed_item(1, "claimable")
-        plans = build_plans(
-            [issue(1, "bounty", "claimed-live", "verification-unavailable")],
-            [canonical],
-            [dict(canonical)],
-            REPOSITORY,
+    def test_open_competition_creation_uses_all_trial_labels_and_enter_copy(self) -> None:
+        record = item(1, mode="first_valid_submission")
+        plan = build_plans(projection(record), [], policy(), REPOSITORY)[0]
+        self.assertIsNone(plan.issue_number)
+        self.assertTrue(plan.create_eligible)
+        self.assertEqual(plan.mapping_action, "current_nonterminal_backfill")
+        self.assertTrue(
+            {"ready-to-earn", "claimable-live", "open-competition", "verifier"}.issubset(
+                plan.desired_managed_labels
+            )
         )
-        self.assertEqual(plans[0].desired_managed_labels, ["claimable-live", "funded-live"])
-        self.assertEqual(plans[0].add_labels, ["claimable-live", "funded-live"])
-        self.assertEqual(
-            plans[0].remove_labels, ["claimed-live", "verification-unavailable"]
-        )
+        self.assertIn("Enter competition", plan.desired_body)
+        self.assertIn("First valid confirmed reveal wins", plan.desired_body)
+        self.assertIn("discovery_id=", plan.desired_body)
+        self.assertNotIn("competition", plan.desired_managed_labels)
 
-    def test_unready_claimable_is_funded_but_not_advertised(self) -> None:
-        canonical = feed_item(1, "claimable", ready=False)
-        plan = build_plans(
-            [issue(1, "bounty", "claimable-live")],
-            [canonical],
+    def test_github_claim_command_recovers_to_open_competition(self) -> None:
+        contract = "0x" + "3" * 40
+        recovery = open_competition_wrong_mode_plan(
+            {
+                "url": f"https://github.com/{REPOSITORY}/issues/88",
+                "issue_body": f"https://agentbounties.app/competition.html?bountyContract={contract}",
+            }
+        )
+        self.assertFalse(recovery["ready"])
+        self.assertEqual(recovery["signal"]["error_code"], "wrong_competition_mode")
+        self.assertEqual(recovery["signal"]["correct_action"], "enter_competition")
+        self.assertIn("discovery_id=", recovery["signal"]["competition_url"])
+
+    def test_reuses_same_repository_source_and_preserves_human_content(self) -> None:
+        source = issue(42, body="Keep this human section.", labels=["bounty", "help wanted"])
+        record = item(2, source_url=f"https://github.com/{REPOSITORY}/issues/42")
+        plan = build_plans(projection(record), [source], policy(), REPOSITORY)[0]
+        self.assertEqual(plan.issue_number, 42)
+        self.assertEqual(plan.mapping_action, "reuse_source")
+        self.assertTrue(plan.desired_body.startswith("Keep this human section."))
+        self.assertIn(MANAGED_START, plan.desired_body)
+        self.assertNotIn("help wanted", plan.remove_labels)
+
+    def test_external_source_creates_central_mirror_and_source_collision_is_unambiguous(self) -> None:
+        external = item(3, source_url="https://github.com/external/project/issues/7")
+        first = item(4, source_url=f"https://github.com/{REPOSITORY}/issues/50")
+        second = item(5, state="settled", source_url=f"https://github.com/{REPOSITORY}/issues/50")
+        plans = build_plans(projection(external, first, second), [issue(50)], policy(), REPOSITORY)
+        by_id = {plan.discovery_id: plan for plan in plans}
+        self.assertEqual(by_id[first["discovery_id"]].mapping_action, "reuse_source")
+        self.assertEqual(by_id[second["discovery_id"]].mapping_action, "post_activation_record")
+        self.assertEqual(by_id[external["discovery_id"]].mapping_action, "current_nonterminal_backfill")
+
+    def test_historical_terminal_is_not_created_but_existing_source_is_reconciled(self) -> None:
+        historical = item(6, state="settled", created_block=49_000_000)
+        plan = build_plans(projection(historical), [], policy(), REPOSITORY)[0]
+        self.assertFalse(plan.create_eligible)
+        self.assertEqual(plan.mapping_action, "excluded_historical_terminal")
+        self.assertFalse(plan_has_write(plan))
+
+        required = build_plans(
+            projection(historical),
             [],
+            policy(required=[historical["discovery_id"]]),
             REPOSITORY,
         )[0]
-        self.assertEqual(
-            plan.desired_managed_labels, ["funded-live", "verification-unavailable"]
-        )
-        self.assertEqual(plan.remove_labels, ["claimable-live"])
+        self.assertTrue(required.create_eligible)
+        self.assertEqual(required.mapping_action, "required_backfill")
+        self.assertEqual(required.desired_state, "closed")
+        self.assertEqual(required.desired_state_reason, "completed")
+        self.assertEqual(required.desired_managed_labels, ["ai-agent-welcome", "bounty", "payments", "settled-paid"])
 
-    def test_claimed_and_submitted_states_are_unavailable_to_new_solvers(self) -> None:
-        claimed = feed_item(1, "claimed")
-        submitted = feed_item(2, "submitted")
-        plans = build_plans(
-            [issue(1, "bounty", "claimable-live"), issue(2, "bounty")],
-            [claimed, submitted],
-            [],
-            REPOSITORY,
-        )
-        for plan in plans:
-            self.assertEqual(plan.desired_managed_labels, ["claimed-live", "funded-live"])
-            self.assertNotIn("claimable-live", plan.desired_managed_labels)
+        historical["source_url"] = f"https://github.com/{REPOSITORY}/issues/60"
+        reused = build_plans(projection(historical), [issue(60)], policy(), REPOSITORY)[0]
+        self.assertTrue(reused.create_eligible)
+        self.assertEqual(reused.mapping_action, "reuse_source")
+        self.assertEqual(reused.desired_state, "closed")
+        self.assertEqual(reused.desired_state_reason, "completed")
 
-    def test_paid_requires_settlement_evidence_and_removes_live_labels(self) -> None:
-        paid = feed_item(1, "paid")
-        plan = build_plans(
-            [issue(1, "bounty", "funded-live", "claimable-live")],
-            [paid],
-            [],
-            REPOSITORY,
-        )[0]
-        self.assertEqual(plan.desired_managed_labels, ["settled-paid"])
-        self.assertEqual(plan.add_labels, ["settled-paid"])
-        self.assertEqual(plan.remove_labels, ["claimable-live", "funded-live"])
+    def test_cancelled_recovery_stays_open_and_terminal_cancel_closes_not_planned(self) -> None:
+        recovery = item(7, state="cancelled", recovery=True, created_block=49_000_000)
+        no_recovery = item(8, state="cancelled", created_block=49_799_000)
+        plans = build_plans(projection(recovery, no_recovery), [], policy(), REPOSITORY)
+        by_id = {plan.discovery_id: plan for plan in plans}
+        self.assertEqual(by_id[recovery["discovery_id"]].desired_state, "open")
+        self.assertIn("refund-available", by_id[recovery["discovery_id"]].desired_managed_labels)
+        self.assertEqual(by_id[no_recovery["discovery_id"]].desired_state, "closed")
+        self.assertEqual(by_id[no_recovery["discovery_id"]].desired_state_reason, "not_planned")
 
-        paid["events"] = []
-        with self.assertRaisesRegex(LabelReconciliationError, "bounty_settled"):
-            build_plans([issue(1, "bounty")], [paid], [], REPOSITORY)
+    def test_degraded_duplicate_and_missing_required_projection_fail_closed(self) -> None:
+        record = item(9)
+        with self.assertRaisesRegex(LabelReconciliationError, "degraded"):
+            build_plans(projection(record, degraded=True), [], policy(), REPOSITORY)
+        with self.assertRaisesRegex(LabelReconciliationError, "malformed"):
+            build_plans(projection(record, dict(record)), [], policy(), REPOSITORY)
+        with self.assertRaisesRegex(LabelReconciliationError, "required backfill"):
+            build_plans(projection(record), [], policy(required=[item(10)["discovery_id"]]), REPOSITORY)
+        private = dict(record)
+        private["discovery_id"] = item(99)["discovery_id"]
+        private["bounty_contract"] = item(99)["bounty_contract"]
+        private["source_id"] = item(99)["source_id"]
+        private["visibility"] = "private"
+        with self.assertRaisesRegex(LabelReconciliationError, "private record"):
+            build_plans(projection(private), [], policy(), REPOSITORY)
 
-    def test_paid_receipt_is_posted_before_close_and_replay_is_a_noop(self) -> None:
-        paid = feed_item(1, "paid")
-        source = issue(1, "bounty", "funded-live")
-        plans = plan_receipt_actions(
-            build_plans([source], [paid], [], REPOSITORY),
-            {1: source["comments"]},
-            REPOSITORY,
-        )
-        plan = plans[0]
+    def test_duplicate_issue_markers_and_malformed_blocks_fail_closed(self) -> None:
+        record = item(11)
+        managed = build_plans(projection(record), [], policy(), REPOSITORY)[0].desired_body
+        duplicate = [issue(1, body=managed), issue(2, body=managed)]
+        with self.assertRaisesRegex(LabelReconciliationError, "duplicate discovery_id"):
+            build_plans(projection(record), duplicate, policy(), REPOSITORY)
+        with self.assertRaisesRegex(LabelReconciliationError, "malformed managed markers"):
+            build_plans(projection(record), [issue(1, body=MANAGED_START)], policy(), REPOSITORY)
+
+    def test_settlement_receipt_is_canonical_and_precedes_close(self) -> None:
+        settled = item(12, state="settled")
+        source = issue(12, labels=["bounty", "ready-to-earn"])
+        settled["source_url"] = f"https://github.com/{REPOSITORY}/issues/12"
+        plan = build_plans(projection(settled), [source], policy(), REPOSITORY)[0]
         self.assertEqual(plan.receipt_action, "create")
-        self.assertTrue(plan.complete_issue)
-        self.assertIn("Solver reward: **2.00 USDC**", plan.settlement_receipt.body)
-        self.assertIn("Returned solver bond: **0.01 USDC**", plan.settlement_receipt.body)
-        self.assertIn("post your own bounty", plan.settlement_receipt.body.lower())
-
-        service = FakeGitHub(source)
-        results = execute_plans(plans, REPOSITORY, "secret", service)
-        self.assertEqual(results[0]["receipt_action"], "create")
-        self.assertEqual(source["state"], "closed")
-        self.assertEqual(source["state_reason"], "completed")
-        self.assertEqual(len(source["comments"]), 1)
-        comment_write = next(
-            index
-            for index, call in enumerate(service.calls)
-            if call[0] == "POST" and call[1].endswith("/comments")
+        self.assertIn("Canonical payout confirmed", plan.settlement_receipt.body)
+        service = FakeGitHub([source])
+        results, provisioned = execute_plans([plan], REPOSITORY, "token", service)
+        self.assertEqual(provisioned, [])
+        self.assertEqual(results[0]["state"], "closed")
+        comment_index = next(i for i, call in enumerate(service.calls) if call[0] == "POST" and call[1].endswith("/comments"))
+        close_index = next(
+            i
+            for i, call in enumerate(service.calls)
+            if call[0] == "PATCH" and call[1].endswith("/issues/12") and call[2].get("state") == "closed"
         )
-        close_write = next(
-            index
-            for index, call in enumerate(service.calls)
-            if call[0] == "PATCH" and call[1].endswith("/issues/1")
-        )
-        self.assertLess(comment_write, close_write)
+        self.assertLess(comment_index, close_index)
+        self.assertEqual(service.issues[12]["state_reason"], "completed")
 
-        replay = plan_receipt_actions(
-            build_plans([source], [paid], [], REPOSITORY),
-            {1: source["comments"]},
-            REPOSITORY,
-        )[0]
-        self.assertEqual(replay.receipt_action, "none")
-        self.assertFalse(replay.complete_issue)
-        service.calls.clear()
-        self.assertEqual(execute_plans([replay], REPOSITORY, "secret", service), [])
-        self.assertEqual(service.calls, [])
+    def test_execution_is_idempotent_and_preserves_unmanaged_labels(self) -> None:
+        record = item(13, difficulty="beginner")
+        source = issue(13, labels=["bounty", "custom-human-label"])
+        record["source_url"] = f"https://github.com/{REPOSITORY}/issues/13"
+        first = build_plans(projection(record), [source], policy(), REPOSITORY)[0]
+        service = FakeGitHub([source])
+        execute_plans([first], REPOSITORY, "token", service)
+        updated = service.issues[13]
+        replay = build_plans(projection(record), [updated], policy(), REPOSITORY)[0]
+        self.assertFalse(plan_has_write(replay))
+        self.assertIn("custom-human-label", {entry["name"] for entry in updated["labels"]})
+        self.assertIn("good-first-agent-bounty", {entry["name"] for entry in updated["labels"]})
+        self.assertEqual(issue_marker(updated), record["discovery_id"])
 
-    def test_stale_trusted_receipt_updates_but_external_marker_is_ignored(self) -> None:
-        paid = feed_item(1, "paid")
-        source = issue(1, "settled-paid")
-        source["state"] = "closed"
-        source["state_reason"] = "completed"
-        source["comments"] = [
-            {
-                "id": 7,
-                "body": f"{SETTLEMENT_RECEIPT_MARKER}\nstale",
-                "user": {"login": "github-actions[bot]"},
-            },
-            {
-                "id": 8,
-                "body": f"{SETTLEMENT_RECEIPT_MARKER}\nspoof",
-                "user": {"login": "external-user"},
-            },
-        ]
-        plan = plan_receipt_actions(
-            build_plans([source], [paid], [], REPOSITORY),
-            {1: source["comments"]},
-            REPOSITORY,
-        )[0]
-        self.assertEqual(plan.receipt_action, "update")
-        self.assertEqual(plan.receipt_comment_id, 7)
-        service = FakeGitHub(source)
-        execute_plans([plan], REPOSITORY, "secret", service)
-        self.assertEqual(source["comments"][0]["body"], plan.settlement_receipt.body)
-        self.assertEqual(source["comments"][1]["body"], f"{SETTLEMENT_RECEIPT_MARKER}\nspoof")
+    def test_pagination_follows_link_header_without_a_record_cap(self) -> None:
+        calls = []
 
-    def test_nonterminal_and_malformed_settlement_records_cannot_close(self) -> None:
-        claimed = feed_item(1, "claimed")
-        source = issue(1, "bounty")
-        plan = build_plans([source], [claimed], [], REPOSITORY)[0]
-        self.assertIsNone(plan.settlement_receipt)
-        self.assertFalse(
-            plan_receipt_actions([plan], {}, REPOSITORY)[0].complete_issue
-        )
+        def request(method, url, body, headers):
+            calls.append(url)
+            if "page=2" in url:
+                return HttpResult(200, [issue(101)], {})
+            return HttpResult(
+                200,
+                [issue(number) for number in range(1, 101)],
+                {"Link": f'<https://api.github.com/repos/{REPOSITORY}/issues?labels=bounty&per_page=100&page=2>; rel="next"'},
+            )
 
-        paid = feed_item(1, "paid")
-        paid["events"][0]["data"]["solver_payout"] += 1
-        with self.assertRaisesRegex(LabelReconciliationError, "amounts"):
-            build_plans([source], [paid], [], REPOSITORY)
+        records = fetch_github_issues(request, REPOSITORY, None)
+        self.assertEqual(len(records), 101)
+        self.assertEqual(len(calls), 2)
 
-        paid = feed_item(1, "paid")
-        paid["terms"]["document"]["source_url"] = (
-            f"https://github.com/{REPOSITORY}/issues/not-a-number"
-        )
-        with self.assertRaisesRegex(LabelReconciliationError, "positive issue"):
-            build_plans([source], [paid], [], REPOSITORY)
+    def test_rate_limit_and_server_failures_retry_then_converge(self) -> None:
+        statuses = [429, 503, 200]
+        sleeps = []
 
-    def test_dry_run_reports_exact_receipt_and_closure_without_writing(self) -> None:
-        source = issue(1, "funded-live")
-        payload = {
-            "issues": [source],
-            "full_feed": [feed_item(1, "paid")],
-            "claimable_feed": [],
-        }
+        def request(method, url, body, headers):
+            status = statuses.pop(0)
+            return HttpResult(status, {}, {"Retry-After": "0"})
+
+        result = request_with_retry(request, "GET", "https://api.github.com/test", sleep=sleeps.append)
+        self.assertEqual(result.status, 200)
+        self.assertEqual(sleeps, [0.0, 0.0])
+
+    def test_fixture_main_is_dry_run_and_execute_is_refused(self) -> None:
+        record = item(14)
         with tempfile.TemporaryDirectory() as directory:
-            fixture_path = Path(directory, "fixture.json")
-            report_path = Path(directory, "report.json")
-            fixture_path.write_text(json.dumps(payload), encoding="utf-8")
+            root = Path(directory)
+            fixture = root / "fixture.json"
+            policy_path = root / "policy.json"
+            report = root / "report.json"
+            markdown = root / "report.md"
+            fixture.write_text(json.dumps({"projection": projection(record), "issues": []}), encoding="utf-8")
+            policy_path.write_text(json.dumps(policy()), encoding="utf-8")
             self.assertEqual(
                 main(
                     [
                         "--fixture",
-                        str(fixture_path),
+                        str(fixture),
+                        "--policy",
+                        str(policy_path),
                         "--json-out",
-                        str(report_path),
+                        str(report),
+                        "--md-out",
+                        str(markdown),
                     ]
                 ),
                 0,
             )
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-        plan = report["plans"][0]
-        self.assertEqual(report["mode"], "dry-run")
-        self.assertEqual(report["drift_count"], 1)
-        self.assertFalse(report["settlement_authority"])
-        self.assertEqual(plan["receipt_action"], "create")
-        self.assertTrue(plan["complete_issue"])
-        self.assertEqual(plan["settlement_receipt"]["transaction_hash"], TX)
-        self.assertEqual(source["comments"], [])
-
-    def test_unmapped_managed_issue_fails_closed(self) -> None:
-        plan = build_plans(
-            [issue(1, "bounty", "funded-live", "claimable-live")],
-            [],
-            [],
-            REPOSITORY,
-        )[0]
-        self.assertEqual(plan.desired_managed_labels, [])
-        self.assertEqual(plan.remove_labels, ["claimable-live", "funded-live"])
-
-    def test_replacement_source_collision_selects_unique_ready_record(self) -> None:
-        retired = feed_item(1, "claimable", ready=False)
-        replacement = feed_item(2, "claimable")
-        replacement["terms"]["document"]["source_url"] = retired["terms"]["document"][
-            "source_url"
-        ]
-        plan = build_plans(
-            [issue(1, "bounty", "verification-unavailable")],
-            [retired, replacement],
-            [dict(replacement)],
-            REPOSITORY,
-        )[0]
-        self.assertEqual(plan.bounty_contract, CONTRACTS[2])
-        self.assertEqual(
-            plan.desired_managed_labels, ["claimable-live", "funded-live"]
-        )
-        self.assertEqual(plan.remove_labels, ["verification-unavailable"])
-
-    def test_terminal_ready_history_does_not_hide_active_ready_replacement(self) -> None:
-        retired = feed_item(1, "cancelled")
-        replacement = feed_item(2, "claimable")
-        replacement["terms"]["document"]["source_url"] = retired["terms"]["document"][
-            "source_url"
-        ]
-        plan = build_plans(
-            [issue(1, "bounty")],
-            [retired, replacement],
-            [dict(replacement)],
-            REPOSITORY,
-        )[0]
-        self.assertEqual(plan.bounty_contract, CONTRACTS[2])
-        self.assertEqual(
-            plan.desired_managed_labels, ["claimable-live", "funded-live"]
-        )
-
-    def test_duplicate_ready_issue_mapping_and_invalid_earning_record_are_rejected(self) -> None:
-        first = feed_item(1, "claimable")
-        duplicate = feed_item(2, "claimable")
-        duplicate["terms"]["document"]["source_url"] = first["terms"]["document"][
-            "source_url"
-        ]
-        with self.assertRaisesRegex(
-            LabelReconciliationError, "without one unique verification-ready record"
-        ):
-            build_plans([issue(1, "bounty")], [first, duplicate], [], REPOSITORY)
-
-        invalid_earning = dict(first)
-        invalid_earning["verification_ready"] = False
-        with self.assertRaisesRegex(LabelReconciliationError, "not an exact executable"):
-            build_plans(
-                [issue(1, "bounty")], [first], [invalid_earning], REPOSITORY
-            )
-
-    def test_execute_mutates_only_managed_labels_and_verifies_result(self) -> None:
-        canonical = feed_item(1, "claimed")
-        source = issue(1, "bounty", "distribution", "claimable-live")
-        plan = build_plans([source], [canonical], [], REPOSITORY)[0]
-        service = FakeGitHub(source)
-        results = execute_plans([plan], REPOSITORY, "secret", service)
-        self.assertEqual(results[0]["managed_labels"], ["claimed-live", "funded-live"])
-        self.assertEqual(
-            {item["name"] for item in source["labels"]},
-            {"bounty", "distribution", "claimed-live", "funded-live"},
-        )
-        self.assertFalse(any("secret" in str(call) for call in service.calls))
-
-    def test_execute_rejects_fixture_mode(self) -> None:
-        with self.assertRaisesRegex(LabelReconciliationError, "cannot use a fixture"):
-            main(
-                [
-                    "--fixture",
-                    "unused.json",
-                    "--execute",
-                    "--confirm-repository",
-                    REPOSITORY,
-                ]
-            )
+            payload = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(payload["mode"], "dry-run")
+            self.assertEqual(payload["coverage_percent"], 100.0)
+            self.assertEqual(payload["covered_record_count"], 1)
+            self.assertIn("Covered records: `1`", markdown.read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(LabelReconciliationError, "fixture mode"):
+                with patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
+                    main(
+                        [
+                            "--fixture",
+                            str(fixture),
+                            "--policy",
+                            str(policy_path),
+                            "--execute",
+                            "--confirm-repository",
+                            REPOSITORY,
+                        ]
+                    )
 
 
 if __name__ == "__main__":

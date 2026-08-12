@@ -81,6 +81,12 @@
   }
 
   function actionHref(item) {
+    if (item.competition_mode === "first_valid_submission" && item.source_type === "canonical_base") {
+      const profile = item.verifier_profile_id
+        ? `&verifierProfileId=${encodeURIComponent(item.verifier_profile_id)}`
+        : "";
+      return `competition.html?bountyContract=${encodeURIComponent(item.source_id)}&network=${encodeURIComponent(item.network || "base-mainnet")}${profile}`;
+    }
     if (item.source_type === "canonical_base" && item.work_state === "claimable") {
       return `earn.html?bountyContract=${encodeURIComponent(item.source_id)}&source=homepage-opportunities`;
     }
@@ -92,7 +98,7 @@
 
   function actionLabel(item) {
     if (item.competition_mode === "first_valid_submission" && item.work_state === "claimable") {
-      return "Inspect and compete";
+      return "Enter competition";
     }
     if (item.source_type === "canonical_base" && item.work_state === "claimable") {
       return "Inspect and claim";
@@ -139,10 +145,26 @@
 
     const method = document.createElement("p");
     method.className = "fine opportunity-method";
-    const competitionMode = item.competition_mode || "exclusive_claim";
+    const openCompetition = item.competition_mode === "first_valid_submission";
+    const competitionMode = openCompetition ? "Open competition" : "Exclusive claim";
     method.textContent = `${competitionMode} · ${item.verification_method} · next: ${item.next_action.action}`;
 
     article.append(state, title, economics, goal, method);
+
+    if (openCompetition) {
+      const competition = document.createElement("p");
+      competition.className = "fine opportunity-meta";
+      const entryBond = item.entry_bond ? formatAmount(item.entry_bond) : formatAmount(item.bond);
+      const entryCount = Number(item.entry_count || 0);
+      const maxEntries = Number(item.max_entries || 0);
+      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "bounded entry capacity";
+      const deadline = item.competition_ends_at
+        ? new Date(Number(item.competition_ends_at) * 1000).toLocaleString()
+        : "published competition deadline";
+      const profile = item.verifier_profile_name || item.verifier_profile_id || "approved deterministic verifier";
+      competition.textContent = `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
+      article.append(competition);
+    }
 
     if (item.standing_meta_bounty) {
       const meta = document.createElement("p");
@@ -547,6 +569,8 @@
     const paidItems = items.filter((item) => item.source_type === "canonical_base"
       && item.work_state === "completed"
       && item.payment_state === "paid");
+    const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
+      && (item.work_state === "in_progress" || item.work_state === "submitted"));
     const addedThisWeek = readyItems.filter((item) => {
       const created = Date.parse(item.created_at);
       return Number.isFinite(created) && created >= oneWeekAgo;
@@ -560,7 +584,10 @@
     const settlements = paidItems.length;
 
     setMetric("ready", readyItems.length);
-    setMetricText("[data-adoption-ready-weekly]", `${formatMetric(addedThisWeek, 0)} added this week`);
+    setMetricText(
+      "[data-adoption-ready-weekly]",
+      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(inProgressItems.length, 0)} in progress`,
+    );
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);

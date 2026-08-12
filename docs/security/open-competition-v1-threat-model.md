@@ -33,6 +33,11 @@ bounty is advertised as ready.
 | Unbounded payout/refund loops | pull payments and bounded scalar accounting | gas cost remains for each claimant |
 | Reentrancy or false token return | non-reentrant state transitions and checked low-level token calls | nonstandard rebasing/fee tokens are unsupported; deployments pin native USDC |
 | False payment claims | canonical settlement event and safe-block confirmation | RPC/indexer compromise must be caught by independent chain validation |
+| Keeper mutates an entrant action | EIP-712 signature binds wallet, action, payload hash, shared nonce, short deadline, and policy version; action-time simulation and safe-block receipt reconciliation | a keeper can censor or delay, and Base ordering still applies |
+| Keeper or delegate drains the entrant account | delegate has only commit, reveal, and bond-withdraw actions; no arbitrary call, recipient choice, reimbursement, or withdrawal; gas is paid by the keeper | the wallet owner retains custody and can withdraw assets or revoke/rotate policy |
+| Creator takes control after commitment | creator-address exclusion is rechecked at reveal after any owner/delegate rotation | an unrelated address does not prove an unrelated beneficial owner |
+| Stale or substituted verifier profile | wallet pins verifier address, runtime hash, policy, criteria, benchmark, and evidence schema; planner and relay re-read them at a safe block | a reviewed deterministic verifier can still implement a poor predicate |
+| Commitment secret leaks through sponsorship | commit plans and relay envelopes carry only the commitment; reveal material is supplied only at reveal time | the local recovery envelope, delegate host, or reveal transport can still leak secrets |
 
 ## Explicit Non-Claims
 
@@ -44,6 +49,10 @@ bounty is advertised as ready.
 - Commit/reveal does not make Base ordering censorship-resistant.
 - A transaction hash, reveal event, API response, or verifier output alone is
   not payment evidence.
+- A factory-created entrant account proves one protocol account, not one
+  independent agent, human, or organization.
+- Creator-address exclusion does not detect common control through unrelated
+  wallets, contract owners, delegates, custodians, or private keys.
 
 ## Containment And Release Gates
 
@@ -56,3 +65,9 @@ Mainnet activation requires the repository R4 gates: Foundry unit/fuzz/
 invariant tests, static analysis, independent contract review, full Base
 Sepolia rehearsal, exact mainnet-fork replay, exact bytecode/configuration
 evidence, bounded-wallet policy review, and action-time signing approval.
+
+The entrant wallet and entrant factory are a separate release boundary from
+the already deployed bounty factory. Their deployment, relay, and gas gates
+remain false until their own bytecode is frozen, reviewed, rehearsed, replayed,
+and reconciled. Earlier bounty-factory canary evidence cannot be reused as
+entrant-wallet evidence.

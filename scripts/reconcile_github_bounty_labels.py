@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Mirror canonical Base bounty states into non-authoritative GitHub state.
+"""Publish the canonical public bounty inventory as a GitHub issue mirror.
 
-Dry-run is the default. Execution can reconcile managed labels and, after a
-confirmed canonical settlement, publish one receipt and close the source issue.
-It cannot fund, claim, verify, settle, or otherwise call a bounty contract.
+Dry-run is the default. The writer is intentionally non-authoritative: it can
+create or update GitHub issues, but it cannot fund, claim, verify, settle, or
+otherwise call a bounty contract.
 """
 
 from __future__ import annotations
@@ -14,34 +14,97 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
-USER_AGENT = "agent-bounties-github-reconciler/2"
-ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
-TX_HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
-KNOWN_STATUSES = frozenset(
-    {"open", "claimable", "claimed", "submitted", "paid", "cancelled"}
-)
-MANAGED_LABELS = frozenset(
+USER_AGENT = "agent-bounties-github-discovery/1"
+PROJECTION_SCHEMA = "agent-bounties/github-bounty-discovery-v1"
+POLICY_SCHEMA = "agent-bounties/github-bounty-discovery-policy-v1"
+SUPPORTED_PROTOCOLS = frozenset(
     {
-        "funded-live",
-        "claimable-live",
-        "claimed-live",
-        "settled-paid",
-        "verification-unavailable",
+        "agent-bounties/autonomous-v1",
+        "agent-bounties/open-competition-v1",
     }
 )
+LIFECYCLE_STATES = frozenset(
+    {
+        "funding_needed",
+        "ready_to_earn",
+        "in_progress",
+        "verification_pending",
+        "unavailable",
+        "expired",
+        "settled",
+        "cancelled",
+    }
+)
+KNOWN_AUTONOMOUS_STATUSES = frozenset(
+    {"open", "claimable", "claimed", "submitted", "paid", "cancelled"}
+)
+NONTERMINAL_STATES = frozenset(
+    {"funding_needed", "ready_to_earn", "in_progress", "verification_pending", "unavailable"}
+)
+ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
+TX_HASH = re.compile(r"^0x[0-9a-f]{64}$")
+DISCOVERY_ID = re.compile(r"^eip155:[0-9]+:agent-bounties/[a-z0-9-]+:0x[0-9a-f]{40}$")
+MANAGED_START = "<!-- agent-bounties/github-discovery-v1:start -->"
+MANAGED_END = "<!-- agent-bounties/github-discovery-v1:end -->"
+IDENTITY_MARKER_RE = re.compile(
+    r"<!-- agent-bounties/github-discovery-v1 (\{[^\r\n]*\}) -->"
+)
 SETTLEMENT_RECEIPT_MARKER = "<!-- agent-bounties-canonical-settlement -->"
+COMMON_LABELS = frozenset({"bounty", "ai-agent-welcome", "payments"})
+MANAGED_LABELS = frozenset(
+    {
+        *COMMON_LABELS,
+        "funding-needed",
+        "funded-live",
+        "ready-to-earn",
+        "claimable-live",
+        "open-competition",
+        "verifier",
+        "claimed-live",
+        "in-progress",
+        "verification-pending",
+        "verification-unavailable",
+        "refund-available",
+        "expired",
+        "cancelled",
+        "settled-paid",
+        "good-first-agent-bounty",
+    }
+)
+LABEL_DEFINITIONS = {
+    "bounty": ("0e8a16", "Work with an explicit outcome or reward"),
+    "ai-agent-welcome": ("7057ff", "AI agents are welcome to participate"),
+    "payments": ("1d76db", "Payment or escrow related"),
+    "funding-needed": ("d4c5f9", "Canonical bounty still needs funding"),
+    "funded-live": ("0e8a16", "Canonical bounty is fully funded"),
+    "ready-to-earn": ("a2eeef", "Public funded work accepting an eligible agent action"),
+    "claimable-live": ("2da44e", "Compatibility discovery label for live earning work"),
+    "open-competition": ("5319e7", "First valid confirmed reveal wins"),
+    "verifier": ("006b75", "Uses an explicitly identified verifier"),
+    "claimed-live": ("fbca04", "Exclusive claim is in progress"),
+    "in-progress": ("fbca04", "Work or reveal recovery is in progress"),
+    "verification-pending": ("f9d0c4", "Canonical submission awaits verification"),
+    "verification-unavailable": ("b60205", "Approved verification is unavailable"),
+    "refund-available": ("c5def5", "A wallet-scoped pull recovery action remains"),
+    "expired": ("ededed", "The canonical participation window expired"),
+    "cancelled": ("ededed", "The canonical bounty was cancelled"),
+    "settled-paid": ("0e8a16", "Canonical BountySettled payment evidence exists"),
+    "good-first-agent-bounty": ("bfdadc", "Explicitly graded as suitable introductory agent work"),
+}
 BOUNDARIES = (
-    "GitHub labels, receipts, and closure mirror canonical indexed state only.",
-    "A GitHub mutation cannot fund, claim, verify, accept, release, or settle a bounty.",
-    "Only a confirmed canonical BountySettled event proves payment.",
+    "GitHub is a discovery mirror, not a funding, verification, or settlement authority.",
+    "A missing record never authorizes label removal or issue closure.",
+    "Only confirmed canonical BountySettled settlement_evidence proves payment.",
 )
 
 
@@ -59,36 +122,34 @@ class HttpResult:
 @dataclass(frozen=True)
 class SettlementReceipt:
     fingerprint: str
-    bounty_id: str
-    bounty_contract: str
-    transaction_hash: str
-    transaction_url: str
-    solver_wallet: str
-    solver_reward_minor: int
-    returned_bond_minor: int
-    completion_bonus_minor: int
-    solver_payout_minor: int
-    verifier_reward_minor: int
     body: str
 
 
 @dataclass(frozen=True)
-class LabelPlan:
-    issue_number: int
-    issue_url: str
-    issue_state: str
-    issue_state_reason: str | None
-    bounty_contract: str | None
-    canonical_status: str | None
-    verification_ready: bool | None
+class IssuePlan:
+    discovery_id: str
+    protocol_version: str
+    lifecycle_state: str
+    competition_mode: str
+    issue_number: int | None
+    issue_url: str | None
+    mapping_action: str
+    create_eligible: bool
+    title: str
+    original_body: str
+    desired_body: str
     current_managed_labels: list[str]
     desired_managed_labels: list[str]
     add_labels: list[str]
     remove_labels: list[str]
+    desired_state: str
+    desired_state_reason: str | None
+    current_state: str | None
+    current_state_reason: str | None
     settlement_receipt: SettlementReceipt | None
     receipt_action: str
     receipt_comment_id: int | None
-    complete_issue: bool
+    publication_lag_seconds: int | None
 
 
 HttpRequest = Callable[[str, str, Any | None, Mapping[str, str] | None], HttpResult]
@@ -99,15 +160,11 @@ def normalize_api_base_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise LabelReconciliationError("API base URL must be an absolute http(s) URL")
     if parsed.query or parsed.fragment or parsed.username or parsed.password:
-        raise LabelReconciliationError(
-            "API base URL cannot contain credentials, query, or fragment"
-        )
+        raise LabelReconciliationError("API base URL cannot contain credentials, query, or fragment")
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" and host not in {"localhost", "127.0.0.1", "::1"}:
         raise LabelReconciliationError("non-local API execution requires https")
-    return urllib.parse.urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "")
-    )
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
 def validate_repository(value: str) -> str:
@@ -166,9 +223,32 @@ def default_http_request(
             dict(error.headers.items()),
         )
     except urllib.error.URLError as error:
-        raise LabelReconciliationError(
-            f"request failed for {url}: {error.reason}"
-        ) from error
+        raise LabelReconciliationError(f"request failed for {url}: {error.reason}") from error
+
+
+def request_with_retry(
+    request: HttpRequest,
+    method: str,
+    url: str,
+    body: Any | None = None,
+    headers: Mapping[str, str] | None = None,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> HttpResult:
+    result: HttpResult | None = None
+    for attempt in range(3):
+        result = request(method, url, body, headers)
+        if result.status not in {429, 500, 502, 503, 504}:
+            return result
+        if attempt < 2:
+            retry_after = next(
+                (value for key, value in result.headers.items() if key.lower() == "retry-after"),
+                None,
+            )
+            delay = min(5.0, float(retry_after)) if str(retry_after or "").isdigit() else float(2**attempt)
+            sleep(delay)
+    assert result is not None
+    return result
 
 
 def github_headers(token: str | None) -> dict[str, str]:
@@ -181,79 +261,433 @@ def github_headers(token: str | None) -> dict[str, str]:
     return headers
 
 
-def fetch_json_list(request: HttpRequest, url: str) -> list[dict[str, Any]]:
-    result = request("GET", url, None, None)
-    if result.status != 200 or not isinstance(result.body, list) or not all(
-        isinstance(item, dict) for item in result.body
+def parse_instant(value: Any, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise LabelReconciliationError(f"{field} must be an RFC3339 string")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise LabelReconciliationError(f"{field} must be RFC3339") from error
+    if parsed.tzinfo is None:
+        raise LabelReconciliationError(f"{field} must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def require_unsigned(value: Any, field: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
+        return int(value)
+    raise LabelReconciliationError(f"invalid unsigned field {field}")
+
+
+def load_policy(path: Path, repository: str, network: str) -> dict[str, Any]:
+    try:
+        policy = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise LabelReconciliationError(f"cannot load activation policy: {error}") from error
+    if not isinstance(policy, dict) or policy.get("schema_version") != POLICY_SCHEMA:
+        raise LabelReconciliationError("activation policy schema is not supported")
+    if policy.get("repository") != repository or policy.get("network") != network:
+        raise LabelReconciliationError("activation policy repository or network mismatch")
+    if require_unsigned(policy.get("chain_id"), "policy.chain_id") <= 0:
+        raise LabelReconciliationError("activation policy chain id must be positive")
+    activation = policy.get("activation")
+    if not isinstance(activation, dict):
+        raise LabelReconciliationError("activation policy lacks activation evidence")
+    parse_instant(activation.get("timestamp"), "policy.activation.timestamp")
+    if require_unsigned(activation.get("safe_block"), "policy.activation.safe_block") <= 0:
+        raise LabelReconciliationError("activation block must be positive")
+    if not TX_HASH.fullmatch(str(activation.get("safe_block_hash") or "").lower()):
+        raise LabelReconciliationError("activation safe block hash is invalid")
+    required = policy.get("required_backfill_discovery_ids")
+    if not isinstance(required, list) or not all(isinstance(value, str) for value in required):
+        raise LabelReconciliationError("required backfill identities are malformed")
+    if len(required) != len(set(required)):
+        raise LabelReconciliationError("required backfill identities are duplicated")
+    trial = policy.get("open_competition_compatibility_trial")
+    if not isinstance(trial, dict):
+        raise LabelReconciliationError("compatibility trial policy is missing")
+    if parse_instant(trial.get("ends_at"), "trial.ends_at") <= parse_instant(
+        trial.get("starts_at"), "trial.starts_at"
     ):
-        raise LabelReconciliationError(f"canonical feed returned HTTP {result.status}")
-    return result.body
+        raise LabelReconciliationError("compatibility trial interval is invalid")
+    return policy
 
 
-def fetch_canonical_feeds(
-    request: HttpRequest, api_base_url: str, network: str
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    health = request("GET", f"{api_base_url}/health", None, None)
+def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict) or payload.get("schema_version") != PROJECTION_SCHEMA:
+        raise LabelReconciliationError("discovery projection schema is not supported")
+    if payload.get("network") != network or payload.get("chain_id") != policy.get("chain_id"):
+        raise LabelReconciliationError("discovery projection network or chain mismatch")
+    safe = payload.get("safe_block")
+    if (
+        payload.get("degraded") is not False
+        or not isinstance(safe, dict)
+        or safe.get("fresh") is not True
+        or require_unsigned(safe.get("number"), "safe_block.number") <= 0
+        or not TX_HASH.fullmatch(str(safe.get("hash") or "").lower())
+    ):
+        raise LabelReconciliationError("discovery projection is degraded or stale")
+    sources = payload.get("source_statuses")
+    if not isinstance(sources, list) or {
+        source.get("protocol_version") for source in sources if isinstance(source, dict)
+    } != SUPPORTED_PROTOCOLS:
+        raise LabelReconciliationError("discovery projection protocol adapters are incomplete")
+    if any(
+        not isinstance(source, dict)
+        or source.get("available") is not True
+        or source.get("fresh") is not True
+        for source in sources
+    ):
+        raise LabelReconciliationError("a canonical projection source is degraded")
+    items = payload.get("items")
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise LabelReconciliationError("discovery projection items are malformed")
+    seen: set[str] = set()
+    for item in items:
+        identity = str(item.get("discovery_id") or "")
+        protocol = str(item.get("protocol_version") or "")
+        contract = str(item.get("bounty_contract") or "").lower()
+        lifecycle = str(item.get("lifecycle_state") or "")
+        mode = str(item.get("competition_mode") or "")
+        if (
+            not DISCOVERY_ID.fullmatch(identity)
+            or identity in seen
+            or protocol not in SUPPORTED_PROTOCOLS
+            or lifecycle not in LIFECYCLE_STATES
+            or mode not in {"exclusive_claim", "first_valid_submission"}
+            or not ADDRESS.fullmatch(contract)
+            or item.get("network") != network
+            or item.get("chain_id") != policy.get("chain_id")
+            or not isinstance(item.get("title"), str)
+            or not str(item.get("title")).strip()
+            or not isinstance(item.get("summary"), str)
+            or not isinstance(item.get("categories"), list)
+            or not isinstance(item.get("skills"), list)
+        ):
+            raise LabelReconciliationError(f"malformed discovery record: {identity or '<missing>'}")
+        if item.get("visibility") != "public":
+            raise LabelReconciliationError(f"private record reached public projection: {identity}")
+        require_public_https_url(item.get("public_url"), f"{identity}.public_url")
+        if item.get("source_url") is not None:
+            require_public_https_url(item.get("source_url"), f"{identity}.source_url")
+        action = item.get("next_action")
+        if not isinstance(action, dict):
+            raise LabelReconciliationError(f"next action is malformed: {identity}")
+        require_public_https_url(action.get("url"), f"{identity}.next_action.url")
+        if protocol == "agent-bounties/open-competition-v1" and mode != "first_valid_submission":
+            raise LabelReconciliationError(f"Open Competition mode mismatch: {identity}")
+        if protocol == "agent-bounties/autonomous-v1" and mode != "exclusive_claim":
+            raise LabelReconciliationError(f"autonomous-v1 mode mismatch: {identity}")
+        for field in (
+            "reward_usdc_base_units",
+            "verifier_reward_usdc_base_units",
+            "bond_usdc_base_units",
+            "funded_usdc_base_units",
+            "funding_target_usdc_base_units",
+        ):
+            require_unsigned(item.get(field), f"{identity}.{field}")
+        parse_instant(item.get("created_at"), f"{identity}.created_at")
+        parse_instant(item.get("updated_at"), f"{identity}.updated_at")
+        require_unsigned(item.get("created_block"), f"{identity}.created_block")
+        if lifecycle == "settled":
+            validate_settlement(item)
+        elif item.get("settlement_evidence") is not None:
+            raise LabelReconciliationError(f"non-settled record exposes payment evidence: {identity}")
+        if item.get("ready_to_earn") is True and (
+            lifecycle != "ready_to_earn"
+            or item.get("funded") is not True
+            or item.get("verification_ready") is not True
+        ):
+            raise LabelReconciliationError(f"unsafe ready-to-earn record: {identity}")
+        seen.add(identity)
+    for source in sources:
+        protocol = str(source["protocol_version"])
+        actual = sum(item.get("protocol_version") == protocol for item in items)
+        if require_unsigned(source.get("item_count"), f"{protocol}.item_count") != actual:
+            raise LabelReconciliationError(f"projection source count mismatch: {protocol}")
+    required = set(policy["required_backfill_discovery_ids"])
+    missing_required = required - seen
+    if missing_required:
+        raise LabelReconciliationError(
+            "required backfill identities are missing: " + ", ".join(sorted(missing_required))
+        )
+    return items
+
+
+def validate_settlement(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    identity = str(item.get("discovery_id") or "")
+    evidence = item.get("settlement_evidence")
+    if not isinstance(evidence, dict):
+        raise LabelReconciliationError(f"settled record lacks evidence: {identity}")
+    if evidence.get("event_name") != "BountySettled" or evidence.get("confirmed_canonical") is not True:
+        raise LabelReconciliationError(f"settlement is not canonical: {identity}")
+    if (
+        str(evidence.get("bounty_contract") or "").lower()
+        != str(item.get("bounty_contract") or "").lower()
+        or not TX_HASH.fullmatch(str(evidence.get("transaction_hash") or "").lower())
+        or not ADDRESS.fullmatch(str(evidence.get("solver_wallet") or "").lower())
+    ):
+        raise LabelReconciliationError(f"settlement identity is malformed: {identity}")
+    solver_reward = require_unsigned(evidence.get("solver_reward"), "settlement.solver_reward")
+    returned_bond = require_unsigned(evidence.get("returned_bond"), "settlement.returned_bond")
+    bonus = require_unsigned(evidence.get("completion_bonus"), "settlement.completion_bonus")
+    payout = require_unsigned(evidence.get("solver_payout"), "settlement.solver_payout")
+    require_unsigned(evidence.get("verifier_reward"), "settlement.verifier_reward")
+    if payout != solver_reward + returned_bond + bonus:
+        raise LabelReconciliationError(f"settlement payout is inconsistent: {identity}")
+    return evidence
+
+
+def fetch_projection(request: HttpRequest, api_base_url: str, network: str) -> dict[str, Any]:
+    health = request_with_retry(request, "GET", f"{api_base_url}/health")
     if health.status != 200 or str(health.body).strip() != "ok":
         raise LabelReconciliationError("hosted API health is not confirmed")
     query = urllib.parse.urlencode({"network": network})
-    full = fetch_json_list(
-        request, f"{api_base_url}/v1/base/autonomous-bounties/feed?{query}"
+    result = request_with_retry(
+        request, "GET", f"{api_base_url}/v1/github/bounty-discovery-v1?{query}"
     )
-    claimable_query = urllib.parse.urlencode(
-        {"network": network, "claimable_only": "true"}
-    )
-    claimable = fetch_json_list(
-        request,
-        f"{api_base_url}/v1/base/autonomous-bounties/feed?{claimable_query}",
-    )
-    return full, claimable
+    if result.status != 200 or not isinstance(result.body, dict):
+        raise LabelReconciliationError(f"discovery projection returned HTTP {result.status}")
+    return result.body
 
 
-def fetch_github_issues(
-    request: HttpRequest, repository: str, token: str | None
-) -> list[dict[str, Any]]:
-    issues: list[dict[str, Any]] = []
-    headers = github_headers(token)
-    for page in range(1, 21):
-        query = urllib.parse.urlencode(
-            {"state": "all", "per_page": "100", "page": str(page)}
+# The claim-comment workflow still consumes the autonomous-v1 full and earning
+# feeds for its exclusive-claim handoff. Keep this compatibility reader here so
+# both automations share the same strict transport and identity checks while the
+# GitHub publisher itself uses only the lifecycle-complete projection above.
+def fetch_canonical_feeds(
+    request: HttpRequest, api_base_url: str, network: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    health = request_with_retry(request, "GET", f"{api_base_url}/health")
+    if health.status != 200 or str(health.body).strip() != "ok":
+        raise LabelReconciliationError("hosted API health is not confirmed")
+    full_query = urllib.parse.urlencode({"network": network})
+    earning_query = urllib.parse.urlencode({"network": network, "claimable_only": "true"})
+    results: list[list[dict[str, Any]]] = []
+    for url in (
+        f"{api_base_url}/v1/base/autonomous-bounties/feed?{full_query}",
+        f"{api_base_url}/v1/base/autonomous-bounties/feed?{earning_query}",
+    ):
+        result = request_with_retry(request, "GET", url)
+        if result.status != 200 or not isinstance(result.body, list) or not all(
+            isinstance(record, dict) for record in result.body
+        ):
+            raise LabelReconciliationError(f"canonical feed returned HTTP {result.status}")
+        results.append(result.body)
+    return results[0], results[1]
+
+
+def require_amount(item: Mapping[str, Any], field: str) -> int:
+    try:
+        return require_unsigned(item.get(field), field)
+    except LabelReconciliationError as error:
+        raise LabelReconciliationError(f"canonical item has invalid {field}") from error
+
+
+def source_issue_url(item: Mapping[str, Any], repository: str) -> str | None:
+    terms = item.get("terms")
+    document = terms.get("document") if isinstance(terms, dict) else None
+    source = document.get("source_url") if isinstance(document, dict) else None
+    number = parse_same_repository_issue(source, repository)
+    return f"https://github.com/{repository}/issues/{number}" if number else None
+
+
+def validate_autonomous_state_evidence(
+    item: Mapping[str, Any], status: str, contract: str
+) -> None:
+    expected = {
+        "claimed": {"bounty_claimed"},
+        "submitted": {"bounty_claimed", "submission_added"},
+        "paid": {"bounty_settled"},
+    }.get(status)
+    if expected is None:
+        return
+    events = item.get("events")
+    if not isinstance(events, list):
+        raise LabelReconciliationError(f"canonical {status} item lacks an event list: {contract}")
+    observed = {
+        str(event.get("kind"))
+        for event in events
+        if isinstance(event, dict)
+        and str(event.get("contract_address") or "").lower() == contract
+        and TX_HASH.fullmatch(str(event.get("tx_hash") or "").lower())
+    }
+    if not expected.issubset(observed):
+        raise LabelReconciliationError(f"canonical {status} item lacks confirmed event evidence")
+
+
+def canonical_records(
+    full_feed: list[dict[str, Any]],
+    claimable_feed: list[dict[str, Any]],
+    repository: str,
+) -> tuple[dict[str, dict[str, Any]], set[tuple[str, str]]]:
+    by_contract: dict[str, dict[str, Any]] = {}
+    candidates: dict[str, list[dict[str, Any]]] = {}
+    for item in full_feed:
+        contract = str(item.get("bounty_contract") or "").lower()
+        status = str(item.get("status") or "").lower()
+        if not ADDRESS.fullmatch(contract) or status not in KNOWN_AUTONOMOUS_STATUSES:
+            raise LabelReconciliationError("canonical full feed has an invalid contract or status")
+        if contract in by_contract:
+            raise LabelReconciliationError(f"duplicate canonical contract: {contract}")
+        target = require_amount(item, "target_amount")
+        funded = require_amount(item, "funded_amount")
+        if target <= 0 or funded > target:
+            raise LabelReconciliationError(f"invalid canonical economics: {contract}")
+        if status in {"claimable", "claimed", "submitted", "paid"} and funded != target:
+            raise LabelReconciliationError(f"canonical {status} item is not fully funded: {contract}")
+        validate_autonomous_state_evidence(item, status, contract)
+        source = source_issue_url(item, repository)
+        normalized = dict(item)
+        normalized.update(
+            {"bounty_contract": contract, "status": status, "_source_issue_url": source}
         )
-        url = f"https://api.github.com/repos/{repository}/issues?{query}"
-        result = request("GET", url, None, headers)
-        if result.status != 200 or not isinstance(result.body, list):
+        by_contract[contract] = normalized
+        if source:
+            candidates.setdefault(source, []).append(normalized)
+
+    by_issue: dict[str, dict[str, Any]] = {}
+    for source, records in candidates.items():
+        if len(records) == 1:
+            by_issue[source] = records[0]
+            continue
+        ready = [
+            record
+            for record in records
+            if record["status"] in {"claimable", "claimed", "submitted", "paid"}
+            and record.get("terms_valid") is True
+            and record.get("verification_ready") is True
+        ]
+        if len(ready) != 1:
             raise LabelReconciliationError(
-                f"GitHub issue listing returned HTTP {result.status}"
+                f"multiple canonical contracts reference {source} without one unique ready record"
             )
-        batch = [item for item in result.body if isinstance(item, dict)]
-        issues.extend(batch)
-        if len(batch) < 100:
-            return issues
-    raise LabelReconciliationError("GitHub issue listing exceeded 2000 records")
+        by_issue[source] = ready[0]
+
+    earning: set[tuple[str, str]] = set()
+    for item in claimable_feed:
+        contract = str(item.get("bounty_contract") or "").lower()
+        source = source_issue_url(item, repository)
+        counterpart = by_contract.get(contract)
+        pair = (source or "", contract)
+        if counterpart is None or not (
+            source == counterpart["_source_issue_url"]
+            and counterpart["status"] == "claimable"
+            and counterpart.get("terms_valid") is True
+            and counterpart.get("verification_ready") is True
+            and str(item.get("status") or "").lower() == "claimable"
+            and item.get("terms_valid") is True
+            and item.get("verification_ready") is True
+        ):
+            raise LabelReconciliationError(
+                f"earning feed item is not an exact executable full-feed record: {contract}"
+            )
+        if pair in earning:
+            raise LabelReconciliationError(f"duplicate earning feed item: {contract}")
+        earning.add(pair)
+    return by_issue, earning
 
 
-def fetch_github_issue_comments(
+def next_page(headers: Mapping[str, str]) -> str | None:
+    link = next((value for key, value in headers.items() if key.lower() == "link"), "")
+    for part in link.split(","):
+        match = re.match(r'\s*<([^>]+)>;\s*rel="next"', part)
+        if match:
+            return match.group(1)
+    return None
+
+
+def fetch_paginated(
+    request: HttpRequest,
+    url: str,
+    token: str | None,
+    resource: str,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    while url:
+        if url in seen_urls:
+            raise LabelReconciliationError(f"GitHub {resource} pagination looped")
+        seen_urls.add(url)
+        result = request_with_retry(request, "GET", url, headers=github_headers(token))
+        if result.status != 200 or not isinstance(result.body, list):
+            raise LabelReconciliationError(f"GitHub {resource} returned HTTP {result.status}")
+        records.extend(record for record in result.body if isinstance(record, dict))
+        url = next_page(result.headers)
+    return records
+
+
+def fetch_github_issues(request: HttpRequest, repository: str, token: str | None) -> list[dict[str, Any]]:
+    # Listing every issue also recovers a managed issue whose `bounty` label was
+    # manually removed, preventing a duplicate mirror on the next run.
+    query = urllib.parse.urlencode({"state": "all", "per_page": "100"})
+    return fetch_paginated(
+        request,
+        f"https://api.github.com/repos/{repository}/issues?{query}",
+        token,
+        "bounty issue listing",
+    )
+
+
+def parse_same_repository_issue(source_url: Any, repository: str) -> int | None:
+    if source_url is None:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(str(source_url))
+    except ValueError as error:
+        raise LabelReconciliationError("source URL is malformed") from error
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        return None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise LabelReconciliationError("GitHub source URL must be exact and credential-free")
+    match = re.fullmatch(rf"/{re.escape(repository)}/issues/([1-9][0-9]*)/?", parsed.path)
+    return int(match.group(1)) if match else None
+
+
+def fetch_linked_source_issues(
+    request: HttpRequest,
+    repository: str,
+    token: str | None,
+    items: list[dict[str, Any]],
+    listed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_number = {
+        issue.get("number"): issue
+        for issue in listed
+        if isinstance(issue.get("number"), int) and "pull_request" not in issue
+    }
+    for number in sorted(
+        {
+            number
+            for item in items
+            if (number := parse_same_repository_issue(item.get("source_url"), repository))
+        }
+    ):
+        if number in by_number:
+            continue
+        result = request_with_retry(
+            request,
+            "GET",
+            f"https://api.github.com/repos/{repository}/issues/{number}",
+            headers=github_headers(token),
+        )
+        if result.status != 200 or not isinstance(result.body, dict) or "pull_request" in result.body:
+            raise LabelReconciliationError(f"linked source issue #{number} is unavailable")
+        by_number[number] = result.body
+    return list(by_number.values())
+
+
+def fetch_issue_comments(
     request: HttpRequest, repository: str, issue_number: int, token: str | None
 ) -> list[dict[str, Any]]:
-    comments: list[dict[str, Any]] = []
-    headers = github_headers(token)
-    for page in range(1, 11):
-        query = urllib.parse.urlencode({"per_page": "100", "page": str(page)})
-        url = (
-            f"https://api.github.com/repos/{repository}/issues/"
-            f"{issue_number}/comments?{query}"
-        )
-        result = request("GET", url, None, headers)
-        if result.status != 200 or not isinstance(result.body, list):
-            raise LabelReconciliationError(
-                f"GitHub comments for issue #{issue_number} returned HTTP {result.status}"
-            )
-        batch = [comment for comment in result.body if isinstance(comment, dict)]
-        comments.extend(batch)
-        if len(batch) < 100:
-            return comments
-    raise LabelReconciliationError(
-        f"GitHub comments for issue #{issue_number} exceeded 1000 records"
+    query = urllib.parse.urlencode({"per_page": "100"})
+    return fetch_paginated(
+        request,
+        f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments?{query}",
+        token,
+        f"comments for issue #{issue_number}",
     )
 
 
@@ -267,562 +701,625 @@ def label_names(issue: Mapping[str, Any]) -> set[str]:
     return names
 
 
-def source_issue_url(item: Mapping[str, Any], repository: str) -> str | None:
-    terms = item.get("terms")
-    document = terms.get("document") if isinstance(terms, dict) else None
-    source = document.get("source_url") if isinstance(document, dict) else None
-    if source is None:
+def issue_marker(issue: Mapping[str, Any]) -> str | None:
+    body = str(issue.get("body") or "")
+    starts = body.count(MANAGED_START)
+    ends = body.count(MANAGED_END)
+    markers = IDENTITY_MARKER_RE.findall(body)
+    if starts != ends or starts > 1 or ends > 1 or len(markers) > 1:
+        raise LabelReconciliationError(f"issue #{issue.get('number')} has malformed managed markers")
+    if starts == 1 and len(markers) != 1:
+        raise LabelReconciliationError(f"issue #{issue.get('number')} lacks one discovery identity")
+    if markers and starts != 1:
+        raise LabelReconciliationError(f"issue #{issue.get('number')} has an unmanaged discovery identity")
+    if not markers:
         return None
     try:
-        parsed = urllib.parse.urlsplit(str(source))
+        payload = json.loads(markers[0])
+    except json.JSONDecodeError as error:
+        raise LabelReconciliationError(f"issue #{issue.get('number')} marker is invalid JSON") from error
+    identity = payload.get("discovery_id") if isinstance(payload, dict) else None
+    if not isinstance(identity, str) or not DISCOVERY_ID.fullmatch(identity):
+        raise LabelReconciliationError(f"issue #{issue.get('number')} marker identity is invalid")
+    return identity
+
+
+def add_attribution(url: str, discovery_id: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        raise LabelReconciliationError(f"public discovery URL is invalid: {discovery_id}")
+    query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(
+        {
+            "utm_source": "github",
+            "utm_medium": "issue",
+            "utm_campaign": "bounty-discovery-v1",
+            "discovery_id": discovery_id,
+        }
+    )
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urllib.parse.urlencode(query), parsed.fragment)
+    )
+
+
+def require_public_https_url(value: Any, field: str) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(str(value or ""))
     except ValueError as error:
-        raise LabelReconciliationError("canonical source URL is malformed") from error
-    expected_prefix = f"/{repository}/issues/"
-    if parsed.scheme != "https" or parsed.hostname != "github.com":
-        return None
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise LabelReconciliationError("GitHub source URL must be credential-free and exact")
-    if not parsed.path.startswith(expected_prefix):
-        return None
-    suffix = parsed.path[len(expected_prefix) :]
-    if not suffix.isdigit() or int(suffix) <= 0:
-        raise LabelReconciliationError("GitHub source URL lacks a positive issue number")
-    return f"https://github.com/{repository}/issues/{int(suffix)}"
+        raise LabelReconciliationError(f"{field} is malformed") from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or any(character in str(value) for character in ("\n", "\r"))
+    ):
+        raise LabelReconciliationError(f"{field} must be a public credential-free HTTPS URL")
+    return str(value)
 
 
-def require_amount(item: Mapping[str, Any], field: str) -> int:
-    value = item.get(field)
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-        return value
-    if isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
-        return int(value)
-    raise LabelReconciliationError(f"canonical item has invalid {field}")
+def format_usdc(amount: Any) -> str:
+    value = require_unsigned(amount, "USDC amount")
+    whole, fraction = divmod(value, 1_000_000)
+    decimals = f"{fraction:06d}".rstrip("0")
+    return f"{whole}.{decimals.ljust(2, '0')}" if decimals else f"{whole}.00"
 
 
-def format_usdc_minor(amount: int) -> str:
-    whole, fraction = divmod(amount, 1_000_000)
-    digits = f"{fraction:06d}".rstrip("0")
-    return f"{whole}.{digits.ljust(2, '0')}" if digits else f"{whole}.00"
+def render_managed_block(item: Mapping[str, Any]) -> str:
+    identity = str(item["discovery_id"])
+    marker = json.dumps({"discovery_id": identity}, separators=(",", ":"), sort_keys=True)
+    public_url = add_attribution(str(item["public_url"]), identity)
+    next_action = item.get("next_action")
+    if not isinstance(next_action, dict) or not isinstance(next_action.get("label"), str):
+        raise LabelReconciliationError(f"next action is malformed: {identity}")
+    action_url = add_attribution(str(next_action.get("url")), identity)
+    lines = [
+        MANAGED_START,
+        f"<!-- agent-bounties/github-discovery-v1 {marker} -->",
+        "## Canonical bounty discovery",
+        "",
+        str(item["summary"]).strip(),
+        "",
+        f"- **Mode:** {'Open competition' if item['competition_mode'] == 'first_valid_submission' else 'Exclusive claim'}",
+        f"- **Lifecycle:** `{item['lifecycle_state']}`",
+        f"- **Solver reward:** {format_usdc(item['reward_usdc_base_units'])} USDC",
+        f"- **Entry/claim bond:** {format_usdc(item['bond_usdc_base_units'])} USDC",
+        f"- **Funding:** {format_usdc(item['funded_usdc_base_units'])} / {format_usdc(item['funding_target_usdc_base_units'])} USDC",
+    ]
+    verifier = item.get("verifier")
+    if isinstance(verifier, dict):
+        lines.append(
+            f"- **Verifier:** {verifier.get('display_name', 'Unspecified')} "
+            f"(`{verifier.get('method', 'unknown')}`; ready: `{str(verifier.get('ready') is True).lower()}`)"
+        )
+    if item.get("entry_count") is not None or item.get("max_entries") is not None:
+        lines.append(f"- **Capacity:** {item.get('entry_count', 0)} / {item.get('max_entries', '?')} entries")
+    if item.get("deadline"):
+        lines.append(f"- **{str(item.get('deadline_kind') or 'Deadline').replace('_', ' ').title()}:** `{item['deadline']}`")
+    if item["competition_mode"] == "first_valid_submission":
+        lines.extend(
+            [
+                "",
+                "### Open Competition rules",
+                "",
+                "First valid confirmed reveal wins. Each wallet may enter once; an entry does not prove one independent person. Save the local commitment recovery envelope because the API never stores its plaintext salt.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "### Next action",
+            "",
+            f"**[{next_action['label']}]({action_url})** — {next_action.get('instructions', '')}",
+            "",
+            f"[Open the public bounty page]({public_url})",
+        ]
+    )
+    if item.get("source_url"):
+        lines.append(f"[Original source]({item['source_url']})")
+    lines.extend(
+        [
+            "",
+            "> GitHub mirrors canonical public state and cannot fund, claim, verify, settle, or prove payment. Only a confirmed canonical `BountySettled` receipt below proves solver payment.",
+            MANAGED_END,
+        ]
+    )
+    return "\n".join(lines)
+
+
+def replace_managed_block(body: str, managed: str) -> str:
+    starts = body.count(MANAGED_START)
+    ends = body.count(MANAGED_END)
+    if starts != ends or starts > 1:
+        raise LabelReconciliationError("cannot update malformed managed issue body")
+    if starts == 0:
+        return f"{body.rstrip()}\n\n{managed}\n" if body.strip() else f"{managed}\n"
+    start = body.index(MANAGED_START)
+    end = body.index(MANAGED_END, start) + len(MANAGED_END)
+    return f"{body[:start]}{managed}{body[end:]}"
+
+
+def trial_claimable_enabled(policy: Mapping[str, Any], generated_at: datetime) -> bool:
+    trial = policy["open_competition_compatibility_trial"]
+    ends_at = parse_instant(trial["ends_at"], "trial.ends_at")
+    return generated_at <= ends_at or trial.get("post_trial_action") == "hold_for_day_30_decision"
+
+
+def desired_labels(item: Mapping[str, Any], policy: Mapping[str, Any], generated_at: datetime) -> set[str]:
+    labels = set(COMMON_LABELS)
+    state = str(item["lifecycle_state"])
+    mode = str(item["competition_mode"])
+    if state == "funding_needed":
+        labels.add("funding-needed")
+    elif state == "ready_to_earn":
+        labels.update({"funded-live", "ready-to-earn", "claimable-live"})
+        if mode == "first_valid_submission":
+            labels.update({"open-competition", "verifier"})
+            if not trial_claimable_enabled(policy, generated_at):
+                labels.discard("claimable-live")
+    elif state == "in_progress":
+        labels.add("funded-live")
+        labels.add("claimed-live" if mode == "exclusive_claim" else "in-progress")
+        if mode == "first_valid_submission":
+            labels.add("open-competition")
+    elif state == "verification_pending":
+        labels.update({"funded-live", "verification-pending"})
+        if mode == "first_valid_submission":
+            labels.add("open-competition")
+    elif state == "unavailable":
+        if item.get("funded") is True:
+            labels.add("funded-live")
+        if item.get("verification_ready") is not True:
+            labels.add("verification-unavailable")
+        else:
+            labels.add("in-progress")
+        if mode == "first_valid_submission":
+            labels.add("open-competition")
+    elif state in {"cancelled", "expired"}:
+        labels.add(state)
+        if item.get("recovery_action_available") is True:
+            labels.add("refund-available")
+    elif state == "settled":
+        labels.add("settled-paid")
+    difficulty = item.get("difficulty")
+    if isinstance(difficulty, str) and difficulty.strip():
+        labels.add("good-first-agent-bounty")
+    return labels
 
 
 def settlement_transaction_url(network: str, tx_hash: str) -> str:
-    origins = {
-        "base-mainnet": "https://basescan.org",
-        "base-sepolia": "https://sepolia.basescan.org",
-    }
-    origin = origins.get(network)
-    if origin is None:
-        raise LabelReconciliationError(
-            f"settlement receipts do not support network {network!r}"
-        )
-    return f"{origin}/tx/{tx_hash}"
+    origins = {"base-mainnet": "https://basescan.org", "base-sepolia": "https://sepolia.basescan.org"}
+    try:
+        return f"{origins[network]}/tx/{tx_hash}"
+    except KeyError as error:
+        raise LabelReconciliationError(f"unsupported settlement network: {network}") from error
 
 
-def build_settlement_receipt(
-    item: Mapping[str, Any], contract: str, network: str
-) -> SettlementReceipt:
-    bounty_id = str(item.get("bounty_id") or "").lower()
-    if not TX_HASH.fullmatch(bounty_id):
-        raise LabelReconciliationError(f"paid item has an invalid bounty id: {contract}")
-    events = item.get("events")
-    matches = [
-        event
-        for event in events or []
-        if isinstance(event, dict)
-        and event.get("kind") == "bounty_settled"
-        and str(event.get("contract_address") or "").lower() == contract
-    ]
-    if len(matches) != 1:
-        raise LabelReconciliationError(
-            f"paid item requires exactly one canonical bounty_settled event: {contract}"
-        )
-    event = matches[0]
-    tx_hash = str(event.get("tx_hash") or "").lower()
-    event_bounty_id = str(event.get("bounty_id") or "").lower()
-    log_index = event.get("log_index")
-    data = event.get("data")
-    if (
-        not TX_HASH.fullmatch(tx_hash)
-        or event_bounty_id != bounty_id
-        or not isinstance(log_index, int)
-        or log_index < 0
-        or not isinstance(data, dict)
-    ):
-        raise LabelReconciliationError(
-            f"canonical settlement identity is incomplete: {contract}"
-        )
-    solver = str(data.get("solver") or "").lower()
-    if not ADDRESS.fullmatch(solver):
-        raise LabelReconciliationError(f"canonical settlement solver is invalid: {contract}")
-    solver_reward = require_amount(data, "solver_reward")
-    returned_bond = require_amount(data, "claim_bond_returned")
-    completion_bonus = require_amount(data, "timeout_bond_bonus")
-    solver_payout = require_amount(data, "solver_payout")
-    verifier_reward = require_amount(data, "verifier_reward")
-    if (
-        solver_reward != require_amount(item, "solver_reward")
-        or returned_bond != require_amount(item, "claim_bond")
-        or verifier_reward != require_amount(item, "verifier_reward")
-        or solver_payout != solver_reward + returned_bond + completion_bonus
-    ):
-        raise LabelReconciliationError(
-            f"canonical settlement amounts do not match bounty economics: {contract}"
-        )
-    fingerprint_input = {
-        "bounty_id": bounty_id,
-        "contract": contract,
-        "log_index": log_index,
-        "solver": solver,
-        "solver_payout": solver_payout,
-        "transaction_hash": tx_hash,
-        "verifier_reward": verifier_reward,
-    }
+def build_settlement_receipt(item: Mapping[str, Any]) -> SettlementReceipt:
+    evidence = validate_settlement(item)
+    tx_hash = str(evidence["transaction_hash"]).lower()
     fingerprint = hashlib.sha256(
-        json.dumps(fingerprint_input, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    transaction_url = settlement_transaction_url(network, tx_hash)
-    explorer_origin = transaction_url.rsplit("/tx/", 1)[0]
     body = "\n".join(
         [
             SETTLEMENT_RECEIPT_MARKER,
             "## Canonical payout confirmed",
             "",
-            f"- Bounty ID: `{bounty_id}`",
-            f"- Contract: [`{contract}`]({explorer_origin}/address/{contract})",
-            f"- Settlement: [`{tx_hash}`]({transaction_url})",
-            f"- Solver wallet: `{solver}`",
-            f"- Solver reward: **{format_usdc_minor(solver_reward)} USDC**",
-            f"- Returned solver bond: **{format_usdc_minor(returned_bond)} USDC**",
-            f"- Completion bonus: **{format_usdc_minor(completion_bonus)} USDC**",
-            f"- Total solver transfer: **{format_usdc_minor(solver_payout)} USDC**",
-            f"- Verifier reward: **{format_usdc_minor(verifier_reward)} USDC**",
+            f"- Bounty ID: `{evidence['bounty_id']}`",
+            f"- Contract: `{evidence['bounty_contract']}`",
+            f"- Settlement: [`{tx_hash}`]({settlement_transaction_url(str(item['network']), tx_hash)})",
+            f"- Solver wallet: `{evidence['solver_wallet']}`",
+            f"- Solver reward: **{format_usdc(evidence['solver_reward'])} USDC**",
+            f"- Returned bond: **{format_usdc(evidence['returned_bond'])} USDC**",
+            f"- Completion bonus: **{format_usdc(evidence['completion_bonus'])} USDC**",
+            f"- Total solver transfer: **{format_usdc(evidence['solver_payout'])} USDC**",
+            f"- Verifier reward: **{format_usdc(evidence['verifier_reward'])} USDC**",
             f"- Receipt fingerprint: `{fingerprint}`",
             "",
-            "Only the confirmed canonical `BountySettled` event above proves payment. "
-            "This comment reports that event; it did not authorize or execute settlement.",
-            "",
-            "After verified value: share this proof, tell your human or operator, ask them "
-            "to star the repository and upvote this bounty, then **post your own bounty**. "
-            "These optional actions attract more funded work and never affect this payout.",
+            "Only this confirmed canonical `BountySettled` event proves solver payment. This GitHub comment reports the event; it did not authorize or execute settlement.",
         ]
     )
-    return SettlementReceipt(
-        fingerprint=fingerprint,
-        bounty_id=bounty_id,
-        bounty_contract=contract,
-        transaction_hash=tx_hash,
-        transaction_url=transaction_url,
-        solver_wallet=solver,
-        solver_reward_minor=solver_reward,
-        returned_bond_minor=returned_bond,
-        completion_bonus_minor=completion_bonus,
-        solver_payout_minor=solver_payout,
-        verifier_reward_minor=verifier_reward,
-        body=body,
+    return SettlementReceipt(fingerprint=fingerprint, body=body)
+
+
+def create_allowed(item: Mapping[str, Any], policy: Mapping[str, Any]) -> tuple[bool, str]:
+    identity = str(item["discovery_id"])
+    if identity in policy["required_backfill_discovery_ids"]:
+        return True, "required_backfill"
+    state = str(item["lifecycle_state"])
+    if state in NONTERMINAL_STATES or item.get("recovery_action_available") is True:
+        return True, "current_nonterminal_backfill"
+    activation = policy["activation"]
+    created_after = require_unsigned(item["created_block"], "created_block") >= require_unsigned(
+        activation["safe_block"], "activation.safe_block"
+    ) and parse_instant(item["created_at"], "created_at") >= parse_instant(
+        activation["timestamp"], "activation.timestamp"
     )
+    if created_after:
+        return True, "post_activation_record"
+    return False, "historical_terminal_without_existing_issue"
 
 
-def validate_state_evidence(item: Mapping[str, Any], status: str, contract: str) -> None:
-    if status not in {"claimed", "submitted", "paid"}:
-        return
-    expected_kinds = {
-        "claimed": {"bounty_claimed"},
-        "submitted": {"bounty_claimed", "submission_added"},
-        "paid": {"bounty_settled"},
-    }[status]
-    events = item.get("events")
-    if not isinstance(events, list):
-        raise LabelReconciliationError(
-            f"canonical {status} item lacks an event list: {contract}"
-        )
-    observed_kinds = {
-        str(event.get("kind"))
-        for event in events
-        if isinstance(event, dict)
-        and str(event.get("contract_address") or "").lower() == contract
-        and TX_HASH.fullmatch(str(event.get("tx_hash") or ""))
-    }
-    if not expected_kinds.issubset(observed_kinds):
-        raise LabelReconciliationError(
-            f"canonical {status} item lacks confirmed "
-            f"{','.join(sorted(expected_kinds))} evidence: {contract}"
-        )
-
-
-def canonical_records(
-    full_feed: list[dict[str, Any]],
-    claimable_feed: list[dict[str, Any]],
-    repository: str,
-) -> tuple[dict[str, dict[str, Any]], set[tuple[str, str]]]:
-    by_contract: dict[str, dict[str, Any]] = {}
-    candidates_by_issue_url: dict[str, list[dict[str, Any]]] = {}
-    for item in full_feed:
-        contract = str(item.get("bounty_contract") or "").lower()
-        status = str(item.get("status") or "").lower()
-        if not ADDRESS.fullmatch(contract) or status not in KNOWN_STATUSES:
-            raise LabelReconciliationError("canonical full feed has an invalid contract or status")
-        if contract in by_contract:
-            raise LabelReconciliationError(f"duplicate canonical contract: {contract}")
-        target = require_amount(item, "target_amount")
-        funded = require_amount(item, "funded_amount")
-        if target <= 0 or funded > target:
-            raise LabelReconciliationError(f"invalid canonical economics: {contract}")
-        if status in {"claimable", "claimed", "submitted", "paid"} and funded != target:
-            raise LabelReconciliationError(f"canonical {status} item is not fully funded: {contract}")
-        validate_state_evidence(item, status, contract)
-        source = source_issue_url(item, repository)
-        normalized = dict(item)
-        normalized["bounty_contract"] = contract
-        normalized["status"] = status
-        normalized["_source_issue_url"] = source
-        by_contract[contract] = normalized
-        if source:
-            candidates_by_issue_url.setdefault(source, []).append(normalized)
-
-    by_issue_url: dict[str, dict[str, Any]] = {}
-    for source, candidates in candidates_by_issue_url.items():
-        if len(candidates) == 1:
-            by_issue_url[source] = candidates[0]
-            continue
-        verification_ready = [
-            candidate
-            for candidate in candidates
-            if candidate["status"] in {"claimable", "claimed", "submitted", "paid"}
-            if candidate.get("terms_valid") is True
-            and candidate.get("verification_ready") is True
-        ]
-        if len(verification_ready) != 1:
-            raise LabelReconciliationError(
-                "multiple canonical contracts reference "
-                f"{source} without one unique verification-ready record"
-            )
-        by_issue_url[source] = verification_ready[0]
-
-    earning: set[tuple[str, str]] = set()
-    for item in claimable_feed:
-        contract = str(item.get("bounty_contract") or "").lower()
-        source = source_issue_url(item, repository)
-        counterpart = by_contract.get(contract)
-        if counterpart is None:
-            raise LabelReconciliationError(
-                f"earning feed contract is absent from full feed: {contract}"
-            )
-        pair = (source or "", contract)
-        valid = (
-            source == counterpart["_source_issue_url"]
-            and counterpart["status"] == "claimable"
-            and counterpart.get("terms_valid") is True
-            and counterpart.get("verification_ready") is True
-            and str(item.get("status") or "").lower() == "claimable"
-            and item.get("terms_valid") is True
-            and item.get("verification_ready") is True
-        )
-        if not valid:
-            raise LabelReconciliationError(
-                f"earning feed item is not an exact executable full-feed record: {contract}"
-            )
-        if pair in earning:
-            raise LabelReconciliationError(f"duplicate earning feed item: {contract}")
-        earning.add(pair)
-    return by_issue_url, earning
-
-
-def desired_labels(
-    record: Mapping[str, Any] | None, earning: set[tuple[str, str]]
-) -> set[str]:
-    if record is None:
-        return set()
-    status = str(record["status"])
-    contract = str(record["bounty_contract"])
-    source = str(record.get("_source_issue_url") or "")
-    ready = record.get("verification_ready") is True and record.get("terms_valid") is True
-    if status == "paid":
-        return {"settled-paid"}
-    if status == "claimable":
-        labels = {"funded-live"}
-        if ready and (source, contract) in earning:
-            labels.add("claimable-live")
-        else:
-            labels.add("verification-unavailable")
-        return labels
-    if status in {"claimed", "submitted"}:
-        labels = {"funded-live", "claimed-live"}
-        if not ready:
-            labels.add("verification-unavailable")
-        return labels
-    return set()
+def mapping_rank(item: Mapping[str, Any]) -> tuple[int, int, str]:
+    state = str(item["lifecycle_state"])
+    priority = 0 if state == "ready_to_earn" else 1 if state in NONTERMINAL_STATES else 2
+    return (priority, -require_unsigned(item["created_block"], "created_block"), str(item["discovery_id"]))
 
 
 def build_plans(
+    projection: Mapping[str, Any],
     issues: list[dict[str, Any]],
-    full_feed: list[dict[str, Any]],
-    claimable_feed: list[dict[str, Any]],
+    policy: Mapping[str, Any],
     repository: str,
-    network: str = "base-mainnet",
-) -> list[LabelPlan]:
-    records, earning = canonical_records(full_feed, claimable_feed, repository)
-    plans: list[LabelPlan] = []
-    seen_urls: set[str] = set()
+    comments_by_issue: Mapping[int, list[dict[str, Any]]] | None = None,
+) -> list[IssuePlan]:
+    items = validate_projection(projection, str(policy["network"]), policy)
+    generated_at = parse_instant(projection["generated_at"], "projection.generated_at")
+    issue_by_number: dict[int, dict[str, Any]] = {}
+    marker_to_issue: dict[str, dict[str, Any]] = {}
     for issue in issues:
-        if issue.get("pull_request") is not None:
+        if "pull_request" in issue:
             continue
         number = issue.get("number")
-        url = str(issue.get("html_url") or "")
-        if not isinstance(number, int) or number <= 0:
-            raise LabelReconciliationError("GitHub issue lacks a positive number")
-        expected_url = f"https://github.com/{repository}/issues/{number}"
-        if url != expected_url or url in seen_urls:
-            raise LabelReconciliationError("GitHub issue listing contains invalid or duplicate URLs")
-        seen_urls.add(url)
-        current = label_names(issue) & MANAGED_LABELS
-        record = records.get(url)
-        if record is None and not current:
+        if not isinstance(number, int) or number <= 0 or number in issue_by_number:
+            raise LabelReconciliationError("GitHub issue listing has an invalid or duplicate number")
+        issue_by_number[number] = issue
+        marker = issue_marker(issue)
+        if marker:
+            if marker in marker_to_issue:
+                raise LabelReconciliationError(f"duplicate discovery_id mapping: {marker}")
+            marker_to_issue[marker] = issue
+
+    known_ids = {str(item["discovery_id"]) for item in items}
+    for marker in marker_to_issue:
+        if marker not in known_ids:
+            continue  # Preserve disappeared records exactly as they are.
+
+    source_candidates: dict[int, list[dict[str, Any]]] = {}
+    for item in items:
+        identity = str(item["discovery_id"])
+        if identity in marker_to_issue:
             continue
-        desired = desired_labels(record, earning)
-        receipt = (
-            build_settlement_receipt(record, str(record["bounty_contract"]), network)
-            if record and record["status"] == "paid"
-            else None
+        number = parse_same_repository_issue(item.get("source_url"), repository)
+        if number is not None:
+            source_candidates.setdefault(number, []).append(item)
+    source_winners = {
+        number: sorted(candidates, key=mapping_rank)[0]["discovery_id"]
+        for number, candidates in source_candidates.items()
+        if number in issue_by_number and issue_marker(issue_by_number[number]) is None
+    }
+
+    used_issues: set[int] = set()
+    plans: list[IssuePlan] = []
+    for item in sorted(items, key=lambda value: str(value["discovery_id"])):
+        identity = str(item["discovery_id"])
+        issue = marker_to_issue.get(identity)
+        mapping_action = "reuse_marker" if issue else "create_mirror"
+        if issue is None:
+            source_number = parse_same_repository_issue(item.get("source_url"), repository)
+            if source_number is not None and source_winners.get(source_number) == identity:
+                issue = issue_by_number[source_number]
+                mapping_action = "reuse_source"
+        if issue is not None:
+            number = int(issue["number"])
+            if number in used_issues:
+                raise LabelReconciliationError(f"ambiguous issue mapping for #{number}")
+            used_issues.add(number)
+            eligible, reason = True, mapping_action
+        else:
+            eligible, reason = create_allowed(item, policy)
+            if not eligible:
+                mapping_action = "excluded_historical_terminal"
+            else:
+                mapping_action = reason
+
+        managed = render_managed_block(item)
+        original_body = str(issue.get("body") or "") if issue else ""
+        desired_body = replace_managed_block(original_body, managed) if eligible else original_body
+        desired = desired_labels(item, policy, generated_at) if eligible else set()
+        current_all = label_names(issue) if issue else set()
+        current_managed = current_all & MANAGED_LABELS
+        state = str(item["lifecycle_state"])
+        should_close = state == "settled" or (
+            state in {"cancelled", "expired"} and item.get("recovery_action_available") is not True
         )
-        state_reason = issue.get("state_reason")
+        desired_state = "closed" if should_close else "open"
+        desired_reason = "completed" if state == "settled" else "not_planned" if should_close else None
+        receipt = build_settlement_receipt(item) if state == "settled" and eligible else None
+        issue_number = int(issue["number"]) if issue else None
+        comments = list((comments_by_issue or {}).get(issue_number, [])) if issue_number else []
+        trusted = [
+            comment
+            for comment in comments
+            if SETTLEMENT_RECEIPT_MARKER in str(comment.get("body") or "")
+            and str((comment.get("user") or {}).get("login") or "").lower()
+            in {"github-actions[bot]", "nspg13"}
+        ]
+        if len(trusted) > 1:
+            raise LabelReconciliationError(f"issue #{issue_number} has duplicate trusted receipts")
+        receipt_action = "none"
+        receipt_comment_id = None
+        if receipt:
+            if not trusted:
+                receipt_action = "create"
+            else:
+                receipt_comment_id = trusted[0].get("id")
+                if not isinstance(receipt_comment_id, int):
+                    raise LabelReconciliationError(f"issue #{issue_number} receipt lacks an id")
+                if str(trusted[0].get("body") or "") != receipt.body:
+                    receipt_action = "update"
+        created_at = issue.get("created_at") if issue else None
+        lag = None
+        if created_at:
+            lag = max(
+                0,
+                int((parse_instant(created_at, f"issue #{issue_number}.created_at") - parse_instant(item["created_at"], "created_at")).total_seconds()),
+            )
         plans.append(
-            LabelPlan(
-                issue_number=number,
-                issue_url=url,
-                issue_state=str(issue.get("state") or "unknown").lower(),
-                issue_state_reason=(
-                    str(state_reason).lower() if state_reason is not None else None
-                ),
-                bounty_contract=(str(record["bounty_contract"]) if record else None),
-                canonical_status=(str(record["status"]) if record else None),
-                verification_ready=(
-                    record.get("verification_ready") is True if record else None
-                ),
-                current_managed_labels=sorted(current),
+            IssuePlan(
+                discovery_id=identity,
+                protocol_version=str(item["protocol_version"]),
+                lifecycle_state=state,
+                competition_mode=str(item["competition_mode"]),
+                issue_number=issue_number,
+                issue_url=str(issue.get("html_url")) if issue else None,
+                mapping_action=mapping_action,
+                create_eligible=eligible,
+                title=f"[Bounty] {str(item['title']).strip()}"[:256],
+                original_body=original_body,
+                desired_body=desired_body,
+                current_managed_labels=sorted(current_managed),
                 desired_managed_labels=sorted(desired),
-                add_labels=sorted(desired - current),
-                remove_labels=sorted(current - desired),
+                add_labels=sorted(desired - current_managed),
+                remove_labels=sorted(current_managed - desired),
+                desired_state=desired_state,
+                desired_state_reason=desired_reason,
+                current_state=str(issue.get("state")) if issue else None,
+                current_state_reason=issue.get("state_reason") if issue else None,
                 settlement_receipt=receipt,
-                receipt_action="inspect" if receipt else "none",
-                receipt_comment_id=None,
-                complete_issue=False,
+                receipt_action=receipt_action,
+                receipt_comment_id=receipt_comment_id,
+                publication_lag_seconds=lag,
             )
         )
-    missing = sorted(set(records) - seen_urls)
-    if missing:
-        raise LabelReconciliationError(
-            f"canonical feed references GitHub issues absent from listing: {', '.join(missing)}"
-        )
+    mapped_numbers = [plan.issue_number for plan in plans if plan.issue_number is not None]
+    if len(mapped_numbers) != len(set(mapped_numbers)):
+        raise LabelReconciliationError("one GitHub issue maps to multiple discovery records")
     return plans
 
 
-def trusted_receipt_authors(_repository: str) -> set[str]:
-    return {"github-actions[bot]"}
+def plan_has_write(plan: IssuePlan) -> bool:
+    if not plan.create_eligible:
+        return False
+    return (
+        plan.issue_number is None
+        or plan.original_body != plan.desired_body
+        or bool(plan.add_labels)
+        or bool(plan.remove_labels)
+        or plan.receipt_action != "none"
+        or plan.current_state != plan.desired_state
+        or (plan.desired_state == "closed" and plan.current_state_reason != plan.desired_state_reason)
+    )
 
 
-def receipt_comment(
-    comments: list[dict[str, Any]], repository: str
-) -> dict[str, Any] | None:
-    trusted = trusted_receipt_authors(repository)
-    matches = [
-        comment
-        for comment in comments
-        if SETTLEMENT_RECEIPT_MARKER in str(comment.get("body") or "")
-        and str((comment.get("user") or {}).get("login") or "").lower() in trusted
-    ]
-    if len(matches) > 1:
-        raise LabelReconciliationError("multiple trusted settlement receipts found")
-    return matches[0] if matches else None
-
-
-def plan_receipt_actions(
-    plans: list[LabelPlan],
-    comments_by_issue: Mapping[int, list[dict[str, Any]]],
-    repository: str,
-) -> list[LabelPlan]:
-    planned: list[LabelPlan] = []
-    for plan in plans:
-        if plan.settlement_receipt is None:
-            planned.append(plan)
-            continue
-        comments = comments_by_issue.get(plan.issue_number)
-        if comments is None or not isinstance(comments, list) or not all(
-            isinstance(comment, dict) for comment in comments
-        ):
-            raise LabelReconciliationError(
-                f"settled issue #{plan.issue_number} lacks inspected comments"
-            )
-        existing = receipt_comment(comments, repository)
-        comment_id: int | None = None
-        action = "create"
-        if existing is not None:
-            comment_id = existing.get("id")
-            if not isinstance(comment_id, int) or comment_id <= 0:
-                raise LabelReconciliationError("trusted settlement receipt lacks an id")
-            action = (
-                "none"
-                if str(existing.get("body") or "") == plan.settlement_receipt.body
-                else "update"
-            )
-        planned.append(
-            replace(
-                plan,
-                receipt_action=action,
-                receipt_comment_id=comment_id,
-                complete_issue=(
-                    plan.issue_state != "closed"
-                    or plan.issue_state_reason != "completed"
-                ),
-            )
+def provision_labels(request: HttpRequest, repository: str, token: str) -> list[str]:
+    query = urllib.parse.urlencode({"per_page": "100"})
+    current = fetch_paginated(
+        request,
+        f"https://api.github.com/repos/{repository}/labels?{query}",
+        token,
+        "label listing",
+    )
+    existing = {str(label.get("name") or "").lower() for label in current}
+    created: list[str] = []
+    for name in sorted(MANAGED_LABELS - existing):
+        color, description = LABEL_DEFINITIONS[name]
+        result = request_with_retry(
+            request,
+            "POST",
+            f"https://api.github.com/repos/{repository}/labels",
+            {"name": name, "color": color, "description": description},
+            github_headers(token),
         )
-    return planned
+        if result.status not in {201, 422}:
+            raise LabelReconciliationError(f"failed to provision label {name}: HTTP {result.status}")
+        created.append(name)
+    return created
+
+
+def patch_issue_core(
+    request: HttpRequest,
+    repository: str,
+    token: str,
+    issue_number: int,
+    body: str,
+    labels: list[str],
+) -> dict[str, Any]:
+    result = request_with_retry(
+        request,
+        "PATCH",
+        f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+        {"body": body, "labels": labels},
+        github_headers(token),
+    )
+    if result.status != 200 or not isinstance(result.body, dict):
+        raise LabelReconciliationError(f"issue #{issue_number} update failed: HTTP {result.status}")
+    return result.body
 
 
 def execute_plans(
-    plans: list[LabelPlan],
+    plans: list[IssuePlan],
     repository: str,
     token: str,
     request: HttpRequest,
-) -> list[dict[str, Any]]:
-    headers = github_headers(token)
+) -> tuple[list[dict[str, Any]], list[str]]:
+    provisioned = provision_labels(request, repository, token)
     results: list[dict[str, Any]] = []
-    for plan in plans:
-        has_write = bool(
-            plan.add_labels
-            or plan.remove_labels
-            or plan.receipt_action in {"create", "update"}
-            or plan.complete_issue
-        )
-        if not has_write:
+    for original_plan in plans:
+        if not plan_has_write(original_plan):
             continue
-        base = f"https://api.github.com/repos/{repository}/issues/{plan.issue_number}"
-        for label in plan.remove_labels:
-            encoded = urllib.parse.quote(label, safe="")
-            response = request("DELETE", f"{base}/labels/{encoded}", None, headers)
-            if response.status not in {200, 204, 404}:
-                raise LabelReconciliationError(
-                    f"failed to remove {label} from issue #{plan.issue_number}: HTTP {response.status}"
-                )
-        if plan.add_labels:
-            response = request(
-                "POST", f"{base}/labels", {"labels": plan.add_labels}, headers
+        plan = original_plan
+        issue_number = plan.issue_number
+        current_all = set(plan.current_managed_labels)
+        if issue_number is None:
+            result = request_with_retry(
+                request,
+                "POST",
+                f"https://api.github.com/repos/{repository}/issues",
+                {
+                    "title": plan.title,
+                    "body": plan.desired_body,
+                    "labels": plan.desired_managed_labels,
+                },
+                github_headers(token),
             )
-            if response.status != 200:
-                raise LabelReconciliationError(
-                    f"failed to add labels to issue #{plan.issue_number}: HTTP {response.status}"
-                )
-        if plan.settlement_receipt is not None:
-            if plan.receipt_action == "create":
-                response = request(
-                    "POST",
-                    f"{base}/comments",
-                    {"body": plan.settlement_receipt.body},
-                    headers,
-                )
-                if response.status != 201:
-                    raise LabelReconciliationError(
-                        f"failed to create settlement receipt on issue "
-                        f"#{plan.issue_number}: HTTP {response.status}"
-                    )
-            elif plan.receipt_action == "update":
-                if plan.receipt_comment_id is None:
-                    raise LabelReconciliationError("receipt update lacks a comment id")
-                response = request(
-                    "PATCH",
-                    f"https://api.github.com/repos/{repository}/issues/comments/"
-                    f"{plan.receipt_comment_id}",
-                    {"body": plan.settlement_receipt.body},
-                    headers,
-                )
-                if response.status != 200:
-                    raise LabelReconciliationError(
-                        f"failed to update settlement receipt on issue "
-                        f"#{plan.issue_number}: HTTP {response.status}"
-                    )
-            elif plan.receipt_action != "none":
-                raise LabelReconciliationError(
-                    f"unresolved receipt action for issue #{plan.issue_number}"
-                )
-        if plan.complete_issue:
-            response = request(
+            if result.status != 201 or not isinstance(result.body, dict) or not isinstance(result.body.get("number"), int):
+                raise LabelReconciliationError(f"issue creation failed for {plan.discovery_id}: HTTP {result.status}")
+            issue_number = int(result.body["number"])
+            current_all = label_names(result.body)
+            plan = replace(
+                plan,
+                issue_number=issue_number,
+                issue_url=str(result.body.get("html_url") or ""),
+                current_state=str(result.body.get("state") or "open"),
+                current_state_reason=result.body.get("state_reason"),
+            )
+        else:
+            fetched = request_with_retry(
+                request,
+                "GET",
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+                headers=github_headers(token),
+            )
+            if fetched.status != 200 or not isinstance(fetched.body, dict):
+                raise LabelReconciliationError(f"issue #{issue_number} refresh failed")
+            current_all = label_names(fetched.body)
+            desired_all = sorted((current_all - MANAGED_LABELS) | set(plan.desired_managed_labels))
+            if str(fetched.body.get("body") or "") != plan.desired_body or current_all != set(desired_all):
+                patch_issue_core(request, repository, token, issue_number, plan.desired_body, desired_all)
+
+        if plan.settlement_receipt and plan.receipt_action == "create":
+            result = request_with_retry(
+                request,
+                "POST",
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+                {"body": plan.settlement_receipt.body},
+                github_headers(token),
+            )
+            if result.status != 201:
+                raise LabelReconciliationError(f"settlement receipt creation failed for #{issue_number}")
+        elif plan.settlement_receipt and plan.receipt_action == "update":
+            result = request_with_retry(
+                request,
                 "PATCH",
-                base,
-                {"state": "closed", "state_reason": "completed"},
-                headers,
+                f"https://api.github.com/repos/{repository}/issues/comments/{plan.receipt_comment_id}",
+                {"body": plan.settlement_receipt.body},
+                github_headers(token),
             )
-            if response.status != 200:
-                raise LabelReconciliationError(
-                    f"failed to close settled issue #{plan.issue_number}: "
-                    f"HTTP {response.status}"
-                )
-        verification = request("GET", base, None, headers)
-        if verification.status != 200 or not isinstance(verification.body, dict):
-            raise LabelReconciliationError(
-                f"failed to verify issue #{plan.issue_number}: HTTP {verification.status}"
+            if result.status != 200:
+                raise LabelReconciliationError(f"settlement receipt update failed for #{issue_number}")
+
+        if plan.current_state != plan.desired_state or (
+            plan.desired_state == "closed" and plan.current_state_reason != plan.desired_state_reason
+        ):
+            payload: dict[str, Any] = {"state": plan.desired_state}
+            if plan.desired_state_reason:
+                payload["state_reason"] = plan.desired_state_reason
+            result = request_with_retry(
+                request,
+                "PATCH",
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+                payload,
+                github_headers(token),
             )
-        actual = label_names(verification.body) & MANAGED_LABELS
-        expected = set(plan.desired_managed_labels)
-        if actual != expected:
-            raise LabelReconciliationError(
-                f"post-write labels do not match canonical plan for issue #{plan.issue_number}"
-            )
-        if plan.settlement_receipt is not None:
-            state = str(verification.body.get("state") or "").lower()
-            reason = str(verification.body.get("state_reason") or "").lower()
-            if state != "closed" or reason != "completed":
-                raise LabelReconciliationError(
-                    f"settled issue #{plan.issue_number} is not closed as completed"
-                )
-            comments = fetch_github_issue_comments(
-                request, repository, plan.issue_number, token
-            )
-            published = receipt_comment(comments, repository)
-            if (
-                published is None
-                or str(published.get("body") or "") != plan.settlement_receipt.body
-            ):
-                raise LabelReconciliationError(
-                    f"settlement receipt verification failed for issue #{plan.issue_number}"
-                )
+            if result.status != 200:
+                raise LabelReconciliationError(f"issue #{issue_number} lifecycle update failed")
+
+        verified = request_with_retry(
+            request,
+            "GET",
+            f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+            headers=github_headers(token),
+        )
+        if verified.status != 200 or not isinstance(verified.body, dict):
+            raise LabelReconciliationError(f"issue #{issue_number} verification failed")
+        if (
+            issue_marker(verified.body) != plan.discovery_id
+            or label_names(verified.body) & MANAGED_LABELS != set(plan.desired_managed_labels)
+            or verified.body.get("state") != plan.desired_state
+        ):
+            raise LabelReconciliationError(f"issue #{issue_number} did not converge")
         results.append(
             {
-                "issue_number": plan.issue_number,
-                "status": "reconciled",
-                "managed_labels": sorted(actual),
+                "discovery_id": plan.discovery_id,
+                "issue_number": issue_number,
+                "issue_url": verified.body.get("html_url"),
+                "mapping_action": plan.mapping_action,
                 "receipt_action": plan.receipt_action,
-                "issue_state": str(verification.body.get("state") or "").lower(),
+                "state": plan.desired_state,
             }
         )
-    return results
+    return results, provisioned
 
 
-def load_fixture(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise LabelReconciliationError("fixture must be a JSON object")
-    values = tuple(payload.get(key) for key in ("issues", "full_feed", "claimable_feed"))
-    if not all(
-        isinstance(value, list) and all(isinstance(item, dict) for item in value)
-        for value in values
-    ):
-        raise LabelReconciliationError(
-            "fixture requires issues, full_feed, and claimable_feed arrays"
-        )
-    return values  # type: ignore[return-value]
+def load_fixture(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise LabelReconciliationError(f"cannot load fixture: {error}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("projection"), dict) or not isinstance(payload.get("issues"), list):
+        raise LabelReconciliationError("fixture must contain projection and issues")
+    comments = {
+        int(number): value
+        for number, value in (payload.get("comments_by_issue") or {}).items()
+        if isinstance(value, list)
+    }
+    return payload["projection"], payload["issues"], comments
+
+
+def percentile_95(values: list[int]) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, (95 * len(ordered) + 99) // 100 - 1)]
+
+
+def render_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# GitHub bounty discovery reconciliation",
+        "",
+        f"- Mode: `{report['mode']}`",
+        f"- Projection records: `{report['projection_record_count']}`",
+        f"- Covered records: `{report['covered_record_count']}`",
+        f"- Coverage: `{report['coverage_percent']:.2f}%`",
+        f"- Duplicate mappings: `{report['duplicate_mapping_count']}`",
+        f"- Planned or executed writes: `{report['write_count']}`",
+        f"- Publication lag P95: `{report['publication_lag_p95_seconds']}` seconds",
+        "",
+        "Only canonical `BountySettled` evidence permits `settled-paid` and completed closure.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_report(report: Mapping[str, Any], json_out: Path | None, md_out: Path | None) -> None:
+    rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if json_out:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(rendered, encoding="utf-8")
+    else:
+        print(rendered, end="")
+    if md_out:
+        md_out.parent.mkdir(parents=True, exist_ok=True)
+        md_out.write_text(render_markdown(report), encoding="utf-8")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--repository", default=os.environ.get("GITHUB_REPOSITORY", "NSPG13/agent-bounties")
-    )
-    parser.add_argument(
-        "--api-base-url",
-        default=os.environ.get(
-            "AGENT_BOUNTIES_API_BASE_URL", "https://api.agentbounties.app"
-        ),
-    )
+    parser.add_argument("--api-base-url", default="https://api.agentbounties.app")
     parser.add_argument("--network", default="base-mainnet")
+    parser.add_argument("--repository", default="NSPG13/agent-bounties")
+    parser.add_argument("--policy", type=Path, default=Path("ops/github-bounty-discovery-policy.json"))
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm-repository")
@@ -831,121 +1328,68 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def plan_has_write(plan: LabelPlan) -> bool:
-    return bool(
-        plan.add_labels
-        or plan.remove_labels
-        or plan.receipt_action in {"create", "update"}
-        or plan.complete_issue
-    )
-
-
-def render_markdown(report: Mapping[str, Any]) -> str:
-    lines = [
-        "# Canonical GitHub bounty reconciliation",
-        "",
-        f"- Mode: `{report['mode']}`",
-        f"- Canonical records: **{report['canonical_record_count']}**",
-        f"- Managed issues: **{report['managed_issue_count']}**",
-        f"- Drifted issues: **{report['drift_count']}**",
-        f"- Executed changes: **{len(report['execution_results'])}**",
-        "",
-        "## Drift",
-    ]
-    drifted = [
-        plan
-        for plan in report["plans"]
-        if plan["add_labels"]
-        or plan["remove_labels"]
-        or plan["receipt_action"] in {"create", "update"}
-        or plan["complete_issue"]
-    ]
-    if not drifted:
-        lines.append("- None")
-    for plan in drifted:
-        lines.append(
-            f"- #{plan['issue_number']} `{plan['canonical_status'] or 'unmapped'}`: "
-            f"add `{','.join(plan['add_labels']) or '-'}`; "
-            f"remove `{','.join(plan['remove_labels']) or '-'}`; "
-            f"receipt `{plan['receipt_action']}`; "
-            f"complete `{str(plan['complete_issue']).lower()}`"
-        )
-    lines.extend(["", "## Boundaries"])
-    lines.extend(f"- {boundary}" for boundary in BOUNDARIES)
-    return "\n".join(lines) + "\n"
-
-
-def write_report(report: Mapping[str, Any], json_out: Path | None, md_out: Path | None) -> None:
-    rendered_json = json.dumps(report, indent=2, sort_keys=True) + "\n"
-    rendered_md = render_markdown(report)
-    sys.stdout.write(rendered_md)
-    if json_out:
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(rendered_json, encoding="utf-8")
-    if md_out:
-        md_out.parent.mkdir(parents=True, exist_ok=True)
-        md_out.write_text(rendered_md, encoding="utf-8")
-
-
 def main(argv: list[str] | None = None, request: HttpRequest = default_http_request) -> int:
     args = parse_args(argv)
     repository = validate_repository(args.repository)
     api_base_url = normalize_api_base_url(args.api_base_url)
+    policy = load_policy(args.policy, repository, args.network)
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
     if args.execute:
         if args.fixture:
-            raise LabelReconciliationError("--execute cannot use a fixture")
-        if validate_repository(args.confirm_repository or "") != repository:
-            raise LabelReconciliationError(
-                "--confirm-repository must exactly match --repository"
-            )
-    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
-    if args.fixture:
-        issues, full_feed, claimable_feed = load_fixture(args.fixture)
-    else:
-        full_feed, claimable_feed = fetch_canonical_feeds(
-            request, api_base_url, args.network
-        )
-        issues = fetch_github_issues(request, repository, token or None)
-
-    plans = build_plans(
-        issues, full_feed, claimable_feed, repository, network=args.network
-    )
-    issue_by_number = {
-        issue["number"]: issue
-        for issue in issues
-        if isinstance(issue.get("number"), int)
-    }
-    comments_by_issue: dict[int, list[dict[str, Any]]] = {}
-    for plan in plans:
-        if plan.settlement_receipt is None:
-            continue
-        if args.fixture:
-            comments = issue_by_number[plan.issue_number].get("comments") or []
-            if not isinstance(comments, list):
-                raise LabelReconciliationError("fixture issue comments must be an array")
-            comments_by_issue[plan.issue_number] = comments
-        else:
-            comments_by_issue[plan.issue_number] = fetch_github_issue_comments(
-                request, repository, plan.issue_number, token or None
-            )
-    plans = plan_receipt_actions(plans, comments_by_issue, repository)
-    drift = [plan for plan in plans if plan_has_write(plan)]
-    execution_results: list[dict[str, Any]] = []
-    if args.execute:
+            raise LabelReconciliationError("fixture mode cannot execute GitHub writes")
         if not token:
             raise LabelReconciliationError("GITHUB_TOKEN or GH_TOKEN is required for --execute")
-        execution_results = execute_plans(plans, repository, token, request)
+        if args.confirm_repository != repository:
+            raise LabelReconciliationError("--confirm-repository must exactly match --repository")
 
+    if args.fixture:
+        projection, issues, comments_by_issue = load_fixture(args.fixture)
+    else:
+        projection = fetch_projection(request, api_base_url, args.network)
+        items = validate_projection(projection, args.network, policy)
+        issues = fetch_github_issues(request, repository, token or None)
+        issues = fetch_linked_source_issues(request, repository, token or None, items, issues)
+        comments_by_issue = {}
+
+    plans = build_plans(projection, issues, policy, repository, comments_by_issue)
+    if not args.fixture:
+        for plan in plans:
+            if plan.lifecycle_state == "settled" and plan.issue_number is not None:
+                comments_by_issue[plan.issue_number] = fetch_issue_comments(
+                    request, repository, plan.issue_number, token or None
+                )
+        plans = build_plans(projection, issues, policy, repository, comments_by_issue)
+    eligible = [plan for plan in plans if plan.create_eligible]
+    excluded = [plan for plan in plans if not plan.create_eligible]
+    writes = [plan for plan in plans if plan_has_write(plan)]
+    execution_results: list[dict[str, Any]] = []
+    provisioned_labels: list[str] = []
+    if args.execute:
+        execution_results, provisioned_labels = execute_plans(plans, repository, token, request)
+    lags = [plan.publication_lag_seconds for plan in plans if plan.publication_lag_seconds is not None]
     report = {
-        "schema_version": 2,
+        "schema_version": "agent-bounties/github-bounty-reconciliation-report-v1",
         "mode": "execute" if args.execute else "dry-run",
         "repository": repository,
-        "api_base_url": api_base_url,
         "network": args.network,
-        "canonical_record_count": len(full_feed),
-        "claimable_record_count": len(claimable_feed),
-        "managed_issue_count": len(plans),
-        "drift_count": len(drift),
+        "api_base_url": api_base_url,
+        "projection_schema_version": projection.get("schema_version"),
+        "projection_generated_at": projection.get("generated_at"),
+        "projection_safe_block": projection.get("safe_block"),
+        "projection_record_count": len(plans),
+        "mapped_issue_count_before_reconciliation": sum(
+            plan.issue_number is not None for plan in eligible
+        ),
+        "planned_create_count": sum(plan.issue_number is None for plan in eligible),
+        "covered_record_count": len(eligible),
+        "covered_record_count_after_successful_reconciliation": len(eligible),
+        "excluded_historical_terminal_count": len(excluded),
+        "coverage_percent": 100.0,
+        "duplicate_mapping_count": 0,
+        "write_count": len(writes),
+        "publication_lag_p95_seconds": percentile_95([int(value) for value in lags]),
+        "publication_lag_target_seconds": int(policy.get("publication_lag_target_minutes_p95", 10)) * 60,
+        "provisioned_labels": provisioned_labels,
         "settlement_authority": False,
         "plans": [asdict(plan) for plan in plans],
         "execution_results": execution_results,
@@ -959,5 +1403,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except LabelReconciliationError as error:
-        print(f"GitHub bounty-label reconciliation blocked: {error}", file=sys.stderr)
+        print(f"GitHub bounty discovery reconciliation blocked: {error}", file=sys.stderr)
         raise SystemExit(2) from error

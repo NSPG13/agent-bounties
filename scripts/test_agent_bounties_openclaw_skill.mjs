@@ -336,7 +336,8 @@ test("portable skill metadata and install contracts remain publishable", async (
   assert.ok(llms.includes("--solver-wallet 0xYourPublicBaseAddress"));
   assert.ok(llms.includes("autonomous-bounty-plan"));
   assert.ok(skill.includes("autonomous-bounty-plan"));
-  assert.ok(skill.includes("label:claimable-live"));
+  assert.ok(skill.includes("label:ready-to-earn"));
+  assert.ok(skill.includes("label:open-competition"));
   assert.ok(skill.includes("funding-needed` is a crowdfunding opportunity"));
 
   assert.equal(chainManifest.factory, activation.deployment.expected_factory);

@@ -112,7 +112,7 @@ pub enum ChainBaseError {
     RelayerProvider(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvmTransactionIntent {
     pub from: Option<String>,
     pub to: String,
@@ -2377,9 +2377,18 @@ pub struct RpcTransactionReceipt {
     pub transaction_hash: String,
     #[serde(rename = "blockNumber")]
     pub block_number: Option<String>,
+    #[serde(rename = "blockHash")]
+    pub block_hash: Option<String>,
     pub status: Option<String>,
     #[serde(default)]
     pub logs: Vec<RpcEvmLog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseBlockIdentity {
+    pub number: u64,
+    pub hash: String,
+    pub timestamp: u64,
 }
 
 pub fn base_network_descriptor(network: &str) -> Result<BaseNetworkDescriptor, ChainBaseError> {
@@ -2497,6 +2506,18 @@ pub trait JsonRpcTransport: Send + Sync {
         rpc_url: &str,
         request: &Value,
     ) -> Result<Value, ChainBaseError>;
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.post_json_value(rpc_url, request).await?);
+        }
+        Ok(responses)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2512,12 +2533,11 @@ impl Default for ReqwestJsonRpcTransport {
     }
 }
 
-#[async_trait::async_trait]
-impl JsonRpcTransport for ReqwestJsonRpcTransport {
-    async fn post_json_value(
+impl ReqwestJsonRpcTransport {
+    async fn post_json_request<T: Serialize + ?Sized>(
         &self,
         rpc_url: &str,
-        request: &Value,
+        request: &T,
     ) -> Result<Value, ChainBaseError> {
         let response = self
             .client
@@ -2545,6 +2565,30 @@ impl JsonRpcTransport for ReqwestJsonRpcTransport {
             .json::<Value>()
             .await
             .map_err(|error| ChainBaseError::InvalidRpcResponse(error.to_string()))
+    }
+}
+
+#[async_trait::async_trait]
+impl JsonRpcTransport for ReqwestJsonRpcTransport {
+    async fn post_json_value(
+        &self,
+        rpc_url: &str,
+        request: &Value,
+    ) -> Result<Value, ChainBaseError> {
+        self.post_json_request(rpc_url, request).await
+    }
+
+    async fn post_json_values(
+        &self,
+        rpc_url: &str,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let response = self.post_json_request(rpc_url, requests).await?;
+        response.as_array().cloned().ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse(
+                "JSON-RPC batch response is not an array".to_string(),
+            )
+        })
     }
 }
 
@@ -2727,7 +2771,11 @@ where
     })
 }
 
-fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, ChainBaseError> {
+pub(crate) fn rpc_result(
+    value: Value,
+    request_id: u64,
+    method: &str,
+) -> Result<Value, ChainBaseError> {
     let object = value.as_object().ok_or_else(|| {
         ChainBaseError::InvalidRpcResponse(format!("{method} response is not an object"))
     })?;
@@ -2754,7 +2802,7 @@ fn rpc_result(value: Value, request_id: u64, method: &str) -> Result<Value, Chai
     })
 }
 
-async fn fetch_account_code_hash<T>(
+pub(crate) async fn fetch_account_code_hash<T>(
     rpc_url: &str,
     address: &str,
     block: &str,
@@ -2791,7 +2839,7 @@ where
     )
 }
 
-async fn fetch_contract_word<T>(
+pub(crate) async fn fetch_contract_word<T>(
     rpc_url: &str,
     contract: &str,
     data: &str,
@@ -2921,6 +2969,85 @@ pub async fn fetch_block_timestamp(
         &ReqwestJsonRpcTransport::default(),
     )
     .await
+}
+
+pub async fn fetch_safe_block_identity(
+    rpc_url: &str,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        "safe",
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_exact_block_identity(
+    rpc_url: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<BaseBlockIdentity, ChainBaseError> {
+    fetch_block_identity_with_transport(
+        rpc_url,
+        &hex_quantity(block_number),
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_block_identity_with_transport<T>(
+    rpc_url: &str,
+    block_tag: &str,
+    request_id: u64,
+    transport: &T,
+) -> Result<BaseBlockIdentity, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    if block_tag != "safe"
+        && !(block_tag.starts_with("0x")
+            && block_tag.len() > 2
+            && block_tag[2..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()))
+    {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "block identity tag must be safe or a hex quantity".to_string(),
+        ));
+    }
+    let block = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getBlockByNumber",
+                    "params": [block_tag, false]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getBlockByNumber",
+    )?;
+    Ok(BaseBlockIdentity {
+        number: parse_rpc_quantity(block.get("number").and_then(Value::as_str).ok_or_else(
+            || ChainBaseError::InvalidRpcResponse("block identity is missing number".to_string()),
+        )?)?,
+        hash: normalize_hash(block.get("hash").and_then(Value::as_str).ok_or_else(|| {
+            ChainBaseError::InvalidRpcResponse("block identity is missing hash".to_string())
+        })?)?,
+        timestamp: parse_rpc_quantity(block.get("timestamp").and_then(Value::as_str).ok_or_else(
+            || {
+                ChainBaseError::InvalidRpcResponse(
+                    "block identity is missing timestamp".to_string(),
+                )
+            },
+        )?)?,
+    })
 }
 
 pub async fn fetch_block_timestamp_with_transport<T>(
@@ -5726,7 +5853,7 @@ fn decode_expiry_event(
     ))
 }
 
-fn event_topic(signature: &str) -> String {
+pub fn event_topic(signature: &str) -> String {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
     format!("0x{}", hex::encode(hasher.finalize()))
@@ -5737,7 +5864,7 @@ fn normalize_topic(topic: &str) -> Result<String, ChainBaseError> {
     Ok(word_hex(word))
 }
 
-fn normalize_hash(hash: &str) -> Result<String, ChainBaseError> {
+pub(crate) fn normalize_hash(hash: &str) -> Result<String, ChainBaseError> {
     normalize_topic(hash)
 }
 
@@ -5770,7 +5897,7 @@ fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
-fn parse_rpc_quantity(value: &str) -> Result<u64, ChainBaseError> {
+pub(crate) fn parse_rpc_quantity(value: &str) -> Result<u64, ChainBaseError> {
     let trimmed = value.strip_prefix("0x").ok_or_else(|| {
         ChainBaseError::InvalidRpcQuantity("quantity must have 0x prefix".to_string())
     })?;
@@ -5821,7 +5948,7 @@ fn word_to_u128(word: [u8; 32]) -> Result<u128, ChainBaseError> {
     Ok(u128::from_be_bytes(value))
 }
 
-fn address_from_word(word: [u8; 32]) -> String {
+pub(crate) fn address_from_word(word: [u8; 32]) -> String {
     format!("0x{}", hex::encode(&word[12..]))
 }
 
@@ -5850,7 +5977,7 @@ fn normalize_address(address: impl AsRef<str>) -> Result<String, ChainBaseError>
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
-fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn parse_bytes32(value: &str) -> Result<[u8; 32], ChainBaseError> {
     let trimmed = value.strip_prefix("0x").unwrap_or(value);
     if trimmed.len() != 64
         || !trimmed
@@ -5887,7 +6014,7 @@ fn eip712_field(name: &str, field_type: &str) -> Eip712TypeField {
     }
 }
 
-fn eip3009_typed_data(
+pub(crate) fn eip3009_typed_data(
     network: &BaseNetworkDescriptor,
     from: &str,
     to: &str,
@@ -6543,7 +6670,7 @@ fn autonomous_bounty_id(
     Ok(Keccak256::digest(encoded).into())
 }
 
-fn predict_minimal_proxy_address(
+pub(crate) fn predict_minimal_proxy_address(
     factory: &str,
     implementation: &str,
     salt: [u8; 32],
@@ -6569,7 +6696,7 @@ fn predict_minimal_proxy_address(
     Ok(format!("0x{}", hex::encode(&hash[12..])))
 }
 
-fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
+pub(crate) fn encode_call(signature: &str, words: Vec<[u8; 32]>) -> String {
     let mut bytes = selector(signature).to_vec();
     for word in words {
         bytes.extend_from_slice(&word);
@@ -6744,14 +6871,14 @@ fn encode_attestation_array_call(attestations: &[EncodedAutonomousAttestation]) 
     format!("0x{}", hex::encode(bytes))
 }
 
-fn selector(signature: &str) -> [u8; 4] {
+pub(crate) fn selector(signature: &str) -> [u8; 4] {
     let mut hasher = Keccak256::new();
     hasher.update(signature.as_bytes());
     let hash = hasher.finalize();
     [hash[0], hash[1], hash[2], hash[3]]
 }
 
-fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
     let normalized = normalize_address(address)?;
     let raw = hex::decode(&normalized[2..])
         .map_err(|_| ChainBaseError::InvalidAddress(address.to_string()))?;
@@ -6760,7 +6887,7 @@ fn encode_address(address: &str) -> Result<[u8; 32], ChainBaseError> {
     Ok(word)
 }
 
-fn encode_uint256(value: u128) -> Result<[u8; 32], ChainBaseError> {
+pub(crate) fn encode_uint256(value: u128) -> Result<[u8; 32], ChainBaseError> {
     let mut word = [0u8; 32];
     word[16..].copy_from_slice(&value.to_be_bytes());
     Ok(word)

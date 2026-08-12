@@ -1,3 +1,5 @@
+import { keccak_256 } from "@noble/hashes/sha3";
+
 export type PrivacyLevel = "Public" | "RedactedPublicProof" | "Private";
 
 export interface RouteBlockedGoalRequest {
@@ -200,6 +202,126 @@ export interface OpenCompetitionReadinessReport {
   evidence_boundary: string;
 }
 
+export type OpenCompetitionDeploymentState =
+  | "source_only_not_ready_to_earn"
+  | "sepolia_rehearsed_not_ready_to_earn"
+  | "mainnet_canary_not_ready_to_earn"
+  | "active_ready_to_earn";
+
+export interface OpenCompetitionVerifierProfile {
+  profile_id: string;
+  protocol_version: "agent-bounties/open-competition-v1";
+  network: "base-mainnet" | "base-sepolia";
+  chain_id: number;
+  display_name: string;
+  module_kind: string;
+  verifier_address: string;
+  runtime_code_hash: string;
+  configuration: Record<string, unknown>;
+  benchmark_hash: string;
+  evidence_schema_hash: string;
+  evidence_schema: string;
+  immutable_runtime_required: boolean;
+  approved_for_rehearsal: boolean;
+  public_inventory_eligible: boolean;
+  deployment_state: OpenCompetitionDeploymentState;
+  evidence_boundary: string;
+}
+
+export interface OpenCompetitionVerifierCatalog {
+  schema_version: "agent-bounties/open-competition-v1-verifier-catalog-v1";
+  protocol_version: "agent-bounties/open-competition-v1";
+  network: "base-mainnet" | "base-sepolia";
+  profiles: OpenCompetitionVerifierProfile[];
+  evidence_boundary: string;
+}
+
+export interface OpenCompetitionCommitmentInput {
+  network: "base-mainnet" | "base-sepolia";
+  bounty: string;
+  solver: string;
+  submission_hash: string;
+  evidence_hash: string;
+}
+
+export interface OpenCompetitionCommitmentEnvelope {
+  schema_version: "agent-bounties/open-competition-v1-commitment-v1";
+  network: "base-mainnet" | "base-sepolia";
+  chain_id: number;
+  bounty: string;
+  solver: string;
+  submission_hash: string;
+  evidence_hash: string;
+  salt: string;
+  commitment: string;
+  committed_block: number | null;
+  reveal_deadline: number | null;
+  evidence_boundary: string;
+}
+
+export interface OpenCompetitionCreateParams {
+  solver_reward: number;
+  verifier_reward: number;
+  terms_hash: string;
+  policy_hash: string;
+  acceptance_criteria_hash: string;
+  benchmark_hash: string;
+  evidence_schema_hash: string;
+  funding_deadline: number;
+  competition_window_seconds: number;
+  reveal_window_seconds: number;
+  max_entries: number;
+  verifier_reward_recipient: string;
+}
+
+export interface OpenCompetitionCreationRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  creator: string;
+  creation_nonce: string;
+  initial_funding: number;
+  verifier_profile_id: string;
+  params: OpenCompetitionCreateParams;
+  funding_authorization?: Record<string, unknown> | null;
+}
+
+export interface OpenCompetitionCreationPlan {
+  schema_version: "agent-bounties/open-competition-v1-creation-preparation-v1";
+  protocol_version: "agent-bounties/open-competition-v1";
+  network: "base-mainnet" | "base-sepolia";
+  chain_id: number;
+  funding_mode: "approval_then_create" | "eip3009_authorized";
+  factory_contract: string;
+  implementation_contract: string;
+  creator: string;
+  bounty_id: string;
+  predicted_bounty_contract: string;
+  verifier_profile_id: string;
+  approve: Record<string, unknown> | null;
+  create_competition: Record<string, unknown> | null;
+  wallet_calls: Record<string, unknown>[];
+  eip3009_authorization: Record<string, unknown> | null;
+  ready_to_broadcast: boolean;
+  public_inventory_eligible: boolean;
+  next_action: string;
+  evidence_boundary: string;
+}
+
+export interface OpenCompetitionSafeState {
+  schema_version: "agent-bounties/open-competition-v1-state-v1";
+  protocol_version: "agent-bounties/open-competition-v1";
+  network: "base-mainnet" | "base-sepolia";
+  chain_id: number;
+  deployment_state: OpenCompetitionDeploymentState;
+  safe_block_number: number;
+  safe_block_hash: string;
+  safe_block_timestamp: number;
+  bounty_contract: string;
+  onchain_ready_to_enter: boolean;
+  public_inventory_eligible: boolean;
+  blockers: string[];
+  [key: string]: unknown;
+}
+
 export type OpenCompetitionOperation =
   | "prepare_open_competition_commit"
   | "prepare_open_competition_reveal"
@@ -212,6 +334,21 @@ export interface OpenCompetitionActionRequest {
   arguments: Record<string, unknown>;
 }
 
+export interface OpenCompetitionCommitRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  bounty_contract: string;
+  solver: string;
+  commitment: string;
+}
+
+export interface OpenCompetitionRevealRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  bounty_contract: string;
+  solver: string;
+  commitment_envelope: OpenCompetitionCommitmentEnvelope;
+  proof: string;
+}
+
 export interface OpenCompetitionActionPlan {
   schema_version: "agent-bounties/open-competition-v1-action-v1";
   protocol_version: "open-competition-v1";
@@ -222,6 +359,65 @@ export interface OpenCompetitionActionPlan {
   function: string | null;
   arguments: Record<string, unknown>;
   blocker: string | null;
+  next_action: string;
+  evidence_boundary: string;
+}
+
+export type OpenCompetitionEntrantAction = "commit" | "reveal" | "withdraw_bond";
+
+export interface OpenCompetitionEntrantActionPreparationRequest {
+  network?: "base-mainnet" | "base-sepolia" | null;
+  wallet: string;
+  bounty_contract: string;
+  action: OpenCompetitionEntrantAction;
+  commitment?: string | null;
+  commitment_envelope?: OpenCompetitionCommitmentEnvelope | null;
+  proof?: string | null;
+  deadline_seconds?: number | null;
+}
+
+export interface OpenCompetitionEntrantActionPlan {
+  schema_version: "agent-bounties/open-competition-entrant-wallet-action-v1";
+  network: "base-mainnet" | "base-sepolia";
+  chain_id: number;
+  wallet: string;
+  delegate: string;
+  policy_hash: string;
+  policy_version: number;
+  action: OpenCompetitionEntrantAction;
+  action_code: number;
+  nonce: number;
+  deadline: number;
+  payload: string;
+  payload_hash: string;
+  signing_payload: Record<string, unknown>;
+  relay_call: Record<string, unknown>;
+  evidence_boundary: string;
+}
+
+export interface OpenCompetitionEntrantRelayRequest {
+  idempotency_key: string;
+  plan: OpenCompetitionEntrantActionPlan;
+  signature: string;
+}
+
+export interface OpenCompetitionEntrantRelayResponse {
+  schema_version: "agent-bounties/open-competition-entrant-relay-v1";
+  id: string;
+  network: "base-mainnet" | "base-sepolia";
+  wallet: string;
+  bounty_contract: string;
+  action: number;
+  wallet_nonce: number;
+  status: "prepared" | "relaying" | "broadcast" | "confirmed" | "failed";
+  retryable: boolean;
+  transaction_hash: string | null;
+  receipt_block: number | null;
+  receipt_block_hash: string | null;
+  canonical_safe_block: number | null;
+  canonical_safe_block_hash: string | null;
+  canonical_event: string | null;
+  payment_proven: boolean;
   next_action: string;
   evidence_boundary: string;
 }
@@ -678,6 +874,108 @@ function parseHttpBody(text: string, status: number): unknown {
   }
 }
 
+function openCompetitionHexBytes(
+  value: string,
+  bytes: number,
+  label: string,
+): Uint8Array {
+  if (!new RegExp(`^0x[0-9a-fA-F]{${bytes * 2}}$`).test(value)) {
+    throw new Error(`${label} must be a ${bytes}-byte 0x-prefixed hex value`);
+  }
+  const result = new Uint8Array(bytes);
+  for (let index = 0; index < bytes; index += 1) {
+    result[index] = Number.parseInt(value.slice(2 + index * 2, 4 + index * 2), 16);
+  }
+  return result;
+}
+
+function openCompetitionNonzeroBytes32(value: string, label: string): Uint8Array {
+  const result = openCompetitionHexBytes(value, 32, label);
+  if (!result.some((byte) => byte !== 0)) {
+    throw new Error(`${label} must be nonzero`);
+  }
+  return result;
+}
+
+function openCompetitionAddressWord(value: string): Uint8Array {
+  const address = openCompetitionHexBytes(value, 20, "address");
+  const result = new Uint8Array(32);
+  result.set(address, 12);
+  return result;
+}
+
+function openCompetitionUint256(value: bigint): Uint8Array {
+  if (value < 0n || value >= 1n << 256n) {
+    throw new Error("uint256 value is out of bounds");
+  }
+  const result = new Uint8Array(32);
+  let remaining = value;
+  for (let index = 31; index >= 0; index -= 1) {
+    result[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return result;
+}
+
+function openCompetitionConcat(parts: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+function openCompetitionHex(value: Uint8Array): string {
+  return `0x${Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function generateOpenCompetitionCommitment(
+  input: OpenCompetitionCommitmentInput,
+): OpenCompetitionCommitmentEnvelope {
+  const chainId = input.network === "base-mainnet" ? 8453 : input.network === "base-sepolia" ? 84532 : null;
+  if (chainId === null) {
+    throw new Error("network must be base-mainnet or base-sepolia");
+  }
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error("cryptographically secure randomness is unavailable");
+  }
+  const salt = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(salt);
+  const submissionHash = openCompetitionNonzeroBytes32(input.submission_hash, "submission_hash");
+  const evidenceHash = openCompetitionNonzeroBytes32(input.evidence_hash, "evidence_hash");
+  const domain = keccak_256(
+    new TextEncoder().encode("agent-bounties/open-competition-v1-solution"),
+  );
+  const commitment = keccak_256(
+    openCompetitionConcat([
+      domain,
+      openCompetitionUint256(BigInt(chainId)),
+      openCompetitionAddressWord(input.bounty),
+      openCompetitionAddressWord(input.solver),
+      submissionHash,
+      evidenceHash,
+      salt,
+    ]),
+  );
+  return {
+    schema_version: "agent-bounties/open-competition-v1-commitment-v1",
+    network: input.network,
+    chain_id: chainId,
+    bounty: input.bounty.toLowerCase(),
+    solver: input.solver.toLowerCase(),
+    submission_hash: input.submission_hash.toLowerCase(),
+    evidence_hash: input.evidence_hash.toLowerCase(),
+    salt: openCompetitionHex(salt),
+    commitment: openCompetitionHex(commitment),
+    committed_block: null,
+    reveal_deadline: null,
+    evidence_boundary:
+      "This recovery envelope contains the secret salt. Store it locally and send only commitment during entry preparation.",
+  };
+}
+
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
@@ -894,11 +1192,49 @@ export class AgentBountiesClient {
   async getOpenCompetitionReadiness(
     bountyContract: string,
     network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+    solver?: string,
+    verifierProfileId?: string,
   ): Promise<OpenCompetitionReadinessReport> {
     return this.query("/v1/base/open-competition-v1/readiness", {
       network,
       bounty_contract: bountyContract,
+      solver,
+      verifier_profile_id: verifierProfileId,
     }) as Promise<OpenCompetitionReadinessReport>;
+  }
+
+  async listOpenCompetitionVerifiers(
+    network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+  ): Promise<OpenCompetitionVerifierCatalog> {
+    return this.query("/v1/base/open-competition-v1/verifiers", {
+      network,
+    }) as Promise<OpenCompetitionVerifierCatalog>;
+  }
+
+  async prepareOpenCompetitionCreation(
+    request: OpenCompetitionCreationRequest,
+  ): Promise<OpenCompetitionCreationPlan> {
+    const path = request.funding_authorization
+      ? "authorized-creation-preparation"
+      : "creation-preparation";
+    return this.post(`/v1/base/open-competition-v1/${path}`, {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionCreationPlan>;
+  }
+
+  async getOpenCompetitionState(
+    bountyContract: string,
+    network: "base-mainnet" | "base-sepolia" = "base-mainnet",
+    solver?: string,
+    verifierProfileId?: string,
+  ): Promise<OpenCompetitionSafeState> {
+    return this.query("/v1/base/open-competition-v1/state", {
+      network,
+      bounty_contract: bountyContract,
+      solver,
+      verifier_profile_id: verifierProfileId,
+    }) as Promise<OpenCompetitionSafeState>;
   }
 
   private openCompetitionAction(
@@ -912,15 +1248,21 @@ export class AgentBountiesClient {
   }
 
   async prepareOpenCompetitionCommit(
-    request: OpenCompetitionActionRequest,
+    request: OpenCompetitionCommitRequest,
   ): Promise<OpenCompetitionActionPlan> {
-    return this.openCompetitionAction("commit-preparation", request);
+    return this.post("/v1/base/open-competition-v1/commit-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionActionPlan>;
   }
 
   async prepareOpenCompetitionReveal(
-    request: OpenCompetitionActionRequest,
+    request: OpenCompetitionRevealRequest,
   ): Promise<OpenCompetitionActionPlan> {
-    return this.openCompetitionAction("reveal-preparation", request);
+    return this.post("/v1/base/open-competition-v1/reveal-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionActionPlan>;
   }
 
   async getOpenCompetitionStatus(
@@ -933,6 +1275,33 @@ export class AgentBountiesClient {
     request: OpenCompetitionActionRequest,
   ): Promise<OpenCompetitionActionPlan> {
     return this.openCompetitionAction("bond-withdrawal-preparation", request);
+  }
+
+  async prepareOpenCompetitionEntrantAction(
+    request: OpenCompetitionEntrantActionPreparationRequest,
+  ): Promise<OpenCompetitionEntrantActionPlan> {
+    return this.post("/v1/base/open-competition-v1/entrant-action-preparation", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    }) as Promise<OpenCompetitionEntrantActionPlan>;
+  }
+
+  async relayOpenCompetitionEntrantAction(
+    request: OpenCompetitionEntrantRelayRequest,
+  ): Promise<OpenCompetitionEntrantRelayResponse> {
+    return this.post(
+      "/v1/base/open-competition-v1/entrant-action-relays",
+      request,
+    ) as Promise<OpenCompetitionEntrantRelayResponse>;
+  }
+
+  async getOpenCompetitionEntrantRelay(
+    relayId: string,
+  ): Promise<OpenCompetitionEntrantRelayResponse> {
+    return this.query(
+      `/v1/base/open-competition-v1/entrant-action-relays/${encodeURIComponent(relayId)}`,
+      {},
+    ) as Promise<OpenCompetitionEntrantRelayResponse>;
   }
 
   private standingMetaV4Action(

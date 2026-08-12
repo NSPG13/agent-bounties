@@ -28,7 +28,7 @@ envVarGroups:
       - key: BASE_SEPOLIA_RPC_URL
         sync: false
       - key: BASE_MAINNET_RPC_URL
-        value: https://mainnet.base.org
+        value: https://base.drpc.org
       - key: BASE_SEPOLIA_USDC_TOKEN
         value: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
       - key: BASE_MAINNET_USDC_TOKEN
@@ -47,6 +47,30 @@ envVarGroups:
         value: "0x2e84ef6708d5fff0e9909e80481a00b7ac47293e"
       - key: BASE_RECOVERY_RESERVED_BOUNTY_CONTRACTS
         value: "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8,0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1,0xb35b94e1225b66e50644a331feccdab0439e63d7,0xfffecb0fcd36477c5f6ecec808f6f0cf53819562,0xbe17ef2d154265ebe3142d7bda5e99610d571455,0x43d42cb227d76588ab16693f14efd6cff851fa7a,0xe8c1d3f046f3e4690bef59ba4abd5d02d2a6984b"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_RELEASE_MANIFEST_JSON
+        value: '{"protocol_version":"agent-bounties/open-competition-v1","network":"base-mainnet","chain_id":8453,"deployment_state":"active_ready_to_earn","factory_contract":"0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5","implementation_contract":"0xa504454ac8cdd043c11c8c6af81a072472aa1651","settlement_token":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913","deployment_block":49663931,"factory_runtime_code_hash":"0x963ac715bb99d8eb669b0a2a77acc752a660474e8da5d0c3a5025878b0557712","implementation_runtime_code_hash":"0xd06d8b654362da834eeec8f93fdc68481f93ff314c692ccc44f2e14327cd52cd"}'
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_VERIFIER_CATALOG_JSON
+        value: '{"schema_version":"agent-bounties/open-competition-v1-verifier-catalog-v1","protocol_version":"agent-bounties/open-competition-v1","network":"base-mainnet","profiles":[{"profile_id":"leading-zero-work-v1-difficulty-16-mainnet-canary","protocol_version":"agent-bounties/open-competition-v1","network":"base-mainnet","chain_id":8453,"display_name":"Scope-bound hash work (16-bit deterministic verifier)","module_kind":"leading-zero-work-v1","verifier_address":"0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e","runtime_code_hash":"0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3","configuration":{"difficulty_bits":16},"benchmark_hash":"0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2","evidence_schema_hash":"0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da","evidence_schema":"agent-bounties/leading-zero-work-evidence-v1","immutable_runtime_required":true,"approved_for_rehearsal":true,"public_inventory_eligible":true,"deployment_state":"active_ready_to_earn","evidence_boundary":"This public profile verifies only the locked 16-bit scope-bound hash-work predicate. It does not evaluate ordinary code, design, writing, research, acceptance-criteria quality, or human identity."}],"evidence_boundary":"Hosted approval requires an exact network, address, runtime hash, immutable configuration, benchmark, and evidence schema match. Factory provenance alone is not verifier approval."}'
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_WALLET_RELEASE_MANIFEST_JSON
+        sync: false
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_GAS_SPONSORSHIP_AVAILABLE
+        value: "true"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_RELAY_SUPPORT_AVAILABLE
+        value: "true"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RELAY_CANARY_ENABLED
+        value: "false"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_ENTRANT_RECOVERY_RELAY_ENABLED
+        value: "false"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_R4_EVIDENCE_COMPLETE
+        value: "true"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_MONITORING_ACTIVE
+        value: "true"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_CREATION_ENABLED
+        value: "true"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_COMMITMENTS_ENABLED
+        value: "true"
+      - key: BASE_MAINNET_OPEN_COMPETITION_V1_PUBLIC_ACTIVATION_BLOCK
+        value: "49759875"
 
   - name: agent-bounties-x402-relayer
     envVars:
@@ -115,7 +139,7 @@ services:
       - key: X402_RELAYER_MAX_USDC_BASE_UNITS
         value: "5000000"
       - key: X402_RELAYER_MAX_GAS
-        value: "300000"
+        value: "700000"
       - key: X402_RELAYER_MAX_FEE_PER_GAS_WEI
         value: "10000000000"
       - key: X402_RELAYER_MAX_DAILY_ATTEMPTS
@@ -294,6 +318,54 @@ services:
         value: "8"
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-discovery
+
+  - type: worker
+    name: agent-bounties-open-competition-v1-indexer
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    # Additive versioned indexer. It never replaces the autonomous-v1 worker.
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: worker
+      - key: APP_BINARY
+        value: worker
+      - key: RUST_LOG
+        value: info
+      - key: PUBLIC_BASE_URL
+        value: https://api.agentbounties.app
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: BASE_INDEXER_PROTOCOL
+        value: open-competition-v1
+      - key: OPEN_COMPETITION_INDEXER_NETWORK
+        value: base-mainnet
+      - key: OPEN_COMPETITION_V1_FACTORY_CONTRACT
+        value: 0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5
+      - key: OPEN_COMPETITION_V1_DEPLOYMENT_BLOCK
+        value: "49663931"
+      - key: OPEN_COMPETITION_INDEXER_RPC_URL
+        value: https://base.drpc.org
+      - key: OPEN_COMPETITION_INDEXER_POLL_SECONDS
+        value: "15"
+      - key: OPEN_COMPETITION_INDEXER_CONFIRMATIONS
+        value: "2"
+      - key: OPEN_COMPETITION_INDEXER_MAX_BLOCKS_PER_QUERY
+        value: "2000"
+      - key: BASE_INDEXER_RETRY_INITIAL_SECONDS
+        value: "5"
+      - key: BASE_INDEXER_RETRY_MAX_SECONDS
+        value: "120"
+      - key: BASE_INDEXER_EXIT_AFTER_FAILURES
+        value: "8"
+      - fromGroup: agent-bounties-base
 
 databases:
   - name: agent-bounties-postgres

@@ -103,7 +103,8 @@
     const statePill = document.createElement("span");
     statePill.className = "board-state-pill";
     statePill.dataset.state = item.boardState;
-    statePill.textContent = "Ready to work";
+    const openCompetition = item.competition_mode === "first_valid_submission";
+    statePill.textContent = openCompetition ? "Open competition" : "Ready to work";
 
     const heading = document.createElement("h2");
     heading.textContent = item.title || "Untitled task";
@@ -136,8 +137,10 @@
     actions.className = "board-task-actions";
 
     const claim = buttonLink(
-      "Claim task",
-      `earn.html?bountyContract=${encodeURIComponent(item.source_id)}&source=bounty-board#claim-workflow`,
+      openCompetition ? "Enter competition" : "Claim task",
+      openCompetition
+        ? `competition.html?bountyContract=${encodeURIComponent(item.source_id)}&network=${encodeURIComponent(item.network || "base-mainnet")}`
+        : `earn.html?bountyContract=${encodeURIComponent(item.source_id)}&source=bounty-board#claim-workflow`,
       true,
     );
     claim.dataset.analyticsEvent = "funded_bounty_click";
@@ -236,6 +239,16 @@
       throw new Error("Live inventory failed its claimability gate.");
     }
     state.items = items.map(normalize);
+    const targetContract = new URLSearchParams(window.location.search).get("bountyContract");
+    const targeted = targetContract && state.items.find(
+      (item) => String(item.source_id).toLowerCase() === targetContract.toLowerCase(),
+    );
+    if (targeted && targeted.competition_mode === "first_valid_submission") {
+      location.replace(
+        `competition.html?bountyContract=${encodeURIComponent(targeted.source_id)}&network=${encodeURIComponent(targeted.network || "base-mainnet")}`,
+      );
+      return;
+    }
     state.lastSync = Date.now();
     render();
   }

@@ -1,0 +1,115 @@
+{
+  "schema_version": "agent-bounties/open-competition-v1-base-mainnet-release-v1",
+  "protocol_version": "agent-bounties/open-competition-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "deployment_state": "active_ready_to_earn",
+  "source_commit": "bc9b3cc9f9f95a87df671be2d13199ac9d06ebcf",
+  "deployer": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "release_manifest": {
+    "protocol_version": "agent-bounties/open-competition-v1",
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "deployment_state": "active_ready_to_earn",
+    "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+    "implementation_contract": "0xa504454ac8cdd043c11c8c6af81a072472aa1651",
+    "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "deployment_block": 49663931,
+    "factory_runtime_code_hash": "0x963ac715bb99d8eb669b0a2a77acc752a660474e8da5d0c3a5025878b0557712",
+    "implementation_runtime_code_hash": "0xd06d8b654362da834eeec8f93fdc68481f93ff314c692ccc44f2e14327cd52cd"
+  },
+  "factory_deployment": {
+    "transaction_hash": "0xcc6878176fe9845c3f635981af4d12beedb94a83139fd9a64430e90c0383b161",
+    "block_number": 49663931
+  },
+  "verifier_catalog": {
+    "schema_version": "agent-bounties/open-competition-v1-verifier-catalog-v1",
+    "protocol_version": "agent-bounties/open-competition-v1",
+    "network": "base-mainnet",
+    "profiles": [
+      {
+        "profile_id": "leading-zero-work-v1-difficulty-16-mainnet-canary",
+        "protocol_version": "agent-bounties/open-competition-v1",
+        "network": "base-mainnet",
+        "chain_id": 8453,
+        "display_name": "Scope-bound hash work (16-bit deterministic verifier)",
+        "module_kind": "leading-zero-work-v1",
+        "verifier_address": "0xcc6059ceeda5bc4ba8a97ecfbffa7488c8fd579e",
+        "runtime_code_hash": "0xbaa3a8305c4b65d0dc20131d0ef207fdaf4763f345393a831370cd04077df9b3",
+        "configuration": {
+          "difficulty_bits": 16
+        },
+        "benchmark_hash": "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+        "evidence_schema_hash": "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da",
+        "evidence_schema": "agent-bounties/leading-zero-work-evidence-v1",
+        "immutable_runtime_required": true,
+        "approved_for_rehearsal": true,
+        "public_inventory_eligible": true,
+        "deployment_state": "active_ready_to_earn",
+        "evidence_boundary": "This public profile verifies only the locked 16-bit scope-bound hash-work predicate. It does not evaluate ordinary code, design, writing, research, acceptance-criteria quality, or human identity."
+      }
+    ],
+    "evidence_boundary": "Hosted approval requires an exact network, address, runtime hash, immutable configuration, benchmark, and evidence schema match. Factory provenance alone is not verifier approval."
+  },
+  "hidden_canary": {
+    "bounty_contract": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+    "verifier_profile": {
+      "profile_id": "leading-zero-work-v1-difficulty-16-mainnet-canary",
+      "benchmark_preimage": "leading-zero-work-v1/difficulty-16/canary-benchmark-v1",
+      "benchmark_hash": "0x8f5dc601eaff77e6102aab44f16a9b176df7ce0a998078782fb5d4b9e0c0ebf2",
+      "evidence_schema_preimage": "agent-bounties/leading-zero-work-evidence-v1",
+      "evidence_schema_hash": "0xea961c63fb67f86823003426b04a928406e44e9c8acc3dcb298189e9558083da"
+    },
+    "creation_transaction": "0x9914bef22a5f2535805696fc6dcc3608c44a13a9641a84c552ea2c5d6b02b781",
+    "settlement_transaction": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5",
+    "settlement_block": 49664756,
+    "winner": "0xb87c9679a14e082e92c103f66327fd1f1e846087",
+    "solver_reward_usdc_base_units": 1000000,
+    "entry_bond_returned_usdc_base_units": 100000,
+    "verifier_reward_usdc_base_units": 100000,
+    "safe_block": {
+      "number": 49664770,
+      "hash": "0xa03367dc9b30e5afc64bd788a0d8fe3d28754c08d59c1d95e3b9fa9e70825905",
+      "timestamp": 1786118887
+    },
+    "canonical_bounty_settled_event": true,
+    "escrow_conservation_passed": true
+  },
+  "release_evidence": {
+    "base_sepolia_rehearsal_passed": true,
+    "slither_high_findings": 0,
+    "slither_medium_findings": 0,
+    "foundry_tests_passed": 176,
+    "foundry_tests_skipped": 11,
+    "fuzz_runs": 1000,
+    "exact_mainnet_fork_replay_passed": true,
+    "independent_review": {
+      "status": "passed",
+      "review_url": "https://github.com/NSPG13/agent-bounties/pull/848#issuecomment-5233895457",
+      "reviewed_source_commit": "bc9b3cc9f9f95a87df671be2d13199ac9d06ebcf",
+      "factory_runtime_code_hash": "0x963ac715bb99d8eb669b0a2a77acc752a660474e8da5d0c3a5025878b0557712",
+      "implementation_runtime_code_hash": "0xd06d8b654362da834eeec8f93fdc68481f93ff314c692ccc44f2e14327cd52cd"
+    },
+    "static_analysis": {
+      "tool": "slither 0.11.5",
+      "raw_open_competition_findings": 25,
+      "untriaged_high_findings": 0,
+      "untriaged_medium_findings": 0,
+      "triage": "docs/security/open-competition-entrant-wallet-v1-static-analysis.md"
+    },
+    "bytecode_frozen": true
+  },
+  "hosted_activation": {
+    "public_creation_enabled": true,
+    "public_commitments_enabled": true,
+    "public_inventory_eligible": true,
+    "monitoring_gate_configured": true,
+    "monitoring_active": false,
+    "relay_support_available": true,
+    "gas_sponsorship_available": true,
+    "r4_release_evidence_complete": true,
+    "public_activation_block": 49759875
+  },
+  "evidence_boundary": "The historical canary settlement proves payment only to that canary solver. Public inventory begins at block 49759875 and is limited to the exact approved deterministic verifier profile; only a canonical BountySettled event proves payment."
+}

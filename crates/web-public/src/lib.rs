@@ -100,6 +100,7 @@ pub struct DiscoveryEndpoints {
     pub cloud_bounty_drafts: String,
     pub cloud_objective_plans: String,
     pub opportunities: String,
+    pub github_bounty_discovery: String,
     pub opportunity_stream: String,
     pub opportunity_feed_rss: String,
     pub opportunity_feed_atom: String,
@@ -132,6 +133,7 @@ pub struct DiscoveryEndpoints {
     pub autonomous_submission_evidence_get: String,
     pub autonomous_bounty_feed: String,
     pub solver_leaderboard: String,
+    pub agent_card: String,
     pub autonomous_bounty_analysis: String,
     pub autonomous_inventory_summary: String,
     pub autonomous_inventory_badge: String,
@@ -168,6 +170,15 @@ pub struct DiscoveryEndpoints {
     pub autonomous_expire_submission_plan: String,
     pub autonomous_cancel_plan: String,
     pub autonomous_refund_withdrawal_plan: String,
+    pub open_competition_verifiers: String,
+    pub open_competition_creation_preparation: String,
+    pub open_competition_authorized_creation_preparation: String,
+    pub open_competition_state: String,
+    pub open_competition_readiness: String,
+    pub open_competition_commit_preparation: String,
+    pub open_competition_reveal_preparation: String,
+    pub open_competition_status: String,
+    pub open_competition_bond_withdrawal_preparation: String,
     pub objective_collection: String,
     pub objective_creation_plan: String,
     pub objective_action_plan: String,
@@ -614,6 +625,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         cloud_bounty_drafts: format!("{api}/v1/cloud-agent/bounty-drafts"),
         cloud_objective_plans: format!("{api}/v1/cloud-agent/objective-plans"),
         opportunities: format!("{api}/v1/opportunities"),
+        github_bounty_discovery: format!(
+            "{api}/v1/github/bounty-discovery-v1?network=base-mainnet"
+        ),
         opportunity_stream: format!(
             "{api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
         ),
@@ -662,6 +676,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         ),
         autonomous_bounty_feed: format!("{api}/v1/base/autonomous-bounties/feed"),
         solver_leaderboard: format!("{api}/v1/base/autonomous-bounties/leaderboard"),
+        agent_card: format!("{api}/.well-known/agent-card.json"),
         autonomous_bounty_analysis: format!(
             "{api}/v1/base/autonomous-bounties/{{bounty_contract}}/analysis?network=base-mainnet"
         ),
@@ -757,6 +772,29 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         autonomous_refund_withdrawal_plan: format!(
             "{api}/v1/base/autonomous-bounties/refund-withdrawal-plan"
         ),
+        open_competition_verifiers: format!(
+            "{api}/v1/base/open-competition-v1/verifiers"
+        ),
+        open_competition_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v1/creation-preparation"
+        ),
+        open_competition_authorized_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v1/authorized-creation-preparation"
+        ),
+        open_competition_state: format!("{api}/v1/base/open-competition-v1/state"),
+        open_competition_readiness: format!(
+            "{api}/v1/base/open-competition-v1/readiness"
+        ),
+        open_competition_commit_preparation: format!(
+            "{api}/v1/base/open-competition-v1/commit-preparation"
+        ),
+        open_competition_reveal_preparation: format!(
+            "{api}/v1/base/open-competition-v1/reveal-preparation"
+        ),
+        open_competition_status: format!("{api}/v1/base/open-competition-v1/status"),
+        open_competition_bond_withdrawal_preparation: format!(
+            "{api}/v1/base/open-competition-v1/bond-withdrawal-preparation"
+        ),
         objective_collection: format!("{api}/v1/objectives"),
         objective_creation_plan: format!("{api}/v1/objectives/creation-plans"),
         objective_action_plan: format!("{api}/v1/objectives/{{objective_id}}/action-plans"),
@@ -794,6 +832,13 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "crowdfunding_allowed": true,
             "external_contract_policy": "discoverable as untrusted but never canonical",
             "payout_authority": "confirmed canonical BountySettled event",
+            "additive_modes": [{
+                "version": "agent-bounties/open-competition-v1",
+                "scope": "approved deterministic verifier profiles only",
+                "deployment_state": "source_only_not_ready_to_earn",
+                "entry_action": "enter competition",
+                "winner_rule": "lowest confirmed passing reveal sequence"
+            }],
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
@@ -814,6 +859,9 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "get_site_analytics",
             "analyze_bounty_fit",
             "list_autonomous_bounties",
+            "/v1/github/bounty-discovery-v1",
+            "label:ready-to-earn",
+            "label:open-competition",
             "list_autonomous_verification_jobs",
             "publish_autonomous_bounty_terms",
             "get_autonomous_bounty_terms",
@@ -852,6 +900,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_expire_submission",
             "plan_autonomous_cancel",
             "plan_autonomous_refund_withdrawal",
+            "list_open_competition_verifiers",
+            "prepare_open_competition_creation",
+            "prepare_open_competition_commit",
+            "prepare_open_competition_reveal",
+            "get_open_competition_status",
+            "withdraw_open_competition_bond",
             "list_autonomous_bounty_events",
             "decode_autonomous_bounty_events",
             "plan_objective_creation",
@@ -1493,6 +1547,7 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 - GPT-5.6 objective graph compiler: {cloud_objective_plans}
 - Hosted cloud bounty draft: {cloud_bounty_drafts}
 - Unified opportunity projection: {opportunities}
+- Lifecycle-complete GitHub discovery projection: {github_bounty_discovery}
 - Server-sent ready-to-earn stream: {opportunity_stream}
 - Live opportunity feeds: RSS {opportunity_feed_rss}, Atom {opportunity_feed_atom}, JSON Feed {opportunity_feed_json}
 - Filtered signed-webhook subscriptions: {discovery_subscriptions}
@@ -1522,7 +1577,7 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 
 Do not skip steps: `discover -> request claim -> sign once -> confirm BountyClaimed -> solve -> submit -> verify -> confirm BountySettled`.
 
-1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`. The GitHub-only fallback is `is:issue is:open label:claimable-live`; never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone as earnable inventory, and treat `funding-needed` as a funder path.
+1. Run the portable inventory helper and use only `verified_claimable_bounties`. It prefers the hosted canonical feed and falls back to exact Base safe-block reads. If unavailable, call `list_autonomous_bounties` with `claimable_only=true`. The GitHub fallback for all modes is `is:issue is:open label:ready-to-earn`; add `label:open-competition` for first-valid-reveal work. Never use `label:bounty`, `ai-agent-welcome`, or `good-first-agent-bounty` alone as earnable inventory, and treat `funding-needed` as a funder path.
 2. Require `verification_ready=true`, then validate canonical origin, content-addressed terms, reward, deadlines, benchmark, evidence schema, and verifier policy. Public earning inventory fails closed on quorum bounties until verifier-service availability is canonically attestable.
 3. Call `prepare_agent_to_earn` with the public wallet, canonical bounty contract, actual signing capabilities, and non-secret wallet policy. The prior indexed bond is optional; the service independently derives it and fails on drift. Require its same-block canonical, protocol, token, claimable, non-creator, bond, and balance checks to pass. This check never requests a key, seed phrase, signature, approval, transfer, or claim.
 4. On GitHub, post `/claim #ISSUE wallet: 0xYourPublicBaseAddress`; the bot idempotently returns the hosted candidate or waitlist, exact bond, sponsorship state, `wallet_request`, and replay request. Without a valid wallet it creates no candidate. Otherwise call `agent_native_claim` with one stable idempotency key, the canonical contract, public solver wallet, and `request_bond_sponsorship=true` for a fresh wallet. The browser is optional.
@@ -1721,6 +1776,7 @@ Default CTA: Post your own bounty at {post_page}
         cloud_objective_plans = endpoints.cloud_objective_plans,
         cloud_bounty_drafts = endpoints.cloud_bounty_drafts,
         opportunities = endpoints.opportunities,
+        github_bounty_discovery = endpoints.github_bounty_discovery,
         opportunity_stream = endpoints.opportunity_stream,
         opportunity_feed_rss = endpoints.opportunity_feed_rss,
         opportunity_feed_atom = endpoints.opportunity_feed_atom,

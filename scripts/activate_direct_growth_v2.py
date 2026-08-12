@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create, fund, and reconcile the four direct-growth bounties."""
+"""Create, fund, and reconcile manifest-pinned direct coding bounties."""
 
 from __future__ import annotations
 
@@ -19,7 +19,9 @@ from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "bounties" / "autonomous-v1" / "direct-growth-v2-manifest.json"
-CONTRACT_MANIFEST = ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
+DEFAULT_CONTRACT_MANIFEST = (
+    ROOT / "deployments" / "bounded-agent-wallet-v2-base-mainnet.json"
+)
 RPC_DEFAULT = "https://mainnet.base.org"
 API_DEFAULT = "https://api.agentbounties.app"
 ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -291,7 +293,10 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ActivationError(f"invalid activation manifest: {error}") from error
-    if manifest.get("schema") != "agent-bounties/direct-growth-activation-v2":
+    if manifest.get("schema") not in {
+        "agent-bounties/direct-growth-activation-v2",
+        "agent-bounties/direct-inventory-activation-v1",
+    }:
         raise ActivationError("activation manifest schema mismatch")
     if manifest.get("network") != "base-mainnet" or manifest.get("chain_id") != 8453:
         raise ActivationError("activation manifest is not pinned to Base mainnet")
@@ -306,13 +311,25 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
     manifest["verifiers"] = [
         address(value, "verifier") for value in manifest.get("verifiers", [])
     ]
-    if len(manifest["verifiers"]) != 1 or manifest.get("threshold") != 1:
-        raise ActivationError(
-            "direct coding tasks require the committed single regression verifier"
-        )
+    threshold = int(manifest.get("threshold", 0))
+    if not 1 <= threshold <= len(manifest["verifiers"]):
+        raise ActivationError("direct coding tasks require a valid committed verifier quorum")
+    if len(manifest["verifiers"]) > 8:
+        raise ActivationError("direct coding tasks support at most eight verifier wallets")
+    verifier_reward = int(manifest.get("verifier_reward", 0))
+    solver_reward = int(manifest.get("solver_reward", 0))
+    initial_funding = int(manifest.get("initial_funding", 0))
+    if solver_reward <= 0 or verifier_reward <= 0:
+        raise ActivationError("solver and verifier rewards must be positive")
+    if verifier_reward % threshold:
+        raise ActivationError("verifier reward must divide evenly across the quorum")
+    if initial_funding != solver_reward + verifier_reward:
+        raise ActivationError("initial funding must equal solver plus verifier rewards")
     tasks = manifest.get("tasks")
-    if not isinstance(tasks, list) or len(tasks) != 4:
-        raise ActivationError("activation manifest must contain exactly four tasks")
+    if not isinstance(tasks, list) or not 1 <= len(tasks) <= 10:
+        raise ActivationError("activation manifest must contain one to ten tasks")
+    if int(manifest.get("task_count", len(tasks))) != len(tasks):
+        raise ActivationError("task count does not match the activation manifest")
     issues = set()
     digests = set()
     for task in tasks:
@@ -333,12 +350,24 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
             raise ActivationError(
                 f"issue #{task['issue']} benchmark digest differs: {observed_digest}"
             )
-    if len(issues) != 4 or len(digests) != 4:
+    if len(issues) != len(tasks) or len(digests) != len(tasks):
         raise ActivationError("task issues and benchmark digests must be unique")
-    expected_total = int(manifest["initial_funding"]) * len(tasks)
-    if expected_total != int(manifest["total_funding"]) or expected_total != 8_040_000:
-        raise ActivationError("activation total must be exactly 8.04 USDC")
+    expected_total = initial_funding * len(tasks)
+    if expected_total != int(manifest["total_funding"]):
+        raise ActivationError("activation total does not match task funding")
+    contract_manifest = manifest.get("wallet_contract_manifest")
+    if contract_manifest is not None:
+        path_value = Path(str(contract_manifest))
+        if path_value.is_absolute() or ".." in path_value.parts:
+            raise ActivationError("wallet contract manifest must stay inside the repository")
+        if not (ROOT / path_value).is_file():
+            raise ActivationError("wallet contract manifest is missing")
     return manifest
+
+
+def contract_manifest_path(manifest: Mapping[str, Any]) -> Path:
+    value = manifest.get("wallet_contract_manifest")
+    return DEFAULT_CONTRACT_MANIFEST if value is None else ROOT / str(value)
 
 
 def terms_document(
@@ -417,11 +446,14 @@ def terms_document(
             "engine": "sandboxed_regression_v1",
             "verifiers": manifest["verifiers"],
             "threshold": manifest["threshold"],
-            "rubric": "The precommitted sandbox runs the exact benchmark against the submitted GitHub commit. The single verifier signs only the resulting deterministic pass or fail candidate.",
+            "rubric": "The precommitted sandbox runs the exact benchmark against the submitted GitHub commit. The configured verifier quorum signs only the resulting deterministic pass or fail candidate.",
             "self_verification_forbidden": True,
         },
         "source_url": f"https://github.com/NSPG13/agent-bounties/issues/{issue}",
-        "discovery_source": "maintainer-seeded direct growth inventory after organic label-search feedback",
+        "discovery_source": manifest.get(
+            "discovery_source",
+            "maintainer-seeded direct growth inventory after organic label-search feedback",
+        ),
     }
 
 
@@ -463,7 +495,7 @@ def inspect_wallet(
             "--wallet",
             manifest["wallet"],
             "--manifest",
-            str(CONTRACT_MANIFEST),
+            str(contract_manifest_path(manifest)),
             "--rpc-url",
             args.rpc_url,
             "--expect-owner",
@@ -482,8 +514,8 @@ def inspect_wallet(
     state = report["state"]
     if int(state["policy_version"]) != int(manifest["wallet_policy_version"]):
         raise ActivationError("bounded wallet policy version changed")
-    if int(state["policy"]["max_per_action"]) != int(manifest["initial_funding"]):
-        raise ActivationError("bounded wallet per-action cap changed")
+    if int(state["policy"]["max_per_action"]) < int(manifest["initial_funding"]):
+        raise ActivationError("bounded wallet per-action cap is below task funding")
     if (
         state["policy"]["signed_quorum_verifier_set_hash"]
         != manifest["verifier_set_hash"]
@@ -536,7 +568,16 @@ def reconcile(
     raise ActivationError(f"canonical activation did not reconcile for {contract}")
 
 
-def issue_body(task: Mapping[str, Any], result: Mapping[str, Any], commit: str) -> str:
+def usdc(amount: object) -> str:
+    return f"{int(amount) / 1_000_000:.2f}"
+
+
+def issue_body(
+    manifest: Mapping[str, Any],
+    task: Mapping[str, Any],
+    result: Mapping[str, Any],
+    commit: str,
+) -> str:
     criteria = "\n".join(f"- {value}" for value in task["acceptance_criteria"])
     issue = int(task["issue"])
     return f"""## Goal
@@ -550,10 +591,10 @@ def issue_body(task: Mapping[str, Any], result: Mapping[str, Any], commit: str) 
 - Contract: `{result["contract"]}`
 - Contract explorer: https://basescan.org/address/{result["contract"]}
 - Creation/funding transaction: https://basescan.org/tx/{result["transaction_hash"]}
-- Confirmed funding: **2.01 / 2.01 USDC**
-- Solver reward: **2.00 USDC**
-- Automated verifier reward and refundable claim bond: **0.01 USDC**
-- Verification: `sandboxed_regression_v1`, one precommitted automated signer
+- Confirmed funding: **{usdc(manifest["initial_funding"])} / {usdc(manifest["initial_funding"])} USDC**
+- Solver reward: **{usdc(manifest["solver_reward"])} USDC**
+- Automated verifier reward and refundable claim bond: **{usdc(manifest["verifier_reward"])} USDC**
+- Verification: `sandboxed_regression_v1`, {int(manifest["threshold"])} of {len(manifest["verifiers"])} precommitted automated signers
 - Immutable benchmark: https://github.com/NSPG13/agent-bounties/tree/{commit}/{task["benchmark_subdirectory"]}
 
 ## Acceptance criteria
@@ -585,7 +626,7 @@ Pass the immutable benchmark and satisfy every criterion above.
 small-code-change
 
 ### Suggested amount
-2 USDC
+{usdc(manifest["solver_reward"])} USDC
 
 ### Funding mode
 AutonomousV1BaseUsdc
@@ -593,6 +634,57 @@ AutonomousV1BaseUsdc
 ### Privacy
 Public
 """
+
+
+def execute_creation_plan(
+    args: argparse.Namespace,
+    cast: Cast,
+    manifest: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    plan_path: Path,
+    action_path: Path,
+    private_key: str,
+) -> tuple[str, str, str | None, bool]:
+    predicted = address(plan.get("predicted_bounty_contract"), "predicted bounty")
+    bounty_id = bytes32(plan.get("bounty_id"), "bounty id")
+    if is_canonical(cast, manifest["canonical_factory"], predicted):
+        return predicted, bounty_id, None, False
+
+    run(
+        [
+            args.python,
+            "scripts/plan_bounded_agent_action.py",
+            "create",
+            "--wallet",
+            manifest["wallet"],
+            "--creation-plan",
+            str(plan_path),
+            "--manifest",
+            str(contract_manifest_path(manifest)),
+            "--rpc-url",
+            args.rpc_url,
+            "--expect-owner",
+            manifest["owner"],
+            "--expect-delegate",
+            manifest["delegate"],
+            "--expect-policy-hash",
+            manifest["wallet_policy_hash"],
+            "--output",
+            str(action_path),
+        ]
+    )
+    action = json.loads(action_path.read_text(encoding="utf-8"))
+    direct = action["direct_transaction"]
+    tx_hash, created_now = create_if_missing(
+        cast,
+        manifest["canonical_factory"],
+        predicted,
+        address(direct.get("to"), "direct transaction target"),
+        str(direct.get("data")),
+        private_key,
+        args.broadcast_recovery_timeout,
+    )
+    return predicted, bounty_id, tx_hash, created_now
 
 
 def activate(args: argparse.Namespace) -> dict[str, Any]:
@@ -646,41 +738,14 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         action_path = args.output_dir / f"issue-{issue}-bounded-action.json"
-        run(
-            [
-                args.python,
-                "scripts/plan_bounded_agent_action.py",
-                "create",
-                "--wallet",
-                manifest["wallet"],
-                "--creation-plan",
-                str(plan_path),
-                "--manifest",
-                str(CONTRACT_MANIFEST),
-                "--rpc-url",
-                args.rpc_url,
-                "--expect-owner",
-                manifest["owner"],
-                "--expect-delegate",
-                manifest["delegate"],
-                "--expect-policy-hash",
-                manifest["wallet_policy_hash"],
-                "--output",
-                str(action_path),
-            ]
-        )
-        action = json.loads(action_path.read_text(encoding="utf-8"))
-        direct = action["direct_transaction"]
-        predicted = address(plan.get("predicted_bounty_contract"), "predicted bounty")
-        bounty_id = bytes32(plan.get("bounty_id"), "bounty id")
-        tx_hash, created_now = create_if_missing(
+        predicted, bounty_id, tx_hash, created_now = execute_creation_plan(
+            args,
             cast,
-            manifest["canonical_factory"],
-            predicted,
-            address(direct.get("to"), "direct transaction target"),
-            str(direct.get("data")),
+            manifest,
+            plan,
+            plan_path,
+            action_path,
             private_key,
-            args.broadcast_recovery_timeout,
         )
         if created_now:
             new_spend += int(manifest["initial_funding"])
@@ -708,7 +773,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "reconciliation": reconciled,
         }
         (args.output_dir / f"issue-{issue}.md").write_text(
-            issue_body(task, result, commit), encoding="utf-8"
+            issue_body(manifest, task, result, commit), encoding="utf-8"
         )
         results.append(result)
 
@@ -741,15 +806,17 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
         "total_funding": int(manifest["total_funding"]),
         "wallet_balance_before": int(before["wallet_usdc_balance"]),
         "wallet_balance_after": int(after["wallet_usdc_balance"]),
+        "solver_reward": int(manifest["solver_reward"]),
+        "verifier_reward": int(manifest["verifier_reward"]),
         "results": results,
-        "complete": len(results) == 4,
+        "complete": len(results) == len(manifest["tasks"]),
         "evidence_boundary": "Canonical creation, funding, claimability, valid terms, and verification readiness are reconciled. Only a future BountySettled event proves solver payment.",
     }
 
 
 def markdown(report: Mapping[str, Any]) -> str:
     lines = [
-        "## Four direct growth bounties activated",
+        f"## {len(report['results'])} direct coding bounties activated",
         "",
         f"- Canonical funding in this batch: **{int(report['total_funding']) / 1_000_000:.2f} USDC**",
         f"- Newly spent by this run: **{int(report['new_spend']) / 1_000_000:.2f} USDC**",
@@ -757,8 +824,10 @@ def markdown(report: Mapping[str, Any]) -> str:
         "",
     ]
     for item in report["results"]:
+        solver = usdc(report["solver_reward"])
+        verifier = usdc(report["verifier_reward"])
         lines.append(
-            f"- #{item['issue']} `{item['contract']}` - 2.00 USDC solver / 0.01 USDC verifier"
+            f"- #{item['issue']} `{item['contract']}` - {solver} USDC solver / {verifier} USDC verifier"
         )
     lines.extend(
         [

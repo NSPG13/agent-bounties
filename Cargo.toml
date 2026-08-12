@@ -29,7 +29,7 @@ repository = "https://github.com/agent-bounties/agent-bounties"
 rust-version = "1.88"
 
 [workspace.dependencies]
-alloy = { version = "=1.4.1", default-features = false, features = ["std", "provider-http", "reqwest-rustls-tls", "rpc-types", "signer-local", "sol-types"] }
+alloy = { version = "=1.6.3", default-features = false, features = ["std", "provider-http", "reqwest-rustls-tls", "rpc-types", "signer-local", "sol-types"] }
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.7"
@@ -48,7 +48,7 @@ sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-toki
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tokio-stream = "0.1"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 utoipa = { version = "4", features = ["chrono", "uuid"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }

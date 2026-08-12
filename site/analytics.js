@@ -23,6 +23,10 @@
     "funding_started",
     "claim_started",
     "claim_confirmed",
+    "competition_entry_started",
+    "competition_entry_confirmed",
+    "competition_reveal_started",
+    "competition_reveal_confirmed",
     "canonical_post_started",
     "canonical_post_confirmed",
   ]);
@@ -216,8 +220,17 @@
     if (!visitorId || !currentSessionId) return false;
     const attribution = currentAttribution();
     const detail = details || {};
-    const opportunityId = validDetail(detail.opportunity_id, /^[A-Za-z0-9:._-]+$/, 200);
-    const bountyContract = validDetail(detail.bounty_contract, /^0x[0-9a-fA-F]{40}$/, 42);
+    const params = new URLSearchParams(window.location.search);
+    const opportunityId = validDetail(
+      detail.opportunity_id || params.get("discovery_id"),
+      /^[A-Za-z0-9:/._-]+$/,
+      200,
+    );
+    const bountyContract = validDetail(
+      detail.bounty_contract || params.get("bountyContract"),
+      /^0x[0-9a-fA-F]{40}$/,
+      42,
+    );
     const event = {
       event_id: randomId(),
       visitor_id: visitorId,

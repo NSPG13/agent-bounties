@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest import mock
@@ -63,7 +64,8 @@ class DirectGrowthActivationTests(unittest.TestCase):
             "contract": "0x" + "12" * 20,
             "transaction_hash": "0x" + "34" * 32,
         }
-        body = activation.issue_body(task, result, "c" * 40)
+        manifest = activation.load_manifest()
+        body = activation.issue_body(manifest, task, result, "c" * 40)
         self.assertIn("Funded and claimable on Base mainnet", body)
         self.assertIn(f"/claim #{task['issue']} wallet:", body)
         self.assertIn("BountySettled", body)
@@ -161,6 +163,35 @@ class DirectGrowthActivationTests(unittest.TestCase):
                 "secret",
                 0,
             )
+
+    def test_resume_skips_action_planning_for_existing_canonical_contract(self) -> None:
+        cast = mock.Mock()
+        cast.call.return_value = "true"
+        manifest = activation.load_manifest()
+        plan = {
+            "predicted_bounty_contract": "0x" + "22" * 20,
+            "bounty_id": "0x" + "33" * 32,
+        }
+        args = SimpleNamespace(
+            python="python",
+            rpc_url="https://rpc.example",
+            broadcast_recovery_timeout=0,
+        )
+        with mock.patch.object(activation, "run") as planner:
+            result = activation.execute_creation_plan(
+                args,
+                cast,
+                manifest,
+                plan,
+                Path("unused-plan.json"),
+                Path("unused-action.json"),
+                "secret",
+            )
+        self.assertEqual(
+            result,
+            (plan["predicted_bounty_contract"], plan["bounty_id"], None, False),
+        )
+        planner.assert_not_called()
 
 
 if __name__ == "__main__":
