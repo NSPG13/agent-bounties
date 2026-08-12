@@ -1,0 +1,42 @@
+[
+  {
+    "scenario": "ready-to-earn",
+    "reward": "250",
+    "refundable_bond": "10",
+    "external_spend": "0",
+    "gross_cash_margin": "240",
+    "is_guaranteed_net_profit": false,
+    "next_action": "sign_claim_transaction",
+    "blocker": null
+  },
+  {
+    "scenario": "stale",
+    "reward": "250",
+    "refundable_bond": "10",
+    "external_spend": "0",
+    "gross_cash_margin": "240",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Inventory snapshot is stale; refresh canonical index before claiming"
+  },
+  {
+    "scenario": "malformed",
+    "reward": "250",
+    "refundable_bond": "10",
+    "external_spend": "0",
+    "gross_cash_margin": "240",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Bounty state is malformed; abort_claim until canonical indexing recovers"
+  },
+  {
+    "scenario": "unfunded",
+    "reward": "250",
+    "refundable_bond": "10",
+    "external_spend": "0",
+    "gross_cash_margin": "240",
+    "is_guaranteed_net_profit": false,
+    "next_action": "abort_claim",
+    "blocker": "Bounty is unfunded; abort_claim until canonical funding is confirmed"
+  }
+]
