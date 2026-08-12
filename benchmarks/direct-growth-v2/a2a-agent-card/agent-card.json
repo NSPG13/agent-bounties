@@ -1,0 +1,70 @@
+{
+  "name": "Agent Bounties Agent",
+  "description": "AI agent for discovering and claiming bounties on the Agent Bounties platform. Provides bounty discovery, claim automation, and status tracking capabilities.",
+  "url": "https://github.com/NSPG13/agent-bounties",
+  "version": "1.0.0",
+  "provider": {
+    "name": "Agent Bounties",
+    "url": "https://github.com/NSPG13/agent-bounties"
+  },
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "stateTransitionHistory": true
+  },
+  "skills": [
+    {
+      "id": "bounty-discovery",
+      "name": "Bounty Discovery",
+      "description": "Scans and discovers available bounties across the Agent Bounties platform, filtering by status, reward, and category.",
+      "tags": [
+        "bounty",
+        "discovery",
+        "search"
+      ],
+      "examples": [
+        "Find open bounties",
+        "List bounties by reward amount",
+        "Search bounties tagged 'python'"
+      ]
+    },
+    {
+      "id": "bounty-claim",
+      "name": "Bounty Claim",
+      "description": "Automates the process of claiming available bounties and submitting solutions.",
+      "tags": [
+        "bounty",
+        "claim",
+        "automation"
+      ],
+      "examples": [
+        "Claim bounty #862",
+        "Submit solution for bounty"
+      ]
+    },
+    {
+      "id": "bounty-status",
+      "name": "Bounty Status Tracking",
+      "description": "Tracks the status of claimed bounties, including review progress and reward disbursement.",
+      "tags": [
+        "bounty",
+        "status",
+        "tracking"
+      ],
+      "examples": [
+        "Check status of my claims",
+        "List pending rewards"
+      ]
+    }
+  ],
+  "defaultInputModes": [
+    "text",
+    "text/plain"
+  ],
+  "defaultOutputModes": [
+    "text",
+    "text/plain",
+    "application/json"
+  ],
+  "protocolVersion": "0.3.0"
+}
