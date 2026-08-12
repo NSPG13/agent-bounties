@@ -1951,6 +1951,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/.well-known/x402.json", get(x402_discovery))
         .route("/.well-known/agent-card.json", get(agent_card))
+        .route("/v1/a2a/agent-card", get(a2a_agent_card))
         .route("/v1/discovery", get(agent_bounties_discovery))
         .route("/v1/risk/policy", get(risk_policy))
         .route("/v1/readiness/live-money", get(live_money_readiness))
@@ -5812,6 +5813,13 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
 #[utoipa::path(get, path = "/.well-known/agent-card.json", responses((status = 200, description = "A2A 1.0 Agent Card for machine discovery")))]
 /// Serves the A2A Agent Card with ETag and Cache-Control headers for conditional requests.
 async fn agent_card() -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
+    agent_card_response()
+}
+
+/// Shared implementation that builds the canonical A2A Agent Card response.
+/// Returns the fixture with an ETag derived from its content hash and a
+/// `public, max-age=3600` Cache-Control header for conditional requests.
+fn agent_card_response() -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
     let card = include_str!("../../../fixtures/a2a-agent-card.json");
     let parsed: serde_json::Value =
         serde_json::from_str(card).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -5826,6 +5834,15 @@ async fn agent_card() -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode
         HeaderValue::from_static("public, max-age=3600"),
     );
     Ok((resp_headers, Json(parsed)))
+}
+
+#[utoipa::path(get, path = "/v1/a2a/agent-card", responses((status = 200, description = "Versioned A2A 1.0 Agent Card under the /v1/a2a namespace")))]
+/// Serves the same canonical A2A Agent Card under the versioned `/v1/a2a`
+/// namespace. This gives A2A clients a stable API-namespaced endpoint in
+/// addition to the `/.well-known/agent-card.json` discovery path, without
+/// duplicating the fixture. Same ETag + Cache-Control behaviour.
+async fn a2a_agent_card() -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
+    agent_card_response()
 }
 
 #[utoipa::path(get, path = "/v1/risk/policy", responses((status = 200, body = RiskPolicyDescriptor)))]
@@ -18372,6 +18389,42 @@ mod tests {
         assert!(html.contains("/llms.txt"));
         assert!(html.contains("/schemas/discovery-manifest.v2.json"));
         assert!(html.contains("/.well-known/agent-bounties.json"));
+    }
+
+    #[tokio::test]
+    async fn a2a_agent_card_route_serves_canonical_card() {
+        let (headers, Json(card)) = a2a_agent_card().await.unwrap();
+
+        // ETag + Cache-Control must match the /.well-known discovery path.
+        assert!(headers.contains_key(header::ETAG));
+        assert_eq!(
+            headers
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=3600")
+        );
+
+        // Canonical fixture invariants must be preserved.
+        assert_eq!(card.get("name").and_then(|v| v.as_str()), Some("Agent Bounties"));
+        assert_eq!(card.get("version").and_then(|v| v.as_str()), Some("1.0"));
+        let interfaces = card
+            .get("supportedInterfaces")
+            .and_then(|v| v.as_array())
+            .expect("supportedInterfaces must be an array");
+        assert!(!interfaces.is_empty());
+        assert!(interfaces.iter().all(|i| {
+            i.get("url")
+                .and_then(|v| v.as_str())
+                .map(|u| u.starts_with("https://api.agentbounties.app/"))
+                .unwrap_or(false)
+        }));
+    }
+
+    #[tokio::test]
+    async fn agent_card_and_versioned_route_return_identical_body() {
+        let (_, Json(well_known)) = agent_card().await.unwrap();
+        let (_, Json(versioned)) = a2a_agent_card().await.unwrap();
+        assert_eq!(well_known, versioned);
     }
 
     #[test]
