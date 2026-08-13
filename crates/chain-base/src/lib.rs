@@ -1,4 +1,6 @@
 use alloy::{
+    consensus::{Transaction as ConsensusTransaction, TxEnvelope},
+    eips::eip2718::Decodable2718,
     network::TransactionBuilder,
     primitives::{Address, Bytes, B256, U256},
     providers::{Provider, ProviderBuilder},
@@ -5891,6 +5893,44 @@ pub fn signed_transaction_hash(transaction: &str) -> Result<String, ChainBaseErr
     let bytes = hex::decode(normalized.trim_start_matches("0x"))
         .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
     Ok(format!("0x{}", hex::encode(Keccak256::digest(bytes))))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedTransactionBinding {
+    pub hash: String,
+    pub signer: String,
+    pub chain_id: u64,
+    pub nonce: u64,
+    pub to: String,
+    pub value: U256,
+    pub input: String,
+}
+
+pub fn decode_signed_transaction_binding(transaction: &str) -> Result<SignedTransactionBinding, ChainBaseError> {
+    let normalized = normalize_signed_transaction(transaction)?;
+    let bytes = hex::decode(normalized.trim_start_matches("0x"))
+        .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    let mut slice = bytes.as_slice();
+    let envelope = TxEnvelope::decode_2718(&mut slice)
+        .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    if !slice.is_empty() { return Err(ChainBaseError::InvalidSignedTransaction(transaction.to_string())); }
+    let signer = match &envelope {
+        TxEnvelope::Legacy(tx) => tx.recover_signer(),
+        TxEnvelope::Eip2930(tx) => tx.recover_signer(),
+        TxEnvelope::Eip1559(tx) => tx.recover_signer(),
+        TxEnvelope::Eip7702(tx) => tx.recover_signer(),
+        TxEnvelope::Eip4844(_) => return Err(ChainBaseError::InvalidSignedTransaction(
+            "blob transaction is prohibited for recovery".into())),
+    }.map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    let chain_id = envelope.chain_id().ok_or_else(||
+        ChainBaseError::InvalidSignedTransaction("legacy transaction lacks protected chain id".into()))?;
+    let to = envelope.to().ok_or_else(||
+        ChainBaseError::InvalidSignedTransaction("contract creation is prohibited".into()))?;
+    Ok(SignedTransactionBinding {
+        hash: signed_transaction_hash(transaction)?, signer: format!("{signer:#x}"), chain_id,
+        nonce: envelope.nonce(), to: format!("{to:#x}"), value: envelope.value(),
+        input: format!("0x{}", hex::encode(envelope.input())),
+    })
 }
 
 fn normalize_data(data: &str) -> Result<String, ChainBaseError> {

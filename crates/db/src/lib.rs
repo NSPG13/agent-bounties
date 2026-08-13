@@ -749,7 +749,7 @@ pub enum X402RelayStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RecoveryAttemptStatus { Reserved, Broadcast, Confirmed }
+pub enum RecoveryAttemptStatus { Prepared, Broadcast, Confirmed, FailedTerminal }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRecoveryAttempt {
@@ -757,8 +757,7 @@ pub struct NewRecoveryAttempt {
     pub contract_address: String, pub contract_code_hash: String, pub bounty_id: String,
     pub expected_status: i16, pub expected_round: u64, pub solver_address: String,
     pub verification_expires_at: u64, pub active_bond: u64, pub calldata: String,
-    pub lease_source: String, pub lease_token: Uuid, pub lease_expires_at: DateTime<Utc>,
-    pub lease_attested_at: DateTime<Utc>, pub signed_transaction_hash: String,
+    pub lease_token: Uuid, pub signed_transaction_hash: String,
     pub signed_transaction: String,
 }
 
@@ -775,6 +774,12 @@ pub struct RecoveryAttempt {
     pub broadcast_started_at: Option<DateTime<Utc>>, pub rpc_transaction_hash: Option<String>,
     pub receipt_block: Option<u64>, pub receipt_status: Option<i16>,
     pub canonical_event_id: Option<Uuid>, pub created_at: DateTime<Utc>, pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct X402RelayerLeaseAttestation {
+    pub network: String, pub lease_token: Uuid, pub lease_expires_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>, pub expired: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3247,13 +3252,21 @@ impl PostgresStore {
         row.map(recovery_attempt_from_row).transpose()
     }
 
+    pub async fn get_x402_relayer_lease_attestation(&self, network: &str) -> DbResult<Option<X402RelayerLeaseAttestation>> {
+        let row = sqlx::query(r#"SELECT network,lease_token,lease_expires_at,updated_at,
+            lease_expires_at <= now() AS expired FROM x402_relayer_leases WHERE network=$1"#)
+            .bind(network).fetch_optional(&self.pool).await?;
+        row.map(|row| Ok(X402RelayerLeaseAttestation { network: row.try_get("network")?,
+            lease_token: row.try_get("lease_token")?, lease_expires_at: row.try_get("lease_expires_at")?,
+            updated_at: row.try_get("updated_at")?, expired: row.try_get("expired")? })).transpose()
+    }
+
     /// Inserts the exact signed transaction while recovering only the specifically attested,
     /// expired transient lease. A replay returns the immutable row and never changes its state.
     pub async fn reserve_recovery_attempt(&self, attempt: &NewRecoveryAttempt) -> DbResult<RecoveryAttempt> {
-        if attempt.network != "base-mainnet" || attempt.lease_expires_at >= Utc::now()
-            || attempt.lease_attested_at < attempt.lease_expires_at {
+        if attempt.network != "base-mainnet" {
             return Err(DbError::RecoveryAttemptConflict(
-                "only an attested expired Base mainnet transient lease is recoverable".into()));
+                "only the fixed Base mainnet lease is recoverable".into()));
         }
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
@@ -3266,13 +3279,23 @@ impl PostgresStore {
             tx.commit().await?;
             return Ok(existing);
         }
+        let lease = sqlx::query(r#"SELECT lease_token,lease_expires_at,updated_at,now() AS attested_at
+            FROM x402_relayer_leases WHERE network=$1 FOR UPDATE"#)
+            .bind(&attempt.network).fetch_optional(&mut *tx).await?
+            .ok_or_else(|| DbError::RecoveryAttemptConflict("production relayer lease row is absent".into()))?;
+        let lease_token: Uuid = lease.try_get("lease_token")?;
+        let lease_expires_at: DateTime<Utc> = lease.try_get("lease_expires_at")?;
+        let lease_attested_at: DateTime<Utc> = lease.try_get("attested_at")?;
+        if lease_token != attempt.lease_token || lease_expires_at > lease_attested_at {
+            return Err(DbError::RecoveryAttemptConflict("lease token mismatch or lease is active".into()));
+        }
         let row = sqlx::query(r#"
             INSERT INTO recovery_attempts
               (recovery_identity,network,pending_nonce,contract_address,contract_code_hash,
                bounty_id,expected_status,expected_round,solver_address,verification_expires_at,
                active_bond,calldata,lease_source,lease_token,lease_expires_at,lease_attested_at,
                lease_recovered_at,status,signed_transaction_hash,signed_transaction)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),'reserved',$17,$18)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),'prepared',$17,$18)
             RETURNING *"#)
             .bind(&attempt.recovery_identity).bind(&attempt.network)
             .bind(i64_from_u64(attempt.pending_nonce)?).bind(normalize_key_address(&attempt.contract_address))
@@ -3280,10 +3303,16 @@ impl PostgresStore {
             .bind(attempt.expected_status).bind(i64_from_u64(attempt.expected_round)?)
             .bind(normalize_key_address(&attempt.solver_address)).bind(i64_from_u64(attempt.verification_expires_at)?)
             .bind(i64_from_u64(attempt.active_bond)?).bind(attempt.calldata.to_ascii_lowercase())
-            .bind(&attempt.lease_source).bind(attempt.lease_token).bind(attempt.lease_expires_at)
-            .bind(attempt.lease_attested_at).bind(attempt.signed_transaction_hash.to_ascii_lowercase())
+            .bind("x402_relayer_leases").bind(lease_token).bind(lease_expires_at)
+            .bind(lease_attested_at).bind(attempt.signed_transaction_hash.to_ascii_lowercase())
             .bind(attempt.signed_transaction.to_ascii_lowercase()).fetch_one(&mut *tx).await?;
         let result = recovery_attempt_from_row(row)?;
+        let cleared = sqlx::query(r#"DELETE FROM x402_relayer_leases
+            WHERE network=$1 AND lease_token=$2 AND lease_expires_at <= now()"#)
+            .bind(&attempt.network).bind(lease_token).execute(&mut *tx).await?;
+        if cleared.rows_affected() != 1 {
+            return Err(DbError::RecoveryAttemptConflict("expired lease changed before selective clear".into()));
+        }
         tx.commit().await?;
         Ok(result)
     }
@@ -3292,7 +3321,7 @@ impl PostgresStore {
     pub async fn mark_recovery_broadcast_started(&self, identity: &str, hash: &str) -> DbResult<Option<RecoveryAttempt>> {
         let row = sqlx::query(r#"UPDATE recovery_attempts SET status='broadcast',
             broadcast_started_at=now(),updated_at=now()
-            WHERE recovery_identity=$1 AND status='reserved' AND signed_transaction_hash=$2 RETURNING *"#)
+            WHERE recovery_identity=$1 AND status='prepared' AND signed_transaction_hash=$2 RETURNING *"#)
             .bind(identity).bind(hash.to_ascii_lowercase()).fetch_optional(&self.pool).await?;
         row.map(recovery_attempt_from_row).transpose()
     }
@@ -7446,9 +7475,10 @@ fn parse_x402_relay_status(value: String) -> DbResult<X402RelayStatus> {
 
 fn recovery_attempt_from_row(row: PgRow) -> DbResult<RecoveryAttempt> {
     let status = match row.try_get::<String, _>("status")?.as_str() {
-        "reserved" => RecoveryAttemptStatus::Reserved,
+        "prepared" => RecoveryAttemptStatus::Prepared,
         "broadcast" => RecoveryAttemptStatus::Broadcast,
         "confirmed" => RecoveryAttemptStatus::Confirmed,
+        "failed_terminal" => RecoveryAttemptStatus::FailedTerminal,
         other => return Err(DbError::InvalidEnum(other.into())),
     };
     Ok(RecoveryAttempt {
@@ -7479,8 +7509,7 @@ fn validate_recovery_replay(existing: &RecoveryAttempt, proposed: &NewRecoveryAt
         && existing.solver_address.eq_ignore_ascii_case(&proposed.solver_address)
         && existing.verification_expires_at == proposed.verification_expires_at
         && existing.active_bond == proposed.active_bond && existing.calldata.eq_ignore_ascii_case(&proposed.calldata)
-        && existing.lease_source == proposed.lease_source && existing.lease_token == proposed.lease_token
-        && existing.lease_expires_at == proposed.lease_expires_at
+        && existing.lease_token == proposed.lease_token
         && existing.signed_transaction_hash.eq_ignore_ascii_case(&proposed.signed_transaction_hash)
         && existing.signed_transaction.eq_ignore_ascii_case(&proposed.signed_transaction);
     if exact { Ok(()) } else { Err(DbError::RecoveryAttemptConflict(
@@ -8388,9 +8417,9 @@ mod tests {
             "signed_transaction_hash TEXT NOT NULL", "broadcast_started_at TIMESTAMPTZ"] {
             assert!(sql.contains(binding), "missing {binding}");
         }
-        assert!(sql.contains("status IN ('reserved', 'broadcast', 'confirmed')"));
-        assert!(sql.contains("status = 'reserved' AND broadcast_started_at IS NULL"));
-        assert!(sql.contains("status IN ('broadcast', 'confirmed') AND broadcast_started_at IS NOT NULL"));
+        assert!(sql.contains("status IN ('prepared', 'broadcast', 'confirmed', 'failed_terminal')"));
+        assert!(sql.contains("status = 'prepared' AND broadcast_started_at IS NULL"));
+        assert!(sql.contains("status IN ('broadcast', 'confirmed', 'failed_terminal') AND broadcast_started_at IS NOT NULL"));
         assert!(sql.contains("status <> 'confirmed' OR (receipt_status = 1"));
     }
 
@@ -8408,12 +8437,14 @@ mod tests {
             contract_code_hash: format!("0x{}", "22".repeat(32)), bounty_id: format!("0x{}", "33".repeat(32)),
             expected_status: 3, expected_round: 4, solver_address: "0x444444444444444444444444444444444444c49e".into(),
             verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: "0x12345678".into(),
-            lease_source: "production-relayer".into(), lease_token: Uuid::new_v4(),
-            lease_expires_at: now - chrono::Duration::minutes(2), lease_attested_at: now,
+            lease_token: Uuid::new_v4(),
             signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x010203".into(),
         };
+        sqlx::query("INSERT INTO x402_relayer_leases(network,lease_token,lease_expires_at,updated_at) VALUES('base-mainnet',$1,$2,now()) ON CONFLICT(network) DO UPDATE SET lease_token=$1,lease_expires_at=$2,updated_at=now()")
+            .bind(attempt.lease_token).bind(now - chrono::Duration::minutes(2))
+            .execute(&store.pool).await.unwrap();
         let reserved = store.reserve_recovery_attempt(&attempt).await.unwrap();
-        assert_eq!(reserved.status, RecoveryAttemptStatus::Reserved);
+        assert_eq!(reserved.status, RecoveryAttemptStatus::Prepared);
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
             .await.unwrap().is_some());
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
