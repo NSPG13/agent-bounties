@@ -2051,7 +2051,6 @@ impl PostgresStore {
                 AND block_time_verified = TRUE
                 AND occurred_at >= $5
                 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($7)
                 AND kind IN ('bounty_settled', 'submission_rejected')
               UNION ALL
               SELECT occurred_at, kind = 'bounty_settled' AS settled,
@@ -2070,7 +2069,6 @@ impl PostgresStore {
                 AND block_time_verified = TRUE
                 AND occurred_at >= $5
                 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($7)
                 AND kind IN ('bounty_settled', 'competition_submission_rejected')
             ), normalized AS (
               SELECT *, solver_amount + verifier_amount + bonus_amount AS total_amount
@@ -2115,7 +2113,6 @@ impl PostgresStore {
         .bind(previous_started_at)
         .bind(launch_at)
         .bind(first_month_ended_at)
-        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -2299,7 +2296,6 @@ impl PostgresStore {
               WHERE network = $1
                 AND block_time_verified = TRUE
                 AND occurred_at >= $2 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($6)
                 AND kind IN ('bounty_settled', 'submission_rejected')
               UNION ALL
               SELECT occurred_at, kind = 'bounty_settled' AS settled,
@@ -2315,7 +2311,6 @@ impl PostgresStore {
               WHERE network = $1
                 AND block_time_verified = TRUE
                 AND occurred_at >= $2 AND occurred_at < $3
-                AND NOT lower(contract_address) = ANY($6)
                 AND kind IN ('bounty_settled', 'competition_submission_rejected')
             ), days AS (
               SELECT generate_series(
@@ -2357,13 +2352,11 @@ impl PostgresStore {
               FROM autonomous_bounty_events
               WHERE network = $1
                 AND occurred_at >= $2
-                AND NOT lower(COALESCE(data->>'bounty_contract', contract_address)) = ANY($3)
               UNION ALL
               SELECT block_time_verified, occurred_at
               FROM open_competition_events
               WHERE network = $1
                 AND occurred_at >= $2
-                AND NOT lower(COALESCE(data->>'bounty_contract', contract_address)) = ANY($3)
             )
             SELECT
               COUNT(*) FILTER (WHERE block_time_verified = TRUE) AS verified_events,
@@ -2377,7 +2370,6 @@ impl PostgresStore {
         )
         .bind(network)
         .bind(launch_at)
-        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -8949,7 +8941,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
-    async fn platform_metrics_query_enforces_identity_payment_and_cohort_boundaries() {
+    async fn platform_metrics_query_separates_history_from_identity_and_cohort_boundaries() {
         async fn add_event(
             store: &PostgresStore,
             network: &str,
@@ -9521,11 +9513,13 @@ mod tests {
         assert_eq!(stats.identities.commenters, 1);
         assert_eq!(stats.identities.marketplace_wallets, 10);
         assert_eq!(stats.identities.opportunity_comment_authors, 1);
-        assert_eq!(stats.payouts.selected_total_base_units, "3725000");
-        assert_eq!(stats.payouts.selected_solver_base_units, "3000000");
-        assert_eq!(stats.payouts.selected_verifier_base_units, "600000");
+        // Recovery reservations protect future earning and verification work; they
+        // must not erase block-time-verified payouts from immutable history.
+        assert_eq!(stats.payouts.selected_total_base_units, "159725000");
+        assert_eq!(stats.payouts.selected_solver_base_units, "143000000");
+        assert_eq!(stats.payouts.selected_verifier_base_units, "16600000");
         assert_eq!(stats.payouts.selected_bonus_base_units, "125000");
-        assert_eq!(stats.payouts.selected_settled_rounds, 2);
+        assert_eq!(stats.payouts.selected_settled_rounds, 4);
         assert_eq!(stats.claim_cohort.settled, 1);
         assert_eq!(stats.claim_cohort.mature, 3);
         assert_eq!(stats.claim_cohort.immature, 1);
@@ -9536,7 +9530,7 @@ mod tests {
                 .iter()
                 .map(|day| day.payout_base_units.parse::<u128>().unwrap())
                 .sum::<u128>(),
-            3_725_000
+            159_725_000
         );
 
         sqlx::query("DELETE FROM open_competition_events WHERE network = $1")

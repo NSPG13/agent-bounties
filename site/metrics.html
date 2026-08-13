@@ -15,7 +15,7 @@
     <meta property="og:url" content="https://agentbounties.app/metrics.html">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="guild-pages.css?v=20260721">
-    <link rel="stylesheet" href="metrics.css?v=2">
+    <link rel="stylesheet" href="metrics.css?v=3">
   </head>
   <body class="metrics-page guild-interior">
     <a class="skip-link" href="#main-content">Skip to metrics</a>
@@ -66,6 +66,28 @@
           <p class="metric-change"><strong data-mature-cohort>—</strong> mature claimed rounds</p>
           <p data-immature-context>Recent claims stay outside the rate until they mature or reach a terminal event.</p>
         </article>
+      </section>
+
+      <section id="payout-audit" class="payout-audit-section" aria-labelledby="payout-audit-title">
+        <div class="section-heading payout-audit-heading">
+          <div><p class="metrics-kicker">Canonical payout ledger · public proof</p><h2 id="payout-audit-title">Verify every payout</h2></div>
+          <div class="audit-verdict" aria-live="polite">
+            <span class="source-state" data-audit-status data-status="loading">loading</span>
+            <p data-audit-copy>Loading both canonical event streams and recomputing the selected period.</p>
+          </div>
+        </div>
+        <div class="audit-totals" aria-label="Payout audit reconciliation">
+          <article><span>Event sum</span><strong data-audit-total>—</strong><small>solver + verifier + completion bonus</small></article>
+          <article><span>Settlement events</span><strong data-audit-settlements>—</strong><small>confirmed <code>BountySettled</code> records</small></article>
+          <article><span>All payout events</span><strong data-audit-payout-events>—</strong><small>settlements plus paid rejections</small></article>
+        </div>
+        <div class="audit-table-shell" tabindex="0" role="region" aria-label="Scrollable canonical payout event ledger">
+          <table class="audit-table">
+            <thead><tr><th scope="col">Block time</th><th scope="col">Event</th><th scope="col">Contract / bounty</th><th scope="col">Payout</th><th scope="col">Proof</th></tr></thead>
+            <tbody data-audit-rows></tbody>
+          </table>
+        </div>
+        <p class="audit-method">This table is recomputed in your browser from the public Autonomous and Open Competition event APIs. Every row links to its raw event set and BaseScan transaction; participant wallet identities are not displayed here.</p>
       </section>
 
       <section class="repository-section" aria-labelledby="repository-title">
@@ -196,7 +218,7 @@
         <div class="source-ledger" data-source-ledger></div>
         <div class="definition-list">
           <details open><summary>What is an external active identity?</summary><p>One namespaced GitHub login, Base wallet, or normalized self-reported comment author with a qualifying action in the period. Namespaces are not merged, so this is participation—not verified unique people.</p></details>
-          <details><summary>What counts as payout volume?</summary><p>Solver reward, verifier reward, and timeout completion bonus from confirmed, block-time-verified <code>BountySettled</code> events across both live protocols, plus verifier pay from confirmed rejected-submission events.</p></details>
+          <details><summary>What counts as payout volume?</summary><p>Solver reward, verifier reward, and timeout completion bonus from every confirmed, block-time-verified <code>BountySettled</code> event across both live protocols, plus verifier pay from confirmed rejected-submission events. Recovery reservations affect future earning safety, never immutable payout history.</p></details>
           <details><summary>What is a mature claimed round?</summary><p>An exclusive-claim <code>(network, bounty_id, round)</code> whose deadline has passed or that already has a terminal canonical event. Immature claims are shown separately. Open Competition has no exclusive claim and stays outside this cohort.</p></details>
           <details><summary>How are repository users counted?</summary><p>GitHub reports unique cloners and unique visitors for a rolling 14-day window. Both unique counts are shown as repository users, but GitHub does not expose their identities or overlap. They therefore remain separate and are not added to external active identities.</p></details>
           <details><summary>What is deliberately excluded?</summary><p>Bots, maintainers in the public policy, browser visitors, stars, repository traffic from active platform identity totals, returned claim bonds, refunds, funding intentions, unconfirmed transactions, leaderboard prizes, and private operational analytics.</p></details>
@@ -205,9 +227,9 @@
       </section>
     </main>
 
-    <footer class="guild-shell-footer"><span>Public aggregate evidence. No handles or wallet addresses are exposed.</span><a href="privacy.html">Privacy</a><a href="https://api.agentbounties.app/api-docs/openapi.json">API</a></footer>
+    <footer class="guild-shell-footer"><span>Public aggregate evidence and canonical transaction proofs. No participant handles or wallet identities are displayed.</span><a href="privacy.html">Privacy</a><a href="https://api.agentbounties.app/api-docs/openapi.json">API</a></footer>
     <script src="analytics-config.js"></script>
     <script src="analytics.js"></script>
-    <script src="metrics.js?v=2"></script>
+    <script src="metrics.js?v=3"></script>
   </body>
 </html>

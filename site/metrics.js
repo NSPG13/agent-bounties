@@ -8,12 +8,16 @@
   "use strict";
 
   const PLATFORM_URL = "https://api.agentbounties.app/v1/metrics/platform";
+  const AUTONOMOUS_EVENTS_URL = "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet";
+  const COMPETITION_EVENTS_URL = "https://api.agentbounties.app/v1/base/open-competition-v1/events?network=base-mainnet";
+  const BASESCAN_TX_URL = "https://basescan.org/tx/";
   const GITHUB_URL = "generated/github-participation.json";
   const ACQUISITION_URL = "https://api.agentbounties.app/v1/analytics/site";
   const PLATFORM_DELAY_MS = 5 * 60 * 1000;
   const GITHUB_DELAY_MS = 2 * 60 * 60 * 1000;
   const ACQUISITION_DELAY_MS = 15 * 60 * 1000;
   const PERIOD_HOURS = Object.freeze({ "7d": 168, "28d": 672, "90d": 2160 });
+  const USDC_SCALE = 1_000_000;
 
   function finiteNumber(value, fallback = 0) {
     const number = Number(value);
@@ -34,6 +38,91 @@
       minimumFractionDigits: 0,
       maximumFractionDigits,
     }).format(amount)} USDC`;
+  }
+
+  function nonNegativeBaseUnits(value) {
+    const amount = Number(value ?? 0);
+    return Number.isSafeInteger(amount) && amount > 0 ? amount : 0;
+  }
+
+  function canonicalPayoutRows(autonomousResponse, competitionResponse, window) {
+    const startedAt = Date.parse(window?.started_at || "");
+    const endedAt = Date.parse(window?.ended_at || "");
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return [];
+    const sources = [
+      {
+        protocol: "Exclusive claim",
+        protocolKey: "autonomous-v1",
+        events: Array.isArray(autonomousResponse) ? autonomousResponse : [],
+        eventUrl: AUTONOMOUS_EVENTS_URL,
+        rejectedKind: "submission_rejected",
+        rejectedAmount: "verifier_reward",
+      },
+      {
+        protocol: "Open competition",
+        protocolKey: "open-competition-v1",
+        events: Array.isArray(competitionResponse?.events) ? competitionResponse.events : [],
+        eventUrl: COMPETITION_EVENTS_URL,
+        rejectedKind: "competition_submission_rejected",
+        rejectedAmount: "bond_paid_to_verifier",
+      },
+    ];
+    const rows = [];
+    sources.forEach((source) => {
+      source.events.forEach((event) => {
+        const occurredAt = Date.parse(event?.occurred_at || "");
+        const settled = event?.kind === "bounty_settled";
+        const rejected = event?.kind === source.rejectedKind;
+        if ((!settled && !rejected) || !Number.isFinite(occurredAt)
+          || occurredAt < startedAt || occurredAt >= endedAt) return;
+        const solver = settled ? nonNegativeBaseUnits(event.data?.solver_reward) : 0;
+        const verifier = settled
+          ? nonNegativeBaseUnits(event.data?.verifier_reward)
+          : nonNegativeBaseUnits(event.data?.[source.rejectedAmount]);
+        const bonus = settled ? nonNegativeBaseUnits(event.data?.timeout_bond_bonus) : 0;
+        rows.push({
+          protocol: source.protocol,
+          protocol_key: source.protocolKey,
+          kind: event.kind,
+          event_label: settled ? "Settlement" : "Rejected submission payout",
+          contract_address: String(event.contract_address || ""),
+          bounty_id: String(event.bounty_id || ""),
+          round: event.data?.round ?? event.data?.submission_sequence ?? null,
+          tx_hash: String(event.tx_hash || ""),
+          block_number: finiteNumber(event.block_number),
+          log_index: finiteNumber(event.log_index),
+          occurred_at: String(event.occurred_at || ""),
+          solver_base_units: solver,
+          verifier_base_units: verifier,
+          bonus_base_units: bonus,
+          total_base_units: solver + verifier + bonus,
+          api_url: `${source.eventUrl}&bounty_id=${encodeURIComponent(String(event.bounty_id || ""))}`,
+          explorer_url: `${BASESCAN_TX_URL}${encodeURIComponent(String(event.tx_hash || ""))}#eventlog`,
+        });
+      });
+    });
+    return rows.sort((left, right) => (
+      right.block_number - left.block_number || right.log_index - left.log_index
+    ));
+  }
+
+  function payoutAuditSummary(rows) {
+    return (Array.isArray(rows) ? rows : []).reduce((summary, row) => {
+      summary.payout_events += 1;
+      summary.settlement_events += row.kind === "bounty_settled" ? 1 : 0;
+      summary.solver_base_units += nonNegativeBaseUnits(row.solver_base_units);
+      summary.verifier_base_units += nonNegativeBaseUnits(row.verifier_base_units);
+      summary.bonus_base_units += nonNegativeBaseUnits(row.bonus_base_units);
+      summary.total_base_units += nonNegativeBaseUnits(row.total_base_units);
+      return summary;
+    }, {
+      payout_events: 0,
+      settlement_events: 0,
+      solver_base_units: 0,
+      verifier_base_units: 0,
+      bonus_base_units: 0,
+      total_base_units: 0,
+    });
   }
 
   function weeklyGrowth(current, previous) {
@@ -212,6 +301,8 @@
     const state = {
       period: "lifetime",
       platform: null,
+      autonomousEvents: null,
+      competitionEvents: null,
       github: null,
       acquisition: null,
       errors: {},
@@ -231,6 +322,115 @@
 
     function amount(response) {
       return formatUsdc(response?.usdc);
+    }
+
+    function shortHash(value) {
+      const text = String(value || "");
+      return text.length > 18 ? `${text.slice(0, 10)}…${text.slice(-6)}` : text || "—";
+    }
+
+    function payoutAuditSnapshot(platform) {
+      if (!platform || !state.autonomousEvents || !state.competitionEvents) {
+        return { status: "unavailable", rows: [], summary: payoutAuditSummary([]), generated_at: null };
+      }
+      const rows = canonicalPayoutRows(
+        state.autonomousEvents,
+        state.competitionEvents,
+        platform.window,
+      );
+      const summary = payoutAuditSummary(rows);
+      const expectedTotal = Number(platform.marketplace_payout_volume?.selected?.usdc_base_units);
+      const expectedSettlements = Number(platform.marketplace_payout_volume?.selected_settled_rounds);
+      const reconciled = Number.isSafeInteger(expectedTotal)
+        && Number.isSafeInteger(expectedSettlements)
+        && summary.total_base_units === expectedTotal
+        && summary.settlement_events === expectedSettlements;
+      return {
+        status: reconciled ? "ready" : "partial",
+        rows,
+        summary,
+        generated_at: rows[0]?.occurred_at || platform.generated_at,
+      };
+    }
+
+    function renderPayoutAudit(audit) {
+      const status = one("[data-audit-status]");
+      if (status) {
+        status.dataset.status = audit.status;
+        status.textContent = audit.status === "ready"
+          ? "reconciled"
+          : audit.status === "partial" ? "mismatch" : "unavailable";
+      }
+      setText("[data-audit-total]", audit.status === "unavailable"
+        ? "—"
+        : formatUsdc(audit.summary.total_base_units / USDC_SCALE));
+      setText("[data-audit-settlements]", audit.status === "unavailable"
+        ? "—"
+        : formatInteger(audit.summary.settlement_events));
+      setText("[data-audit-payout-events]", audit.status === "unavailable"
+        ? "—"
+        : formatInteger(audit.summary.payout_events));
+      setText("[data-audit-copy]", audit.status === "ready"
+        ? "The independent event sum exactly matches the headline payout and settlement count for this period."
+        : audit.status === "partial"
+          ? "The public event sum does not match the aggregate yet. Treat the headline as partial while indexing catches up."
+          : "The raw canonical event streams are unavailable. No unverifiable replacement is shown.");
+
+      const body = one("[data-audit-rows]");
+      if (!body) return;
+      body.replaceChildren();
+      audit.rows.forEach((row) => {
+        const tr = doc.createElement("tr");
+        const when = doc.createElement("td");
+        const time = doc.createElement("time");
+        time.dateTime = row.occurred_at;
+        time.textContent = new Date(row.occurred_at).toLocaleString(undefined, {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "UTC",
+          timeZoneName: "short",
+        });
+        when.appendChild(time);
+
+        const event = doc.createElement("td");
+        const eventName = doc.createElement("strong");
+        eventName.textContent = row.event_label;
+        const protocol = doc.createElement("span");
+        protocol.textContent = `${row.protocol}${row.round == null ? "" : ` · round ${row.round}`}`;
+        event.append(eventName, protocol);
+
+        const contract = doc.createElement("td");
+        const contractCode = doc.createElement("code");
+        contractCode.textContent = shortHash(row.contract_address);
+        contractCode.title = row.contract_address;
+        const bountyCode = doc.createElement("span");
+        bountyCode.textContent = `Bounty ${shortHash(row.bounty_id)}`;
+        bountyCode.title = row.bounty_id;
+        contract.append(contractCode, bountyCode);
+
+        const payout = doc.createElement("td");
+        payout.textContent = formatUsdc(row.total_base_units / USDC_SCALE);
+
+        const proof = doc.createElement("td");
+        const explorer = doc.createElement("a");
+        explorer.href = row.explorer_url;
+        explorer.target = "_blank";
+        explorer.rel = "noopener noreferrer";
+        explorer.textContent = "BaseScan";
+        explorer.title = `Open transaction ${row.tx_hash} on BaseScan`;
+        const raw = doc.createElement("a");
+        raw.href = row.api_url;
+        raw.target = "_blank";
+        raw.rel = "noopener noreferrer";
+        raw.textContent = "Raw events";
+        raw.title = `Open canonical event records for ${row.bounty_id}`;
+        proof.append(explorer, raw);
+        tr.append(when, event, contract, payout, proof);
+        body.appendChild(tr);
+      });
     }
 
     function renderChart(selector, points, valueKey, kind) {
@@ -270,12 +470,13 @@
       });
     }
 
-    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus) {
+    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit) {
       const target = one("[data-source-ledger]");
       if (!target) return;
       target.replaceChildren();
       const sources = [
         ["Marketplace events", merged.platform_status, state.platform?.generated_at, "Confirmed canonical Base events with verified block time."],
+        ["Payout proof ledger", audit.status, audit.generated_at, "Every qualifying payout event is summed in the browser and linked to its raw record and Base transaction."],
         ["GitHub participation", merged.github_status, state.github?.generated_at, "Hourly aggregate of external issues, pull requests, comments, and reviews."],
         ["Repository acquisition", repositoryStatus, state.github?.repository_acquisition?.generated_at, "GitHub clone and page-view aggregates for its rolling 14-day traffic window."],
         ["Browser acquisition", acquisitionStatus, state.acquisition?.generated_at, "First-party browser/device IDs; never counted as users or identities."],
@@ -319,7 +520,9 @@
         now,
         GITHUB_DELAY_MS,
       );
-      const overallStatus = dashboardStatus(merged.status, repositoryStatus);
+      const audit = payoutAuditSnapshot(platform);
+      const coreStatus = dashboardStatus(merged.status, repositoryStatus);
+      const overallStatus = dashboardStatus(coreStatus, audit.status);
       const status = one("[data-overall-status]");
       if (status) {
         status.dataset.status = overallStatus;
@@ -349,6 +552,7 @@
       setText("[data-solver-pay]", payout ? amount(payout.selected_solver_pay) : "—");
       setText("[data-verifier-pay]", payout ? amount(payout.selected_verifier_pay) : "—");
       setText("[data-completion-bonus]", payout ? amount(payout.selected_completion_bonus) : "—");
+      renderPayoutAudit(audit);
 
       const inventoryReady = inventory?.status === "ready";
       setText("[data-inventory-ready]", inventoryReady ? formatInteger(inventory.ready_to_earn_opportunities) : "—");
@@ -397,24 +601,45 @@
         ? `${formatInteger(state.acquisition.overview?.sessions)} browser sessions in the matching lookback. Device/browser IDs are not people.`
         : "Acquisition source unavailable. Browser IDs are never estimated or counted as active identities.");
       setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "0 USDC");
-      renderSourceLedger(merged, acquisitionStatus, repositoryStatus);
+      renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit);
 
       const notices = [];
       if (merged.status === "partial") notices.push("Identity totals are partial because a required participation source is unavailable or incomplete.");
       if (merged.status === "delayed") notices.push("One or more required sources are delayed; values remain visible with their source timestamps.");
       if (merged.status === "unavailable") notices.push("Marketplace metrics are temporarily unavailable; no missing value has been replaced with zero.");
       if (["partial", "unavailable"].includes(repositoryStatus)) notices.push("Repository acquisition is unavailable or incomplete; historical snapshots remain labeled and are not substituted as live data.");
+      if (audit.status === "partial") notices.push("The payout proof ledger does not yet reconcile to the aggregate; payout values are marked partial.");
+      if (audit.status === "unavailable") notices.push("The public payout proof streams are unavailable, so payout auditability is temporarily partial.");
       if (overallStatus === "ready") notices.push(`Live aggregate for ${state.period === "lifetime" ? "lifetime since launch" : state.period}. Roles are not additive.`);
       setText("[data-dashboard-notice]", notices.join(" "));
     }
 
     async function refreshPlatform() {
-      try {
-        state.platform = await requestJson(`${PLATFORM_URL}?period=${encodeURIComponent(state.period)}`);
+      const [platformResult, autonomousResult, competitionResult] = await Promise.allSettled([
+        requestJson(`${PLATFORM_URL}?period=${encodeURIComponent(state.period)}`),
+        requestJson(AUTONOMOUS_EVENTS_URL),
+        requestJson(COMPETITION_EVENTS_URL),
+      ]);
+      if (platformResult.status === "fulfilled") {
+        state.platform = platformResult.value;
         delete state.errors.platform;
-      } catch (error) {
-        state.errors.platform = error;
+      } else {
+        state.errors.platform = platformResult.reason;
         state.platform = null;
+      }
+      if (autonomousResult.status === "fulfilled") {
+        state.autonomousEvents = autonomousResult.value;
+        delete state.errors.autonomousEvents;
+      } else {
+        state.autonomousEvents = null;
+        state.errors.autonomousEvents = autonomousResult.reason;
+      }
+      if (competitionResult.status === "fulfilled") {
+        state.competitionEvents = competitionResult.value;
+        delete state.errors.competitionEvents;
+      } else {
+        state.competitionEvents = null;
+        state.errors.competitionEvents = competitionResult.reason;
       }
       render();
     }
@@ -477,11 +702,13 @@
 
   return {
     acquisitionWindowHours,
+    canonicalPayoutRows,
     chartSvg,
     combinedStatus,
     dashboardStatus,
     mergeDaily,
     mergeMetrics,
+    payoutAuditSummary,
     sourceStatus,
     start,
     ratioMultiple,
