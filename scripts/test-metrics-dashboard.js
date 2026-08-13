@@ -150,6 +150,51 @@ test("repository traffic has an independent honest status and comparable baselin
   assert.equal(metrics.ratioMultiple(9654, 0), null);
 });
 
+test("interface usage aggregates fixed API CLI and MCP rows without claiming users", () => {
+  const summary = metrics.interfaceUsageSummary({
+    interfaces: [
+      { interface: "mcp", protocol_era: "legacy", request_count: 20, successful_request_count: 19, first_observed_at: "2026-08-13T17:00:00Z", last_observed_at: "2026-08-13T17:12:00Z" },
+      { interface: "cli", protocol_era: "not_applicable", request_count: 7, successful_request_count: 7, first_observed_at: "2026-08-13T17:02:00Z", last_observed_at: "2026-08-13T17:13:00Z" },
+      { interface: "mcp", protocol_era: "http_adapter", request_count: 5, successful_request_count: 5, first_observed_at: "2026-08-13T17:03:00Z", last_observed_at: "2026-08-13T17:14:00Z" },
+      { interface: "mcp", protocol_era: "modern", request_count: 5, successful_request_count: 5, first_observed_at: "2026-08-13T17:04:00Z", last_observed_at: "2026-08-13T17:15:00Z" },
+      { interface: "api", protocol_era: "not_applicable", request_count: 3, successful_request_count: 3, first_observed_at: "2026-08-13T17:05:00Z", last_observed_at: "2026-08-13T17:16:00Z" },
+    ],
+  });
+
+  assert.equal(summary.status, "ready");
+  assert.equal(summary.rows.length, 5);
+  assert.equal(summary.request_count, 40);
+  assert.equal(summary.successful_request_count, 39);
+  assert.equal(summary.success_rate, 39 / 40);
+  assert.equal(summary.mcp_request_count, 30);
+  assert.equal(summary.mcp_share, 0.75);
+  assert.equal(summary.rows.find((row) => row.key === "mcp:legacy").success_rate, 19 / 20);
+  assert.equal(summary.first_observed_at, "2026-08-13T17:00:00.000Z");
+  assert.equal(summary.last_observed_at, "2026-08-13T17:16:00.000Z");
+});
+
+test("interface usage handles empty coverage duplicate buckets and malformed success counts", () => {
+  assert.equal(metrics.interfaceUsageSummary(null).status, "unavailable");
+
+  const empty = metrics.interfaceUsageSummary({ interfaces: [] });
+  assert.equal(empty.status, "ready");
+  assert.equal(empty.request_count, 0);
+  assert.equal(empty.mcp_share, null);
+  assert.equal(empty.rows.every((row) => row.request_count === 0), true);
+
+  const combined = metrics.interfaceUsageSummary({
+    interfaces: [
+      { interface: "api", protocol_era: "not_applicable", request_count: 2, successful_request_count: 9 },
+      { interface: "api", protocol_era: "not_applicable", request_count: 3, successful_request_count: -1 },
+      { interface: "unknown", protocol_era: "future", request_count: 100, successful_request_count: 100 },
+    ],
+  });
+  assert.equal(combined.request_count, 5);
+  assert.equal(combined.successful_request_count, 2);
+  assert.equal(combined.rows.find((row) => row.key === "api:not_applicable").request_count, 5);
+  assert.equal(combined.rows.find((row) => row.key === "api:not_applicable").successful_request_count, 2);
+});
+
 test("canonical payout audit reconciles exact public event arithmetic", () => {
   const autonomous = [
     {
