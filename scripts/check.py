@@ -233,6 +233,7 @@ def main() -> int:
         "-v",
     )
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
+    py("-m", "unittest", "scripts.test_expire_772_round4")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):
         py(f"scripts/test_{name}.py", "-v")
     py("scripts/self_heal.py", "bench", "--policy", "ops/self-healing-policy.json", "--fixtures", "ops/fixtures/recovery-cases.json", "--output", "target/tmp/recovery-bench.json")

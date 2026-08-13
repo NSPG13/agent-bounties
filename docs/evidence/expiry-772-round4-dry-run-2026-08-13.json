@@ -1,0 +1,35 @@
+{
+  "execution": {
+    "action": "expire_submission",
+    "endpoint": "https://api.agentbounties.app/v1/base/autonomous-bounties/timeout-relay",
+    "performed": false
+  },
+  "intent": {
+    "data": "0xf9251ec7",
+    "function": "expireSubmission()",
+    "to": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+    "value_wei": 0
+  },
+  "network": "base-mainnet",
+  "schema": "agent-bounties/expiry-772-round4-dry-run-v1",
+  "simulation": {
+    "gas_cap": 250000,
+    "gas_estimate": 91787,
+    "return_data": "0x",
+    "success": true
+  },
+  "tuple": {
+    "active_claim_bond": 10000,
+    "block_hash": "0xc277717c66025b5c66827de318cc3b68361b4ff234fac6ad15d054299e819b93",
+    "block_number": 49913267,
+    "block_timestamp": 1786615881,
+    "bounty_id": "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb",
+    "chain_id": 8453,
+    "codehash": "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1",
+    "round": 4,
+    "solver": "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a",
+    "solver_usdc_balance": 3081134,
+    "status": 3,
+    "verification_expires_at": 1786586903
+  }
+}
