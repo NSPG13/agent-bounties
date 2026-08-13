@@ -289,8 +289,18 @@ class RenderDeployRecoveryTests(unittest.TestCase):
 
     def test_exclusion_canaries_cover_every_interface_and_both_mcp_eras(self) -> None:
         responses = [
-            {"schema_version": "agent-bounties/discovery-v2"},
-            {"schema_version": "agent-bounties/discovery-v2"},
+            {
+                "schema": (
+                    "https://agentbounties.org/schemas/"
+                    "discovery-manifest.v2.json"
+                )
+            },
+            {
+                "schema": (
+                    "https://agentbounties.org/schemas/"
+                    "discovery-manifest.v2.json"
+                )
+            },
             {
                 "result": {
                     "protocolVersion": recovery.LEGACY_MCP_PROTOCOL_VERSION

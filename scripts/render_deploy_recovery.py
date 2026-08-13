@@ -1850,7 +1850,9 @@ def validate_analytics_exclusion_canaries(
             token=token,
             interface=interface,
         )
-        if not isinstance(payload.get("schema_version"), str):
+        if payload.get("schema") != (
+            "https://agentbounties.org/schemas/discovery-manifest.v2.json"
+        ):
             raise RecoveryError(
                 f"{interface} analytics exclusion canary returned invalid discovery"
             )
