@@ -21824,7 +21824,7 @@ fix-ci-failure
         let calldata = "0xf9251ec7";
         let base = DurableRecoveryRequest {
             recovery_identity: RECOVERY_772_IDENTITY.into(), pending_nonce: 41,
-            contract_address: RECOVERY_772_CONTRACT.into(), contract_code_hash: code_hash.clone(),
+            contract_address: RECOVERY_772_CONTRACT.into(), contract_code_hash: code_hash.to_string(),
             bounty_id: RECOVERY_772_BOUNTY.into(), status: 3, round: 4, solver_address: solver.into(),
             verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: calldata.into(),
             lease_token: Uuid::new_v4(),
@@ -21848,7 +21848,7 @@ fix-ci-failure
     fn recovery_live_preflight_and_poststate_reject_every_drift() {
         let hash=RECOVERY_772_CODE_HASH.to_string();
         let solver=RECOVERY_772_SOLVER;
-        let base=chain_base::RecoveryChainPreflight{block_number:1,block_hash:format!("0x{}","aa".repeat(32)),code_hash:hash.into(),latest_nonce:41,
+        let base=chain_base::RecoveryChainPreflight{block_number:1,block_hash:format!("0x{}","aa".repeat(32)),code_hash:hash.clone(),latest_nonce:41,
             pending_nonce:41,status:3,round:4,solver:solver.into(),verification_expires_at:1_786_586_903,
             active_bond:10_000};
         assert!(valid_live_recovery_preflight(&base,&hash,solver));
