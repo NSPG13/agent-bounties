@@ -1,12 +1,14 @@
 {
-    "bounties": [
-        {
-            "number": 999,
-            "title": "[META] Zero-margin test bounty",
-            "reward": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "canonical_updated_at": "2026-08-10T20:00:00Z",
-            "claimable": true
-        }
-    ]
+  "synthetic": true,
+  "bounties": [
+    {
+      "number": 1005,
+      "title": "[SYNTHETIC] Zero-margin bounty (reward equals bond)",
+      "reward": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    }
+  ]
 }
