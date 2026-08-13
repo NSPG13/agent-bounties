@@ -25,11 +25,14 @@ FULL_TOOLS = {
     "prepare_bounty_action",
     "get_bounty_action_status",
     "compile_objective_with_cloud_agent",
+    "list_autonomous_bounties",
     "list_bounty_comments",
     "add_bounty_comment",
     "create_share_bundle",
 }
 FEED_WIDGET_URI = "ui://agent-bounties/live-feed-v4.html"
+MODERN_PROTOCOL_VERSION = "2026-07-28"
+LEGACY_PROTOCOL_VERSION = "2025-06-18"
 
 
 def require(condition: bool, message: str) -> None:
@@ -43,7 +46,33 @@ def available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def request(endpoint: str, request_id: int, method: str, params: dict) -> dict:
+def request(
+    endpoint: str,
+    request_id: int,
+    method: str,
+    params: dict,
+    modern: bool = False,
+) -> dict:
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    if modern:
+        params = dict(params)
+        params["_meta"] = {
+            "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "agent-bounties-release-harness",
+                "version": "1",
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+        headers["MCP-Protocol-Version"] = MODERN_PROTOCOL_VERSION
+        headers["Mcp-Method"] = method
+        if method == "resources/read":
+            headers["Mcp-Name"] = params["uri"]
+        elif method in ("tools/call", "prompts/get"):
+            headers["Mcp-Name"] = params["name"]
     payload = {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -53,7 +82,7 @@ def request(endpoint: str, request_id: int, method: str, params: dict) -> dict:
     http_request = urllib.request.Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(http_request, timeout=5) as response:
@@ -108,10 +137,10 @@ def main() -> int:
 
     request_id = 0
 
-    def rpc(method: str, params: dict | None = None) -> dict:
+    def rpc(method: str, params: dict | None = None, modern: bool = True) -> dict:
         nonlocal request_id
         request_id += 1
-        return request(endpoint, request_id, method, params or {})
+        return request(endpoint, request_id, method, params or {}, modern=modern)
 
     try:
         last_error: Exception | None = None
@@ -122,17 +151,7 @@ def main() -> int:
                     f"server exited {process.returncode}: {stdout}\n{stderr}"
                 )
             try:
-                initialized = rpc(
-                    "initialize",
-                    {
-                        "protocolVersion": "2025-06-18",
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": "agent-bounties-release-harness",
-                            "version": "1",
-                        },
-                    },
-                )
+                discovered = rpc("server/discover")
                 break
             except (OSError, urllib.error.URLError) as error:
                 last_error = error
@@ -141,16 +160,42 @@ def main() -> int:
             raise AssertionError(f"server did not become ready: {last_error}")
 
         require(
-            initialized["serverInfo"]["name"] == "agent-bounties",
-            "production server name drifted",
+            discovered["supportedVersions"] == [MODERN_PROTOCOL_VERSION],
+            "modern MCP version discovery drifted",
         )
         require(
-            initialized["serverInfo"]["title"] == "Agent Bounties",
-            "production server title drifted",
+            discovered["resultType"] == "complete"
+            and discovered["cacheScope"] == "public"
+            and discovered["ttlMs"] > 0,
+            "modern discovery lost typed cache metadata",
         )
+        server_info = discovered["_meta"]["io.modelcontextprotocol/serverInfo"]
+        require(server_info["name"] == "agent-bounties", "server name drifted")
+        require(server_info["title"] == "Agent Bounties", "server title drifted")
         require(
-            "Public review mode" not in initialized["instructions"],
+            "Public review mode" not in discovered["instructions"],
             "retired public-review profile is still reachable",
+        )
+
+        initialized = rpc(
+            "initialize",
+            {
+                "protocolVersion": LEGACY_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "agent-bounties-release-harness",
+                    "version": "1",
+                },
+            },
+            modern=False,
+        )
+        require(
+            initialized["protocolVersion"] == LEGACY_PROTOCOL_VERSION,
+            "legacy MCP compatibility drifted",
+        )
+        require(
+            "resultType" not in initialized,
+            "legacy response shape unexpectedly became modern",
         )
 
         tools = rpc("tools/list")["tools"]
@@ -158,6 +203,11 @@ def main() -> int:
         require(
             len(tools) == len(FULL_TOOLS) and tool_names == FULL_TOOLS,
             f"runtime tool set drifted: {sorted(tool_names)}",
+        )
+        legacy_tools = rpc("tools/list", modern=False)["tools"]
+        require(
+            {tool["name"] for tool in legacy_tools} == FULL_TOOLS,
+            "legacy tool catalog drifted",
         )
         moonpay_descriptor = next(
             tool for tool in tools if tool["name"] == "prepare_moonpay_onramp"
@@ -286,6 +336,8 @@ def main() -> int:
 
     print(
         "chatgpt_runtime_check=ok "
+        f"mcp_modern={MODERN_PROTOCOL_VERSION} "
+        f"mcp_legacy={LEGACY_PROTOCOL_VERSION} "
         f"tools={len(FULL_TOOLS)} "
         "profile=full_hosted_execution "
         "chatgpt_image_handoff=file_param "

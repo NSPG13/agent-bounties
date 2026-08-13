@@ -11,6 +11,7 @@ ai_handoff = (site_dir / "ai-bounty-handoff.js").read_text(encoding="utf-8")
 composer = (site_dir / "bounty-composer-v2.js").read_text(encoding="utf-8")
 entry_js = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
 guild_home_js = (site_dir / "guild-home.js").read_text(encoding="utf-8")
+home_js = (site_dir / "home.js").read_text(encoding="utf-8")
 agent_html = (site_dir / "agent" / "index.html").read_text(encoding="utf-8")
 agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
 discovery = json.loads(
@@ -78,6 +79,14 @@ for marker in (
 
 for marker in ('event.key !== "Enter"', "search.requestSubmit()"):
     require("homepage Enter handler", guild_home_js, marker)
+
+for marker in (
+    "/v1/metrics/platform?period=lifetime",
+    "metrics?.marketplace_payout_volume?.lifetime?.usdc",
+    "metrics?.marketplace_payout_volume?.lifetime_settled_rounds",
+    'proof.href = "metrics.html#payout-audit"',
+):
+    require("homepage canonical payout metrics", home_js, marker)
 
 for marker in (
     "window.AgentBountyEntry.consume(params)",

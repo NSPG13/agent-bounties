@@ -14,6 +14,7 @@
     providers: [],
     legalAction: null,
     legalScope: null,
+    walletConnection: null,
   };
 
   const announcedProviders = [];
@@ -72,6 +73,43 @@
     if (provider.isCoinbaseWallet) return "Coinbase Wallet";
     if (provider.isBraveWallet) return "Brave Wallet";
     return "Browser wallet";
+  }
+
+  function selectedProviderName(provider = state.provider) {
+    const selected = state.providers.find((item) => item.provider === provider);
+    return providerName(provider || {}, selected ? selected.info : {});
+  }
+
+  function walletErrorCode(error) {
+    const values = [
+      error && error.code,
+      error && error.data && error.data.code,
+      error && error.data && error.data.originalError && error.data.originalError.code,
+    ];
+    for (const value of values) {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed)) return parsed;
+    }
+    return null;
+  }
+
+  function walletConnectionErrorMessage(error, action = "connect") {
+    const name = selectedProviderName();
+    const message = error && error.message ? error.message : String(error || "");
+    const code = walletErrorCode(error);
+    if (code === 4001 || /user (rejected|denied)|request rejected|cancelled/i.test(message)) {
+      return `${name} connection was cancelled. No wallet action was taken.`;
+    }
+    if (code === -32002 || /already processing|already pending|request.*pending/i.test(message)) {
+      return `${name} already has a request open. Approve or reject it from the wallet icon, then try again.`;
+    }
+    if (code === -32603 || /internal error/i.test(message)) {
+      const task = action === "switch"
+        ? "switch to Base"
+        : "complete the connection";
+      return `${name} could not ${task}. Open it, finish setup or unlock it, close any pending request, then try again.`;
+    }
+    return message || `${name} could not ${action === "switch" ? "switch to Base" : "connect"}. Try again from the wallet icon.`;
   }
 
   function rememberProvider(event) {
@@ -627,11 +665,23 @@
     return JSON.stringify(canonicalJsonValue(value));
   }
 
-  async function connectWallet(context = document) {
+  async function connectWalletOnce(context) {
     await discoverProviders();
     selectProvider(context);
     const protocol = await loadProtocol();
-    const accounts = await walletRequest("eth_requestAccounts");
+    let accounts = [];
+    try {
+      accounts = await walletRequest("eth_accounts");
+    } catch (_error) {
+      // Some injected providers reject passive account reads while locked.
+    }
+    if (!accounts || !accounts[0]) {
+      try {
+        accounts = await walletRequest("eth_requestAccounts");
+      } catch (error) {
+        throw new Error(walletConnectionErrorMessage(error));
+      }
+    }
     if (!accounts || !accounts[0]) throw new Error("No wallet account was returned.");
     state.account = accounts[0];
     configurePostVerification(
@@ -641,27 +691,47 @@
       protocol,
       state.account,
     );
-    const current = await walletRequest("eth_chainId");
+    let current;
+    try {
+      current = await walletRequest("eth_chainId");
+    } catch (error) {
+      throw new Error(walletConnectionErrorMessage(error, "switch"));
+    }
     if (String(current).toLowerCase() !== protocol.chain_id_hex.toLowerCase()) {
       try {
         await walletRequest("wallet_switchEthereumChain", [{ chainId: protocol.chain_id_hex }]);
       } catch (error) {
         if (error && error.code === 4902) {
-          await walletRequest("wallet_addEthereumChain", [
-            {
-              chainId: protocol.chain_id_hex,
-              chainName: "Base",
-              nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-              rpcUrls: ["https://mainnet.base.org"],
-              blockExplorerUrls: [protocol.explorer_url],
-            },
-          ]);
+          try {
+            await walletRequest("wallet_addEthereumChain", [
+              {
+                chainId: protocol.chain_id_hex,
+                chainName: "Base",
+                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+                rpcUrls: ["https://mainnet.base.org"],
+                blockExplorerUrls: [protocol.explorer_url],
+              },
+            ]);
+          } catch (addError) {
+            throw new Error(walletConnectionErrorMessage(addError, "switch"));
+          }
         } else {
-          throw error;
+          throw new Error(walletConnectionErrorMessage(error, "switch"));
         }
       }
     }
     return state.account;
+  }
+
+  async function connectWallet(context = document) {
+    if (state.walletConnection) return state.walletConnection;
+    const connection = connectWalletOnce(context);
+    state.walletConnection = connection;
+    try {
+      return await connection;
+    } finally {
+      if (state.walletConnection === connection) state.walletConnection = null;
+    }
   }
 
   async function isContractAccount(account) {
@@ -2103,12 +2173,21 @@
     if (creatorRefundButton) creatorRefundButton.addEventListener("click", withdrawCreatorRefund);
     document.querySelectorAll("[data-connect-wallet]").forEach((button) => {
       button.addEventListener("click", async () => {
+        if (button.getAttribute("aria-busy") === "true") return;
         const target = byId(button.dataset.output);
+        const label = button.textContent;
+        button.setAttribute("aria-busy", "true");
+        button.disabled = true;
+        button.textContent = "Connecting...";
         try {
           const account = await connectWallet(button.closest("form") || document);
           output(target, `Connected: ${account}`, "success");
         } catch (error) {
           output(target, error.message || String(error), "error");
+        } finally {
+          button.removeAttribute("aria-busy");
+          button.disabled = false;
+          button.textContent = label;
         }
       });
     });

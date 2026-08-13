@@ -248,6 +248,111 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 token_factory=lambda: "n" * 64,
             )
 
+    def test_analytics_exclusion_token_is_reused_without_publishing_it(self) -> None:
+        client = OperatorRotationClient()
+        result = recovery.ensure_analytics_exclusion_token(
+            client,
+            {
+                "envGroup": {
+                    "envVars": [
+                        {
+                            "key": recovery.ANALYTICS_EXCLUSION_TOKEN_KEY,
+                            "value": "e" * 64,
+                        }
+                    ]
+                }
+            },
+        )
+        self.assertFalse(result["changed"])
+        self.assertFalse(result["secret_published"])
+        self.assertEqual(client._analytics_exclusion_token, "e" * 64)
+        self.assertNotIn("e" * 64, recovery.json.dumps(result))
+
+    def test_analytics_exclusion_token_is_generated_without_publishing_it(self) -> None:
+        client = OperatorRotationClient()
+        result = recovery.ensure_analytics_exclusion_token(
+            client,
+            {
+                "id": "evg-" + "e" * 20,
+                "envGroup": {"envVars": []},
+            },
+            token_factory=lambda: "n" * 64,
+        )
+        self.assertTrue(result["changed"])
+        self.assertFalse(result["secret_published"])
+        self.assertEqual(
+            client.values[0][1:],
+            (recovery.ANALYTICS_EXCLUSION_TOKEN_KEY, "n" * 64),
+        )
+        self.assertEqual(client._analytics_exclusion_token, "n" * 64)
+        self.assertNotIn("n" * 64, recovery.json.dumps(result))
+
+    def test_exclusion_canaries_cover_every_interface_and_both_mcp_eras(self) -> None:
+        responses = [
+            {
+                "schema": (
+                    "https://agentbounties.org/schemas/"
+                    "discovery-manifest.v2.json"
+                )
+            },
+            {
+                "schema": (
+                    "https://agentbounties.org/schemas/"
+                    "discovery-manifest.v2.json"
+                )
+            },
+            {
+                "result": {
+                    "protocolVersion": recovery.LEGACY_MCP_PROTOCOL_VERSION
+                }
+            },
+            {
+                "result": {
+                    "supportedVersions": [recovery.MODERN_MCP_PROTOCOL_VERSION]
+                }
+            },
+        ]
+        with mock.patch.object(
+            recovery,
+            "fetch_exclusion_attestation",
+            side_effect=responses,
+        ) as fetch:
+            result = recovery.validate_analytics_exclusion_canaries(
+                "https://api.example",
+                "https://mcp.example",
+                "t" * 64,
+            )
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["secret_published"])
+        self.assertEqual(result["interfaces"], ["api", "cli", "mcp"])
+        self.assertEqual(fetch.call_count, 4)
+        self.assertFalse(fetch.call_args_list[0].kwargs.get("bearer", False))
+        self.assertFalse(fetch.call_args_list[1].kwargs.get("bearer", False))
+        self.assertFalse(fetch.call_args_list[2].kwargs.get("bearer", False))
+        self.assertTrue(fetch.call_args_list[3].kwargs["bearer"])
+        self.assertNotIn("t" * 64, recovery.json.dumps(result))
+
+    def test_oauth_exclusion_token_is_signed_scoped_and_secret_free(self) -> None:
+        token = recovery.analytics_oauth_access_token(
+            "s" * 64,
+            "https://mcp.example",
+            1_800_000_000,
+        )
+        prefix, payload, signature = token.split(".")
+        claims = recovery.json.loads(
+            recovery.base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+        self.assertEqual(prefix, recovery.ANALYTICS_OAUTH_TOKEN_PREFIX)
+        self.assertEqual(claims["iss"], "https://mcp.example")
+        self.assertEqual(claims["aud"], "https://mcp.example")
+        self.assertEqual(claims["scope"], recovery.ANALYTICS_EXCLUSION_SCOPE)
+        self.assertEqual(
+            claims["exp"] - claims["iat"],
+            recovery.ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS,
+        )
+        self.assertTrue(signature)
+        self.assertNotIn("s" * 64, token)
+
     def test_operator_token_rotation_requires_deploy_only(self) -> None:
         with self.assertRaisesRegex(recovery.RecoveryError, "requires deploy_only"):
             recovery.deploy(
@@ -1267,6 +1372,103 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(secrets, [])
         self.assertNotIn("CLOUD_AGENT_API_KEY", [key for _, key, _ in client.calls])
 
+    def test_moonpay_environment_is_all_or_none_and_evidence_is_redacted(self) -> None:
+        client = EnvironmentClient()
+        service = {"id": "srv-mcp", "name": "agent-bounties-mcp"}
+        evidence, changed = recovery.reconcile_moonpay_environment(
+            client,
+            service,
+            publishable_key=" pk_test_example_publishable ",
+            secret_key=" sk_test_example_secret ",
+            environment="test",
+        )
+        self.assertTrue(changed)
+        self.assertEqual(len(evidence), 3)
+        self.assertEqual(evidence[0]["value"], "sandbox")
+        self.assertNotIn("value", evidence[1])
+        self.assertNotIn("value", evidence[2])
+        self.assertIn(
+            ("agent-bounties-mcp", "MOONPAY_ENVIRONMENT", "sandbox"),
+            client.calls,
+        )
+        serialized = recovery.json.dumps(evidence)
+        self.assertNotIn("pk_test_example_publishable", serialized)
+        self.assertNotIn("sk_test_example_secret", serialized)
+
+        with self.assertRaisesRegex(recovery.RecoveryError, "keys together"):
+            recovery.reconcile_moonpay_environment(
+                client,
+                service,
+                publishable_key="pk_test_example_publishable",
+                secret_key=None,
+                environment="sandbox",
+            )
+
+    def test_workflow_passes_moonpay_values_only_as_runtime_environment(self) -> None:
+        workflow = (
+            SCRIPT.parent.parent
+            / ".github"
+            / "workflows"
+            / "render-deploy-recovery.yml"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(workflow.count("secrets.MOONPAY_PUBLISHABLE_KEY"), 1)
+        self.assertEqual(workflow.count("secrets.MOONPAY_SECRET_KEY"), 1)
+        self.assertEqual(workflow.count("vars.MOONPAY_ENVIRONMENT"), 1)
+        self.assertNotIn("pk_test_", workflow)
+        self.assertNotIn("sk_test_", workflow)
+
+    def test_deploy_only_restarts_service_after_direct_environment_change(self) -> None:
+        self.assertFalse(
+            recovery.deploy_only_can_reuse_current(
+                "agent-bounties-mcp",
+                open_competition_environment_changed=False,
+                operator_token_changed=False,
+                service_environment_changed=True,
+            )
+        )
+
+    def test_moonpay_environment_rejects_key_mode_mismatch(self) -> None:
+        client = EnvironmentClient()
+        service = {"id": "srv-mcp", "name": "agent-bounties-mcp"}
+        with self.assertRaisesRegex(recovery.RecoveryError, "do not match"):
+            recovery.reconcile_moonpay_environment(
+                client,
+                service,
+                publishable_key="pk_test_example_publishable",
+                secret_key="sk_test_example_secret",
+                environment="live",
+            )
+        self.assertEqual(client.calls, [])
+
+    def test_partial_moonpay_configuration_fails_before_render_access(self) -> None:
+        client = ResolutionFailureClient()
+        with self.assertRaisesRegex(recovery.RecoveryError, "keys together"):
+            recovery.deploy(
+                client,
+                "a" * 40,
+                moonpay_publishable_key="pk_test_example_publishable",
+                moonpay_secret_key=None,
+                moonpay_environment="sandbox",
+                deploy_timeout_seconds=1,
+                health_timeout_seconds=1,
+                poll_seconds=0,
+            )
+        self.assertEqual(client.resolved, [])
+        self.assertEqual(client.mutations, [])
+
+    def test_omitted_moonpay_environment_is_not_invented(self) -> None:
+        client = EnvironmentClient(changed=False)
+        evidence, changed = recovery.reconcile_moonpay_environment(
+            client,
+            {"id": "srv-mcp", "name": "agent-bounties-mcp"},
+            publishable_key=None,
+            secret_key=None,
+            environment="sandbox",
+        )
+        self.assertEqual(evidence, [])
+        self.assertFalse(changed)
+        self.assertEqual(client.calls, [])
+
     def test_neynar_environment_is_all_or_none_and_evidence_is_redacted(self) -> None:
         client = EnvironmentClient()
         service = {"id": "srv-api", "name": "agent-bounties-api"}
@@ -1887,6 +2089,12 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 'bad payload {"value":"postgresql://worker:private-value@db/app"}'
             ),
         )
+        moonpay_values = recovery.redact(
+            "pk_test_publishableexample sk_test_secretexample"
+        )
+        self.assertNotIn("pk_test_publishableexample", moonpay_values)
+        self.assertNotIn("sk_test_secretexample", moonpay_values)
+        self.assertEqual(moonpay_values.count("[moonpay-key-redacted]"), 2)
 
 
 if __name__ == "__main__":

@@ -565,7 +565,7 @@ export interface OpportunityConversionFunnel extends Record<string, unknown> {
 }
 
 export interface SiteAnalyticsReport extends Record<string, unknown> {
-  schema_version: "agent-bounties/site-analytics-v1";
+  schema_version: "agent-bounties/site-analytics-v2";
   window_hours: number;
   window_started_at: string;
   generated_at: string;
@@ -580,6 +580,14 @@ export interface SiteAnalyticsReport extends Record<string, unknown> {
   event_counts: Array<Record<string, unknown>>;
   daily: Array<Record<string, unknown>>;
   channels: Array<Record<string, unknown>>;
+  interfaces: Array<{
+    interface: "api" | "cli" | "mcp";
+    protocol_era: "not_applicable" | "legacy" | "modern" | "http_adapter";
+    request_count: number;
+    successful_request_count: number;
+    first_observed_at: string;
+    last_observed_at: string;
+  }>;
   rates: Array<Record<string, unknown>>;
   definitions: string[];
   evidence_boundary: string;
@@ -667,6 +675,7 @@ export interface X402FundingLoopOptions {
 export interface AgentBountiesClientOptions {
   baseUrl?: string;
   operatorApiToken?: string | null;
+  analyticsExclusionToken?: string | null;
 }
 
 export type AgentWalletSigningCapability =
@@ -979,6 +988,7 @@ export function generateOpenCompetitionCommitment(
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
+  private readonly analyticsExclusionToken?: string;
 
   constructor(
     baseUrlOrOptions: string | AgentBountiesClientOptions = "http://127.0.0.1:8080",
@@ -987,9 +997,11 @@ export class AgentBountiesClient {
     if (typeof baseUrlOrOptions === "string") {
       this.baseUrl = baseUrlOrOptions;
       this.operatorApiToken = operatorApiToken ?? undefined;
+      this.analyticsExclusionToken = undefined;
     } else {
       this.baseUrl = baseUrlOrOptions.baseUrl ?? "http://127.0.0.1:8080";
       this.operatorApiToken = baseUrlOrOptions.operatorApiToken ?? undefined;
+      this.analyticsExclusionToken = baseUrlOrOptions.analyticsExclusionToken ?? undefined;
     }
   }
 
@@ -998,7 +1010,11 @@ export class AgentBountiesClient {
       ...init,
       headers: {
         "content-type": "application/json",
+        "x-agent-bounties-interface": "api",
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(this.analyticsExclusionToken
+          ? { "x-agent-bounties-analytics-exclusion": this.analyticsExclusionToken }
+          : {}),
         ...(init?.headers ?? {}),
       },
     });
@@ -1072,6 +1088,7 @@ export class AgentBountiesClient {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "GET",
       headers: {
+        "x-agent-bounties-interface": "api",
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
         ...(request.payment_signature
           ? { "PAYMENT-SIGNATURE": request.payment_signature }
@@ -1092,9 +1109,10 @@ export class AgentBountiesClient {
   async getX402RelayStatus(relayId: string): Promise<X402BountyFundingResponse> {
     const path = `/v1/x402/base/relays/${relayId}`;
     const response = await fetch(`${this.baseUrl}${path}`, {
-      headers: this.operatorApiToken
-        ? { "x-operator-token": this.operatorApiToken }
-        : undefined,
+      headers: {
+        "x-agent-bounties-interface": "api",
+        ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+      },
     });
     if (![200, 202, 404, 422, 503].includes(response.status)) {
       throw new Error(`${path} failed: ${response.status}`);

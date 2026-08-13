@@ -20,7 +20,7 @@ or a relayer is compromised.
 
 Base mainnet wallet
 `0x1eaa1c68772cf76bc5f4e4174766076e33ace662` currently uses policy
-version 5:
+version 6:
 
 | Boundary | Value |
 | --- | ---: |
@@ -29,18 +29,19 @@ version 5:
 | Maximum one action | 5 USDC |
 | Maximum each fixed 24-hour period | 10 USDC |
 | Maximum bounty target | 5 USDC |
-| Delegate | `0xc26a630e85134ed30968735c8e7de4576cfa5dbc` |
+| Delegate | `0xe46741de0f379bff0ab8b01bce1b79a12d892fdb` |
 | Expiry | No automatic expiry; owner can revoke or replace |
 | Actions | create, fund, claim, submit |
 | Deterministic verification | durable router `0x380c1af742593dd88b6f20387e9ee693a0536731` |
 | Signed verification | exact `sandboxed_regression_v1` threshold-two set |
 
 The exact policy hash is
-`0xac8c86836e1cab2b4707420057d414b0dfa675006bda6584df7fb9118caabe88`.
+`0xe865752db0df29aa0fc682fa837b7a68b91d0c88272cd6e0ae6718c831ada959`.
 Owner transaction
-`0x7b6cce94eb19ecb60cbec268fe9fce33847190b2cb7f33af6802b1e223b89201`
-configured it at block `49211742`. Automation must pin all policy fields,
-version, and hash; accepting any live policy is unsafe.
+`0x09532bbf5382cadac12c14c010cf332a7082d3e7ff018362e13991c5dfbb5704`
+configured it at block `49902575`. This delegate-only rotation preserved every
+financial cap, allowed action, and verifier constraint. Automation must pin all
+policy fields, version, and hash; accepting any live policy is unsafe.
 
 The five funded standing-meta-v2 parents are recovery-reserved and cannot be
 selected for new earning actions. Returned claim bonds and bounty earnings

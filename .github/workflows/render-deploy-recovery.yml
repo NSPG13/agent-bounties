@@ -185,6 +185,9 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           CLOUD_AGENT_API_KEY: ${{ secrets.CLOUD_AGENT_API_KEY }}
+          MOONPAY_PUBLISHABLE_KEY: ${{ secrets.MOONPAY_PUBLISHABLE_KEY }}
+          MOONPAY_SECRET_KEY: ${{ secrets.MOONPAY_SECRET_KEY }}
+          MOONPAY_ENVIRONMENT: ${{ vars.MOONPAY_ENVIRONMENT || 'sandbox' }}
           NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
           NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}
           NEYNAR_BOT_FID: ${{ vars.NEYNAR_BOT_FID }}
@@ -252,10 +255,12 @@ jobs:
               f"- Exact health attestations: `{len(evidence['health'])}/2`",
               f"- Public runtime variables reconciled: `{len(evidence.get('public_environment', []))}`",
               f"- Open Competition shared variables reconciled: `{len(evidence.get('open_competition_environment', []))}`",
+              f"- Private API/CLI/legacy MCP/core MCP exclusion canaries: `{bool(evidence.get('analytics_exclusion_canary', {}).get('verified'))}`",
               f"- Operator token rotated: `{bool(evidence.get('operator_token_rotation', {}).get('performed'))}`",
               f"- Cloud runtime variables: `{len(evidence.get('cloud_environment', []))}/10`",
               f"- Cloud model credential supplied: `{bool(evidence.get('secret_environment'))}`",
               f"- Cloud drafting ready: `{bool(evidence.get('cloud_readiness', {}).get('available'))}`",
+              f"- MoonPay values reconciled: `{len(evidence.get('moonpay_environment', []))}/3`",
               f"- Neynar provider values reconciled: `{len(evidence.get('social_environment', []))}/5`",
               f"- Neynar webhook registered: `{bool(evidence.get('social_webhook', {}).get('active'))}`",
               f"- Social mention ingestion ready: `{bool(evidence.get('social_readiness', {}).get('enabled'))}`",

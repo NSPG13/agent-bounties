@@ -1,6 +1,8 @@
 name: Pages
 
 on:
+  schedule:
+    - cron: "17 * * * *"
   pull_request:
     paths:
       - ".github/workflows/pages.yml"
@@ -20,6 +22,11 @@ on:
       - "scripts/test-homepage-bounty-flow.js"
       - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
+      - "scripts/test-metrics-dashboard.js"
+      - "scripts/github_audience_audit.py"
+      - "scripts/test_github_audience_audit.py"
+      - "scripts/fixtures/github_participation_metrics.json"
+      - "crates/api/fixtures/public-metrics-policy.json"
   push:
     branches: [main]
     paths:
@@ -40,17 +47,20 @@ on:
       - "scripts/test-homepage-bounty-flow.js"
       - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
+      - "scripts/test-metrics-dashboard.js"
+      - "scripts/github_audience_audit.py"
+      - "scripts/test_github_audience_audit.py"
+      - "scripts/fixtures/github_participation_metrics.json"
+      - "crates/api/fixtures/public-metrics-policy.json"
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: true
+  # An hourly snapshot must not cancel a protected-main deployment already in flight.
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   validate:
@@ -83,6 +93,28 @@ jobs:
       - run: node scripts/test-homepage-bounty-flow.js
       - run: node scripts/test-create-competition-flow.js
       - run: node scripts/test-ai-bounty-handoff.js
+      - run: node --test scripts/test-metrics-dashboard.js
+      - name: Verify the privacy-safe GitHub participation aggregate
+        run: |
+          python scripts/test_github_audience_audit.py -v
+          python scripts/github_audience_audit.py \
+            --fixture scripts/fixtures/github_participation_metrics.json \
+            --public-metrics-policy crates/api/fixtures/public-metrics-policy.json \
+            --public-metrics-output /tmp/github-participation.json \
+            --public-metrics-only
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          value = json.loads(Path("/tmp/github-participation.json").read_text(encoding="utf-8"))
+          assert value["schema_version"] == "agent-bounties/github-participation-v1"
+          assert value["coverage"]["raw_identifiers_included"] is False
+          assert set(value["periods"]) == {"7d", "28d", "90d", "lifetime"}
+          acquisition = value["repository_acquisition"]
+          assert acquisition["window_kind"] == "rolling_14_days"
+          assert acquisition["coverage"]["status"] == "unavailable"
+          assert len(acquisition["historical_snapshots"]) == 2
+          PY
       - name: Check simplified public scripts
         run: |
           node --check site/bounty-board.js
@@ -91,6 +123,7 @@ jobs:
           node --check site/bounty-composer-v2.js
           node --check site/bounty-chat-ui.js
           node --check site/simple-home.js
+          node --check site/metrics.js
           node --check site/guild-shell.js
           node --check site/wallet-adapter-registry.js
           node --check site/x402-browser.js
@@ -169,11 +202,20 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -224,6 +266,16 @@ jobs:
           cp deployments/bounded-agent-wallet-v2-base-mainnet.json site/bounded-agent-wallet-v2-base-mainnet.json
           mkdir -p site/schemas
           cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
+      - name: Generate privacy-safe GitHub participation metrics
+        env:
+          GH_TOKEN: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN || github.token }}
+        run: |
+          python scripts/github_audience_audit.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --owner-login "${GITHUB_REPOSITORY_OWNER}" \
+            --public-metrics-policy crates/api/fixtures/public-metrics-policy.json \
+            --public-metrics-output site/generated/github-participation.json \
+            --public-metrics-only
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
@@ -231,6 +283,7 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v5
       - name: Verify the normal chatbot and embedded-wallet experience
+        if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           LIVE_CANARY_ISSUE: "499"

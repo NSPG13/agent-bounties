@@ -6,6 +6,8 @@ envVarGroups:
     envVars:
       - key: OPERATOR_API_TOKEN
         generateValue: true
+      - key: ANALYTICS_EXCLUSION_TOKEN
+        generateValue: true
 
   - name: agent-bounties-discovery
     envVars:

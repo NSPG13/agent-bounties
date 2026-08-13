@@ -8,9 +8,9 @@
     <title>Earn Money With AI | Funded Agent Bounties</title>
     <meta name="description" content="Find funded AI, coding, research, and writing bounties with explicit rewards and acceptance criteria. Use ChatGPT, Claude, or Gemini Spark to help claim, complete, and submit work.">
     <link rel="canonical" href="https://agentbounties.app/earn.html">
-    <link rel="stylesheet" href="styles.css?v=20260722-1">
+    <link rel="stylesheet" href="styles.css?v=20260813-1">
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
-    <link rel="stylesheet" href="simple-ux.css?v=1">
+    <link rel="stylesheet" href="simple-ux.css?v=2">
     <link rel="stylesheet" href="onramp.css?v=1">
     <link rel="stylesheet" href="wallet-adapters.css?v=1">
     <link rel="stylesheet" href="coinbase-embedded-wallet.bundle.css?v=1">
@@ -106,15 +106,17 @@
             <p class="eyebrow">Claim this task</p>
             <h2 id="claim-title">Review it, connect your wallet, and claim it.</h2>
             <p class="fine">Start work only after the claim is confirmed.</p>
-            <label class="wallet-picker">
-              Wallet
-              <select data-wallet-provider aria-label="Wallet provider">
-                <option>Detecting wallets</option>
-              </select>
-            </label>
-            <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
-            <output id="claim-feed-output" class="output compact-output" aria-live="polite">Review the selected task before signing.</output>
-            <div data-legal-consent data-consent-actions="claim_bounty"></div>
+            <div class="claim-wallet-stack">
+              <label class="wallet-picker">
+                Wallet
+                <select data-wallet-provider aria-label="Wallet provider">
+                  <option>Detecting wallets</option>
+                </select>
+              </label>
+              <button class="button secondary" type="button" data-connect-wallet data-output="claim-feed-output">Connect wallet</button>
+              <output id="claim-feed-output" class="output compact-output" aria-live="polite">Review the selected task before signing.</output>
+              <div data-legal-consent data-consent-actions="claim_bounty"></div>
+            </div>
           </div>
           <div id="claimable-feed" class="bounty-feed" aria-live="polite">Loading the selected task…</div>
         </div>
@@ -193,7 +195,7 @@
     <script src="wallet-adapter-registry.js?v=1"></script>
     <script src="coinbase-embedded-wallet.bundle.js?v=1"></script>
     <script src="x402-browser.js?v=1"></script>
-    <script src="autonomous.js"></script>
+    <script src="autonomous.js?v=20260813-1"></script>
     <script src="bounty-board.js?v=2"></script>
   </body>
 </html>

@@ -148,18 +148,28 @@ assert(postHtml.includes('name="solverReward" type="number" min="0.01" step="0.0
 assert(postHtml.includes('name="verifierReward" type="number" min="0.01" step="0.01" value="0.01"'));
 
 const earnHtml = fs.readFileSync(path.join(repoRoot, "site", "earn.html"), "utf8");
+const sharedCss = fs.readFileSync(path.join(repoRoot, "site", "styles.css"), "utf8");
+const simpleUxCss = fs.readFileSync(path.join(repoRoot, "site", "simple-ux.css"), "utf8");
 assert(earnHtml.includes("Sign once. Start after BountyClaimed"));
+assert(earnHtml.includes('class="claim-wallet-stack"'));
+assert(earnHtml.includes('styles.css?v=20260813-1'));
+assert(earnHtml.includes('simple-ux.css?v=2'));
+assert(earnHtml.includes('autonomous.js?v=20260813-1'));
+assert(sharedCss.includes(".sr-only"));
+assert(simpleUxCss.includes(".claim-wallet-stack"));
 assert(earnHtml.includes("Gas is sponsored for this funding action"));
 assert(earnHtml.includes('data-wallet-requires="direct-transactions"'));
 assert(earnHtml.includes('src="wallet-adapter-registry.js?v=1"'));
 assert(earnHtml.includes('src="x402-browser.js?v=1"'));
 assert(
-  earnHtml.indexOf('src="x402-browser.js?v=1"') < earnHtml.indexOf('src="autonomous.js"'),
+  earnHtml.indexOf('src="x402-browser.js?v=1"') < earnHtml.indexOf('src="autonomous.js?v=20260813-1"'),
   "the sponsored x402 client must load before the autonomous funding flow",
 );
 assert(source.includes('params.get("bountyContract")'));
 assert(source.includes("Sign once to claim"));
 assert(source.includes("Sponsored refundable bond"));
+assert(source.includes('walletRequest("eth_accounts")'));
+assert(source.includes("already has a request open"));
 assert(!source.includes("/v1/base/autonomous-bounties/authorized-claim-plan"));
 const fundingStart = source.indexOf("async function fundBounty(event)");
 const submissionStart = source.indexOf("async function submitBounty(event)", fundingStart);
@@ -412,7 +422,120 @@ async function testDeterministicPostingDefaults() {
   );
 }
 
-testDeterministicPostingDefaults()
+function walletHarness(provider) {
+  const selector = {
+    dataset: {},
+    disabled: false,
+    value: "0",
+    replaceChildren(...options) {
+      this.options = options;
+      const selected = options.find((option) => option.selected) || options[0];
+      this.value = selected ? selected.value : "";
+    },
+    addEventListener() {},
+  };
+  const document = {
+    addEventListener() {},
+    createElement() {
+      return { value: "", textContent: "", selected: false };
+    },
+    getElementById() {
+      return null;
+    },
+    querySelector(value) {
+      return value === "[data-wallet-provider]" ? selector : null;
+    },
+    querySelectorAll(value) {
+      return value === "[data-wallet-provider]" ? [selector] : [];
+    },
+  };
+  const window = {
+    addEventListener() {},
+    dispatchEvent() {},
+    ethereum: provider,
+  };
+  const context = vm.createContext({
+    console,
+    crypto: webcrypto,
+    document,
+    window,
+    Event,
+    URLSearchParams,
+    location: { search: "" },
+    fetch: async () => ({ ok: true, json: async () => protocol }),
+    setTimeout: (callback) => {
+      callback();
+      return 1;
+    },
+  });
+  const instrumentedSource = source.replace(
+    /\}\)\(\);\s*$/,
+    "globalThis.__agentBountiesTest = { connectWallet }; })();",
+  );
+  new vm.Script(evmSource, { filename: "site/evm.js" }).runInContext(context);
+  new vm.Script(instrumentedSource, { filename: "site/autonomous.js" }).runInContext(context);
+  return context.__agentBountiesTest;
+}
+
+async function testWalletConnectionReuseAndErrors() {
+  const account = "0x2222222222222222222222222222222222222222";
+  const authorizedCalls = [];
+  const authorized = walletHarness({
+    isBraveWallet: true,
+    async request({ method }) {
+      authorizedCalls.push(method);
+      if (method === "eth_accounts") return [account];
+      if (method === "eth_requestAccounts") throw new Error("should not request an authorized account again");
+      if (method === "eth_chainId") return protocol.chain_id_hex;
+      throw new Error(`Unexpected wallet method: ${method}`);
+    },
+  });
+  assert.strictEqual(await authorized.connectWallet(), account);
+  assert.deepStrictEqual(authorizedCalls, ["eth_accounts", "eth_chainId"]);
+
+  let resolveAccounts;
+  let requestCount = 0;
+  const pendingAccounts = new Promise((resolve) => {
+    resolveAccounts = resolve;
+  });
+  const concurrent = walletHarness({
+    isBraveWallet: true,
+    async request({ method }) {
+      if (method === "eth_accounts") return [];
+      if (method === "eth_requestAccounts") {
+        requestCount += 1;
+        return pendingAccounts;
+      }
+      if (method === "eth_chainId") return protocol.chain_id_hex;
+      throw new Error(`Unexpected wallet method: ${method}`);
+    },
+  });
+  const first = concurrent.connectWallet();
+  const second = concurrent.connectWallet();
+  resolveAccounts([account]);
+  assert.deepStrictEqual(await Promise.all([first, second]), [account, account]);
+  assert.strictEqual(requestCount, 1, "concurrent connects must share one wallet permission request");
+
+  const failing = walletHarness({
+    isBraveWallet: true,
+    async request({ method }) {
+      if (method === "eth_accounts") return [];
+      if (method === "eth_requestAccounts") {
+        throw Object.assign(new Error("An internal error has occurred"), { code: -32603 });
+      }
+      throw new Error(`Unexpected wallet method: ${method}`);
+    },
+  });
+  await assert.rejects(
+    failing.connectWallet(),
+    /Brave Wallet could not complete the connection\. Open it, finish setup or unlock it, close any pending request, then try again\./,
+  );
+}
+
+Promise.all([
+  testDeterministicPostingDefaults(),
+  testWalletConnectionReuseAndErrors(),
+])
   .then(() => console.log("autonomous wallet flow contract passed"))
   .catch((error) => {
     console.error(error);

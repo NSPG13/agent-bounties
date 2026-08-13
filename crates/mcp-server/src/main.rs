@@ -7,12 +7,14 @@ use app::{
     RejectRiskEventRequest, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Form, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    middleware::{self, Next},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use bounty_router::BountyRouter;
 use chain_base::{
     autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
@@ -32,7 +34,7 @@ use chain_base::{
     StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
-use db::PostgresStore;
+use db::{ObservedInterface, ObservedProtocolEra, PostgresStore};
 use domain::{
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
     DiscoverySubscriptionFilters, EvalRun, HelpRequest, Id, Money, Objective, ObjectiveAction,
@@ -44,6 +46,7 @@ use github_app::{
     parse_issue_form_bounty, proof_comment_plan, GitHubClaimCommentInput, GitHubCreateCommentInput,
     GitHubFundingCommentInput, GitHubProofComment,
 };
+use hmac::{Hmac, Mac};
 use payments_stripe::{
     execute_stripe_request, CheckoutTopUpRequest, ConnectAccountSnapshot, StripeEventDeduper,
     StripePlanner, StripeRequestIntent, StripeWebhookEvent, STRIPE_API_BASE_URL,
@@ -59,10 +62,12 @@ use service_runtime::{
 use service_runtime::{
     eval_run_from_loop_suite, eval_run_from_suite, LiveMoneyRuntimeSettings, PlannerAddressError,
 };
-use std::collections::BTreeSet;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
+use url::Url;
 use uuid::Uuid;
 
 mod chatgpt_app;
@@ -79,12 +84,23 @@ struct AppState {
     stripe_api_base_url: String,
     stripe_payment_method_configuration: Option<String>,
     operator_api_token: Option<String>,
+    analytics_exclusion_token: Option<String>,
+    mcp_base_url: String,
+    oauth_authorizations: Mutex<HashMap<String, PendingOAuthAuthorization>>,
+    oauth_codes: Mutex<HashMap<String, OAuthAuthorizationCode>>,
     store: Option<PostgresStore>,
     recovery_reservations: AutonomousBountyRecoveryReservations,
 }
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+const ANALYTICS_EXCLUSION_HEADER: &str = "x-agent-bounties-analytics-exclusion";
+const ANALYTICS_EXCLUDED_HEADER: &str = "x-agent-bounties-analytics-excluded";
+const ANALYTICS_EXCLUSION_SCOPE: &str = "analytics:exclude-owner";
+const ANALYTICS_OAUTH_TOKEN_PREFIX: &str = "abx1";
+const ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS: i64 = 7_776_000;
+const MAX_PENDING_OAUTH_AUTHORIZATIONS: usize = 512;
+type AnalyticsHmacSha256 = Hmac<Sha256>;
 
 async fn health() -> impl IntoResponse {
     health_response(&deployment_revision())
@@ -212,6 +228,50 @@ fn require_operator(
         Ok(())
     } else {
         Err(mcp_error("operator authorization required"))
+    }
+}
+
+pub(crate) fn analytics_exclusion_is_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+    let bearer = authorization.and_then(|value| value.trim().strip_prefix("Bearer "));
+    state.analytics_exclusion_token.is_some()
+        && service_runtime::operator_token_is_authorized(
+            state.analytics_exclusion_token.as_deref(),
+            headers
+                .get(ANALYTICS_EXCLUSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            None,
+        )
+        || state
+            .analytics_exclusion_token
+            .as_deref()
+            .is_some_and(|secret| {
+                bearer.is_some_and(|token| {
+                    analytics_oauth_access_token_is_authorized(
+                        secret,
+                        token,
+                        &state.mcp_base_url,
+                        Utc::now(),
+                    )
+                })
+            })
+        || (state.operator_api_token.is_some()
+            && service_runtime::operator_token_is_authorized(
+                state.operator_api_token.as_deref(),
+                headers
+                    .get(OPERATOR_TOKEN_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                authorization,
+            ))
+}
+
+pub(crate) fn attest_analytics_exclusion(response: &mut Response, excluded: bool) {
+    if excluded {
+        response
+            .headers_mut()
+            .insert(ANALYTICS_EXCLUDED_HEADER, HeaderValue::from_static("true"));
     }
 }
 
@@ -1575,6 +1635,12 @@ async fn main() -> anyhow::Result<()> {
         operator_api_token: env::var("OPERATOR_API_TOKEN")
             .ok()
             .and_then(non_empty_secret),
+        analytics_exclusion_token: env::var("ANALYTICS_EXCLUSION_TOKEN")
+            .ok()
+            .and_then(non_empty_secret),
+        mcp_base_url: mcp_base_url_from_env().trim_end_matches('/').to_string(),
+        oauth_authorizations: Mutex::new(HashMap::new()),
+        oauth_codes: Mutex::new(HashMap::new()),
         store,
         recovery_reservations,
     });
@@ -1602,6 +1668,20 @@ async fn main() -> anyhow::Result<()> {
             "/.well-known/agent-bounties.json",
             get(agent_bounties_discovery),
         )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth_protected_resource),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_authorization_server),
+        )
+        .route("/oauth/register", post(oauth_register))
+        .route(
+            "/oauth/authorize",
+            get(oauth_authorize).post(oauth_authorize_submit),
+        )
+        .route("/oauth/token", post(oauth_token))
         .route(
             "/mcp",
             get(chatgpt_app::mcp_get)
@@ -1969,6 +2049,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/approve_risk_bounty", post(approve_risk_bounty))
         .route("/tools/approve_risk_payout", post(approve_risk_payout))
         .route("/tools/reject_risk_event", post(reject_risk_event))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observe_mcp_http_adapter,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -1991,6 +2075,37 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
                 .map(|value| format!("0.0.0.0:{}", value.trim()))
         })
         .unwrap_or_else(|| default_addr.to_string())
+}
+
+fn is_mcp_http_adapter_path(path: &str) -> bool {
+    path == "/tools" || path.starts_with("/tools/")
+}
+
+async fn observe_mcp_http_adapter(
+    State(state): State<SharedState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let observed = is_mcp_http_adapter_path(request.uri().path());
+    let excluded = analytics_exclusion_is_authorized(&state, request.headers());
+    let mut response = next.run(request).await;
+    attest_analytics_exclusion(&mut response, observed && excluded);
+    if observed && !excluded {
+        if let Some(store) = state.store.clone() {
+            let succeeded = response.status().is_success();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_interface_usage(
+                        ObservedInterface::Mcp,
+                        ObservedProtocolEra::McpHttpAdapter,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
+    }
+    response
 }
 
 async fn agent_bounties_discovery() -> Json<web_public::DiscoveryManifest> {
@@ -2029,6 +2144,491 @@ fn openai_apps_challenge_response(configured: Option<String>) -> (StatusCode, He
         headers,
         token.expect("validated challenge token"),
     )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OAuthAuthorizationQuery {
+    response_type: String,
+    client_id: String,
+    redirect_uri: String,
+    code_challenge: String,
+    code_challenge_method: String,
+    scope: String,
+    state: Option<String>,
+    resource: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingOAuthAuthorization {
+    client_id: String,
+    redirect_uri: String,
+    code_challenge: String,
+    scope: String,
+    state: Option<String>,
+    resource: String,
+    expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct OAuthAuthorizationCode {
+    client_id: String,
+    redirect_uri: String,
+    code_challenge: String,
+    scope: String,
+    resource: String,
+    expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthAuthorizationForm {
+    request_id: String,
+    link_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthTokenRequest {
+    grant_type: String,
+    code: String,
+    redirect_uri: String,
+    client_id: String,
+    code_verifier: String,
+    resource: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AnalyticsOAuthClaims {
+    iss: String,
+    aud: String,
+    scope: String,
+    iat: i64,
+    exp: i64,
+}
+
+fn analytics_oauth_access_token(
+    secret: &str,
+    audience: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<String, &'static str> {
+    let claims = AnalyticsOAuthClaims {
+        iss: audience.to_string(),
+        aud: audience.to_string(),
+        scope: ANALYTICS_EXCLUSION_SCOPE.to_string(),
+        iat: now.timestamp(),
+        exp: now.timestamp() + ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS,
+    };
+    let payload = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&claims).map_err(|_| "OAuth claims could not be encoded")?);
+    let signed = format!("{ANALYTICS_OAUTH_TOKEN_PREFIX}.{payload}");
+    let mut mac = AnalyticsHmacSha256::new_from_slice(secret.as_bytes())
+        .map_err(|_| "OAuth signing key is invalid")?;
+    mac.update(signed.as_bytes());
+    Ok(format!(
+        "{signed}.{}",
+        URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+    ))
+}
+
+fn analytics_oauth_access_token_is_authorized(
+    secret: &str,
+    token: &str,
+    audience: &str,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    if token.len() > 2048 {
+        return false;
+    }
+    let mut segments = token.split('.');
+    let (Some(prefix), Some(payload), Some(signature), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return false;
+    };
+    if prefix != ANALYTICS_OAUTH_TOKEN_PREFIX {
+        return false;
+    }
+    let Ok(signature) = URL_SAFE_NO_PAD.decode(signature) else {
+        return false;
+    };
+    let Ok(mut mac) = AnalyticsHmacSha256::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(format!("{prefix}.{payload}").as_bytes());
+    if mac.verify_slice(&signature).is_err() {
+        return false;
+    }
+    let Ok(payload) = URL_SAFE_NO_PAD.decode(payload) else {
+        return false;
+    };
+    let Ok(claims) = serde_json::from_slice::<AnalyticsOAuthClaims>(&payload) else {
+        return false;
+    };
+    claims.iss == audience
+        && claims.aud == audience
+        && claims.scope == ANALYTICS_EXCLUSION_SCOPE
+        && claims.iat <= now.timestamp() + 60
+        && claims.exp > now.timestamp()
+        && claims.exp - claims.iat == ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthRegistrationRequest {
+    redirect_uris: Vec<String>,
+    #[serde(default)]
+    grant_types: Vec<String>,
+    #[serde(default)]
+    response_types: Vec<String>,
+    token_endpoint_auth_method: Option<String>,
+}
+
+async fn oauth_protected_resource(State(state): State<SharedState>) -> Response {
+    if state.analytics_exclusion_token.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let resource = state.mcp_base_url.clone();
+    Json(json!({
+        "resource": resource,
+        "authorization_servers": [resource],
+        "scopes_supported": [ANALYTICS_EXCLUSION_SCOPE],
+        "resource_documentation": "https://agentbounties.app/docs/interaction-guide.html"
+    }))
+    .into_response()
+}
+
+async fn oauth_authorization_server(State(state): State<SharedState>) -> Response {
+    if state.analytics_exclusion_token.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let issuer = state.mcp_base_url.clone();
+    Json(json!({
+        "issuer": issuer,
+        "authorization_endpoint": format!("{issuer}/oauth/authorize"),
+        "token_endpoint": format!("{issuer}/oauth/token"),
+        "registration_endpoint": format!("{issuer}/oauth/register"),
+        "scopes_supported": [ANALYTICS_EXCLUSION_SCOPE],
+        "response_types_supported": ["code"],
+        "response_modes_supported": ["query"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "client_id_metadata_document_supported": true
+    }))
+    .into_response()
+}
+
+fn valid_chatgpt_oauth_redirect(value: &str) -> bool {
+    if value.len() > 512 {
+        return false;
+    }
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || url.host_str() != Some("chatgpt.com")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    url.path() == "/connector_platform_oauth_redirect"
+        || url
+            .path()
+            .strip_prefix("/connector/oauth/")
+            .is_some_and(|callback_id| {
+                !callback_id.is_empty()
+                    && callback_id.len() <= 200
+                    && callback_id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+}
+
+fn valid_oauth_client_id(value: &str) -> bool {
+    if value.len() > 1024 {
+        return false;
+    }
+    value
+        .strip_prefix("agent-bounties-chatgpt-")
+        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+        || Url::parse(value).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host_str() == Some("chatgpt.com")
+                && url.path().starts_with("/oauth/")
+        })
+}
+
+fn oauth_scope_is_valid(scope: &str) -> bool {
+    scope
+        .split_ascii_whitespace()
+        .eq([ANALYTICS_EXCLUSION_SCOPE])
+}
+
+async fn oauth_register(
+    State(state): State<SharedState>,
+    Json(request): Json<OAuthRegistrationRequest>,
+) -> Response {
+    if state.analytics_exclusion_token.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if request.redirect_uris.len() != 1
+        || !valid_chatgpt_oauth_redirect(&request.redirect_uris[0])
+        || (!request.grant_types.is_empty()
+            && request.grant_types != ["authorization_code".to_string()])
+        || (!request.response_types.is_empty() && request.response_types != ["code".to_string()])
+        || request
+            .token_endpoint_auth_method
+            .as_deref()
+            .is_some_and(|method| method != "none")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid_client_metadata"})),
+        )
+            .into_response();
+    }
+    let client_id = format!("agent-bounties-chatgpt-{}", Uuid::new_v4());
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "client_id": client_id,
+            "client_id_issued_at": Utc::now().timestamp(),
+            "redirect_uris": request.redirect_uris,
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none"
+        })),
+    )
+        .into_response()
+}
+
+fn validate_oauth_authorization_request(request: &OAuthAuthorizationQuery, resource: &str) -> bool {
+    request.response_type == "code"
+        && valid_oauth_client_id(&request.client_id)
+        && valid_chatgpt_oauth_redirect(&request.redirect_uri)
+        && request.code_challenge_method == "S256"
+        && (43..=128).contains(&request.code_challenge.len())
+        && request
+            .code_challenge
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        && oauth_scope_is_valid(&request.scope)
+        && request
+            .state
+            .as_ref()
+            .is_none_or(|state| state.len() <= 512)
+        && request.resource.as_deref() == Some(resource)
+}
+
+async fn oauth_authorize(
+    State(state): State<SharedState>,
+    Query(request): Query<OAuthAuthorizationQuery>,
+) -> Response {
+    if state.analytics_exclusion_token.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let resource = state.mcp_base_url.clone();
+    if !validate_oauth_authorization_request(&request, &resource) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_request",
+                "error_description": "ChatGPT OAuth requires an approved callback, resource, scope, and S256 PKCE challenge."
+            })),
+        )
+            .into_response();
+    }
+    let request_id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+    let accepted = {
+        let mut pending = state
+            .oauth_authorizations
+            .lock()
+            .expect("OAuth authorization mutex poisoned");
+        pending.retain(|_, authorization| authorization.expires_at > now);
+        if pending.len() >= MAX_PENDING_OAUTH_AUTHORIZATIONS {
+            false
+        } else {
+            pending.insert(
+                request_id.clone(),
+                PendingOAuthAuthorization {
+                    client_id: request.client_id,
+                    redirect_uri: request.redirect_uri,
+                    code_challenge: request.code_challenge,
+                    scope: request.scope,
+                    state: request.state,
+                    resource,
+                    expires_at: now + chrono::Duration::minutes(5),
+                },
+            );
+            true
+        }
+    };
+    if !accepted {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::CACHE_CONTROL, "no-store")],
+            "Too many pending authorization requests. Retry shortly.",
+        )
+            .into_response();
+    }
+    let html = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Link operator analytics exclusion</title><style>body{{font:16px system-ui;background:#101410;color:#f4f7ee;max-width:42rem;margin:8vh auto;padding:2rem}}main{{border:1px solid #3f4b3f;border-radius:16px;padding:2rem}}label,input,button{{display:block;width:100%;box-sizing:border-box}}input,button{{margin-top:.6rem;padding:.8rem;border-radius:8px}}button{{background:#c8ff45;color:#101410;font-weight:700;border:0;margin-top:1rem}}</style></head><body><main><h1>Exclude this private connector from public usage</h1><p>Linking adds only the <code>{ANALYTICS_EXCLUSION_SCOPE}</code> scope. It grants no operator, wallet, payment, or mutation authority.</p><form method=\"post\" action=\"/oauth/authorize\"><input type=\"hidden\" name=\"request_id\" value=\"{request_id}\"><label for=\"link_token\">Analytics exclusion link token</label><input id=\"link_token\" name=\"link_token\" type=\"password\" autocomplete=\"off\" required><button type=\"submit\">Link private connector</button></form></main></body></html>"
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        ),
+    );
+    (headers, html).into_response()
+}
+
+async fn oauth_authorize_submit(
+    State(state): State<SharedState>,
+    Form(form): Form<OAuthAuthorizationForm>,
+) -> Response {
+    let Some(configured) = state.analytics_exclusion_token.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !(64..=256).contains(&form.link_token.len())
+        || form
+            .link_token
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace())
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::CACHE_CONTROL, "no-store")],
+            "The analytics exclusion link token was not accepted.",
+        )
+            .into_response();
+    }
+    if !service_runtime::operator_token_is_authorized(
+        Some(configured),
+        Some(form.link_token.trim()),
+        None,
+    ) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(header::CACHE_CONTROL, "no-store")],
+            "The analytics exclusion link token was not accepted.",
+        )
+            .into_response();
+    }
+    let now = Utc::now();
+    let authorization = {
+        let mut pending = state
+            .oauth_authorizations
+            .lock()
+            .expect("OAuth authorization mutex poisoned");
+        pending.retain(|_, authorization| authorization.expires_at > now);
+        pending.remove(&form.request_id)
+    };
+    let Some(authorization) = authorization else {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CACHE_CONTROL, "no-store")],
+            "The authorization request expired or was already used.",
+        )
+            .into_response();
+    };
+    let code = Uuid::new_v4().to_string();
+    state
+        .oauth_codes
+        .lock()
+        .expect("OAuth code mutex poisoned")
+        .insert(
+            code.clone(),
+            OAuthAuthorizationCode {
+                client_id: authorization.client_id,
+                redirect_uri: authorization.redirect_uri.clone(),
+                code_challenge: authorization.code_challenge,
+                scope: authorization.scope,
+                resource: authorization.resource,
+                expires_at: now + chrono::Duration::minutes(2),
+            },
+        );
+    let mut redirect = Url::parse(&authorization.redirect_uri)
+        .expect("validated ChatGPT redirect URI must remain valid");
+    redirect.query_pairs_mut().append_pair("code", &code);
+    if let Some(value) = authorization.state {
+        redirect.query_pairs_mut().append_pair("state", &value);
+    }
+    Redirect::to(redirect.as_str()).into_response()
+}
+
+async fn oauth_token(
+    State(state): State<SharedState>,
+    Form(request): Form<OAuthTokenRequest>,
+) -> Response {
+    let Some(signing_secret) = state.analytics_exclusion_token.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let authorization = state
+        .oauth_codes
+        .lock()
+        .expect("OAuth code mutex poisoned")
+        .remove(&request.code);
+    let Some(authorization) = authorization else {
+        return oauth_token_error("invalid_grant", "Authorization code is invalid or expired.");
+    };
+    if !(43..=128).contains(&request.code_verifier.len())
+        || !request
+            .code_verifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~'))
+    {
+        return oauth_token_error("invalid_grant", "PKCE verifier is malformed.");
+    }
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(request.code_verifier.as_bytes()));
+    if request.grant_type != "authorization_code"
+        || authorization.expires_at <= Utc::now()
+        || request.client_id != authorization.client_id
+        || request.redirect_uri != authorization.redirect_uri
+        || request.resource.as_deref() != Some(authorization.resource.as_str())
+        || challenge != authorization.code_challenge
+    {
+        return oauth_token_error(
+            "invalid_grant",
+            "Authorization code binding or PKCE verification failed.",
+        );
+    }
+    let access_token =
+        match analytics_oauth_access_token(signing_secret, &authorization.resource, Utc::now()) {
+            Ok(token) => token,
+            Err(description) => return oauth_token_error("server_error", description),
+        };
+    let mut response = Json(json!({
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS,
+        "scope": authorization.scope
+    }))
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn oauth_token_error(error: &str, description: &str) -> Response {
+    let mut response = (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": error, "error_description": description})),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn public_base_url_from_env() -> String {
@@ -6035,6 +6635,131 @@ mod tests {
         }
     }
 
+    #[test]
+    fn oauth_authorization_accepts_only_chatgpt_callbacks_scoped_resource_and_s256_pkce() {
+        let resource = "https://mcp.agentbounties.app";
+        let request = OAuthAuthorizationQuery {
+            response_type: "code".to_string(),
+            client_id: "https://chatgpt.com/oauth/agent-bounties/client.json".to_string(),
+            redirect_uri: "https://chatgpt.com/connector/oauth/callback_123".to_string(),
+            code_challenge: "a".repeat(43),
+            code_challenge_method: "S256".to_string(),
+            scope: ANALYTICS_EXCLUSION_SCOPE.to_string(),
+            state: Some("opaque-state".to_string()),
+            resource: Some(resource.to_string()),
+        };
+        assert!(validate_oauth_authorization_request(&request, resource));
+
+        let mut evil_redirect = request.clone();
+        evil_redirect.redirect_uri =
+            "https://chatgpt.com.evil.example/connector/oauth/callback_123".to_string();
+        assert!(!validate_oauth_authorization_request(
+            &evil_redirect,
+            resource
+        ));
+
+        let mut wrong_resource = request.clone();
+        wrong_resource.resource = Some("https://api.agentbounties.app".to_string());
+        assert!(!validate_oauth_authorization_request(
+            &wrong_resource,
+            resource
+        ));
+
+        let mut weak_pkce = request;
+        weak_pkce.code_challenge_method = "plain".to_string();
+        assert!(!validate_oauth_authorization_request(&weak_pkce, resource));
+    }
+
+    #[tokio::test]
+    async fn oauth_code_exchange_is_pkce_bound_single_use_and_analytics_only() {
+        let state = test_state_with_analytics_token("analytics-secret");
+        let verifier = "v".repeat(64);
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        state.oauth_codes.lock().expect("OAuth code mutex").insert(
+            "one-time-code".to_string(),
+            OAuthAuthorizationCode {
+                client_id: "agent-bounties-chatgpt-11111111-1111-4111-8111-111111111111"
+                    .to_string(),
+                redirect_uri: "https://chatgpt.com/connector/oauth/callback_123".to_string(),
+                code_challenge: challenge,
+                scope: ANALYTICS_EXCLUSION_SCOPE.to_string(),
+                resource: "https://mcp.agentbounties.app".to_string(),
+                expires_at: Utc::now() + chrono::Duration::minutes(1),
+            },
+        );
+        let request = OAuthTokenRequest {
+            grant_type: "authorization_code".to_string(),
+            code: "one-time-code".to_string(),
+            redirect_uri: "https://chatgpt.com/connector/oauth/callback_123".to_string(),
+            client_id: "agent-bounties-chatgpt-11111111-1111-4111-8111-111111111111".to_string(),
+            code_verifier: verifier,
+            resource: Some("https://mcp.agentbounties.app".to_string()),
+        };
+        let response = oauth_token(State(state.clone()), Form(request)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let access_token = body["access_token"].as_str().unwrap();
+        assert_ne!(access_token, "analytics-secret");
+        assert!(analytics_oauth_access_token_is_authorized(
+            "analytics-secret",
+            access_token,
+            "https://mcp.agentbounties.app",
+            Utc::now()
+        ));
+        assert_eq!(body["scope"], ANALYTICS_EXCLUSION_SCOPE);
+        assert!(state
+            .oauth_codes
+            .lock()
+            .expect("OAuth code mutex")
+            .is_empty());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {access_token}")).unwrap(),
+        );
+        assert!(analytics_exclusion_is_authorized(&state, &headers));
+        assert!(require_operator(&state, &headers).is_err());
+
+        assert!(!analytics_oauth_access_token_is_authorized(
+            "analytics-secret",
+            access_token,
+            "https://wrong.example",
+            Utc::now()
+        ));
+        assert!(!analytics_oauth_access_token_is_authorized(
+            "wrong-secret",
+            access_token,
+            "https://mcp.agentbounties.app",
+            Utc::now()
+        ));
+        let expired = analytics_oauth_access_token(
+            "analytics-secret",
+            "https://mcp.agentbounties.app",
+            Utc::now() - chrono::Duration::days(91),
+        )
+        .unwrap();
+        assert!(!analytics_oauth_access_token_is_authorized(
+            "analytics-secret",
+            &expired,
+            "https://mcp.agentbounties.app",
+            Utc::now()
+        ));
+
+        let mut attested = StatusCode::OK.into_response();
+        attest_analytics_exclusion(&mut attested, true);
+        assert_eq!(
+            attested
+                .headers()
+                .get(ANALYTICS_EXCLUDED_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
     #[tokio::test]
     async fn tool_descriptors_publish_machine_readable_input_schemas() {
         let descriptors = tools().await.0;
@@ -7133,6 +7858,18 @@ mod tests {
         test_state_with_network(BountyNetwork::default())
     }
 
+    #[test]
+    fn interface_attribution_distinguishes_http_adapter_from_protocol_endpoint() {
+        assert!(is_mcp_http_adapter_path("/tools"));
+        assert!(is_mcp_http_adapter_path("/tools/list_opportunities"));
+        assert!(!is_mcp_http_adapter_path("/mcp"));
+        assert!(!is_mcp_http_adapter_path("/health"));
+        assert!(!analytics_exclusion_is_authorized(
+            &test_state(),
+            &HeaderMap::new()
+        ));
+    }
+
     fn test_state_with_network(network: BountyNetwork) -> SharedState {
         Arc::new(AppState {
             network: Mutex::new(network),
@@ -7144,6 +7881,10 @@ mod tests {
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: None,
             operator_api_token: None,
+            analytics_exclusion_token: None,
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            oauth_authorizations: Mutex::new(HashMap::new()),
+            oauth_codes: Mutex::new(HashMap::new()),
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
@@ -7162,6 +7903,10 @@ mod tests {
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: Some(payment_method_configuration.to_string()),
             operator_api_token: None,
+            analytics_exclusion_token: None,
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            oauth_authorizations: Mutex::new(HashMap::new()),
+            oauth_codes: Mutex::new(HashMap::new()),
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
@@ -7178,6 +7923,30 @@ mod tests {
             stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
             stripe_payment_method_configuration: None,
             operator_api_token: Some(token.to_string()),
+            analytics_exclusion_token: None,
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            oauth_authorizations: Mutex::new(HashMap::new()),
+            oauth_codes: Mutex::new(HashMap::new()),
+            store: None,
+            recovery_reservations: AutonomousBountyRecoveryReservations::default(),
+        })
+    }
+
+    fn test_state_with_analytics_token(token: &str) -> SharedState {
+        Arc::new(AppState {
+            network: Mutex::new(BountyNetwork::default()),
+            eval_runs: Mutex::new(Vec::new()),
+            base_rpc_urls: BaseRpcUrlConfig::default(),
+            base_broadcast_enabled: false,
+            stripe_secret_key: None,
+            stripe_live_execution_enabled: false,
+            stripe_api_base_url: STRIPE_API_BASE_URL.to_string(),
+            stripe_payment_method_configuration: None,
+            operator_api_token: Some("operator-secret".to_string()),
+            analytics_exclusion_token: Some(token.to_string()),
+            mcp_base_url: "https://mcp.agentbounties.app".to_string(),
+            oauth_authorizations: Mutex::new(HashMap::new()),
+            oauth_codes: Mutex::new(HashMap::new()),
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })
