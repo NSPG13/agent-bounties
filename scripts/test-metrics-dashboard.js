@@ -51,6 +51,14 @@ function github(overrides = {}) {
     weekly: { latest_active_identities: 4, previous_active_identities: 1 },
     first_month: { active_identities: 7 },
     coverage: { status: "ready" },
+    repository_acquisition: {
+      generated_at: "2026-08-12T20:00:00Z",
+      clone_events: 9654,
+      unique_cloners: 446,
+      page_views: 883,
+      unique_visitors: 218,
+      coverage: { status: "ready", unique_audiences_are_additive: false },
+    },
     ...overrides,
   };
 }
@@ -131,4 +139,13 @@ test("lifetime acquisition lookback is bounded to the public API contract", () =
   assert.equal(metrics.acquisitionWindowHours("7d", NOW), 168);
   assert.ok(metrics.acquisitionWindowHours("lifetime", NOW) >= 1);
   assert.ok(metrics.acquisitionWindowHours("lifetime", Date.parse("2028-08-12T00:00:00Z")) <= 8760);
+});
+
+test("repository traffic has an independent honest status and comparable baseline", () => {
+  assert.equal(metrics.dashboardStatus("ready", "ready"), "ready");
+  assert.equal(metrics.dashboardStatus("ready", "unavailable"), "partial");
+  assert.equal(metrics.dashboardStatus("ready", "delayed"), "delayed");
+  assert.equal(metrics.dashboardStatus("unavailable", "ready"), "unavailable");
+  assert.equal(metrics.ratioMultiple(9654, 2448).toFixed(1), "3.9");
+  assert.equal(metrics.ratioMultiple(9654, 0), null);
 });

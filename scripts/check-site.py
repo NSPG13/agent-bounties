@@ -316,10 +316,14 @@ def main() -> int:
             "Mature claim-to-settlement",
             "Role counts are not additive",
             "Browser/device IDs",
+            "Thousands of repository actions",
+            "Unique cloners",
+            "Unique visitors",
+            "Unique repository users measured by GitHub",
             "Monetization not active",
             "Only a confirmed canonical <code>BountySettled</code> event proves solver payment",
-            'data-period="7d" aria-pressed="true"',
-            'data-period="lifetime"',
+            'data-period="lifetime" aria-pressed="true"',
+            'data-period="7d" aria-pressed="false"',
         ],
     )
     require_phrases(

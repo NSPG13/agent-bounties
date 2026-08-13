@@ -42,6 +42,22 @@ MENTION_RE = re.compile(r"(?<![A-Za-z0-9-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))"
 PLATFORM_LAUNCH_AT = "2026-07-08T20:22:19Z"
 PLATFORM_FIRST_MONTH_ENDED_AT = "2026-08-08T20:22:19Z"
 PUBLIC_METRICS_PERIOD_DAYS = {"7d": 7, "28d": 28, "90d": 90}
+PUBLIC_REPOSITORY_TRAFFIC_SNAPSHOTS = (
+    {
+        "observed_at": "2026-07-09T23:09:23Z",
+        "clone_events": 1260,
+        "unique_cloners": 222,
+        "page_views": 98,
+        "unique_visitors": 28,
+    },
+    {
+        "observed_at": "2026-07-11T06:58:04Z",
+        "clone_events": 2448,
+        "unique_cloners": 310,
+        "page_views": 280,
+        "unique_visitors": 58,
+    },
+)
 
 
 def utc_now() -> str:
@@ -77,11 +93,37 @@ def gh_api(repository: str, suffix: str, *, accept: str | None = None) -> list[d
     return flatten_pages(json.loads(completed.stdout))
 
 
+def gh_api_json(repository: str, suffix: str) -> Any:
+    completed = subprocess.run(
+        ["gh", "api", f"repos/{repository}/{suffix.lstrip('/')}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
+    return json.loads(completed.stdout)
+
+
+def collect_repository_traffic(repository: str) -> dict[str, Any]:
+    """Collect GitHub's aggregate rolling traffic without paths or identities."""
+
+    try:
+        clones = gh_api_json(repository, "traffic/clones?per=day")
+        views = gh_api_json(repository, "traffic/views?per=day")
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return {"status": "unavailable"}
+    if not isinstance(clones, dict) or not isinstance(views, dict):
+        return {"status": "unavailable"}
+    return {"status": "ready", "clones": clones, "views": views}
+
+
 def collect_snapshot(
     repository: str,
     *,
     include_enrichment: bool = True,
     activity_since: str | None = None,
+    include_repository_traffic: bool = False,
 ) -> dict[str, Any]:
     issues = gh_api(repository, "issues?state=all&per_page=100")
     pulls = gh_api(repository, "pulls?state=all&per_page=100")
@@ -147,6 +189,11 @@ def collect_snapshot(
         "reviews": reviews,
         "reactions": reactions,
         "stargazers": stargazers,
+        "repository_traffic": (
+            collect_repository_traffic(repository)
+            if include_repository_traffic
+            else {"status": "unavailable"}
+        ),
     }
 
 
@@ -489,6 +536,87 @@ def public_metrics_policy(path: Path | None) -> dict[str, Any]:
     return value
 
 
+def build_public_repository_acquisition(
+    snapshot: dict[str, Any], generated_at: datetime
+) -> dict[str, Any]:
+    traffic = snapshot.get("repository_traffic")
+    base: dict[str, Any] = {
+        "source": "github_repository_traffic",
+        "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "window_kind": "rolling_14_days",
+        "window_days": 14,
+        "historical_snapshots": [
+            dict(value) for value in PUBLIC_REPOSITORY_TRAFFIC_SNAPSHOTS
+        ],
+        "coverage": {"status": "unavailable"},
+        "definitions": {
+            "clone_events": "Repository clone operations in GitHub's rolling 14-day traffic window.",
+            "unique_cloners": "Unique repository users measured by GitHub as cloners in the rolling window.",
+            "page_views": "Repository page views in GitHub's rolling 14-day traffic window.",
+            "unique_visitors": "Unique repository users measured by GitHub as visitors in the rolling window.",
+            "overlap": "GitHub does not expose overlap between unique cloners and unique visitors, so they are not summed or added to active platform identities.",
+        },
+    }
+    if not isinstance(traffic, dict) or traffic.get("status") != "ready":
+        return base
+    clones = traffic.get("clones")
+    views = traffic.get("views")
+    if not isinstance(clones, dict) or not isinstance(views, dict):
+        return base
+
+    def count(value: Any) -> int | None:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    clone_events = count(clones.get("count"))
+    unique_cloners = count(clones.get("uniques"))
+    page_views = count(views.get("count"))
+    unique_visitors = count(views.get("uniques"))
+    if None in (clone_events, unique_cloners, page_views, unique_visitors):
+        return base
+    if unique_cloners > clone_events or unique_visitors > page_views:
+        return base
+
+    timestamps = []
+    for series_name, payload in (("clones", clones), ("views", views)):
+        series = payload.get(series_name)
+        if not isinstance(series, list):
+            return base
+        for point in series:
+            if not isinstance(point, dict):
+                return base
+            timestamp = parse_utc_timestamp(point.get("timestamp"))
+            if (
+                timestamp is None
+                or count(point.get("count")) is None
+                or count(point.get("uniques")) is None
+            ):
+                return base
+            timestamps.append(timestamp)
+    if not timestamps:
+        return base
+
+    base.update(
+        {
+            "started_at": min(timestamps).isoformat().replace("+00:00", "Z"),
+            "ended_at": (max(timestamps) + timedelta(days=1))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "clone_events": clone_events,
+            "unique_cloners": unique_cloners,
+            "page_views": page_views,
+            "unique_visitors": unique_visitors,
+            "coverage": {
+                "status": "ready",
+                "raw_identifiers_included": False,
+                "unique_audiences_are_additive": False,
+            },
+        }
+    )
+    return base
+
+
 def build_public_participation_metrics(
     snapshot: dict[str, Any],
     owner_login: str,
@@ -657,6 +785,7 @@ def build_public_participation_metrics(
     first_month = aggregate(launch_at, first_month_ended_at)
     latest_week = periods["7d"]["active_identities"]
     previous_week = periods["7d"]["previous_active_identities"]
+    repository_acquisition = build_public_repository_acquisition(snapshot, generated_at)
 
     return {
         "schema_version": "agent-bounties/github-participation-v1",
@@ -672,6 +801,7 @@ def build_public_participation_metrics(
             "previous_active_identities": previous_week,
         },
         "first_month": first_month,
+        "repository_acquisition": repository_acquisition,
         "coverage": {
             "status": "partial" if missing_timestamp_records else "ready",
             "qualifying_records": len(activity),
@@ -783,6 +913,7 @@ def main() -> int:
             args.repository,
             include_enrichment=not args.public_metrics_only,
             activity_since=PLATFORM_LAUNCH_AT if args.public_metrics_only else None,
+            include_repository_traffic=args.public_metrics_only,
         )
     snapshot.setdefault("repository", args.repository)
     if args.snapshot_output:

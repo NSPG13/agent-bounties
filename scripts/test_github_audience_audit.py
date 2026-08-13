@@ -131,6 +131,74 @@ class GitHubAudienceAuditTests(unittest.TestCase):
         self.assertEqual(snapshot["reactions"], [])
         self.assertEqual(snapshot["stargazers"], [])
 
+    def test_repository_traffic_is_aggregate_only_and_preserves_window_scope(self) -> None:
+        snapshot = {
+            "fetched_at": "2026-08-12T20:22:19Z",
+            "repository_traffic": {
+                "status": "ready",
+                "clones": {
+                    "count": 9654,
+                    "uniques": 446,
+                    "clones": [
+                        {"timestamp": "2026-07-30T00:00:00Z", "count": 4000, "uniques": 250},
+                        {"timestamp": "2026-08-12T00:00:00Z", "count": 5654, "uniques": 300},
+                    ],
+                },
+                "views": {
+                    "count": 883,
+                    "uniques": 218,
+                    "views": [
+                        {"timestamp": "2026-07-30T00:00:00Z", "count": 300, "uniques": 100},
+                        {"timestamp": "2026-08-12T00:00:00Z", "count": 583, "uniques": 140},
+                    ],
+                },
+            },
+        }
+
+        acquisition = MODULE.build_public_repository_acquisition(
+            snapshot, MODULE.parse_utc_timestamp(snapshot["fetched_at"])
+        )
+        serialized = json.dumps(acquisition).lower()
+
+        self.assertEqual(acquisition["coverage"]["status"], "ready")
+        self.assertEqual(acquisition["clone_events"], 9654)
+        self.assertEqual(acquisition["unique_cloners"], 446)
+        self.assertEqual(acquisition["page_views"], 883)
+        self.assertEqual(acquisition["unique_visitors"], 218)
+        self.assertEqual(acquisition["started_at"], "2026-07-30T00:00:00Z")
+        self.assertEqual(acquisition["ended_at"], "2026-08-13T00:00:00Z")
+        self.assertFalse(acquisition["coverage"]["unique_audiences_are_additive"])
+        self.assertNotIn("login", serialized)
+        self.assertNotIn("github.com/", serialized)
+
+    def test_repository_traffic_fails_closed_when_counts_are_invalid(self) -> None:
+        generated_at = MODULE.parse_utc_timestamp("2026-08-12T20:22:19Z")
+        acquisition = MODULE.build_public_repository_acquisition(
+            {
+                "repository_traffic": {
+                    "status": "ready",
+                    "clones": {"count": 2, "uniques": 3, "clones": []},
+                    "views": {"count": 1, "uniques": 1, "views": []},
+                }
+            },
+            generated_at,
+        )
+        self.assertEqual(acquisition["coverage"]["status"], "unavailable")
+        self.assertNotIn("clone_events", acquisition)
+
+    def test_repository_traffic_collection_uses_only_aggregate_endpoints(self) -> None:
+        payloads = {
+            "traffic/clones?per=day": {"count": 9, "uniques": 4, "clones": []},
+            "traffic/views?per=day": {"count": 8, "uniques": 3, "views": []},
+        }
+        with patch.object(
+            MODULE, "gh_api_json", side_effect=lambda _repo, suffix: payloads[suffix]
+        ) as api:
+            traffic = MODULE.collect_repository_traffic("NSPG13/agent-bounties")
+
+        self.assertEqual(traffic["status"], "ready")
+        self.assertEqual(api.call_count, 2)
+
     def test_public_activity_is_deduplicated_and_bots_are_excluded(self) -> None:
         handles = [participant["handle"] for participant in self.audit["participants"]]
         self.assertEqual(handles, ["alice-agent", "bob-human"])
