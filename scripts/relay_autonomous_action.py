@@ -446,6 +446,19 @@ class CastClient:
             raise RelayError("cast send receipt is not an object")
         return receipt
 
+    def receipt(self, transaction_hash: str) -> dict[str, Any]:
+        output = self.run(
+            "receipt",
+            transaction_hash,
+            "--rpc-url",
+            self.rpc_url,
+            "--json",
+        )
+        receipt = json.loads(output)
+        if not isinstance(receipt, dict):
+            raise RelayError("cast receipt response is not an object")
+        return receipt
+
     def keeper_address(self, private_key: str) -> str:
         return normalize_address(
             self.run("wallet", "address", "--private-key", private_key)
@@ -968,6 +981,14 @@ def relay(
     if not execute:
         return report
     receipt = client.send(normalized_key, gas_limit, contract, signature, *args)
+    if receipt.get("blockNumber") is None and receipt.get("block_number") is None:
+        transaction_hash = receipt.get("transactionHash") or receipt.get("transaction_hash")
+        if not isinstance(transaction_hash, str) or not HEX_32_RE.fullmatch(transaction_hash):
+            raise RelayError("relay receipt is missing a canonical transaction hash")
+        # A provider may return the successful send result before its receipt payload has
+        # populated the block fields. Re-querying by hash observes the already-broadcast
+        # transaction and must never send a second transaction.
+        receipt = client.receipt(transaction_hash)
     transaction_hash, block_tag = validate_receipt(receipt, contract)
     after = read_state(client, contract, block=block_tag)
     validate_after(action, envelope, state, after)

@@ -113,6 +113,7 @@ class FakeClient:
     def __init__(self, *, verifier_passed: bool = True) -> None:
         self.verifier_passed = verifier_passed
         self.sent = False
+        self.receipt_queried = False
         self.estimated = False
 
     def call(self, contract: str, signature: str, *args: str, block: str | None = None) -> str:
@@ -146,6 +147,16 @@ class FakeClient:
             "status": "0x1",
             "to": contract,
             "transactionHash": "0x" + "ab" * 32,
+            "blockNumber": "0x1234",
+        }
+
+    def receipt(self, transaction_hash: str):
+        self.receipt_queried = True
+        self.receipt_hash = transaction_hash
+        return {
+            "status": "0x1",
+            "to": CONTRACT,
+            "transactionHash": transaction_hash,
             "blockNumber": "0x1234",
         }
 
@@ -558,6 +569,40 @@ class RelayTests(unittest.TestCase):
             relay.read_state = original
         self.assertEqual(report["outcome"], "already_applied")
         self.assertFalse(client.sent)
+
+    def test_post_confirm_null_block_requeries_receipt_without_rebroadcast(self) -> None:
+        client = FakeClient()
+        transaction_hash = "0x" + "ab" * 32
+        original_send = client.send
+
+        def send_with_null_block(*args: object):
+            receipt = original_send(*args)
+            receipt["blockNumber"] = None
+            return receipt
+
+        client.send = send_with_null_block  # type: ignore[method-assign]
+        before = bounty_state()
+        after = bounty_state(
+            status=relay.STATUS_CLAIMED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+        )
+        states = iter((before, after))
+        original_read_state = relay.read_state
+        relay.read_state = lambda ignored, contract, block=None: next(states)  # type: ignore[assignment]
+        try:
+            report = relay.relay(
+                client, event(claim_envelope()), execute=True, private_key=PRIVATE_KEY
+            )
+        finally:
+            relay.read_state = original_read_state
+        self.assertEqual(report["outcome"], "relayed")
+        self.assertEqual(report["transaction_hash"], transaction_hash)
+        self.assertTrue(client.receipt_queried)
+        self.assertEqual(client.receipt_hash, transaction_hash)
+        self.assertTrue(client.sent)
 
     def test_gas_and_balance_caps_fail_before_send(self) -> None:
         client = FakeClient()
