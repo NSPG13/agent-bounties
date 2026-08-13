@@ -10336,7 +10336,11 @@ async fn run_durable_recovery_attempt(
             && request.verification_expires_at == attempt.verification_expires_at
             && request.active_bond == attempt.active_bond
             && request.calldata.eq_ignore_ascii_case(&attempt.calldata)
-            && request.lease_token == attempt.lease_token;
+            && request.lease_token == attempt.lease_token
+            && request.signed_transaction.eq_ignore_ascii_case(&attempt.signed_transaction)
+            && decode_signed_transaction_binding(&request.signed_transaction)
+                .map(|binding| binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash))
+                .unwrap_or(false);
         if !immutable_match { return Err(StatusCode::CONFLICT); }
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
             evidence_boundary: "Existing durable recovery state is authoritative; replay performs zero resend and requires reconciliation for canonical evidence.".into() }));
@@ -21839,7 +21843,7 @@ fix-ci-failure
 
     #[test]
     fn recovery_live_preflight_and_poststate_reject_every_drift() {
-        let hash=RECOVERY_772_CODE_HASH;
+        let hash=RECOVERY_772_CODE_HASH.to_string();
         let solver=RECOVERY_772_SOLVER;
         let base=chain_base::RecoveryChainPreflight{block_number:1,block_hash:format!("0x{}","aa".repeat(32)),code_hash:hash.into(),latest_nonce:41,
             pending_nonce:41,status:3,round:4,solver:solver.into(),verification_expires_at:1_786_586_903,
