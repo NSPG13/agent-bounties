@@ -4155,11 +4155,21 @@ async fn production_smoke_check(
         }))
         .send()
         .await?;
+    let discover_status = discover_response.status();
+    let discover_json: serde_json::Value = discover_response.json().await?;
+    if discover_json
+        .pointer("/error/code")
+        .and_then(|value| value.as_i64())
+        == Some(-32601)
+    {
+        bail!(
+            "MCP 2026-07-28 server/discover is unavailable: the deployed endpoint is legacy-only; deploy the dual-era MCP server before treating the modern core as live"
+        );
+    }
     require(
-        discover_response.status().is_success(),
+        discover_status.is_success(),
         "MCP 2026-07-28 server/discover must succeed",
     )?;
-    let discover_json: serde_json::Value = discover_response.json().await?;
     require(
         discover_json["result"]["supportedVersions"] == serde_json::json!(["2026-07-28"])
             && value_str(&discover_json, "/result/resultType") == Some("complete")
@@ -4167,7 +4177,7 @@ async fn production_smoke_check(
                 &discover_json,
                 "/result/_meta/io.modelcontextprotocol~1serverInfo/name",
             ) == Some("agent-bounties"),
-        "MCP 2026-07-28 discovery contract drifted",
+        "MCP 2026-07-28 discovery response is missing the supported version, complete result type, or server identity",
     )?;
 
     let initialize_response = client

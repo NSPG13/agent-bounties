@@ -86,5 +86,16 @@ The gate checks:
   authenticated star/upvote execution.
 - Persisted eval history when explicitly required.
 
+For a faster MCP-only deployment diagnosis, run:
+
+```bash
+python scripts/check-mcp-protocol-eras.py \
+  --endpoint https://mcp.agentbounties.app/mcp \
+  --expect dual
+```
+
+`--expect legacy` proves only the compatibility lane. It is not modern-core
+release evidence.
+
 Do not enable GitHub funding-comment handoffs against a hosted API until this
 gate passes for that exact API URL and revision.

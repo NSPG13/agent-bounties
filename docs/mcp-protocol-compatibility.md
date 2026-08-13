@@ -1,9 +1,18 @@
 # MCP protocol compatibility
 
-The hosted Streamable HTTP endpoint at `/mcp` implements the modern MCP
-`2026-07-28` wire contract and retains a separate legacy compatibility lane for
-clients that still initialize with `2024-11-05`, `2025-03-26`, or
-`2025-06-18`.
+The server revision documented here implements the modern MCP `2026-07-28`
+wire contract and retains a separate legacy compatibility lane for clients that
+still initialize with `2024-11-05`, `2025-03-26`, or `2025-06-18`.
+
+A healthy `/health` route or working legacy connector does not prove that the
+modern core is deployed. Treat a hosted endpoint as dual-era only when this
+read-only probe passes:
+
+```bash
+python scripts/check-mcp-protocol-eras.py \
+  --endpoint https://mcp.agentbounties.app/mcp \
+  --expect dual
+```
 
 ## Compatibility boundary
 
@@ -18,6 +27,37 @@ Modern and legacy MCP implementations are not directly interoperable. The
 endpoint therefore detects the era from the modern protocol header/request
 metadata or `server/discover`; it does not mix modern fields into legacy
 responses.
+
+## Why this change benefits Agent Bounties
+
+At first principles, connection state is hidden coupling: if correctness
+depends on which server handled an earlier handshake, requests need sticky
+routing or shared session storage. A self-contained request can be retried or
+sent to any healthy instance. That gives us simpler horizontal scaling and
+failure recovery on ordinary HTTP infrastructure.
+
+The remaining incentives line up across participants:
+
+- clients gain explicit version errors, safe retry/failover, and cacheable,
+  deterministic catalogs;
+- servers remove session-affinity infrastructure and can evolve optional
+  features through extensions instead of expanding the core handshake;
+- gateways can route, authorize, rate-limit, and observe a method or tool from
+  `Mcp-Method` and `Mcp-Name` without parsing the entire JSON body;
+- Agent Bounties can keep the existing ChatGPT/legacy lane while deploying the
+  modern lane independently, then measure adoption before retiring anything.
+
+The tradeoff is that each modern request carries more metadata, and the server
+must validate the header/body pair. The dual-era boundary intentionally pays
+some temporary implementation complexity to avoid pushing a flag-day migration
+onto existing users.
+
+Normal app users do not select an era manually. A dual-era client should try
+modern discovery first. A recognized modern error must be corrected as a
+modern request; an unrecognized error response identifies a legacy server and
+can trigger the `initialize` fallback. For Streamable HTTP, inspect the JSON-RPC
+body of a `4xx` response before falling back. Existing clients that only
+implement the legacy handshake continue to use that lane.
 
 ## Modern request contract
 
@@ -46,6 +86,17 @@ MCP-Protocol-Version: 2026-07-28
 Mcp-Method: server/discover
 
 {"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"example-client","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}}}
+```
+
+An older client starts with the legacy handshake and then sends legacy-shaped
+requests without modern request metadata:
+
+```http
+POST /mcp
+Accept: application/json, text/event-stream
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example-client","version":"1"}}}
 ```
 
 Successful modern results include `resultType: "complete"` and server identity
@@ -77,6 +128,7 @@ boundary, not an authentication substitute.
 cargo test -p mcp-server chatgpt_app::tests
 cargo build -p mcp-server
 python scripts/check-chatgpt-app-runtime.py
+python scripts/check-mcp-protocol-eras.py --endpoint http://127.0.0.1:8080/mcp --expect dual
 ```
 
 The runtime check calls modern `server/discover`, modern catalogs, a resource,
@@ -84,7 +136,11 @@ and a tool, plus legacy `initialize` and a legacy catalog through the real HTTP
 endpoint.
 
 The deployed production smoke performs modern discovery and legacy initialize
-against the published endpoint.
+against the published endpoint. A health response alone is not sufficient
+release evidence.
+
+For choosing between the app, raw MCP, REST API, and CLI, see the
+[interaction guide](interaction-guide.md).
 
 Protocol references:
 
