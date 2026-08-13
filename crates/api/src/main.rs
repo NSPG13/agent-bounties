@@ -46,7 +46,8 @@ use chain_base::{
     plan_open_competition_action, plan_open_competition_creation,
     plan_open_competition_entrant_action, plan_standing_meta_v4_action,
     prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
-    decode_signed_transaction_binding, standing_meta_v2_parent_context, standing_meta_v4_readiness,
+    decode_signed_transaction_binding, observe_erc20_balance_at_block, observe_recovery_preflight,
+    observe_word_at_block, standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
     validate_autonomous_creation_for_public_earning, validate_open_competition_commitment_envelope,
     AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
@@ -2081,8 +2082,7 @@ struct DurableRecoveryReport {
 
 #[derive(Debug, Clone, Deserialize)]
 struct RecoveryReconciliationRequest {
-    recovery_identity: String, solver_balance_before: u64, solver_balance_after: u64,
-    post_status: i16, post_round: u64, post_active_bond: u64, request_id: Option<u64>,
+    recovery_identity: String, request_id: Option<u64>,
 }
 
 fn valid_recovery_772_tuple(request: &DurableRecoveryRequest, code_hash: &str,
@@ -10327,6 +10327,16 @@ async fn run_durable_recovery_attempt(
         return Err(StatusCode::BAD_REQUEST);
     }
     let hash = binding.hash;
+    let (_, rpc_url) = state.base_rpc_urls.resolve("base-mainnet").map_err(|e| base_rpc_fetch_status(&e))?;
+    let preflight = observe_recovery_preflight(&rpc_url, RECOVERY_772_CONTRACT,
+        &authorized_signer, request.request_id.unwrap_or(1)).await.map_err(|e| base_rpc_fetch_status(&e))?;
+    if !preflight.code_hash.eq_ignore_ascii_case(&expected_code_hash)
+        || preflight.latest_nonce != 41 || preflight.pending_nonce != 41
+        || preflight.status != 3 || preflight.round != 4
+        || !preflight.solver.eq_ignore_ascii_case(&expected_solver)
+        || preflight.verification_expires_at != 1_786_586_903 || preflight.active_bond != 10_000 {
+        return Err(StatusCode::CONFLICT);
+    }
     let request_id = request.request_id.unwrap_or(1);
     let proposed = NewRecoveryAttempt {
         recovery_identity: request.recovery_identity, network: "base-mainnet".into(),
@@ -10342,7 +10352,7 @@ async fn run_durable_recovery_attempt(
         DbError::RecoveryAttemptConflict(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     })?;
-    if attempt.status != RecoveryAttemptStatus::Prepared {
+    if attempt.status != RecoveryAttemptStatus::Reserved {
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
             evidence_boundary: "A stored hash is not canonical expiry evidence; reconcile the receipt and exact SubmissionExpired event.".into() }));
     }
@@ -10354,7 +10364,6 @@ async fn run_durable_recovery_attempt(
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
             evidence_boundary: "Another request already crossed the durable broadcast boundary. This replay performs zero resend.".into() }));
     };
-    let (_, rpc_url) = state.base_rpc_urls.resolve("base-mainnet").map_err(|e| base_rpc_fetch_status(&e))?;
     match broadcast_signed_transaction(&rpc_url, &proposed.signed_transaction, request_id).await {
         Ok(response) => {
             if !response.result.eq_ignore_ascii_case(&hash) { return Err(StatusCode::BAD_GATEWAY); }
@@ -10405,9 +10414,20 @@ async fn reconcile_durable_recovery_attempt(
             && event.data["round"] == 4 && event.data["claim_bond_refunded"] == 10_000
             && event.data["solver"].as_str().is_some_and(|v| v.to_ascii_lowercase().ends_with("c49e"));
     }
-    let exact_poststate = request.post_status == 1 && request.post_round == 4
-        && request.post_active_bond == 0
-        && request.solver_balance_after.checked_sub(request.solver_balance_before) == Some(10_000);
+    if block == 0 { return Err(StatusCode::CONFLICT); }
+    let id=request.request_id.unwrap_or(1)+20;
+    let post_status = u64::from_be_bytes(observe_word_at_block(&rpc_url,RECOVERY_772_CONTRACT,"status()",block,id).await
+        .map_err(|e|base_rpc_fetch_status(&e))?[24..].try_into().unwrap());
+    let post_round = u64::from_be_bytes(observe_word_at_block(&rpc_url,RECOVERY_772_CONTRACT,"round()",block,id+1).await
+        .map_err(|e|base_rpc_fetch_status(&e))?[24..].try_into().unwrap());
+    let post_bond = u64::from_be_bytes(observe_word_at_block(&rpc_url,RECOVERY_772_CONTRACT,"activeClaimBond()",block,id+2).await
+        .map_err(|e|base_rpc_fetch_status(&e))?[24..].try_into().unwrap());
+    let before = observe_erc20_balance_at_block(&rpc_url,"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        &attempt.solver_address,block-1,id+3).await.map_err(|e|base_rpc_fetch_status(&e))?;
+    let after = observe_erc20_balance_at_block(&rpc_url,"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        &attempt.solver_address,block,id+4).await.map_err(|e|base_rpc_fetch_status(&e))?;
+    let exact_poststate = post_status == 1 && post_round == 4 && post_bond == 0
+        && after.checked_sub(before) == Some(10_000);
     if !exact_event || !exact_poststate { return Err(StatusCode::CONFLICT); }
     let event_id = Uuid::new_v5(&Uuid::NAMESPACE_URL,
         format!("{}:{}", attempt.signed_transaction_hash, block).as_bytes());

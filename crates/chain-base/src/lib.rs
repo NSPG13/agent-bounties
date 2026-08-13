@@ -5933,6 +5933,57 @@ pub fn decode_signed_transaction_binding(transaction: &str) -> Result<SignedTran
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryChainPreflight {
+    pub code_hash: String, pub latest_nonce: u64, pub pending_nonce: u64,
+    pub status: u64, pub round: u64, pub solver: String,
+    pub verification_expires_at: u64, pub active_bond: u64,
+}
+
+pub async fn observe_recovery_preflight(rpc_url: &str, contract: &str, relayer: &str,
+    request_id: u64) -> Result<RecoveryChainPreflight, ChainBaseError> {
+    let transport = ReqwestJsonRpcTransport::default();
+    let contract = normalize_address(contract)?; let relayer = normalize_address(relayer)?;
+    let code_hash = fetch_account_code_hash(rpc_url, &contract, "latest", request_id, &transport).await?;
+    let quantity = |value: Value, method: &str| -> Result<u64, ChainBaseError> {
+        parse_rpc_quantity(value.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse(
+            format!("{method} result is not a quantity")))?)
+    };
+    async fn rpc_value(t:&ReqwestJsonRpcTransport,url:&str,id:u64,method:&'static str,params:Value)->Result<Value,ChainBaseError>{
+        rpc_result(t.post_json_value(url,&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).await?,id,method)
+    }
+    let latest_nonce = quantity(rpc_value(&transport,rpc_url,request_id+1,"eth_getTransactionCount",json!([relayer,"latest"])).await?, "latest nonce")?;
+    let pending_nonce = quantity(rpc_value(&transport,rpc_url,request_id+2,"eth_getTransactionCount",json!([relayer,"pending"])).await?, "pending nonce")?;
+    async fn call_word(rpc_url: &str, contract: &str, signature: &str, id: u64,
+        transport: &ReqwestJsonRpcTransport) -> Result<[u8;32], ChainBaseError> {
+        let value = rpc_result(transport.post_json_value(rpc_url, &json!({"jsonrpc":"2.0","id":id,
+            "method":"eth_call","params":[{"to":contract,"data":encode_call(signature,vec![])},"latest"]})).await?,id,"eth_call")?;
+        parse_bytes32(value.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse("eth_call word missing".into()))?)
+    }
+    let status = word_to_u64(call_word(rpc_url,&contract,"status()",request_id+3,&transport).await?,"status")?;
+    let round = word_to_u64(call_word(rpc_url,&contract,"round()",request_id+4,&transport).await?,"round")?;
+    let solver = address_from_word(call_word(rpc_url,&contract,"solver()",request_id+5,&transport).await?);
+    let verification_expires_at = word_to_u64(call_word(rpc_url,&contract,"verificationExpiresAt()",request_id+6,&transport).await?,"expiry")?;
+    let active_bond = word_to_u64(call_word(rpc_url,&contract,"activeClaimBond()",request_id+7,&transport).await?,"bond")?;
+    Ok(RecoveryChainPreflight { code_hash,latest_nonce,pending_nonce,status,round,solver,verification_expires_at,active_bond })
+}
+
+pub async fn observe_word_at_block(rpc_url: &str, contract: &str, signature: &str,
+    block: u64, request_id: u64) -> Result<[u8;32], ChainBaseError> {
+    let transport=ReqwestJsonRpcTransport::default();
+    let result=rpc_result(transport.post_json_value(rpc_url,&json!({"jsonrpc":"2.0","id":request_id,
+        "method":"eth_call","params":[{"to":normalize_address(contract)?,"data":encode_call(signature,vec![])},hex_quantity(block)]})).await?,request_id,"eth_call")?;
+    parse_bytes32(result.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse("eth_call word missing".into()))?)
+}
+
+pub async fn observe_erc20_balance_at_block(rpc_url:&str,token:&str,account:&str,block:u64,id:u64)->Result<u128,ChainBaseError>{
+    let transport=ReqwestJsonRpcTransport::default();
+    let data=encode_call("balanceOf(address)",vec![encode_address(&normalize_address(account)?)?]);
+    let result=rpc_result(transport.post_json_value(rpc_url,&json!({"jsonrpc":"2.0","id":id,"method":"eth_call",
+        "params":[{"to":normalize_address(token)?,"data":data},hex_quantity(block)]})).await?,id,"eth_call")?;
+    word_to_u128(parse_bytes32(result.as_str().ok_or_else(||ChainBaseError::InvalidRpcResponse("balance word missing".into()))?)?)
+}
+
 fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     let trimmed = data.strip_prefix("0x").unwrap_or(data);
     if !trimmed.len().is_multiple_of(2)

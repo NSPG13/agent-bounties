@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS recovery_attempts (
   lease_expires_at TIMESTAMPTZ NOT NULL,
   lease_attested_at TIMESTAMPTZ NOT NULL,
   lease_recovered_at TIMESTAMPTZ,
-  status TEXT NOT NULL CHECK (status IN ('prepared', 'broadcast', 'confirmed', 'failed_terminal')),
+  status TEXT NOT NULL CHECK (status IN ('reserved', 'broadcast', 'confirmed')),
   signed_transaction_hash TEXT NOT NULL,
   signed_transaction TEXT NOT NULL,
   broadcast_started_at TIMESTAMPTZ,
@@ -31,11 +31,12 @@ CREATE TABLE IF NOT EXISTS recovery_attempts (
   CHECK (lower(contract_address) = '0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274'),
   CHECK (lower(bounty_id) = '0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb'),
   CHECK (expected_status = 3 AND expected_round = 4),
-  CHECK (right(lower(solver_address), 4) = 'c49e'),
+  CHECK (lower(solver_address) = '0xc49e5374f0072abc0b4c134b2fd413d87aa6354a'),
+  CHECK (contract_code_hash ~ '^0x[0-9a-f]{64}$' AND contract_code_hash <> repeat('0', 66)),
   CHECK (verification_expires_at = 1786586903 AND active_bond = 10000),
   CHECK (lower(calldata) = '0xf9251ec7'),
-  CHECK ((status = 'prepared' AND broadcast_started_at IS NULL)
-      OR (status IN ('broadcast', 'confirmed', 'failed_terminal') AND broadcast_started_at IS NOT NULL)),
+  CHECK ((status = 'reserved' AND broadcast_started_at IS NULL)
+      OR (status IN ('broadcast', 'confirmed') AND broadcast_started_at IS NOT NULL)),
   CHECK (rpc_transaction_hash IS NULL OR lower(rpc_transaction_hash) = lower(signed_transaction_hash)),
   CHECK (status <> 'confirmed' OR (receipt_status = 1 AND receipt_block IS NOT NULL))
 );

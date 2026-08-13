@@ -749,7 +749,7 @@ pub enum X402RelayStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RecoveryAttemptStatus { Prepared, Broadcast, Confirmed, FailedTerminal }
+pub enum RecoveryAttemptStatus { Reserved, Broadcast, Confirmed }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewRecoveryAttempt {
@@ -3295,7 +3295,7 @@ impl PostgresStore {
                bounty_id,expected_status,expected_round,solver_address,verification_expires_at,
                active_bond,calldata,lease_source,lease_token,lease_expires_at,lease_attested_at,
                lease_recovered_at,status,signed_transaction_hash,signed_transaction)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),'prepared',$17,$18)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),'reserved',$17,$18)
             RETURNING *"#)
             .bind(&attempt.recovery_identity).bind(&attempt.network)
             .bind(i64_from_u64(attempt.pending_nonce)?).bind(normalize_key_address(&attempt.contract_address))
@@ -3321,7 +3321,7 @@ impl PostgresStore {
     pub async fn mark_recovery_broadcast_started(&self, identity: &str, hash: &str) -> DbResult<Option<RecoveryAttempt>> {
         let row = sqlx::query(r#"UPDATE recovery_attempts SET status='broadcast',
             broadcast_started_at=now(),updated_at=now()
-            WHERE recovery_identity=$1 AND status='prepared' AND signed_transaction_hash=$2 RETURNING *"#)
+            WHERE recovery_identity=$1 AND status='reserved' AND signed_transaction_hash=$2 RETURNING *"#)
             .bind(identity).bind(hash.to_ascii_lowercase()).fetch_optional(&self.pool).await?;
         row.map(recovery_attempt_from_row).transpose()
     }
@@ -7475,10 +7475,9 @@ fn parse_x402_relay_status(value: String) -> DbResult<X402RelayStatus> {
 
 fn recovery_attempt_from_row(row: PgRow) -> DbResult<RecoveryAttempt> {
     let status = match row.try_get::<String, _>("status")?.as_str() {
-        "prepared" => RecoveryAttemptStatus::Prepared,
+        "reserved" => RecoveryAttemptStatus::Reserved,
         "broadcast" => RecoveryAttemptStatus::Broadcast,
         "confirmed" => RecoveryAttemptStatus::Confirmed,
-        "failed_terminal" => RecoveryAttemptStatus::FailedTerminal,
         other => return Err(DbError::InvalidEnum(other.into())),
     };
     Ok(RecoveryAttempt {
@@ -8417,9 +8416,9 @@ mod tests {
             "signed_transaction_hash TEXT NOT NULL", "broadcast_started_at TIMESTAMPTZ"] {
             assert!(sql.contains(binding), "missing {binding}");
         }
-        assert!(sql.contains("status IN ('prepared', 'broadcast', 'confirmed', 'failed_terminal')"));
-        assert!(sql.contains("status = 'prepared' AND broadcast_started_at IS NULL"));
-        assert!(sql.contains("status IN ('broadcast', 'confirmed', 'failed_terminal') AND broadcast_started_at IS NOT NULL"));
+        assert!(sql.contains("status IN ('reserved', 'broadcast', 'confirmed')"));
+        assert!(sql.contains("status = 'reserved' AND broadcast_started_at IS NULL"));
+        assert!(sql.contains("status IN ('broadcast', 'confirmed') AND broadcast_started_at IS NOT NULL"));
         assert!(sql.contains("status <> 'confirmed' OR (receipt_status = 1"));
     }
 
@@ -8429,14 +8428,14 @@ mod tests {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
-        let identity = format!("recovery-test-{}", Uuid::new_v4());
+        let identity = "agent-bounties-772-round4-expiry-v2".to_string();
         let now = Utc::now();
         let attempt = NewRecoveryAttempt {
             recovery_identity: identity.clone(), network: "base-mainnet".into(), pending_nonce: 41,
-            contract_address: "0x1111111111111111111111111111111111111111".into(),
-            contract_code_hash: format!("0x{}", "22".repeat(32)), bounty_id: format!("0x{}", "33".repeat(32)),
-            expected_status: 3, expected_round: 4, solver_address: "0x444444444444444444444444444444444444c49e".into(),
-            verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: "0x12345678".into(),
+            contract_address: "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274".into(),
+            contract_code_hash: format!("0x{}", "22".repeat(32)), bounty_id: "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb".into(),
+            expected_status: 3, expected_round: 4, solver_address: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(),
+            verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: "0xf9251ec7".into(),
             lease_token: Uuid::new_v4(),
             signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x010203".into(),
         };
@@ -8444,7 +8443,7 @@ mod tests {
             .bind(attempt.lease_token).bind(now - chrono::Duration::minutes(2))
             .execute(&store.pool).await.unwrap();
         let reserved = store.reserve_recovery_attempt(&attempt).await.unwrap();
-        assert_eq!(reserved.status, RecoveryAttemptStatus::Prepared);
+        assert_eq!(reserved.status, RecoveryAttemptStatus::Reserved);
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
             .await.unwrap().is_some());
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
