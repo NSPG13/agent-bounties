@@ -21791,8 +21791,8 @@ fix-ci-failure
 
     #[test]
     fn durable_recovery_tuple_rejects_every_mutable_money_binding() {
-        let code_hash = format!("0x{}", "11".repeat(32));
-        let solver = "0x222222222222222222222222222222222222c49e";
+        let code_hash = RECOVERY_772_CODE_HASH;
+        let solver = RECOVERY_772_SOLVER;
         let calldata = "0xf9251ec7";
         let base = DurableRecoveryRequest {
             recovery_identity: RECOVERY_772_IDENTITY.into(), pending_nonce: 41,
@@ -21818,9 +21818,9 @@ fix-ci-failure
 
     #[test]
     fn recovery_live_preflight_and_poststate_reject_every_drift() {
-        let hash=format!("0x{}","11".repeat(32));
-        let solver="0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
-        let base=chain_base::RecoveryChainPreflight{code_hash:hash.clone(),latest_nonce:41,
+        let hash=RECOVERY_772_CODE_HASH;
+        let solver=RECOVERY_772_SOLVER;
+        let base=chain_base::RecoveryChainPreflight{block_number:1,block_hash:format!("0x{}","aa".repeat(32)),code_hash:hash.into(),latest_nonce:41,
             pending_nonce:41,status:3,round:4,solver:solver.into(),verification_expires_at:1_786_586_903,
             active_bond:10_000};
         assert!(valid_live_recovery_preflight(&base,&hash,solver));
@@ -21828,7 +21828,7 @@ fix-ci-failure
             Box::new(|v|v.latest_nonce=40),Box::new(|v|v.pending_nonce=42),Box::new(|v|v.status=1),
             Box::new(|v|v.round=5),Box::new(|v|v.verification_expires_at+=1),Box::new(|v|v.active_bond=0),
             Box::new(|v|v.solver="0x0000000000000000000000000000000000000001".into()),
-            Box::new(|v|v.code_hash=format!("0x{}","22".repeat(32)))];
+            Box::new(|v|v.code_hash=format!("0x{}","22".repeat(32))), Box::new(|v|v.block_number=2)];
         for mutate in mutations {let mut changed=base.clone();mutate(&mut changed);
             assert!(!valid_live_recovery_preflight(&changed,&hash,solver));}
         assert!(valid_recovery_poststate(1,4,0,100,10_100));
