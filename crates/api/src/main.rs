@@ -10327,6 +10327,17 @@ async fn run_durable_recovery_attempt(
     // without requiring chain preflight (nonce/state necessarily drift after broadcast).
     if let Some(attempt) = store.get_recovery_attempt(&request.recovery_identity).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+        let immutable_match = request.pending_nonce == attempt.pending_nonce
+            && request.contract_address.eq_ignore_ascii_case(&attempt.contract_address)
+            && request.contract_code_hash.eq_ignore_ascii_case(&attempt.contract_code_hash)
+            && request.bounty_id.eq_ignore_ascii_case(&attempt.bounty_id)
+            && request.status == attempt.expected_status && request.round == attempt.expected_round
+            && request.solver_address.eq_ignore_ascii_case(&attempt.solver_address)
+            && request.verification_expires_at == attempt.verification_expires_at
+            && request.active_bond == attempt.active_bond
+            && request.calldata.eq_ignore_ascii_case(&attempt.calldata)
+            && request.lease_token == attempt.lease_token;
+        if !immutable_match { return Err(StatusCode::CONFLICT); }
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
             evidence_boundary: "Existing durable recovery state is authoritative; replay performs zero resend and requires reconciliation for canonical evidence.".into() }));
     }
