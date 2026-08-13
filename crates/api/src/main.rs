@@ -10339,7 +10339,10 @@ async fn run_durable_recovery_attempt(
             && request.lease_token == attempt.lease_token
             && request.signed_transaction.eq_ignore_ascii_case(&attempt.signed_transaction)
             && decode_signed_transaction_binding(&request.signed_transaction)
-                .map(|binding| binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash))
+                .map(|binding| binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash)
+                    && binding.chain_id == 8_453 && binding.nonce == attempt.pending_nonce
+                    && binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
+                    && binding.value.is_zero() && binding.input.eq_ignore_ascii_case(&attempt.calldata))
                 .unwrap_or(false);
         if !immutable_match { return Err(StatusCode::CONFLICT); }
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
