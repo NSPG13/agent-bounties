@@ -10341,6 +10341,7 @@ async fn run_durable_recovery_attempt(
             && decode_signed_transaction_binding(&request.signed_transaction)
                 .map(|binding| binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash)
                     && binding.chain_id == 8_453 && binding.nonce == attempt.pending_nonce
+                    && binding.signer.eq_ignore_ascii_case(&attempt.solver_address)
                     && binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
                     && binding.value.is_zero() && binding.input.eq_ignore_ascii_case(&attempt.calldata))
                 .unwrap_or(false);
