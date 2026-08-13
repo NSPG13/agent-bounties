@@ -8,8 +8,8 @@ use super::{
     public_base_url_from_env, publish_autonomous_submission_evidence, publish_unfunded_bounty,
     submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs, AutonomousBountyFeedArgs,
     AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs, GetX402RelayStatusArgs,
-    ListUnfundedBountiesArgs, OpportunityListArgs, PaidStatusArgs,
-    PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
+    ListUnfundedBountiesArgs, ObservedInterface, ObservedProtocolEra, OpportunityListArgs,
+    PaidStatusArgs, PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
     PlanAutonomousModuleSettlementArgs, PlanAutonomousVerificationAttestationArgs,
     PrepareAgentToEarnInput, PrepareAutonomousBountySubmissionArgs, PrepareBountyPostArgs,
     PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
@@ -548,11 +548,39 @@ pub(super) async fn mcp_post(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Response {
+    let era = mcp_protocol_era(&headers, &payload);
+    let response = handle_mcp_post(state.clone(), headers, payload, era).await;
+    if let Some(store) = state.store.clone() {
+        let succeeded = response.status().is_success();
+        let protocol_era = match era {
+            McpProtocolEra::Legacy => ObservedProtocolEra::McpLegacy,
+            McpProtocolEra::Modern => ObservedProtocolEra::McpModern,
+        };
+        tokio::spawn(async move {
+            let _ = store
+                .record_interface_usage(
+                    ObservedInterface::Mcp,
+                    protocol_era,
+                    succeeded,
+                    chrono::Utc::now(),
+                )
+                .await;
+        });
+    }
+    response
+}
+
+async fn handle_mcp_post(
+    state: SharedState,
+    headers: HeaderMap,
+    payload: Value,
+    era: McpProtocolEra,
+) -> Response {
     if !mcp_origin_is_allowed(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    if mcp_protocol_era(&headers, &payload) == McpProtocolEra::Modern {
+    if era == McpProtocolEra::Modern {
         if payload.is_array() {
             return mcp_error_response(
                 StatusCode::BAD_REQUEST,

@@ -61,6 +61,8 @@ pub const OPEN_COMPETITION_V1_MIGRATION: &str =
     include_str!("../../../migrations/0019_open_competition_v1.sql");
 pub const OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION: &str =
     include_str!("../../../migrations/0020_open_competition_entrant_relays.sql");
+pub const INTERFACE_USAGE_MIGRATION: &str =
+    include_str!("../../../migrations/0021_interface_usage.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -490,12 +492,59 @@ pub struct SiteAnalyticsChannelStats {
     pub claims_confirmed: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservedInterface {
+    Api,
+    Cli,
+    Mcp,
+}
+
+impl ObservedInterface {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Api => "api",
+            Self::Cli => "cli",
+            Self::Mcp => "mcp",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservedProtocolEra {
+    NotApplicable,
+    McpLegacy,
+    McpModern,
+    McpHttpAdapter,
+}
+
+impl ObservedProtocolEra {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not_applicable",
+            Self::McpLegacy => "legacy",
+            Self::McpModern => "modern",
+            Self::McpHttpAdapter => "http_adapter",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InterfaceUsageStats {
+    pub interface: String,
+    pub protocol_era: String,
+    pub request_count: u64,
+    pub successful_request_count: u64,
+    pub first_observed_at: DateTime<Utc>,
+    pub last_observed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SiteAnalyticsStats {
     pub overview: SiteAnalyticsOverview,
     pub event_counts: Vec<SiteAnalyticsEventCount>,
     pub daily: Vec<SiteAnalyticsDailyStats>,
     pub channels: Vec<SiteAnalyticsChannelStats>,
+    pub interfaces: Vec<InterfaceUsageStats>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -963,6 +1012,7 @@ impl PostgresStore {
                 SOLVE_ACTION_RENAME_MIGRATION,
                 OPEN_COMPETITION_V1_MIGRATION,
                 OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
+                INTERFACE_USAGE_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1373,6 +1423,57 @@ impl PostgresStore {
         Ok(inserted.is_some())
     }
 
+    pub async fn record_interface_usage(
+        &self,
+        interface: ObservedInterface,
+        protocol_era: ObservedProtocolEra,
+        succeeded: bool,
+        observed_at: DateTime<Utc>,
+    ) -> DbResult<()> {
+        let valid_pair = matches!(
+            (interface, protocol_era),
+            (
+                ObservedInterface::Api | ObservedInterface::Cli,
+                ObservedProtocolEra::NotApplicable
+            ) | (
+                ObservedInterface::Mcp,
+                ObservedProtocolEra::McpLegacy
+                    | ObservedProtocolEra::McpModern
+                    | ObservedProtocolEra::McpHttpAdapter
+            )
+        );
+        if !valid_pair {
+            return Err(DbError::InvalidEnum(
+                "interface and protocol era do not form a valid attribution pair".to_string(),
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO interface_usage_hourly
+              (bucket_started_at, interface, protocol_era, request_count,
+               successful_request_count, first_observed_at, last_observed_at)
+            VALUES (
+              date_trunc('hour', $1 AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+              $2, $3, 1, CASE WHEN $4 THEN 1 ELSE 0 END, $1, $1
+            )
+            ON CONFLICT (bucket_started_at, interface, protocol_era) DO UPDATE SET
+              request_count = interface_usage_hourly.request_count + 1,
+              successful_request_count = interface_usage_hourly.successful_request_count
+                + CASE WHEN $4 THEN 1 ELSE 0 END,
+              first_observed_at = LEAST(interface_usage_hourly.first_observed_at, EXCLUDED.first_observed_at),
+              last_observed_at = GREATEST(interface_usage_hourly.last_observed_at, EXCLUDED.last_observed_at)
+            "#,
+        )
+        .bind(observed_at)
+        .bind(interface.as_str())
+        .bind(protocol_era.as_str())
+        .bind(succeeded)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn reserve_social_mention_ingestion(
         &self,
         ingestion: &NewSocialMentionIngestion,
@@ -1629,6 +1730,28 @@ impl PostgresStore {
         .fetch_all(&self.pool)
         .await?;
 
+        let interface_rows = sqlx::query(
+            r#"
+            SELECT interface, protocol_era,
+                   SUM(request_count)::BIGINT AS request_count,
+                   SUM(successful_request_count)::BIGINT AS successful_request_count,
+                   MIN(first_observed_at) AS first_observed_at,
+                   MAX(last_observed_at) AS last_observed_at
+            FROM interface_usage_hourly
+            WHERE bucket_started_at >= (
+                    date_trunc('hour', $1 AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                  )
+              AND bucket_started_at <= (
+                    date_trunc('hour', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                  )
+            GROUP BY interface, protocol_era
+            ORDER BY request_count DESC, interface, protocol_era
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+
         Ok(SiteAnalyticsStats {
             overview: SiteAnalyticsOverview {
                 unique_visitors: u64_from_i64(overview.try_get("unique_visitors")?)?,
@@ -1682,6 +1805,21 @@ impl PostgresStore {
                         )?,
                         funding_starts: u64_from_i64(row.try_get("funding_starts")?)?,
                         claims_confirmed: u64_from_i64(row.try_get("claims_confirmed")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            interfaces: interface_rows
+                .into_iter()
+                .map(|row| {
+                    Ok(InterfaceUsageStats {
+                        interface: row.try_get("interface")?,
+                        protocol_era: row.try_get("protocol_era")?,
+                        request_count: u64_from_i64(row.try_get("request_count")?)?,
+                        successful_request_count: u64_from_i64(
+                            row.try_get("successful_request_count")?,
+                        )?,
+                        first_observed_at: row.try_get("first_observed_at")?,
+                        last_observed_at: row.try_get("last_observed_at")?,
                     })
                 })
                 .collect::<DbResult<Vec<_>>>()?,
@@ -8235,6 +8373,39 @@ mod tests {
     }
 
     #[test]
+    fn interface_usage_migration_stores_only_hourly_aggregate_attribution() {
+        for invariant in [
+            "interface_usage_hourly",
+            "PRIMARY KEY (bucket_started_at, interface, protocol_era)",
+            "interface IN ('api', 'cli', 'mcp')",
+            "protocol_era IN ('not_applicable', 'legacy', 'modern', 'http_adapter')",
+            "request_count BIGINT NOT NULL",
+            "successful_request_count BIGINT NOT NULL",
+            "interface_usage_hourly_recent_idx",
+        ] {
+            assert!(
+                INTERFACE_USAGE_MIGRATION.contains(invariant),
+                "missing aggregate interface-usage invariant {invariant}"
+            );
+        }
+        for forbidden in [
+            "ip_address",
+            "user_agent",
+            "wallet_address",
+            "visitor_id",
+            "session_id",
+            "client_id",
+            "request_body",
+            "tool_arguments",
+        ] {
+            assert!(
+                !INTERFACE_USAGE_MIGRATION.contains(forbidden),
+                "interface usage must not persist {forbidden}"
+            );
+        }
+    }
+
+    #[test]
     fn social_mention_migration_is_durable_idempotent_and_lease_bounded() {
         for invariant in [
             "social_mention_ingestions",
@@ -8704,6 +8875,54 @@ mod tests {
         };
         assert!(store.record_site_analytics_event(&event).await.unwrap());
         assert!(!store.record_site_analytics_event(&event).await.unwrap());
+        let before = store
+            .site_analytics_stats(now - chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        let api_requests_before = before
+            .interfaces
+            .iter()
+            .find(|usage| usage.interface == "api")
+            .map(|usage| usage.request_count)
+            .unwrap_or(0);
+        store
+            .record_interface_usage(
+                ObservedInterface::Api,
+                ObservedProtocolEra::NotApplicable,
+                true,
+                now,
+            )
+            .await
+            .unwrap();
+        store
+            .record_interface_usage(
+                ObservedInterface::Cli,
+                ObservedProtocolEra::NotApplicable,
+                false,
+                now,
+            )
+            .await
+            .unwrap();
+        store
+            .record_interface_usage(
+                ObservedInterface::Mcp,
+                ObservedProtocolEra::McpModern,
+                true,
+                now,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .record_interface_usage(
+                    ObservedInterface::Api,
+                    ObservedProtocolEra::McpModern,
+                    true,
+                    now,
+                )
+                .await,
+            Err(DbError::InvalidEnum(_))
+        ));
         let stats = store
             .site_analytics_stats(now - chrono::Duration::minutes(1))
             .await
@@ -8714,6 +8933,18 @@ mod tests {
             .channels
             .iter()
             .any(|channel| channel.source == "postgres-test"));
+        let api = stats
+            .interfaces
+            .iter()
+            .find(|usage| usage.interface == "api")
+            .expect("API usage is aggregated");
+        assert_eq!(api.protocol_era, "not_applicable");
+        assert!(api.request_count > api_requests_before);
+        assert!(stats.interfaces.iter().any(|usage| {
+            usage.interface == "mcp"
+                && usage.protocol_era == "modern"
+                && usage.successful_request_count >= 1
+        }));
     }
 
     #[tokio::test]

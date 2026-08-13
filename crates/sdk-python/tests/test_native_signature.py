@@ -159,7 +159,11 @@ class NativeSignatureTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["params"], {"false": False, "zero": 0})
         self.assertEqual(
             request.call_args.kwargs["headers"],
-            {"x-operator-token": "operator", "x-extra": "value"},
+            {
+                "x-agent-bounties-interface": "api",
+                "x-operator-token": "operator",
+                "x-extra": "value",
+            },
         )
 
     def test_stripe_event_methods_share_identical_transport_contract(self):
@@ -175,7 +179,11 @@ class NativeSignatureTests(unittest.TestCase):
                     self.assertEqual(request.call_args.args, ("POST", f"https://example.test{path}"))
                     self.assertEqual(
                         request.call_args.kwargs["headers"],
-                        {"x-operator-token": "operator", "stripe-signature": "signature"},
+                        {
+                            "x-agent-bounties-interface": "api",
+                            "x-operator-token": "operator",
+                            "stripe-signature": "signature",
+                        },
                     )
 
 

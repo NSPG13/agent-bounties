@@ -54,6 +54,8 @@ use std::{
 };
 use uuid::Uuid;
 
+const INTERFACE_ATTRIBUTION_HEADER: &str = "x-agent-bounties-interface";
+
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
 #[command(about = "Claim verified work. Earn Base USDC.")]
@@ -3767,6 +3769,14 @@ async fn production_smoke_check(
 ) -> Result<ProductionSmokeReport> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
+        .default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                INTERFACE_ATTRIBUTION_HEADER,
+                reqwest::header::HeaderValue::from_static("cli"),
+            );
+            headers
+        })
         .build()?;
 
     let api_health = production_get_health(&client, &format!("{api}/health")).await?;
@@ -4968,6 +4978,7 @@ async fn leaderboard(api_base_url: String, network: String, at: Option<String>) 
     }
     let response = reqwest::Client::new()
         .get(&url)
+        .header(INTERFACE_ATTRIBUTION_HEADER, "cli")
         .query(&query)
         .send()
         .await
@@ -5019,7 +5030,7 @@ fn http_request_with_headers(
         extra_headers.push_str("\r\n");
     }
     let request = format!(
-        "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{}\
+        "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{INTERFACE_ATTRIBUTION_HEADER}: cli\r\n{}\
          {}\r\n{}",
         parsed.path, parsed.authority, content_headers, extra_headers, body
     );

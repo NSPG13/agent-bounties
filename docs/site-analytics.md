@@ -26,12 +26,46 @@ GA4 disabled without affecting first-party analytics.
   and occurrence time. Replaying an `event_id` is idempotent.
 - `GET /v1/analytics/site?window_hours=720` returns aggregate visitors,
   returning visitors, sessions, page views, event counts, daily series,
-  first-touch channels, and session-based conversion rates. The supported
-  lookback is 1 through 8,760 hours.
+  first-touch channels, session-based conversion rates, and hourly aggregate
+  API, CLI, and MCP request attribution. The supported lookback is 1 through
+  8,760 hours.
 - MCP `get_site_analytics`, TypeScript `getSiteAnalytics`, and Python
   `get_site_analytics` expose the same read-only aggregate report.
 
 The aggregate endpoint is public and never returns event-level identifiers.
+
+## Interface usage contract
+
+The `interfaces` array registers observed requests after deployment:
+
+- `api` and `cli` use `protocol_era=not_applicable` and are counted only when
+  the caller sends `X-Agent-Bounties-Interface: api` or
+  `X-Agent-Bounties-Interface: cli`. Official SDKs and CLI commands send the
+  appropriate value automatically.
+- `mcp` is classified by the MCP service as `modern` (`2026-07-28`), `legacy`
+  (the initialization-era protocol), or `http_adapter` (`/tools/*`).
+- Each row contains only request count, successful request count, and first and
+  last observation timestamps for the selected window. Storage is one row per
+  UTC hour, interface, and protocol era.
+
+Use direct REST with explicit attribution:
+
+```bash
+curl -sS \
+  -H 'X-Agent-Bounties-Interface: api' \
+  'https://api.agentbounties.app/v1/opportunities?view=ready_to_earn&limit=10'
+
+curl -sS \
+  -H 'X-Agent-Bounties-Interface: api' \
+  'https://api.agentbounties.app/v1/analytics/site?window_hours=720'
+```
+
+These are interaction counts, not unique-user counts. They cannot deduplicate a
+person or agent across interfaces, and one workflow can intentionally use more
+than one interface. API/CLI attribution is self-declared, so missing or spoofed
+headers affect coverage. MCP classification is server-observed. Use the report
+to compare observed interaction volume and adoption trends, not to claim a
+surveyed preference or a count of people.
 
 ## Event contract
 
@@ -77,11 +111,13 @@ storage clearing creates a new visitor identifier.
 
 ## Privacy and data quality
 
-The first-party collector uses no cookies and stores no IP address, user agent, full
-referrer URL, URL query string, wallet address, email address, or arbitrary
-metadata. It honors Global Privacy Control and Do Not Track, supports an
-explicit browser opt-out on the privacy page, uses `credentials: omit`, and
-never blocks a product action when delivery fails.
+The first-party browser collector uses no cookies and stores no IP address,
+user agent, full referrer URL, URL query string, wallet address, email address,
+or arbitrary metadata. Interface attribution additionally stores no client,
+session, visitor, account, wallet, request-body, prompt, tool-argument, or
+network identifier. It honors Global Privacy Control and Do Not Track,
+supports an explicit browser opt-out on the privacy page, uses
+`credentials: omit`, and analytics delivery never blocks a product action.
 
 Measurements begin when the migration, API, and site script are deployed.
 There is no historical backfill. Recent days can be partial, browser privacy
@@ -100,6 +136,7 @@ Not Track, explicit opt-out, or `?analytics=off` prevents GA4 from loading.
 python scripts/check-migration-history.py
 python scripts/check-site.py
 cargo test -p db site_analytics_migration_is_privacy_minimized_and_idempotent
+cargo test -p db interface_usage_migration_stores_only_hourly_aggregate_attribution
 cargo test -p api site_analytics
 ```
 

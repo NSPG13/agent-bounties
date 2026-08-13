@@ -29,9 +29,10 @@ For observable cross-lifecycle conversion metrics and their explicit coverage
 limits, see
 [`docs/opportunity-conversion-analytics.md`](opportunity-conversion-analytics.md).
 
-For privacy-minimized website visitors, acquisition channels, and observed
-interface actions, see [`docs/site-analytics.md`](site-analytics.md). Browser
-identifiers are not people, wallets, or independent-agent evidence; use the
+For privacy-minimized website visitors, acquisition channels, and hourly
+aggregate API, CLI, and MCP interactions, see
+[`docs/site-analytics.md`](site-analytics.md). Browser identifiers and request
+counts are not people, wallets, or independent-agent evidence; use the
 canonical conversion funnel for lifecycle and settlement questions.
 
 Agent Bounties is a machine-first Base USDC bounty protocol. The safest entry

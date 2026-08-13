@@ -91,10 +91,11 @@ use db::{
     NewBondSponsorship, NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription,
     NewLegalAcceptance, NewOpenCompetitionEntrantRelay, NewOpportunityComment,
     NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
-    NewX402RelayAttempt, OpenCompetitionEntrantRelay, OpenCompetitionEntrantRelayStatus,
-    OpportunityComment as DbOpportunityComment, OpportunityLifecycleStats, PlatformMetricsStats,
-    PostgresStore, SiteAnalyticsStats, SocialMentionIngestion, TrialBounty, UnfundedBountySolution,
-    WebhookSubscription, X402RelayAttempt, X402RelayStatus,
+    NewX402RelayAttempt, ObservedInterface, ObservedProtocolEra, OpenCompetitionEntrantRelay,
+    OpenCompetitionEntrantRelayStatus, OpportunityComment as DbOpportunityComment,
+    OpportunityLifecycleStats, PlatformMetricsStats, PostgresStore, SiteAnalyticsStats,
+    SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
+    X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -434,6 +435,7 @@ use worker::{
         ,SiteAnalyticsEventCountResponse
         ,SiteAnalyticsDailyResponse
         ,SiteAnalyticsChannelResponse
+        ,InterfaceUsageResponse
         ,SiteAnalyticsRateResponse
         ,SiteAnalyticsResponse
         ,PlatformMetricsResponse
@@ -815,6 +817,7 @@ impl BondSponsorConfig {
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+const INTERFACE_ATTRIBUTION_HEADER: &str = "x-agent-bounties-interface";
 const PLATFORM_LAUNCH_AT: &str = "2026-07-08T20:22:19Z";
 const PLATFORM_FIRST_MONTH_ENDED_AT: &str = "2026-08-08T20:22:19Z";
 const PUBLIC_METRICS_POLICY_JSON: &str = include_str!("../fixtures/public-metrics-policy.json");
@@ -1484,6 +1487,16 @@ struct SiteAnalyticsChannelResponse {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+struct InterfaceUsageResponse {
+    interface: String,
+    protocol_era: String,
+    request_count: u64,
+    successful_request_count: u64,
+    first_observed_at: String,
+    last_observed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 struct SiteAnalyticsRateResponse {
     metric: String,
     numerator_sessions: u64,
@@ -1502,6 +1515,7 @@ struct SiteAnalyticsResponse {
     event_counts: Vec<SiteAnalyticsEventCountResponse>,
     daily: Vec<SiteAnalyticsDailyResponse>,
     channels: Vec<SiteAnalyticsChannelResponse>,
+    interfaces: Vec<InterfaceUsageResponse>,
     rates: Vec<SiteAnalyticsRateResponse>,
     definitions: Vec<String>,
     evidence_boundary: String,
@@ -2616,6 +2630,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/public/templates/:slug", get(public_template_page))
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/docs", get(api_docs))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observe_interface_usage,
+        ))
         .layer(CorsLayer::permissive())
         .layer(middleware::from_fn(redirect_marketing_domain))
         .with_state(state);
@@ -2639,6 +2657,40 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
                 .map(|value| format!("0.0.0.0:{}", value.trim()))
         })
         .unwrap_or_else(|| default_addr.to_string())
+}
+
+fn attributed_api_interface(headers: &HeaderMap) -> Option<ObservedInterface> {
+    let value = headers.get(INTERFACE_ATTRIBUTION_HEADER)?.to_str().ok()?;
+    if value.eq_ignore_ascii_case("api") {
+        Some(ObservedInterface::Api)
+    } else if value.eq_ignore_ascii_case("cli") {
+        Some(ObservedInterface::Cli)
+    } else {
+        None
+    }
+}
+
+async fn observe_interface_usage(
+    State(state): State<SharedState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let interface = attributed_api_interface(request.headers());
+    let response = next.run(request).await;
+    if let (Some(store), Some(interface)) = (state.store.clone(), interface) {
+        let succeeded = response.status().is_success();
+        tokio::spawn(async move {
+            let _ = store
+                .record_interface_usage(
+                    interface,
+                    ObservedProtocolEra::NotApplicable,
+                    succeeded,
+                    Utc::now(),
+                )
+                .await;
+        });
+    }
+    response
 }
 
 #[utoipa::path(get, path = "/health", responses((status = 200, body = String)))]
@@ -4821,7 +4873,7 @@ fn site_analytics_response(
         ),
     ];
     SiteAnalyticsResponse {
-        schema_version: "agent-bounties/site-analytics-v1".to_string(),
+        schema_version: "agent-bounties/site-analytics-v2".to_string(),
         window_hours,
         window_started_at: window_started_at.to_rfc3339(),
         generated_at: generated_at.to_rfc3339(),
@@ -4873,14 +4925,28 @@ fn site_analytics_response(
                 claims_confirmed: channel.claims_confirmed,
             })
             .collect(),
+        interfaces: stats
+            .interfaces
+            .into_iter()
+            .map(|usage| InterfaceUsageResponse {
+                interface: usage.interface,
+                protocol_era: usage.protocol_era,
+                request_count: usage.request_count,
+                successful_request_count: usage.successful_request_count,
+                first_observed_at: usage.first_observed_at.to_rfc3339(),
+                last_observed_at: usage.last_observed_at.to_rfc3339(),
+            })
+            .collect(),
         rates,
         definitions: vec![
             "A visitor is one random browser-local UUID with a 90-day lifetime, not a person or wallet.".to_string(),
             "A returning visitor is the same browser-local UUID observed on at least two UTC dates in the selected window.".to_string(),
             "A session is one random sessionStorage UUID and ends with that browser tab session.".to_string(),
             "Channel attribution uses the visitor's earliest recorded privacy-safe source and campaign; only the referrer hostname is retained.".to_string(),
+            "Interface usage is an hourly aggregate of observed requests, not unique people, agents, clients, or sessions; partial boundary hours are included.".to_string(),
+            "API and CLI attribution is self-declared through x-agent-bounties-interface; MCP protocol era is observed by the MCP service.".to_string(),
         ],
-        evidence_boundary: "Collection begins only after this feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect coverage. No IP address, user agent, full referrer URL, wallet, or arbitrary metadata is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
+        evidence_boundary: "Collection begins only after each feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect browser coverage. Interface counters cannot deduplicate users or prove preference, and self-declared API or CLI attribution can be absent or spoofed. No IP address, user agent, full referrer URL, wallet, client identifier, request body, prompt, or tool arguments are stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
     }
 }
 
@@ -16720,6 +16786,36 @@ mod tests {
         assert_eq!(event.source.as_deref(), Some("github"));
         assert_eq!(event.referrer_host.as_deref(), Some("github.com"));
         assert_eq!(event.page_path, "/competition.html");
+    }
+
+    #[test]
+    fn interface_attribution_accepts_only_explicit_api_or_cli_values() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(attributed_api_interface(&headers), None);
+
+        headers.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("api"),
+        );
+        assert_eq!(
+            attributed_api_interface(&headers),
+            Some(ObservedInterface::Api)
+        );
+
+        headers.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("CLI"),
+        );
+        assert_eq!(
+            attributed_api_interface(&headers),
+            Some(ObservedInterface::Cli)
+        );
+
+        headers.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("website"),
+        );
+        assert_eq!(attributed_api_interface(&headers), None);
     }
 
     #[test]
