@@ -7,8 +7,9 @@ use app::{
     RejectRiskEventRequest, RiskEventFilter, SubmitResultRequest, VerifySubmissionRequest,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -32,7 +33,7 @@ use chain_base::{
     StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
-use db::PostgresStore;
+use db::{ObservedInterface, ObservedProtocolEra, PostgresStore};
 use domain::{
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
     DiscoverySubscriptionFilters, EvalRun, HelpRequest, Id, Money, Objective, ObjectiveAction,
@@ -1969,6 +1970,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools/approve_risk_bounty", post(approve_risk_bounty))
         .route("/tools/approve_risk_payout", post(approve_risk_payout))
         .route("/tools/reject_risk_event", post(reject_risk_event))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observe_mcp_http_adapter,
+        ))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -1991,6 +1996,35 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
                 .map(|value| format!("0.0.0.0:{}", value.trim()))
         })
         .unwrap_or_else(|| default_addr.to_string())
+}
+
+fn is_mcp_http_adapter_path(path: &str) -> bool {
+    path == "/tools" || path.starts_with("/tools/")
+}
+
+async fn observe_mcp_http_adapter(
+    State(state): State<SharedState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let observed = is_mcp_http_adapter_path(request.uri().path());
+    let response = next.run(request).await;
+    if observed {
+        if let Some(store) = state.store.clone() {
+            let succeeded = response.status().is_success();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_interface_usage(
+                        ObservedInterface::Mcp,
+                        ObservedProtocolEra::McpHttpAdapter,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
+    }
+    response
 }
 
 async fn agent_bounties_discovery() -> Json<web_public::DiscoveryManifest> {
@@ -7131,6 +7165,14 @@ mod tests {
 
     fn test_state() -> SharedState {
         test_state_with_network(BountyNetwork::default())
+    }
+
+    #[test]
+    fn interface_attribution_distinguishes_http_adapter_from_protocol_endpoint() {
+        assert!(is_mcp_http_adapter_path("/tools"));
+        assert!(is_mcp_http_adapter_path("/tools/list_opportunities"));
+        assert!(!is_mcp_http_adapter_path("/mcp"));
+        assert!(!is_mcp_http_adapter_path("/health"));
     }
 
     fn test_state_with_network(network: BountyNetwork) -> SharedState {

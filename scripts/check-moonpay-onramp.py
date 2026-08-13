@@ -81,10 +81,13 @@ def main() -> int:
             "Gas is sponsored for this funding action.",
             'data-moonpay-onramp-link',
             'src="moonpay-link.js?v=1"',
+            'src="autonomous.js?v=20260813-1"',
             "Buying USDC does not fund this bounty",
         ],
     )
-    if earn.index('src="moonpay-link.js?v=1"') > earn.index('src="autonomous.js"'):
+    if earn.index('src="moonpay-link.js?v=1"') > earn.index(
+        'src="autonomous.js?v=20260813-1"'
+    ):
         fail("moonpay-link.js must load before autonomous.js initializes the funding form")
 
     browser = require(

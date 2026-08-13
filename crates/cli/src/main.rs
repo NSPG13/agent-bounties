@@ -54,6 +54,8 @@ use std::{
 };
 use uuid::Uuid;
 
+const INTERFACE_ATTRIBUTION_HEADER: &str = "x-agent-bounties-interface";
+
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
 #[command(about = "Claim verified work. Earn Base USDC.")]
@@ -3767,6 +3769,14 @@ async fn production_smoke_check(
 ) -> Result<ProductionSmokeReport> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
+        .default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                INTERFACE_ATTRIBUTION_HEADER,
+                reqwest::header::HeaderValue::from_static("cli"),
+            );
+            headers
+        })
         .build()?;
 
     let api_health = production_get_health(&client, &format!("{api}/health")).await?;
@@ -4133,8 +4143,56 @@ async fn production_smoke_check(
 
     let mcp_streamable_http = value_str(&discovery, "/endpoints/mcp_streamable_http")
         .context("Streamable HTTP MCP url missing")?;
+    let discover_response = client
+        .post(mcp_streamable_http)
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "server/discover")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "production-smoke-discover",
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "production-smoke",
+                        "version": "1"
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        }))
+        .send()
+        .await?;
+    let discover_status = discover_response.status();
+    let discover_json: serde_json::Value = discover_response.json().await?;
+    if discover_json
+        .pointer("/error/code")
+        .and_then(|value| value.as_i64())
+        == Some(-32601)
+    {
+        bail!(
+            "MCP 2026-07-28 server/discover is unavailable: the deployed endpoint is legacy-only; deploy the dual-era MCP server before treating the modern core as live"
+        );
+    }
+    require(
+        discover_status.is_success(),
+        "MCP 2026-07-28 server/discover must succeed",
+    )?;
+    require(
+        discover_json["result"]["supportedVersions"] == serde_json::json!(["2026-07-28"])
+            && value_str(&discover_json, "/result/resultType") == Some("complete")
+            && value_str(
+                &discover_json,
+                "/result/_meta/io.modelcontextprotocol~1serverInfo/name",
+            ) == Some("agent-bounties"),
+        "MCP 2026-07-28 discovery response is missing the supported version, complete result type, or server identity",
+    )?;
+
     let initialize_response = client
         .post(mcp_streamable_http)
+        .header("Accept", "application/json, text/event-stream")
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -4154,7 +4212,7 @@ async fn production_smoke_check(
     let initialize_json: serde_json::Value = initialize_response.json().await?;
     require(
         value_str(&initialize_json, "/result/serverInfo/name") == Some("agent-bounties"),
-        "Streamable HTTP MCP initialize returned the wrong server",
+        "legacy Streamable HTTP MCP initialize returned the wrong server",
     )?;
     for retired in [
         "plan_base_log_query",
@@ -4920,6 +4978,7 @@ async fn leaderboard(api_base_url: String, network: String, at: Option<String>) 
     }
     let response = reqwest::Client::new()
         .get(&url)
+        .header(INTERFACE_ATTRIBUTION_HEADER, "cli")
         .query(&query)
         .send()
         .await
@@ -4971,7 +5030,7 @@ fn http_request_with_headers(
         extra_headers.push_str("\r\n");
     }
     let request = format!(
-        "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{}\
+        "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{INTERFACE_ATTRIBUTION_HEADER}: cli\r\n{}\
          {}\r\n{}",
         parsed.path, parsed.authority, content_headers, extra_headers, body
     );

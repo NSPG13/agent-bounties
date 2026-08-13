@@ -116,10 +116,11 @@ class AgentBountiesClient:
         self.base_url = base_url.rstrip("/")
         self.operator_api_token = operator_api_token or os.getenv("OPERATOR_API_TOKEN")
 
-    def _headers(self) -> dict[str, str] | None:
+    def _headers(self) -> dict[str, str]:
+        headers = {"x-agent-bounties-interface": "api"}
         if self.operator_api_token:
-            return {"x-operator-token": self.operator_api_token}
-        return None
+            headers["x-operator-token"] = self.operator_api_token
+        return headers
 
     def _http(
         self,
