@@ -66,9 +66,9 @@ pub const INTERFACE_USAGE_MIGRATION: &str =
 pub const EXTERNAL_INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0022_external_interface_usage.sql");
 pub const DURABLE_RECOVERY_ATTEMPTS_MIGRATION: &str =
-    include_str!("../../../migrations/0021_durable_recovery_attempts.sql");
+    include_str!("../../../migrations/0023_durable_recovery_attempts.sql");
 pub const RECOVERY_AUTHORIZED_SIGNER_MIGRATION: &str =
-    include_str!("../../../migrations/0022_recovery_authorized_signer.sql");
+    include_str!("../../../migrations/0024_recovery_authorized_signer.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
