@@ -551,7 +551,14 @@ def read_state(client: CastClient, contract: str, block: str | None = None) -> B
     )
 
 
-def validate_common(state: BountyState, *, require_funded: bool = True) -> None:
+def validate_common(
+    state: BountyState,
+    *,
+    require_funded: bool = True,
+    verification_mode: int = 0,
+    threshold: int = 1,
+    expected_verifier_module: str | None = None,
+) -> None:
     expected = {
         "chain_id": CHAIN_ID,
         "codehash": CLONE_CODEHASH,
@@ -559,8 +566,8 @@ def validate_common(state: BountyState, *, require_funded: bool = True) -> None:
         "factory_implementation": IMPLEMENTATION,
         "factory": FACTORY,
         "settlement_token": USDC,
-        "verification_mode": 0,
-        "threshold": 1,
+        "verification_mode": verification_mode,
+        "threshold": threshold,
     }
     for field, wanted in expected.items():
         observed = getattr(state, field)
@@ -568,7 +575,12 @@ def validate_common(state: BountyState, *, require_funded: bool = True) -> None:
             raise RelayError(
                 f"fail-closed canonical-state mismatch for {field}: expected {wanted}, got {observed}"
             )
-    if state.verifier_module not in ALLOWED_VERIFIER_MODULES:
+    allowed_verifier_modules = (
+        ALLOWED_VERIFIER_MODULES
+        if expected_verifier_module is None
+        else (expected_verifier_module,)
+    )
+    if state.verifier_module not in allowed_verifier_modules:
         raise RelayError(
             f"verifier module is not allowlisted for the bounded relay: {state.verifier_module}"
         )
