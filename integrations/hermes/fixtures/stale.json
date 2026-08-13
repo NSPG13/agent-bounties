@@ -1,10 +1,11 @@
 {
+  "synthetic": true,
   "state": "stale",
-  "bounty_id": "888",
+  "bounty_id": "synthetic-stale-0001",
   "repository": "NSPG13/agent-bounties",
-  "reward": "1.50 USDC",
+  "reward": "0.00 USDC",
   "network": "Base",
   "verification_ready": false,
-  "next_action": "This bounty has expired. Check the canonical feed at https://api.agentbounties.app/v1/base/autonomous-bounties/feed for current claimable inventory.",
-  "description": "Expired bounty — claim deadline has passed. Bond forfeited if applicable."
+  "next_action": "This synthetic entry has expired. Check the canonical feed at https://api.agentbounties.app/v1/base/autonomous-bounties/feed for current claimable inventory.",
+  "description": "Synthetic fixture illustrating a stale/expired bounty. Does not reference any live issue."
 }
