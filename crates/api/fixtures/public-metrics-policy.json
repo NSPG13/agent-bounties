@@ -1,0 +1,16 @@
+{
+  "schema_version": "agent-bounties/public-metrics-policy-v1",
+  "maintainer_github_logins": [
+    "NSPG13"
+  ],
+  "maintainer_comment_authors": [
+    "agent bounties",
+    "agent-bounties",
+    "bountyboard",
+    "maintainer",
+    "nspg13",
+    "system"
+  ],
+  "maintainer_wallets": [],
+  "wallet_ownership_boundary": "Wallet ownership is never inferred. Only addresses deliberately added to this public policy are excluded as maintainer-controlled."
+}

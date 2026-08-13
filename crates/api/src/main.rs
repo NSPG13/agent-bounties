@@ -91,10 +91,11 @@ use db::{
     NewBondSponsorship, NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription,
     NewLegalAcceptance, NewOpenCompetitionEntrantRelay, NewOpportunityComment,
     NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
-    NewX402RelayAttempt, OpenCompetitionEntrantRelay, OpenCompetitionEntrantRelayStatus,
-    OpportunityComment as DbOpportunityComment, OpportunityLifecycleStats, PostgresStore,
-    SiteAnalyticsStats, SocialMentionIngestion, TrialBounty, UnfundedBountySolution,
-    WebhookSubscription, X402RelayAttempt, X402RelayStatus,
+    NewX402RelayAttempt, ObservedInterface, ObservedProtocolEra, OpenCompetitionEntrantRelay,
+    OpenCompetitionEntrantRelayStatus, OpportunityComment as DbOpportunityComment,
+    OpportunityLifecycleStats, PlatformMetricsStats, PostgresStore, SiteAnalyticsStats,
+    SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
+    X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -206,6 +207,7 @@ use worker::{
         opportunity_conversion_funnel,
         record_site_analytics_event,
         site_analytics,
+        platform_metrics,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -433,8 +435,20 @@ use worker::{
         ,SiteAnalyticsEventCountResponse
         ,SiteAnalyticsDailyResponse
         ,SiteAnalyticsChannelResponse
+        ,InterfaceUsageResponse
         ,SiteAnalyticsRateResponse
         ,SiteAnalyticsResponse
+        ,PlatformMetricsResponse
+        ,PlatformMetricsWindowResponse
+        ,PlatformIdentityMetricsResponse
+        ,PlatformIdentityRoleResponse
+        ,PlatformIdentityNamespaceResponse
+        ,PlatformAmountResponse
+        ,PlatformPayoutMetricsResponse
+        ,PlatformClaimCohortResponse
+        ,PlatformInventoryResponse
+        ,PlatformDailyResponse
+        ,PlatformCoverageResponse
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -493,6 +507,7 @@ struct AppState {
     base_rpc_urls: BaseRpcUrlConfig,
     base_broadcast_enabled: bool,
     operator_api_token: Option<String>,
+    analytics_exclusion_token: Option<String>,
     public_base_url: String,
     mcp_base_url: String,
     x402_relayer: X402HostedRelayerConfig,
@@ -803,6 +818,12 @@ impl BondSponsorConfig {
 
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
+const INTERFACE_ATTRIBUTION_HEADER: &str = "x-agent-bounties-interface";
+const ANALYTICS_EXCLUSION_HEADER: &str = "x-agent-bounties-analytics-exclusion";
+const ANALYTICS_EXCLUDED_HEADER: &str = "x-agent-bounties-analytics-excluded";
+const PLATFORM_LAUNCH_AT: &str = "2026-07-08T20:22:19Z";
+const PLATFORM_FIRST_MONTH_ENDED_AT: &str = "2026-08-08T20:22:19Z";
+const PUBLIC_METRICS_POLICY_JSON: &str = include_str!("../fixtures/public-metrics-policy.json");
 const LEGAL_TERMS_VERSION: &str = "2026-07-18";
 const LEGAL_PRIVACY_VERSION: &str = "2026-07-18";
 const LEGAL_ACCEPTANCE_STATEMENT: &str = "I meet the age requirement in the Terms and am authorized to use this wallet and perform this action. I understand that public and blockchain records may be permanent. I accept the posted task, verification, and settlement rules. I am responsible for legal compliance, taxes, content rights, agent authority, and wallet security. I agree to the Terms of Use and Privacy Policy.";
@@ -1469,6 +1490,16 @@ struct SiteAnalyticsChannelResponse {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+struct InterfaceUsageResponse {
+    interface: String,
+    protocol_era: String,
+    request_count: u64,
+    successful_request_count: u64,
+    first_observed_at: String,
+    last_observed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 struct SiteAnalyticsRateResponse {
     metric: String,
     numerator_sessions: u64,
@@ -1487,8 +1518,149 @@ struct SiteAnalyticsResponse {
     event_counts: Vec<SiteAnalyticsEventCountResponse>,
     daily: Vec<SiteAnalyticsDailyResponse>,
     channels: Vec<SiteAnalyticsChannelResponse>,
+    interfaces: Vec<InterfaceUsageResponse>,
     rates: Vec<SiteAnalyticsRateResponse>,
     definitions: Vec<String>,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PlatformMetricsQuery {
+    period: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PublicMetricsPolicy {
+    schema_version: String,
+    maintainer_github_logins: Vec<String>,
+    maintainer_comment_authors: Vec<String>,
+    maintainer_wallets: Vec<String>,
+    wallet_ownership_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformMetricsWindowResponse {
+    period: String,
+    started_at: String,
+    ended_at: String,
+    previous_started_at: String,
+    previous_ended_at: String,
+    launch_at: String,
+    first_month_started_at: String,
+    first_month_ended_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformIdentityRoleResponse {
+    role: String,
+    active_identities: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformIdentityNamespaceResponse {
+    namespace: String,
+    active_identities: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformIdentityMetricsResponse {
+    selected: u64,
+    previous: u64,
+    latest_week: u64,
+    previous_week: u64,
+    first_month: u64,
+    lifetime: u64,
+    roles: Vec<PlatformIdentityRoleResponse>,
+    namespaces: Vec<PlatformIdentityNamespaceResponse>,
+    definition: String,
+    cross_namespace_deduplication: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformAmountResponse {
+    usdc_base_units: String,
+    usdc: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformPayoutMetricsResponse {
+    selected: PlatformAmountResponse,
+    previous: PlatformAmountResponse,
+    first_month: PlatformAmountResponse,
+    lifetime: PlatformAmountResponse,
+    selected_solver_pay: PlatformAmountResponse,
+    selected_verifier_pay: PlatformAmountResponse,
+    selected_completion_bonus: PlatformAmountResponse,
+    selected_settled_rounds: u64,
+    previous_settled_rounds: u64,
+    first_month_settled_rounds: u64,
+    lifetime_settled_rounds: u64,
+    definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformClaimCohortResponse {
+    settled_rounds: u64,
+    mature_claimed_rounds: u64,
+    immature_claimed_rounds: u64,
+    settlement_rate: Option<f64>,
+    definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformInventoryResponse {
+    status: String,
+    ready_to_earn_opportunities: Option<usize>,
+    autonomous_claimable_bounties: Option<usize>,
+    open_competitions_ready_to_earn: Option<usize>,
+    verification_ready_bounties: Option<usize>,
+    standing_meta_bounties: Option<usize>,
+    funded: Option<PlatformAmountResponse>,
+    solver_rewards: Option<PlatformAmountResponse>,
+    verifier_rewards: Option<PlatformAmountResponse>,
+    generated_at: Option<String>,
+    definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformDailyResponse {
+    day: String,
+    active_identities: u64,
+    payout: PlatformAmountResponse,
+    settled_rounds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformCoverageResponse {
+    status: String,
+    autonomous_indexer_fresh: bool,
+    open_competition_indexer_fresh: bool,
+    verified_canonical_events: u64,
+    awaiting_block_time_events: u64,
+    opportunity_comments: u64,
+    latest_verified_event_at: Option<String>,
+    latest_comment_at: Option<String>,
+    github_included: bool,
+    github_snapshot_path: String,
+    maintainer_exclusion_policy: String,
+    identity_limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformMetricsResponse {
+    schema_version: String,
+    network: String,
+    generated_at: String,
+    window: PlatformMetricsWindowResponse,
+    platform_active_identities: PlatformIdentityMetricsResponse,
+    marketplace_payout_volume: PlatformPayoutMetricsResponse,
+    mature_claim_to_settlement: PlatformClaimCohortResponse,
+    current_inventory: PlatformInventoryResponse,
+    daily: Vec<PlatformDailyResponse>,
+    platform_revenue: PlatformAmountResponse,
+    monetization_status: String,
+    coverage: PlatformCoverageResponse,
+    definitions: BTreeMap<String, String>,
     evidence_boundary: String,
 }
 
@@ -1816,6 +1988,27 @@ struct AutonomousBountyInventorySummary {
     evidence_boundary: String,
 }
 
+#[derive(Debug, Clone)]
+struct OpenCompetitionInventorySummary {
+    generated_at: String,
+    ready_to_earn_count: usize,
+    funded_usdc_base_units: String,
+    solver_reward_usdc_base_units: String,
+    verifier_reward_usdc_base_units: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlatformCanonicalSourceFreshness {
+    autonomous: bool,
+    open_competition: bool,
+}
+
+impl PlatformCanonicalSourceFreshness {
+    fn complete(self) -> bool {
+        self.autonomous && self.open_competition
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct AutonomousVerificationJobsQuery {
     network: Option<String>,
@@ -1925,6 +2118,9 @@ async fn main() -> anyhow::Result<()> {
         operator_api_token: env::var("OPERATOR_API_TOKEN")
             .ok()
             .and_then(non_empty_secret),
+        analytics_exclusion_token: env::var("ANALYTICS_EXCLUSION_TOKEN")
+            .ok()
+            .and_then(non_empty_secret),
         public_base_url: env::var("PUBLIC_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
         mcp_base_url: env::var("MCP_BASE_URL")
@@ -1998,6 +2194,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/analytics/events", post(record_site_analytics_event))
         .route("/v1/analytics/site", get(site_analytics))
+        .route("/v1/metrics/platform", get(platform_metrics))
         .route(
             "/public/opportunities/:opportunity_id/embed",
             get(opportunity_embed_page),
@@ -2439,6 +2636,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/public/templates/:slug", get(public_template_page))
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/docs", get(api_docs))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observe_interface_usage,
+        ))
         .layer(CorsLayer::permissive())
         .layer(middleware::from_fn(redirect_marketing_domain))
         .with_state(state);
@@ -2462,6 +2663,78 @@ fn service_bind_addr(configured: Option<&str>, port: Option<&str>, default_addr:
                 .map(|value| format!("0.0.0.0:{}", value.trim()))
         })
         .unwrap_or_else(|| default_addr.to_string())
+}
+
+fn attributed_api_interface(headers: &HeaderMap) -> Option<ObservedInterface> {
+    let value = headers.get(INTERFACE_ATTRIBUTION_HEADER)?.to_str().ok()?;
+    if value.eq_ignore_ascii_case("api") {
+        Some(ObservedInterface::Api)
+    } else if value.eq_ignore_ascii_case("cli") {
+        Some(ObservedInterface::Cli)
+    } else {
+        None
+    }
+}
+
+fn analytics_exclusion_is_authorized(
+    analytics_exclusion_token: Option<&str>,
+    operator_api_token: Option<&str>,
+    headers: &HeaderMap,
+) -> bool {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok());
+    analytics_exclusion_token.is_some()
+        && service_runtime::operator_token_is_authorized(
+            analytics_exclusion_token,
+            headers
+                .get(ANALYTICS_EXCLUSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            None,
+        )
+        || (operator_api_token.is_some()
+            && service_runtime::operator_token_is_authorized(
+                operator_api_token,
+                headers
+                    .get(OPERATOR_TOKEN_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                authorization,
+            ))
+}
+
+async fn observe_interface_usage(
+    State(state): State<SharedState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let interface = attributed_api_interface(request.headers());
+    let excluded = analytics_exclusion_is_authorized(
+        state.analytics_exclusion_token.as_deref(),
+        state.operator_api_token.as_deref(),
+        request.headers(),
+    );
+    let mut response = next.run(request).await;
+    if excluded {
+        response
+            .headers_mut()
+            .insert(ANALYTICS_EXCLUDED_HEADER, HeaderValue::from_static("true"));
+    }
+    if !excluded {
+        if let (Some(store), Some(interface)) = (state.store.clone(), interface) {
+            let succeeded = response.status().is_success();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_interface_usage(
+                        interface,
+                        ObservedProtocolEra::NotApplicable,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
+    }
+    response
 }
 
 #[utoipa::path(get, path = "/health", responses((status = 200, body = String)))]
@@ -4644,7 +4917,7 @@ fn site_analytics_response(
         ),
     ];
     SiteAnalyticsResponse {
-        schema_version: "agent-bounties/site-analytics-v1".to_string(),
+        schema_version: "agent-bounties/site-analytics-v2".to_string(),
         window_hours,
         window_started_at: window_started_at.to_rfc3339(),
         generated_at: generated_at.to_rfc3339(),
@@ -4696,15 +4969,472 @@ fn site_analytics_response(
                 claims_confirmed: channel.claims_confirmed,
             })
             .collect(),
+        interfaces: stats
+            .interfaces
+            .into_iter()
+            .map(|usage| InterfaceUsageResponse {
+                interface: usage.interface,
+                protocol_era: usage.protocol_era,
+                request_count: usage.request_count,
+                successful_request_count: usage.successful_request_count,
+                first_observed_at: usage.first_observed_at.to_rfc3339(),
+                last_observed_at: usage.last_observed_at.to_rfc3339(),
+            })
+            .collect(),
         rates,
         definitions: vec![
             "A visitor is one random browser-local UUID with a 90-day lifetime, not a person or wallet.".to_string(),
             "A returning visitor is the same browser-local UUID observed on at least two UTC dates in the selected window.".to_string(),
             "A session is one random sessionStorage UUID and ends with that browser tab session.".to_string(),
             "Channel attribution uses the visitor's earliest recorded privacy-safe source and campaign; only the referrer hostname is retained.".to_string(),
+            "External interface usage is an hourly aggregate of observed requests, not unique people, agents, clients, or sessions; partial boundary hours are included.".to_string(),
+            "Requests bearing a server-verified analytics exclusion or operator credential are omitted before aggregation; no operator identifier is stored.".to_string(),
+            "API and CLI attribution is self-declared through x-agent-bounties-interface; MCP protocol era is observed by the MCP service.".to_string(),
         ],
-        evidence_boundary: "Collection begins only after this feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect coverage. No IP address, user agent, full referrer URL, wallet, or arbitrary metadata is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
+        evidence_boundary: "Collection begins only after each feature is deployed and has no historical backfill. External interface counting restarts at the operator-exclusion release; the earlier launch aggregate is retained outside this public response because it contains maintainer validation traffic that cannot be separated retrospectively. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect browser coverage. Interface counters cannot deduplicate users or prove preference, and self-declared API or CLI attribution can be absent or spoofed. No IP address, user agent, full referrer URL, wallet, client identifier, request body, prompt, tool arguments, or operator identity is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlatformMetricWindow {
+    period: String,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    previous_started_at: DateTime<Utc>,
+    launch_at: DateTime<Utc>,
+    first_month_ended_at: DateTime<Utc>,
+}
+
+fn parse_public_metrics_timestamp(value: &str) -> Result<DateTime<Utc>, StatusCode> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn platform_metric_window(
+    period: Option<&str>,
+    ended_at: DateTime<Utc>,
+) -> Result<PlatformMetricWindow, StatusCode> {
+    let launch_at = parse_public_metrics_timestamp(PLATFORM_LAUNCH_AT)?;
+    let first_month_ended_at = parse_public_metrics_timestamp(PLATFORM_FIRST_MONTH_ENDED_AT)?;
+    let period = period.unwrap_or("7d");
+    let requested_started_at = match period {
+        "7d" => ended_at - ChronoDuration::days(7),
+        "28d" => ended_at - ChronoDuration::days(28),
+        "90d" => ended_at - ChronoDuration::days(90),
+        "lifetime" => launch_at,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let started_at = requested_started_at.max(launch_at);
+    let selected_duration = ended_at.signed_duration_since(started_at);
+    let previous_started_at = if period == "lifetime" {
+        launch_at
+    } else {
+        started_at - selected_duration
+    };
+    Ok(PlatformMetricWindow {
+        period: period.to_string(),
+        started_at,
+        ended_at,
+        previous_started_at,
+        launch_at,
+        first_month_ended_at,
+    })
+}
+
+fn public_metrics_policy() -> Result<PublicMetricsPolicy, StatusCode> {
+    let mut policy: PublicMetricsPolicy = serde_json::from_str(PUBLIC_METRICS_POLICY_JSON)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    policy.maintainer_github_logins = policy
+        .maintainer_github_logins
+        .into_iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect();
+    policy.maintainer_comment_authors = policy
+        .maintainer_comment_authors
+        .into_iter()
+        .map(|value| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase()
+        })
+        .filter(|value| !value.is_empty())
+        .collect();
+    policy.maintainer_wallets = policy
+        .maintainer_wallets
+        .into_iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect();
+    Ok(policy)
+}
+
+fn exact_usdc(amount: u128) -> String {
+    format!("{}.{:06}", amount / 1_000_000, amount % 1_000_000)
+}
+
+fn platform_amount(base_units: impl Into<String>) -> Result<PlatformAmountResponse, StatusCode> {
+    let usdc_base_units = base_units.into();
+    let amount = usdc_base_units
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(PlatformAmountResponse {
+        usdc_base_units,
+        usdc: exact_usdc(amount),
+    })
+}
+
+fn platform_inventory_response(
+    autonomous: Option<AutonomousBountyInventorySummary>,
+    competition: Option<OpenCompetitionInventorySummary>,
+) -> Result<PlatformInventoryResponse, StatusCode> {
+    match (autonomous, competition) {
+        (Some(autonomous), Some(competition)) => Ok(PlatformInventoryResponse {
+            status: "ready".to_string(),
+            ready_to_earn_opportunities: Some(
+                autonomous
+                    .claimable_bounty_count
+                    .checked_add(competition.ready_to_earn_count)
+                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
+            ),
+            autonomous_claimable_bounties: Some(autonomous.claimable_bounty_count),
+            open_competitions_ready_to_earn: Some(competition.ready_to_earn_count),
+            verification_ready_bounties: Some(
+                autonomous
+                    .verification_ready_bounty_count
+                    .checked_add(competition.ready_to_earn_count)
+                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
+            ),
+            standing_meta_bounties: Some(autonomous.standing_meta_bounty_count),
+            funded: Some(platform_amount(add_platform_base_units(
+                &autonomous.funded_usdc_base_units,
+                &competition.funded_usdc_base_units,
+            )?)?),
+            solver_rewards: Some(platform_amount(add_platform_base_units(
+                &autonomous.solver_reward_usdc_base_units,
+                &competition.solver_reward_usdc_base_units,
+            )?)?),
+            verifier_rewards: Some(platform_amount(add_platform_base_units(
+                &autonomous.verifier_reward_usdc_base_units,
+                &competition.verifier_reward_usdc_base_units,
+            )?)?),
+            generated_at: Some(if autonomous.generated_at <= competition.generated_at {
+                autonomous.generated_at
+            } else {
+                competition.generated_at
+            }),
+            definition: "Current ready-to-earn inventory combines the canonical exclusive-claim feed with active Open Competition entries. It is a point-in-time projection and is not added to historical payout or conversion cohorts.".to_string(),
+        }),
+        (autonomous, competition) => Ok(PlatformInventoryResponse {
+            status: if autonomous.is_some() || competition.is_some() {
+                "partial"
+            } else {
+                "unavailable"
+            }
+            .to_string(),
+            ready_to_earn_opportunities: None,
+            autonomous_claimable_bounties: autonomous
+                .as_ref()
+                .map(|summary| summary.claimable_bounty_count),
+            open_competitions_ready_to_earn: competition
+                .as_ref()
+                .map(|summary| summary.ready_to_earn_count),
+            verification_ready_bounties: None,
+            standing_meta_bounties: None,
+            funded: None,
+            solver_rewards: None,
+            verifier_rewards: None,
+            generated_at: None,
+            definition: "One or both canonical inventory protocols could not be read. Historical metrics remain available, observed protocol counts stay separated, and combined inventory values are not silently replaced with a lower total or zero.".to_string(),
+        }),
+    }
+}
+
+fn add_platform_base_units(left: &str, right: &str) -> Result<String, StatusCode> {
+    let left = left
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let right = right
+        .parse::<u128>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    left.checked_add(right)
+        .map(|value| value.to_string())
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn platform_metrics_response(
+    stats: PlatformMetricsStats,
+    window: PlatformMetricWindow,
+    policy: PublicMetricsPolicy,
+    autonomous_inventory: Option<AutonomousBountyInventorySummary>,
+    competition_inventory: Option<OpenCompetitionInventorySummary>,
+    source_freshness: PlatformCanonicalSourceFreshness,
+) -> Result<PlatformMetricsResponse, StatusCode> {
+    let settlement_rate = (stats.claim_cohort.mature > 0)
+        .then(|| stats.claim_cohort.settled as f64 / stats.claim_cohort.mature as f64);
+    let inventory_complete = autonomous_inventory.is_some() && competition_inventory.is_some();
+    let coverage_status = if inventory_complete
+        && source_freshness.complete()
+        && stats.coverage.awaiting_block_time_events == 0
+    {
+        "ready"
+    } else {
+        "partial"
+    };
+    let inventory = platform_inventory_response(autonomous_inventory, competition_inventory)?;
+    let mut definitions = BTreeMap::new();
+    definitions.insert(
+        "external_active_identities".to_string(),
+        "Distinct provider-namespaced marketplace wallets and normalized opportunity-comment authors that performed a qualifying action. GitHub identities are supplied by the separate aggregate snapshot and must be added only once. Identities are not verified unique people.".to_string(),
+    );
+    definitions.insert(
+        "marketplace_payout_volume".to_string(),
+        "Confirmed solver reward, verifier reward, and completion bonus from block-time-verified BountySettled events across Autonomous and Open Competition, plus verifier pay from block-time-verified SubmissionRejected and CompetitionSubmissionRejected events. Returned bonds, refunds, funding plans, and prizes are excluded.".to_string(),
+    );
+    definitions.insert(
+        "mature_claim_to_settlement".to_string(),
+        "Settled exclusive-claim rounds divided by exclusive-claim rounds whose claim deadline has passed or that already have a terminal canonical event. Recent immature claims are shown separately and excluded from the rate. Open Competition has no exclusive claim and is not part of this cohort.".to_string(),
+    );
+    definitions.insert(
+        "platform_revenue".to_string(),
+        "The live marketplace protocols have no platform fee. Marketplace payout volume is not platform revenue.".to_string(),
+    );
+
+    Ok(PlatformMetricsResponse {
+        schema_version: "agent-bounties/platform-metrics-v1".to_string(),
+        network: "base-mainnet".to_string(),
+        generated_at: stats.generated_at.to_rfc3339(),
+        window: PlatformMetricsWindowResponse {
+            period: window.period,
+            started_at: window.started_at.to_rfc3339(),
+            ended_at: window.ended_at.to_rfc3339(),
+            previous_started_at: window.previous_started_at.to_rfc3339(),
+            previous_ended_at: window.started_at.to_rfc3339(),
+            launch_at: window.launch_at.to_rfc3339(),
+            first_month_started_at: window.launch_at.to_rfc3339(),
+            first_month_ended_at: window.first_month_ended_at.to_rfc3339(),
+        },
+        platform_active_identities: PlatformIdentityMetricsResponse {
+            selected: stats.identities.selected,
+            previous: stats.identities.previous,
+            latest_week: stats.identities.latest_week,
+            previous_week: stats.identities.previous_week,
+            first_month: stats.identities.first_month,
+            lifetime: stats.identities.lifetime,
+            roles: vec![
+                PlatformIdentityRoleResponse { role: "posters".to_string(), active_identities: stats.identities.posters },
+                PlatformIdentityRoleResponse { role: "funders".to_string(), active_identities: stats.identities.funders },
+                PlatformIdentityRoleResponse { role: "solvers".to_string(), active_identities: stats.identities.solvers },
+                PlatformIdentityRoleResponse { role: "verifiers".to_string(), active_identities: stats.identities.verifiers },
+                PlatformIdentityRoleResponse { role: "commenters".to_string(), active_identities: stats.identities.commenters },
+            ],
+            namespaces: vec![
+                PlatformIdentityNamespaceResponse {
+                    namespace: "base_wallet".to_string(),
+                    active_identities: stats.identities.marketplace_wallets,
+                },
+                PlatformIdentityNamespaceResponse {
+                    namespace: "opportunity_comment_author".to_string(),
+                    active_identities: stats.identities.opportunity_comment_authors,
+                },
+            ],
+            definition: "One identity is counted once per namespace and reporting window after the public maintainer exclusion policy is applied. Role counts are not additive.".to_string(),
+            cross_namespace_deduplication: false,
+        },
+        marketplace_payout_volume: PlatformPayoutMetricsResponse {
+            selected: platform_amount(stats.payouts.selected_total_base_units)?,
+            previous: platform_amount(stats.payouts.previous_total_base_units)?,
+            first_month: platform_amount(stats.payouts.first_month_total_base_units)?,
+            lifetime: platform_amount(stats.payouts.lifetime_total_base_units)?,
+            selected_solver_pay: platform_amount(stats.payouts.selected_solver_base_units)?,
+            selected_verifier_pay: platform_amount(stats.payouts.selected_verifier_base_units)?,
+            selected_completion_bonus: platform_amount(stats.payouts.selected_bonus_base_units)?,
+            selected_settled_rounds: stats.payouts.selected_settled_rounds,
+            previous_settled_rounds: stats.payouts.previous_settled_rounds,
+            first_month_settled_rounds: stats.payouts.first_month_settled_rounds,
+            lifetime_settled_rounds: stats.payouts.lifetime_settled_rounds,
+            definition: definitions["marketplace_payout_volume"].clone(),
+        },
+        mature_claim_to_settlement: PlatformClaimCohortResponse {
+            settled_rounds: stats.claim_cohort.settled,
+            mature_claimed_rounds: stats.claim_cohort.mature,
+            immature_claimed_rounds: stats.claim_cohort.immature,
+            settlement_rate,
+            definition: definitions["mature_claim_to_settlement"].clone(),
+        },
+        current_inventory: inventory,
+        daily: stats
+            .daily
+            .into_iter()
+            .map(|day| {
+                Ok(PlatformDailyResponse {
+                    day: day.day,
+                    active_identities: day.active_identities,
+                    payout: platform_amount(day.payout_base_units)?,
+                    settled_rounds: day.settled_rounds,
+                })
+            })
+            .collect::<Result<Vec<_>, StatusCode>>()?,
+        platform_revenue: platform_amount("0")?,
+        monetization_status: "monetization not active".to_string(),
+        coverage: PlatformCoverageResponse {
+            status: coverage_status.to_string(),
+            autonomous_indexer_fresh: source_freshness.autonomous,
+            open_competition_indexer_fresh: source_freshness.open_competition,
+            verified_canonical_events: stats.coverage.verified_canonical_events,
+            awaiting_block_time_events: stats.coverage.awaiting_block_time_events,
+            opportunity_comments: stats.coverage.opportunity_comments,
+            latest_verified_event_at: stats
+                .coverage
+                .latest_verified_event_at
+                .map(|value| value.to_rfc3339()),
+            latest_comment_at: stats
+                .coverage
+                .latest_comment_at
+                .map(|value| value.to_rfc3339()),
+            github_included: false,
+            github_snapshot_path: "/generated/github-participation.json".to_string(),
+            maintainer_exclusion_policy: policy.schema_version,
+            identity_limitations: vec![
+                "A wallet, GitHub login, and self-reported comment author are separate identity namespaces unless explicitly verified and linked.".to_string(),
+                policy.wallet_ownership_boundary,
+                "Opportunity-comment authors are self-reported labels, not authenticated people.".to_string(),
+            ],
+        },
+        definitions,
+        evidence_boundary: "This public response contains aggregate counts and amounts only. Canonical metrics use events whose Base block time has been verified. It returns no wallet, GitHub, comment-author, event, transaction, or customer identifiers. GitHub participation is intentionally generated as a separate aggregate snapshot to avoid double counting. Only confirmed canonical BountySettled proves solver payment.".to_string(),
+    })
+}
+
+fn public_metrics_indexer_heartbeat_fresh(
+    heartbeat: &BaseIndexerHeartbeat,
+    now: DateTime<Utc>,
+) -> bool {
+    const MAX_AGE_SECONDS: i64 = 300;
+    const MAX_CURSOR_LAG_BLOCKS: u64 = 20;
+    let status_healthy = heartbeat.status == "success"
+        || (heartbeat.status == "skipped"
+            && heartbeat.skipped_reason.as_deref()
+                == Some("no confirmed blocks are ready to scan"));
+    let Some(completed_at) = heartbeat.completed_at else {
+        return false;
+    };
+    let age = now.signed_duration_since(completed_at).num_seconds();
+    let cursor_caught_up = heartbeat
+        .latest_block
+        .zip(heartbeat.persisted_cursor_block)
+        .is_some_and(|(latest, cursor)| cursor.saturating_add(MAX_CURSOR_LAG_BLOCKS) >= latest);
+    status_healthy
+        && heartbeat.error_message.is_none()
+        && (0..=MAX_AGE_SECONDS).contains(&age)
+        && cursor_caught_up
+}
+
+async fn platform_canonical_source_freshness(
+    state: &SharedState,
+    now: DateTime<Utc>,
+) -> PlatformCanonicalSourceFreshness {
+    let Some(store) = state.store.as_ref() else {
+        return PlatformCanonicalSourceFreshness {
+            autonomous: false,
+            open_competition: false,
+        };
+    };
+    let autonomous = if let Some(factory) = autonomous_factory_for_chain(8_453) {
+        store
+            .get_base_indexer_heartbeat("base-mainnet", &factory)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|heartbeat| public_metrics_indexer_heartbeat_fresh(&heartbeat, now))
+    } else {
+        false
+    };
+    let open_competition = match open_competition_release_from_environment("base-mainnet") {
+        Ok(release) => store
+            .get_base_indexer_heartbeat("base-mainnet", &release.factory_contract)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|heartbeat| public_metrics_indexer_heartbeat_fresh(&heartbeat, now)),
+        Err(_) => false,
+    };
+    PlatformCanonicalSourceFreshness {
+        autonomous,
+        open_competition,
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/metrics/platform",
+    params(("period" = Option<String>, Query, description = "Reporting window: 7d, 28d, 90d, or lifetime; defaults to 7d")),
+    responses(
+        (status = 200, body = PlatformMetricsResponse),
+        (status = 400, description = "Unknown reporting period"),
+        (status = 503, description = "Durable metrics store unavailable")
+    )
+)]
+async fn platform_metrics(
+    State(state): State<SharedState>,
+    Query(query): Query<PlatformMetricsQuery>,
+) -> Result<Response, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let window = platform_metric_window(query.period.as_deref(), Utc::now())?;
+    let policy = public_metrics_policy()?;
+    let excluded_contracts = state.recovery_reservations.contracts();
+    let stats = store
+        .platform_metrics_stats(
+            "base-mainnet",
+            window.started_at,
+            window.ended_at,
+            window.previous_started_at,
+            window.launch_at,
+            window.first_month_ended_at,
+            &policy.maintainer_wallets,
+            &policy.maintainer_comment_authors,
+            &excluded_contracts,
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let source_freshness = platform_canonical_source_freshness(&state, stats.generated_at).await;
+    let autonomous_inventory = if source_freshness.autonomous {
+        match load_verified_autonomous_bounty_feed(&state, "base-mainnet", true).await {
+            Ok(feed) => build_autonomous_inventory_summary(&state, "base-mainnet", feed).ok(),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let competition_inventory = if source_freshness.open_competition {
+        build_open_competition_inventory_summary(&state, "base-mainnet")
+            .await
+            .ok()
+    } else {
+        None
+    };
+    let response = platform_metrics_response(
+        stats,
+        window,
+        policy,
+        autonomous_inventory,
+        competition_inventory,
+        source_freshness,
+    )?;
+    Ok((
+        [(
+            header::CACHE_CONTROL,
+            "public, max-age=30, stale-while-revalidate=60",
+        )],
+        Json(response),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -12870,6 +13600,29 @@ async fn load_autonomous_bounty_feed(
     Ok(feed)
 }
 
+async fn load_verified_autonomous_bounty_feed(
+    state: &SharedState,
+    network: &str,
+    claimable_only: bool,
+) -> Result<Vec<AutonomousBountyFeedItem>, StatusCode> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let events = store
+        .list_verified_autonomous_bounty_events(network)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let terms = store
+        .list_autonomous_bounty_terms()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut feed = build_autonomous_bounty_feed(events, terms, false)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.recovery_reservations.apply(&mut feed, claimable_only);
+    Ok(feed)
+}
+
 #[utoipa::path(
     get,
     path = "/v1/base/autonomous-bounties/leaderboard",
@@ -13225,6 +13978,77 @@ fn build_autonomous_inventory_summary(
         verifier_reward_usdc: format_usdc_base_units(verifier),
         items,
         evidence_boundary: "This summary is derived at request time from confirmed canonical events and validated content-addressed terms in the hosted index. It proves current indexed inventory, not a future claim, completion, or payout. Only BountySettled proves payment.".to_string(),
+    })
+}
+
+async fn build_open_competition_inventory_summary(
+    state: &SharedState,
+    network: &str,
+) -> Result<OpenCompetitionInventorySummary, StatusCode> {
+    let (descriptor, _) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let release = open_competition_release_from_environment(network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if release.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let prefix = open_competition_environment_prefix(network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let public_activation_block = env::var(format!("{prefix}_PUBLIC_ACTIVATION_BLOCK"))
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+        .parse::<u64>()
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let catalog = open_competition_verifier_catalog_from_environment(network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let [profile] = catalog.profiles.as_slice() else {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    if !profile.public_inventory_eligible
+        || profile.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let events = store
+        .list_verified_open_competition_events(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let generated_at = Utc::now();
+    let website_base_url =
+        legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
+    let items = open_competition_discovery_items(
+        &events,
+        profile,
+        network,
+        descriptor.chain_id,
+        &state.public_base_url,
+        &website_base_url,
+        public_activation_block,
+        generated_at,
+    )
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let ready = items.iter().filter(|item| item.ready_to_earn);
+    let sum = |field: fn(&github_discovery::GitHubDiscoveryItem) -> &str| {
+        ready.clone().try_fold(0_u128, |total, item| {
+            field(item)
+                .parse::<u128>()
+                .ok()
+                .and_then(|amount| total.checked_add(amount))
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
+        })
+    };
+    Ok(OpenCompetitionInventorySummary {
+        generated_at: generated_at.to_rfc3339(),
+        ready_to_earn_count: items.iter().filter(|item| item.ready_to_earn).count(),
+        funded_usdc_base_units: sum(|item| &item.funded_usdc_base_units)?.to_string(),
+        solver_reward_usdc_base_units: sum(|item| &item.reward_usdc_base_units)?.to_string(),
+        verifier_reward_usdc_base_units: sum(|item| &item.verifier_reward_usdc_base_units)?
+            .to_string(),
     })
 }
 
@@ -15311,6 +16135,10 @@ mod tests {
         RegisterCapabilityRequest, SubmitResultRequest, VerifySubmissionRequest,
     };
     use chrono::TimeZone;
+    use db::{
+        PlatformClaimCohortStats, PlatformDailyStats, PlatformIdentityStats,
+        PlatformMetricsCoverageStats, PlatformPayoutStats,
+    };
     use domain::{
         AffectedPartyDeclaration, Bounty, BountyStatus, CapabilityClass, DeliverableAccessPolicy,
         ExpectedEffect, FundingIntentStatus, FundingMode, IdentityDisclosure, ObjectiveAuthority,
@@ -15401,6 +16229,24 @@ mod tests {
         assert!(!open_competition_monitoring_is_fresh(
             &caught_up, safe_block, now
         ));
+    }
+
+    #[test]
+    fn public_metrics_marks_indexer_heartbeats_delayed_after_five_minutes() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        let fresh = open_competition_heartbeat(now, "success", Some(50_000_000), 300);
+        assert!(public_metrics_indexer_heartbeat_fresh(&fresh, now));
+
+        let stale = open_competition_heartbeat(now, "success", Some(50_000_000), 301);
+        assert!(!public_metrics_indexer_heartbeat_fresh(&stale, now));
+
+        let mut lagging = open_competition_heartbeat(now, "success", Some(50_000_000), 1);
+        lagging.latest_block = Some(50_000_021);
+        assert!(!public_metrics_indexer_heartbeat_fresh(&lagging, now));
+
+        let mut failed = open_competition_heartbeat(now, "success", Some(50_000_000), 1);
+        failed.error_message = Some("redacted".to_string());
+        assert!(!public_metrics_indexer_heartbeat_fresh(&failed, now));
     }
 
     fn entrant_relay_fixture(action: u8) -> OpenCompetitionEntrantRelay {
@@ -15985,6 +16831,84 @@ mod tests {
         assert_eq!(event.source.as_deref(), Some("github"));
         assert_eq!(event.referrer_host.as_deref(), Some("github.com"));
         assert_eq!(event.page_path, "/competition.html");
+    }
+
+    #[test]
+    fn interface_attribution_accepts_only_explicit_api_or_cli_values() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(attributed_api_interface(&headers), None);
+
+        headers.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("api"),
+        );
+        assert_eq!(
+            attributed_api_interface(&headers),
+            Some(ObservedInterface::Api)
+        );
+
+        headers.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("CLI"),
+        );
+        assert_eq!(
+            attributed_api_interface(&headers),
+            Some(ObservedInterface::Cli)
+        );
+
+        headers.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("website"),
+        );
+        assert_eq!(attributed_api_interface(&headers), None);
+    }
+
+    #[test]
+    fn interface_analytics_exclusion_requires_a_verified_scoped_or_operator_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ANALYTICS_EXCLUSION_HEADER,
+            HeaderValue::from_static("wrong-token"),
+        );
+        assert!(!analytics_exclusion_is_authorized(
+            Some("analytics-secret"),
+            Some("operator-secret"),
+            &headers,
+        ));
+
+        headers.insert(
+            ANALYTICS_EXCLUSION_HEADER,
+            HeaderValue::from_static("analytics-secret"),
+        );
+        assert!(analytics_exclusion_is_authorized(
+            Some("analytics-secret"),
+            Some("operator-secret"),
+            &headers,
+        ));
+
+        headers.remove(ANALYTICS_EXCLUSION_HEADER);
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer operator-secret"),
+        );
+        assert!(analytics_exclusion_is_authorized(
+            Some("analytics-secret"),
+            Some("operator-secret"),
+            &headers,
+        ));
+        assert!(!analytics_exclusion_is_authorized(None, None, &headers,));
+
+        let mut response = StatusCode::OK.into_response();
+        response
+            .headers_mut()
+            .insert(ANALYTICS_EXCLUDED_HEADER, HeaderValue::from_static("true"));
+        assert_eq!(
+            response
+                .headers()
+                .get(ANALYTICS_EXCLUDED_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
     }
 
     #[test]
@@ -18473,6 +19397,237 @@ mod tests {
         );
     }
 
+    #[test]
+    fn platform_metric_windows_use_exact_launch_and_first_month_boundaries() {
+        let ended_at = parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap();
+        let seven_days = platform_metric_window(Some("7d"), ended_at).unwrap();
+        assert_eq!(
+            seven_days.started_at,
+            parse_public_metrics_timestamp("2026-08-05T20:22:19Z").unwrap()
+        );
+        assert_eq!(
+            seven_days.previous_started_at,
+            parse_public_metrics_timestamp("2026-07-29T20:22:19Z").unwrap()
+        );
+        assert_eq!(
+            seven_days.launch_at.to_rfc3339(),
+            "2026-07-08T20:22:19+00:00"
+        );
+        assert_eq!(
+            seven_days.first_month_ended_at.to_rfc3339(),
+            "2026-08-08T20:22:19+00:00"
+        );
+
+        let lifetime = platform_metric_window(Some("lifetime"), ended_at).unwrap();
+        assert_eq!(lifetime.started_at, lifetime.launch_at);
+        assert_eq!(lifetime.previous_started_at, lifetime.launch_at);
+        assert_eq!(
+            platform_metric_window(Some("30d"), ended_at),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn platform_metrics_response_is_aggregate_only_and_preserves_payment_math() {
+        let generated_at = parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap();
+        let stats = PlatformMetricsStats {
+            generated_at,
+            identities: PlatformIdentityStats {
+                selected: 4,
+                previous: 2,
+                latest_week: 4,
+                previous_week: 2,
+                first_month: 3,
+                lifetime: 5,
+                posters: 1,
+                funders: 1,
+                solvers: 2,
+                verifiers: 1,
+                commenters: 1,
+                marketplace_wallets: 3,
+                opportunity_comment_authors: 1,
+            },
+            payouts: PlatformPayoutStats {
+                selected_total_base_units: "1250000".to_string(),
+                previous_total_base_units: "100000".to_string(),
+                first_month_total_base_units: "900000".to_string(),
+                lifetime_total_base_units: "1350000".to_string(),
+                selected_solver_base_units: "1000000".to_string(),
+                selected_verifier_base_units: "200000".to_string(),
+                selected_bonus_base_units: "50000".to_string(),
+                selected_settled_rounds: 1,
+                previous_settled_rounds: 0,
+                first_month_settled_rounds: 1,
+                lifetime_settled_rounds: 1,
+            },
+            claim_cohort: PlatformClaimCohortStats {
+                settled: 1,
+                mature: 2,
+                immature: 1,
+            },
+            daily: vec![PlatformDailyStats {
+                day: "2026-08-12".to_string(),
+                active_identities: 4,
+                payout_base_units: "1250000".to_string(),
+                settled_rounds: 1,
+            }],
+            coverage: PlatformMetricsCoverageStats {
+                verified_canonical_events: 9,
+                awaiting_block_time_events: 1,
+                opportunity_comments: 2,
+                latest_verified_event_at: Some(generated_at),
+                latest_comment_at: Some(generated_at),
+            },
+        };
+        let mut policy = public_metrics_policy().unwrap();
+        policy.maintainer_github_logins = vec!["private-maintainer-login".to_string()];
+        policy.maintainer_wallets = vec!["0x1111111111111111111111111111111111111111".to_string()];
+        let response = platform_metrics_response(
+            stats,
+            platform_metric_window(Some("7d"), generated_at).unwrap(),
+            policy,
+            None,
+            None,
+            PlatformCanonicalSourceFreshness {
+                autonomous: true,
+                open_competition: true,
+            },
+        )
+        .unwrap();
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert_eq!(response.marketplace_payout_volume.selected.usdc, "1.250000");
+        assert_eq!(
+            response.mature_claim_to_settlement.settlement_rate,
+            Some(0.5)
+        );
+        assert_eq!(response.platform_active_identities.namespaces.len(), 2);
+        assert_eq!(
+            response.platform_active_identities.namespaces[0].active_identities,
+            3
+        );
+        assert_eq!(
+            response.platform_active_identities.namespaces[1].active_identities,
+            1
+        );
+        assert_eq!(response.current_inventory.status, "unavailable");
+        assert_eq!(response.coverage.status, "partial");
+        assert!(!response.coverage.github_included);
+        assert!(!json.contains("private-maintainer-login"));
+        assert!(!json.contains("0x1111111111111111111111111111111111111111"));
+    }
+
+    #[test]
+    fn platform_inventory_combines_protocols_only_when_both_are_available() {
+        let autonomous = AutonomousBountyInventorySummary {
+            schema_version: "test".to_string(),
+            network: "base-mainnet".to_string(),
+            generated_at: "2026-08-12T20:00:00+00:00".to_string(),
+            canonical_source: "test".to_string(),
+            claimable_bounty_count: 2,
+            verification_ready_bounty_count: 1,
+            standing_meta_bounty_count: 1,
+            funded_usdc_base_units: "3000000".to_string(),
+            funded_usdc: "3.00".to_string(),
+            solver_reward_usdc_base_units: "2400000".to_string(),
+            solver_reward_usdc: "2.40".to_string(),
+            verifier_reward_usdc_base_units: "600000".to_string(),
+            verifier_reward_usdc: "0.60".to_string(),
+            items: Vec::new(),
+            evidence_boundary: "test".to_string(),
+        };
+        let competition = OpenCompetitionInventorySummary {
+            generated_at: "2026-08-12T20:01:00+00:00".to_string(),
+            ready_to_earn_count: 1,
+            funded_usdc_base_units: "1200000".to_string(),
+            solver_reward_usdc_base_units: "1000000".to_string(),
+            verifier_reward_usdc_base_units: "200000".to_string(),
+        };
+        let combined =
+            platform_inventory_response(Some(autonomous.clone()), Some(competition)).unwrap();
+
+        assert_eq!(combined.status, "ready");
+        assert_eq!(combined.ready_to_earn_opportunities, Some(3));
+        assert_eq!(combined.autonomous_claimable_bounties, Some(2));
+        assert_eq!(combined.open_competitions_ready_to_earn, Some(1));
+        assert_eq!(combined.funded.unwrap().usdc, "4.200000");
+
+        let partial = platform_inventory_response(Some(autonomous), None).unwrap();
+        assert_eq!(partial.status, "partial");
+        assert_eq!(partial.autonomous_claimable_bounties, Some(2));
+        assert_eq!(partial.open_competitions_ready_to_earn, None);
+        assert_eq!(partial.ready_to_earn_opportunities, None);
+        assert!(partial.funded.is_none());
+    }
+
+    #[test]
+    fn platform_metrics_zero_mature_denominator_has_no_rate() {
+        assert_eq!(
+            platform_metrics_response(
+                PlatformMetricsStats {
+                    generated_at: parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap(),
+                    identities: PlatformIdentityStats {
+                        selected: 0,
+                        previous: 0,
+                        latest_week: 0,
+                        previous_week: 0,
+                        first_month: 0,
+                        lifetime: 0,
+                        posters: 0,
+                        funders: 0,
+                        solvers: 0,
+                        verifiers: 0,
+                        commenters: 0,
+                        marketplace_wallets: 0,
+                        opportunity_comment_authors: 0,
+                    },
+                    payouts: PlatformPayoutStats {
+                        selected_total_base_units: "0".to_string(),
+                        previous_total_base_units: "0".to_string(),
+                        first_month_total_base_units: "0".to_string(),
+                        lifetime_total_base_units: "0".to_string(),
+                        selected_solver_base_units: "0".to_string(),
+                        selected_verifier_base_units: "0".to_string(),
+                        selected_bonus_base_units: "0".to_string(),
+                        selected_settled_rounds: 0,
+                        previous_settled_rounds: 0,
+                        first_month_settled_rounds: 0,
+                        lifetime_settled_rounds: 0,
+                    },
+                    claim_cohort: PlatformClaimCohortStats {
+                        settled: 0,
+                        mature: 0,
+                        immature: 2,
+                    },
+                    daily: Vec::new(),
+                    coverage: PlatformMetricsCoverageStats {
+                        verified_canonical_events: 0,
+                        awaiting_block_time_events: 0,
+                        opportunity_comments: 0,
+                        latest_verified_event_at: None,
+                        latest_comment_at: None,
+                    },
+                },
+                platform_metric_window(
+                    Some("7d"),
+                    parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap(),
+                )
+                .unwrap(),
+                public_metrics_policy().unwrap(),
+                None,
+                None,
+                PlatformCanonicalSourceFreshness {
+                    autonomous: true,
+                    open_competition: true,
+                },
+            )
+            .unwrap()
+            .mature_claim_to_settlement
+            .settlement_rate,
+            None
+        );
+    }
+
     #[tokio::test]
     async fn openapi_json_endpoint_contains_agent_router_path() {
         let document = openapi_json().await.0;
@@ -18531,6 +19686,7 @@ mod tests {
         assert!(paths.contains_key("/v1/chatgpt/action-intents/{intent_id}/observations"));
         assert!(paths.contains_key("/v1/analytics/events"));
         assert!(paths.contains_key("/v1/analytics/site"));
+        assert!(paths.contains_key("/v1/metrics/platform"));
         assert!(paths.contains_key("/v1/discovery/subscriptions"));
         assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed"));
@@ -19916,6 +21072,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -19951,6 +21108,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -19977,6 +21135,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -20003,6 +21162,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -20033,6 +21193,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -20065,6 +21226,7 @@ mod tests {
             },
             base_broadcast_enabled: true,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -20094,6 +21256,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -20123,6 +21286,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -20153,6 +21317,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),

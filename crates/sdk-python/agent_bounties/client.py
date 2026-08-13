@@ -112,14 +112,23 @@ class AgentBountiesClient:
         self,
         base_url: str = "http://127.0.0.1:8080",
         operator_api_token: str | None = None,
+        analytics_exclusion_token: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.operator_api_token = operator_api_token or os.getenv("OPERATOR_API_TOKEN")
+        self.analytics_exclusion_token = analytics_exclusion_token or os.getenv(
+            "AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN"
+        )
 
-    def _headers(self) -> dict[str, str] | None:
+    def _headers(self) -> dict[str, str]:
+        headers = {"x-agent-bounties-interface": "api"}
         if self.operator_api_token:
-            return {"x-operator-token": self.operator_api_token}
-        return None
+            headers["x-operator-token"] = self.operator_api_token
+        if self.analytics_exclusion_token:
+            headers["x-agent-bounties-analytics-exclusion"] = (
+                self.analytics_exclusion_token
+            )
+        return headers
 
     def _http(
         self,

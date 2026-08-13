@@ -448,7 +448,13 @@ def validate_created_bounty(
     params = decoded["params"]
     assert isinstance(params, dict)
     bounty = read_state(client, predicted, block=block)
-    validate_common(bounty, require_funded=False)
+    validate_common(
+        bounty,
+        require_funded=False,
+        verification_mode=int(params["verification_mode"]),
+        threshold=int(params["threshold"]),
+        expected_verifier_module=str(params["verifier_module"]),
+    )
     expected_status = 1 if prepared["initial_funding"] == prepared["target"] else 0
     expected = {
         "bounty_id": prepared["bounty_id"],

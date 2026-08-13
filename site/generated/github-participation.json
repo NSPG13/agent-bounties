@@ -1,0 +1,42 @@
+{
+  "schema_version": "agent-bounties/github-participation-v1",
+  "source": "github_public_activity",
+  "generated_at": "2026-07-08T20:22:19Z",
+  "launch_at": "2026-07-08T20:22:19Z",
+  "first_month_started_at": "2026-07-08T20:22:19Z",
+  "first_month_ended_at": "2026-08-08T20:22:19Z",
+  "namespace": "github",
+  "periods": {
+    "7d": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0},
+    "28d": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0},
+    "90d": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0},
+    "lifetime": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0}
+  },
+  "weekly": {"latest_active_identities": 0, "previous_active_identities": 0},
+  "first_month": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-08-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": []},
+  "repository_acquisition": {
+    "source": "github_repository_traffic",
+    "generated_at": "2026-07-08T20:22:19Z",
+    "window_kind": "rolling_14_days",
+    "window_days": 14,
+    "historical_snapshots": [
+      {"observed_at": "2026-07-09T23:09:23Z", "clone_events": 1260, "unique_cloners": 222, "page_views": 98, "unique_visitors": 28},
+      {"observed_at": "2026-07-11T06:58:04Z", "clone_events": 2448, "unique_cloners": 310, "page_views": 280, "unique_visitors": 58}
+    ],
+    "coverage": {"status": "unavailable"},
+    "definitions": {
+      "clone_events": "Repository clone operations in GitHub's rolling 14-day traffic window.",
+      "unique_cloners": "Unique repository users measured by GitHub as cloners in the rolling window.",
+      "page_views": "Repository page views in GitHub's rolling 14-day traffic window.",
+      "unique_visitors": "Unique repository users measured by GitHub as visitors in the rolling window.",
+      "overlap": "GitHub does not expose overlap between unique cloners and unique visitors, so they are not summed or added to active platform identities."
+    }
+  },
+  "coverage": {"status": "unavailable", "qualifying_records": 0, "excluded_records": 0, "missing_timestamp_records": 0, "maintainer_exclusion_policy": "agent-bounties/public-metrics-policy-v1", "raw_identifiers_included": false},
+  "definitions": {
+    "active_identity": "One external GitHub login with a qualifying action. It is a participating identity, not a verified unique person.",
+    "qualifying_action": "An external issue or pull request opened, issue or pull-request comment, submitted pull-request review, or inline review comment.",
+    "exclusions": "Bots, system identities, the repository owner, and checked-in maintainers are excluded."
+  },
+  "privacy_boundary": "Placeholder only. The scheduled Pages job replaces this file with aggregate counts and no raw identifiers."
+}

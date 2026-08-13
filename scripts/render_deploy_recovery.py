@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -37,6 +39,15 @@ OPEN_COMPETITION_REFERENCE_SERVICE_NAME = "agent-bounties-base-indexer"
 OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
 OPERATOR_ENV_GROUP_NAME = "agent-bounties-operator"
 OPERATOR_TOKEN_KEY = "OPERATOR_API_TOKEN"
+ANALYTICS_EXCLUSION_TOKEN_KEY = "ANALYTICS_EXCLUSION_TOKEN"
+ANALYTICS_EXCLUSION_HEADER = "X-Agent-Bounties-Analytics-Exclusion"
+ANALYTICS_EXCLUDED_HEADER = "X-Agent-Bounties-Analytics-Excluded"
+INTERFACE_ATTRIBUTION_HEADER = "X-Agent-Bounties-Interface"
+MODERN_MCP_PROTOCOL_VERSION = "2026-07-28"
+LEGACY_MCP_PROTOCOL_VERSION = "2025-06-18"
+ANALYTICS_EXCLUSION_SCOPE = "analytics:exclude-owner"
+ANALYTICS_OAUTH_TOKEN_PREFIX = "abx1"
+ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS = 7_776_000
 OPERATOR_TOKEN_SERVICE_NAMES = frozenset(
     {"agent-bounties-api", "agent-bounties-mcp"}
 )
@@ -111,6 +122,7 @@ PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-mcp",
 }
 CLOUD_AGENT_API_SERVICE_NAME = "agent-bounties-api"
+MOONPAY_MCP_SERVICE_NAME = "agent-bounties-mcp"
 API_RUNTIME_ENVIRONMENT = {
     "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
     # The hosted relayer applies its own 120% padding after eth_estimateGas.
@@ -131,6 +143,12 @@ CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_MAX_OUTPUT_TOKENS": "12000",
     "CLOUD_AGENT_MAX_DAILY_DRAFTS": "50",
     "CLOUD_AGENT_TIMEOUT_SECONDS": "90",
+}
+MOONPAY_ENVIRONMENTS = {
+    "sandbox": ("sandbox", "pk_test_", "sk_test_"),
+    "test": ("sandbox", "pk_test_", "sk_test_"),
+    "live": ("live", "pk_live_", "sk_live_"),
+    "production": ("live", "pk_live_", "sk_live_"),
 }
 
 
@@ -247,6 +265,11 @@ def redact(value: str) -> str:
     value = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)([?&](?:key|token)=)[^&\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)(render_api_key\s*[=:]\s*)[^\s,;]+", r"\1[redacted]", value)
+    value = re.sub(
+        r"(?i)\b(?:pk|sk)_(?:test|live)_[a-z0-9_-]{4,}\b",
+        "[moonpay-key-redacted]",
+        value,
+    )
     value = re.sub(r"(?i)postgres(?:ql)?://[^\s\"']+", "[database-url-redacted]", value)
     return value[:1000]
 
@@ -492,8 +515,11 @@ def deploy_only_can_reuse_current(
     *,
     open_competition_environment_changed: bool,
     operator_token_changed: bool,
+    service_environment_changed: bool = False,
 ) -> bool:
     if service_name == CLOUD_AGENT_API_SERVICE_NAME:
+        return False
+    if service_environment_changed:
         return False
     if open_competition_environment_changed:
         return False
@@ -1720,6 +1746,193 @@ def fetch_json(url: str, timeout_seconds: float) -> dict[str, Any]:
     return payload
 
 
+def fetch_exclusion_attestation(
+    url: str,
+    timeout_seconds: float,
+    *,
+    token: str,
+    interface: str,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    bearer: bool = False,
+) -> dict[str, Any]:
+    request_headers = {
+        "Accept": "application/json, text/event-stream",
+        "Cache-Control": "no-cache, no-store",
+        "Connection": "close",
+        "Pragma": "no-cache",
+        "User-Agent": "agent-bounties-render-recovery/1",
+        INTERFACE_ATTRIBUTION_HEADER: interface,
+        ("Authorization" if bearer else ANALYTICS_EXCLUSION_HEADER): (
+            f"Bearer {token}" if bearer else token
+        ),
+        **(headers or {}),
+    }
+    data = None
+    method = "GET"
+    if payload is not None:
+        data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+        method = "POST"
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers=request_headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.status
+            body = response.read().decode("utf-8", errors="replace")
+            response_headers = {
+                key.lower(): value for key, value in response.headers.items()
+            }
+    except urllib.error.HTTPError as error:
+        raise RecoveryError(
+            f"analytics exclusion canary returned HTTP {error.code}"
+        ) from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RecoveryError(
+            f"analytics exclusion canary transport failed: {redact(str(error))}"
+        ) from None
+    if status != 200:
+        raise RecoveryError(f"analytics exclusion canary returned HTTP {status}")
+    if response_headers.get(ANALYTICS_EXCLUDED_HEADER.lower()) != "true":
+        raise RecoveryError("runtime did not attest analytics exclusion")
+    try:
+        decoded = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise RecoveryError(
+            f"analytics exclusion canary returned invalid JSON: {error}"
+        ) from None
+    if not isinstance(decoded, dict):
+        raise RecoveryError("analytics exclusion canary must return an object")
+    return decoded
+
+
+def analytics_oauth_access_token(secret: str, audience: str, now: int) -> str:
+    claims = json.dumps(
+        {
+            "iss": audience,
+            "aud": audience,
+            "scope": ANALYTICS_EXCLUSION_SCOPE,
+            "iat": now,
+            "exp": now + ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    payload = base64.urlsafe_b64encode(claims).rstrip(b"=").decode("ascii")
+    signed = f"{ANALYTICS_OAUTH_TOKEN_PREFIX}.{payload}"
+    signature = (
+        base64.urlsafe_b64encode(
+            hmac.new(secret.encode("utf-8"), signed.encode("ascii"), hashlib.sha256).digest()
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    return f"{signed}.{signature}"
+
+
+def validate_analytics_exclusion_canaries(
+    public_base_url: str,
+    mcp_base_url: str,
+    token: str,
+    *,
+    timeout_seconds: float = 20,
+) -> dict[str, Any]:
+    if len(token) < 64 or any(character.isspace() for character in token):
+        raise RecoveryError("analytics exclusion canary token is malformed")
+    discovery_url = f"{public_base_url.rstrip('/')}/.well-known/agent-bounties.json"
+    for interface in ("api", "cli"):
+        payload = fetch_exclusion_attestation(
+            discovery_url,
+            timeout_seconds,
+            token=token,
+            interface=interface,
+        )
+        if payload.get("schema") != (
+            "https://agentbounties.org/schemas/discovery-manifest.v2.json"
+        ):
+            raise RecoveryError(
+                f"{interface} analytics exclusion canary returned invalid discovery"
+            )
+
+    endpoint = f"{mcp_base_url.rstrip('/')}/mcp"
+    legacy = fetch_exclusion_attestation(
+        endpoint,
+        timeout_seconds,
+        token=token,
+        interface="mcp",
+        payload={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "agent-bounties-private-deploy-canary",
+                    "version": "1",
+                },
+            },
+        },
+    )
+    legacy_result = legacy.get("result")
+    if (
+        not isinstance(legacy_result, dict)
+        or legacy_result.get("protocolVersion") != LEGACY_MCP_PROTOCOL_VERSION
+    ):
+        raise RecoveryError("legacy MCP analytics exclusion canary returned invalid protocol")
+
+    oauth_token = analytics_oauth_access_token(token, mcp_base_url.rstrip("/"), int(time.time()))
+    modern = fetch_exclusion_attestation(
+        endpoint,
+        timeout_seconds,
+        token=oauth_token,
+        interface="mcp",
+        bearer=True,
+        headers={
+            "MCP-Protocol-Version": MODERN_MCP_PROTOCOL_VERSION,
+            "Mcp-Method": "server/discover",
+        },
+        payload={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": (
+                        MODERN_MCP_PROTOCOL_VERSION
+                    ),
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "agent-bounties-private-deploy-canary",
+                        "version": "1",
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            },
+        },
+    )
+    modern_result = modern.get("result")
+    supported = (
+        modern_result.get("supportedVersions", [])
+        if isinstance(modern_result, dict)
+        else []
+    )
+    if MODERN_MCP_PROTOCOL_VERSION not in supported:
+        raise RecoveryError("modern MCP analytics exclusion canary returned invalid protocol")
+    return {
+        "verified": True,
+        "interfaces": ["api", "cli", "mcp"],
+        "mcp_protocol_versions": [
+            LEGACY_MCP_PROTOCOL_VERSION,
+            MODERN_MCP_PROTOCOL_VERSION,
+        ],
+        "credential_transports": ["header", "bearer"],
+        "secret_published": False,
+    }
+
+
 def validate_cloud_agent_readiness(
     payload: dict[str, Any],
     *,
@@ -1883,6 +2096,82 @@ def reconcile_cloud_agent_environment(
     return runtime_environment, secret_environment, changed
 
 
+def normalize_moonpay_environment(
+    *,
+    publishable_key: str | None,
+    secret_key: str | None,
+    environment: str | None,
+) -> dict[str, str]:
+    supplied_publishable_key = (
+        publishable_key.strip() if isinstance(publishable_key, str) else ""
+    )
+    supplied_secret_key = secret_key.strip() if isinstance(secret_key, str) else ""
+    supplied = [bool(supplied_publishable_key), bool(supplied_secret_key)]
+    if not any(supplied):
+        return {}
+    if not all(supplied):
+        raise RecoveryError(
+            "MoonPay checkout requires publishable and secret keys together"
+        )
+
+    requested_environment = (
+        environment.strip().lower() if isinstance(environment, str) else "sandbox"
+    )
+    normalized = MOONPAY_ENVIRONMENTS.get(requested_environment)
+    if normalized is None:
+        raise RecoveryError("MoonPay environment must be sandbox or live")
+    normalized_environment, publishable_prefix, secret_prefix = normalized
+    if not supplied_publishable_key.startswith(publishable_prefix) or not supplied_secret_key.startswith(
+        secret_prefix
+    ):
+        raise RecoveryError(
+            "MoonPay keys do not match the configured environment"
+        )
+    return {
+        "MOONPAY_ENVIRONMENT": normalized_environment,
+        "MOONPAY_PUBLISHABLE_KEY": supplied_publishable_key,
+        "MOONPAY_SECRET_KEY": supplied_secret_key,
+    }
+
+
+def reconcile_moonpay_environment(
+    client: RenderClient,
+    service: dict[str, Any],
+    *,
+    publishable_key: str | None,
+    secret_key: str | None,
+    environment: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    normalized = normalize_moonpay_environment(
+        publishable_key=publishable_key,
+        secret_key=secret_key,
+        environment=environment,
+    )
+    if not normalized:
+        return [], False
+
+    desired = (
+        ("MOONPAY_ENVIRONMENT", normalized["MOONPAY_ENVIRONMENT"], False),
+        ("MOONPAY_PUBLISHABLE_KEY", normalized["MOONPAY_PUBLISHABLE_KEY"], True),
+        ("MOONPAY_SECRET_KEY", normalized["MOONPAY_SECRET_KEY"], True),
+    )
+    evidence = []
+    changed = False
+    for key, value, secret in desired:
+        record = client.ensure_env_var(service, key, value)
+        changed |= record["changed"]
+        item = {
+            "service": service["name"],
+            "key": key,
+            "configured": True,
+            "changed": record["changed"],
+        }
+        if not secret:
+            item["value"] = value
+        evidence.append(item)
+    return evidence, changed
+
+
 def rotate_operator_token(
     client: RenderClient,
     group: dict[str, Any],
@@ -1914,6 +2203,60 @@ def rotate_operator_token(
         }
         setattr(client, "operator_token_rotation_evidence", evidence)
         return evidence
+    finally:
+        for index in range(len(token)):
+            token[index] = 0
+
+
+def ensure_analytics_exclusion_token(
+    client: RenderClient,
+    group: dict[str, Any],
+    *,
+    token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(48),
+) -> dict[str, Any]:
+    try:
+        current = env_group_env_var(group, ANALYTICS_EXCLUSION_TOKEN_KEY)["value"]
+    except RecoveryError as error:
+        if "returned 0 values" not in str(error):
+            raise
+        current = ""
+    if current:
+        if len(current) < 64 or any(character.isspace() for character in current):
+            raise RecoveryError("configured analytics exclusion token is malformed")
+        setattr(client, "_analytics_exclusion_token", current)
+        return {
+            "configured": True,
+            "key": ANALYTICS_EXCLUSION_TOKEN_KEY,
+            "characters": len(current),
+            "changed": False,
+            "secret_published": False,
+        }
+
+    token_text = token_factory()
+    if (
+        not isinstance(token_text, str)
+        or len(token_text) < 64
+        or any(character.isspace() for character in token_text)
+    ):
+        raise RecoveryError("generated analytics exclusion token is malformed")
+    token = bytearray(token_text.encode("utf-8"))
+    token_text = ""
+    try:
+        record = client.ensure_env_group_env_var(
+            group,
+            ANALYTICS_EXCLUSION_TOKEN_KEY,
+            token.decode("utf-8"),
+        )
+        if record.get("key") != ANALYTICS_EXCLUSION_TOKEN_KEY:
+            raise RecoveryError("Render did not configure the analytics exclusion token")
+        setattr(client, "_analytics_exclusion_token", token.decode("utf-8"))
+        return {
+            "configured": True,
+            "key": ANALYTICS_EXCLUSION_TOKEN_KEY,
+            "characters": len(token),
+            "changed": bool(record.get("changed")),
+            "secret_published": False,
+        }
     finally:
         for index in range(len(token)):
             token[index] = 0
@@ -2164,6 +2507,9 @@ def deploy(
     mcp_base_url: str = "https://mcp.agentbounties.app",
     website_base_url: str = "https://agentbounties.app",
     cloud_agent_api_key: str | None = None,
+    moonpay_publishable_key: str | None = None,
+    moonpay_secret_key: str | None = None,
+    moonpay_environment: str | None = "sandbox",
     neynar_api_key: str | None = None,
     neynar_signer_uuid: str | None = None,
     neynar_bot_fid: str | None = None,
@@ -2176,6 +2522,11 @@ def deploy(
     deploy_mode = validate_deploy_mode(deploy_mode)
     if rotate_operator_api_token and deploy_mode != "deploy_only":
         raise RecoveryError("operator token rotation requires deploy_only")
+    moonpay_inputs = normalize_moonpay_environment(
+        publishable_key=moonpay_publishable_key,
+        secret_key=moonpay_secret_key,
+        environment=moonpay_environment,
+    )
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
@@ -2232,18 +2583,20 @@ def deploy(
 
     operator_token_rotation: dict[str, Any] = {}
     operator_token_changed = False
+    operator_group = client.resolve_operator_env_group(
+        validate_owner_id(reference_service.get("ownerId"))
+    )
+    operator_group = client.get_env_group(operator_group["id"])
+    for spec, service in services:
+        if spec.name not in OPERATOR_TOKEN_SERVICE_NAMES:
+            continue
+        if not env_group_has_service(operator_group, spec, service["id"]):
+            raise RecoveryError(
+                f"operator environment group is not linked to {spec.name}"
+            )
+    analytics_exclusion = ensure_analytics_exclusion_token(client, operator_group)
+    operator_token_changed |= analytics_exclusion["changed"]
     if rotate_operator_api_token:
-        operator_group = client.resolve_operator_env_group(
-            validate_owner_id(reference_service.get("ownerId"))
-        )
-        operator_group = client.get_env_group(operator_group["id"])
-        for spec, service in services:
-            if spec.name not in OPERATOR_TOKEN_SERVICE_NAMES:
-                continue
-            if not env_group_has_service(operator_group, spec, service["id"]):
-                raise RecoveryError(
-                    f"operator environment group is not linked to {spec.name}"
-                )
         operator_token_rotation = rotate_operator_token(client, operator_group)
         operator_token_changed = True
     desired_open_competition_environment = open_competition_shared_environment(
@@ -2331,6 +2684,17 @@ def deploy(
         reconcile_cloud_agent_environment(client, api_service, cloud_agent_api_key)
     )
     public_environment_changed[CLOUD_AGENT_API_SERVICE_NAME] |= cloud_environment_changed
+    mcp_service = next(
+        service for spec, service in services if spec.name == MOONPAY_MCP_SERVICE_NAME
+    )
+    moonpay_evidence, moonpay_environment_changed = reconcile_moonpay_environment(
+        client,
+        mcp_service,
+        publishable_key=moonpay_inputs.get("MOONPAY_PUBLISHABLE_KEY"),
+        secret_key=moonpay_inputs.get("MOONPAY_SECRET_KEY"),
+        environment=moonpay_inputs.get("MOONPAY_ENVIRONMENT"),
+    )
+    public_environment_changed[MOONPAY_MCP_SERVICE_NAME] |= moonpay_environment_changed
     social_environment, social_environment_changed = reconcile_neynar_social_environment(
         client,
         api_service,
@@ -2372,6 +2736,9 @@ def deploy(
                     open_competition_environment_changed
                 ),
                 operator_token_changed=operator_token_changed,
+                service_environment_changed=public_environment_changed.get(
+                    spec.name, False
+                ),
             )
         ):
             created = preexisting_live[spec.name]
@@ -2430,6 +2797,12 @@ def deploy(
         for spec, _ in services
         if spec.health_url is not None
     ]
+    analytics_exclusion_canary = validate_analytics_exclusion_canaries(
+        public_base_url,
+        mcp_base_url,
+        getattr(client, "_analytics_exclusion_token", ""),
+    )
+    setattr(client, "_analytics_exclusion_token", None)
     cloud_readiness = validate_cloud_agent_readiness(
         fetch_json(
             f"{public_base_url.rstrip('/')}/v1/cloud-agent/readiness",
@@ -2502,11 +2875,14 @@ def deploy(
         "open_competition_environment": reconciled_open_competition_environment,
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
+        "moonpay_environment": moonpay_evidence,
         "social_environment": social_environment,
         "social_webhook": social_webhook,
         "cloud_readiness": cloud_readiness,
         "social_readiness": social_readiness,
         "leaderboard_readiness": leaderboard_readiness,
+        "analytics_exclusion": analytics_exclusion,
+        "analytics_exclusion_canary": analytics_exclusion_canary,
         "operator_token_rotation": operator_token_rotation,
     }
 
@@ -2580,11 +2956,14 @@ def main() -> int:
         "public_environment": [],
         "cloud_environment": [],
         "secret_environment": [],
+        "moonpay_environment": [],
         "social_environment": [],
         "social_webhook": {},
         "cloud_readiness": {},
         "social_readiness": {},
         "leaderboard_readiness": [],
+        "analytics_exclusion": {},
+        "analytics_exclusion_canary": {},
         "operator_token_rotation": {},
         "failure": None,
         "error": None,
@@ -2607,6 +2986,9 @@ def main() -> int:
             mcp_base_url=args.mcp_base_url,
             website_base_url=args.website_base_url,
             cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY"),
+            moonpay_publishable_key=os.environ.get("MOONPAY_PUBLISHABLE_KEY"),
+            moonpay_secret_key=os.environ.get("MOONPAY_SECRET_KEY"),
+            moonpay_environment=os.environ.get("MOONPAY_ENVIRONMENT", "sandbox"),
             neynar_api_key=os.environ.get("NEYNAR_API_KEY"),
             neynar_signer_uuid=os.environ.get("NEYNAR_SIGNER_UUID"),
             neynar_bot_fid=os.environ.get("NEYNAR_BOT_FID"),
@@ -2631,6 +3013,7 @@ def main() -> int:
             evidence["failure"] = error.evidence
     finally:
         if client is not None:
+            setattr(client, "_analytics_exclusion_token", None)
             evidence["operator_token_rotation"] = getattr(
                 client,
                 "operator_token_rotation_evidence",

@@ -204,6 +204,9 @@ Production:
 
 ```text
 MCP_BASE_URL=https://mcp.agentbounties.app
+# Optional, comma-separated exact browser origins beyond the built-in
+# first-party and ChatGPT allowlist:
+MCP_ALLOWED_ORIGINS=https://approved-client.example
 PUBLIC_BASE_URL=https://api.agentbounties.app
 WEBSITE_BASE_URL=https://agentbounties.app
 OPENAI_APPS_CHALLENGE_TOKEN=<portal-token>
@@ -216,6 +219,10 @@ Sandbox:
 CHATGPT_APP_SANDBOX_MODE=true
 MCP_BASE_URL=https://<sandbox-mcp-origin>
 ```
+
+The endpoint uses MCP `2026-07-28` stateless discovery and strict per-request
+transport metadata, with a separate legacy initialization lane for current
+clients. See [MCP protocol compatibility](mcp-protocol-compatibility.md).
 
 The exact domain challenge is served at:
 

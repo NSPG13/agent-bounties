@@ -16,6 +16,10 @@ import yaml
 REQUIRED_FILES = [
     "index.html",
     "earn.html",
+    "metrics.html",
+    "metrics.css",
+    "metrics.js",
+    "generated/github-participation.json",
     "competition.html",
     "competition.css",
     "competition.js",
@@ -82,6 +86,7 @@ CORE_PAGES = [
 PUBLIC_INDEXABLE_PAGES = {
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
+    "metrics.html": "https://agentbounties.app/metrics.html",
     "competition.html": "https://agentbounties.app/competition.html",
     "post.html": "https://agentbounties.app/post.html",
     "funding.html": "https://agentbounties.app/funding.html",
@@ -299,6 +304,76 @@ def main() -> int:
         fail("retired browser settlement bundle site/main.js must not exist")
 
     pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    metrics_page = (site_dir / "metrics.html").read_text(encoding="utf-8")
+    metrics_css = (site_dir / "metrics.css").read_text(encoding="utf-8")
+    metrics_javascript = (site_dir / "metrics.js").read_text(encoding="utf-8")
+    require_phrases(
+        "public metrics dashboard",
+        metrics_page,
+        [
+            "External active identities",
+            "Marketplace payout volume",
+            "Mature claim-to-settlement",
+            "API, CLI, and MCP usage",
+            "Observed external requests",
+            "MCP request share",
+            "Counts are external requests, not unique people, agents, clients, or sessions",
+            "Verify every payout",
+            "Event sum",
+            "Role counts are not additive",
+            "Browser/device IDs",
+            "Thousands of repository actions",
+            "Unique cloners",
+            "Unique visitors",
+            "Unique repository users measured by GitHub",
+            "Monetization not active",
+            "Only a confirmed canonical <code>BountySettled</code> event proves solver payment",
+            'data-period="lifetime" aria-pressed="true"',
+            'data-period="7d" aria-pressed="false"',
+        ],
+    )
+    require_phrases(
+        "public metrics dashboard behavior",
+        metrics_javascript,
+        [
+            'const PLATFORM_DELAY_MS = 5 * 60 * 1000',
+            'const GITHUB_DELAY_MS = 2 * 60 * 60 * 1000',
+            'win.setInterval(() =>',
+            'doc.hidden',
+            'visibilitychange',
+            '"unavailable"',
+            '"delayed"',
+            'weeklyGrowth',
+            'interfaceUsageSummary',
+            'data-interface-status',
+            'canonicalPayoutRows',
+            'payoutAuditSummary',
+            'BASESCAN_TX_URL',
+            'raw.textContent = "Raw events"',
+        ],
+    )
+    require_phrases(
+        "public metrics accessibility",
+        metrics_css,
+        [
+            "@media (prefers-reduced-motion: reduce)",
+            ".metrics-page [data-reveal]",
+            ".period-control button[aria-pressed=\"true\"]",
+            ".audit-table-shell:focus-visible",
+            ".interface-track i",
+        ],
+    )
+    github_participation = json.loads(
+        (site_dir / "generated" / "github-participation.json").read_text(encoding="utf-8")
+    )
+    if github_participation.get("schema_version") != "agent-bounties/github-participation-v1":
+        fail("GitHub participation placeholder has the wrong schema version")
+    if github_participation.get("coverage", {}).get("raw_identifiers_included") is not False:
+        fail("GitHub participation artifact must declare aggregate-only coverage")
+    serialized_github_participation = json.dumps(github_participation).lower()
+    for forbidden in ("html_url", "profile_url", "comment_text", "wallet_address"):
+        if forbidden in serialized_github_participation:
+            fail(f"GitHub participation artifact exposes forbidden field: {forbidden}")
     structured_data_match = re.search(
         r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>',
         pages["index.html"],
@@ -679,8 +754,8 @@ def main() -> int:
             'document.addEventListener("visibilitychange"',
             "claim-funnel?window_hours=${MARKET_WINDOW_HOURS}",
             "limit=300",
-            "sumUsdc",
-            "newestPaidProof",
+            "/v1/metrics/platform?period=lifetime",
+            "metrics.html#payout-audit",
             "no stale bounty is shown",
             "Last verified standings remain visible",
             "payment_state",
@@ -799,7 +874,7 @@ def main() -> int:
             "Subscribe via RSS",
             "Subscribe via Atom",
             "Agent Bounties | The Global Marketplace for Digital Work",
-            'src="home.js?v=766"',
+            'src="home.js?v=767"',
             'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',

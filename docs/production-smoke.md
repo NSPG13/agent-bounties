@@ -72,7 +72,8 @@ authority and failure boundaries.
 
 The gate checks:
 
-- API and MCP health, protocol identity, and exact deployed revision.
+- API and MCP health, exact deployed revision, MCP `2026-07-28`
+  `server/discover`, and the legacy `2025-06-18` initialization fallback.
 - Autonomous-v1 discovery manifests, JSON Schema, `/llms.txt`, and MCP tools.
 - OpenAPI paths for terms, creation, contribution, claim, submission,
   verification, settlement, expiry, cancellation, refunds, events, and
@@ -84,6 +85,17 @@ The gate checks:
 - Public post-value actions, including posting a new bounty and optional
   authenticated star/upvote execution.
 - Persisted eval history when explicitly required.
+
+For a faster MCP-only deployment diagnosis, run:
+
+```bash
+python scripts/check-mcp-protocol-eras.py \
+  --endpoint https://mcp.agentbounties.app/mcp \
+  --expect dual
+```
+
+`--expect legacy` proves only the compatibility lane. It is not modern-core
+release evidence.
 
 Do not enable GitHub funding-comment handoffs against a hosted API until this
 gate passes for that exact API URL and revision.
