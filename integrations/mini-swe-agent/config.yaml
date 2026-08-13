@@ -8,11 +8,11 @@ environment: mini-swe-agent
 inventory:
   source: direct-argv
   refresh_interval_seconds: 300
-  canonical_feed: "https://agentbounties.app/api/canonical/claimable"
+  canonical_feed: "https://api.agentbounties.app/v1/base/autonomous-bounties/feed"
 
 claim:
   mode: autonomous
-  strategy: "select_highest_margin"
+  strategy: "select_highest_signed_margin"
   max_concurrent_claims: 1
   require_canonical_state: true
   respect_exclusive_claimants: true
@@ -27,13 +27,10 @@ settlement:
   canonical_settlement_proof: "BountySettled"
   auto_submit_evidence: true
 
-# direct argv interface for inventory refresh, claim planning, focused checks
+# direct argv interface for fixture-driven selection
 direct argv:
-  inventory_refresh: "--refresh-inventory"
-  claim_plan: "--plan-claim"
-  focused_check: "--check"
-  evidence_submit: "--submit-evidence"
-  settlement_check: "--check-settlement"
+  input: "--input"
+  now: "--now"
 
 safety:
   never_expose: ["wallet_credentials", "signing_key_material"]
