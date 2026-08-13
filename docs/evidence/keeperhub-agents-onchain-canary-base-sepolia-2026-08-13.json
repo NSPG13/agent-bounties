@@ -1,0 +1,48 @@
+{
+  "schema_version": "agent-bounties/keeperhub-agents-onchain-canary-evidence-v1",
+  "recorded_at": "2026-08-13T05:43:35.057Z",
+  "source": {
+    "commit": "3937cc8360424b3d04bb65f6d25f66969c5e8392",
+    "pull_request": "https://github.com/NSPG13/agent-bounties/pull/932"
+  },
+  "network": {
+    "name": "Base Sepolia",
+    "chain_id": 84532,
+    "rpc_verification": "https://sepolia.base.org"
+  },
+  "keeperhub": {
+    "execution_id": "z2lp1eatpds9fx766rktg",
+    "organization_wallet": "0xd8688bc66c7059a84d24cd9849207b838bf72bf2",
+    "simulation": {
+      "success": true,
+      "would_revert": false,
+      "gas_estimate": "504537",
+      "predicted_bounty": "0x5f2df60ff6264b9c20d5da4e13f168772af57a30",
+      "predicted_bounty_id": "0x85d90e337ccfb788d576012b3c892dc6f0775acdb2b744268e612c7dc66e1889"
+    }
+  },
+  "transaction": {
+    "hash": "0x80fb04d83d6135c2b1f9753d9fb449a693d9f1be0a84fddcc60f03ecee6ab329",
+    "explorer_url": "https://sepolia.basescan.org/tx/0x80fb04d83d6135c2b1f9753d9fb449a693d9f1be0a84fddcc60f03ecee6ab329",
+    "status": "0x1",
+    "block_number": 45415763,
+    "block_hash": "0x4e8d87c1323db884c355afb9ed726e07eb352100d07469c568f99192784a7c98",
+    "gas_used": "560155",
+    "factory": "0x7231f1312448fa60078fb56cdb6e2c392bd1269b",
+    "bounty": "0x5f2df60ff6264b9c20d5da4e13f168772af57a30",
+    "bounty_id": "0x85d90e337ccfb788d576012b3c892dc6f0775acdb2b744268e612c7dc66e1889",
+    "creator": "0xd8688bc66c7059a84d24cd9849207b838bf72bf2",
+    "canonical_factory_registration": true,
+    "canonical_event": {
+      "name": "CanonicalCompetitionCreated",
+      "topic0": "0xd89805182f83e81946ee47273c3282be41947da1982d6d1788b61682be82dec5"
+    }
+  },
+  "economics": {
+    "initial_funding_usdc_units": "0",
+    "target_usdc_units": "110000",
+    "native_value_wei": "0",
+    "public_inventory_state": "funding_needed"
+  },
+  "evidence_boundary": "This evidence proves one KeeperHub-submitted Base Sepolia canary transaction and canonical Open Competition creation. It does not prove bounty funding, solver settlement, or payment."
+}
