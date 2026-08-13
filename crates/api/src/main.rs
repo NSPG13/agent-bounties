@@ -19329,7 +19329,10 @@ mod tests {
         );
 
         // Canonical fixture invariants must be preserved.
-        assert_eq!(card.get("name").and_then(|v| v.as_str()), Some("Agent Bounties"));
+        assert_eq!(
+            card.get("name").and_then(|v| v.as_str()),
+            Some("Agent Bounties")
+        );
         assert_eq!(card.get("version").and_then(|v| v.as_str()), Some("1.0"));
         let interfaces = card
             .get("supportedInterfaces")
