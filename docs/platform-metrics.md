@@ -128,6 +128,14 @@ This optional acquisition section reports privacy-minimized browser/device IDs.
 It is labeled as acquisition context, not users, has no pre-deployment backfill,
 and is never added to active identities.
 
+The same response supplies the dashboard's live interface-usage section. It
+shows hourly aggregate request totals and successful HTTP responses for REST API,
+CLI, modern MCP, legacy MCP, and the MCP HTTP adapter. These are interactions,
+not unique people, agents, clients, sessions, or surveyed preferences. API and
+CLI attribution is self-declared through `X-Agent-Bounties-Interface`; MCP era
+is observed by the MCP service. The rows are stored in Postgres table
+`interface_usage_hourly` and have no historical backfill before deployment.
+
 ## Freshness and honest gaps
 
 - Platform data older than five minutes is delayed.
@@ -141,9 +149,10 @@ and is never added to active identities.
 - Missing inventory stays unavailable instead of becoming zero.
 - Missing historical browser analytics is disclosed and never estimated.
 
-The page refreshes the platform aggregate and both canonical proof streams every
-minute, and GitHub plus browser analytics every five minutes. It pauses periodic
-work while hidden and refreshes after the page becomes visible again.
+The page refreshes the platform aggregate, both canonical proof streams, and
+interface/browser analytics every minute. GitHub participation and repository
+traffic refresh every five minutes. It pauses periodic work while hidden and
+refreshes after the page becomes visible again.
 
 ## Recheck commands
 

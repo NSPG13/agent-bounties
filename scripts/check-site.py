@@ -314,6 +314,10 @@ def main() -> int:
             "External active identities",
             "Marketplace payout volume",
             "Mature claim-to-settlement",
+            "API, CLI, and MCP usage",
+            "Observed requests",
+            "MCP request share",
+            "Counts are requests, not unique people, agents, clients, or sessions",
             "Verify every payout",
             "Event sum",
             "Role counts are not additive",
@@ -340,6 +344,8 @@ def main() -> int:
             '"unavailable"',
             '"delayed"',
             'weeklyGrowth',
+            'interfaceUsageSummary',
+            'data-interface-status',
             'canonicalPayoutRows',
             'payoutAuditSummary',
             'BASESCAN_TX_URL',
@@ -354,6 +360,7 @@ def main() -> int:
             ".metrics-page [data-reveal]",
             ".period-control button[aria-pressed=\"true\"]",
             ".audit-table-shell:focus-visible",
+            ".interface-track i",
         ],
     )
     github_participation = json.loads(

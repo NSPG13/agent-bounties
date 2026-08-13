@@ -18,6 +18,13 @@
   const ACQUISITION_DELAY_MS = 15 * 60 * 1000;
   const PERIOD_HOURS = Object.freeze({ "7d": 168, "28d": 672, "90d": 2160 });
   const USDC_SCALE = 1_000_000;
+  const INTERFACE_DEFINITIONS = Object.freeze([
+    { key: "api:not_applicable", interface: "api", label: "REST API", detail: "Direct HTTP and official SDK requests", tone: "api" },
+    { key: "cli:not_applicable", interface: "cli", label: "CLI", detail: "Rust command-line workflows", tone: "cli" },
+    { key: "mcp:modern", interface: "mcp", label: "MCP 2026-07-28", detail: "Stateless discovery and self-contained requests", tone: "modern" },
+    { key: "mcp:legacy", interface: "mcp", label: "Legacy MCP", detail: "Initialization-era compatible clients", tone: "legacy" },
+    { key: "mcp:http_adapter", interface: "mcp", label: "MCP HTTP adapter", detail: "Direct /tools/* compatibility calls", tone: "adapter" },
+  ]);
 
   function finiteNumber(value, fallback = 0) {
     const number = Number(value);
@@ -38,6 +45,94 @@
       minimumFractionDigits: 0,
       maximumFractionDigits,
     }).format(amount)} USDC`;
+  }
+
+  function formatPercent(value) {
+    const percent = Math.max(0, Math.min(1, finiteNumber(value))) * 100;
+    return `${percent.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
+  }
+
+  function interfaceUsageSummary(response) {
+    const emptyRows = () => INTERFACE_DEFINITIONS.map((definition) => ({
+      ...definition,
+      request_count: 0,
+      successful_request_count: 0,
+      success_rate: null,
+      share: 0,
+      first_observed_at: null,
+      last_observed_at: null,
+    }));
+    if (!response || !Array.isArray(response.interfaces)) {
+      return {
+        status: "unavailable",
+        rows: emptyRows(),
+        request_count: 0,
+        successful_request_count: 0,
+        success_rate: null,
+        mcp_request_count: 0,
+        mcp_share: null,
+        first_observed_at: null,
+        last_observed_at: null,
+      };
+    }
+    const observed = new Map();
+    response.interfaces.forEach((item) => {
+      const key = `${String(item?.interface || "")}:${String(item?.protocol_era || "")}`;
+      if (!INTERFACE_DEFINITIONS.some((definition) => definition.key === key)) return;
+      const current = observed.get(key) || {
+        request_count: 0,
+        successful_request_count: 0,
+        first_observed_at: null,
+        last_observed_at: null,
+      };
+      const requestCount = Math.max(0, finiteNumber(item?.request_count));
+      const successfulCount = Math.min(requestCount, Math.max(0, finiteNumber(item?.successful_request_count)));
+      const firstObserved = Date.parse(item?.first_observed_at || "");
+      const lastObserved = Date.parse(item?.last_observed_at || "");
+      current.request_count += requestCount;
+      current.successful_request_count += successfulCount;
+      if (Number.isFinite(firstObserved) && (!current.first_observed_at || firstObserved < Date.parse(current.first_observed_at))) {
+        current.first_observed_at = new Date(firstObserved).toISOString();
+      }
+      if (Number.isFinite(lastObserved) && (!current.last_observed_at || lastObserved > Date.parse(current.last_observed_at))) {
+        current.last_observed_at = new Date(lastObserved).toISOString();
+      }
+      observed.set(key, current);
+    });
+    const requestCount = [...observed.values()].reduce((sum, row) => sum + row.request_count, 0);
+    const successfulRequestCount = [...observed.values()].reduce((sum, row) => sum + row.successful_request_count, 0);
+    const rows = INTERFACE_DEFINITIONS.map((definition) => {
+      const row = observed.get(definition.key) || {
+        request_count: 0,
+        successful_request_count: 0,
+        first_observed_at: null,
+        last_observed_at: null,
+      };
+      return {
+        ...definition,
+        ...row,
+        success_rate: row.request_count ? row.successful_request_count / row.request_count : null,
+        share: requestCount ? row.request_count / requestCount : 0,
+      };
+    });
+    const mcpRequestCount = rows
+      .filter((row) => row.interface === "mcp")
+      .reduce((sum, row) => sum + row.request_count, 0);
+    const timestamps = rows.flatMap((row) => [
+      Date.parse(row.first_observed_at || ""),
+      Date.parse(row.last_observed_at || ""),
+    ]).filter(Number.isFinite);
+    return {
+      status: "ready",
+      rows,
+      request_count: requestCount,
+      successful_request_count: successfulRequestCount,
+      success_rate: requestCount ? successfulRequestCount / requestCount : null,
+      mcp_request_count: mcpRequestCount,
+      mcp_share: requestCount ? mcpRequestCount / requestCount : null,
+      first_observed_at: timestamps.length ? new Date(Math.min(...timestamps)).toISOString() : null,
+      last_observed_at: timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null,
+    };
   }
 
   function nonNegativeBaseUnits(value) {
@@ -470,13 +565,86 @@
       });
     }
 
-    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit) {
+    function renderInterfaceUsage(summary) {
+      const available = summary.status !== "unavailable";
+      const status = one("[data-interface-status]");
+      if (status) {
+        status.dataset.status = summary.status;
+        status.textContent = summary.status === "ready"
+          ? "live aggregate"
+          : summary.status === "delayed" ? "delayed" : summary.status;
+      }
+      setText("[data-interface-total]", available ? formatInteger(summary.request_count) : "—");
+      setText("[data-interface-success]", available
+        ? `${formatInteger(summary.successful_request_count)}${summary.success_rate == null ? "" : ` · ${formatPercent(summary.success_rate)}`}`
+        : "—");
+      setText("[data-interface-mcp-share]", available
+        ? (summary.mcp_share == null ? "No traffic yet" : formatPercent(summary.mcp_share))
+        : "—");
+      const windowLabel = state.period === "lifetime" ? "lifetime since interface tracking began" : state.period;
+      setText("[data-interface-window]", summary.status === "unavailable"
+        ? "The aggregate interface report is unavailable; no counts are estimated."
+        : summary.last_observed_at
+          ? `${windowLabel} · last observed ${new Date(summary.last_observed_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
+          : `${windowLabel} · no attributed requests observed yet`);
+
+      const target = one("[data-interface-rows]");
+      if (!target) return;
+      target.replaceChildren();
+      summary.rows.forEach((row) => {
+        const item = doc.createElement("article");
+        item.className = "interface-row";
+        item.dataset.tone = row.tone;
+
+        const identity = doc.createElement("div");
+        identity.className = "interface-identity";
+        const label = doc.createElement("h3");
+        label.textContent = row.label;
+        const detail = doc.createElement("p");
+        detail.textContent = row.detail;
+        identity.append(label, detail);
+
+        const volume = doc.createElement("div");
+        volume.className = "interface-volume";
+        const count = doc.createElement("strong");
+        count.textContent = available ? formatInteger(row.request_count) : "—";
+        const success = doc.createElement("span");
+        success.textContent = !available
+          ? "source unavailable"
+          : row.success_rate == null
+            ? "no requests in window"
+            : `${formatInteger(row.successful_request_count)} HTTP 2xx · ${formatPercent(row.success_rate)}`;
+        volume.append(count, success);
+
+        const share = doc.createElement("div");
+        share.className = "interface-share";
+        const track = doc.createElement("span");
+        track.className = "interface-track";
+        track.setAttribute("role", "progressbar");
+        track.setAttribute("aria-label", `${row.label} share of observed requests`);
+        track.setAttribute("aria-valuemin", "0");
+        track.setAttribute("aria-valuemax", "100");
+        track.setAttribute("aria-valuenow", String(Math.round(row.share * 100)));
+        const fill = doc.createElement("i");
+        fill.style.setProperty("--interface-width", `${row.share * 100}%`);
+        track.appendChild(fill);
+        const shareText = doc.createElement("span");
+        shareText.textContent = summary.request_count ? `${formatPercent(row.share)} of requests` : "No share yet";
+        share.append(track, shareText);
+
+        item.append(identity, volume, share);
+        target.appendChild(item);
+      });
+    }
+
+    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage) {
       const target = one("[data-source-ledger]");
       if (!target) return;
       target.replaceChildren();
       const sources = [
         ["Marketplace events", merged.platform_status, state.platform?.generated_at, "Confirmed canonical Base events with verified block time."],
         ["Payout proof ledger", audit.status, audit.generated_at, "Every qualifying payout event is summed in the browser and linked to its raw record and Base transaction."],
+        ["Interface usage", interfaceUsage.status, state.acquisition?.generated_at, "Hourly API, CLI, and MCP request aggregates; not people, clients, or sessions."],
         ["GitHub participation", merged.github_status, state.github?.generated_at, "Hourly aggregate of external issues, pull requests, comments, and reviews."],
         ["Repository acquisition", repositoryStatus, state.github?.repository_acquisition?.generated_at, "GitHub clone and page-view aggregates for its rolling 14-day traffic window."],
         ["Browser acquisition", acquisitionStatus, state.acquisition?.generated_at, "First-party browser/device IDs; never counted as users or identities."],
@@ -521,8 +689,13 @@
         GITHUB_DELAY_MS,
       );
       const audit = payoutAuditSnapshot(platform);
+      const interfaceSummary = interfaceUsageSummary(state.acquisition);
+      const interfaceUsage = interfaceSummary.status === "unavailable"
+        ? interfaceSummary
+        : { ...interfaceSummary, status: acquisitionStatus };
       const coreStatus = dashboardStatus(merged.status, repositoryStatus);
-      const overallStatus = dashboardStatus(coreStatus, audit.status);
+      const auditedStatus = dashboardStatus(coreStatus, audit.status);
+      const overallStatus = dashboardStatus(auditedStatus, interfaceUsage.status);
       const status = one("[data-overall-status]");
       if (status) {
         status.dataset.status = overallStatus;
@@ -552,6 +725,7 @@
       setText("[data-solver-pay]", payout ? amount(payout.selected_solver_pay) : "—");
       setText("[data-verifier-pay]", payout ? amount(payout.selected_verifier_pay) : "—");
       setText("[data-completion-bonus]", payout ? amount(payout.selected_completion_bonus) : "—");
+      renderInterfaceUsage(interfaceUsage);
       renderPayoutAudit(audit);
 
       const inventoryReady = inventory?.status === "ready";
@@ -601,13 +775,15 @@
         ? `${formatInteger(state.acquisition.overview?.sessions)} browser sessions in the matching lookback. Device/browser IDs are not people.`
         : "Acquisition source unavailable. Browser IDs are never estimated or counted as active identities.");
       setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "0 USDC");
-      renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit);
+      renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage);
 
       const notices = [];
       if (merged.status === "partial") notices.push("Identity totals are partial because a required participation source is unavailable or incomplete.");
       if (merged.status === "delayed") notices.push("One or more required sources are delayed; values remain visible with their source timestamps.");
       if (merged.status === "unavailable") notices.push("Marketplace metrics are temporarily unavailable; no missing value has been replaced with zero.");
       if (["partial", "unavailable"].includes(repositoryStatus)) notices.push("Repository acquisition is unavailable or incomplete; historical snapshots remain labeled and are not substituted as live data.");
+      if (interfaceUsage.status === "unavailable") notices.push("Interface usage is unavailable; API, CLI, and MCP request counts are not estimated.");
+      if (["partial", "delayed"].includes(interfaceUsage.status)) notices.push("Interface usage is delayed or incomplete; the last observed aggregate remains labeled with its timestamp.");
       if (audit.status === "partial") notices.push("The payout proof ledger does not yet reconcile to the aggregate; payout values are marked partial.");
       if (audit.status === "unavailable") notices.push("The public payout proof streams are unavailable, so payout auditability is temporarily partial.");
       if (overallStatus === "ready") notices.push(`Live aggregate for ${state.period === "lifetime" ? "lifetime since launch" : state.period}. Roles are not additive.`);
@@ -644,25 +820,25 @@
       render();
     }
 
-    async function refreshSupporting() {
-      const hours = acquisitionWindowHours(state.period);
-      const [githubResult, acquisitionResult] = await Promise.allSettled([
-        requestJson(`${GITHUB_URL}?v=${Date.now()}`),
-        requestJson(`${ACQUISITION_URL}?window_hours=${hours}`),
-      ]);
-      if (githubResult.status === "fulfilled") {
-        state.github = githubResult.value;
+    async function refreshRepository() {
+      try {
+        state.github = await requestJson(`${GITHUB_URL}?v=${Date.now()}`);
         delete state.errors.github;
-      } else {
+      } catch (error) {
         state.github = null;
-        state.errors.github = githubResult.reason;
+        state.errors.github = error;
       }
-      if (acquisitionResult.status === "fulfilled") {
-        state.acquisition = acquisitionResult.value;
+      render();
+    }
+
+    async function refreshAcquisition() {
+      const hours = acquisitionWindowHours(state.period);
+      try {
+        state.acquisition = await requestJson(`${ACQUISITION_URL}?window_hours=${hours}`);
         delete state.errors.acquisition;
-      } else {
+      } catch (error) {
         state.acquisition = null;
-        state.errors.acquisition = acquisitionResult.reason;
+        state.errors.acquisition = error;
       }
       render();
     }
@@ -678,7 +854,7 @@
         state.platform = null;
         state.acquisition = null;
         render();
-        void Promise.all([refreshPlatform(), refreshSupporting()]);
+        void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition()]);
       });
     });
 
@@ -687,15 +863,18 @@
         if (!doc.hidden) void refreshPlatform();
       }, 60_000));
       state.timers.push(win.setInterval(() => {
-        if (!doc.hidden) void refreshSupporting();
+        if (!doc.hidden) void refreshAcquisition();
+      }, 60_000));
+      state.timers.push(win.setInterval(() => {
+        if (!doc.hidden) void refreshRepository();
       }, 300_000));
     }
 
     doc.addEventListener("visibilitychange", () => {
-      if (!doc.hidden) void Promise.all([refreshPlatform(), refreshSupporting()]);
+      if (!doc.hidden) void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition()]);
     });
     render();
-    void Promise.all([refreshPlatform(), refreshSupporting()]);
+    void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition()]);
     schedule();
     return state;
   }
@@ -709,6 +888,7 @@
     mergeDaily,
     mergeMetrics,
     payoutAuditSummary,
+    interfaceUsageSummary,
     sourceStatus,
     start,
     ratioMultiple,
