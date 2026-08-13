@@ -5885,6 +5885,14 @@ fn normalize_signed_transaction(transaction: &str) -> Result<String, ChainBaseEr
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
+/// Returns the canonical EVM transaction hash without broadcasting.
+pub fn signed_transaction_hash(transaction: &str) -> Result<String, ChainBaseError> {
+    let normalized = normalize_signed_transaction(transaction)?;
+    let bytes = hex::decode(normalized.trim_start_matches("0x"))
+        .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    Ok(format!("0x{}", hex::encode(Keccak256::digest(bytes))))
+}
+
 fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     let trimmed = data.strip_prefix("0x").unwrap_or(data);
     if !trimmed.len().is_multiple_of(2)
@@ -9474,6 +9482,18 @@ mod tests {
         let request = seen_request.lock().unwrap().clone().unwrap();
         assert_eq!(request["method"], "eth_sendRawTransaction");
         assert_eq!(request["params"][0], "0x0102");
+    }
+
+    #[test]
+    fn signed_transaction_hash_is_deterministic_and_fail_closed() {
+        let first = signed_transaction_hash("0x010203").unwrap();
+        let second = signed_transaction_hash("0x010203").unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 66);
+        assert!(first.starts_with("0x"));
+        assert!(signed_transaction_hash("010203").is_err());
+        assert!(signed_transaction_hash("0x1").is_err());
+        assert!(signed_transaction_hash("0xzz").is_err());
     }
 
     #[tokio::test]
