@@ -756,6 +756,7 @@ pub struct NewRecoveryAttempt {
     pub recovery_identity: String, pub network: String, pub pending_nonce: u64,
     pub contract_address: String, pub contract_code_hash: String, pub bounty_id: String,
     pub expected_status: i16, pub expected_round: u64, pub solver_address: String,
+    pub authorized_signer: String,
     pub verification_expires_at: u64, pub active_bond: u64, pub calldata: String,
     pub lease_token: Uuid, pub signed_transaction_hash: String,
     pub signed_transaction: String,
@@ -766,6 +767,7 @@ pub struct RecoveryAttempt {
     pub recovery_identity: String, pub network: String, pub pending_nonce: u64,
     pub contract_address: String, pub contract_code_hash: String, pub bounty_id: String,
     pub expected_status: i16, pub expected_round: u64, pub solver_address: String,
+    pub authorized_signer: String,
     pub verification_expires_at: u64, pub active_bond: u64, pub calldata: String,
     pub lease_source: String, pub lease_token: Uuid, pub lease_expires_at: DateTime<Utc>,
     pub lease_attested_at: DateTime<Utc>, pub lease_recovered_at: Option<DateTime<Utc>>,
@@ -3292,16 +3294,16 @@ impl PostgresStore {
         let row = sqlx::query(r#"
             INSERT INTO recovery_attempts
               (recovery_identity,network,pending_nonce,contract_address,contract_code_hash,
-               bounty_id,expected_status,expected_round,solver_address,verification_expires_at,
+               bounty_id,expected_status,expected_round,solver_address,authorized_signer,verification_expires_at,
                active_bond,calldata,lease_source,lease_token,lease_expires_at,lease_attested_at,
                lease_recovered_at,status,signed_transaction_hash,signed_transaction)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now(),'reserved',$17,$18)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),'reserved',$18,$19)
             RETURNING *"#)
             .bind(&attempt.recovery_identity).bind(&attempt.network)
             .bind(i64_from_u64(attempt.pending_nonce)?).bind(normalize_key_address(&attempt.contract_address))
             .bind(attempt.contract_code_hash.to_ascii_lowercase()).bind(attempt.bounty_id.to_ascii_lowercase())
             .bind(attempt.expected_status).bind(i64_from_u64(attempt.expected_round)?)
-            .bind(normalize_key_address(&attempt.solver_address)).bind(i64_from_u64(attempt.verification_expires_at)?)
+            .bind(normalize_key_address(&attempt.solver_address)).bind(normalize_key_address(&attempt.authorized_signer)).bind(i64_from_u64(attempt.verification_expires_at)?)
             .bind(i64_from_u64(attempt.active_bond)?).bind(attempt.calldata.to_ascii_lowercase())
             .bind("x402_relayer_leases").bind(lease_token).bind(lease_expires_at)
             .bind(lease_attested_at).bind(attempt.signed_transaction_hash.to_ascii_lowercase())
@@ -7502,6 +7504,7 @@ fn recovery_attempt_from_row(row: PgRow) -> DbResult<RecoveryAttempt> {
         contract_address: row.try_get("contract_address")?, contract_code_hash: row.try_get("contract_code_hash")?,
         bounty_id: row.try_get("bounty_id")?, expected_status: row.try_get("expected_status")?,
         expected_round: u64_from_i64(row.try_get("expected_round")?)?, solver_address: row.try_get("solver_address")?,
+        authorized_signer: row.try_get("authorized_signer")?,
         verification_expires_at: u64_from_i64(row.try_get("verification_expires_at")?)?,
         active_bond: u64_from_i64(row.try_get("active_bond")?)?, calldata: row.try_get("calldata")?,
         lease_source: row.try_get("lease_source")?, lease_token: row.try_get("lease_token")?,
@@ -7522,6 +7525,7 @@ fn validate_recovery_replay(existing: &RecoveryAttempt, proposed: &NewRecoveryAt
         && existing.bounty_id.eq_ignore_ascii_case(&proposed.bounty_id)
         && existing.expected_status == proposed.expected_status && existing.expected_round == proposed.expected_round
         && existing.solver_address.eq_ignore_ascii_case(&proposed.solver_address)
+        && existing.authorized_signer.eq_ignore_ascii_case(&proposed.authorized_signer)
         && existing.verification_expires_at == proposed.verification_expires_at
         && existing.active_bond == proposed.active_bond && existing.calldata.eq_ignore_ascii_case(&proposed.calldata)
         && existing.lease_token == proposed.lease_token
@@ -8450,11 +8454,13 @@ mod tests {
             recovery_identity: identity.clone(), network: "base-mainnet".into(), pending_nonce: 41,
             contract_address: "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274".into(),
             contract_code_hash: "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1".into(), bounty_id: "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb".into(),
-            expected_status: 3, expected_round: 4, solver_address: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(),
+            expected_status: 3, expected_round: 4, solver_address: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(), authorized_signer: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(),
             verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: "0xf9251ec7".into(),
             lease_token: Uuid::new_v4(),
             signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x010203".into(),
         };
+        assert_eq!(attempt.solver_address, attempt.authorized_signer,
+            "the fixed tuple intentionally uses the solver as its independently authorized relayer signer");
         sqlx::query("INSERT INTO x402_relayer_leases(network,lease_token,lease_expires_at,updated_at) VALUES('base-mainnet',$1,$2,now()) ON CONFLICT(network) DO UPDATE SET lease_token=$1,lease_expires_at=$2,updated_at=now()")
             .bind(attempt.lease_token).bind(now + chrono::Duration::minutes(2))
             .execute(&store.pool).await.unwrap();
@@ -8471,14 +8477,27 @@ mod tests {
             forged_token, "forged token failure must roll back without clearing");
         sqlx::query("UPDATE x402_relayer_leases SET lease_token=$1 WHERE network='base-mainnet'")
             .bind(attempt.lease_token).execute(&store.pool).await.unwrap();
-        let reserved = store.reserve_recovery_attempt(&attempt).await.unwrap();
-        assert_eq!(reserved.status, RecoveryAttemptStatus::Reserved);
+        let (first, second) = tokio::join!(
+            store.reserve_recovery_attempt(&attempt),
+            store.reserve_recovery_attempt(&attempt),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.status, RecoveryAttemptStatus::Reserved);
+        assert_eq!(second.recovery_identity, first.recovery_identity,
+            "concurrent reservation must converge on one durable row");
+        assert_eq!(second.signed_transaction_hash, first.signed_transaction_hash);
+        assert_eq!(first.authorized_signer, attempt.authorized_signer);
         assert!(store.acquire_x402_relayer_lease("base-mainnet",30).await.unwrap().is_none(),
             "generic lease acquisition must remain fenced after recovery reservation");
-        assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
-            .await.unwrap().is_some());
-        assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
-            .await.unwrap().is_none(), "a concurrent/replayed caller must not receive broadcast authority");
+        let (first_mark, second_mark) = tokio::join!(
+            store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash),
+            store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash),
+        );
+        let broadcast_authorities = [first_mark.unwrap(), second_mark.unwrap()]
+            .into_iter().filter(Option::is_some).count();
+        assert_eq!(broadcast_authorities, 1,
+            "exactly one concurrent caller may cross the durable broadcast boundary");
         let replay = store.reserve_recovery_attempt(&attempt).await.unwrap();
         assert_eq!(replay.status, RecoveryAttemptStatus::Broadcast);
         let mut conflict = attempt.clone();

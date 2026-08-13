@@ -9789,6 +9789,43 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn recovery_preflight_transport_pins_one_block_and_pending_nonce() {
+        let word = |value: &str| format!("0x{:0>64}", value);
+        let solver = "c49e5374f0072abc0b4c134b2fd413d87aa6354a";
+        let responses = VecDeque::from(vec![
+            json!({"jsonrpc":"2.0","id":40,"result":{"number":"0x64","hash":format!("0x{}","aa".repeat(32))}}),
+            json!({"jsonrpc":"2.0","id":41,"result":{"codeHash":format!("0x{}","bb".repeat(32))}}),
+            json!({"jsonrpc":"2.0","id":42,"result":"0x29"}),
+            json!({"jsonrpc":"2.0","id":43,"result":"0x29"}),
+            json!({"jsonrpc":"2.0","id":44,"result":word("3")}),
+            json!({"jsonrpc":"2.0","id":45,"result":word("4")}),
+            json!({"jsonrpc":"2.0","id":46,"result":word(solver)}),
+            json!({"jsonrpc":"2.0","id":47,"result":word("6a7d2717")}),
+            json!({"jsonrpc":"2.0","id":48,"result":word("2710")}),
+        ]);
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let transport = SequenceTransport { seen_requests: seen_requests.clone(), responses: Mutex::new(responses) };
+        let observed = observe_recovery_preflight_with_transport(
+            "https://example.invalid", "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+            "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a", 40, &transport,
+        ).await.unwrap();
+        assert_eq!(observed.block_number, 100);
+        assert_eq!(observed.latest_nonce, 41);
+        assert_eq!(observed.pending_nonce, 41);
+        assert_eq!(observed.status, 3);
+        assert_eq!(observed.round, 4);
+        assert_eq!(observed.solver, format!("0x{solver}"));
+        assert_eq!(observed.verification_expires_at, 1_786_586_903);
+        assert_eq!(observed.active_bond, 10_000);
+        let requests = seen_requests.lock().unwrap();
+        assert_eq!(requests.len(), 9);
+        assert_eq!(requests[1]["params"][2], "0x64");
+        assert_eq!(requests[2]["params"][1], "0x64");
+        assert_eq!(requests[3]["params"][1], "pending");
+        for request in &requests[4..] { assert_eq!(request["params"][1], "0x64"); }
+    }
+
     struct MockTransport {
         seen_request: Arc<Mutex<Option<Value>>>,
         response: Value,

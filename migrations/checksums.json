@@ -24,6 +24,6 @@
     "0020_open_competition_entrant_relays.sql": "96822727b50f7c4f672138082605748ea08b942505958d712715d69336a12b6f",
     "0021_interface_usage.sql": "979b376c8b789cf460f395d770f3986acec326db6c103ffd053b6b782e8b1489",
     "0022_external_interface_usage.sql": "4ecce64e317ef74252acd2d6e932b5a7971da9cefc00e131287fb9940e768848",
-    "0021_durable_recovery_attempts.sql": "7a0f1f218e474285ea5b233bd8b12424bac74c1b1d11e5aedf325e5569977082"
+    "0021_durable_recovery_attempts.sql": "9c1704953dbbd4d291e04b0013f9d97181d740c192b867cc6a1f67110b4b76b1"
   }
 }

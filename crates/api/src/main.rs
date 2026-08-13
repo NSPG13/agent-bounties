@@ -2056,6 +2056,10 @@ const RECOVERY_772_CONTRACT: &str = "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274"
 const RECOVERY_772_BOUNTY: &str = "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb";
 const RECOVERY_772_CODE_HASH: &str = "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1";
 const RECOVERY_772_SOLVER: &str = "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
+// Public address of wallet_registry.json's evm-base-primary signer. This is an
+// authorization binding, independently pinned from the solver identity below;
+// the two addresses intentionally coincide for this one fixed recovery tuple.
+const RECOVERY_772_AUTHORIZED_SIGNER_PIN: &str = "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
 
 #[derive(Debug, Clone, Deserialize)]
 struct DurableRecoveryRequest {
@@ -2108,6 +2112,20 @@ fn valid_live_recovery_preflight(observed: &chain_base::RecoveryChainPreflight,
         && observed.pending_nonce == 41 && observed.status == 3 && observed.round == 4
         && observed.solver.eq_ignore_ascii_case(solver)
         && observed.verification_expires_at == 1_786_586_903 && observed.active_bond == 10_000
+}
+
+fn valid_recovery_signed_binding(
+    binding: &chain_base::SignedTransactionBinding,
+    attempt: &RecoveryAttempt,
+) -> bool {
+    binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash)
+        && binding.chain_id == 8_453
+        && binding.nonce == attempt.pending_nonce
+        && binding.signer.eq_ignore_ascii_case(RECOVERY_772_AUTHORIZED_SIGNER_PIN)
+        && binding.signer.eq_ignore_ascii_case(&attempt.authorized_signer)
+        && binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
+        && binding.value.is_zero()
+        && binding.input.eq_ignore_ascii_case(&attempt.calldata)
 }
 
 fn valid_recovery_poststate(status:u64,round:u64,bond:u64,before:u128,after:u128)->bool{
@@ -10339,11 +10357,7 @@ async fn run_durable_recovery_attempt(
             && request.lease_token == attempt.lease_token
             && request.signed_transaction.eq_ignore_ascii_case(&attempt.signed_transaction)
             && decode_signed_transaction_binding(&request.signed_transaction)
-                .map(|binding| binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash)
-                    && binding.chain_id == 8_453 && binding.nonce == attempt.pending_nonce
-                    && binding.signer.eq_ignore_ascii_case(&attempt.solver_address)
-                    && binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
-                    && binding.value.is_zero() && binding.input.eq_ignore_ascii_case(&attempt.calldata))
+                .map(|binding| valid_recovery_signed_binding(&binding, &attempt))
                 .unwrap_or(false);
         if !immutable_match { return Err(StatusCode::CONFLICT); }
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
@@ -10360,6 +10374,9 @@ async fn run_durable_recovery_attempt(
         .map_err(|error| base_rpc_fetch_status(&error))?;
     let authorized_signer = env::var("RECOVERY_772_AUTHORIZED_SIGNER").ok().and_then(non_empty_secret)
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if !authorized_signer.eq_ignore_ascii_case(RECOVERY_772_AUTHORIZED_SIGNER_PIN) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     if binding.chain_id != 8_453 || binding.nonce != 41
         || !binding.signer.eq_ignore_ascii_case(&authorized_signer)
         || !binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
@@ -10380,6 +10397,7 @@ async fn run_durable_recovery_attempt(
         contract_code_hash: request.contract_code_hash, bounty_id: request.bounty_id,
         expected_status: request.status, expected_round: request.round,
         solver_address: request.solver_address, verification_expires_at: request.verification_expires_at,
+        authorized_signer: authorized_signer.clone(),
         active_bond: request.active_bond, calldata: request.calldata,
         lease_token: request.lease_token, signed_transaction_hash: hash.clone(),
         signed_transaction: request.signed_transaction,
@@ -21843,6 +21861,49 @@ fix-ci-failure
             let mut changed = base.clone(); mutate(&mut changed);
             assert!(!valid_recovery_772_tuple(&changed, &code_hash, solver, calldata));
         }
+    }
+
+    #[test]
+    fn durable_recovery_authorized_signer_is_independent_and_envelope_bound() {
+        let now = Utc::now();
+        let attempt = RecoveryAttempt {
+            recovery_identity: RECOVERY_772_IDENTITY.into(), network: "base-mainnet".into(),
+            pending_nonce: 41, contract_address: RECOVERY_772_CONTRACT.into(),
+            contract_code_hash: RECOVERY_772_CODE_HASH.into(), bounty_id: RECOVERY_772_BOUNTY.into(),
+            expected_status: 3, expected_round: 4, solver_address: RECOVERY_772_SOLVER.into(),
+            authorized_signer: RECOVERY_772_AUTHORIZED_SIGNER_PIN.into(),
+            verification_expires_at: 1_786_586_903, active_bond: 10_000,
+            calldata: "0xf9251ec7".into(), lease_source: "x402_relayer_leases".into(),
+            lease_token: Uuid::new_v4(), lease_expires_at: now, lease_attested_at: now,
+            lease_recovered_at: Some(now), status: RecoveryAttemptStatus::Broadcast,
+            signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x01".into(),
+            broadcast_started_at: Some(now), rpc_transaction_hash: None, receipt_block: None,
+            receipt_status: None, canonical_event_id: None, created_at: now, updated_at: now,
+        };
+        assert_eq!(attempt.solver_address, attempt.authorized_signer,
+            "same address is intentional; solver and signing authority remain separate fields");
+        let binding = chain_base::SignedTransactionBinding {
+            hash: attempt.signed_transaction_hash.clone(), signer: attempt.authorized_signer.clone(),
+            chain_id: 8_453, nonce: 41, to: RECOVERY_772_CONTRACT.into(),
+            value: alloy::primitives::U256::ZERO, input: attempt.calldata.clone(),
+        };
+        assert!(valid_recovery_signed_binding(&binding, &attempt));
+        let mutations: Vec<Box<dyn Fn(&mut chain_base::SignedTransactionBinding)>> = vec![
+            Box::new(|v| v.signer = "0x0000000000000000000000000000000000000001".into()),
+            Box::new(|v| v.chain_id = 84_532), Box::new(|v| v.nonce = 42),
+            Box::new(|v| v.to = "0x0000000000000000000000000000000000000001".into()),
+            Box::new(|v| v.value = alloy::primitives::U256::from(1)),
+            Box::new(|v| v.input = "0xdeadbeef".into()),
+            Box::new(|v| v.hash = format!("0x{}", "66".repeat(32))),
+        ];
+        for mutate in mutations {
+            let mut changed = binding.clone(); mutate(&mut changed);
+            assert!(!valid_recovery_signed_binding(&changed, &attempt));
+        }
+        let mut independently_forged_attempt = attempt.clone();
+        independently_forged_attempt.authorized_signer =
+            "0x0000000000000000000000000000000000000001".into();
+        assert!(!valid_recovery_signed_binding(&binding, &independently_forged_attempt));
     }
 
     #[test]
