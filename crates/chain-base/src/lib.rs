@@ -2169,152 +2169,189 @@ impl FailoverRetryConfig {
 /// and retries only on bounded transport errors, HTTP 429, and HTTP 5xx.
 /// Never retries confirmed JSON-RPC execution errors or logs credentials.
 #[derive(Debug, Clone)]
-pub struct FailoverJsonRpcTransport {
-    inner: ReqwestJsonRpcTransport,
+pub struct FailoverJsonRpcTransport<T: JsonRpcTransport = ReqwestJsonRpcTransport> {
+    inner: T,
     endpoints: Vec<String>,
     expected_chain_id: u64,
     retry: FailoverRetryConfig,
 }
 
-impl FailoverJsonRpcTransport {
+impl FailoverJsonRpcTransport<ReqwestJsonRpcTransport> {
     pub fn new(endpoints: Vec<String>, expected_chain_id: u64, retry: FailoverRetryConfig) -> Self {
+        Self::with_transport(
+            ReqwestJsonRpcTransport::default(),
+            endpoints,
+            expected_chain_id,
+            retry,
+        )
+    }
+}
+
+impl<T: JsonRpcTransport> FailoverJsonRpcTransport<T> {
+    /// Build a failover transport over an injected inner transport (used by offline tests).
+    pub fn with_transport(
+        inner: T,
+        endpoints: Vec<String>,
+        expected_chain_id: u64,
+        retry: FailoverRetryConfig,
+    ) -> Self {
         Self {
-            inner: ReqwestJsonRpcTransport::default(),
+            inner,
             endpoints,
             expected_chain_id,
             retry,
         }
     }
 
-    /// Returns the first endpoint that validates the expected chain ID.
-    /// Caches validation so chain ID is only checked once per transport instance.
-    async fn discover_valid_endpoint(&self) -> Result<&str, ChainBaseError> {
-        for endpoint in &self.endpoints {
-            match self
-                .inner
-                .post_json_value(
-                    endpoint,
-                    &serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": 0,
-                        "method": "eth_chainId",
-                        "params": []
-                    }),
-                )
-                .await
-            {
-                Ok(value) => {
-                    let chain_id_hex = value
-                        .get("result")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if let Ok(chain_id) = u64::from_str_radix(chain_id_hex.trim_start_matches("0x"), 16)
-                    {
-                        if chain_id == self.expected_chain_id {
-                            return Ok(endpoint.as_str());
-                        }
-                    }
-                }
-                Err(_) => continue,
-            }
-        }
-        Err(ChainBaseError::MissingRpcUrl {
-            network: format!("chain-id-{}", self.expected_chain_id),
-            env_var: String::new(),
-        })
-    }
-
-    fn is_retriable_http_status(status: u16) -> bool {
+    /// Whether an HTTP status is a bounded, retriable transport failure.
+    pub fn is_retriable_http_status(status: u16) -> bool {
         status == 429 || (500..=599).contains(&status)
     }
 
-    fn classify_error(error: &ChainBaseError) -> bool {
-        matches!(
-            error,
-            ChainBaseError::RpcTransport(_)
-                | ChainBaseError::RpcHttpStatus(_)
-                | ChainBaseError::InvalidRpcResponse(_)
-        )
+    /// Whether an error may be retried on the same endpoint and then fail over.
+    fn is_retriable_error(error: &ChainBaseError) -> bool {
+        match error {
+            ChainBaseError::RpcTransport(_) => true,
+            ChainBaseError::RpcHttpStatus(status) => Self::is_retriable_http_status(*status),
+            ChainBaseError::InvalidRpcResponse(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Validate a single endpoint's chain ID, returning a mismatch on wrong chain.
+    async fn validate_endpoint(&self, endpoint: &str) -> Result<(), ChainBaseError> {
+        let value = self
+            .inner
+            .post_json_value(
+                endpoint,
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 0,
+                    "method": "eth_chainId",
+                    "params": []
+                }),
+            )
+            .await?;
+        let chain_id_hex = value.get("result").and_then(Value::as_str).unwrap_or("");
+        let observed =
+            u64::from_str_radix(chain_id_hex.trim_start_matches("0x"), 16).map_err(|_| {
+                ChainBaseError::RelayerChainMismatch {
+                    expected: self.expected_chain_id,
+                    observed: 0,
+                }
+            })?;
+        if observed != self.expected_chain_id {
+            return Err(ChainBaseError::RelayerChainMismatch {
+                expected: self.expected_chain_id,
+                observed,
+            });
+        }
+        Ok(())
+    }
+
+    /// Post a single request across endpoints: validate chain, retry bounded failures,
+    /// then advance to the next endpoint. Never retries a confirmed execution error.
+    async fn post_value_with_failover(&self, request: &Value) -> Result<Value, ChainBaseError> {
+        let mut last_error: Option<ChainBaseError> = None;
+        for endpoint in &self.endpoints {
+            match self.validate_endpoint(endpoint).await {
+                Ok(()) => {}
+                Err(
+                    error @ (ChainBaseError::RelayerChainMismatch { .. }
+                    | ChainBaseError::RpcTransport(_)
+                    | ChainBaseError::RpcHttpStatus(_)
+                    | ChainBaseError::InvalidRpcResponse(_)),
+                ) => {
+                    last_error = Some(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+            for attempt in 0..=self.retry.max_retries {
+                if attempt > 0 {
+                    let delay = self.retry.deterministic_backoff_ms(attempt - 1);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+                match self.inner.post_json_value(endpoint, request).await {
+                    Ok(value) => return Ok(value),
+                    Err(error) => {
+                        if !Self::is_retriable_error(&error) {
+                            return Err(error);
+                        }
+                        last_error = Some(error);
+                        if attempt == self.retry.max_retries {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            ChainBaseError::RpcTransport("no Base RPC endpoints configured".to_string())
+        }))
+    }
+
+    /// Batch variant of `post_value_with_failover`.
+    async fn post_values_with_failover(
+        &self,
+        requests: &[Value],
+    ) -> Result<Vec<Value>, ChainBaseError> {
+        let mut last_error: Option<ChainBaseError> = None;
+        for endpoint in &self.endpoints {
+            match self.validate_endpoint(endpoint).await {
+                Ok(()) => {}
+                Err(
+                    error @ (ChainBaseError::RelayerChainMismatch { .. }
+                    | ChainBaseError::RpcTransport(_)
+                    | ChainBaseError::RpcHttpStatus(_)
+                    | ChainBaseError::InvalidRpcResponse(_)),
+                ) => {
+                    last_error = Some(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+            for attempt in 0..=self.retry.max_retries {
+                if attempt > 0 {
+                    let delay = self.retry.deterministic_backoff_ms(attempt - 1);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                }
+                match self.inner.post_json_values(endpoint, requests).await {
+                    Ok(values) => return Ok(values),
+                    Err(error) => {
+                        if !Self::is_retriable_error(&error) {
+                            return Err(error);
+                        }
+                        last_error = Some(error);
+                        if attempt == self.retry.max_retries {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            ChainBaseError::RpcTransport("no Base RPC endpoints configured".to_string())
+        }))
     }
 }
 
 #[async_trait::async_trait]
-impl JsonRpcTransport for FailoverJsonRpcTransport {
+impl<T: JsonRpcTransport> JsonRpcTransport for FailoverJsonRpcTransport<T> {
     async fn post_json_value(
         &self,
         _rpc_url: &str,
         request: &Value,
     ) -> Result<Value, ChainBaseError> {
-        let endpoint = self.discover_valid_endpoint().await?;
-        let mut last_error: Option<ChainBaseError> = None;
-
-        for attempt in 0..=self.retry.max_retries {
-            if attempt > 0 {
-                let delay = self.retry.deterministic_backoff_ms(attempt - 1);
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            }
-
-            match self.inner.post_json_value(endpoint, request).await {
-                Ok(value) => return Ok(value),
-                Err(error) => {
-                    let retriable = match &error {
-                        ChainBaseError::RpcTransport(_) => true,
-                        ChainBaseError::RpcHttpStatus(status) => {
-                            Self::is_retriable_http_status(*status)
-                        }
-                        ChainBaseError::InvalidRpcResponse(_) => true,
-                        // Never retry confirmed JSON-RPC execution errors
-                        _ => false,
-                    };
-                    if !retriable || attempt == self.retry.max_retries {
-                        return Err(error);
-                    }
-                    last_error = Some(error);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| {
-            ChainBaseError::RpcTransport("failover exhausted all retries".to_string())
-        }))
+        self.post_value_with_failover(request).await
     }
 
     async fn post_json_values(
         &self,
-        rpc_url: &str,
+        _rpc_url: &str,
         requests: &[Value],
     ) -> Result<Vec<Value>, ChainBaseError> {
-        let endpoint = self.discover_valid_endpoint().await?;
-        let mut last_error: Option<ChainBaseError> = None;
-
-        for attempt in 0..=self.retry.max_retries {
-            if attempt > 0 {
-                let delay = self.retry.deterministic_backoff_ms(attempt - 1);
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            }
-
-            match self.inner.post_json_values(endpoint, requests).await {
-                Ok(values) => return Ok(values),
-                Err(error) => {
-                    let retriable = match &error {
-                        ChainBaseError::RpcTransport(_) => true,
-                        ChainBaseError::RpcHttpStatus(status) => {
-                            Self::is_retriable_http_status(*status)
-                        }
-                        ChainBaseError::InvalidRpcResponse(_) => true,
-                        _ => false,
-                    };
-                    if !retriable || attempt == self.retry.max_retries {
-                        return Err(error);
-                    }
-                    last_error = Some(error);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or_else(|| {
-            ChainBaseError::RpcTransport("failover exhausted all retries".to_string())
-        }))
+        self.post_values_with_failover(requests).await
     }
 }
 
