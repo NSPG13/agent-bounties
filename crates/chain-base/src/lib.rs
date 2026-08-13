@@ -16,7 +16,6 @@ use sha2::Sha256;
 use sha3::{Digest, Keccak256};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    env,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -3609,13 +3608,6 @@ where
     parse_eth_get_transaction_receipt_response(
         transport.post_json_value(rpc_url, &json!(request)).await?,
     )
-}
-
-fn non_empty_env(key: &str) -> Option<String> {
-    env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 impl BaseContractLogQuery {

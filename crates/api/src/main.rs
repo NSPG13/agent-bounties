@@ -20040,8 +20040,8 @@ mod tests {
             stripe_payment_method_configuration: None,
             store: None,
             base_rpc_urls: BaseRpcUrlConfig {
-                base_sepolia: Some(base_sepolia_rpc_url),
-                base_mainnet: None,
+                base_sepolia: vec![base_sepolia_rpc_url],
+                base_mainnet: Vec::new(),
             },
             base_broadcast_enabled: true,
             operator_api_token: None,
