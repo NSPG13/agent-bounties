@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 use chain_base::{
-    BaseRpcUrlConfig, ChainBaseError, FailoverJsonRpcTransport, FailoverRetryConfig,
-    JsonRpcTransport,
+    is_retriable_http_status, BaseRpcUrlConfig, ChainBaseError, FailoverJsonRpcTransport,
+    FailoverRetryConfig, JsonRpcTransport,
 };
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -110,17 +110,17 @@ fn retry_config_custom_max_backoff() {
 
 #[test]
 fn is_retriable_http_status_classification() {
-    assert!(FailoverJsonRpcTransport::is_retriable_http_status(429));
-    assert!(FailoverJsonRpcTransport::is_retriable_http_status(500));
-    assert!(FailoverJsonRpcTransport::is_retriable_http_status(502));
-    assert!(FailoverJsonRpcTransport::is_retriable_http_status(503));
-    assert!(FailoverJsonRpcTransport::is_retriable_http_status(504));
-    assert!(!FailoverJsonRpcTransport::is_retriable_http_status(400));
-    assert!(!FailoverJsonRpcTransport::is_retriable_http_status(401));
-    assert!(!FailoverJsonRpcTransport::is_retriable_http_status(403));
-    assert!(!FailoverJsonRpcTransport::is_retriable_http_status(404));
-    assert!(!FailoverJsonRpcTransport::is_retriable_http_status(200));
-    assert!(!FailoverJsonRpcTransport::is_retriable_http_status(301));
+    assert!(is_retriable_http_status(429));
+    assert!(is_retriable_http_status(500));
+    assert!(is_retriable_http_status(502));
+    assert!(is_retriable_http_status(503));
+    assert!(is_retriable_http_status(504));
+    assert!(!is_retriable_http_status(400));
+    assert!(!is_retriable_http_status(401));
+    assert!(!is_retriable_http_status(403));
+    assert!(!is_retriable_http_status(404));
+    assert!(!is_retriable_http_status(200));
+    assert!(!is_retriable_http_status(301));
 }
 
 #[test]

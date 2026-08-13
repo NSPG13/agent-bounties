@@ -2176,6 +2176,21 @@ pub struct FailoverJsonRpcTransport<T: JsonRpcTransport = ReqwestJsonRpcTranspor
     retry: FailoverRetryConfig,
 }
 
+/// Whether an HTTP status is a bounded, retriable transport failure.
+pub fn is_retriable_http_status(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
+
+/// Whether an error may be retried on the same endpoint and then fail over.
+fn is_retriable_error(error: &ChainBaseError) -> bool {
+    match error {
+        ChainBaseError::RpcTransport(_) => true,
+        ChainBaseError::RpcHttpStatus(status) => is_retriable_http_status(*status),
+        ChainBaseError::InvalidRpcResponse(_) => true,
+        _ => false,
+    }
+}
+
 impl FailoverJsonRpcTransport<ReqwestJsonRpcTransport> {
     pub fn new(endpoints: Vec<String>, expected_chain_id: u64, retry: FailoverRetryConfig) -> Self {
         Self::with_transport(
@@ -2200,21 +2215,6 @@ impl<T: JsonRpcTransport> FailoverJsonRpcTransport<T> {
             endpoints,
             expected_chain_id,
             retry,
-        }
-    }
-
-    /// Whether an HTTP status is a bounded, retriable transport failure.
-    pub fn is_retriable_http_status(status: u16) -> bool {
-        status == 429 || (500..=599).contains(&status)
-    }
-
-    /// Whether an error may be retried on the same endpoint and then fail over.
-    fn is_retriable_error(error: &ChainBaseError) -> bool {
-        match error {
-            ChainBaseError::RpcTransport(_) => true,
-            ChainBaseError::RpcHttpStatus(status) => Self::is_retriable_http_status(*status),
-            ChainBaseError::InvalidRpcResponse(_) => true,
-            _ => false,
         }
     }
 
@@ -2275,7 +2275,7 @@ impl<T: JsonRpcTransport> FailoverJsonRpcTransport<T> {
                 match self.inner.post_json_value(endpoint, request).await {
                     Ok(value) => return Ok(value),
                     Err(error) => {
-                        if !Self::is_retriable_error(&error) {
+                        if !is_retriable_error(&error) {
                             return Err(error);
                         }
                         last_error = Some(error);
@@ -2319,7 +2319,7 @@ impl<T: JsonRpcTransport> FailoverJsonRpcTransport<T> {
                 match self.inner.post_json_values(endpoint, requests).await {
                     Ok(values) => return Ok(values),
                     Err(error) => {
-                        if !Self::is_retriable_error(&error) {
+                        if !is_retriable_error(&error) {
                             return Err(error);
                         }
                         last_error = Some(error);
