@@ -498,6 +498,72 @@ pub struct SiteAnalyticsStats {
     pub channels: Vec<SiteAnalyticsChannelStats>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformIdentityStats {
+    pub selected: u64,
+    pub previous: u64,
+    pub latest_week: u64,
+    pub previous_week: u64,
+    pub first_month: u64,
+    pub lifetime: u64,
+    pub posters: u64,
+    pub funders: u64,
+    pub solvers: u64,
+    pub verifiers: u64,
+    pub commenters: u64,
+    pub marketplace_wallets: u64,
+    pub opportunity_comment_authors: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformPayoutStats {
+    pub selected_total_base_units: String,
+    pub previous_total_base_units: String,
+    pub first_month_total_base_units: String,
+    pub lifetime_total_base_units: String,
+    pub selected_solver_base_units: String,
+    pub selected_verifier_base_units: String,
+    pub selected_bonus_base_units: String,
+    pub selected_settled_rounds: u64,
+    pub previous_settled_rounds: u64,
+    pub first_month_settled_rounds: u64,
+    pub lifetime_settled_rounds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformClaimCohortStats {
+    pub settled: u64,
+    pub mature: u64,
+    pub immature: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformDailyStats {
+    pub day: String,
+    pub active_identities: u64,
+    pub payout_base_units: String,
+    pub settled_rounds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformMetricsCoverageStats {
+    pub verified_canonical_events: u64,
+    pub awaiting_block_time_events: u64,
+    pub opportunity_comments: u64,
+    pub latest_verified_event_at: Option<DateTime<Utc>>,
+    pub latest_comment_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformMetricsStats {
+    pub generated_at: DateTime<Utc>,
+    pub identities: PlatformIdentityStats,
+    pub payouts: PlatformPayoutStats,
+    pub claim_cohort: PlatformClaimCohortStats,
+    pub daily: Vec<PlatformDailyStats>,
+    pub coverage: PlatformMetricsCoverageStats,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewSocialMentionIngestion {
     pub id: Uuid,
@@ -1619,6 +1685,621 @@ impl PostgresStore {
                     })
                 })
                 .collect::<DbResult<Vec<_>>>()?,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn platform_metrics_stats(
+        &self,
+        network: &str,
+        selected_started_at: DateTime<Utc>,
+        selected_ended_at: DateTime<Utc>,
+        previous_started_at: DateTime<Utc>,
+        launch_at: DateTime<Utc>,
+        first_month_ended_at: DateTime<Utc>,
+        excluded_wallets: &[String],
+        excluded_comment_authors: &[String],
+        excluded_bounty_contracts: &[String],
+    ) -> DbResult<PlatformMetricsStats> {
+        let identity_row = sqlx::query(
+            r#"
+            WITH event_actors AS (
+              SELECT event.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_bounty_created' THEN event.data->>'creator'
+                       WHEN event.kind = 'external_bounty_submitted' THEN event.data->>'submitter'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn')
+                         THEN event.data->>'contributor'
+                       ELSE event.data->>'solver'
+                     END) AS identity,
+                     CASE
+                       WHEN event.kind IN ('canonical_bounty_created', 'external_bounty_submitted') THEN 'poster'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn') THEN 'funder'
+                       ELSE 'solver'
+                     END AS role
+              FROM autonomous_bounty_events AS event
+              WHERE event.network = $1
+                AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $5
+                AND event.occurred_at < $3
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($9)
+                AND event.kind IN (
+                  'canonical_bounty_created', 'external_bounty_submitted', 'funding_added',
+                  'bounty_claimed', 'submission_added', 'submission_rejected',
+                  'bounty_settled', 'claim_expired', 'submission_expired',
+                  'refund_withdrawn'
+                )
+            ), competition_actors AS (
+              SELECT event.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_competition_created'
+                         THEN event.data->>'creator'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn')
+                         THEN event.data->>'contributor'
+                       ELSE event.data->>'solver'
+                     END) AS identity,
+                     CASE
+                       WHEN event.kind = 'canonical_competition_created' THEN 'poster'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn') THEN 'funder'
+                       ELSE 'solver'
+                     END AS role
+              FROM open_competition_events AS event
+              WHERE event.network = $1
+                AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $5
+                AND event.occurred_at < $3
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($9)
+                AND event.kind IN (
+                  'canonical_competition_created', 'funding_added',
+                  'solution_committed', 'solution_revealed',
+                  'competition_submission_rejected', 'commitment_expired',
+                  'bounty_settled', 'entry_bond_withdrawn', 'refund_withdrawn'
+                )
+            ), verifier_actors AS (
+              SELECT payout.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(configuration.data->>'verifier_reward_recipient') AS identity,
+                     'verifier'::text AS role
+              FROM autonomous_bounty_events AS payout
+              JOIN LATERAL (
+                SELECT configured.data
+                FROM autonomous_bounty_events AS configured
+                WHERE configured.network = payout.network
+                  AND configured.bounty_id = payout.bounty_id
+                  AND configured.contract_address = payout.contract_address
+                  AND configured.block_time_verified = TRUE
+                  AND configured.kind = 'canonical_bounty_verification_configured'
+                ORDER BY configured.block_number, configured.log_index
+                LIMIT 1
+              ) AS configuration ON TRUE
+              WHERE payout.network = $1
+                AND payout.block_time_verified = TRUE
+                AND payout.occurred_at >= $5
+                AND payout.occurred_at < $3
+                AND NOT lower(payout.contract_address) = ANY($9)
+                AND payout.kind IN ('submission_rejected', 'bounty_settled')
+                AND COALESCE((payout.data->>'verifier_reward')::numeric, 0) > 0
+            ), competition_verifier_actors AS (
+              SELECT payout.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(configuration.data->>'verifier_reward_recipient') AS identity,
+                     'verifier'::text AS role
+              FROM open_competition_events AS payout
+              JOIN LATERAL (
+                SELECT configured.data
+                FROM open_competition_events AS configured
+                WHERE configured.network = payout.network
+                  AND configured.bounty_id = payout.bounty_id
+                  AND configured.contract_address = payout.contract_address
+                  AND configured.block_time_verified = TRUE
+                  AND configured.kind = 'canonical_competition_verification_configured'
+                ORDER BY configured.block_number, configured.log_index
+                LIMIT 1
+              ) AS configuration ON TRUE
+              WHERE payout.network = $1
+                AND payout.block_time_verified = TRUE
+                AND payout.occurred_at >= $5
+                AND payout.occurred_at < $3
+                AND NOT lower(payout.contract_address) = ANY($9)
+                AND payout.kind IN ('competition_submission_rejected', 'bounty_settled')
+                AND CASE WHEN payout.kind = 'bounty_settled'
+                      THEN COALESCE((payout.data->>'verifier_reward')::numeric, 0)
+                      ELSE COALESCE((payout.data->>'bond_paid_to_verifier')::numeric, 0)
+                    END > 0
+            ), comment_actors AS (
+              SELECT comment.created_at AS occurred_at,
+                     'opportunity_comment_author'::text AS namespace,
+                     lower(regexp_replace(trim(comment.author), '\s+', ' ', 'g')) AS identity,
+                     'commenter'::text AS role
+              FROM opportunity_comments AS comment
+              WHERE comment.created_at >= $5 AND comment.created_at < $3
+            ), actors AS (
+              SELECT occurred_at, namespace, identity, role
+              FROM event_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND NOT identity = ANY($7)
+              UNION ALL
+              SELECT occurred_at, namespace, identity, role
+              FROM competition_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND NOT identity = ANY($7)
+              UNION ALL
+              SELECT occurred_at, namespace, identity, role
+              FROM verifier_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND identity <> '0x0000000000000000000000000000000000000000'
+                AND NOT identity = ANY($7)
+              UNION ALL
+              SELECT occurred_at, namespace, identity, role
+              FROM competition_verifier_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND identity <> '0x0000000000000000000000000000000000000000'
+                AND NOT identity = ANY($7)
+              UNION ALL
+              SELECT occurred_at, namespace, identity, role
+              FROM comment_actors
+              WHERE identity <> '' AND NOT identity = ANY($8)
+            )
+            SELECT
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+              ) AS selected,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $4 AND occurred_at < $2
+              ) AS previous,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $3 - INTERVAL '7 days' AND occurred_at < $3
+              ) AS latest_week,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $3 - INTERVAL '14 days'
+                  AND occurred_at < $3 - INTERVAL '7 days'
+              ) AS previous_week,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $5 AND occurred_at < $6
+              ) AS first_month,
+              COUNT(DISTINCT (namespace, identity)) AS lifetime,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND role = 'poster'
+              ) AS posters,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND role = 'funder'
+              ) AS funders,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND role = 'solver'
+              ) AS solvers,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND role = 'verifier'
+              ) AS verifiers,
+              COUNT(DISTINCT (namespace, identity)) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND role = 'commenter'
+              ) AS commenters,
+              COUNT(DISTINCT identity) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND namespace = 'base_wallet'
+              ) AS marketplace_wallets,
+              COUNT(DISTINCT identity) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+                  AND namespace = 'opportunity_comment_author'
+              ) AS opportunity_comment_authors
+            FROM actors
+            "#,
+        )
+        .bind(network)
+        .bind(selected_started_at)
+        .bind(selected_ended_at)
+        .bind(previous_started_at)
+        .bind(launch_at)
+        .bind(first_month_ended_at)
+        .bind(excluded_wallets)
+        .bind(excluded_comment_authors)
+        .bind(excluded_bounty_contracts)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let payout_row = sqlx::query(
+            r#"
+            WITH payouts AS (
+              SELECT occurred_at, kind = 'bounty_settled' AS settled,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'solver_reward')::numeric, 0)
+                       ELSE 0 END AS solver_amount,
+                     COALESCE((data->>'verifier_reward')::numeric, 0) AS verifier_amount,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0)
+                       ELSE 0 END AS bonus_amount
+              FROM autonomous_bounty_events
+              WHERE network = $1
+                AND block_time_verified = TRUE
+                AND occurred_at >= $5
+                AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($7)
+                AND kind IN ('bounty_settled', 'submission_rejected')
+              UNION ALL
+              SELECT occurred_at, kind = 'bounty_settled' AS settled,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'solver_reward')::numeric, 0)
+                       ELSE 0 END AS solver_amount,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'verifier_reward')::numeric, 0)
+                       ELSE COALESCE((data->>'bond_paid_to_verifier')::numeric, 0)
+                     END AS verifier_amount,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0)
+                       ELSE 0 END AS bonus_amount
+              FROM open_competition_events
+              WHERE network = $1
+                AND block_time_verified = TRUE
+                AND occurred_at >= $5
+                AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($7)
+                AND kind IN ('bounty_settled', 'competition_submission_rejected')
+            ), normalized AS (
+              SELECT *, solver_amount + verifier_amount + bonus_amount AS total_amount
+              FROM payouts
+            )
+            SELECT
+              COALESCE(SUM(total_amount) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+              ), 0)::text AS selected_total,
+              COALESCE(SUM(total_amount) FILTER (
+                WHERE occurred_at >= $4 AND occurred_at < $2
+              ), 0)::text AS previous_total,
+              COALESCE(SUM(total_amount) FILTER (
+                WHERE occurred_at >= $5 AND occurred_at < $6
+              ), 0)::text AS first_month_total,
+              COALESCE(SUM(total_amount), 0)::text AS lifetime_total,
+              COALESCE(SUM(solver_amount) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+              ), 0)::text AS selected_solver,
+              COALESCE(SUM(verifier_amount) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+              ), 0)::text AS selected_verifier,
+              COALESCE(SUM(bonus_amount) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+              ), 0)::text AS selected_bonus,
+              COUNT(*) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3 AND settled
+              ) AS selected_settled,
+              COUNT(*) FILTER (
+                WHERE occurred_at >= $4 AND occurred_at < $2 AND settled
+              ) AS previous_settled,
+              COUNT(*) FILTER (
+                WHERE occurred_at >= $5 AND occurred_at < $6 AND settled
+              ) AS first_month_settled,
+              COUNT(*) FILTER (WHERE settled) AS lifetime_settled
+            FROM normalized
+            "#,
+        )
+        .bind(network)
+        .bind(selected_started_at)
+        .bind(selected_ended_at)
+        .bind(previous_started_at)
+        .bind(launch_at)
+        .bind(first_month_ended_at)
+        .bind(excluded_bounty_contracts)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let cohort_row = sqlx::query(
+            r#"
+            WITH claim_events AS (
+              SELECT network, bounty_id, (data->>'round')::bigint AS round,
+                     (data->>'claim_expires_at')::bigint AS claim_expires_at
+              FROM autonomous_bounty_events
+              WHERE network = $1
+                AND block_time_verified = TRUE
+                AND kind = 'bounty_claimed'
+                AND occurred_at >= $2
+                AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($4)
+            ), claims AS (
+              SELECT network, bounty_id, round, MAX(claim_expires_at) AS claim_expires_at
+              FROM claim_events
+              GROUP BY network, bounty_id, round
+            ), terminal AS (
+              SELECT network, bounty_id, (data->>'round')::bigint AS round,
+                     BOOL_OR(kind = 'bounty_settled') AS settled
+              FROM autonomous_bounty_events
+              WHERE network = $1
+                AND block_time_verified = TRUE
+                AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($4)
+                AND kind IN (
+                  'bounty_settled', 'submission_rejected',
+                  'claim_expired', 'submission_expired'
+                )
+              GROUP BY network, bounty_id, (data->>'round')::bigint
+            ), evaluated AS (
+              SELECT claims.*,
+                     terminal.round IS NOT NULL AS has_terminal,
+                     COALESCE(terminal.settled, FALSE) AS settled,
+                     claims.claim_expires_at <= EXTRACT(EPOCH FROM $3::timestamptz)::bigint
+                       OR terminal.round IS NOT NULL AS mature
+              FROM claims
+              LEFT JOIN terminal USING (network, bounty_id, round)
+            )
+            SELECT
+              COUNT(*) FILTER (WHERE mature AND settled) AS settled,
+              COUNT(*) FILTER (WHERE mature) AS mature,
+              COUNT(*) FILTER (WHERE NOT mature) AS immature
+            FROM evaluated
+            "#,
+        )
+        .bind(network)
+        .bind(selected_started_at)
+        .bind(selected_ended_at)
+        .bind(excluded_bounty_contracts)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let daily_rows = sqlx::query(
+            r#"
+            WITH event_actors AS (
+              SELECT event.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_bounty_created' THEN event.data->>'creator'
+                       WHEN event.kind = 'external_bounty_submitted' THEN event.data->>'submitter'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn')
+                         THEN event.data->>'contributor'
+                       ELSE event.data->>'solver'
+                     END) AS identity
+              FROM autonomous_bounty_events AS event
+              WHERE event.network = $1
+                AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $2 AND event.occurred_at < $3
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($6)
+                AND event.kind IN (
+                  'canonical_bounty_created', 'external_bounty_submitted', 'funding_added',
+                  'bounty_claimed', 'submission_added', 'submission_rejected',
+                  'bounty_settled', 'claim_expired', 'submission_expired',
+                  'refund_withdrawn'
+                )
+            ), competition_actors AS (
+              SELECT event.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_competition_created'
+                         THEN event.data->>'creator'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn')
+                         THEN event.data->>'contributor'
+                       ELSE event.data->>'solver'
+                     END) AS identity
+              FROM open_competition_events AS event
+              WHERE event.network = $1
+                AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $2 AND event.occurred_at < $3
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($6)
+                AND event.kind IN (
+                  'canonical_competition_created', 'funding_added',
+                  'solution_committed', 'solution_revealed',
+                  'competition_submission_rejected', 'commitment_expired',
+                  'bounty_settled', 'entry_bond_withdrawn', 'refund_withdrawn'
+                )
+            ), verifier_actors AS (
+              SELECT payout.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(configuration.data->>'verifier_reward_recipient') AS identity
+              FROM autonomous_bounty_events AS payout
+              JOIN LATERAL (
+                SELECT configured.data
+                FROM autonomous_bounty_events AS configured
+                WHERE configured.network = payout.network
+                  AND configured.bounty_id = payout.bounty_id
+                  AND configured.contract_address = payout.contract_address
+                  AND configured.block_time_verified = TRUE
+                  AND configured.kind = 'canonical_bounty_verification_configured'
+                ORDER BY configured.block_number, configured.log_index
+                LIMIT 1
+              ) AS configuration ON TRUE
+              WHERE payout.network = $1
+                AND payout.block_time_verified = TRUE
+                AND payout.occurred_at >= $2 AND payout.occurred_at < $3
+                AND NOT lower(payout.contract_address) = ANY($6)
+                AND payout.kind IN ('submission_rejected', 'bounty_settled')
+                AND COALESCE((payout.data->>'verifier_reward')::numeric, 0) > 0
+            ), competition_verifier_actors AS (
+              SELECT payout.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(configuration.data->>'verifier_reward_recipient') AS identity
+              FROM open_competition_events AS payout
+              JOIN LATERAL (
+                SELECT configured.data
+                FROM open_competition_events AS configured
+                WHERE configured.network = payout.network
+                  AND configured.bounty_id = payout.bounty_id
+                  AND configured.contract_address = payout.contract_address
+                  AND configured.block_time_verified = TRUE
+                  AND configured.kind = 'canonical_competition_verification_configured'
+                ORDER BY configured.block_number, configured.log_index
+                LIMIT 1
+              ) AS configuration ON TRUE
+              WHERE payout.network = $1
+                AND payout.block_time_verified = TRUE
+                AND payout.occurred_at >= $2 AND payout.occurred_at < $3
+                AND NOT lower(payout.contract_address) = ANY($6)
+                AND payout.kind IN ('competition_submission_rejected', 'bounty_settled')
+                AND CASE WHEN payout.kind = 'bounty_settled'
+                      THEN COALESCE((payout.data->>'verifier_reward')::numeric, 0)
+                      ELSE COALESCE((payout.data->>'bond_paid_to_verifier')::numeric, 0)
+                    END > 0
+            ), comment_actors AS (
+              SELECT created_at AS occurred_at,
+                     'opportunity_comment_author'::text AS namespace,
+                     lower(regexp_replace(trim(author), '\s+', ' ', 'g')) AS identity
+              FROM opportunity_comments
+              WHERE created_at >= $2 AND created_at < $3
+            ), actors AS (
+              SELECT occurred_at, namespace, identity FROM event_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$' AND NOT identity = ANY($4)
+              UNION ALL
+              SELECT occurred_at, namespace, identity FROM competition_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$' AND NOT identity = ANY($4)
+              UNION ALL
+              SELECT occurred_at, namespace, identity FROM verifier_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND identity <> '0x0000000000000000000000000000000000000000'
+                AND NOT identity = ANY($4)
+              UNION ALL
+              SELECT occurred_at, namespace, identity FROM competition_verifier_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND identity <> '0x0000000000000000000000000000000000000000'
+                AND NOT identity = ANY($4)
+              UNION ALL
+              SELECT occurred_at, namespace, identity FROM comment_actors
+              WHERE identity <> '' AND NOT identity = ANY($5)
+            ), payouts AS (
+              SELECT occurred_at, kind = 'bounty_settled' AS settled,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'solver_reward')::numeric, 0) ELSE 0 END
+                     + COALESCE((data->>'verifier_reward')::numeric, 0)
+                     + CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0) ELSE 0 END
+                       AS total_amount
+              FROM autonomous_bounty_events
+              WHERE network = $1
+                AND block_time_verified = TRUE
+                AND occurred_at >= $2 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($6)
+                AND kind IN ('bounty_settled', 'submission_rejected')
+              UNION ALL
+              SELECT occurred_at, kind = 'bounty_settled' AS settled,
+                     CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'solver_reward')::numeric, 0) ELSE 0 END
+                     + CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'verifier_reward')::numeric, 0)
+                       ELSE COALESCE((data->>'bond_paid_to_verifier')::numeric, 0) END
+                     + CASE WHEN kind = 'bounty_settled'
+                       THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0) ELSE 0 END
+                       AS total_amount
+              FROM open_competition_events
+              WHERE network = $1
+                AND block_time_verified = TRUE
+                AND occurred_at >= $2 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($6)
+                AND kind IN ('bounty_settled', 'competition_submission_rejected')
+            ), days AS (
+              SELECT generate_series(
+                date_trunc('day', $2::timestamptz),
+                date_trunc('day', $3::timestamptz - INTERVAL '1 microsecond'),
+                INTERVAL '1 day'
+              ) AS day
+            )
+            SELECT to_char(days.day AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+                   (SELECT COUNT(DISTINCT (namespace, identity))
+                    FROM actors
+                    WHERE (occurred_at AT TIME ZONE 'UTC')::date =
+                          (days.day AT TIME ZONE 'UTC')::date) AS active_identities,
+                   COALESCE((SELECT SUM(total_amount)
+                    FROM payouts
+                    WHERE (occurred_at AT TIME ZONE 'UTC')::date =
+                          (days.day AT TIME ZONE 'UTC')::date), 0)::text AS payout_base_units,
+                   (SELECT COUNT(*) FROM payouts
+                    WHERE settled
+                      AND (occurred_at AT TIME ZONE 'UTC')::date =
+                          (days.day AT TIME ZONE 'UTC')::date) AS settled_rounds
+            FROM days
+            ORDER BY days.day
+            "#,
+        )
+        .bind(network)
+        .bind(selected_started_at)
+        .bind(selected_ended_at)
+        .bind(excluded_wallets)
+        .bind(excluded_comment_authors)
+        .bind(excluded_bounty_contracts)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let coverage_row = sqlx::query(
+            r#"
+            WITH protocol_events AS (
+              SELECT block_time_verified, occurred_at
+              FROM autonomous_bounty_events
+              WHERE network = $1
+                AND occurred_at >= $2
+                AND NOT lower(COALESCE(data->>'bounty_contract', contract_address)) = ANY($3)
+              UNION ALL
+              SELECT block_time_verified, occurred_at
+              FROM open_competition_events
+              WHERE network = $1
+                AND occurred_at >= $2
+                AND NOT lower(COALESCE(data->>'bounty_contract', contract_address)) = ANY($3)
+            )
+            SELECT
+              COUNT(*) FILTER (WHERE block_time_verified = TRUE) AS verified_events,
+              COUNT(*) FILTER (WHERE block_time_verified = FALSE) AS awaiting_events,
+              MAX(occurred_at) FILTER (WHERE block_time_verified = TRUE) AS latest_verified_event_at,
+              (SELECT COUNT(*) FROM opportunity_comments WHERE created_at >= $2) AS comments,
+              (SELECT MAX(created_at) FROM opportunity_comments WHERE created_at >= $2)
+                AS latest_comment_at
+            FROM protocol_events
+            "#,
+        )
+        .bind(network)
+        .bind(launch_at)
+        .bind(excluded_bounty_contracts)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(PlatformMetricsStats {
+            generated_at: selected_ended_at,
+            identities: PlatformIdentityStats {
+                selected: u64_from_i64(identity_row.try_get("selected")?)?,
+                previous: u64_from_i64(identity_row.try_get("previous")?)?,
+                latest_week: u64_from_i64(identity_row.try_get("latest_week")?)?,
+                previous_week: u64_from_i64(identity_row.try_get("previous_week")?)?,
+                first_month: u64_from_i64(identity_row.try_get("first_month")?)?,
+                lifetime: u64_from_i64(identity_row.try_get("lifetime")?)?,
+                posters: u64_from_i64(identity_row.try_get("posters")?)?,
+                funders: u64_from_i64(identity_row.try_get("funders")?)?,
+                solvers: u64_from_i64(identity_row.try_get("solvers")?)?,
+                verifiers: u64_from_i64(identity_row.try_get("verifiers")?)?,
+                commenters: u64_from_i64(identity_row.try_get("commenters")?)?,
+                marketplace_wallets: u64_from_i64(identity_row.try_get("marketplace_wallets")?)?,
+                opportunity_comment_authors: u64_from_i64(
+                    identity_row.try_get("opportunity_comment_authors")?,
+                )?,
+            },
+            payouts: PlatformPayoutStats {
+                selected_total_base_units: payout_row.try_get("selected_total")?,
+                previous_total_base_units: payout_row.try_get("previous_total")?,
+                first_month_total_base_units: payout_row.try_get("first_month_total")?,
+                lifetime_total_base_units: payout_row.try_get("lifetime_total")?,
+                selected_solver_base_units: payout_row.try_get("selected_solver")?,
+                selected_verifier_base_units: payout_row.try_get("selected_verifier")?,
+                selected_bonus_base_units: payout_row.try_get("selected_bonus")?,
+                selected_settled_rounds: u64_from_i64(payout_row.try_get("selected_settled")?)?,
+                previous_settled_rounds: u64_from_i64(payout_row.try_get("previous_settled")?)?,
+                first_month_settled_rounds: u64_from_i64(
+                    payout_row.try_get("first_month_settled")?,
+                )?,
+                lifetime_settled_rounds: u64_from_i64(payout_row.try_get("lifetime_settled")?)?,
+            },
+            claim_cohort: PlatformClaimCohortStats {
+                settled: u64_from_i64(cohort_row.try_get("settled")?)?,
+                mature: u64_from_i64(cohort_row.try_get("mature")?)?,
+                immature: u64_from_i64(cohort_row.try_get("immature")?)?,
+            },
+            daily: daily_rows
+                .into_iter()
+                .map(|row| {
+                    Ok(PlatformDailyStats {
+                        day: row.try_get("day")?,
+                        active_identities: u64_from_i64(row.try_get("active_identities")?)?,
+                        payout_base_units: row.try_get("payout_base_units")?,
+                        settled_rounds: u64_from_i64(row.try_get("settled_rounds")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            coverage: PlatformMetricsCoverageStats {
+                verified_canonical_events: u64_from_i64(coverage_row.try_get("verified_events")?)?,
+                awaiting_block_time_events: u64_from_i64(coverage_row.try_get("awaiting_events")?)?,
+                opportunity_comments: u64_from_i64(coverage_row.try_get("comments")?)?,
+                latest_verified_event_at: coverage_row.try_get("latest_verified_event_at")?,
+                latest_comment_at: coverage_row.try_get("latest_comment_at")?,
+            },
         })
     }
 
@@ -5221,6 +5902,29 @@ impl PostgresStore {
             .collect()
     }
 
+    pub async fn list_verified_open_competition_events(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, protocol_version, log_key, tx_hash, block_number, log_index,
+                   contract_address, bounty_id, kind, data, occurred_at
+            FROM open_competition_events
+            WHERE network = $1 AND factory_contract = $2 AND block_time_verified = TRUE
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_event_from_row)
+            .collect()
+    }
+
     pub async fn list_canonical_open_competition_contracts(
         &self,
         network: &str,
@@ -5306,6 +6010,25 @@ impl PostgresStore {
                    bounty_id, kind, data, occurred_at
             FROM autonomous_bounty_events
             WHERE network = $1
+            ORDER BY block_number, log_index
+            "#,
+        )
+        .bind(network)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(autonomous_event_from_row).collect()
+    }
+
+    pub async fn list_verified_autonomous_bounty_events(
+        &self,
+        network: &str,
+    ) -> DbResult<Vec<AutonomousBountyEvent>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, log_key, tx_hash, block_number, log_index, contract_address,
+                   bounty_id, kind, data, occurred_at
+            FROM autonomous_bounty_events
+            WHERE network = $1 AND block_time_verified = TRUE
             ORDER BY block_number, log_index
             "#,
         )
@@ -7991,6 +8714,615 @@ mod tests {
             .channels
             .iter()
             .any(|channel| channel.source == "postgres-test"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn platform_metrics_query_enforces_identity_payment_and_cohort_boundaries() {
+        async fn add_event(
+            store: &PostgresStore,
+            network: &str,
+            block_number: u64,
+            contract_address: &str,
+            bounty_id: &str,
+            kind: AutonomousBountyEventKind,
+            data: serde_json::Value,
+            occurred_at: DateTime<Utc>,
+            verified: bool,
+        ) {
+            store
+                .upsert_autonomous_bounty_event(
+                    network,
+                    &AutonomousBountyEvent {
+                        id: Uuid::new_v4(),
+                        log_key: format!("{network}:{block_number}:0"),
+                        tx_hash: format!("0x{block_number:064x}"),
+                        block_number,
+                        log_index: 0,
+                        contract_address: contract_address.to_string(),
+                        bounty_id: bounty_id.to_string(),
+                        kind,
+                        data,
+                        occurred_at,
+                    },
+                )
+                .await
+                .unwrap();
+            if verified {
+                assert_eq!(
+                    store
+                        .confirm_autonomous_event_block_time(network, block_number, occurred_at)
+                        .await
+                        .unwrap(),
+                    1
+                );
+            }
+        }
+
+        async fn add_competition_event(
+            store: &PostgresStore,
+            network: &str,
+            factory_contract: &str,
+            block_number: u64,
+            contract_address: &str,
+            bounty_id: &str,
+            kind: OpenCompetitionEventKind,
+            data: serde_json::Value,
+            occurred_at: DateTime<Utc>,
+            verified: bool,
+        ) {
+            store
+                .upsert_open_competition_event(
+                    network,
+                    factory_contract,
+                    &OpenCompetitionEvent {
+                        id: Uuid::new_v4(),
+                        protocol_version: "agent-bounties/open-competition-v1".to_string(),
+                        log_key: format!("open:{network}:{block_number}:0"),
+                        tx_hash: format!("0x{block_number:064x}"),
+                        block_number,
+                        log_index: 0,
+                        contract_address: contract_address.to_string(),
+                        bounty_id: bounty_id.to_string(),
+                        kind,
+                        data,
+                        occurred_at,
+                    },
+                )
+                .await
+                .unwrap();
+            if verified {
+                assert_eq!(
+                    store
+                        .confirm_open_competition_event_block_time(
+                            network,
+                            factory_contract,
+                            block_number,
+                            occurred_at,
+                        )
+                        .await
+                        .unwrap(),
+                    1
+                );
+            }
+        }
+
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let test_id = Uuid::new_v4();
+        let network = format!("platform-metrics-test-{test_id}");
+        let opportunity_id = format!("metrics-test-{test_id}");
+        let at = |value: &str| {
+            DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let launch_at = at("2099-01-01T00:00:00Z");
+        let previous_started_at = launch_at;
+        let selected_started_at = at("2099-01-08T00:00:00Z");
+        let selected_ended_at = at("2099-01-15T00:00:00Z");
+        let first_month_ended_at = at("2099-02-01T00:00:00Z");
+        let contract_one = "0x1111111111111111111111111111111111111111";
+        let contract_two = "0x2222222222222222222222222222222222222222";
+        let competition_contract = "0x3333333333333333333333333333333333333333";
+        let competition_refund_contract = "0x3434343434343434343434343434343434343434";
+        let competition_factory = "0x4444444444444444444444444444444444444444";
+        let recovery_contract = "0x9999999999999999999999999999999999999999";
+        let funder = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let competition_funder = "0x4545454545454545454545454545454545454545";
+        let refunded_funder = "0x4646464646464646464646464646464646464646";
+        let competition_solver_one = "0x5555555555555555555555555555555555555555";
+        let competition_solver_two = "0x5656565656565656565656565656565656565656";
+        let solver_one = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let verifier = "0xcccccccccccccccccccccccccccccccccccccccc";
+        let solver_two = "0xdddddddddddddddddddddddddddddddddddddddd";
+        let immature_solver = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let expired_solver = "0xffffffffffffffffffffffffffffffffffffffff";
+        let maintainer_wallet = "0x1234512345123451234512345123451234512345";
+        let future_expiry = selected_ended_at.timestamp() + 3_600;
+        let past_expiry = selected_ended_at.timestamp() - 3_600;
+        let mut block = 9_000_000_u64;
+
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_one,
+            "bounty-one",
+            AutonomousBountyEventKind::CanonicalBountyCreated,
+            serde_json::json!({"creator": funder}),
+            at("2099-01-04T00:00:00Z"),
+            true,
+        )
+        .await;
+
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_factory,
+            "competition-one",
+            OpenCompetitionEventKind::CanonicalCompetitionCreated,
+            serde_json::json!({
+                "bounty_contract": competition_contract,
+                "creator": funder
+            }),
+            at("2099-01-09T03:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_factory,
+            "competition-refund",
+            OpenCompetitionEventKind::CanonicalCompetitionCreated,
+            serde_json::json!({
+                "bounty_contract": competition_refund_contract,
+                "creator": funder
+            }),
+            at("2099-01-09T03:00:30Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_contract,
+            "competition-one",
+            OpenCompetitionEventKind::CanonicalCompetitionVerificationConfigured,
+            serde_json::json!({"verifier_reward_recipient": verifier}),
+            at("2099-01-09T03:01:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_contract,
+            "competition-one",
+            OpenCompetitionEventKind::FundingAdded,
+            serde_json::json!({"contributor": competition_funder, "amount": 2_400_000}),
+            at("2099-01-10T03:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_contract,
+            "competition-one",
+            OpenCompetitionEventKind::CompetitionSubmissionRejected,
+            serde_json::json!({
+                "solver": competition_solver_one,
+                "bond_paid_to_verifier": 200_000,
+                "entry_bond_returned": 8_000_000,
+                "refund": 9_000_000
+            }),
+            at("2099-01-12T03:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_contract,
+            "competition-one",
+            OpenCompetitionEventKind::BountySettled,
+            serde_json::json!({
+                "solver": competition_solver_two,
+                "solver_reward": 2_000_000,
+                "verifier_reward": 200_000,
+                "timeout_bond_bonus": 75_000,
+                "entry_bond_returned": 200_000,
+                "refund": 9_000_000
+            }),
+            at("2099-01-13T03:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_refund_contract,
+            "competition-refund",
+            OpenCompetitionEventKind::BountyCancelled,
+            serde_json::json!({
+                "principal": 500_000_000,
+                "expired_entry_bonus": 25_000_000
+            }),
+            at("2099-01-13T03:30:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_refund_contract,
+            "competition-refund",
+            OpenCompetitionEventKind::RefundWithdrawn,
+            serde_json::json!({
+                "contributor": refunded_funder,
+                "principal": 500_000_000,
+                "expired_entry_bonus": 25_000_000,
+                "amount": 525_000_000
+            }),
+            at("2099-01-13T04:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            competition_contract,
+            "competition-unverified",
+            OpenCompetitionEventKind::BountySettled,
+            serde_json::json!({
+                "solver": "0x5757575757575757575757575757575757575757",
+                "solver_reward": 70_000_000,
+                "verifier_reward": 7_000_000,
+                "timeout_bond_bonus": 0
+            }),
+            at("2099-01-14T03:00:00Z"),
+            false,
+        )
+        .await;
+        block += 1;
+        add_competition_event(
+            &store,
+            &network,
+            competition_factory,
+            block,
+            recovery_contract,
+            "competition-recovery",
+            OpenCompetitionEventKind::BountySettled,
+            serde_json::json!({
+                "solver": "0x5858585858585858585858585858585858585858",
+                "solver_reward": 60_000_000,
+                "verifier_reward": 6_000_000,
+                "timeout_bond_bonus": 0
+            }),
+            at("2099-01-14T04:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_one,
+            "bounty-one",
+            AutonomousBountyEventKind::CanonicalBountyVerificationConfigured,
+            serde_json::json!({"verifier_reward_recipient": verifier}),
+            at("2099-01-04T00:01:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_one,
+            "bounty-one",
+            AutonomousBountyEventKind::FundingAdded,
+            serde_json::json!({"contributor": funder, "amount": 9_999_999}),
+            at("2099-01-09T00:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_one,
+            "bounty-one",
+            AutonomousBountyEventKind::BountyClaimed,
+            serde_json::json!({
+                "round": 1,
+                "solver": solver_one,
+                "claim_expires_at": future_expiry
+            }),
+            at("2099-01-10T00:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_one,
+            "bounty-one",
+            AutonomousBountyEventKind::SubmissionAdded,
+            serde_json::json!({"round": 1, "solver": solver_one}),
+            at("2099-01-10T01:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_one,
+            "bounty-one",
+            AutonomousBountyEventKind::BountySettled,
+            serde_json::json!({
+                "round": 1,
+                "solver": solver_one,
+                "solver_reward": 1_000_000,
+                "verifier_reward": 100_000,
+                "timeout_bond_bonus": 50_000,
+                "solver_payout": 1_050_000,
+                "returned_claim_bond": 100_000,
+                "refund": 4_000_000,
+                "leaderboard_prize": 2_000_000
+            }),
+            at("2099-01-11T00:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "bounty-two",
+            AutonomousBountyEventKind::CanonicalBountyVerificationConfigured,
+            serde_json::json!({"verifier_reward_recipient": verifier}),
+            at("2099-01-09T00:01:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "bounty-two",
+            AutonomousBountyEventKind::BountyClaimed,
+            serde_json::json!({
+                "round": 2,
+                "solver": solver_two,
+                "claim_expires_at": future_expiry
+            }),
+            at("2099-01-10T02:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "bounty-two",
+            AutonomousBountyEventKind::SubmissionRejected,
+            serde_json::json!({
+                "round": 2,
+                "solver": solver_two,
+                "verifier_reward": 100_000,
+                "forfeited_bond": 100_000,
+                "refund": 3_000_000
+            }),
+            at("2099-01-12T00:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "bounty-three",
+            AutonomousBountyEventKind::BountyClaimed,
+            serde_json::json!({
+                "round": 3,
+                "solver": immature_solver,
+                "claim_expires_at": future_expiry
+            }),
+            at("2099-01-13T00:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "bounty-four",
+            AutonomousBountyEventKind::BountyClaimed,
+            serde_json::json!({
+                "round": 4,
+                "solver": expired_solver,
+                "claim_expires_at": past_expiry
+            }),
+            at("2099-01-13T01:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "maintainer-bounty",
+            AutonomousBountyEventKind::CanonicalBountyCreated,
+            serde_json::json!({"creator": maintainer_wallet}),
+            at("2099-01-13T02:00:00Z"),
+            true,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            contract_two,
+            "unverified-bounty",
+            AutonomousBountyEventKind::BountySettled,
+            serde_json::json!({
+                "round": 1,
+                "solver": "0x7777777777777777777777777777777777777777",
+                "solver_reward": 90_000_000,
+                "verifier_reward": 10_000_000,
+                "timeout_bond_bonus": 0
+            }),
+            at("2099-01-14T00:00:00Z"),
+            false,
+        )
+        .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            recovery_contract,
+            "recovery-bounty",
+            AutonomousBountyEventKind::BountySettled,
+            serde_json::json!({
+                "round": 1,
+                "solver": "0x6666666666666666666666666666666666666666",
+                "solver_reward": 80_000_000,
+                "verifier_reward": 10_000_000,
+                "timeout_bond_bonus": 0
+            }),
+            at("2099-01-14T01:00:00Z"),
+            true,
+        )
+        .await;
+
+        for (author, minute) in [
+            ("  Alice   Agent  ", 0_i64),
+            ("alice agent", 1_i64),
+            ("Maintainer", 2_i64),
+        ] {
+            sqlx::query(
+                "INSERT INTO opportunity_comments (id, opportunity_id, author, body, created_at) VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(&opportunity_id)
+            .bind(author)
+            .bind("metrics test")
+            .bind(at("2099-01-14T02:00:00Z") + chrono::Duration::minutes(minute))
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        }
+
+        let stats = store
+            .platform_metrics_stats(
+                &network,
+                selected_started_at,
+                selected_ended_at,
+                previous_started_at,
+                launch_at,
+                first_month_ended_at,
+                &[maintainer_wallet.to_string()],
+                &["maintainer".to_string()],
+                &[recovery_contract.to_string()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(stats.identities.selected, 11);
+        assert_eq!(stats.identities.previous, 1);
+        assert_eq!(stats.identities.lifetime, 11);
+        assert_eq!(stats.identities.posters, 1);
+        assert_eq!(stats.identities.funders, 3);
+        assert_eq!(stats.identities.solvers, 6);
+        assert_eq!(stats.identities.verifiers, 1);
+        assert_eq!(stats.identities.commenters, 1);
+        assert_eq!(stats.identities.marketplace_wallets, 10);
+        assert_eq!(stats.identities.opportunity_comment_authors, 1);
+        assert_eq!(stats.payouts.selected_total_base_units, "3725000");
+        assert_eq!(stats.payouts.selected_solver_base_units, "3000000");
+        assert_eq!(stats.payouts.selected_verifier_base_units, "600000");
+        assert_eq!(stats.payouts.selected_bonus_base_units, "125000");
+        assert_eq!(stats.payouts.selected_settled_rounds, 2);
+        assert_eq!(stats.claim_cohort.settled, 1);
+        assert_eq!(stats.claim_cohort.mature, 3);
+        assert_eq!(stats.claim_cohort.immature, 1);
+        assert_eq!(stats.coverage.awaiting_block_time_events, 2);
+        assert_eq!(
+            stats
+                .daily
+                .iter()
+                .map(|day| day.payout_base_units.parse::<u128>().unwrap())
+                .sum::<u128>(),
+            3_725_000
+        );
+
+        sqlx::query("DELETE FROM open_competition_events WHERE network = $1")
+            .bind(&network)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM autonomous_bounty_events WHERE network = $1")
+            .bind(&network)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM opportunity_comments WHERE opportunity_id = $1")
+            .bind(&opportunity_id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

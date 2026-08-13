@@ -17,7 +17,8 @@ import sys
 import urllib.error
 import urllib.request
 from collections import defaultdict
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +39,9 @@ DISCOVERY_ANSWER_MARKERS = (
     "found agent bounties",
 )
 MENTION_RE = re.compile(r"(?<![A-Za-z0-9-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))")
+PLATFORM_LAUNCH_AT = "2026-07-08T20:22:19Z"
+PLATFORM_FIRST_MONTH_ENDED_AT = "2026-08-08T20:22:19Z"
+PUBLIC_METRICS_PERIOD_DAYS = {"7d": 7, "28d": 28, "90d": 90}
 
 
 def utc_now() -> str:
@@ -73,42 +77,66 @@ def gh_api(repository: str, suffix: str, *, accept: str | None = None) -> list[d
     return flatten_pages(json.loads(completed.stdout))
 
 
-def collect_snapshot(repository: str) -> dict[str, Any]:
+def collect_snapshot(
+    repository: str,
+    *,
+    include_enrichment: bool = True,
+    activity_since: str | None = None,
+) -> dict[str, Any]:
     issues = gh_api(repository, "issues?state=all&per_page=100")
     pulls = gh_api(repository, "pulls?state=all&per_page=100")
     issue_comments = gh_api(repository, "issues/comments?per_page=100")
     review_comments = gh_api(repository, "pulls/comments?per_page=100")
     reviews: list[dict[str, Any]] = []
-    for pull in pulls:
-        number = pull.get("number")
-        if isinstance(number, int):
-            for review in gh_api(repository, f"pulls/{number}/reviews?per_page=100"):
-                review["pull_number"] = number
-                reviews.append(review)
-
-    bounty_issues = [
-        issue
-        for issue in issues
-        if "pull_request" not in issue
-        and "bounty" in {str(label.get("name", "")).lower() for label in issue.get("labels", [])}
+    reviewable_pulls = pulls
+    if activity_since:
+        reviewable_pulls = [
+            pull
+            for pull in pulls
+            if str(pull.get("updated_at") or pull.get("created_at") or "") >= activity_since
+        ]
+    review_numbers = [
+        int(pull["number"])
+        for pull in reviewable_pulls
+        if isinstance(pull.get("number"), int)
     ]
-    reactions: list[dict[str, Any]] = []
-    for issue in bounty_issues:
-        number = issue.get("number")
-        if isinstance(number, int):
-            for reaction in gh_api(
-                repository,
-                f"issues/{number}/reactions?per_page=100",
-                accept="application/vnd.github+json",
-            ):
-                reaction["issue_number"] = number
-                reactions.append(reaction)
 
-    stargazers = gh_api(
-        repository,
-        "stargazers?per_page=100",
-        accept="application/vnd.github.star+json",
-    )
+    def pull_reviews(number: int) -> tuple[int, list[dict[str, Any]]]:
+        return number, gh_api(repository, f"pulls/{number}/reviews?per_page=100")
+
+    if review_numbers:
+        with ThreadPoolExecutor(max_workers=min(8, len(review_numbers))) as executor:
+            for number, records in executor.map(pull_reviews, review_numbers):
+                for review in records:
+                    review["pull_number"] = number
+                    reviews.append(review)
+
+    reactions: list[dict[str, Any]] = []
+    stargazers: list[dict[str, Any]] = []
+    if include_enrichment:
+        bounty_issues = [
+            issue
+            for issue in issues
+            if "pull_request" not in issue
+            and "bounty"
+            in {str(label.get("name", "")).lower() for label in issue.get("labels", [])}
+        ]
+        for issue in bounty_issues:
+            number = issue.get("number")
+            if isinstance(number, int):
+                for reaction in gh_api(
+                    repository,
+                    f"issues/{number}/reactions?per_page=100",
+                    accept="application/vnd.github+json",
+                ):
+                    reaction["issue_number"] = number
+                    reactions.append(reaction)
+
+        stargazers = gh_api(
+            repository,
+            "stargazers?per_page=100",
+            accept="application/vnd.github.star+json",
+        )
     return {
         "repository": repository,
         "fetched_at": utc_now(),
@@ -437,6 +465,230 @@ def build_audit(
     }
 
 
+def parse_utc_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def public_metrics_policy(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {
+            "schema_version": "agent-bounties/public-metrics-policy-v1",
+            "maintainer_github_logins": [],
+        }
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("public metrics policy must be a JSON object")
+    return value
+
+
+def build_public_participation_metrics(
+    snapshot: dict[str, Any],
+    owner_login: str,
+    *,
+    excluded_logins: set[str] | None = None,
+    policy_schema_version: str = "agent-bounties/public-metrics-policy-v1",
+) -> dict[str, Any]:
+    """Build an aggregate-only GitHub participation artifact.
+
+    The function deliberately keeps login keys only in local memory. The
+    returned value contains no handles, profile URLs, event IDs, or comment text.
+    """
+
+    launch_at = parse_utc_timestamp(PLATFORM_LAUNCH_AT)
+    first_month_ended_at = parse_utc_timestamp(PLATFORM_FIRST_MONTH_ENDED_AT)
+    generated_at = parse_utc_timestamp(snapshot.get("fetched_at"))
+    if launch_at is None or first_month_ended_at is None or generated_at is None:
+        raise ValueError("launch, first-month, and snapshot timestamps must be valid UTC values")
+    excluded = {owner_login.strip().lower()}
+    excluded.update(value.strip().lower() for value in (excluded_logins or set()) if value.strip())
+    records: dict[tuple[str, str], tuple[datetime, str, str]] = {}
+    excluded_records = 0
+    missing_timestamp_records = 0
+
+    def add_record(
+        kind: str,
+        role: str,
+        event_id: Any,
+        user: Any,
+        occurred_at: Any,
+        fallback: str,
+    ) -> None:
+        nonlocal excluded_records, missing_timestamp_records
+        timestamp = parse_utc_timestamp(occurred_at)
+        if timestamp is None:
+            missing_timestamp_records += 1
+            return
+        if timestamp < launch_at or timestamp >= generated_at:
+            return
+        if not isinstance(user, dict):
+            excluded_records += 1
+            return
+        login = str(user.get("login") or "").strip().lower()
+        if (
+            not login
+            or login in excluded
+            or login.endswith("[bot]")
+            or str(user.get("type") or "").lower() == "bot"
+        ):
+            excluded_records += 1
+            return
+        key = (kind, str(event_id if event_id is not None else fallback))
+        records[key] = (timestamp, login, role)
+
+    for index, issue in enumerate(snapshot.get("issues", [])):
+        if not isinstance(issue, dict):
+            continue
+        is_pull = "pull_request" in issue
+        add_record(
+            "pull_request_opened" if is_pull else "issue_opened",
+            "pull_request_contributors" if is_pull else "issue_posters",
+            issue.get("id") or issue.get("number"),
+            issue.get("user"),
+            issue.get("created_at"),
+            f"issue-{index}",
+        )
+    for index, comment in enumerate(snapshot.get("issue_comments", [])):
+        if isinstance(comment, dict):
+            add_record(
+                "issue_commented",
+                "commenters",
+                comment.get("id"),
+                comment.get("user"),
+                comment.get("created_at"),
+                f"issue-comment-{index}",
+            )
+    for index, comment in enumerate(snapshot.get("review_comments", [])):
+        if isinstance(comment, dict):
+            add_record(
+                "pull_request_inline_comment",
+                "reviewers",
+                comment.get("id"),
+                comment.get("user"),
+                comment.get("created_at"),
+                f"review-comment-{index}",
+            )
+    for index, review in enumerate(snapshot.get("reviews", [])):
+        if isinstance(review, dict):
+            add_record(
+                "pull_request_review",
+                "reviewers",
+                review.get("id"),
+                review.get("user"),
+                review.get("submitted_at"),
+                f"review-{index}",
+            )
+
+    activity = list(records.values())
+
+    def aggregate(started_at: datetime, ended_at: datetime) -> dict[str, Any]:
+        selected = [record for record in activity if started_at <= record[0] < ended_at]
+        roles = []
+        for role in (
+            "issue_posters",
+            "pull_request_contributors",
+            "commenters",
+            "reviewers",
+        ):
+            roles.append(
+                {
+                    "role": role,
+                    "active_identities": len(
+                        {identity for _, identity, record_role in selected if record_role == role}
+                    ),
+                }
+            )
+        daily = []
+        cursor = datetime(started_at.year, started_at.month, started_at.day, tzinfo=timezone.utc)
+        while cursor < ended_at:
+            day_ended_at = cursor + timedelta(days=1)
+            bounded_start = max(cursor, started_at)
+            bounded_end = min(day_ended_at, ended_at)
+            day_records = [
+                record for record in selected if bounded_start <= record[0] < bounded_end
+            ]
+            daily.append(
+                {
+                    "day": cursor.date().isoformat(),
+                    "active_identities": len({record[1] for record in day_records}),
+                    "qualifying_actions": len(day_records),
+                }
+            )
+            cursor = day_ended_at
+        return {
+            "started_at": started_at.isoformat().replace("+00:00", "Z"),
+            "ended_at": ended_at.isoformat().replace("+00:00", "Z"),
+            "active_identities": len({record[1] for record in selected}),
+            "qualifying_actions": len(selected),
+            "roles": roles,
+            "roles_are_additive": False,
+            "daily": daily,
+        }
+
+    periods: dict[str, Any] = {}
+    for period, days in PUBLIC_METRICS_PERIOD_DAYS.items():
+        requested_start = generated_at - timedelta(days=days)
+        started_at = max(launch_at, requested_start)
+        selected = aggregate(started_at, generated_at)
+        previous_started_at = started_at - (generated_at - started_at)
+        previous = aggregate(previous_started_at, started_at)
+        selected["previous_started_at"] = previous["started_at"]
+        selected["previous_ended_at"] = previous["ended_at"]
+        selected["previous_active_identities"] = previous["active_identities"]
+        selected["previous_qualifying_actions"] = previous["qualifying_actions"]
+        periods[period] = selected
+    lifetime = aggregate(launch_at, generated_at)
+    lifetime.update(
+        {
+            "previous_started_at": launch_at.isoformat().replace("+00:00", "Z"),
+            "previous_ended_at": launch_at.isoformat().replace("+00:00", "Z"),
+            "previous_active_identities": 0,
+            "previous_qualifying_actions": 0,
+        }
+    )
+    periods["lifetime"] = lifetime
+    first_month = aggregate(launch_at, first_month_ended_at)
+    latest_week = periods["7d"]["active_identities"]
+    previous_week = periods["7d"]["previous_active_identities"]
+
+    return {
+        "schema_version": "agent-bounties/github-participation-v1",
+        "source": "github_public_activity",
+        "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "launch_at": PLATFORM_LAUNCH_AT,
+        "first_month_started_at": PLATFORM_LAUNCH_AT,
+        "first_month_ended_at": PLATFORM_FIRST_MONTH_ENDED_AT,
+        "namespace": "github",
+        "periods": periods,
+        "weekly": {
+            "latest_active_identities": latest_week,
+            "previous_active_identities": previous_week,
+        },
+        "first_month": first_month,
+        "coverage": {
+            "status": "partial" if missing_timestamp_records else "ready",
+            "qualifying_records": len(activity),
+            "excluded_records": excluded_records,
+            "missing_timestamp_records": missing_timestamp_records,
+            "maintainer_exclusion_policy": policy_schema_version,
+            "raw_identifiers_included": False,
+        },
+        "definitions": {
+            "active_identity": "One external GitHub login with at least one qualifying issue, pull request, top-level comment, review, or inline review comment in the period. It is a participating identity, not a verified unique person.",
+            "qualifying_action": "An external issue or pull request opened, issue or pull-request comment, submitted pull-request review, or inline review comment.",
+            "exclusions": "Bots, system identities, the repository owner, and logins in the checked-in public maintainer exclusion policy are excluded.",
+        },
+        "privacy_boundary": "This file contains aggregate counts only. It contains no repository owner, GitHub handles, user IDs, profile URLs, comment text, review text, issue IDs, pull-request IDs, or event IDs.",
+    }
+
+
 def http_post_json(base_url: str, path: str, payload: dict[str, Any], token: str | None) -> Any:
     headers = {"Content-Type": "application/json"}
     if token:
@@ -510,6 +762,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--snapshot-output", type=Path)
     parser.add_argument("--output", type=Path, default=Path("target/github-audience-audit.json"))
+    parser.add_argument("--public-metrics-output", type=Path)
+    parser.add_argument("--public-metrics-policy", type=Path)
+    parser.add_argument("--public-metrics-only", action="store_true")
+    parser.add_argument("--exclude-login", action="append", default=[])
     parser.add_argument("--include-owner", action="store_true")
     parser.add_argument("--curated-responses", type=Path)
     parser.add_argument("--sync", action="store_true")
@@ -523,11 +779,43 @@ def main() -> int:
     if args.fixture:
         snapshot = json.loads(args.fixture.read_text(encoding="utf-8"))
     else:
-        snapshot = collect_snapshot(args.repository)
+        snapshot = collect_snapshot(
+            args.repository,
+            include_enrichment=not args.public_metrics_only,
+            activity_since=PLATFORM_LAUNCH_AT if args.public_metrics_only else None,
+        )
     snapshot.setdefault("repository", args.repository)
     if args.snapshot_output:
         args.snapshot_output.parent.mkdir(parents=True, exist_ok=True)
         args.snapshot_output.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+    if args.public_metrics_output:
+        policy = public_metrics_policy(args.public_metrics_policy)
+        policy_logins = policy.get("maintainer_github_logins", [])
+        if not isinstance(policy_logins, list):
+            raise ValueError("maintainer_github_logins must be a JSON array")
+        excluded_logins = {
+            str(value).strip().lower()
+            for value in [*policy_logins, *args.exclude_login]
+            if str(value).strip()
+        }
+        public_metrics = build_public_participation_metrics(
+            snapshot,
+            args.owner_login,
+            excluded_logins=excluded_logins,
+            policy_schema_version=str(
+                policy.get("schema_version")
+                or "agent-bounties/public-metrics-policy-v1"
+            ),
+        )
+        args.public_metrics_output.parent.mkdir(parents=True, exist_ok=True)
+        args.public_metrics_output.write_text(
+            json.dumps(public_metrics, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"public_metrics_output={args.public_metrics_output}")
+    if args.public_metrics_only:
+        if not args.public_metrics_output:
+            raise ValueError("--public-metrics-only requires --public-metrics-output")
+        return 0
     audit = build_audit(snapshot, args.owner_login, include_owner=args.include_owner)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(audit, indent=2) + "\n", encoding="utf-8")

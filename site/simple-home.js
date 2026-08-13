@@ -7,6 +7,7 @@
   const PRIMARY_LINKS = [
     ["earn.html", "Bounty Board"],
     ["how-it-works.html", "How It Works"],
+    ["metrics.html", "Metrics"],
   ];
   const COMMUNITY_LINKS = [
     ["leaderboard.html", "Leaderboard"],
@@ -65,6 +66,7 @@
     if (!footerNav) return;
     const desired = [
       ["how-it-works.html", "How it works"],
+      ["metrics.html", "Metrics"],
       ["leaderboard.html", "Leaderboard"],
       ["news.html", "News"],
       ["llms.txt", "Docs"],
