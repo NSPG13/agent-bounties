@@ -38,6 +38,7 @@ cargo test -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded -- --
 cargo test -p db tests::claim_funnel_counts_direct_and_atomic_sponsored_confirmations -- --ignored --exact --nocapture
 cargo test -p db tests::opportunity_lifecycle_query_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p db tests::site_analytics_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+cargo test -p db tests::platform_metrics_query_enforces_identity_payment_and_cohort_boundaries -- --ignored --exact --nocapture
 cargo test -p db tests::opportunity_comment_round_trip_is_durable_and_idempotent -- --ignored --exact --nocapture
 cargo test -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed_transaction -- --ignored --exact --nocapture
 cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture

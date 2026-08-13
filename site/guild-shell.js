@@ -21,6 +21,7 @@
   const navItems = [
     ["earn.html", "Bounty Board"],
     ["how-it-works.html", "How It Works"],
+    ["metrics.html", "Metrics"],
   ];
 
   let topbar = document.querySelector(".topbar");

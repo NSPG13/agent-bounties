@@ -1,0 +1,24 @@
+{
+  "schema_version": "agent-bounties/github-participation-v1",
+  "source": "github_public_activity",
+  "generated_at": "2026-07-08T20:22:19Z",
+  "launch_at": "2026-07-08T20:22:19Z",
+  "first_month_started_at": "2026-07-08T20:22:19Z",
+  "first_month_ended_at": "2026-08-08T20:22:19Z",
+  "namespace": "github",
+  "periods": {
+    "7d": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0},
+    "28d": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0},
+    "90d": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0},
+    "lifetime": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-07-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": [], "previous_started_at": "2026-07-08T20:22:19Z", "previous_ended_at": "2026-07-08T20:22:19Z", "previous_active_identities": 0, "previous_qualifying_actions": 0}
+  },
+  "weekly": {"latest_active_identities": 0, "previous_active_identities": 0},
+  "first_month": {"started_at": "2026-07-08T20:22:19Z", "ended_at": "2026-08-08T20:22:19Z", "active_identities": 0, "qualifying_actions": 0, "roles": [], "roles_are_additive": false, "daily": []},
+  "coverage": {"status": "unavailable", "qualifying_records": 0, "excluded_records": 0, "missing_timestamp_records": 0, "maintainer_exclusion_policy": "agent-bounties/public-metrics-policy-v1", "raw_identifiers_included": false},
+  "definitions": {
+    "active_identity": "One external GitHub login with a qualifying action. It is a participating identity, not a verified unique person.",
+    "qualifying_action": "An external issue or pull request opened, issue or pull-request comment, submitted pull-request review, or inline review comment.",
+    "exclusions": "Bots, system identities, the repository owner, and checked-in maintainers are excluded."
+  },
+  "privacy_boundary": "Placeholder only. The scheduled Pages job replaces this file with aggregate counts and no raw identifiers."
+}
