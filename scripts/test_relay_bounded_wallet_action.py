@@ -191,6 +191,32 @@ class BoundedWalletRelayTests(unittest.TestCase):
         encoded = encode(f"f({POLICY_TYPE})", policy_tuple(policy))
         self.assertEqual(keccak_hex(encoded), relay.POLICY_HASH)
 
+    def test_common_identity_accepts_an_exact_signed_quorum_profile(self) -> None:
+        common = relay.validate_common.__globals__
+        state = mock.Mock(
+            chain_id=common["CHAIN_ID"],
+            codehash=common["CLONE_CODEHASH"],
+            canonical=True,
+            factory_implementation=common["IMPLEMENTATION"],
+            factory=common["FACTORY"],
+            settlement_token=common["USDC"],
+            verification_mode=1,
+            threshold=2,
+            verifier_module=relay.ZERO_ADDRESS,
+            solver_reward=100_000,
+            verifier_reward=10_000,
+            target_amount=110_000,
+            funded_amount=110_000,
+        )
+        relay.validate_common(
+            state,
+            verification_mode=1,
+            threshold=2,
+            expected_verifier_module=relay.ZERO_ADDRESS,
+        )
+        with self.assertRaisesRegex(relay.RelayError, "verifier module is not allowlisted"):
+            relay.validate_common(state, verification_mode=1, threshold=2)
+
     def test_comment_requires_exact_command_and_schema(self) -> None:
         body = relay.COMMAND + "\n```json\n" + json.dumps(envelope()) + "\n```"
         self.assertEqual(relay.parse_comment(body)["issue_number"], 249)
