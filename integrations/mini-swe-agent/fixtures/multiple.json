@@ -1,28 +1,32 @@
 {
-    "bounties": [
-        {
-            "number": 771,
-            "title": "[DIRECT] Publish an A2A Agent Card for machine discovery",
-            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "canonical_updated_at": "2026-08-10T20:00:00Z",
-            "claimable": true
-        },
-        {
-            "number": 774,
-            "title": "[DIRECT] Add a mini-SWE-agent paid-work environment",
-            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "canonical_updated_at": "2026-08-10T20:00:00Z",
-            "claimable": true
-        },
-        {
-            "number": 773,
-            "title": "[DIRECT] Add an OpenHands earning-loop integration",
-            "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
-            "canonical_updated_at": "2026-08-10T20:00:00Z",
-            "claimable": true
-        }
-    ]
+  "synthetic": true,
+  "bounties": [
+    {
+      "number": 1001,
+      "title": "[SYNTHETIC] Claimable bounty A (moderate reward)",
+      "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    },
+    {
+      "number": 1002,
+      "title": "[SYNTHETIC] Claimable bounty B (highest signed margin)",
+      "reward": {"amount": "3000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    },
+    {
+      "number": 1003,
+      "title": "[SYNTHETIC] Claimable bounty C (highest reward, high external spend)",
+      "reward": {"amount": "5000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "4000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    }
+  ]
 }
