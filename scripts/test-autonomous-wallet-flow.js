@@ -154,6 +154,7 @@ assert(earnHtml.includes("Sign once. Start after BountyClaimed"));
 assert(earnHtml.includes('class="claim-wallet-stack"'));
 assert(earnHtml.includes('styles.css?v=20260813-1'));
 assert(earnHtml.includes('simple-ux.css?v=2'));
+assert(earnHtml.includes('autonomous.js?v=20260813-1'));
 assert(sharedCss.includes(".sr-only"));
 assert(simpleUxCss.includes(".claim-wallet-stack"));
 assert(earnHtml.includes("Gas is sponsored for this funding action"));
@@ -161,7 +162,7 @@ assert(earnHtml.includes('data-wallet-requires="direct-transactions"'));
 assert(earnHtml.includes('src="wallet-adapter-registry.js?v=1"'));
 assert(earnHtml.includes('src="x402-browser.js?v=1"'));
 assert(
-  earnHtml.indexOf('src="x402-browser.js?v=1"') < earnHtml.indexOf('src="autonomous.js"'),
+  earnHtml.indexOf('src="x402-browser.js?v=1"') < earnHtml.indexOf('src="autonomous.js?v=20260813-1"'),
   "the sponsored x402 client must load before the autonomous funding flow",
 );
 assert(source.includes('params.get("bountyContract")'));
