@@ -2054,6 +2054,8 @@ struct BaseTransactionReceiptReport {
 const RECOVERY_772_IDENTITY: &str = "agent-bounties-772-round4-expiry-v2";
 const RECOVERY_772_CONTRACT: &str = "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274";
 const RECOVERY_772_BOUNTY: &str = "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb";
+const RECOVERY_772_CODE_HASH: &str = "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1";
+const RECOVERY_772_SOLVER: &str = "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
 
 #[derive(Debug, Clone, Deserialize)]
 struct DurableRecoveryRequest {
@@ -2093,7 +2095,6 @@ fn valid_recovery_772_tuple(request: &DurableRecoveryRequest, code_hash: &str,
         && request.bounty_id.eq_ignore_ascii_case(RECOVERY_772_BOUNTY)
         && request.status == 3 && request.round == 4
         && request.solver_address.eq_ignore_ascii_case(solver)
-        && request.solver_address.to_ascii_lowercase().ends_with("c49e")
         && request.verification_expires_at == 1_786_586_903 && request.active_bond == 10_000
         && request.calldata.eq_ignore_ascii_case(calldata)
         && request.calldata.eq_ignore_ascii_case("0xf9251ec7")
@@ -10320,10 +10321,8 @@ async fn run_durable_recovery_attempt(
     require_operator(&state, &headers)?;
     if !state.base_broadcast_enabled { return Err(StatusCode::SERVICE_UNAVAILABLE); }
     let store = state.store.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let expected_code_hash = env::var("RECOVERY_772_CONTRACT_CODE_HASH").ok().and_then(non_empty_secret)
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let expected_solver = env::var("RECOVERY_772_SOLVER_ADDRESS").ok().and_then(non_empty_secret)
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let expected_code_hash = RECOVERY_772_CODE_HASH.to_string();
+    let expected_solver = RECOVERY_772_SOLVER.to_string();
     let expected_calldata = env::var("RECOVERY_772_EXPIRE_CALLDATA").ok().and_then(non_empty_secret)
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let exact = valid_recovery_772_tuple(&request, &expected_code_hash, &expected_solver, &expected_calldata);
@@ -10363,6 +10362,13 @@ async fn run_durable_recovery_attempt(
     if attempt.status != RecoveryAttemptStatus::Reserved {
         return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
             evidence_boundary: "A stored hash is not canonical expiry evidence; reconcile the receipt and exact SubmissionExpired event.".into() }));
+    }
+    // Re-observe the complete tuple after the lease transaction. No durable broadcast
+    // authority is granted if state or nonce drifted while the row was being reserved.
+    let recheck = observe_recovery_preflight(&rpc_url, RECOVERY_772_CONTRACT,
+        &authorized_signer, request_id + 100).await.map_err(|e| base_rpc_fetch_status(&e))?;
+    if !valid_live_recovery_preflight(&recheck,&expected_code_hash,&expected_solver) {
+        return Err(StatusCode::CONFLICT);
     }
     // Commit the point-of-no-return before making the one permitted raw RPC call.
     let Some(attempt) = store.mark_recovery_broadcast_started(&attempt.recovery_identity, &hash).await
@@ -10420,7 +10426,7 @@ async fn reconcile_durable_recovery_attempt(
         exact_event |= event.kind == AutonomousBountyEventKind::SubmissionExpired
             && event.bounty_id.eq_ignore_ascii_case(RECOVERY_772_BOUNTY)
             && event.data["round"] == 4 && event.data["claim_bond_refunded"] == 10_000
-            && event.data["solver"].as_str().is_some_and(|v| v.to_ascii_lowercase().ends_with("c49e"));
+            && event.data["solver"].as_str().is_some_and(|v| v.eq_ignore_ascii_case(RECOVERY_772_SOLVER));
     }
     if block == 0 { return Err(StatusCode::CONFLICT); }
     let id=request.request_id.unwrap_or(1)+20;

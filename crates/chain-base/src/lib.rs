@@ -5935,6 +5935,7 @@ pub fn decode_signed_transaction_binding(transaction: &str) -> Result<SignedTran
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryChainPreflight {
+    pub block_number: u64, pub block_hash: String,
     pub code_hash: String, pub latest_nonce: u64, pub pending_nonce: u64,
     pub status: u64, pub round: u64, pub solver: String,
     pub verification_expires_at: u64, pub active_bond: u64,
@@ -5943,29 +5944,42 @@ pub struct RecoveryChainPreflight {
 pub async fn observe_recovery_preflight(rpc_url: &str, contract: &str, relayer: &str,
     request_id: u64) -> Result<RecoveryChainPreflight, ChainBaseError> {
     let transport = ReqwestJsonRpcTransport::default();
+    observe_recovery_preflight_with_transport(rpc_url,contract,relayer,request_id,&transport).await
+}
+
+pub async fn observe_recovery_preflight_with_transport<T>(rpc_url: &str, contract: &str,
+    relayer: &str, request_id: u64, transport: &T) -> Result<RecoveryChainPreflight, ChainBaseError>
+where T: JsonRpcTransport + ?Sized {
     let contract = normalize_address(contract)?; let relayer = normalize_address(relayer)?;
-    let code_hash = fetch_account_code_hash(rpc_url, &contract, "latest", request_id, &transport).await?;
+    let block=rpc_result(transport.post_json_value(rpc_url,&json!({"jsonrpc":"2.0","id":request_id,
+        "method":"eth_getBlockByNumber","params":["latest",false]})).await?,request_id,"eth_getBlockByNumber")?;
+    let block_number=parse_rpc_quantity(block.get("number").and_then(Value::as_str)
+        .ok_or_else(||ChainBaseError::InvalidRpcResponse("preflight block number missing".into()))?)?;
+    let block_hash=normalize_hash(block.get("hash").and_then(Value::as_str)
+        .ok_or_else(||ChainBaseError::InvalidRpcResponse("preflight block hash missing".into()))?)?;
+    let block_tag=hex_quantity(block_number);
+    let code_hash = fetch_account_code_hash(rpc_url, &contract, &block_tag, request_id+1, transport).await?;
     let quantity = |value: Value, method: &str| -> Result<u64, ChainBaseError> {
         parse_rpc_quantity(value.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse(
             format!("{method} result is not a quantity")))?)
     };
-    async fn rpc_value(t:&ReqwestJsonRpcTransport,url:&str,id:u64,method:&'static str,params:Value)->Result<Value,ChainBaseError>{
+    async fn rpc_value<T:JsonRpcTransport+?Sized>(t:&T,url:&str,id:u64,method:&'static str,params:Value)->Result<Value,ChainBaseError>{
         rpc_result(t.post_json_value(url,&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).await?,id,method)
     }
-    let latest_nonce = quantity(rpc_value(&transport,rpc_url,request_id+1,"eth_getTransactionCount",json!([relayer,"latest"])).await?, "latest nonce")?;
-    let pending_nonce = quantity(rpc_value(&transport,rpc_url,request_id+2,"eth_getTransactionCount",json!([relayer,"pending"])).await?, "pending nonce")?;
-    async fn call_word(rpc_url: &str, contract: &str, signature: &str, id: u64,
-        transport: &ReqwestJsonRpcTransport) -> Result<[u8;32], ChainBaseError> {
+    let latest_nonce = quantity(rpc_value(transport,rpc_url,request_id+2,"eth_getTransactionCount",json!([relayer,&block_tag])).await?, "latest nonce")?;
+    let pending_nonce = quantity(rpc_value(transport,rpc_url,request_id+3,"eth_getTransactionCount",json!([relayer,"pending"])).await?, "pending nonce")?;
+    async fn call_word<T:JsonRpcTransport+?Sized>(rpc_url: &str, contract: &str, signature: &str, id: u64,
+        block_tag:&str, transport: &T) -> Result<[u8;32], ChainBaseError> {
         let value = rpc_result(transport.post_json_value(rpc_url, &json!({"jsonrpc":"2.0","id":id,
-            "method":"eth_call","params":[{"to":contract,"data":encode_call(signature,vec![])},"latest"]})).await?,id,"eth_call")?;
+            "method":"eth_call","params":[{"to":contract,"data":encode_call(signature,vec![])},block_tag]})).await?,id,"eth_call")?;
         parse_bytes32(value.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse("eth_call word missing".into()))?)
     }
-    let status = word_to_u64(call_word(rpc_url,&contract,"status()",request_id+3,&transport).await?,"status")?;
-    let round = word_to_u64(call_word(rpc_url,&contract,"round()",request_id+4,&transport).await?,"round")?;
-    let solver = address_from_word(call_word(rpc_url,&contract,"solver()",request_id+5,&transport).await?);
-    let verification_expires_at = word_to_u64(call_word(rpc_url,&contract,"verificationExpiresAt()",request_id+6,&transport).await?,"expiry")?;
-    let active_bond = word_to_u64(call_word(rpc_url,&contract,"activeClaimBond()",request_id+7,&transport).await?,"bond")?;
-    Ok(RecoveryChainPreflight { code_hash,latest_nonce,pending_nonce,status,round,solver,verification_expires_at,active_bond })
+    let status = word_to_u64(call_word(rpc_url,&contract,"status()",request_id+4,&block_tag,transport).await?,"status")?;
+    let round = word_to_u64(call_word(rpc_url,&contract,"round()",request_id+5,&block_tag,transport).await?,"round")?;
+    let solver = address_from_word(call_word(rpc_url,&contract,"solver()",request_id+6,&block_tag,transport).await?);
+    let verification_expires_at = word_to_u64(call_word(rpc_url,&contract,"verificationExpiresAt()",request_id+7,&block_tag,transport).await?,"expiry")?;
+    let active_bond = word_to_u64(call_word(rpc_url,&contract,"activeClaimBond()",request_id+8,&block_tag,transport).await?,"bond")?;
+    Ok(RecoveryChainPreflight { block_number,block_hash,code_hash,latest_nonce,pending_nonce,status,round,solver,verification_expires_at,active_bond })
 }
 
 pub async fn observe_word_at_block(rpc_url: &str, contract: &str, signature: &str,

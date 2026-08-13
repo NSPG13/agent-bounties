@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS recovery_attempts (
   CHECK (lower(bounty_id) = '0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb'),
   CHECK (expected_status = 3 AND expected_round = 4),
   CHECK (lower(solver_address) = '0xc49e5374f0072abc0b4c134b2fd413d87aa6354a'),
-  CHECK (contract_code_hash ~ '^0x[0-9a-f]{64}$' AND contract_code_hash <> repeat('0', 66)),
+  CHECK (lower(contract_code_hash) = '0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1'),
   CHECK (verification_expires_at = 1786586903 AND active_bond = 10000),
   CHECK (lower(calldata) = '0xf9251ec7'),
   CHECK ((status = 'reserved' AND broadcast_started_at IS NULL)

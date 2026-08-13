@@ -3517,6 +3517,20 @@ impl PostgresStore {
     ) -> DbResult<Option<Uuid>> {
         let lease_token = Uuid::new_v4();
         let lease_seconds = i64_from_u64(lease_seconds)?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('durable-recovery:agent-bounties-772-round4-expiry-v2', 0))")
+            .execute(&mut *transaction)
+            .await?;
+        let recovery_reserved: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM recovery_attempts WHERE network = $1 AND status IN ('reserved', 'broadcast'))",
+        )
+        .bind(network)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if recovery_reserved {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
         let row = sqlx::query(
             r#"
             INSERT INTO x402_relayer_leases
@@ -3533,11 +3547,13 @@ impl PostgresStore {
         .bind(network)
         .bind(lease_token)
         .bind(lease_seconds)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await?;
-        row.map(|row| row.try_get("lease_token"))
+        let result = row.map(|row| row.try_get("lease_token"))
             .transpose()
-            .map_err(Into::into)
+            .map_err(Into::into);
+        transaction.commit().await?;
+        result
     }
 
     pub async fn release_x402_relayer_lease(
@@ -8433,7 +8449,7 @@ mod tests {
         let attempt = NewRecoveryAttempt {
             recovery_identity: identity.clone(), network: "base-mainnet".into(), pending_nonce: 41,
             contract_address: "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274".into(),
-            contract_code_hash: format!("0x{}", "22".repeat(32)), bounty_id: "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb".into(),
+            contract_code_hash: "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1".into(), bounty_id: "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb".into(),
             expected_status: 3, expected_round: 4, solver_address: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(),
             verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: "0xf9251ec7".into(),
             lease_token: Uuid::new_v4(),
@@ -8457,6 +8473,8 @@ mod tests {
             .bind(attempt.lease_token).execute(&store.pool).await.unwrap();
         let reserved = store.reserve_recovery_attempt(&attempt).await.unwrap();
         assert_eq!(reserved.status, RecoveryAttemptStatus::Reserved);
+        assert!(store.acquire_x402_relayer_lease("base-mainnet",30).await.unwrap().is_none(),
+            "generic lease acquisition must remain fenced after recovery reservation");
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
             .await.unwrap().is_some());
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)
