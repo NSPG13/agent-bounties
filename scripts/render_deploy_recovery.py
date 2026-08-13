@@ -111,6 +111,7 @@ PUBLIC_ENV_SERVICE_NAMES = {
     "agent-bounties-mcp",
 }
 CLOUD_AGENT_API_SERVICE_NAME = "agent-bounties-api"
+MOONPAY_MCP_SERVICE_NAME = "agent-bounties-mcp"
 API_RUNTIME_ENVIRONMENT = {
     "AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED": "true",
     # The hosted relayer applies its own 120% padding after eth_estimateGas.
@@ -131,6 +132,12 @@ CLOUD_AGENT_RUNTIME_ENVIRONMENT = {
     "CLOUD_AGENT_MAX_OUTPUT_TOKENS": "12000",
     "CLOUD_AGENT_MAX_DAILY_DRAFTS": "50",
     "CLOUD_AGENT_TIMEOUT_SECONDS": "90",
+}
+MOONPAY_ENVIRONMENTS = {
+    "sandbox": ("sandbox", "pk_test_", "sk_test_"),
+    "test": ("sandbox", "pk_test_", "sk_test_"),
+    "live": ("live", "pk_live_", "sk_live_"),
+    "production": ("live", "pk_live_", "sk_live_"),
 }
 
 
@@ -247,6 +254,11 @@ def redact(value: str) -> str:
     value = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)([?&](?:key|token)=)[^&\s]+", r"\1[redacted]", value)
     value = re.sub(r"(?i)(render_api_key\s*[=:]\s*)[^\s,;]+", r"\1[redacted]", value)
+    value = re.sub(
+        r"(?i)\b(?:pk|sk)_(?:test|live)_[a-z0-9_-]{4,}\b",
+        "[moonpay-key-redacted]",
+        value,
+    )
     value = re.sub(r"(?i)postgres(?:ql)?://[^\s\"']+", "[database-url-redacted]", value)
     return value[:1000]
 
@@ -492,8 +504,11 @@ def deploy_only_can_reuse_current(
     *,
     open_competition_environment_changed: bool,
     operator_token_changed: bool,
+    service_environment_changed: bool = False,
 ) -> bool:
     if service_name == CLOUD_AGENT_API_SERVICE_NAME:
+        return False
+    if service_environment_changed:
         return False
     if open_competition_environment_changed:
         return False
@@ -1883,6 +1898,82 @@ def reconcile_cloud_agent_environment(
     return runtime_environment, secret_environment, changed
 
 
+def normalize_moonpay_environment(
+    *,
+    publishable_key: str | None,
+    secret_key: str | None,
+    environment: str | None,
+) -> dict[str, str]:
+    supplied_publishable_key = (
+        publishable_key.strip() if isinstance(publishable_key, str) else ""
+    )
+    supplied_secret_key = secret_key.strip() if isinstance(secret_key, str) else ""
+    supplied = [bool(supplied_publishable_key), bool(supplied_secret_key)]
+    if not any(supplied):
+        return {}
+    if not all(supplied):
+        raise RecoveryError(
+            "MoonPay checkout requires publishable and secret keys together"
+        )
+
+    requested_environment = (
+        environment.strip().lower() if isinstance(environment, str) else "sandbox"
+    )
+    normalized = MOONPAY_ENVIRONMENTS.get(requested_environment)
+    if normalized is None:
+        raise RecoveryError("MoonPay environment must be sandbox or live")
+    normalized_environment, publishable_prefix, secret_prefix = normalized
+    if not supplied_publishable_key.startswith(publishable_prefix) or not supplied_secret_key.startswith(
+        secret_prefix
+    ):
+        raise RecoveryError(
+            "MoonPay keys do not match the configured environment"
+        )
+    return {
+        "MOONPAY_ENVIRONMENT": normalized_environment,
+        "MOONPAY_PUBLISHABLE_KEY": supplied_publishable_key,
+        "MOONPAY_SECRET_KEY": supplied_secret_key,
+    }
+
+
+def reconcile_moonpay_environment(
+    client: RenderClient,
+    service: dict[str, Any],
+    *,
+    publishable_key: str | None,
+    secret_key: str | None,
+    environment: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    normalized = normalize_moonpay_environment(
+        publishable_key=publishable_key,
+        secret_key=secret_key,
+        environment=environment,
+    )
+    if not normalized:
+        return [], False
+
+    desired = (
+        ("MOONPAY_ENVIRONMENT", normalized["MOONPAY_ENVIRONMENT"], False),
+        ("MOONPAY_PUBLISHABLE_KEY", normalized["MOONPAY_PUBLISHABLE_KEY"], True),
+        ("MOONPAY_SECRET_KEY", normalized["MOONPAY_SECRET_KEY"], True),
+    )
+    evidence = []
+    changed = False
+    for key, value, secret in desired:
+        record = client.ensure_env_var(service, key, value)
+        changed |= record["changed"]
+        item = {
+            "service": service["name"],
+            "key": key,
+            "configured": True,
+            "changed": record["changed"],
+        }
+        if not secret:
+            item["value"] = value
+        evidence.append(item)
+    return evidence, changed
+
+
 def rotate_operator_token(
     client: RenderClient,
     group: dict[str, Any],
@@ -2164,6 +2255,9 @@ def deploy(
     mcp_base_url: str = "https://mcp.agentbounties.app",
     website_base_url: str = "https://agentbounties.app",
     cloud_agent_api_key: str | None = None,
+    moonpay_publishable_key: str | None = None,
+    moonpay_secret_key: str | None = None,
+    moonpay_environment: str | None = "sandbox",
     neynar_api_key: str | None = None,
     neynar_signer_uuid: str | None = None,
     neynar_bot_fid: str | None = None,
@@ -2176,6 +2270,11 @@ def deploy(
     deploy_mode = validate_deploy_mode(deploy_mode)
     if rotate_operator_api_token and deploy_mode != "deploy_only":
         raise RecoveryError("operator token rotation requires deploy_only")
+    moonpay_inputs = normalize_moonpay_environment(
+        publishable_key=moonpay_publishable_key,
+        secret_key=moonpay_secret_key,
+        environment=moonpay_environment,
+    )
     services: list[tuple[ServiceSpec, dict[str, Any]]] = []
     pending: dict[str, tuple[dict[str, Any], str]] = {}
     initial: dict[str, dict[str, Any]] = {}
@@ -2331,6 +2430,17 @@ def deploy(
         reconcile_cloud_agent_environment(client, api_service, cloud_agent_api_key)
     )
     public_environment_changed[CLOUD_AGENT_API_SERVICE_NAME] |= cloud_environment_changed
+    mcp_service = next(
+        service for spec, service in services if spec.name == MOONPAY_MCP_SERVICE_NAME
+    )
+    moonpay_evidence, moonpay_environment_changed = reconcile_moonpay_environment(
+        client,
+        mcp_service,
+        publishable_key=moonpay_inputs.get("MOONPAY_PUBLISHABLE_KEY"),
+        secret_key=moonpay_inputs.get("MOONPAY_SECRET_KEY"),
+        environment=moonpay_inputs.get("MOONPAY_ENVIRONMENT"),
+    )
+    public_environment_changed[MOONPAY_MCP_SERVICE_NAME] |= moonpay_environment_changed
     social_environment, social_environment_changed = reconcile_neynar_social_environment(
         client,
         api_service,
@@ -2372,6 +2482,9 @@ def deploy(
                     open_competition_environment_changed
                 ),
                 operator_token_changed=operator_token_changed,
+                service_environment_changed=public_environment_changed.get(
+                    spec.name, False
+                ),
             )
         ):
             created = preexisting_live[spec.name]
@@ -2502,6 +2615,7 @@ def deploy(
         "open_competition_environment": reconciled_open_competition_environment,
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
+        "moonpay_environment": moonpay_evidence,
         "social_environment": social_environment,
         "social_webhook": social_webhook,
         "cloud_readiness": cloud_readiness,
@@ -2580,6 +2694,7 @@ def main() -> int:
         "public_environment": [],
         "cloud_environment": [],
         "secret_environment": [],
+        "moonpay_environment": [],
         "social_environment": [],
         "social_webhook": {},
         "cloud_readiness": {},
@@ -2607,6 +2722,9 @@ def main() -> int:
             mcp_base_url=args.mcp_base_url,
             website_base_url=args.website_base_url,
             cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY"),
+            moonpay_publishable_key=os.environ.get("MOONPAY_PUBLISHABLE_KEY"),
+            moonpay_secret_key=os.environ.get("MOONPAY_SECRET_KEY"),
+            moonpay_environment=os.environ.get("MOONPAY_ENVIRONMENT", "sandbox"),
             neynar_api_key=os.environ.get("NEYNAR_API_KEY"),
             neynar_signer_uuid=os.environ.get("NEYNAR_SIGNER_UUID"),
             neynar_bot_fid=os.environ.get("NEYNAR_BOT_FID"),

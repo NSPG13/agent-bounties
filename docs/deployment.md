@@ -47,6 +47,15 @@ secret `CLOUD_AGENT_API_KEY` into the API service without logging it. Verify
 `GET /v1/cloud-agent/readiness`; see
 [`cloud-agent-operations.md`](cloud-agent-operations.md).
 
+MoonPay signed external checkout uses two direct `sync: false` values on
+`agent-bounties-mcp`: `MOONPAY_PUBLISHABLE_KEY` and `MOONPAY_SECRET_KEY`.
+Store both as repository Actions secrets. The exact-SHA controller installs
+them all-or-none, verifies that their test/live prefixes match the repository
+`MOONPAY_ENVIRONMENT` variable (default `sandbox`), and records only redacted
+configuration evidence. The MCP service returns a signed external MoonPay URL;
+it does not embed checkout, complete a purchase, transfer crypto, or prove
+canonical bounty funding.
+
 Farcaster mention ingestion uses five direct `sync: false` API-service values:
 `NEYNAR_API_KEY`, `NEYNAR_WEBHOOK_SECRET`, `NEYNAR_SIGNER_UUID`,
 `NEYNAR_BOT_FID`, and `NEYNAR_BOT_USERNAME`. They are all-or-none at runtime.
@@ -89,16 +98,18 @@ succeeds on a push to `main`, the workflow:
    both public services;
 8. reconciles all nonsecret cloud-agent settings on API and copies the optional
    GitHub-held model key without including its value in evidence;
-9. creates or updates the optional FID-filtered Neynar provider webhook and
+9. reconciles the optional all-or-none MoonPay key pair and environment on MCP
+   without including either key in evidence;
+10. creates or updates the optional FID-filtered Neynar provider webhook and
    reconciles its bot identity, reply signer, and generated signing secret on
    API without including their values in evidence;
-10. calls Render's deploy API with the exact commit for API, MCP, and both workers;
-11. waits for all four deploys to reach `live` and fails on terminal errors;
-12. verifies exact revision and protocol headers from API and MCP `/health`;
-13. attests cloud readiness and fails if a supplied model credential did not
+11. calls Render's deploy API with the exact commit for API, MCP, and both workers;
+12. waits for all four deploys to reach `live` and fails on terminal errors;
+13. verifies exact revision and protocol headers from API and MCP `/health`;
+14. attests cloud readiness and fails if a supplied model credential did not
     become usable;
-14. attests social mention readiness when provider values were supplied;
-15. stores a redacted 30-day deployment evidence artifact.
+15. attests social mention readiness when provider values were supplied;
+16. stores a redacted 30-day deployment evidence artifact.
 
 Configure the GitHub Actions secret `RENDER_API_KEY`. Create it in the
 Render Dashboard for the workspace that owns these four services, then store
@@ -115,6 +126,15 @@ To enable hosted bounty drafting, also configure the repository Actions secret
 only to `agent-bounties-api`, and redacted from evidence. If it is absent, the
 deployment still succeeds but `/v1/cloud-agent/readiness` remains unavailable
 and reports the missing credential explicitly; no local-model fallback runs.
+
+To enable signed MoonPay checkout, configure both repository Actions secrets
+`MOONPAY_PUBLISHABLE_KEY` and `MOONPAY_SECRET_KEY`. Keep the repository Actions
+variable `MOONPAY_ENVIRONMENT=sandbox` while using `pk_test_`/`sk_test_` keys;
+switch it to `live` only together with an approved `pk_live_`/`sk_live_` pair.
+A partial or mode-mismatched pair fails before Render is changed. Run
+`python scripts/check-moonpay-production.py --require-checkout` after the exact
+revision is live; this validates URL generation and signature boundaries but
+does not complete a purchase or establish bounty funding.
 
 To activate Farcaster ingestion, provision one approved Neynar signer owned by
 the Agent Bounties bot account. Store `NEYNAR_API_KEY` and `NEYNAR_SIGNER_UUID`
@@ -156,9 +176,9 @@ Use `deploy_only` for runtime-only configuration after capacity is available:
 
 `deploy_only` rejects a service whose current live artifact does not match the
 supplied SHA. It reuses that artifact, applies saved environment values, and
-does not build new code. It restarts only API unless a shared environment
-change requires another linked service, then requires the supplied SHA from
-`/health` and the exact leaderboard contracts from the live API. Render's
+does not build new code. It restarts API plus any service whose direct or
+shared environment changed, then requires the supplied SHA from `/health` and
+the exact leaderboard contracts from the live API. Render's
 branch label is recorded but is not artifact evidence. Render currently applies
 the workspace pipeline quota before both deployment modes, so `deploy_only` is
 not a quota bypass.
