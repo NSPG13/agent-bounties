@@ -23,6 +23,8 @@ from typing import Any
 CANDIDATE_SCHEMA = "agent-bounties/regression-candidate-v1"
 ATTESTATION_SCHEMA = "agent-bounties/regression-attestation-v1"
 MANIFEST_SCHEMA = "agent-bounties/regression-candidate-manifest-v1"
+FAILURE_SCHEMA = "agent-bounties/regression-infrastructure-failure-v1"
+PREFLIGHT_SCHEMA = "agent-bounties/regression-preflight-v1"
 ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -56,14 +58,17 @@ def normalize_address(value: object, field: str) -> str:
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=900,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise PipelineError("command exceeded the verifier time limit") from error
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:800]
         raise PipelineError(f"command failed closed: {detail}")
@@ -386,6 +391,111 @@ def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> 
     }
 
 
+def safe_job_id(job: dict[str, Any]) -> str:
+    job_id = str(job.get("job_id", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", job_id):
+        raise PipelineError("verification job id is invalid")
+    return job_id
+
+
+def classify_infrastructure_failure(error: Exception) -> tuple[str, bool, str]:
+    detail = str(error).lower()
+    classifications = (
+        (
+            "github archive exceeds the compressed input limit",
+            "source_archive_too_large",
+            False,
+            "The GitHub source archive exceeds the verifier's compressed input limit.",
+        ),
+        (
+            "github snapshot exceeds committed limits",
+            "snapshot_limit_exceeded",
+            False,
+            "A source or benchmark snapshot exceeds its immutable size or file-count limits.",
+        ),
+        (
+            "downloaded source does not match submission evidence",
+            "source_digest_mismatch",
+            False,
+            "The downloaded source does not match the submitted source snapshot digest.",
+        ),
+        (
+            "downloaded benchmark does not match immutable terms",
+            "benchmark_digest_mismatch",
+            False,
+            "The downloaded benchmark does not match the digest committed in the bounty terms.",
+        ),
+        (
+            "verification deadline",
+            "verification_deadline_unavailable",
+            False,
+            "The canonical verification deadline is no longer safe to use.",
+        ),
+        (
+            "command exceeded the verifier time limit",
+            "runner_command_timeout",
+            True,
+            "A verifier infrastructure command exceeded its operational time limit.",
+        ),
+        (
+            "command failed closed",
+            "runner_command_failed",
+            True,
+            "A verifier infrastructure command failed before a trustworthy verdict was produced.",
+        ),
+        (
+            "github archive returned http",
+            "source_archive_unavailable",
+            True,
+            "A required GitHub archive was temporarily unavailable.",
+        ),
+    )
+    for needle, code, retryable, message in classifications:
+        if needle in detail:
+            return code, retryable, message
+    return (
+        "verifier_input_or_runtime_failure",
+        False,
+        "The verifier rejected an input or runtime condition before producing a trustworthy verdict.",
+    )
+
+
+def infrastructure_failure(job: dict[str, Any], error: Exception) -> dict[str, Any]:
+    code, retryable, message = classify_infrastructure_failure(error)
+    try:
+        job_id: str | None = safe_job_id(job)
+    except PipelineError:
+        job_id = None
+    try:
+        bounty_contract: str | None = normalize_address(
+            job.get("bounty_contract"), "bounty contract"
+        )
+    except PipelineError:
+        bounty_contract = None
+    return {
+        "schema": FAILURE_SCHEMA,
+        "job_id": job_id,
+        "bounty_contract": bounty_contract,
+        "round": job.get("round") if isinstance(job.get("round"), int) else None,
+        "error_code": code,
+        "retryable": retryable,
+        "message": message,
+        "verdict_emitted": False,
+        "runner_revision": os.environ.get("GITHUB_SHA", "local"),
+    }
+
+
+def report_infrastructure_failure(record: dict[str, Any]) -> None:
+    identity = record.get("job_id") or "invalid-job-id"
+    code = record["error_code"]
+    message = record["message"]
+    print(f"::warning title=Regression verifier {code}::{identity}: {message}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+    if summary:
+        with Path(summary).open("a", encoding="utf-8") as output:
+            output.write(f"- `{identity}` — **{code}**: {message} No verdict was emitted.\n")
+
+
 def command_run(args: argparse.Namespace) -> None:
     verifiers = [normalize_address(value, "verifier") for value in args.verifier]
     if len(verifiers) not in {1, 2} or len(set(verifiers)) != len(verifiers):
@@ -394,21 +504,86 @@ def command_run(args: argparse.Namespace) -> None:
     selected = selected_jobs(jobs, verifiers, args.max_jobs)
     args.output.mkdir(parents=True, exist_ok=True)
     candidates = []
+    failures = []
     for job in selected:
-        job_id = str(job.get("job_id", ""))
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", job_id):
-            raise PipelineError("verification job id is invalid")
-        with tempfile.TemporaryDirectory(prefix="agent-bounties-regression-") as temporary:
+        try:
+            job_id = safe_job_id(job)
+            with tempfile.TemporaryDirectory(prefix="agent-bounties-regression-") as temporary:
+                candidate = run_job(
+                    args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
+                )
+            name = f"candidate-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
+            write_json(args.output / name, candidate)
+            candidates.append({"job_id": job_id, "file": name})
+        except (PipelineError, OSError, ValueError, json.JSONDecodeError) as error:
+            failure = infrastructure_failure(job, error)
+            identity = failure.get("job_id") or canonical_json(job)
+            name = f"failure-{hashlib.sha256(str(identity).encode()).hexdigest()}.json"
+            write_json(args.output / name, failure)
+            failures.append({"job_id": failure.get("job_id"), "file": name})
+            report_infrastructure_failure(failure)
+    write_json(
+        args.output / "manifest.json",
+        {
+            "schema": MANIFEST_SCHEMA,
+            "network": args.network,
+            "candidates": candidates,
+            "failures": failures,
+        },
+    )
+
+
+def preflight_job(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PipelineError("preflight input must be a JSON object")
+    if isinstance(value.get("verifier_preflight"), dict):
+        value = value["verifier_preflight"]
+    if isinstance(value.get("job"), dict):
+        value = value["job"]
+    if not isinstance(value, dict):
+        raise PipelineError("preflight input must contain one verifier job")
+    safe_job_id(value)
+    required_job_signers(value)
+    return value
+
+
+def command_preflight(args: argparse.Namespace) -> None:
+    job = preflight_job(read_json(args.input))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="agent-bounties-preflight-") as temporary:
             candidate = run_job(
                 args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
             )
-        name = f"candidate-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
-        write_json(args.output / name, candidate)
-        candidates.append({"job_id": job_id, "file": name})
+    except (PipelineError, OSError, ValueError, json.JSONDecodeError) as error:
+        failure = infrastructure_failure(job, error)
+        write_json(
+            args.output,
+            {
+                "schema": PREFLIGHT_SCHEMA,
+                "status": "infrastructure_failure",
+                "job_id": failure.get("job_id"),
+                "failure": failure,
+                "safe_to_sign": False,
+            },
+        )
+        raise PipelineError(f"preflight failed: {failure['error_code']}") from error
+    outcome = candidate.get("outcome", {})
+    passed = isinstance(outcome, dict) and outcome.get("verdict") == "passed"
     write_json(
-        args.output / "manifest.json",
-        {"schema": MANIFEST_SCHEMA, "network": args.network, "candidates": candidates},
+        args.output,
+        {
+            "schema": PREFLIGHT_SCHEMA,
+            "status": "passed" if passed else "benchmark_rejected",
+            "job_id": safe_job_id(job),
+            "outcome": outcome,
+            "safe_to_sign": passed,
+            "runner_revision": candidate["runner_revision"],
+            "boundary": "This preflight is not a verifier signature, settlement, or payment evidence.",
+        },
     )
+    if not passed:
+        raise PipelineError("preflight benchmark did not pass; do not sign or relay the submission")
 
 
 def current_job(api_base: str, network: str, verifier: str, job_id: str) -> dict[str, Any]:
@@ -608,6 +783,13 @@ def parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--output", type=Path, required=True)
     run_parser.add_argument("--max-jobs", type=int, default=5)
     run_parser.set_defaults(handler=command_run)
+
+    preflight_parser = subcommands.add_parser("preflight")
+    preflight_parser.add_argument("--input", type=Path, required=True)
+    preflight_parser.add_argument("--worker", type=Path, required=True)
+    preflight_parser.add_argument("--staging", type=Path, required=True)
+    preflight_parser.add_argument("--output", type=Path, required=True)
+    preflight_parser.set_defaults(handler=command_preflight)
 
     sign_parser = subcommands.add_parser("sign")
     sign_parser.add_argument("--api-base", default=DEFAULT_API)

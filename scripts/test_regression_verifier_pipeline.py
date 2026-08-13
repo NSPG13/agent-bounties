@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import sys
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -221,6 +223,112 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                     {"image": image, "platform": "linux/amd64"},
                     "docker",
                 )
+
+    def test_one_infrastructure_failure_does_not_block_later_jobs(self) -> None:
+        verifier = "0x" + "1" * 40
+        jobs = [
+            {
+                "job_id": name,
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": [verifier],
+                "threshold": 1,
+                "bounty_contract": "0x" + digit * 40,
+                "round": 1,
+            }
+            for name, digit in (("too-large", "2"), ("healthy", "3"))
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = SimpleNamespace(
+                verifier=[verifier],
+                api_base="https://example.test",
+                network="base-mainnet",
+                max_jobs=5,
+                output=root / "output",
+                worker=root / "worker",
+                staging=root / "staging",
+            )
+            healthy_candidate = {
+                "schema": pipeline.CANDIDATE_SCHEMA,
+                "job": jobs[1],
+                "outcome": {"verdict": "passed"},
+                "runner_revision": "test",
+            }
+            with mock.patch.object(pipeline, "verification_jobs", return_value=jobs), mock.patch.object(
+                pipeline,
+                "run_job",
+                side_effect=[
+                    pipeline.PipelineError(
+                        "GitHub archive exceeds the compressed input limit"
+                    ),
+                    healthy_candidate,
+                ],
+            ):
+                pipeline.command_run(args)
+
+            manifest = json.loads((args.output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["job_id"] for item in manifest["candidates"]], ["healthy"])
+            self.assertEqual([item["job_id"] for item in manifest["failures"]], ["too-large"])
+            failure = json.loads(
+                (args.output / manifest["failures"][0]["file"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(failure["schema"], pipeline.FAILURE_SCHEMA)
+            self.assertEqual(failure["error_code"], "source_archive_too_large")
+            self.assertFalse(failure["retryable"])
+            self.assertFalse(failure["verdict_emitted"])
+
+    def test_preflight_uses_the_same_job_runner_and_requires_a_pass(self) -> None:
+        verifier = "0x" + "1" * 40
+        job = {
+            "job_id": "preflight-job",
+            "verification_mode": "signed_quorum",
+            "eligible_verifiers": [verifier],
+            "threshold": 1,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "preparation.json"
+            input_path.write_text(
+                json.dumps({"verifier_preflight": {"job": job}}), encoding="utf-8"
+            )
+            args = SimpleNamespace(
+                input=input_path,
+                output=root / "receipt.json",
+                worker=root / "worker",
+                staging=root / "staging",
+            )
+            candidate = {
+                "schema": pipeline.CANDIDATE_SCHEMA,
+                "job": job,
+                "outcome": {"verdict": "passed", "response_hash": "0x" + "a" * 64},
+                "runner_revision": "test",
+            }
+            with mock.patch.object(pipeline, "run_job", return_value=candidate) as run_job:
+                pipeline.command_preflight(args)
+            run_job.assert_called_once()
+            receipt = json.loads(args.output.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], pipeline.PREFLIGHT_SCHEMA)
+            self.assertEqual(receipt["status"], "passed")
+            self.assertTrue(receipt["safe_to_sign"])
+
+            candidate["outcome"] = {"verdict": "failed", "response_hash": "0x" + "b" * 64}
+            with mock.patch.object(pipeline, "run_job", return_value=candidate), self.assertRaises(
+                pipeline.PipelineError
+            ):
+                pipeline.command_preflight(args)
+            receipt = json.loads(args.output.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["status"], "benchmark_rejected")
+            self.assertFalse(receipt["safe_to_sign"])
+
+    def test_runner_artifact_is_uploaded_even_after_an_unexpected_step_failure(self) -> None:
+        workflow = (
+            SCRIPT.parent.parent / ".github" / "workflows" / "regression-verifier-runner.yml"
+        ).read_text(encoding="utf-8")
+        upload = workflow.split(
+            "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            maxsplit=1,
+        )[1]
+        self.assertIn("if: always()", upload)
 
 
 if __name__ == "__main__":

@@ -900,7 +900,18 @@ pub struct AutonomousBountySubmissionPreparation {
     pub signing_payload: AutonomousBountySubmissionAuthorizationTypedData,
     pub unsigned_relay_envelope: Value,
     pub evidence_publication: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_preflight: Option<AutonomousSubmissionVerifierPreflight>,
     pub relay_issue_url: Option<String>,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutonomousSubmissionVerifierPreflight {
+    pub schema: String,
+    pub required_before_signing: bool,
+    pub job: AutonomousVerificationJob,
+    pub success_condition: String,
     pub evidence_boundary: String,
 }
 
@@ -4379,6 +4390,80 @@ pub fn build_autonomous_submission_preparation(
     let (artifact_reference, submission_hash, evidence_hash) =
         validate_submission_preimages(artifact_reference, &evidence)?;
     let bounty_contract = normalize_evm_address(&item.bounty_contract)?;
+    let verifier_preflight = if terms
+        .document
+        .benchmark
+        .get("engine")
+        .and_then(Value::as_str)
+        == Some(STANDING_META_V2_REGRESSION_ENGINE)
+    {
+        let verification_window_seconds = terms
+            .document
+            .contract_terms
+            .as_object()
+            .ok_or_else(|| {
+                ChainBaseError::InvalidSubmissionPreparation(
+                    "published contract terms are unavailable".to_string(),
+                )
+            })
+            .and_then(|terms| {
+                contract_terms_u64(terms, "verification_window_seconds").map_err(|error| {
+                    ChainBaseError::InvalidSubmissionPreparation(error.to_string())
+                })
+            })?;
+        let verification_expires_at = observed_at_unix
+            .checked_add(verification_window_seconds)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidSubmissionPreparation(
+                    "provisional verification deadline overflowed".to_string(),
+                )
+            })?;
+        let observed_at_timestamp = i64::try_from(observed_at_unix).map_err(|_| {
+            ChainBaseError::InvalidSubmissionPreparation(
+                "preflight observation time is outside the supported range".to_string(),
+            )
+        })?;
+        let evidence_created_at = DateTime::<Utc>::from_timestamp(observed_at_timestamp, 0)
+            .ok_or_else(|| {
+                ChainBaseError::InvalidSubmissionPreparation(
+                    "preflight observation time is outside the supported range".to_string(),
+                )
+            })?;
+        let provisional_evidence = AutonomousSubmissionEvidenceRecord {
+            network: network.to_string(),
+            bounty_contract: bounty_contract.clone(),
+            bounty_id: item.bounty_id.clone(),
+            round,
+            solver_wallet: solver.clone(),
+            artifact_reference: artifact_reference.clone(),
+            artifact_hash: submission_hash.clone(),
+            evidence: evidence.clone(),
+            evidence_hash: evidence_hash.clone(),
+            created_at: evidence_created_at,
+        };
+        let provisional_job = build_autonomous_verification_job(
+            network,
+            item,
+            terms.clone(),
+            provisional_evidence,
+            round,
+            solver.clone(),
+            verification_expires_at,
+        )?;
+        Some(AutonomousSubmissionVerifierPreflight {
+            schema: "agent-bounties/regression-preflight-request-v1".to_string(),
+            required_before_signing: true,
+            job: provisional_job,
+            success_condition:
+                "Run this exact job through the committed sandbox. Sign only when the receipt has schema agent-bounties/regression-preflight-v1, status passed, and safe_to_sign true."
+                    .to_string(),
+            evidence_boundary:
+                "This provisional run checks source ingestibility and the immutable benchmark before SubmissionAdded starts the on-chain verification clock. It is not a verifier signature, settlement, or payment evidence."
+                    .to_string(),
+        })
+    } else {
+        None
+    };
     let authorization_request = AutonomousBountySubmissionAuthorizationRequest {
         bounty_contract: bounty_contract.clone(),
         bounty_id: item.bounty_id.clone(),
@@ -4417,6 +4502,11 @@ pub fn build_autonomous_submission_preparation(
         .source_url
         .clone()
         .filter(|url| url.starts_with("https://github.com/") && url.contains("/issues/"));
+    let evidence_boundary = if verifier_preflight.is_some() {
+        "This preparation validates one indexed active claim and computes deterministic public commitments. Run verifier_preflight and require safe_to_sign=true before signing. The preparation and preflight do not sign, broadcast, submit, publish evidence, verify, settle, or prove payment. Add the solver's EIP-712 signature to the relay envelope only after preflight passes, wait for confirmed canonical SubmissionAdded, then publish the returned evidence preimages. Only BountySettled proves payout."
+    } else {
+        "This preparation validates one indexed active claim and computes deterministic public commitments. It does not sign, broadcast, submit, publish evidence, verify, settle, or prove payment. Add the solver's EIP-712 signature to the relay envelope, wait for confirmed canonical SubmissionAdded, then publish the returned evidence preimages. Only BountySettled proves payout."
+    };
     Ok(AutonomousBountySubmissionPreparation {
         protocol_version: "agent-bounties/autonomous-v1".to_string(),
         network: network_descriptor,
@@ -4436,8 +4526,9 @@ pub fn build_autonomous_submission_preparation(
         signing_payload,
         unsigned_relay_envelope,
         evidence_publication,
+        verifier_preflight,
         relay_issue_url,
-        evidence_boundary: "This preparation validates one indexed active claim and computes deterministic public commitments. It does not sign, broadcast, submit, publish evidence, verify, settle, or prove payment. Add the solver's EIP-712 signature to the relay envelope, wait for confirmed canonical SubmissionAdded, then publish the returned evidence preimages. Only BountySettled proves payout.".to_string(),
+        evidence_boundary: evidence_boundary.to_string(),
     })
 }
 
@@ -4536,6 +4627,106 @@ pub fn build_autonomous_submission_evidence_record(
     })
 }
 
+fn build_autonomous_verification_job(
+    network: &str,
+    item: &AutonomousBountyFeedItem,
+    terms: AutonomousBountyTermsRecord,
+    evidence: AutonomousSubmissionEvidenceRecord,
+    round: u64,
+    solver_wallet: String,
+    verification_expires_at: u64,
+) -> Result<AutonomousVerificationJob, ChainBaseError> {
+    let policy = terms
+        .document
+        .verification_policy
+        .as_object()
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument("verification policy is not an object".to_string())
+        })?;
+    let verification_mode = policy
+        .get("mechanism")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "verification mechanism is unavailable".to_string(),
+            )
+        })?
+        .to_string();
+    let threshold = policy
+        .get("threshold")
+        .and_then(Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| {
+            ChainBaseError::InvalidTermsDocument(
+                "verification threshold is unavailable".to_string(),
+            )
+        })?;
+    let eligible_verifiers = policy
+        .get("verifiers")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| {
+                    ChainBaseError::InvalidTermsDocument(
+                        "eligible verifier is not an address".to_string(),
+                    )
+                })
+                .and_then(normalize_address)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let verifier_module = policy
+        .get("verifier_module")
+        .and_then(Value::as_str)
+        .filter(|value| !value.eq_ignore_ascii_case("0x0000000000000000000000000000000000000000"))
+        .map(normalize_address)
+        .transpose()?;
+    let solver_reward = item
+        .solver_reward
+        .parse::<u128>()
+        .map_err(|_| ChainBaseError::InvalidLogData("feed solver reward is invalid".to_string()))?;
+    let timeout_bonus = item.timeout_bond_pool.parse::<u128>().map_err(|_| {
+        ChainBaseError::InvalidLogData("feed timeout bond pool is invalid".to_string())
+    })?;
+    let required_action = if verification_mode == "deterministic_module" {
+        "Evaluate the committed module proof format, then relay verifyAndSettle. A valid pass settles and a valid fail pays the verifier and reopens the bounty."
+    } else {
+        "Evaluate only the immutable policy and exact evidence preimages, request the scoped EIP-712 attestation payload, sign one verdict, and relay a matching threshold quorum."
+    };
+    Ok(AutonomousVerificationJob {
+        job_id: format!(
+            "{}:{}:{}",
+            network,
+            item.bounty_contract.to_ascii_lowercase(),
+            round
+        ),
+        network: network.to_string(),
+        bounty_id: item.bounty_id.clone(),
+        bounty_contract: item.bounty_contract.clone(),
+        round,
+        solver_wallet,
+        verification_mode,
+        verifier_module,
+        eligible_verifiers,
+        threshold,
+        verifier_reward: item.verifier_reward.clone(),
+        current_solver_payout: solver_reward
+            .checked_add(timeout_bonus)
+            .ok_or(ChainBaseError::InvalidAmount)?
+            .to_string(),
+        verification_expires_at,
+        terms,
+        submission_evidence: evidence,
+        required_action: required_action.to_string(),
+        payout_boundary:
+            "A verdict, signature, relay hash, or AI output is not payout evidence. Only confirmed canonical BountySettled proves payment."
+                .to_string(),
+    })
+}
+
 pub fn build_autonomous_verification_jobs(
     network: &str,
     feed: impl IntoIterator<Item = AutonomousBountyFeedItem>,
@@ -4613,98 +4804,15 @@ pub fn build_autonomous_verification_jobs(
                 "stored evidence no longer matches the current indexed submission".to_string(),
             ));
         }
-        let policy = terms
-            .document
-            .verification_policy
-            .as_object()
-            .ok_or_else(|| {
-                ChainBaseError::InvalidTermsDocument(
-                    "verification policy is not an object".to_string(),
-                )
-            })?;
-        let verification_mode = policy
-            .get("mechanism")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                ChainBaseError::InvalidTermsDocument(
-                    "verification mechanism is unavailable".to_string(),
-                )
-            })?
-            .to_string();
-        let threshold = policy
-            .get("threshold")
-            .and_then(Value::as_u64)
-            .and_then(|value| u8::try_from(value).ok())
-            .ok_or_else(|| {
-                ChainBaseError::InvalidTermsDocument(
-                    "verification threshold is unavailable".to_string(),
-                )
-            })?;
-        let eligible_verifiers = policy
-            .get("verifiers")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .ok_or_else(|| {
-                        ChainBaseError::InvalidTermsDocument(
-                            "eligible verifier is not an address".to_string(),
-                        )
-                    })
-                    .and_then(normalize_address)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let verifier_module = policy
-            .get("verifier_module")
-            .and_then(Value::as_str)
-            .filter(|value| {
-                !value.eq_ignore_ascii_case("0x0000000000000000000000000000000000000000")
-            })
-            .map(normalize_address)
-            .transpose()?;
-        let solver_reward = item.solver_reward.parse::<u128>().map_err(|_| {
-            ChainBaseError::InvalidLogData("feed solver reward is invalid".to_string())
-        })?;
-        let timeout_bonus = item.timeout_bond_pool.parse::<u128>().map_err(|_| {
-            ChainBaseError::InvalidLogData("feed timeout bond pool is invalid".to_string())
-        })?;
-        let required_action = if verification_mode == "deterministic_module" {
-            "Evaluate the committed module proof format, then relay verifyAndSettle. A valid pass settles and a valid fail pays the verifier and reopens the bounty."
-        } else {
-            "Evaluate only the immutable policy and exact evidence preimages, request the scoped EIP-712 attestation payload, sign one verdict, and relay a matching threshold quorum."
-        };
-        jobs.push(AutonomousVerificationJob {
-            job_id: format!(
-                "{}:{}:{}",
-                network,
-                item.bounty_contract.to_ascii_lowercase(),
-                round
-            ),
-            network: network.to_string(),
-            bounty_id: item.bounty_id,
-            bounty_contract: item.bounty_contract,
+        jobs.push(build_autonomous_verification_job(
+            network,
+            &item,
+            terms,
+            evidence,
             round,
             solver_wallet,
-            verification_mode,
-            verifier_module,
-            eligible_verifiers,
-            threshold,
-            verifier_reward: item.verifier_reward,
-            current_solver_payout: solver_reward
-                .checked_add(timeout_bonus)
-                .ok_or(ChainBaseError::InvalidAmount)?
-                .to_string(),
             verification_expires_at,
-            terms,
-            submission_evidence: evidence,
-            required_action: required_action.to_string(),
-            payout_boundary:
-                "A verdict, signature, relay hash, or AI output is not payout evidence. Only confirmed canonical BountySettled proves payment."
-                    .to_string(),
-        });
+        )?);
     }
     jobs.sort_by_key(|job| (job.verification_expires_at, job.job_id.clone()));
     Ok(jobs)
@@ -8768,10 +8876,63 @@ mod tests {
         assert_eq!(prepared.unsigned_relay_envelope["signature"], Value::Null);
         assert_eq!(prepared.unsigned_relay_envelope["round"], 2);
         assert_eq!(prepared.evidence_publication["evidence"], evidence);
+        assert!(prepared.verifier_preflight.is_none());
         assert_eq!(
             prepared.relay_issue_url.as_deref(),
             Some("https://github.com/NSPG13/agent-bounties/issues/244")
         );
+    }
+
+    #[test]
+    fn sandboxed_regression_submission_preparation_includes_exact_preflight_job() {
+        let mut item = claimed_submission_fixture(5_000);
+        let verifier = "0x8888888888888888888888888888888888888888";
+        let terms = item.terms.as_mut().unwrap();
+        terms.document.contract_terms = json!({"verification_window_seconds": 1_800});
+        terms.document.benchmark = json!({"engine": STANDING_META_V2_REGRESSION_ENGINE});
+        terms.document.verification_policy = json!({
+            "mechanism": "signed_quorum",
+            "threshold": 1,
+            "verifiers": [verifier]
+        });
+        item.verification_mode = "signed_quorum".to_string();
+        item.verifier_module = None;
+        item.verifier_set_hash = Some(format!("0x{}", "44".repeat(32)));
+        item.runner_identifier = Some(STANDING_META_V2_REGRESSION_ENGINE.to_string());
+        let planner = AutonomousBountyTxPlanner::new(
+            "0x6666666666666666666666666666666666666666",
+            "0x7777777777777777777777777777777777777777",
+        )
+        .unwrap();
+
+        let prepared = build_autonomous_submission_preparation(
+            &planner,
+            "base-mainnet",
+            &item,
+            "0x3333333333333333333333333333333333333333",
+            &format!("https://github.com/owner/repo/commit/{}", "ab".repeat(20)),
+            json!({"source_snapshot_digest": format!("sha256:{}", "cd".repeat(32))}),
+            1_000,
+        )
+        .unwrap();
+
+        let preflight = prepared.verifier_preflight.as_ref().unwrap();
+        assert!(preflight.required_before_signing);
+        assert_eq!(
+            preflight.schema,
+            "agent-bounties/regression-preflight-request-v1"
+        );
+        assert_eq!(preflight.job.round, 2);
+        assert_eq!(preflight.job.verification_expires_at, 2_800);
+        assert_eq!(
+            preflight.job.submission_evidence.artifact_hash,
+            prepared.submission_hash
+        );
+        assert_eq!(
+            preflight.job.submission_evidence.evidence_hash,
+            prepared.evidence_hash
+        );
+        assert_eq!(preflight.job.eligible_verifiers, vec![verifier]);
     }
 
     #[test]

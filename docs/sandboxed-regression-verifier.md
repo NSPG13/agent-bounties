@@ -18,6 +18,10 @@ Implemented and enabled for the precommitted Base-mainnet verifier set:
 - pass/fail candidates only for completed ordinary exits;
 - no verdict on timeout, output overflow, resource kill, input mismatch, or
   runtime failure;
+- an exact pre-submission sandbox preflight, returned by submission
+  preparation, that must pass before a cooperative client signs;
+- per-job infrastructure-failure records so one invalid input does not prevent
+  later jobs in the same scheduled batch from running;
 - a scheduled no-secrets GitHub runner that emits candidates only;
 - isolated signing jobs that re-fetch current state before signing;
 - a separate keeper relay that revalidates the exact committed verifier set
@@ -77,6 +81,43 @@ The benchmark commits the full runner manifest:
 Shell entrypoints and mutable image tags are invalid. Submission evidence must
 contain `source_snapshot_digest` using the same directory-digest algorithm as
 the worker.
+
+## Before Submission
+
+`prepare_autonomous_bounty_submission` returns a
+`verifier_preflight.job` for sandboxed-regression bounties. Save the complete
+preparation response and run the exact job through the same download, staging,
+digest-validation, image, and worker path used by the hosted verifier:
+
+```powershell
+python scripts/regression_verifier_pipeline.py preflight `
+  --input path\to\submission-preparation.json `
+  --worker target\release\worker.exe `
+  --staging target\regression-preflight-staging `
+  --output target\regression-preflight-receipt.json
+```
+
+Do not sign or relay unless the command succeeds and the receipt contains
+`schema=agent-bounties/regression-preflight-v1`, `status=passed`, and
+`safe_to_sign=true`. Infrastructure failures and ordinary benchmark failures
+both fail closed. The receipt is advisory in autonomous-v1 and cannot be reused
+as a verifier attestation, settlement, or payment evidence.
+
+The exact preventive contract boundary for a future protocol version is a
+short-lived hosted preflight receipt committed into the submission
+authorization. That would make skipping preflight impossible, but it requires
+a new signed message/contract version rather than an unsafe reinterpretation
+of existing immutable bounties.
+
+## Scheduled Failure Isolation
+
+The no-secrets runner catches input and infrastructure failures per job, writes
+one `agent-bounties/regression-infrastructure-failure-v1` record with
+`verdict_emitted=false`, adds it to `manifest.json`, and continues with the next
+eligible job. GitHub Actions receives a warning and step-summary entry. The
+artifact upload runs with `if: always()` so partial diagnostics survive an
+unexpected workflow failure. A failed job never becomes a pass/fail candidate
+and the signing workflows consume only the manifest's `candidates` list.
 
 ## Local Rehearsal
 
