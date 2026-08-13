@@ -211,6 +211,29 @@ body.guild-interior .cancel-hero h1 {
   display: none !important;
 }
 
+.claim-wallet-stack {
+  display: grid;
+  align-items: start;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.claim-wallet-stack .wallet-picker {
+  width: 100%;
+  max-width: none;
+}
+
+.claim-wallet-stack > .button {
+  justify-self: start;
+  margin: 0;
+}
+
+.claim-wallet-stack .compact-output,
+.claim-wallet-stack .legal-consent {
+  width: 100%;
+  margin: 0;
+}
+
 .post-workflow {
   max-width: 1120px;
   margin: 0 auto;
