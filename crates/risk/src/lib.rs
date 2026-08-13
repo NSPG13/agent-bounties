@@ -60,6 +60,113 @@ pub struct PayoutRiskInput {
     pub amount: Money,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyEvidenceChecklist {
+    pub submission: Vec<String>,
+    pub verification: Vec<String>,
+    pub payment: Vec<String>,
+    pub rejection_rules: Vec<String>,
+}
+
+impl Default for DirectBountyEvidenceChecklist {
+    fn default() -> Self {
+        Self {
+            submission: vec![
+                "exact source repository HTTPS URL".to_string(),
+                "exact source commit SHA".to_string(),
+                "repository subdirectory, or . when the repository root is the artifact"
+                    .to_string(),
+                "pull request HTTPS URL".to_string(),
+                "immutable HTTPS artifact URL".to_string(),
+                "artifact SHA-256 digest".to_string(),
+            ],
+            verification: vec![
+                "check-run HTTPS URLs for the benchmark or CI runs used by the verifier"
+                    .to_string(),
+                "artifact digest that the verifier evaluated".to_string(),
+            ],
+            payment: vec![
+                "canonical BountySettled event URL or transaction reference".to_string(),
+                "submission, verification, PR, and test evidence are not payment evidence"
+                    .to_string(),
+            ],
+            rejection_rules: vec![
+                "empty evidence fields are rejected".to_string(),
+                "non-HTTPS repository, pull request, check-run, artifact, or settlement references are rejected".to_string(),
+                "mutable artifact references such as branch, latest, raw main, or unpinned download URLs are rejected".to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyEvidence {
+    pub repository_url: String,
+    pub source_commit: String,
+    pub subdirectory: String,
+    pub pull_request_url: String,
+    pub check_run_urls: Vec<String>,
+    pub artifact_url: String,
+    pub artifact_sha256: String,
+    pub bounty_settled_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyEvidenceReport {
+    pub checklist: DirectBountyEvidenceChecklist,
+    pub accepted: bool,
+    pub errors: Vec<String>,
+    pub evidence_boundary: String,
+}
+
+pub fn direct_bounty_evidence_checklist() -> DirectBountyEvidenceChecklist {
+    DirectBountyEvidenceChecklist::default()
+}
+
+pub fn validate_direct_bounty_evidence(
+    evidence: &DirectBountyEvidence,
+) -> DirectBountyEvidenceReport {
+    let mut errors = Vec::new();
+
+    require_non_empty(&mut errors, "repository_url", &evidence.repository_url);
+    require_non_empty(&mut errors, "source_commit", &evidence.source_commit);
+    require_non_empty(&mut errors, "subdirectory", &evidence.subdirectory);
+    require_non_empty(&mut errors, "pull_request_url", &evidence.pull_request_url);
+    require_non_empty(&mut errors, "artifact_url", &evidence.artifact_url);
+    require_non_empty(&mut errors, "artifact_sha256", &evidence.artifact_sha256);
+    require_non_empty(&mut errors, "bounty_settled_url", &evidence.bounty_settled_url);
+
+    require_https(&mut errors, "repository_url", &evidence.repository_url);
+    require_https(&mut errors, "pull_request_url", &evidence.pull_request_url);
+    require_https(&mut errors, "artifact_url", &evidence.artifact_url);
+    require_https(&mut errors, "bounty_settled_url", &evidence.bounty_settled_url);
+
+    if evidence.check_run_urls.is_empty() {
+        errors.push("check_run_urls must contain at least one HTTPS check-run URL".to_string());
+    }
+    for (index, url) in evidence.check_run_urls.iter().enumerate() {
+        require_non_empty(&mut errors, &format!("check_run_urls[{index}]"), url);
+        require_https(&mut errors, &format!("check_run_urls[{index}]"), url);
+    }
+
+    if !is_hex_sha(&evidence.source_commit, 40) {
+        errors.push("source_commit must be a full 40-character hexadecimal commit SHA".to_string());
+    }
+    if !is_hex_sha(&evidence.artifact_sha256, 64) {
+        errors.push("artifact_sha256 must be a 64-character hexadecimal SHA-256 digest".to_string());
+    }
+    if is_mutable_artifact_reference(&evidence.artifact_url) {
+        errors.push("artifact_url must be immutable and pinned, not a branch/latest/raw-main reference".to_string());
+    }
+
+    DirectBountyEvidenceReport {
+        checklist: DirectBountyEvidenceChecklist::default(),
+        accepted: errors.is_empty(),
+        errors,
+        evidence_boundary: "Submission, verification, and payment evidence are separate. Only canonical BountySettled proves payment.".to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RiskPolicy {
     pub low_value_usdc_cap_minor: i64,
@@ -253,6 +360,34 @@ impl RiskPolicy {
     }
 }
 
+fn require_non_empty(errors: &mut Vec<String>, field: &str, value: &str) {
+    if value.trim().is_empty() {
+        errors.push(format!("{field} must not be empty"));
+    }
+}
+
+fn require_https(errors: &mut Vec<String>, field: &str, value: &str) {
+    if !value.starts_with("https://") {
+        errors.push(format!("{field} must be an HTTPS URL"));
+    }
+}
+
+fn is_hex_sha(value: &str, expected_len: usize) -> bool {
+    value.len() == expected_len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_mutable_artifact_reference(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("/latest")
+        || lower.contains("?latest")
+        || lower.contains("/raw/main/")
+        || lower.contains("/raw/master/")
+        || lower.contains("/main/")
+        || lower.contains("/master/")
+        || lower.ends_with("/main")
+        || lower.ends_with("/master")
+}
+
 fn strongest(left: RiskAction, right: RiskAction) -> RiskAction {
     match (left, right) {
         (RiskAction::Block, _) | (_, RiskAction::Block) => RiskAction::Block,
@@ -309,5 +444,99 @@ mod tests {
             .blocked_rules
             .iter()
             .any(|rule| rule.contains("active claim")));
+    }
+
+    #[test]
+    fn direct_bounty_evidence_accepts_complete_pinned_https_record() {
+        let report = validate_direct_bounty_evidence(&DirectBountyEvidence {
+            repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subdirectory: "crates/risk".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686"
+                .to_string(),
+            check_run_urls: vec![
+                "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789"
+                    .to_string(),
+            ],
+            artifact_url:
+                "https://github.com/agent-bounties/agent-bounties/releases/download/evidence-686/report.json"
+                    .to_string(),
+            artifact_sha256:
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            bounty_settled_url:
+                "https://basescan.org/tx/0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+        });
+
+        assert!(report.accepted, "{:?}", report.errors);
+        assert!(report.errors.is_empty());
+        assert!(report
+            .checklist
+            .payment
+            .iter()
+            .any(|item| item.contains("BountySettled")));
+        assert!(report.evidence_boundary.contains("Only canonical BountySettled"));
+    }
+
+    #[test]
+    fn direct_bounty_evidence_rejects_missing_and_malformed_fields() {
+        let report = validate_direct_bounty_evidence(&DirectBountyEvidence {
+            repository_url: "".to_string(),
+            source_commit: "abc".to_string(),
+            subdirectory: "".to_string(),
+            pull_request_url: "http://github.com/example/repo/pull/1".to_string(),
+            check_run_urls: vec!["".to_string()],
+            artifact_url: "https://example.com/artifacts/latest/report.json".to_string(),
+            artifact_sha256: "not-a-digest".to_string(),
+            bounty_settled_url: "ipfs://settled".to_string(),
+        });
+
+        assert!(!report.accepted);
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("repository_url must not be empty")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("source_commit must be a full")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("pull_request_url must be an HTTPS URL")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("artifact_url must be immutable")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("bounty_settled_url must be an HTTPS URL")));
+    }
+
+    #[test]
+    fn direct_bounty_evidence_requires_check_run_urls() {
+        let report = validate_direct_bounty_evidence(&DirectBountyEvidence {
+            repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subdirectory: ".".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686"
+                .to_string(),
+            check_run_urls: Vec::new(),
+            artifact_url:
+                "https://github.com/agent-bounties/agent-bounties/releases/download/evidence-686/report.json"
+                    .to_string(),
+            artifact_sha256:
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            bounty_settled_url:
+                "https://basescan.org/tx/0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
+        });
+
+        assert!(!report.accepted);
+        assert!(report
+            .errors
+            .iter()
+            .any(|error| error.contains("check_run_urls must contain at least one")));
     }
 }
