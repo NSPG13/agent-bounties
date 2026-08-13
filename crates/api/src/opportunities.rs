@@ -222,6 +222,21 @@ pub struct OpportunitySourceStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct InventoryStateBreakdownV1 {
+    pub ready_to_earn: usize,
+    pub in_progress: usize,
+    pub submitted: usize,
+    pub paid: usize,
+    pub verification_unavailable: usize,
+    pub total: usize,
+    pub generated_at: String,
+    pub source: String,
+    pub source_degraded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safe_block: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct OpportunityProjectionResponse {
     pub schema_version: String,
     pub generated_at: String,
@@ -231,6 +246,12 @@ pub struct OpportunityProjectionResponse {
     pub source_statuses: Vec<OpportunitySourceStatus>,
     pub items: Vec<OpportunityItem>,
     pub evidence_boundary: String,
+    /// Canonical inventory-state-breakdown-v1 derived from one accepted snapshot.
+    #[serde(
+        rename = "inventory-state-breakdown-v1",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub inventory_state_breakdown: Option<InventoryStateBreakdownV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1202,6 +1223,71 @@ fn json_u64(value: &Value, field: &str) -> Result<u64, String> {
         .map_err(|_| format!("open-competition event field {field} is out of range"))
 }
 
+
+/// Project one accepted opportunity snapshot into inventory-state-breakdown-v1.
+/// Counts use production work_state/payment_state fields; ready_to_earn matches the
+/// strict ready_to_earn view without mutating discovery factors.
+pub fn inventory_state_breakdown_v1(
+    items: &[OpportunityItem],
+    generated_at: &str,
+    degraded: bool,
+    safe_block: Option<u64>,
+) -> InventoryStateBreakdownV1 {
+    let mut in_progress = 0usize;
+    let mut submitted = 0usize;
+    let mut paid = 0usize;
+    let mut verification_unavailable = 0usize;
+    let mut ready_to_earn = 0usize;
+
+    for item in items {
+        if item.source_type != "canonical_base" {
+            continue;
+        }
+        if is_ready_to_earn_item(item) {
+            ready_to_earn += 1;
+        }
+        match item.work_state.as_str() {
+            "in_progress" | "claimed" => in_progress += 1,
+            "submitted" => submitted += 1,
+            "completed" if item.payment_state == "paid" => paid += 1,
+            _ => {}
+        }
+        if item.work_state == "claimable" && !item.verification_ready {
+            verification_unavailable += 1;
+        }
+    }
+
+    let total = ready_to_earn + in_progress + submitted + paid + verification_unavailable;
+    InventoryStateBreakdownV1 {
+        ready_to_earn,
+        in_progress,
+        submitted,
+        paid,
+        verification_unavailable,
+        total,
+        generated_at: generated_at.to_string(),
+        source: if degraded {
+            "degraded-on-chain-feed".to_string()
+        } else {
+            "canonical".to_string()
+        },
+        source_degraded: degraded,
+        safe_block,
+    }
+}
+
+fn is_ready_to_earn_item(item: &OpportunityItem) -> bool {
+    item.work_state == "claimable"
+        && item.payment_state == "escrowed"
+        && item.payment_committed
+        && item.verification_ready
+        && (item.source_type != "canonical_base"
+            || item
+                .cash_economics
+                .as_ref()
+                .is_some_and(|economics| economics.gross_cash_margin_positive))
+}
+
 pub fn apply_query(
     mut items: Vec<OpportunityItem>,
     query: &OpportunityQuery,
@@ -2048,6 +2134,7 @@ mod tests {
             source_statuses: Vec::new(),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
+            inventory_state_breakdown: None,
         };
 
         let feeds = render_opportunity_feeds(&projection, "https://api.example/");
@@ -2085,6 +2172,7 @@ mod tests {
             source_statuses: Vec::new(),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
+            inventory_state_breakdown: None,
         };
 
         let feeds = render_opportunity_feeds(&projection, "https://api.example/");

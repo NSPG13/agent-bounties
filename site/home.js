@@ -552,6 +552,66 @@
     return latest && safePublicUrl((latest.proof_urls || [])[0] || latest.public_url);
   }
 
+  /**
+   * Prefer the production API inventory-state-breakdown-v1 on the projection.
+   * Fallback recomputes only if the server field is absent (older API).
+   * Strict ready_to_earn board filtering remains in isReadyToEarn / readyProjection.
+   */
+  function inventoryStateBreakdown(projection, readyProjection, claim) {
+    const serverBody = projection && projection["inventory-state-breakdown-v1"];
+    if (serverBody && typeof serverBody === "object") {
+      // Board still uses readyProjection for claimability; surface ready count from
+      // the ready view so the hero cannot diverge from rendered ready cards.
+      const readyItems = readyProjection.items || [];
+      return {
+        "inventory-state-breakdown-v1": {
+          ready_to_earn: readyItems.length,
+          in_progress: Number(serverBody.in_progress) || 0,
+          submitted: Number(serverBody.submitted) || 0,
+          paid: Number(serverBody.paid) || 0,
+          verification_unavailable: Number(serverBody.verification_unavailable) || 0,
+          total: serverBody.total,
+          generated_at: serverBody.generated_at || claim.generated_at || projection.generated_at || null,
+          source: serverBody.source || (projection.degraded ? "degraded-on-chain-feed" : "canonical"),
+          source_degraded: Boolean(serverBody.source_degraded || projection.degraded),
+          safe_block: serverBody.safe_block != null ? serverBody.safe_block : (projection.safe_block || claim.safe_block || null),
+        },
+      };
+    }
+    const items = projection.items || [];
+    const readyItems = readyProjection.items || [];
+    let inProgress = 0;
+    let submitted = 0;
+    let paid = 0;
+    let verificationUnavailable = 0;
+    for (const item of items) {
+      if (!item || item.source_type !== "canonical_base") continue;
+      const work = item.work_state;
+      if (work === "in_progress" || work === "claimed") inProgress += 1;
+      else if (work === "submitted") submitted += 1;
+      else if (work === "completed" && item.payment_state === "paid") paid += 1;
+      if (item.work_state === "claimable" && item.verification_ready === false) {
+        verificationUnavailable += 1;
+      }
+    }
+    const sourceStatuses = projection.source_statuses || [];
+    const sourceDegraded = Boolean(projection.degraded)
+      || sourceStatuses.some((source) => source && source.available === false);
+    return {
+      "inventory-state-breakdown-v1": {
+        ready_to_earn: readyItems.length,
+        in_progress: inProgress,
+        submitted,
+        paid,
+        verification_unavailable: verificationUnavailable,
+        generated_at: claim.generated_at || projection.generated_at || null,
+        source: sourceDegraded ? "degraded-on-chain-feed" : "canonical",
+        source_degraded: sourceDegraded,
+        safe_block: projection.safe_block || claim.safe_block || null,
+      },
+    };
+  }
+
   function renderMarketSnapshot(protocol, projection, readyProjection, claim) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
@@ -564,6 +624,9 @@
       || readyItems.some((item) => !isReadyToEarn(item))) {
       throw new Error("Live earning inventory failed its claimability gate.");
     }
+    const breakdown = inventoryStateBreakdown(projection, readyProjection, claim);
+    const breakdownBody = breakdown["inventory-state-breakdown-v1"];
+    marketState.inventoryStateBreakdown = breakdown;
     const referenceAt = new Date(claim.generated_at || projection.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
     const paidItems = items.filter((item) => item.source_type === "canonical_base"
@@ -596,7 +659,7 @@
     renderOpportunityBoard(container, readyItems);
 
     if (heroSummary) {
-      heroSummary.textContent = `${readyItems.length} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC settled · ${settlements} bounties settled`;
+      heroSummary.textContent = `${breakdownBody.ready_to_earn} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC settled · ${settlements} bounties settled`;
     }
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;
@@ -605,9 +668,10 @@
       .map((source) => source.source_type);
     const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
     if (detail) {
+      const counts = `ready ${breakdownBody.ready_to_earn} · in progress ${breakdownBody.in_progress} · submitted ${breakdownBody.submitted} · paid ${breakdownBody.paid} · verification unavailable ${breakdownBody.verification_unavailable}`;
       detail.textContent = unavailable.length
-        ? `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
-        : `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream`;
+        ? `${protocolStatus} · ${counts} · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
+        : `${protocolStatus} · ${counts} · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream`;
     }
 
     const proofUrl = newestPaidProof(paidItems);
