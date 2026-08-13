@@ -549,23 +549,27 @@ pub(super) async fn mcp_post(
     Json(payload): Json<Value>,
 ) -> Response {
     let era = mcp_protocol_era(&headers, &payload);
-    let response = handle_mcp_post(state.clone(), headers, payload, era).await;
-    if let Some(store) = state.store.clone() {
-        let succeeded = response.status().is_success();
-        let protocol_era = match era {
-            McpProtocolEra::Legacy => ObservedProtocolEra::McpLegacy,
-            McpProtocolEra::Modern => ObservedProtocolEra::McpModern,
-        };
-        tokio::spawn(async move {
-            let _ = store
-                .record_interface_usage(
-                    ObservedInterface::Mcp,
-                    protocol_era,
-                    succeeded,
-                    chrono::Utc::now(),
-                )
-                .await;
-        });
+    let excluded = super::analytics_exclusion_is_authorized(&state, &headers);
+    let mut response = handle_mcp_post(state.clone(), headers, payload, era).await;
+    super::attest_analytics_exclusion(&mut response, excluded);
+    if !excluded {
+        if let Some(store) = state.store.clone() {
+            let succeeded = response.status().is_success();
+            let protocol_era = match era {
+                McpProtocolEra::Legacy => ObservedProtocolEra::McpLegacy,
+                McpProtocolEra::Modern => ObservedProtocolEra::McpModern,
+            };
+            tokio::spawn(async move {
+                let _ = store
+                    .record_interface_usage(
+                        ObservedInterface::Mcp,
+                        protocol_era,
+                        succeeded,
+                        chrono::Utc::now(),
+                    )
+                    .await;
+            });
+        }
     }
     response
 }
@@ -1162,9 +1166,12 @@ fn mcp_tool_descriptor_for_mode(
             "idempotentHint": idempotent
         }),
     );
-    value.insert("securitySchemes".to_string(), json!([{"type": "noauth"}]));
+    let security_schemes = analytics_security_schemes(
+        std::env::var("ANALYTICS_EXCLUSION_TOKEN").is_ok_and(|value| !value.trim().is_empty()),
+    );
+    value.insert("securitySchemes".to_string(), security_schemes.clone());
     let mut metadata = json!({
-        "securitySchemes": [{"type": "noauth"}],
+        "securitySchemes": security_schemes,
         "ui": {"visibility": ["model", "app"]},
         "agentBountiesSandbox": sandbox,
         "agentBountiesPublicReview": public_review
@@ -1227,6 +1234,17 @@ fn mcp_tool_descriptor_for_mode(
     }
     value.insert("_meta".to_string(), metadata);
     Value::Object(value)
+}
+
+fn analytics_security_schemes(exclusion_link_enabled: bool) -> Value {
+    if exclusion_link_enabled {
+        json!([
+            {"type": "noauth"},
+            {"type": "oauth2", "scopes": [super::ANALYTICS_EXCLUSION_SCOPE]}
+        ])
+    } else {
+        json!([{"type": "noauth"}])
+    }
 }
 
 fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
@@ -3987,7 +4005,10 @@ mod tests {
     use super::*;
     use app::BountyNetwork;
     use chain_base::{AutonomousBountyRecoveryReservations, BaseRpcUrlConfig};
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     fn valid_args() -> PrepareBountyPostArgs {
         PrepareBountyPostArgs {
@@ -4305,6 +4326,21 @@ mod tests {
             .any(|field| field == "bounty_image"));
     }
 
+    #[test]
+    fn optional_analytics_oauth_keeps_public_tools_anonymous() {
+        assert_eq!(
+            analytics_security_schemes(false),
+            json!([{"type": "noauth"}])
+        );
+        assert_eq!(
+            analytics_security_schemes(true),
+            json!([
+                {"type": "noauth"},
+                {"type": "oauth2", "scopes": ["analytics:exclude-owner"]}
+            ])
+        );
+    }
+
     fn public_tool_test_state() -> SharedState {
         Arc::new(AppState {
             network: Mutex::new(BountyNetwork::default()),
@@ -4316,6 +4352,10 @@ mod tests {
             stripe_api_base_url: "https://api.stripe.com".to_string(),
             stripe_payment_method_configuration: None,
             operator_api_token: None,
+            analytics_exclusion_token: None,
+            mcp_base_url: "http://127.0.0.1:8090".to_string(),
+            oauth_authorizations: Mutex::new(HashMap::new()),
+            oauth_codes: Mutex::new(HashMap::new()),
             store: None,
             recovery_reservations: AutonomousBountyRecoveryReservations::default(),
         })

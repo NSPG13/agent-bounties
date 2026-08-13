@@ -255,6 +255,7 @@ jobs:
               f"- Exact health attestations: `{len(evidence['health'])}/2`",
               f"- Public runtime variables reconciled: `{len(evidence.get('public_environment', []))}`",
               f"- Open Competition shared variables reconciled: `{len(evidence.get('open_competition_environment', []))}`",
+              f"- Private API/CLI/legacy MCP/core MCP exclusion canaries: `{bool(evidence.get('analytics_exclusion_canary', {}).get('verified'))}`",
               f"- Operator token rotated: `{bool(evidence.get('operator_token_rotation', {}).get('performed'))}`",
               f"- Cloud runtime variables: `{len(evidence.get('cloud_environment', []))}/10`",
               f"- Cloud model credential supplied: `{bool(evidence.get('secret_environment'))}`",

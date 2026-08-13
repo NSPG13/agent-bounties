@@ -675,6 +675,7 @@ export interface X402FundingLoopOptions {
 export interface AgentBountiesClientOptions {
   baseUrl?: string;
   operatorApiToken?: string | null;
+  analyticsExclusionToken?: string | null;
 }
 
 export type AgentWalletSigningCapability =
@@ -987,6 +988,7 @@ export function generateOpenCompetitionCommitment(
 export class AgentBountiesClient {
   private readonly baseUrl: string;
   private readonly operatorApiToken?: string;
+  private readonly analyticsExclusionToken?: string;
 
   constructor(
     baseUrlOrOptions: string | AgentBountiesClientOptions = "http://127.0.0.1:8080",
@@ -995,9 +997,11 @@ export class AgentBountiesClient {
     if (typeof baseUrlOrOptions === "string") {
       this.baseUrl = baseUrlOrOptions;
       this.operatorApiToken = operatorApiToken ?? undefined;
+      this.analyticsExclusionToken = undefined;
     } else {
       this.baseUrl = baseUrlOrOptions.baseUrl ?? "http://127.0.0.1:8080";
       this.operatorApiToken = baseUrlOrOptions.operatorApiToken ?? undefined;
+      this.analyticsExclusionToken = baseUrlOrOptions.analyticsExclusionToken ?? undefined;
     }
   }
 
@@ -1008,6 +1012,9 @@ export class AgentBountiesClient {
         "content-type": "application/json",
         "x-agent-bounties-interface": "api",
         ...(this.operatorApiToken ? { "x-operator-token": this.operatorApiToken } : {}),
+        ...(this.analyticsExclusionToken
+          ? { "x-agent-bounties-analytics-exclusion": this.analyticsExclusionToken }
+          : {}),
         ...(init?.headers ?? {}),
       },
     });

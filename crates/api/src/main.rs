@@ -507,6 +507,7 @@ struct AppState {
     base_rpc_urls: BaseRpcUrlConfig,
     base_broadcast_enabled: bool,
     operator_api_token: Option<String>,
+    analytics_exclusion_token: Option<String>,
     public_base_url: String,
     mcp_base_url: String,
     x402_relayer: X402HostedRelayerConfig,
@@ -818,6 +819,8 @@ impl BondSponsorConfig {
 type SharedState = Arc<AppState>;
 const OPERATOR_TOKEN_HEADER: &str = "x-operator-token";
 const INTERFACE_ATTRIBUTION_HEADER: &str = "x-agent-bounties-interface";
+const ANALYTICS_EXCLUSION_HEADER: &str = "x-agent-bounties-analytics-exclusion";
+const ANALYTICS_EXCLUDED_HEADER: &str = "x-agent-bounties-analytics-excluded";
 const PLATFORM_LAUNCH_AT: &str = "2026-07-08T20:22:19Z";
 const PLATFORM_FIRST_MONTH_ENDED_AT: &str = "2026-08-08T20:22:19Z";
 const PUBLIC_METRICS_POLICY_JSON: &str = include_str!("../fixtures/public-metrics-policy.json");
@@ -2115,6 +2118,9 @@ async fn main() -> anyhow::Result<()> {
         operator_api_token: env::var("OPERATOR_API_TOKEN")
             .ok()
             .and_then(non_empty_secret),
+        analytics_exclusion_token: env::var("ANALYTICS_EXCLUSION_TOKEN")
+            .ok()
+            .and_then(non_empty_secret),
         public_base_url: env::var("PUBLIC_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
         mcp_base_url: env::var("MCP_BASE_URL")
@@ -2670,25 +2676,63 @@ fn attributed_api_interface(headers: &HeaderMap) -> Option<ObservedInterface> {
     }
 }
 
+fn analytics_exclusion_is_authorized(
+    analytics_exclusion_token: Option<&str>,
+    operator_api_token: Option<&str>,
+    headers: &HeaderMap,
+) -> bool {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok());
+    analytics_exclusion_token.is_some()
+        && service_runtime::operator_token_is_authorized(
+            analytics_exclusion_token,
+            headers
+                .get(ANALYTICS_EXCLUSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            None,
+        )
+        || (operator_api_token.is_some()
+            && service_runtime::operator_token_is_authorized(
+                operator_api_token,
+                headers
+                    .get(OPERATOR_TOKEN_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                authorization,
+            ))
+}
+
 async fn observe_interface_usage(
     State(state): State<SharedState>,
     request: Request,
     next: Next,
 ) -> Response {
     let interface = attributed_api_interface(request.headers());
-    let response = next.run(request).await;
-    if let (Some(store), Some(interface)) = (state.store.clone(), interface) {
-        let succeeded = response.status().is_success();
-        tokio::spawn(async move {
-            let _ = store
-                .record_interface_usage(
-                    interface,
-                    ObservedProtocolEra::NotApplicable,
-                    succeeded,
-                    Utc::now(),
-                )
-                .await;
-        });
+    let excluded = analytics_exclusion_is_authorized(
+        state.analytics_exclusion_token.as_deref(),
+        state.operator_api_token.as_deref(),
+        request.headers(),
+    );
+    let mut response = next.run(request).await;
+    if excluded {
+        response
+            .headers_mut()
+            .insert(ANALYTICS_EXCLUDED_HEADER, HeaderValue::from_static("true"));
+    }
+    if !excluded {
+        if let (Some(store), Some(interface)) = (state.store.clone(), interface) {
+            let succeeded = response.status().is_success();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_interface_usage(
+                        interface,
+                        ObservedProtocolEra::NotApplicable,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
     }
     response
 }
@@ -4943,10 +4987,11 @@ fn site_analytics_response(
             "A returning visitor is the same browser-local UUID observed on at least two UTC dates in the selected window.".to_string(),
             "A session is one random sessionStorage UUID and ends with that browser tab session.".to_string(),
             "Channel attribution uses the visitor's earliest recorded privacy-safe source and campaign; only the referrer hostname is retained.".to_string(),
-            "Interface usage is an hourly aggregate of observed requests, not unique people, agents, clients, or sessions; partial boundary hours are included.".to_string(),
+            "External interface usage is an hourly aggregate of observed requests, not unique people, agents, clients, or sessions; partial boundary hours are included.".to_string(),
+            "Requests bearing a server-verified analytics exclusion or operator credential are omitted before aggregation; no operator identifier is stored.".to_string(),
             "API and CLI attribution is self-declared through x-agent-bounties-interface; MCP protocol era is observed by the MCP service.".to_string(),
         ],
-        evidence_boundary: "Collection begins only after each feature is deployed and has no historical backfill. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect browser coverage. Interface counters cannot deduplicate users or prove preference, and self-declared API or CLI attribution can be absent or spoofed. No IP address, user agent, full referrer URL, wallet, client identifier, request body, prompt, or tool arguments are stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
+        evidence_boundary: "Collection begins only after each feature is deployed and has no historical backfill. External interface counting restarts at the operator-exclusion release; the earlier launch aggregate is retained outside this public response because it contains maintainer validation traffic that cannot be separated retrospectively. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect browser coverage. Interface counters cannot deduplicate users or prove preference, and self-declared API or CLI attribution can be absent or spoofed. No IP address, user agent, full referrer URL, wallet, client identifier, request body, prompt, tool arguments, or operator identity is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
     }
 }
 
@@ -16819,6 +16864,54 @@ mod tests {
     }
 
     #[test]
+    fn interface_analytics_exclusion_requires_a_verified_scoped_or_operator_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ANALYTICS_EXCLUSION_HEADER,
+            HeaderValue::from_static("wrong-token"),
+        );
+        assert!(!analytics_exclusion_is_authorized(
+            Some("analytics-secret"),
+            Some("operator-secret"),
+            &headers,
+        ));
+
+        headers.insert(
+            ANALYTICS_EXCLUSION_HEADER,
+            HeaderValue::from_static("analytics-secret"),
+        );
+        assert!(analytics_exclusion_is_authorized(
+            Some("analytics-secret"),
+            Some("operator-secret"),
+            &headers,
+        ));
+
+        headers.remove(ANALYTICS_EXCLUSION_HEADER);
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer operator-secret"),
+        );
+        assert!(analytics_exclusion_is_authorized(
+            Some("analytics-secret"),
+            Some("operator-secret"),
+            &headers,
+        ));
+        assert!(!analytics_exclusion_is_authorized(None, None, &headers,));
+
+        let mut response = StatusCode::OK.into_response();
+        response
+            .headers_mut()
+            .insert(ANALYTICS_EXCLUDED_HEADER, HeaderValue::from_static("true"));
+        assert_eq!(
+            response
+                .headers()
+                .get(ANALYTICS_EXCLUDED_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+    }
+
+    #[test]
     fn marketing_domains_redirect_once_and_preserve_deep_paths_and_queries() {
         assert_eq!(
             marketing_domain_destination("agentbounties.work", &"/".parse().unwrap()),
@@ -20979,6 +21072,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21014,6 +21108,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21040,6 +21135,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21066,6 +21162,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21096,6 +21193,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21128,6 +21226,7 @@ mod tests {
             },
             base_broadcast_enabled: true,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21157,6 +21256,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21186,6 +21286,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -21216,6 +21317,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),

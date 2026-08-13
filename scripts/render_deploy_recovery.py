@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -37,6 +39,15 @@ OPEN_COMPETITION_REFERENCE_SERVICE_NAME = "agent-bounties-base-indexer"
 OPEN_COMPETITION_ENV_GROUP_NAME = "agent-bounties-base"
 OPERATOR_ENV_GROUP_NAME = "agent-bounties-operator"
 OPERATOR_TOKEN_KEY = "OPERATOR_API_TOKEN"
+ANALYTICS_EXCLUSION_TOKEN_KEY = "ANALYTICS_EXCLUSION_TOKEN"
+ANALYTICS_EXCLUSION_HEADER = "X-Agent-Bounties-Analytics-Exclusion"
+ANALYTICS_EXCLUDED_HEADER = "X-Agent-Bounties-Analytics-Excluded"
+INTERFACE_ATTRIBUTION_HEADER = "X-Agent-Bounties-Interface"
+MODERN_MCP_PROTOCOL_VERSION = "2026-07-28"
+LEGACY_MCP_PROTOCOL_VERSION = "2025-06-18"
+ANALYTICS_EXCLUSION_SCOPE = "analytics:exclude-owner"
+ANALYTICS_OAUTH_TOKEN_PREFIX = "abx1"
+ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS = 7_776_000
 OPERATOR_TOKEN_SERVICE_NAMES = frozenset(
     {"agent-bounties-api", "agent-bounties-mcp"}
 )
@@ -1735,6 +1746,191 @@ def fetch_json(url: str, timeout_seconds: float) -> dict[str, Any]:
     return payload
 
 
+def fetch_exclusion_attestation(
+    url: str,
+    timeout_seconds: float,
+    *,
+    token: str,
+    interface: str,
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    bearer: bool = False,
+) -> dict[str, Any]:
+    request_headers = {
+        "Accept": "application/json, text/event-stream",
+        "Cache-Control": "no-cache, no-store",
+        "Connection": "close",
+        "Pragma": "no-cache",
+        "User-Agent": "agent-bounties-render-recovery/1",
+        INTERFACE_ATTRIBUTION_HEADER: interface,
+        ("Authorization" if bearer else ANALYTICS_EXCLUSION_HEADER): (
+            f"Bearer {token}" if bearer else token
+        ),
+        **(headers or {}),
+    }
+    data = None
+    method = "GET"
+    if payload is not None:
+        data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+        method = "POST"
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers=request_headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.status
+            body = response.read().decode("utf-8", errors="replace")
+            response_headers = {
+                key.lower(): value for key, value in response.headers.items()
+            }
+    except urllib.error.HTTPError as error:
+        raise RecoveryError(
+            f"analytics exclusion canary returned HTTP {error.code}"
+        ) from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RecoveryError(
+            f"analytics exclusion canary transport failed: {redact(str(error))}"
+        ) from None
+    if status != 200:
+        raise RecoveryError(f"analytics exclusion canary returned HTTP {status}")
+    if response_headers.get(ANALYTICS_EXCLUDED_HEADER.lower()) != "true":
+        raise RecoveryError("runtime did not attest analytics exclusion")
+    try:
+        decoded = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise RecoveryError(
+            f"analytics exclusion canary returned invalid JSON: {error}"
+        ) from None
+    if not isinstance(decoded, dict):
+        raise RecoveryError("analytics exclusion canary must return an object")
+    return decoded
+
+
+def analytics_oauth_access_token(secret: str, audience: str, now: int) -> str:
+    claims = json.dumps(
+        {
+            "iss": audience,
+            "aud": audience,
+            "scope": ANALYTICS_EXCLUSION_SCOPE,
+            "iat": now,
+            "exp": now + ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    payload = base64.urlsafe_b64encode(claims).rstrip(b"=").decode("ascii")
+    signed = f"{ANALYTICS_OAUTH_TOKEN_PREFIX}.{payload}"
+    signature = (
+        base64.urlsafe_b64encode(
+            hmac.new(secret.encode("utf-8"), signed.encode("ascii"), hashlib.sha256).digest()
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    return f"{signed}.{signature}"
+
+
+def validate_analytics_exclusion_canaries(
+    public_base_url: str,
+    mcp_base_url: str,
+    token: str,
+    *,
+    timeout_seconds: float = 20,
+) -> dict[str, Any]:
+    if len(token) < 64 or any(character.isspace() for character in token):
+        raise RecoveryError("analytics exclusion canary token is malformed")
+    discovery_url = f"{public_base_url.rstrip('/')}/.well-known/agent-bounties.json"
+    for interface in ("api", "cli"):
+        payload = fetch_exclusion_attestation(
+            discovery_url,
+            timeout_seconds,
+            token=token,
+            interface=interface,
+        )
+        if not isinstance(payload.get("schema_version"), str):
+            raise RecoveryError(
+                f"{interface} analytics exclusion canary returned invalid discovery"
+            )
+
+    endpoint = f"{mcp_base_url.rstrip('/')}/mcp"
+    legacy = fetch_exclusion_attestation(
+        endpoint,
+        timeout_seconds,
+        token=token,
+        interface="mcp",
+        payload={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "agent-bounties-private-deploy-canary",
+                    "version": "1",
+                },
+            },
+        },
+    )
+    legacy_result = legacy.get("result")
+    if (
+        not isinstance(legacy_result, dict)
+        or legacy_result.get("protocolVersion") != LEGACY_MCP_PROTOCOL_VERSION
+    ):
+        raise RecoveryError("legacy MCP analytics exclusion canary returned invalid protocol")
+
+    oauth_token = analytics_oauth_access_token(token, mcp_base_url.rstrip("/"), int(time.time()))
+    modern = fetch_exclusion_attestation(
+        endpoint,
+        timeout_seconds,
+        token=oauth_token,
+        interface="mcp",
+        bearer=True,
+        headers={
+            "MCP-Protocol-Version": MODERN_MCP_PROTOCOL_VERSION,
+            "Mcp-Method": "server/discover",
+        },
+        payload={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": (
+                        MODERN_MCP_PROTOCOL_VERSION
+                    ),
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "agent-bounties-private-deploy-canary",
+                        "version": "1",
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            },
+        },
+    )
+    modern_result = modern.get("result")
+    supported = (
+        modern_result.get("supportedVersions", [])
+        if isinstance(modern_result, dict)
+        else []
+    )
+    if MODERN_MCP_PROTOCOL_VERSION not in supported:
+        raise RecoveryError("modern MCP analytics exclusion canary returned invalid protocol")
+    return {
+        "verified": True,
+        "interfaces": ["api", "cli", "mcp"],
+        "mcp_protocol_versions": [
+            LEGACY_MCP_PROTOCOL_VERSION,
+            MODERN_MCP_PROTOCOL_VERSION,
+        ],
+        "credential_transports": ["header", "bearer"],
+        "secret_published": False,
+    }
+
+
 def validate_cloud_agent_readiness(
     payload: dict[str, Any],
     *,
@@ -2005,6 +2201,60 @@ def rotate_operator_token(
         }
         setattr(client, "operator_token_rotation_evidence", evidence)
         return evidence
+    finally:
+        for index in range(len(token)):
+            token[index] = 0
+
+
+def ensure_analytics_exclusion_token(
+    client: RenderClient,
+    group: dict[str, Any],
+    *,
+    token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(48),
+) -> dict[str, Any]:
+    try:
+        current = env_group_env_var(group, ANALYTICS_EXCLUSION_TOKEN_KEY)["value"]
+    except RecoveryError as error:
+        if "returned 0 values" not in str(error):
+            raise
+        current = ""
+    if current:
+        if len(current) < 64 or any(character.isspace() for character in current):
+            raise RecoveryError("configured analytics exclusion token is malformed")
+        setattr(client, "_analytics_exclusion_token", current)
+        return {
+            "configured": True,
+            "key": ANALYTICS_EXCLUSION_TOKEN_KEY,
+            "characters": len(current),
+            "changed": False,
+            "secret_published": False,
+        }
+
+    token_text = token_factory()
+    if (
+        not isinstance(token_text, str)
+        or len(token_text) < 64
+        or any(character.isspace() for character in token_text)
+    ):
+        raise RecoveryError("generated analytics exclusion token is malformed")
+    token = bytearray(token_text.encode("utf-8"))
+    token_text = ""
+    try:
+        record = client.ensure_env_group_env_var(
+            group,
+            ANALYTICS_EXCLUSION_TOKEN_KEY,
+            token.decode("utf-8"),
+        )
+        if record.get("key") != ANALYTICS_EXCLUSION_TOKEN_KEY:
+            raise RecoveryError("Render did not configure the analytics exclusion token")
+        setattr(client, "_analytics_exclusion_token", token.decode("utf-8"))
+        return {
+            "configured": True,
+            "key": ANALYTICS_EXCLUSION_TOKEN_KEY,
+            "characters": len(token),
+            "changed": bool(record.get("changed")),
+            "secret_published": False,
+        }
     finally:
         for index in range(len(token)):
             token[index] = 0
@@ -2331,18 +2581,20 @@ def deploy(
 
     operator_token_rotation: dict[str, Any] = {}
     operator_token_changed = False
+    operator_group = client.resolve_operator_env_group(
+        validate_owner_id(reference_service.get("ownerId"))
+    )
+    operator_group = client.get_env_group(operator_group["id"])
+    for spec, service in services:
+        if spec.name not in OPERATOR_TOKEN_SERVICE_NAMES:
+            continue
+        if not env_group_has_service(operator_group, spec, service["id"]):
+            raise RecoveryError(
+                f"operator environment group is not linked to {spec.name}"
+            )
+    analytics_exclusion = ensure_analytics_exclusion_token(client, operator_group)
+    operator_token_changed |= analytics_exclusion["changed"]
     if rotate_operator_api_token:
-        operator_group = client.resolve_operator_env_group(
-            validate_owner_id(reference_service.get("ownerId"))
-        )
-        operator_group = client.get_env_group(operator_group["id"])
-        for spec, service in services:
-            if spec.name not in OPERATOR_TOKEN_SERVICE_NAMES:
-                continue
-            if not env_group_has_service(operator_group, spec, service["id"]):
-                raise RecoveryError(
-                    f"operator environment group is not linked to {spec.name}"
-                )
         operator_token_rotation = rotate_operator_token(client, operator_group)
         operator_token_changed = True
     desired_open_competition_environment = open_competition_shared_environment(
@@ -2543,6 +2795,12 @@ def deploy(
         for spec, _ in services
         if spec.health_url is not None
     ]
+    analytics_exclusion_canary = validate_analytics_exclusion_canaries(
+        public_base_url,
+        mcp_base_url,
+        getattr(client, "_analytics_exclusion_token", ""),
+    )
+    setattr(client, "_analytics_exclusion_token", None)
     cloud_readiness = validate_cloud_agent_readiness(
         fetch_json(
             f"{public_base_url.rstrip('/')}/v1/cloud-agent/readiness",
@@ -2621,6 +2879,8 @@ def deploy(
         "cloud_readiness": cloud_readiness,
         "social_readiness": social_readiness,
         "leaderboard_readiness": leaderboard_readiness,
+        "analytics_exclusion": analytics_exclusion,
+        "analytics_exclusion_canary": analytics_exclusion_canary,
         "operator_token_rotation": operator_token_rotation,
     }
 
@@ -2700,6 +2960,8 @@ def main() -> int:
         "cloud_readiness": {},
         "social_readiness": {},
         "leaderboard_readiness": [],
+        "analytics_exclusion": {},
+        "analytics_exclusion_canary": {},
         "operator_token_rotation": {},
         "failure": None,
         "error": None,
@@ -2749,6 +3011,7 @@ def main() -> int:
             evidence["failure"] = error.evidence
     finally:
         if client is not None:
+            setattr(client, "_analytics_exclusion_token", None)
             evidence["operator_token_rotation"] = getattr(
                 client,
                 "operator_token_rotation_evidence",

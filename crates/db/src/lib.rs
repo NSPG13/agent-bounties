@@ -63,6 +63,8 @@ pub const OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION: &str =
     include_str!("../../../migrations/0020_open_competition_entrant_relays.sql");
 pub const INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0021_interface_usage.sql");
+pub const EXTERNAL_INTERFACE_USAGE_MIGRATION: &str =
+    include_str!("../../../migrations/0022_external_interface_usage.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1013,6 +1015,7 @@ impl PostgresStore {
                 OPEN_COMPETITION_V1_MIGRATION,
                 OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
                 INTERFACE_USAGE_MIGRATION,
+                EXTERNAL_INTERFACE_USAGE_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1450,7 +1453,7 @@ impl PostgresStore {
 
         sqlx::query(
             r#"
-            INSERT INTO interface_usage_hourly
+            INSERT INTO external_interface_usage_hourly
               (bucket_started_at, interface, protocol_era, request_count,
                successful_request_count, first_observed_at, last_observed_at)
             VALUES (
@@ -1458,11 +1461,11 @@ impl PostgresStore {
               $2, $3, 1, CASE WHEN $4 THEN 1 ELSE 0 END, $1, $1
             )
             ON CONFLICT (bucket_started_at, interface, protocol_era) DO UPDATE SET
-              request_count = interface_usage_hourly.request_count + 1,
-              successful_request_count = interface_usage_hourly.successful_request_count
+              request_count = external_interface_usage_hourly.request_count + 1,
+              successful_request_count = external_interface_usage_hourly.successful_request_count
                 + CASE WHEN $4 THEN 1 ELSE 0 END,
-              first_observed_at = LEAST(interface_usage_hourly.first_observed_at, EXCLUDED.first_observed_at),
-              last_observed_at = GREATEST(interface_usage_hourly.last_observed_at, EXCLUDED.last_observed_at)
+              first_observed_at = LEAST(external_interface_usage_hourly.first_observed_at, EXCLUDED.first_observed_at),
+              last_observed_at = GREATEST(external_interface_usage_hourly.last_observed_at, EXCLUDED.last_observed_at)
             "#,
         )
         .bind(observed_at)
@@ -1737,7 +1740,7 @@ impl PostgresStore {
                    SUM(successful_request_count)::BIGINT AS successful_request_count,
                    MIN(first_observed_at) AS first_observed_at,
                    MAX(last_observed_at) AS last_observed_at
-            FROM interface_usage_hourly
+            FROM external_interface_usage_hourly
             WHERE bucket_started_at >= (
                     date_trunc('hour', $1 AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                   )
@@ -8393,6 +8396,42 @@ mod tests {
             assert!(
                 !INTERFACE_USAGE_MIGRATION.contains(forbidden),
                 "interface usage must not persist {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_interface_usage_migration_starts_a_clean_privacy_minimized_epoch() {
+        for invariant in [
+            "external_interface_usage_hourly",
+            "PRIMARY KEY (bucket_started_at, interface, protocol_era)",
+            "interface IN ('api', 'cli', 'mcp')",
+            "protocol_era IN ('not_applicable', 'legacy', 'modern', 'http_adapter')",
+            "request_count BIGINT NOT NULL",
+            "successful_request_count BIGINT NOT NULL",
+            "external_interface_usage_hourly_recent_idx",
+            "verified analytics-exclusion credential",
+        ] {
+            assert!(
+                EXTERNAL_INTERFACE_USAGE_MIGRATION.contains(invariant),
+                "missing external interface-usage invariant {invariant}"
+            );
+        }
+        for forbidden in [
+            "INSERT INTO external_interface_usage_hourly",
+            "SELECT * FROM interface_usage_hourly",
+            "ip_address",
+            "user_agent",
+            "wallet_address",
+            "visitor_id",
+            "session_id",
+            "client_id",
+            "request_body",
+            "tool_arguments",
+        ] {
+            assert!(
+                !EXTERNAL_INTERFACE_USAGE_MIGRATION.contains(forbidden),
+                "external interface usage must not contain or backfill {forbidden}"
             );
         }
     }

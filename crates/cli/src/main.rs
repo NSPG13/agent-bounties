@@ -55,6 +55,8 @@ use std::{
 use uuid::Uuid;
 
 const INTERFACE_ATTRIBUTION_HEADER: &str = "x-agent-bounties-interface";
+const ANALYTICS_EXCLUSION_HEADER: &str = "x-agent-bounties-analytics-exclusion";
+const ANALYTICS_EXCLUSION_TOKEN_ENV: &str = "AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN";
 
 #[derive(Parser)]
 #[command(name = "agent-bounties")]
@@ -3769,14 +3771,7 @@ async fn production_smoke_check(
 ) -> Result<ProductionSmokeReport> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
-        .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(
-                INTERFACE_ATTRIBUTION_HEADER,
-                reqwest::header::HeaderValue::from_static("cli"),
-            );
-            headers
-        })
+        .default_headers(cli_attribution_headers()?)
         .build()?;
 
     let api_health = production_get_health(&client, &format!("{api}/health")).await?;
@@ -4976,9 +4971,10 @@ async fn leaderboard(api_base_url: String, network: String, at: Option<String>) 
     if let Some(at) = at {
         query.push(("at", at));
     }
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .default_headers(cli_attribution_headers()?)
+        .build()?
         .get(&url)
-        .header(INTERFACE_ATTRIBUTION_HEADER, "cli")
         .query(&query)
         .send()
         .await
@@ -5029,8 +5025,24 @@ fn http_request_with_headers(
         extra_headers.push_str(value);
         extra_headers.push_str("\r\n");
     }
+    let analytics_exclusion_token =
+        env::var(ANALYTICS_EXCLUSION_TOKEN_ENV)
+            .ok()
+            .and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            });
+    if analytics_exclusion_token
+        .as_deref()
+        .is_some_and(|value| value.bytes().any(|byte| byte.is_ascii_control()))
+    {
+        bail!("analytics exclusion token is not a valid HTTP header value");
+    }
+    let analytics_exclusion_header = analytics_exclusion_token
+        .map(|value| format!("{ANALYTICS_EXCLUSION_HEADER}: {value}\r\n"))
+        .unwrap_or_default();
     let request = format!(
-        "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{INTERFACE_ATTRIBUTION_HEADER}: cli\r\n{}\
+        "{method} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n{INTERFACE_ATTRIBUTION_HEADER}: cli\r\n{analytics_exclusion_header}{}\
          {}\r\n{}",
         parsed.path, parsed.authority, content_headers, extra_headers, body
     );
@@ -5057,6 +5069,32 @@ fn http_request_with_headers(
         return decode_chunked_body(body);
     }
     Ok(body.to_string())
+}
+
+fn cli_attribution_headers() -> Result<reqwest::header::HeaderMap> {
+    let token = env::var(ANALYTICS_EXCLUSION_TOKEN_ENV).ok();
+    cli_attribution_headers_from(token.as_deref())
+}
+
+fn cli_attribution_headers_from(
+    analytics_exclusion_token: Option<&str>,
+) -> Result<reqwest::header::HeaderMap> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        INTERFACE_ATTRIBUTION_HEADER,
+        reqwest::header::HeaderValue::from_static("cli"),
+    );
+    if let Some(value) = analytics_exclusion_token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        headers.insert(
+            ANALYTICS_EXCLUSION_HEADER,
+            reqwest::header::HeaderValue::from_str(value)
+                .context("analytics exclusion token is not a valid HTTP header value")?,
+        );
+    }
+    Ok(headers)
 }
 
 struct ParsedHttpUrl {
@@ -6433,6 +6471,14 @@ mod tests {
             serde_json::from_str(include_str!("../fixtures/public-help-contract.json")).unwrap();
         assert_eq!(help.lines().count(), fixture["normalized_lines"]);
         assert_eq!(hash_artifact(&help), fixture["normalized_sha256"]);
+    }
+
+    #[test]
+    fn cli_attribution_can_exclude_private_operator_traffic() {
+        let headers = cli_attribution_headers_from(Some(" scoped-private-token ")).unwrap();
+        assert_eq!(headers[INTERFACE_ATTRIBUTION_HEADER], "cli");
+        assert_eq!(headers[ANALYTICS_EXCLUSION_HEADER], "scoped-private-token");
+        assert!(cli_attribution_headers_from(Some("bad\r\ntoken")).is_err());
     }
 
     fn production_health(revision: &str) -> ProductionHealth {

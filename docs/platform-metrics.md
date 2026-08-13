@@ -128,13 +128,18 @@ This optional acquisition section reports privacy-minimized browser/device IDs.
 It is labeled as acquisition context, not users, has no pre-deployment backfill,
 and is never added to active identities.
 
-The same response supplies the dashboard's live interface-usage section. It
-shows hourly aggregate request totals and successful HTTP responses for REST API,
+The same response supplies the dashboard's live external-interface-usage section. It
+shows hourly aggregate external request totals and successful HTTP responses for REST API,
 CLI, modern MCP, legacy MCP, and the MCP HTTP adapter. These are interactions,
 not unique people, agents, clients, sessions, or surveyed preferences. API and
 CLI attribution is self-declared through `X-Agent-Bounties-Interface`; MCP era
-is observed by the MCP service. The rows are stored in Postgres table
-`interface_usage_hourly` and have no historical backfill before deployment.
+is observed by the MCP service. Requests bearing a verified analytics-exclusion
+or operator credential are omitted before aggregation, without storing an
+operator identity. Public rows are stored in Postgres table
+`external_interface_usage_hourly` and have no historical backfill. The original
+`interface_usage_hourly` launch aggregate is retained outside the public response
+because it contains maintainer validation traffic that cannot be separated
+retrospectively.
 
 ## Freshness and honest gaps
 
