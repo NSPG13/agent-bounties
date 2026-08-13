@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS recovery_attempts (
   expected_status SMALLINT NOT NULL,
   expected_round BIGINT NOT NULL,
   solver_address TEXT NOT NULL,
-  authorized_signer TEXT NOT NULL,
   verification_expires_at BIGINT NOT NULL,
   active_bond BIGINT NOT NULL,
   calldata TEXT NOT NULL,
@@ -33,7 +32,6 @@ CREATE TABLE IF NOT EXISTS recovery_attempts (
   CHECK (lower(bounty_id) = '0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb'),
   CHECK (expected_status = 3 AND expected_round = 4),
   CHECK (lower(solver_address) = '0xc49e5374f0072abc0b4c134b2fd413d87aa6354a'),
-  CHECK (lower(authorized_signer) = '0xc49e5374f0072abc0b4c134b2fd413d87aa6354a'),
   CHECK (lower(contract_code_hash) = '0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1'),
   CHECK (verification_expires_at = 1786586903 AND active_bond = 10000),
   CHECK (lower(calldata) = '0xf9251ec7'),
@@ -49,4 +47,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_attempts_signed_hash
   ON recovery_attempts (signed_transaction_hash);
 
 COMMENT ON TABLE recovery_attempts IS
-  'Dedicated durable money-recovery state. Generic relay state is prohibited.';
+  'Dedicated durable money-recovery state; generic relay state is prohibited.';

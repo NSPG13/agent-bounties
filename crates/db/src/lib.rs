@@ -67,6 +67,8 @@ pub const EXTERNAL_INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0022_external_interface_usage.sql");
 pub const DURABLE_RECOVERY_ATTEMPTS_MIGRATION: &str =
     include_str!("../../../migrations/0021_durable_recovery_attempts.sql");
+pub const RECOVERY_AUTHORIZED_SIGNER_MIGRATION: &str =
+    include_str!("../../../migrations/0022_recovery_authorized_signer.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1058,14 +1060,9 @@ impl PostgresStore {
                 INTERFACE_USAGE_MIGRATION,
                 EXTERNAL_INTERFACE_USAGE_MIGRATION,
                 DURABLE_RECOVERY_ATTEMPTS_MIGRATION,
+                RECOVERY_AUTHORIZED_SIGNER_MIGRATION,
             ] {
-                for statement in migration
-                    .split(';')
-                    .map(str::trim)
-                    .filter(|statement| !statement.is_empty())
-                {
-                    sqlx::query(statement).execute(&mut *connection).await?;
-                }
+                sqlx::raw_sql(migration).execute(&mut *connection).await?;
             }
             Ok::<(), sqlx::Error>(())
         }
@@ -8440,6 +8437,13 @@ mod tests {
         assert!(sql.contains("status = 'reserved' AND broadcast_started_at IS NULL"));
         assert!(sql.contains("status IN ('broadcast', 'confirmed') AND broadcast_started_at IS NOT NULL"));
         assert!(sql.contains("status <> 'confirmed' OR (receipt_status = 1"));
+        assert!(!sql.contains("authorized_signer"),
+            "the shipped migration must remain immutable; signer binding is forward-only");
+        let signer_sql = RECOVERY_AUTHORIZED_SIGNER_MIGRATION;
+        assert!(signer_sql.contains("ADD COLUMN IF NOT EXISTS authorized_signer TEXT"));
+        assert!(signer_sql.contains("WHERE authorized_signer IS NULL"));
+        assert!(signer_sql.contains("ALTER COLUMN authorized_signer SET NOT NULL"));
+        assert!(signer_sql.contains("recovery_attempts_authorized_signer_pin"));
     }
 
     #[tokio::test]
@@ -8447,7 +8451,21 @@ mod tests {
     async fn durable_recovery_attempt_is_exactly_once_and_replay_bound() {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
+        sqlx::raw_sql(DURABLE_RECOVERY_ATTEMPTS_MIGRATION)
+            .execute(&store.pool).await.unwrap();
+        let signer_before: bool = sqlx::query_scalar(r#"SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='recovery_attempts'
+              AND column_name='authorized_signer')"#)
+            .fetch_one(&store.pool).await.unwrap();
+        assert!(!signer_before, "fixture must reproduce the shipped 0021 schema");
         store.migrate().await.unwrap();
+        let signer_after: bool = sqlx::query_scalar(r#"SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='recovery_attempts'
+              AND column_name='authorized_signer' AND is_nullable='NO')"#)
+            .fetch_one(&store.pool).await.unwrap();
+        assert!(signer_after, "forward migration must upgrade an existing 0021 table");
         let identity = "agent-bounties-772-round4-expiry-v2".to_string();
         let now = Utc::now();
         let attempt = NewRecoveryAttempt {
