@@ -10,6 +10,7 @@ and raw identities are outside this surface.
 - Production launch: `2026-07-08T20:22:19Z`.
 - First month: `[2026-07-08T20:22:19Z, 2026-08-08T20:22:19Z)`.
 - Periods: rolling 7, 28, or 90 days, plus lifetime since launch.
+- The dashboard opens on lifetime and orders controls from longest to most recent.
 - All boundaries and daily series use UTC.
 
 ## Headline metrics
@@ -79,9 +80,27 @@ transaction IDs.
 
 `/generated/github-participation.json`
 
-GitHub Pages regenerates this aggregate-only file hourly at minute 17 with the
-workflow `GITHUB_TOKEN`. It never needs an operator API secret. The dashboard
-adds this distinct `github` namespace to the platform aggregates once.
+GitHub Pages regenerates this aggregate-only file hourly at minute 17. Public
+participation uses the workflow `GITHUB_TOKEN`; the administration-read traffic
+endpoint uses the encrypted `REPOSITORY_TRAFFIC_TOKEN` only inside this
+read-only aggregate generator when configured and otherwise fails closed. It
+never needs an operator API secret.
+The dashboard adds the distinct `github` participation namespace to platform
+aggregates once.
+
+The same aggregate-only file includes GitHub repository acquisition for the
+rolling 14-day window exposed by the GitHub Traffic API:
+
+- clone events and unique cloners;
+- page views and unique visitors.
+
+Unique cloners and unique visitors are presented as GitHub-measured repository
+users. They remain separate because GitHub does not expose their identities or
+overlap, and they are not added to external active identities because they
+cannot be deduplicated against GitHub participants, wallets, or comment authors.
+The dashboard also shows dated 9 July and 11 July public snapshots for context.
+Those overlapping rolling snapshots are never summed or described as lifetime
+traffic.
 
 `GET /v1/analytics/site?window_hours=<hours>`
 
@@ -96,6 +115,8 @@ and is never added to active identities.
   an error, or lagging its observed chain head by more than 20 blocks makes the
   platform source partial and withholds combined point-in-time inventory.
 - GitHub aggregate data older than two hours is delayed.
+- Missing GitHub repository traffic is shown as unavailable; dated historical
+  snapshots are not substituted for live traffic.
 - Missing required identity sources make identity totals partial.
 - Missing inventory stays unavailable instead of becoming zero.
 - Missing historical browser analytics is disclosed and never estimated.

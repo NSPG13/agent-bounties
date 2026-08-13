@@ -65,6 +65,19 @@
     return "ready";
   }
 
+  function dashboardStatus(coreStatus, repositoryStatus) {
+    if (coreStatus === "unavailable") return "unavailable";
+    if (coreStatus === "partial" || repositoryStatus === "partial" || repositoryStatus === "unavailable") return "partial";
+    if (coreStatus === "delayed" || repositoryStatus === "delayed") return "delayed";
+    return "ready";
+  }
+
+  function ratioMultiple(current, baseline) {
+    const denominator = Math.max(0, finiteNumber(baseline));
+    if (!denominator) return null;
+    return Math.max(0, finiteNumber(current)) / denominator;
+  }
+
   function roleMap(roles) {
     return new Map(
       (Array.isArray(roles) ? roles : []).map((item) => [
@@ -197,7 +210,7 @@
 
   function start(win, doc) {
     const state = {
-      period: "7d",
+      period: "lifetime",
       platform: null,
       github: null,
       acquisition: null,
@@ -257,13 +270,14 @@
       });
     }
 
-    function renderSourceLedger(merged, acquisitionStatus) {
+    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus) {
       const target = one("[data-source-ledger]");
       if (!target) return;
       target.replaceChildren();
       const sources = [
         ["Marketplace events", merged.platform_status, state.platform?.generated_at, "Confirmed canonical Base events with verified block time."],
         ["GitHub participation", merged.github_status, state.github?.generated_at, "Hourly aggregate of external issues, pull requests, comments, and reviews."],
+        ["Repository acquisition", repositoryStatus, state.github?.repository_acquisition?.generated_at, "GitHub clone and page-view aggregates for its rolling 14-day traffic window."],
         ["Browser acquisition", acquisitionStatus, state.acquisition?.generated_at, "First-party browser/device IDs; never counted as users or identities."],
       ];
       sources.forEach(([name, status, generatedAt, description]) => {
@@ -297,10 +311,19 @@
         now,
         ACQUISITION_DELAY_MS,
       );
+      const repositoryAcquisition = state.github?.repository_acquisition;
+      const repositoryStatus = sourceStatus(
+        repositoryAcquisition
+          ? { generated_at: repositoryAcquisition.generated_at, status: repositoryAcquisition.coverage?.status }
+          : null,
+        now,
+        GITHUB_DELAY_MS,
+      );
+      const overallStatus = dashboardStatus(merged.status, repositoryStatus);
       const status = one("[data-overall-status]");
       if (status) {
-        status.dataset.status = merged.status;
-        status.lastChild.textContent = merged.status === "ready" ? "Live data" : merged.status[0].toUpperCase() + merged.status.slice(1);
+        status.dataset.status = overallStatus;
+        status.lastChild.textContent = overallStatus === "ready" ? "Live data" : overallStatus[0].toUpperCase() + overallStatus.slice(1);
       }
       const timestamps = [platform?.generated_at, state.github?.generated_at]
         .map((value) => Date.parse(value || ""))
@@ -345,18 +368,43 @@
       setText("[data-first-month-settled]", payout ? formatInteger(payout.first_month_settled_rounds) : "—");
       setText("[data-lifetime-settled]", payout ? formatInteger(payout.lifetime_settled_rounds) : "—");
 
+      const repositoryReady = repositoryStatus === "ready" || repositoryStatus === "delayed";
+      const repositoryStatusNode = one("[data-repository-status]");
+      if (repositoryStatusNode) {
+        repositoryStatusNode.dataset.status = repositoryStatus;
+        repositoryStatusNode.textContent = repositoryStatus;
+      }
+      setText("[data-clone-events]", repositoryReady ? formatInteger(repositoryAcquisition.clone_events) : "—");
+      setText("[data-unique-cloners]", repositoryReady ? formatInteger(repositoryAcquisition.unique_cloners) : "—");
+      setText("[data-page-views]", repositoryReady ? formatInteger(repositoryAcquisition.page_views) : "—");
+      setText("[data-unique-visitors]", repositoryReady ? formatInteger(repositoryAcquisition.unique_visitors) : "—");
+      if (repositoryReady) {
+        const started = new Date(repositoryAcquisition.started_at);
+        const ended = new Date(Date.parse(repositoryAcquisition.ended_at) - 1);
+        const dateOptions = { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" };
+        setText("[data-repository-window]", `${started.toLocaleDateString("en-US", dateOptions)} – ${ended.toLocaleDateString("en-US", dateOptions)} · GitHub rolling 14-day window`);
+        const multiple = ratioMultiple(repositoryAcquisition.clone_events, 2448);
+        setText("[data-repository-comparison]", multiple == null
+          ? "Historical snapshots are overlapping rolling windows and are not summed."
+          : `Current clone activity is ${multiple.toLocaleString("en-US", { maximumFractionDigits: 1 })}× the 11 July public snapshot. Historical snapshots are overlapping rolling windows and are not summed.`);
+      } else {
+        setText("[data-repository-window]", "GitHub repository traffic is unavailable; no lower value is substituted.");
+        setText("[data-repository-comparison]", "The dated July snapshots remain visible, but they are not substituted for missing live traffic.");
+      }
+
       setText("[data-browser-identities]", state.acquisition ? formatInteger(state.acquisition.overview?.unique_visitors) : "—");
       setText("[data-browser-context]", state.acquisition
         ? `${formatInteger(state.acquisition.overview?.sessions)} browser sessions in the matching lookback. Device/browser IDs are not people.`
         : "Acquisition source unavailable. Browser IDs are never estimated or counted as active identities.");
       setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "0 USDC");
-      renderSourceLedger(merged, acquisitionStatus);
+      renderSourceLedger(merged, acquisitionStatus, repositoryStatus);
 
       const notices = [];
       if (merged.status === "partial") notices.push("Identity totals are partial because a required participation source is unavailable or incomplete.");
       if (merged.status === "delayed") notices.push("One or more required sources are delayed; values remain visible with their source timestamps.");
       if (merged.status === "unavailable") notices.push("Marketplace metrics are temporarily unavailable; no missing value has been replaced with zero.");
-      if (merged.status === "ready") notices.push(`Live aggregate for ${state.period === "lifetime" ? "lifetime since launch" : state.period}. Roles are not additive.`);
+      if (["partial", "unavailable"].includes(repositoryStatus)) notices.push("Repository acquisition is unavailable or incomplete; historical snapshots remain labeled and are not substituted as live data.");
+      if (overallStatus === "ready") notices.push(`Live aggregate for ${state.period === "lifetime" ? "lifetime since launch" : state.period}. Roles are not additive.`);
       setText("[data-dashboard-notice]", notices.join(" "));
     }
 
@@ -431,10 +479,12 @@
     acquisitionWindowHours,
     chartSvg,
     combinedStatus,
+    dashboardStatus,
     mergeDaily,
     mergeMetrics,
     sourceStatus,
     start,
+    ratioMultiple,
     weeklyGrowth,
   };
 });

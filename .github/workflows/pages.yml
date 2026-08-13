@@ -110,6 +110,10 @@ jobs:
           assert value["schema_version"] == "agent-bounties/github-participation-v1"
           assert value["coverage"]["raw_identifiers_included"] is False
           assert set(value["periods"]) == {"7d", "28d", "90d", "lifetime"}
+          acquisition = value["repository_acquisition"]
+          assert acquisition["window_kind"] == "rolling_14_days"
+          assert acquisition["coverage"]["status"] == "unavailable"
+          assert len(acquisition["historical_snapshots"]) == 2
           PY
       - name: Check simplified public scripts
         run: |
@@ -264,7 +268,7 @@ jobs:
           cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
       - name: Generate privacy-safe GitHub participation metrics
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN || github.token }}
         run: |
           python scripts/github_audience_audit.py \
             --repository "${GITHUB_REPOSITORY}" \
