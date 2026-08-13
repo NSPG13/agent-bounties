@@ -2102,7 +2102,9 @@ fn valid_recovery_772_tuple(request: &DurableRecoveryRequest, code_hash: &str,
 
 fn valid_live_recovery_preflight(observed: &chain_base::RecoveryChainPreflight,
     code_hash: &str, solver: &str) -> bool {
-    observed.code_hash.eq_ignore_ascii_case(code_hash) && observed.latest_nonce == 41
+    observed.block_number > 0 && observed.block_hash.len() == 66
+        && observed.block_hash.starts_with("0x")
+        && observed.code_hash.eq_ignore_ascii_case(code_hash) && observed.latest_nonce == 41
         && observed.pending_nonce == 41 && observed.status == 3 && observed.round == 4
         && observed.solver.eq_ignore_ascii_case(solver)
         && observed.verification_expires_at == 1_786_586_903 && observed.active_bond == 10_000
@@ -10319,8 +10321,16 @@ async fn run_durable_recovery_attempt(
     State(state): State<SharedState>, headers: HeaderMap, Json(request): Json<DurableRecoveryRequest>,
 ) -> Result<Json<DurableRecoveryReport>, StatusCode> {
     require_operator(&state, &headers)?;
-    if !state.base_broadcast_enabled { return Err(StatusCode::SERVICE_UNAVAILABLE); }
     let store = state.store.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if request.recovery_identity != RECOVERY_772_IDENTITY { return Err(StatusCode::BAD_REQUEST); }
+    // Durable replay is authoritative: once a row exists, return its immutable hash/state
+    // without requiring chain preflight (nonce/state necessarily drift after broadcast).
+    if let Some(attempt) = store.get_recovery_attempt(&request.recovery_identity).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+        return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
+            evidence_boundary: "Existing durable recovery state is authoritative; replay performs zero resend and requires reconciliation for canonical evidence.".into() }));
+    }
+    if !state.base_broadcast_enabled { return Err(StatusCode::SERVICE_UNAVAILABLE); }
     let expected_code_hash = RECOVERY_772_CODE_HASH.to_string();
     let expected_solver = RECOVERY_772_SOLVER.to_string();
     let expected_calldata = env::var("RECOVERY_772_EXPIRE_CALLDATA").ok().and_then(non_empty_secret)
@@ -21828,7 +21838,8 @@ fix-ci-failure
             Box::new(|v|v.latest_nonce=40),Box::new(|v|v.pending_nonce=42),Box::new(|v|v.status=1),
             Box::new(|v|v.round=5),Box::new(|v|v.verification_expires_at+=1),Box::new(|v|v.active_bond=0),
             Box::new(|v|v.solver="0x0000000000000000000000000000000000000001".into()),
-            Box::new(|v|v.code_hash=format!("0x{}","22".repeat(32))), Box::new(|v|v.block_number=2)];
+            Box::new(|v|v.code_hash=format!("0x{}","22".repeat(32))), Box::new(|v|v.block_number=0),
+            Box::new(|v|v.block_hash="0x00".into())];
         for mutate in mutations {let mut changed=base.clone();mutate(&mut changed);
             assert!(!valid_live_recovery_preflight(&changed,&hash,solver));}
         assert!(valid_recovery_poststate(1,4,0,100,10_100));
