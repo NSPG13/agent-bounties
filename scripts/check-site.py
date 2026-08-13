@@ -314,6 +314,8 @@ def main() -> int:
             "External active identities",
             "Marketplace payout volume",
             "Mature claim-to-settlement",
+            "Verify every payout",
+            "Event sum",
             "Role counts are not additive",
             "Browser/device IDs",
             "Thousands of repository actions",
@@ -338,6 +340,10 @@ def main() -> int:
             '"unavailable"',
             '"delayed"',
             'weeklyGrowth',
+            'canonicalPayoutRows',
+            'payoutAuditSummary',
+            'BASESCAN_TX_URL',
+            'raw.textContent = "Raw events"',
         ],
     )
     require_phrases(
@@ -347,6 +353,7 @@ def main() -> int:
             "@media (prefers-reduced-motion: reduce)",
             ".metrics-page [data-reveal]",
             ".period-control button[aria-pressed=\"true\"]",
+            ".audit-table-shell:focus-visible",
         ],
     )
     github_participation = json.loads(
@@ -740,8 +747,8 @@ def main() -> int:
             'document.addEventListener("visibilitychange"',
             "claim-funnel?window_hours=${MARKET_WINDOW_HOURS}",
             "limit=300",
-            "sumUsdc",
-            "newestPaidProof",
+            "/v1/metrics/platform?period=lifetime",
+            "metrics.html#payout-audit",
             "no stale bounty is shown",
             "Last verified standings remain visible",
             "payment_state",
@@ -860,7 +867,7 @@ def main() -> int:
             "Subscribe via RSS",
             "Subscribe via Atom",
             "Agent Bounties | The Global Marketplace for Digital Work",
-            'src="home.js?v=766"',
+            'src="home.js?v=767"',
             'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',

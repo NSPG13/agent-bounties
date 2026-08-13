@@ -149,3 +149,81 @@ test("repository traffic has an independent honest status and comparable baselin
   assert.equal(metrics.ratioMultiple(9654, 2448).toFixed(1), "3.9");
   assert.equal(metrics.ratioMultiple(9654, 0), null);
 });
+
+test("canonical payout audit reconciles exact public event arithmetic", () => {
+  const autonomous = [
+    {
+      kind: "bounty_settled",
+      contract_address: "0x9999999999999999999999999999999999999999",
+      bounty_id: "0xaaa",
+      tx_hash: "0x111",
+      block_number: 11,
+      log_index: 4,
+      occurred_at: "2026-08-11T12:00:00Z",
+      data: { round: 1, solver_reward: 1_000_000, verifier_reward: 100_000, timeout_bond_bonus: 50_000 },
+    },
+    {
+      kind: "submission_rejected",
+      contract_address: "0x2222222222222222222222222222222222222222",
+      bounty_id: "0xbbb",
+      tx_hash: "0x222",
+      block_number: 12,
+      log_index: 5,
+      occurred_at: "2026-08-12T12:00:00Z",
+      data: { round: 2, verifier_reward: 100_000, forfeited_bond: 9_000_000 },
+    },
+    {
+      kind: "bounty_settled",
+      contract_address: "0x3333333333333333333333333333333333333333",
+      bounty_id: "0xccc",
+      tx_hash: "0x333",
+      block_number: 13,
+      log_index: 6,
+      occurred_at: "2026-08-13T00:00:00Z",
+      data: { solver_reward: 99_000_000, verifier_reward: 0, timeout_bond_bonus: 0 },
+    },
+  ];
+  const competition = {
+    events: [
+      {
+        kind: "competition_submission_rejected",
+        contract_address: "0x4444444444444444444444444444444444444444",
+        bounty_id: "0xddd",
+        tx_hash: "0x444",
+        block_number: 14,
+        log_index: 7,
+        occurred_at: "2026-08-11T13:00:00Z",
+        data: { submission_sequence: 1, bond_paid_to_verifier: 200_000, refund: 8_000_000 },
+      },
+      {
+        kind: "bounty_settled",
+        contract_address: "0x5555555555555555555555555555555555555555",
+        bounty_id: "0xeee",
+        tx_hash: "0x555",
+        block_number: 15,
+        log_index: 8,
+        occurred_at: "2026-08-12T13:00:00Z",
+        data: { submission_sequence: 2, solver_reward: 2_000_000, verifier_reward: 200_000, timeout_bond_bonus: 75_000 },
+      },
+    ],
+  };
+  const rows = metrics.canonicalPayoutRows(autonomous, competition, {
+    started_at: "2026-08-11T00:00:00Z",
+    ended_at: "2026-08-13T00:00:00Z",
+  });
+  const summary = metrics.payoutAuditSummary(rows);
+
+  assert.equal(rows.length, 4);
+  assert.equal(rows[0].tx_hash, "0x555");
+  assert.match(rows[0].explorer_url, /basescan\.org\/tx\/0x555#eventlog$/);
+  assert.match(rows[0].api_url, /bounty_id=0xeee$/);
+  assert.equal(rows.some((row) => row.contract_address.startsWith("0x9999")), true);
+  assert.deepEqual(summary, {
+    payout_events: 4,
+    settlement_events: 2,
+    solver_base_units: 3_000_000,
+    verifier_base_units: 600_000,
+    bonus_base_units: 125_000,
+    total_base_units: 3_725_000,
+  });
+});

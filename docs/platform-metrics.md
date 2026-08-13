@@ -53,6 +53,12 @@ Returned claim bonds, forfeited bonds, refunds, funding plans or intentions,
 unconfirmed transactions, and leaderboard prizes are excluded. Only a
 confirmed canonical `BountySettled` event proves solver payment.
 
+Recovery reservations are an active-inventory safety control. They keep a
+contract out of claimable inventory and verification work, but do not remove
+an already confirmed payout from immutable historical totals. The homepage and
+dashboard both read lifetime payout volume and settlement-event count from this
+same aggregate instead of recomputing them from the current opportunity feed.
+
 Platform revenue is reported separately as `0 USDC — monetization not active`.
 Marketplace payout volume is not platform revenue.
 
@@ -77,6 +83,20 @@ definitions. Combined inventory is withheld when either protocol is unavailable.
 The response intentionally excludes GitHub participation
 and all raw handles, wallet addresses, comment authors, event IDs, and
 transaction IDs.
+
+For public auditability, the dashboard independently reads the existing
+canonical event surfaces:
+
+- `GET /v1/base/autonomous-bounties/events?network=base-mainnet`
+- `GET /v1/base/open-competition-v1/events?network=base-mainnet`
+
+It filters those records to the selected UTC window, applies the payout formula
+above, and requires the exact base-unit sum and `BountySettled` count to match
+the aggregate. Every displayed payout row links to the bounty-scoped raw event
+set and its BaseScan transaction. Contract, bounty, event, and transaction
+identifiers are public blockchain evidence; participant wallet identities are
+not rendered in the ledger. A missing stream or arithmetic mismatch marks the
+dashboard partial instead of silently trusting or replacing the aggregate.
 
 `/generated/github-participation.json`
 
@@ -121,9 +141,9 @@ and is never added to active identities.
 - Missing inventory stays unavailable instead of becoming zero.
 - Missing historical browser analytics is disclosed and never estimated.
 
-The page refreshes the platform aggregate every minute and GitHub plus browser
-analytics every five minutes. It pauses periodic work while hidden and refreshes
-after the page becomes visible again.
+The page refreshes the platform aggregate and both canonical proof streams every
+minute, and GitHub plus browser analytics every five minutes. It pauses periodic
+work while hidden and refreshes after the page becomes visible again.
 
 ## Recheck commands
 

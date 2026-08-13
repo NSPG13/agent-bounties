@@ -263,12 +263,168 @@ body.metrics-page {
 
 .trend-section,
 .repository-section,
+.payout-audit-section,
 .composition-section,
 .inventory-section,
 .comparison-section,
 .supporting-section,
 .evidence-section {
   padding: clamp(70px, 9vw, 132px) 0 0;
+}
+
+.payout-audit-heading {
+  align-items: center;
+}
+
+.payout-audit-section {
+  scroll-margin-top: 148px;
+}
+
+.audit-verdict {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.audit-verdict p,
+.audit-method {
+  margin: 0;
+  color: var(--metrics-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.audit-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 1px;
+  background: var(--metrics-line);
+}
+
+.audit-totals article {
+  min-width: 0;
+  padding: clamp(24px, 3vw, 38px);
+  background: #030c08;
+}
+
+.audit-totals span,
+.audit-totals small {
+  display: block;
+  color: var(--metrics-muted);
+  font-size: 11px;
+}
+
+.audit-totals span {
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.audit-totals strong {
+  display: block;
+  margin: 18px 0 12px;
+  color: var(--metrics-paper);
+  font: 500 clamp(30px, 4vw, 54px) / 1 Georgia, "Times New Roman", serif;
+  letter-spacing: -0.045em;
+}
+
+.audit-totals article:first-child strong {
+  color: var(--metrics-blue);
+}
+
+.audit-totals code,
+.audit-method code {
+  color: var(--metrics-accent);
+}
+
+.audit-table-shell {
+  max-height: 620px;
+  margin-top: 24px;
+  overflow: auto;
+  border: 1px solid var(--metrics-line);
+  background: rgba(3, 12, 8, 0.78);
+  scrollbar-color: var(--metrics-line-strong) #030c08;
+}
+
+.audit-table-shell:focus-visible {
+  outline: 2px solid var(--metrics-accent);
+  outline-offset: 3px;
+}
+
+.audit-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.audit-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--metrics-line-strong);
+  background: #06110c;
+  color: var(--metrics-muted);
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.audit-table td {
+  padding: 17px 18px;
+  border-bottom: 1px solid var(--metrics-line);
+  color: #c6d0c7;
+  font-size: 12px;
+  vertical-align: top;
+}
+
+.audit-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.audit-table td:nth-child(2) strong,
+.audit-table td:nth-child(4) {
+  color: var(--metrics-paper);
+  font-weight: 760;
+}
+
+.audit-table td:nth-child(2) strong,
+.audit-table td:nth-child(2) span,
+.audit-table td:nth-child(3) code,
+.audit-table td:nth-child(3) span {
+  display: block;
+}
+
+.audit-table td:nth-child(2) span,
+.audit-table td:nth-child(3) span {
+  margin-top: 6px;
+  color: #7f8d84;
+}
+
+.audit-table code {
+  color: var(--metrics-accent);
+  font-size: 11px;
+}
+
+.audit-table td:last-child {
+  white-space: nowrap;
+}
+
+.audit-table a {
+  color: var(--metrics-blue);
+  font-weight: 760;
+  text-underline-offset: 3px;
+}
+
+.audit-table a + a {
+  margin-left: 12px;
+}
+
+.audit-method {
+  max-width: 920px;
+  margin-top: 18px;
 }
 
 .repository-status-line {
@@ -617,7 +773,7 @@ body.metrics-page {
 
 .source-ledger {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 1px;
   margin-top: 32px;
   background: var(--metrics-line);
@@ -736,6 +892,7 @@ body.metrics-page {
 
 @media (max-width: 980px) {
   .headline-metrics,
+  .audit-totals,
   .repository-metrics,
   .inventory-ledger,
   .source-ledger {
@@ -799,6 +956,10 @@ body.metrics-page {
 
   .trend-figure {
     padding: 24px 18px;
+  }
+
+  .audit-table-shell {
+    max-height: 520px;
   }
 
   .role-row {
