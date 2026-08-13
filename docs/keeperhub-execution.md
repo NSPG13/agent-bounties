@@ -19,6 +19,28 @@ execution API:
 The adapter rejects every other chain, contract, function, native value, and
 nonzero initial-funding request.
 
+## Judge in 60 seconds
+
+The public KeeperHub execution is
+[`0x80fb...b329`](https://sepolia.basescan.org/tx/0x80fb04d83d6135c2b1f9753d9fb449a693d9f1be0a84fddcc60f03ecee6ab329),
+with KeeperHub execution ID `z2lp1eatpds9fx766rktg`. Its machine-readable
+receipt is checked in at
+[`docs/evidence/keeperhub-agents-onchain-canary-base-sepolia-2026-08-13.json`](evidence/keeperhub-agents-onchain-canary-base-sepolia-2026-08-13.json).
+
+Verify the receipt directly against Base Sepolia:
+
+```powershell
+node scripts/verify_keeperhub_canary_evidence.mjs `
+  --evidence docs/evidence/keeperhub-agents-onchain-canary-base-sepolia-2026-08-13.json `
+  --rpc-url https://sepolia.base.org
+```
+
+The verifier fails closed unless the RPC reports Base Sepolia, the exact
+transaction succeeded at the recorded block with the recorded gas usage, and
+the factory emitted exactly one matching `CanonicalCompetitionCreated` event
+for the recorded bounty ID, bounty address, and creator. It does not infer
+funding or payment from a successful transaction.
+
 ## Authentication
 
 Create an organization API key (`kh_`) in KeeperHub under **Settings → API
