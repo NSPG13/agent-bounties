@@ -257,6 +257,7 @@ def main() -> int:
         ["--check", "scripts/open-competition-v1-signer.js"],
         ["scripts/test-open-competition-v1-signer-console.js"],
         ["scripts/test-create-competition-flow.js"],
+        ["scripts/test_keeperhub_direct_execution.mjs"],
         ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
