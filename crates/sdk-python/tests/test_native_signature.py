@@ -147,7 +147,9 @@ class NativeSignatureTests(unittest.TestCase):
         self.assertEqual(client.requests[0]["solver_budget_usdc"], "8.00")
 
     def test_shared_http_builder_preserves_false_zero_and_headers(self):
-        client = AgentBountiesClient("https://example.test", "operator")
+        client = AgentBountiesClient(
+            "https://example.test", "operator", "analytics-exclusion"
+        )
         response = httpx.Response(200, json={"ok": True}, request=httpx.Request("GET", "https://example.test"))
         with patch("agent_bounties.client.httpx.request", return_value=response) as request:
             client._http(
@@ -162,6 +164,7 @@ class NativeSignatureTests(unittest.TestCase):
             {
                 "x-agent-bounties-interface": "api",
                 "x-operator-token": "operator",
+                "x-agent-bounties-analytics-exclusion": "analytics-exclusion",
                 "x-extra": "value",
             },
         )

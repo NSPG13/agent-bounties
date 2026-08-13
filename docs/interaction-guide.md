@@ -30,6 +30,13 @@ For ChatGPT development or private use:
 4. Ask it to inspect work or call `prepare_bounty_post` after the exact terms
    and image are approved.
 
+For the maintainer's private ChatGPT connector, choose the optional OAuth link
+and enter the scoped `ANALYTICS_EXCLUSION_TOKEN` only on the first-party
+`mcp.agentbounties.app/oauth/authorize` page. The resulting bearer token has
+only `analytics:exclude-owner`; it grants no operator or wallet authority. MCP
+does not reveal a ChatGPT account identity by itself, so an unlinked connector
+is intentionally counted as external rather than fingerprinted.
+
 The MCP client negotiates the protocol era. Do not add protocol headers by
 hand in a normal ChatGPT conversation.
 
@@ -128,7 +135,9 @@ dominant measured product-discovery mechanism, while GitHub and repository
 cloning were the dominant measured contributor/agent-development mechanisms.
 The `interfaces` array in `GET /v1/analytics/site` begins collecting aggregate
 API, CLI, modern MCP, legacy MCP, and MCP HTTP-adapter interactions only after
-this release is deployed. It has no historical backfill, so do not infer a
+the external-only epoch is deployed. Verified maintainer requests are omitted
+and the contaminated launch aggregate is not returned. It has no historical
+backfill, so do not infer a
 pre-release MCP-versus-REST-versus-CLI ranking from its first partial hours.
 
 The likely reason is lower friction and task fit: browsing needs no connector,

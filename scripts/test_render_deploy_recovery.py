@@ -248,6 +248,101 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 token_factory=lambda: "n" * 64,
             )
 
+    def test_analytics_exclusion_token_is_reused_without_publishing_it(self) -> None:
+        client = OperatorRotationClient()
+        result = recovery.ensure_analytics_exclusion_token(
+            client,
+            {
+                "envGroup": {
+                    "envVars": [
+                        {
+                            "key": recovery.ANALYTICS_EXCLUSION_TOKEN_KEY,
+                            "value": "e" * 64,
+                        }
+                    ]
+                }
+            },
+        )
+        self.assertFalse(result["changed"])
+        self.assertFalse(result["secret_published"])
+        self.assertEqual(client._analytics_exclusion_token, "e" * 64)
+        self.assertNotIn("e" * 64, recovery.json.dumps(result))
+
+    def test_analytics_exclusion_token_is_generated_without_publishing_it(self) -> None:
+        client = OperatorRotationClient()
+        result = recovery.ensure_analytics_exclusion_token(
+            client,
+            {
+                "id": "evg-" + "e" * 20,
+                "envGroup": {"envVars": []},
+            },
+            token_factory=lambda: "n" * 64,
+        )
+        self.assertTrue(result["changed"])
+        self.assertFalse(result["secret_published"])
+        self.assertEqual(
+            client.values[0][1:],
+            (recovery.ANALYTICS_EXCLUSION_TOKEN_KEY, "n" * 64),
+        )
+        self.assertEqual(client._analytics_exclusion_token, "n" * 64)
+        self.assertNotIn("n" * 64, recovery.json.dumps(result))
+
+    def test_exclusion_canaries_cover_every_interface_and_both_mcp_eras(self) -> None:
+        responses = [
+            {"schema_version": "agent-bounties/discovery-v2"},
+            {"schema_version": "agent-bounties/discovery-v2"},
+            {
+                "result": {
+                    "protocolVersion": recovery.LEGACY_MCP_PROTOCOL_VERSION
+                }
+            },
+            {
+                "result": {
+                    "supportedVersions": [recovery.MODERN_MCP_PROTOCOL_VERSION]
+                }
+            },
+        ]
+        with mock.patch.object(
+            recovery,
+            "fetch_exclusion_attestation",
+            side_effect=responses,
+        ) as fetch:
+            result = recovery.validate_analytics_exclusion_canaries(
+                "https://api.example",
+                "https://mcp.example",
+                "t" * 64,
+            )
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["secret_published"])
+        self.assertEqual(result["interfaces"], ["api", "cli", "mcp"])
+        self.assertEqual(fetch.call_count, 4)
+        self.assertFalse(fetch.call_args_list[0].kwargs.get("bearer", False))
+        self.assertFalse(fetch.call_args_list[1].kwargs.get("bearer", False))
+        self.assertFalse(fetch.call_args_list[2].kwargs.get("bearer", False))
+        self.assertTrue(fetch.call_args_list[3].kwargs["bearer"])
+        self.assertNotIn("t" * 64, recovery.json.dumps(result))
+
+    def test_oauth_exclusion_token_is_signed_scoped_and_secret_free(self) -> None:
+        token = recovery.analytics_oauth_access_token(
+            "s" * 64,
+            "https://mcp.example",
+            1_800_000_000,
+        )
+        prefix, payload, signature = token.split(".")
+        claims = recovery.json.loads(
+            recovery.base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+        self.assertEqual(prefix, recovery.ANALYTICS_OAUTH_TOKEN_PREFIX)
+        self.assertEqual(claims["iss"], "https://mcp.example")
+        self.assertEqual(claims["aud"], "https://mcp.example")
+        self.assertEqual(claims["scope"], recovery.ANALYTICS_EXCLUSION_SCOPE)
+        self.assertEqual(
+            claims["exp"] - claims["iat"],
+            recovery.ANALYTICS_OAUTH_TOKEN_LIFETIME_SECONDS,
+        )
+        self.assertTrue(signature)
+        self.assertNotIn("s" * 64, token)
+
     def test_operator_token_rotation_requires_deploy_only(self) -> None:
         with self.assertRaisesRegex(recovery.RecoveryError, "requires deploy_only"):
             recovery.deploy(

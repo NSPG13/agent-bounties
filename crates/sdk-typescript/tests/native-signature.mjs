@@ -216,6 +216,7 @@ test("query methods preserve ordering, false values, and operator headers", asyn
     const client = new AgentBountiesClient({
       baseUrl: "https://api.example",
       operatorApiToken: "operator-token",
+      analyticsExclusionToken: "analytics-exclusion",
     });
     await client.listAutonomousBounties("base-mainnet", false);
     await client.getSiteAnalytics(0);
@@ -226,6 +227,10 @@ test("query methods preserve ordering, false values, and operator headers", asyn
       "https://api.example/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false",
     );
     assert.equal(requests[0].init.headers["x-operator-token"], "operator-token");
+    assert.equal(
+      requests[0].init.headers["x-agent-bounties-analytics-exclusion"],
+      "analytics-exclusion",
+    );
     assert.equal(requests[1].url, "https://api.example/v1/analytics/site?window_hours=0");
     assert.equal(
       requests[2].url,

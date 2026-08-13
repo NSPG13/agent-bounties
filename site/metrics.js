@@ -621,7 +621,7 @@
         const track = doc.createElement("span");
         track.className = "interface-track";
         track.setAttribute("role", "progressbar");
-        track.setAttribute("aria-label", `${row.label} share of observed requests`);
+        track.setAttribute("aria-label", `${row.label} share of observed external requests`);
         track.setAttribute("aria-valuemin", "0");
         track.setAttribute("aria-valuemax", "100");
         track.setAttribute("aria-valuenow", String(Math.round(row.share * 100)));
@@ -644,7 +644,7 @@
       const sources = [
         ["Marketplace events", merged.platform_status, state.platform?.generated_at, "Confirmed canonical Base events with verified block time."],
         ["Payout proof ledger", audit.status, audit.generated_at, "Every qualifying payout event is summed in the browser and linked to its raw record and Base transaction."],
-        ["Interface usage", interfaceUsage.status, state.acquisition?.generated_at, "Hourly API, CLI, and MCP request aggregates; not people, clients, or sessions."],
+        ["External interface usage", interfaceUsage.status, state.acquisition?.generated_at, "Hourly external API, CLI, and MCP request aggregates; verified operator traffic is omitted."],
         ["GitHub participation", merged.github_status, state.github?.generated_at, "Hourly aggregate of external issues, pull requests, comments, and reviews."],
         ["Repository acquisition", repositoryStatus, state.github?.repository_acquisition?.generated_at, "GitHub clone and page-view aggregates for its rolling 14-day traffic window."],
         ["Browser acquisition", acquisitionStatus, state.acquisition?.generated_at, "First-party browser/device IDs; never counted as users or identities."],
@@ -782,8 +782,8 @@
       if (merged.status === "delayed") notices.push("One or more required sources are delayed; values remain visible with their source timestamps.");
       if (merged.status === "unavailable") notices.push("Marketplace metrics are temporarily unavailable; no missing value has been replaced with zero.");
       if (["partial", "unavailable"].includes(repositoryStatus)) notices.push("Repository acquisition is unavailable or incomplete; historical snapshots remain labeled and are not substituted as live data.");
-      if (interfaceUsage.status === "unavailable") notices.push("Interface usage is unavailable; API, CLI, and MCP request counts are not estimated.");
-      if (["partial", "delayed"].includes(interfaceUsage.status)) notices.push("Interface usage is delayed or incomplete; the last observed aggregate remains labeled with its timestamp.");
+      if (interfaceUsage.status === "unavailable") notices.push("External interface usage is unavailable; API, CLI, and MCP request counts are not estimated.");
+      if (["partial", "delayed"].includes(interfaceUsage.status)) notices.push("External interface usage is delayed or incomplete; the last observed aggregate remains labeled with its timestamp.");
       if (audit.status === "partial") notices.push("The payout proof ledger does not yet reconcile to the aggregate; payout values are marked partial.");
       if (audit.status === "unavailable") notices.push("The public payout proof streams are unavailable, so payout auditability is temporarily partial.");
       if (overallStatus === "ready") notices.push(`Live aggregate for ${state.period === "lifetime" ? "lifetime since launch" : state.period}. Roles are not additive.`);

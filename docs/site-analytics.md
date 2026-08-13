@@ -34,9 +34,9 @@ GA4 disabled without affecting first-party analytics.
 
 The aggregate endpoint is public and never returns event-level identifiers.
 
-## Interface usage contract
+## External interface usage contract
 
-The `interfaces` array registers observed requests after deployment:
+The `interfaces` array registers external observed requests after deployment:
 
 - `api` and `cli` use `protocol_era=not_applicable` and are counted only when
   the caller sends `X-Agent-Bounties-Interface: api` or
@@ -44,9 +44,18 @@ The `interfaces` array registers observed requests after deployment:
   appropriate value automatically.
 - `mcp` is classified by the MCP service as `modern` (`2026-07-28`), `legacy`
   (the initialization-era protocol), or `http_adapter` (`/tools/*`).
+- A request is omitted before aggregation when the API or MCP service verifies
+  either the dedicated analytics-exclusion credential or an existing operator
+  credential. The exclusion token grants no operator, wallet, payment, or
+  mutation authority.
 - Each row contains only request count, successful request count, and first and
   last observation timestamps for the selected window. Storage is one row per
   UTC hour, interface, and protocol era.
+
+The public aggregate starts clean in `external_interface_usage_hourly`. The
+earlier `interface_usage_hourly` launch aggregate is retained for audit but is
+never returned because it contains maintainer deployment traffic that cannot be
+separated retrospectively. No external rows are copied into the new table.
 
 Use direct REST with explicit attribution:
 
@@ -66,6 +75,29 @@ than one interface. API/CLI attribution is self-declared, so missing or spoofed
 headers affect coverage. MCP classification is server-observed. Use the report
 to compare observed interaction volume and adoption trends, not to claim a
 surveyed preference or a count of people.
+
+For private maintainer API or CLI work, retrieve the generated
+`ANALYTICS_EXCLUSION_TOKEN` from the Render environment group without placing it
+in an issue, prompt, log, or repository. Direct REST requests send it in
+`X-Agent-Bounties-Analytics-Exclusion`. The Rust CLI and Python SDK read
+`AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN`; TypeScript accepts
+`analyticsExclusionToken` in `AgentBountiesClientOptions`.
+An accepted credential is explicitly attested with
+`X-Agent-Bounties-Analytics-Excluded: true`; the secret itself is never echoed.
+
+```powershell
+$env:AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN = "<scoped-exclusion-token>"
+cargo run -p cli -- production-smoke `
+  --api-base-url https://api.agentbounties.app `
+  --mcp-base-url https://mcp.agentbounties.app
+```
+
+ChatGPT cannot present a custom API key. The private connector instead uses the
+server's optional OAuth authorization-code + S256 PKCE flow. In the ChatGPT app
+settings, link the connector and enter the scoped exclusion token only on the
+first-party `mcp.agentbounties.app/oauth/authorize` page. ChatGPT then sends the
+resulting analytics-only bearer token on MCP requests. Anonymous public users
+continue to use every public tool without authentication.
 
 ## Event contract
 
@@ -113,9 +145,10 @@ storage clearing creates a new visitor identifier.
 
 The first-party browser collector uses no cookies and stores no IP address,
 user agent, full referrer URL, URL query string, wallet address, email address,
-or arbitrary metadata. Interface attribution additionally stores no client,
+or arbitrary metadata. External interface attribution additionally stores no client,
 session, visitor, account, wallet, request-body, prompt, tool-argument, or
-network identifier. It honors Global Privacy Control and Do Not Track,
+network identifier. It stores neither the exclusion credential nor an operator
+identifier. It honors Global Privacy Control and Do Not Track,
 supports an explicit browser opt-out on the privacy page, uses
 `credentials: omit`, and analytics delivery never blocks a product action.
 
@@ -136,7 +169,7 @@ Not Track, explicit opt-out, or `?analytics=off` prevents GA4 from loading.
 python scripts/check-migration-history.py
 python scripts/check-site.py
 cargo test -p db site_analytics_migration_is_privacy_minimized_and_idempotent
-cargo test -p db interface_usage_migration_stores_only_hourly_aggregate_attribution
+cargo test -p db external_interface_usage_migration_starts_a_clean_privacy_minimized_epoch
 cargo test -p api site_analytics
 ```
 
