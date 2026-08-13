@@ -210,7 +210,7 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         )
         state = MODULE.policy_state(PolicyCast(), deployment)
         self.assertEqual(state["policy_hash"], MODULE.active_wallet.POLICY_HASH)
-        self.assertEqual(state["policy_version"], 5)
+        self.assertEqual(state["policy_version"], MODULE.active_wallet.POLICY_VERSION)
         self.assertEqual(state["affordable_creations"], 4)
 
     def test_active_wallet_policy_drift_fails_closed(self) -> None:
@@ -230,7 +230,7 @@ class ActivateRoutedV3Tests(unittest.TestCase):
             "deterministic_verifier": "0x" + "93" * 20,
             "signed_quorum": "0x" + "94" * 32,
             "policy_hash": "0x" + "95" * 32,
-            "policy_version": 6,
+            "policy_version": MODULE.active_wallet.POLICY_VERSION + 1,
             "max_per_period": 11_000_000,
         }
         for field, observed in cases.items():
