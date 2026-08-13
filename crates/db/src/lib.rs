@@ -8440,8 +8440,21 @@ mod tests {
             signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x010203".into(),
         };
         sqlx::query("INSERT INTO x402_relayer_leases(network,lease_token,lease_expires_at,updated_at) VALUES('base-mainnet',$1,$2,now()) ON CONFLICT(network) DO UPDATE SET lease_token=$1,lease_expires_at=$2,updated_at=now()")
-            .bind(attempt.lease_token).bind(now - chrono::Duration::minutes(2))
+            .bind(attempt.lease_token).bind(now + chrono::Duration::minutes(2))
             .execute(&store.pool).await.unwrap();
+        assert!(matches!(store.reserve_recovery_attempt(&attempt).await,
+            Err(DbError::RecoveryAttemptConflict(_))));
+        assert_eq!(store.get_x402_relayer_lease_attestation("base-mainnet").await.unwrap().unwrap().lease_token,
+            attempt.lease_token, "active lease failure must roll back without clearing");
+        let forged_token=Uuid::new_v4();
+        sqlx::query("UPDATE x402_relayer_leases SET lease_token=$1,lease_expires_at=$2 WHERE network='base-mainnet'")
+            .bind(forged_token).bind(now-chrono::Duration::minutes(2)).execute(&store.pool).await.unwrap();
+        assert!(matches!(store.reserve_recovery_attempt(&attempt).await,
+            Err(DbError::RecoveryAttemptConflict(_))));
+        assert_eq!(store.get_x402_relayer_lease_attestation("base-mainnet").await.unwrap().unwrap().lease_token,
+            forged_token, "forged token failure must roll back without clearing");
+        sqlx::query("UPDATE x402_relayer_leases SET lease_token=$1 WHERE network='base-mainnet'")
+            .bind(attempt.lease_token).execute(&store.pool).await.unwrap();
         let reserved = store.reserve_recovery_attempt(&attempt).await.unwrap();
         assert_eq!(reserved.status, RecoveryAttemptStatus::Reserved);
         assert!(store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash)

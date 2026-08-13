@@ -2099,6 +2099,18 @@ fn valid_recovery_772_tuple(request: &DurableRecoveryRequest, code_hash: &str,
         && request.calldata.eq_ignore_ascii_case("0xf9251ec7")
 }
 
+fn valid_live_recovery_preflight(observed: &chain_base::RecoveryChainPreflight,
+    code_hash: &str, solver: &str) -> bool {
+    observed.code_hash.eq_ignore_ascii_case(code_hash) && observed.latest_nonce == 41
+        && observed.pending_nonce == 41 && observed.status == 3 && observed.round == 4
+        && observed.solver.eq_ignore_ascii_case(solver)
+        && observed.verification_expires_at == 1_786_586_903 && observed.active_bond == 10_000
+}
+
+fn valid_recovery_poststate(status:u64,round:u64,bond:u64,before:u128,after:u128)->bool{
+    status==1 && round==4 && bond==0 && after.checked_sub(before)==Some(10_000)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let store = match env::var("DATABASE_URL") {
@@ -10330,11 +10342,7 @@ async fn run_durable_recovery_attempt(
     let (_, rpc_url) = state.base_rpc_urls.resolve("base-mainnet").map_err(|e| base_rpc_fetch_status(&e))?;
     let preflight = observe_recovery_preflight(&rpc_url, RECOVERY_772_CONTRACT,
         &authorized_signer, request.request_id.unwrap_or(1)).await.map_err(|e| base_rpc_fetch_status(&e))?;
-    if !preflight.code_hash.eq_ignore_ascii_case(&expected_code_hash)
-        || preflight.latest_nonce != 41 || preflight.pending_nonce != 41
-        || preflight.status != 3 || preflight.round != 4
-        || !preflight.solver.eq_ignore_ascii_case(&expected_solver)
-        || preflight.verification_expires_at != 1_786_586_903 || preflight.active_bond != 10_000 {
+    if !valid_live_recovery_preflight(&preflight,&expected_code_hash,&expected_solver) {
         return Err(StatusCode::CONFLICT);
     }
     let request_id = request.request_id.unwrap_or(1);
@@ -10426,8 +10434,7 @@ async fn reconcile_durable_recovery_attempt(
         &attempt.solver_address,block-1,id+3).await.map_err(|e|base_rpc_fetch_status(&e))?;
     let after = observe_erc20_balance_at_block(&rpc_url,"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         &attempt.solver_address,block,id+4).await.map_err(|e|base_rpc_fetch_status(&e))?;
-    let exact_poststate = post_status == 1 && post_round == 4 && post_bond == 0
-        && after.checked_sub(before) == Some(10_000);
+    let exact_poststate = valid_recovery_poststate(post_status,post_round,post_bond,before,after);
     if !exact_event || !exact_poststate { return Err(StatusCode::CONFLICT); }
     let event_id = Uuid::new_v5(&Uuid::NAMESPACE_URL,
         format!("{}:{}", attempt.signed_transaction_hash, block).as_bytes());
@@ -21801,5 +21808,25 @@ fix-ci-failure
             let mut changed = base.clone(); mutate(&mut changed);
             assert!(!valid_recovery_772_tuple(&changed, &code_hash, solver, calldata));
         }
+    }
+
+    #[test]
+    fn recovery_live_preflight_and_poststate_reject_every_drift() {
+        let hash=format!("0x{}","11".repeat(32));
+        let solver="0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
+        let base=chain_base::RecoveryChainPreflight{code_hash:hash.clone(),latest_nonce:41,
+            pending_nonce:41,status:3,round:4,solver:solver.into(),verification_expires_at:1_786_586_903,
+            active_bond:10_000};
+        assert!(valid_live_recovery_preflight(&base,&hash,solver));
+        let mutations:Vec<Box<dyn Fn(&mut chain_base::RecoveryChainPreflight)>>=vec![
+            Box::new(|v|v.latest_nonce=40),Box::new(|v|v.pending_nonce=42),Box::new(|v|v.status=1),
+            Box::new(|v|v.round=5),Box::new(|v|v.verification_expires_at+=1),Box::new(|v|v.active_bond=0),
+            Box::new(|v|v.solver="0x0000000000000000000000000000000000000001".into()),
+            Box::new(|v|v.code_hash=format!("0x{}","22".repeat(32)))];
+        for mutate in mutations {let mut changed=base.clone();mutate(&mut changed);
+            assert!(!valid_live_recovery_preflight(&changed,&hash,solver));}
+        assert!(valid_recovery_poststate(1,4,0,100,10_100));
+        for args in [(3,4,0,100,10_100),(1,5,0,100,10_100),(1,4,1,100,10_100),
+            (1,4,0,100,10_099),(1,4,0,10_100,100)] {assert!(!valid_recovery_poststate(args.0,args.1,args.2,args.3,args.4));}
     }
 }
