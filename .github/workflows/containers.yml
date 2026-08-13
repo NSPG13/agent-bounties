@@ -8,14 +8,19 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "Dockerfile"
+      - "contracts/**"
+      - "crates/**"
       - "docker-compose.production.yml"
       - "docs/deployment.md"
+      - "fixtures/**"
       - "migrations/**"
+      - "schemas/**"
       - "scripts/check-containers.ps1"
       - "scripts/check-containers.sh"
       - "scripts/check-production-compose.ps1"
       - "scripts/check-production-compose.sh"
       - "scripts/check-production-smoke.sh"
+      - "site/**"
   push:
     branches: [main]
     paths:
@@ -24,14 +29,19 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "Dockerfile"
+      - "contracts/**"
+      - "crates/**"
       - "docker-compose.production.yml"
       - "docs/deployment.md"
+      - "fixtures/**"
       - "migrations/**"
+      - "schemas/**"
       - "scripts/check-containers.ps1"
       - "scripts/check-containers.sh"
       - "scripts/check-production-compose.ps1"
       - "scripts/check-production-compose.sh"
       - "scripts/check-production-smoke.sh"
+      - "site/**"
   workflow_dispatch:
 
 permissions:
