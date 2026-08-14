@@ -190,6 +190,30 @@ fn deployment_revision() -> String {
         .unwrap_or_else(|| "local".to_string())
 }
 
+fn interface_usage_excluded_event(protocol_era: ObservedProtocolEra, revision: &str) -> Value {
+    let protocol_era = match protocol_era {
+        ObservedProtocolEra::McpModern => "modern",
+        ObservedProtocolEra::McpLegacy => "legacy",
+        ObservedProtocolEra::NotApplicable | ObservedProtocolEra::McpHttpAdapter => {
+            unreachable!("only protocol MCP requests emit exclusion evidence")
+        }
+    };
+    json!({
+        "event": "interface_usage_excluded",
+        "interface": "mcp",
+        "protocol_era": protocol_era,
+        "success": true,
+        "revision": revision,
+    })
+}
+
+pub(crate) fn emit_interface_usage_excluded(protocol_era: ObservedProtocolEra) {
+    eprintln!(
+        "{}",
+        interface_usage_excluded_event(protocol_era, &deployment_revision())
+    );
+}
+
 fn health_response(revision: &str) -> impl IntoResponse {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -7868,6 +7892,42 @@ mod tests {
             &test_state(),
             &HeaderMap::new()
         ));
+    }
+
+    #[test]
+    fn interface_attribution_exclusion_evidence_is_redacted_and_revision_bound() {
+        for (era, expected) in [
+            (ObservedProtocolEra::McpModern, "modern"),
+            (ObservedProtocolEra::McpLegacy, "legacy"),
+        ] {
+            let event = interface_usage_excluded_event(era, &"a".repeat(40));
+            assert_eq!(
+                event,
+                json!({
+                    "event": "interface_usage_excluded",
+                    "interface": "mcp",
+                    "protocol_era": expected,
+                    "success": true,
+                    "revision": "a".repeat(40),
+                })
+            );
+            let fields = event
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                fields,
+                BTreeSet::from([
+                    "event".to_string(),
+                    "interface".to_string(),
+                    "protocol_era".to_string(),
+                    "revision".to_string(),
+                    "success".to_string(),
+                ])
+            );
+        }
     }
 
     fn test_state_with_network(network: BountyNetwork) -> SharedState {

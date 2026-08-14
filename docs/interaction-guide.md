@@ -30,6 +30,22 @@ For ChatGPT development or private use:
 4. Ask it to inspect work or call `prepare_bounty_post` after the exact terms
    and image are approved.
 
+Production has exactly two durable ChatGPT registrations:
+
+| Registration | Authorization | Intended use |
+| --- | --- | --- |
+| `Agent Bounties` | None | Public anonymous production access |
+| `Agent Bounties Operator QA` | OAuth | Private maintainer QA excluded from public interface metrics |
+
+Both use `https://mcp.agentbounties.app/mcp` and must scan the same ten tools:
+`get_bounty_feed`, `render_bounty_feed`, `prepare_moonpay_onramp`,
+`prepare_bounty_post`, `prepare_bounty_action`,
+`get_bounty_action_status`, `compile_objective_with_cloud_agent`,
+`list_bounty_comments`, `add_bounty_comment`, and `create_share_bundle`.
+`get_bounty_feed` is the only discovery entry point advertised to a new
+ChatGPT registration. The core modern and legacy MCP catalogs retain
+`list_autonomous_bounties`, and cached registrations may still call it.
+
 For the maintainer's private ChatGPT connector, choose the optional OAuth link
 and enter the scoped `ANALYTICS_EXCLUSION_TOKEN` only on the first-party
 `mcp.agentbounties.app/oauth/authorize` page. The resulting bearer token has
@@ -39,6 +55,19 @@ is intentionally counted as external rather than fingerprinted.
 
 The MCP client negotiates the protocol era. Do not add protocol headers by
 hand in a normal ChatGPT conversation.
+
+Never owner-test through the public registration: an anonymous owner request
+is deliberately indistinguishable from external traffic. Refresh and test
+`Agent Bounties Operator QA` first, verify a private redacted exclusion event,
+and refresh the public registration only after QA passes. Reauthorize Operator
+QA before its 90-day bearer lifetime expires; otherwise stop ChatGPT
+maintainer testing and use the API or CLI exclusion credential until OAuth is
+restored.
+
+Temporary registrations must name their purpose, date, short revision, owner,
+and either `DELETE-TODAY` or an explicit expiry. Remove them in the same
+release session. Do not create durable registrations named `Current`,
+`Latest`, `Final`, `Release`, or `Proven`.
 
 ## Modern MCP
 

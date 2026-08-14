@@ -14,6 +14,7 @@ from typing import Any
 MODERN_VERSION = "2026-07-28"
 LEGACY_VERSION = "2025-06-18"
 WIDGET_URI = "ui://agent-bounties/live-feed-v4.html"
+COMPATIBILITY_TOOL = "list_autonomous_bounties"
 
 
 def post_json(
@@ -149,9 +150,15 @@ def probe(endpoint: str) -> dict[str, Any]:
     modern_checks: dict[str, bool] = {"server_discover": modern_available}
     if modern_available:
         status, response = modern_request(endpoint, 2, "tools/list")
+        modern_tool_names = {
+            tool.get("name")
+            for tool in response.get("result", {}).get("tools", [])
+            if isinstance(tool, dict)
+        }
         modern_checks["tools_list"] = successful_modern_result(
             status, response, cacheable=True
         ) and bool(response["result"].get("tools"))
+        modern_checks["compatibility_tool"] = COMPATIBILITY_TOOL in modern_tool_names
         status, response = modern_request(endpoint, 3, "resources/read", {"uri": WIDGET_URI})
         modern_checks["resources_read"] = successful_modern_result(
             status, response, cacheable=True
@@ -187,9 +194,15 @@ def probe(endpoint: str) -> dict[str, Any]:
     legacy_checks: dict[str, bool] = {"initialize": legacy_available}
     if legacy_available:
         status, response = legacy_request(endpoint, 12, "tools/list")
+        legacy_tool_names = {
+            tool.get("name")
+            for tool in response.get("result", {}).get("tools", [])
+            if isinstance(tool, dict)
+        }
         legacy_checks["tools_list"] = successful_result(status, response) and bool(
             response["result"].get("tools")
         )
+        legacy_checks["compatibility_tool"] = COMPATIBILITY_TOOL in legacy_tool_names
         status, response = legacy_request(
             endpoint, 13, "resources/read", {"uri": WIDGET_URI}
         )
