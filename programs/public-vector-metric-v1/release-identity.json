@@ -1,11 +1,12 @@
 {
   "schema": "agent-bounties/open-competition-v2-metric-release-identity-v1",
   "profile_id": "public-vector-metric-v1",
+  "status": "pending_patched_rebuild",
   "rust_version": "1.96.1",
-  "sp1_version": "6.3.1",
-  "sp1_commit": "8252c2905ce32964df68248117015c61ebb854db",
+  "sp1_version": "6.4.0-agent-bounties-sp1-safe-v1",
+  "sp1_commit": "cac02844905e41f8ad1bedeeb85f455452f9e925",
   "program_vkey": "0x004f46857a039393a0c686abe9c66ed1aa98fc3f86acd20e2778d58ad1ac1bba",
-  "source_hash": "0x4e78a9da5ad688b3461a063d6589bbf17c511c67aaa0a537f448076482ea2c01",
+  "source_hash": "0x59e8a70adb2a5f667ce2f93328c9282d78a0e4d1db4e56dde9a01440a341a53f",
   "elf_keccak256": "0x27a64455409be7a6ddb733251392f45968735bf824f29b85cbf463942ee02353",
   "elf_sha256": "651bfcb9172309211cbb360ba27e4c9335e1e10914a82b84d9609f2f8954d0d3"
 }

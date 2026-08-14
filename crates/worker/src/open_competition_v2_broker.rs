@@ -1192,7 +1192,7 @@ mod tests {
     fn event(kind: OpenCompetitionV2EventKind, data: Value, index: u64) -> OpenCompetitionV2Event {
         OpenCompetitionV2Event {
             id: Uuid::new_v4(),
-            protocol_version: "agent-bounties/open-competition-v2-beta1".to_string(),
+            protocol_version: "agent-bounties/open-competition-v2-beta2".to_string(),
             log_key: format!("log-{index}"),
             tx_hash: format!("0x{:064x}", index + 1),
             block_number: 200,

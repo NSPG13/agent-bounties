@@ -79,6 +79,52 @@ envVarGroups:
       - key: X402_RELAYER_PRIVATE_KEY
         sync: false
 
+  - name: agent-bounties-v2-beta2
+    envVars:
+      # These identities come only from the signed Beta2 deployment evidence bundle.
+      - key: BASE_MAINNET_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON
+        sync: false
+      - key: OPEN_COMPETITION_V2_FACTORY_CONTRACT
+        sync: false
+      - key: OPEN_COMPETITION_V2_KEEPER_FACTORY
+        sync: false
+      - key: OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK
+        sync: false
+      - key: OPEN_COMPETITION_V2_INDEXER_RPC_URL
+        sync: false
+      - key: OPEN_COMPETITION_V2_SHADOW_RPC_URL
+        sync: false
+      - key: OPEN_COMPETITION_V2_PROVER_URL
+        sync: false
+      - key: OPEN_COMPETITION_V2_PROVER_API_KEY
+        sync: false
+      - key: OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS
+        sync: false
+      - key: OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS
+        sync: false
+      - key: OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS
+        sync: false
+      - key: OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS
+        sync: false
+      - key: OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS
+        sync: false
+      - key: OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS
+        sync: false
+      - key: OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS
+        value: "120"
+      - key: OPEN_COMPETITION_V2_INDEXER_MAX_LAG_BLOCKS
+        value: "64"
+      - key: OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS
+        value: "120"
+      - key: OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS
+        value: "180"
+      - key: OPEN_COMPETITION_V2_REFUND_WINDOW_SECONDS
+        value: "1800"
+      - key: OPEN_COMPETITION_V2_RELAYER_MAX_GAS
+        value: "8000000"
+      - key: OPEN_COMPETITION_V2_RELAYER_MAX_FEE_PER_GAS_WEI
+        value: "10000000000"
+
   - name: agent-bounties-bond-sponsor
     envVars:
       - key: BOND_SPONSOR_GRANT_SIGNER_PRIVATE_KEY
@@ -206,6 +252,7 @@ services:
       - fromGroup: agent-bounties-x402-relayer
       - fromGroup: agent-bounties-bond-sponsor
       - fromGroup: agent-bounties-discovery
+      - fromGroup: agent-bounties-v2-beta2
 
   - type: web
     name: agent-bounties-mcp
@@ -271,6 +318,7 @@ services:
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-v2-beta2
 
   - type: worker
     name: agent-bounties-base-indexer
@@ -368,6 +416,138 @@ services:
       - key: BASE_INDEXER_EXIT_AFTER_FAILURES
         value: "8"
       - fromGroup: agent-bounties-base
+
+  - type: worker
+    name: agent-bounties-open-competition-v2-beta2-indexer
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: worker
+      - key: APP_BINARY
+        value: worker
+      - key: RUST_LOG
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: BASE_INDEXER_PROTOCOL
+        value: open-competition-v2-beta2
+      - key: OPEN_COMPETITION_V2_INDEXER_NETWORK
+        value: base-mainnet
+      - key: OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS
+        value: "15"
+      - key: OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS
+        value: "2"
+      - key: OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY
+        value: "2000"
+      - key: BASE_INDEXER_RETRY_INITIAL_SECONDS
+        value: "5"
+      - key: BASE_INDEXER_RETRY_MAX_SECONDS
+        value: "120"
+      - key: BASE_INDEXER_EXIT_AFTER_FAILURES
+        value: "8"
+      - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-v2-beta2
+
+  - type: worker
+    name: agent-bounties-open-competition-v2-beta2-shadow
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: worker
+      - key: APP_BINARY
+        value: worker
+      - key: RUST_LOG
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: BASE_INDEXER_PROTOCOL
+        value: open-competition-v2-shadow
+      - key: OPEN_COMPETITION_V2_INDEXER_NETWORK
+        value: base-mainnet
+      - key: OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY
+        value: "2000"
+      - key: OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS
+        value: "30"
+      - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-v2-beta2
+
+  - type: worker
+    name: agent-bounties-open-competition-v2-beta2-keeper
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: worker
+      - key: APP_BINARY
+        value: worker
+      - key: RUST_LOG
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: BASE_INDEXER_PROTOCOL
+        value: open-competition-v2-keeper
+      - key: OPEN_COMPETITION_V2_KEEPER_NETWORK
+        value: base-mainnet
+      - key: OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS
+        value: "5"
+      - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-x402-relayer
+      - fromGroup: agent-bounties-v2-beta2
+
+  - type: worker
+    name: agent-bounties-open-competition-v2-beta2-broker
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: off
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: APP_PACKAGE
+        value: worker
+      - key: APP_BINARY
+        value: worker
+      - key: RUST_LOG
+        value: info
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-bounties-postgres
+          property: connectionString
+      - key: BASE_INDEXER_PROTOCOL
+        value: open-competition-v2-broker
+      - key: OPEN_COMPETITION_V2_BROKER_POLL_SECONDS
+        value: "5"
+      - fromGroup: agent-bounties-base
+      - fromGroup: agent-bounties-x402-relayer
+      - fromGroup: agent-bounties-v2-beta2
 
 databases:
   - name: agent-bounties-postgres

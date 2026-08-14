@@ -15,8 +15,7 @@ use chain_base::{
     OpenCompetitionV2CreationRequest, OpenCompetitionV2ProgramClassification,
     OpenCompetitionV2ProofSystem, OpenCompetitionV2Release, OpenCompetitionV2ScoreDirection,
     OpenCompetitionV2WinnerMode, OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-    OPEN_COMPETITION_V2_BASE_USDC, OPEN_COMPETITION_V2_GROTH16_GATEWAY,
-    OPEN_COMPETITION_V2_PLONK_GATEWAY, OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+    OPEN_COMPETITION_V2_BASE_USDC, OPEN_COMPETITION_V2_PROTOCOL_VERSION,
 };
 use chrono::{DateTime, Utc};
 use competition_metric_core::{
@@ -43,48 +42,69 @@ type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
 pub(crate) fn router() -> Router<SharedState> {
     Router::new()
-        .route("/v1/base/open-competition-v2-beta1/profiles", get(profiles))
+        .nest(
+            "/v1/base/open-competition-v2-beta1",
+            Router::new().fallback(beta1_superseded),
+        )
+        .route("/v1/base/open-competition-v2-beta2/release", get(release))
+        .route("/v1/base/open-competition-v2-beta2/profiles", get(profiles))
         .route(
-            "/v1/base/open-competition-v2-beta1/validate",
+            "/v1/base/open-competition-v2-beta2/validate",
             post(validate_creation),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/creation-preparation",
+            "/v1/base/open-competition-v2-beta2/creation-preparation",
             post(prepare_creation),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/funding-preparation",
+            "/v1/base/open-competition-v2-beta2/funding-preparation",
             post(prepare_funding),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/inventory",
+            "/v1/base/open-competition-v2-beta2/inventory",
             get(inventory),
         )
-        .route("/v1/base/open-competition-v2-beta1/events", get(events))
+        .route("/v1/base/open-competition-v2-beta2/events", get(events))
         .route(
-            "/v1/base/open-competition-v2-beta1/proof-quotes",
+            "/v1/base/open-competition-v2-beta2/proof-quotes",
             post(create_proof_quote),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/proof-preparation",
+            "/v1/base/open-competition-v2-beta2/proof-preparation",
             post(prepare_proof),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/action-preparation",
+            "/v1/base/open-competition-v2-beta2/action-preparation",
             post(prepare_action),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/proof-jobs/:job_id",
+            "/v1/base/open-competition-v2-beta2/proof-jobs/:job_id",
             get(get_proof_job),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/proof-jobs/:job_id/payment",
+            "/v1/base/open-competition-v2-beta2/proof-jobs/:job_id/payment",
             post(pay_proof_job),
         )
         .route(
-            "/v1/base/open-competition-v2-beta1/proof-jobs/:job_id/relay-authorization",
+            "/v1/base/open-competition-v2-beta2/proof-jobs/:job_id/relay-authorization",
             post(authorize_proof_job_relay),
         )
+}
+
+async fn beta1_superseded() -> impl IntoResponse {
+    (
+        StatusCode::GONE,
+        Json(json!({
+            "schema_version": "agent-bounties/open-competition-v2-problem-v1",
+            "state": "superseded_before_launch",
+            "failed_transition": "resolve_release",
+            "error_code": "superseded_before_launch",
+            "retryable": false,
+            "replacement_protocol": OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+            "replacement_path": "/v1/base/open-competition-v2-beta2",
+            "message": "Beta1 was never deployed. Use Beta2; do not reuse Beta1 vkeys, proofs, verifier bytecode, or release manifests."
+        })),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,10 +221,27 @@ pub(crate) struct ProofRelayAuthorizationBody {
     solver_signature: Option<String>,
 }
 
-#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta1/profiles", responses((status = 200, description = "Pinned V2 release, SP1 rails, and metric program classifications")))]
-pub(crate) async fn profiles(Query(query): Query<NetworkQuery>) -> ApiResult {
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta2/profiles", responses((status = 200, description = "Pinned V2 release, SP1 rails, and metric program classifications")))]
+pub(crate) async fn profiles(
+    State(state): State<SharedState>,
+    Query(query): Query<NetworkQuery>,
+) -> ApiResult {
     let network = network_or_default(query.network);
     let release = release_from_environment(&network).ok();
+    let indexers_agree = match &release {
+        Some(release) => current_indexer_agreement(&state, &network, release)
+            .await
+            .is_ok(),
+        None => false,
+    };
+    Ok(Json(profiles_document(&network, release, indexers_agree)?))
+}
+
+fn profiles_document(
+    network: &str,
+    release: Option<OpenCompetitionV2Release>,
+    indexers_agree: bool,
+) -> Result<Value, (StatusCode, Json<Value>)> {
     let programs = release
         .as_ref()
         .map(|release| json!(release.metric_programs))
@@ -215,31 +252,61 @@ pub(crate) async fn profiles(Query(query): Query<NetworkQuery>) -> ApiResult {
                 "reason": "Enable only after two isolated builds reproduce the ELF digest and vkey and the published adversarial corpus passes."
             }])
         });
-    Ok(Json(json!({
+    Ok(json!({
         "schema_version": "agent-bounties/open-competition-v2-profiles-v1",
         "protocol_version": OPEN_COMPETITION_V2_PROTOCOL_VERSION,
         "network": network,
         "release": release,
         "canonical_rails": {
-            "settlement_token": settlement_token(&network)?,
-            "groth16_gateway": OPEN_COMPETITION_V2_GROTH16_GATEWAY,
-            "plonk_gateway": OPEN_COMPETITION_V2_PLONK_GATEWAY,
-            "sp1_release_line": "6.3.1",
-            "sp1_verifier_route_line": "6.1"
+            "settlement_token": settlement_token(network)?,
+            "groth16_verifier": release.as_ref().map(|value| &value.groth16_verifier),
+            "plonk_verifier": release.as_ref().map(|value| &value.plonk_verifier),
+            "sp1_source_commit": release.as_ref().map(|value| &value.sp1_source_commit),
+            "sp1_circuit_version": release.as_ref().map(|value| &value.sp1_circuit_version)
         },
         "programs": programs,
-        "proof_broker_enabled": release.as_ref().is_some_and(|release| release.proof_broker_enabled),
-        "creation_enabled": release.as_ref().is_some_and(|release| release.public_creation_enabled),
+        "proof_broker_enabled": release.as_ref().is_some_and(|release| release.proof_broker_enabled) && indexers_agree,
+        "creation_enabled": release.as_ref().is_some_and(|release| release.public_creation_enabled) && indexers_agree,
+        "indexers_agree": indexers_agree,
         "next_action": if release.is_some() {
             "Validate a complete immutable profile, then prepare creation."
         } else {
             "Wait for the reviewed release manifest; do not construct a factory call from guessed addresses."
         },
         "evidence_boundary": "A profile catalog or release manifest is not deployment, funding, proof acceptance, settlement, or payment evidence."
+    }))
+}
+
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta2/release", responses((status = 200, description = "Exact immutable Beta2 release identity and activation state"), (status = 503, description = "Beta2 release is not configured or fails validation")))]
+pub(crate) async fn release(
+    State(state): State<SharedState>,
+    Query(query): Query<NetworkQuery>,
+) -> ApiResult {
+    let network = network_or_default(query.network);
+    let release = release_from_environment(&network)?;
+    let agreement = current_indexer_agreement(&state, &network, &release)
+        .await
+        .ok();
+    let operational = agreement.is_some();
+    Ok(Json(json!({
+        "schema_version": "agent-bounties/open-competition-v2-beta2-runtime-manifest-v1",
+        "activation_state": if release.public_creation_enabled && operational {
+            "public_beta"
+        } else {
+            "creation_disabled"
+        },
+        "release": release,
+        "indexer_agreement": agreement,
+        "next_action": if release.public_creation_enabled && operational {
+            "Validate a profile, then prepare creation."
+        } else {
+            "Wait for every public-beta gate to pass."
+        },
+        "evidence_boundary": "This endpoint identifies configured code and activation flags. Canonical events remain the only evidence of funding, qualification, settlement, or refund."
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/validate", responses((status = 200, description = "Immutable competition profile is valid"), (status = 400, description = "Machine-readable profile validation failure")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/validate", responses((status = 200, description = "Immutable competition profile is valid"), (status = 400, description = "Machine-readable profile validation failure")))]
 pub(crate) async fn validate_creation(Json(body): Json<CreationBody>) -> ApiResult {
     match build_creation_plan(body, false) {
         Ok(plan) => Ok(Json(json!({
@@ -255,8 +322,16 @@ pub(crate) async fn validate_creation(Json(body): Json<CreationBody>) -> ApiResu
     }
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/creation-preparation", responses((status = 200, description = "Exact unsigned create and optional funding calls"), (status = 503, description = "Public Beta1 creation is gated")))]
-pub(crate) async fn prepare_creation(Json(body): Json<CreationBody>) -> ApiResult {
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/creation-preparation", responses((status = 200, description = "Exact unsigned create and optional funding calls"), (status = 503, description = "Public Beta2 creation is gated")))]
+pub(crate) async fn prepare_creation(
+    State(state): State<SharedState>,
+    Json(body): Json<CreationBody>,
+) -> ApiResult {
+    let network = network_or_default(body.network.clone());
+    let release = release_from_environment(&network)?;
+    if release.public_creation_enabled {
+        current_indexer_agreement(&state, &network, &release).await?;
+    }
     let plan = build_creation_plan(body, true)?;
     if !plan.public_inventory_eligible_after_confirmation {
         return Ok(Json(json!({
@@ -272,7 +347,7 @@ pub(crate) async fn prepare_creation(Json(body): Json<CreationBody>) -> ApiResul
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/funding-preparation", responses((status = 200, description = "Exact unsigned pooled-funding calls")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/funding-preparation", responses((status = 200, description = "Exact unsigned pooled-funding calls")))]
 pub(crate) async fn prepare_funding(Json(body): Json<FundingBody>) -> ApiResult {
     let network = network_or_default(body.network.clone());
     let release = release_from_environment(&network)?;
@@ -298,7 +373,7 @@ pub(crate) async fn prepare_funding(Json(body): Json<FundingBody>) -> ApiResult 
     })))
 }
 
-#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta1/inventory", responses((status = 200, description = "Safe-block V2 competition inventory")))]
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta2/inventory", responses((status = 200, description = "Safe-block V2 competition inventory")))]
 pub(crate) async fn inventory(
     State(state): State<SharedState>,
     Query(query): Query<InventoryQuery>,
@@ -387,7 +462,7 @@ pub(crate) async fn inventory(
     })))
 }
 
-#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta1/events", responses((status = 200, description = "Replay-safe canonical V2 event history")))]
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta2/events", responses((status = 200, description = "Replay-safe canonical V2 event history")))]
 pub(crate) async fn events(
     State(state): State<SharedState>,
     Query(query): Query<EventQuery>,
@@ -413,13 +488,16 @@ pub(crate) async fn events(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/proof-quotes", responses((status = 200, description = "Five-minute solver- and artifact-bound x402 proof quote"), (status = 409, description = "Proof SLA cannot fit or competition is not active")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/proof-quotes", responses((status = 200, description = "Five-minute solver- and artifact-bound x402 proof quote"), (status = 409, description = "Proof SLA cannot fit or competition is not active")))]
 pub(crate) async fn create_proof_quote(
     State(state): State<SharedState>,
     Json(body): Json<ProofQuoteBody>,
 ) -> ApiResult {
     let network = network_or_default(body.network.clone());
     let release = release_from_environment(&network)?;
+    if release.proof_broker_enabled {
+        current_indexer_agreement(&state, &network, &release).await?;
+    }
     let store = state.store.as_ref().ok_or_else(database_unavailable)?;
     let records = store
         .list_open_competition_v2_projections(&network, &release.factory_contract)
@@ -594,7 +672,7 @@ pub(crate) async fn create_proof_quote(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/proof-preparation", responses((status = 200, description = "Direct call and exact EIP-712 relay authorization")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/proof-preparation", responses((status = 200, description = "Direct call and exact EIP-712 relay authorization")))]
 pub(crate) async fn prepare_proof(Json(body): Json<ProofBody>) -> ApiResult {
     let network = network_or_default(body.network);
     let solver_nonce = decimal_u128(&body.solver_nonce, "solver_nonce")?;
@@ -627,7 +705,7 @@ pub(crate) async fn prepare_proof(Json(body): Json<ProofBody>) -> ApiResult {
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/action-preparation", responses((status = 200, description = "Finalization, expiry, cancellation, or permissionless refund call")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/action-preparation", responses((status = 200, description = "Finalization, expiry, cancellation, or permissionless refund call")))]
 pub(crate) async fn prepare_action(Json(body): Json<ActionBody>) -> ApiResult {
     let network = network_or_default(body.network);
     let plan = plan_open_competition_v2_action(
@@ -641,7 +719,7 @@ pub(crate) async fn prepare_action(Json(body): Json<ActionBody>) -> ApiResult {
     Ok(Json(json!({ "plan": plan })))
 }
 
-#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}", params(("job_id" = Uuid, Path, description = "Hosted proof job ID")), responses((status = 200, description = "Exact proof job state and next action"), (status = 404, description = "Proof job not found")))]
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}", params(("job_id" = Uuid, Path, description = "Hosted proof job ID")), responses((status = 200, description = "Exact proof job state and next action"), (status = 404, description = "Proof job not found")))]
 pub(crate) async fn get_proof_job(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,
@@ -672,7 +750,7 @@ pub(crate) async fn get_proof_job(
     })))
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/payment", params(("job_id" = Uuid, Path, description = "Quoted hosted proof job ID")), responses((status = 200, description = "Canonical Base USDC payment confirmed"), (status = 202, description = "Payment relay is awaiting canonical confirmation"), (status = 402, description = "Exact x402 payment authorization required")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment", params(("job_id" = Uuid, Path, description = "Quoted hosted proof job ID")), responses((status = 200, description = "Canonical Base USDC payment confirmed"), (status = 202, description = "Payment relay is awaiting canonical confirmation"), (status = 402, description = "Exact x402 payment authorization required")))]
 pub(crate) async fn pay_proof_job(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,
@@ -818,7 +896,7 @@ pub(crate) async fn pay_proof_job(
     proof_job_payment_response(&job)
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 digest or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 digest or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
 pub(crate) async fn authorize_proof_job_relay(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,
@@ -1006,7 +1084,7 @@ fn proof_job_payment_challenge(
 ) -> Result<payments_x402::PaymentRequired, (StatusCode, Json<Value>)> {
     base_usdc_exact_service_challenge(
         format!(
-            "{}/v1/base/open-competition-v2-beta1/proof-jobs/{}/payment",
+            "{}/v1/base/open-competition-v2-beta2/proof-jobs/{}/payment",
             state.public_base_url.trim_end_matches('/'),
             job.id
         ),
@@ -1641,7 +1719,7 @@ fn release_from_environment(
             ));
         }
     };
-    let variable = format!("{prefix}_OPEN_COMPETITION_V2_BETA1_RELEASE_MANIFEST_JSON");
+    let variable = format!("{prefix}_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON");
     let raw = env::var(&variable).map_err(|_| {
         service_error(
             "resolve_release",
@@ -1673,6 +1751,82 @@ fn release_from_environment(
         )
     })?;
     Ok(release)
+}
+
+async fn current_indexer_agreement(
+    state: &SharedState,
+    network: &str,
+    release: &OpenCompetitionV2Release,
+) -> Result<db::OpenCompetitionV2IndexerAgreement, (StatusCode, Json<Value>)> {
+    let store = state.store.as_ref().ok_or_else(database_unavailable)?;
+    let agreement = store
+        .get_open_competition_v2_indexer_agreement(network, &release.factory_contract)
+        .await
+        .map_err(|error| {
+            service_error(
+                "resolve_release",
+                "indexer_agreement_read_failed",
+                error.to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            service_error(
+                "resolve_release",
+                "indexer_agreement_missing",
+                "Primary and shadow V2 indexers have not produced agreement evidence.",
+            )
+        })?;
+    let max_age_seconds = env::var("OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(120)
+        .clamp(30, 600);
+    let max_lag_blocks = env::var("OPEN_COMPETITION_V2_INDEXER_MAX_LAG_BLOCKS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(64)
+        .clamp(8, 600);
+    let age_seconds = Utc::now()
+        .signed_duration_since(agreement.observed_at)
+        .num_seconds();
+    if !indexer_agreement_is_current(
+        release,
+        &agreement,
+        age_seconds,
+        max_age_seconds,
+        max_lag_blocks,
+    ) {
+        return Err(service_error(
+            "resolve_release",
+            "indexer_agreement_unavailable",
+            "Primary and shadow V2 indexer agreement is missing, stale, lagging, or mismatched.",
+        ));
+    }
+    Ok(agreement)
+}
+
+fn indexer_agreement_is_current(
+    release: &OpenCompetitionV2Release,
+    agreement: &db::OpenCompetitionV2IndexerAgreement,
+    age_seconds: i64,
+    max_age_seconds: i64,
+    max_lag_blocks: u64,
+) -> bool {
+    agreement.agrees
+        && agreement.protocol_version == OPEN_COMPETITION_V2_PROTOCOL_VERSION
+        && agreement.common_safe_block >= release.deployment_block
+        && agreement
+            .primary_safe_head
+            .saturating_sub(agreement.common_safe_block)
+            <= max_lag_blocks
+        && agreement
+            .shadow_safe_head
+            .saturating_sub(agreement.common_safe_block)
+            <= max_lag_blocks
+        && agreement
+            .primary_block_hash
+            .eq_ignore_ascii_case(&agreement.shadow_block_hash)
+        && (0..=max_age_seconds).contains(&age_seconds)
 }
 
 fn require_reviewed_broker_profile(
@@ -1961,11 +2115,25 @@ mod tests {
         OpenCompetitionV2Release {
             protocol_version: OPEN_COMPETITION_V2_PROTOCOL_VERSION.to_string(),
             network: "base-sepolia".to_string(),
+            source_commit: "11".repeat(20),
+            repository_subject_hash: hash(13),
+            sp1_source_commit: "22".repeat(20),
+            sp1_circuit_version: "agent-bounties-sp1-safe-v1".to_string(),
             factory_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            factory_runtime_code_hash: hash(14),
             implementation_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            implementation_runtime_code_hash: hash(15),
             settlement_token: OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC.to_string(),
+            groth16_verifier: "0x5555555555555555555555555555555555555555".to_string(),
+            groth16_verifier_hash: hash(16),
+            groth16_verifier_runtime_code_hash: hash(17),
             groth16_adapter: "0x3333333333333333333333333333333333333333".to_string(),
+            groth16_adapter_runtime_code_hash: hash(18),
+            plonk_verifier: "0x6666666666666666666666666666666666666666".to_string(),
+            plonk_verifier_hash: hash(19),
+            plonk_verifier_runtime_code_hash: hash(20),
             plonk_adapter: "0x4444444444444444444444444444444444444444".to_string(),
+            plonk_adapter_runtime_code_hash: hash(21),
             deployment_block: 1,
             release_hash: hash(1),
             beta_risk_hash: hash(2),
@@ -1997,17 +2165,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profiles_distinguish_prover_release_from_verifier_route() {
-        let response = profiles(Query(NetworkQuery {
-            network: Some("base-sepolia".to_string()),
-        }))
-        .await
-        .expect("profiles response");
-        assert_eq!(response.0["canonical_rails"]["sp1_release_line"], "6.3.1");
-        assert_eq!(
-            response.0["canonical_rails"]["sp1_verifier_route_line"],
-            "6.1"
-        );
+    async fn profiles_fail_closed_without_a_release_manifest() {
+        let response = profiles_document("base-sepolia", None, false).expect("profiles response");
+        assert!(response["canonical_rails"]["sp1_source_commit"].is_null());
+        assert!(response["canonical_rails"]["groth16_verifier"].is_null());
+        assert_eq!(response["creation_enabled"], false);
     }
 
     #[test]
@@ -2026,5 +2188,36 @@ mod tests {
         release = release_fixture();
         release.proof_broker_enabled = false;
         assert!(require_reviewed_broker_profile(&release, &projection()).is_err());
+    }
+
+    #[test]
+    fn indexer_agreement_rejects_a_fresh_but_lagging_cursor() {
+        let release = release_fixture();
+        let mut agreement = db::OpenCompetitionV2IndexerAgreement {
+            network: release.network.clone(),
+            factory_contract: release.factory_contract.clone(),
+            protocol_version: release.protocol_version.clone(),
+            common_safe_block: 100,
+            primary_safe_head: 110,
+            shadow_safe_head: 111,
+            primary_block_hash: hash(10),
+            shadow_block_hash: hash(10),
+            canonical_event_count: 0,
+            canonical_event_set_hash: hash(11),
+            agrees: true,
+            failure_code: None,
+            observed_at: Utc::now(),
+        };
+        assert!(indexer_agreement_is_current(
+            &release, &agreement, 1, 120, 64
+        ));
+        agreement.primary_safe_head = 165;
+        assert!(!indexer_agreement_is_current(
+            &release, &agreement, 1, 120, 64
+        ));
+        agreement.primary_safe_head = 110;
+        assert!(!indexer_agreement_is_current(
+            &release, &agreement, 121, 120, 64
+        ));
     }
 }

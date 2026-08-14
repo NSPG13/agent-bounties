@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.26;
 
-import "../src/OpenCompetitionBountyFactoryV2Beta1.sol";
+import "../src/OpenCompetitionBountyFactoryV2Beta2.sol";
+import {ISP1VerifierWithHash} from "../src/ISP1Verifier.sol";
 
 struct VmCompetitionLog {
     bytes32[] topics;
@@ -77,19 +78,8 @@ contract CompetitionV2Token {
     }
 }
 
-contract CompetitionV2Gateway is ISP1VerifierV2Beta1 {
+abstract contract CompetitionV2Verifier is ISP1VerifierWithHash {
     bytes32 public acceptedProofHash;
-    mapping(bytes4 => address) public routedVerifier;
-    mapping(bytes4 => bool) public routeFrozen;
-
-    function setRoute(bytes4 selector, address verifier, bool frozen) external {
-        routedVerifier[selector] = verifier;
-        routeFrozen[selector] = frozen;
-    }
-
-    function routes(bytes4 selector) external view returns (address verifier, bool frozen) {
-        return (routedVerifier[selector], routeFrozen[selector]);
-    }
 
     function setAcceptedProof(bytes calldata proof) external {
         acceptedProofHash = keccak256(proof);
@@ -102,18 +92,28 @@ contract CompetitionV2Gateway is ISP1VerifierV2Beta1 {
     }
 }
 
-contract CompetitionV2VerifierMarker {}
+contract CompetitionV2Groth16Verifier is CompetitionV2Verifier {
+    function VERIFIER_HASH() external pure returns (bytes32) {
+        return 0x4388a21c00000000000000000000000000000000000000000000000000000001;
+    }
+}
+
+contract CompetitionV2PlonkVerifier is CompetitionV2Verifier {
+    function VERIFIER_HASH() external pure returns (bytes32) {
+        return 0x5a093a2f00000000000000000000000000000000000000000000000000000001;
+    }
+}
 
 contract CompetitionV2Actor {
     function approve(CompetitionV2Token token, address spender, uint256 amount) external {
         token.approve(spender, amount);
     }
 
-    function fund(OpenCompetitionBountyV2Beta1 bounty, uint256 amount, bytes32 riskHash) external {
+    function fund(OpenCompetitionBountyV2Beta2 bounty, uint256 amount, bytes32 riskHash) external {
         bounty.fund(amount, riskHash);
     }
 
-    function submit(OpenCompetitionBountyV2Beta1 bounty, bytes calldata journal, bytes calldata proof) external {
+    function submit(OpenCompetitionBountyV2Beta2 bounty, bytes calldata journal, bytes calldata proof) external {
         bounty.submitProof(journal, proof);
     }
 }
@@ -139,7 +139,7 @@ contract CompetitionV2ReturnBombSigner {
     }
 }
 
-contract OpenCompetitionBountyV2Beta1Test {
+contract OpenCompetitionBountyV2Beta2Test {
     VmCompetitionV2 constant vm = VmCompetitionV2(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     bytes constant GROTH16_PROOF = hex"4388a21c01020304";
@@ -152,16 +152,16 @@ contract OpenCompetitionBountyV2Beta1Test {
     bytes32 constant EXECUTION_POLICY_HASH = keccak256("execution-policy");
     bytes32 constant VERIFICATION_POLICY_HASH = keccak256("verification-policy");
     bytes32 constant SETTLEMENT_POLICY_HASH = keccak256("settlement-policy");
-    bytes32 constant BETA_RISK_HASH = keccak256("open-competition-v2-beta1-risk");
+    bytes32 constant BETA_RISK_HASH = keccak256("open-competition-v2-beta2-risk");
     bytes32 constant SUBMISSION_HASH = keccak256("submission");
     bytes32 constant EVIDENCE_HASH = keccak256("evidence");
     uint256 constant SOLVER_REWARD = 1_000_000;
     uint256 constant KEEPER_REWARD = 50_000;
 
     CompetitionV2Token token;
-    CompetitionV2Gateway groth16Gateway;
-    CompetitionV2Gateway plonkGateway;
-    OpenCompetitionBountyFactoryV2Beta1 factory;
+    CompetitionV2Groth16Verifier groth16Verifier;
+    CompetitionV2PlonkVerifier plonkVerifier;
+    OpenCompetitionBountyFactoryV2Beta2 factory;
     CompetitionV2Actor solverA;
     CompetitionV2Actor solverB;
     CompetitionV2Actor solverC;
@@ -170,19 +170,19 @@ contract OpenCompetitionBountyV2Beta1Test {
 
     function setUp() public {
         token = new CompetitionV2Token();
-        groth16Gateway = new CompetitionV2Gateway();
-        plonkGateway = new CompetitionV2Gateway();
-        CompetitionV2VerifierMarker marker = new CompetitionV2VerifierMarker();
-        address groth16Verifier = 0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2;
-        address plonkVerifier = 0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A;
-        vm.etch(groth16Verifier, address(marker).code);
-        vm.etch(plonkVerifier, address(marker).code);
-        groth16Gateway.setRoute(0x4388a21c, groth16Verifier, false);
-        plonkGateway.setRoute(0x5a093a2f, plonkVerifier, false);
-        groth16Gateway.setAcceptedProof(GROTH16_PROOF);
-        plonkGateway.setAcceptedProof(PLONK_PROOF);
-        factory =
-            new OpenCompetitionBountyFactoryV2Beta1(address(token), address(groth16Gateway), address(plonkGateway));
+        groth16Verifier = new CompetitionV2Groth16Verifier();
+        plonkVerifier = new CompetitionV2PlonkVerifier();
+        groth16Verifier.setAcceptedProof(GROTH16_PROOF);
+        plonkVerifier.setAcceptedProof(PLONK_PROOF);
+        factory = new OpenCompetitionBountyFactoryV2Beta2(
+            address(token),
+            address(groth16Verifier),
+            groth16Verifier.VERIFIER_HASH(),
+            address(groth16Verifier).codehash,
+            address(plonkVerifier),
+            plonkVerifier.VERIFIER_HASH(),
+            address(plonkVerifier).codehash
+        );
         solverA = new CompetitionV2Actor();
         solverB = new CompetitionV2Actor();
         solverC = new CompetitionV2Actor();
@@ -192,9 +192,9 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testFirstProvenPaysSolverAndProofSubmitterAtomically() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             10,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -202,7 +202,7 @@ contract OpenCompetitionBountyV2Beta1Test {
 
         solverA.submit(bounty, journal, _passingProof(bounty));
 
-        require(bounty.competitionStatus() == OpenCompetitionBountyV2Beta1.CompetitionStatus.Settled, "not settled");
+        require(bounty.competitionStatus() == OpenCompetitionBountyV2Beta2.CompetitionStatus.Settled, "not settled");
         require(bounty.winner() == address(solverA), "wrong winner");
         require(token.balanceOf(address(solverA)) == SOLVER_REWARD + KEEPER_REWARD, "payout mismatch");
         require(token.balanceOf(address(bounty)) == 0, "escrow retained USDC");
@@ -211,9 +211,9 @@ contract OpenCompetitionBountyV2Beta1Test {
 
     function testCanonicalCreationEventsPrecedeInitialFunding() public {
         vm.recordLogs();
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -237,10 +237,10 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testPooledBestScoreKeepsEarliestTieAndFinalizerReward() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createPartiallyFunded(
+        OpenCompetitionBountyV2Beta2 bounty = _createPartiallyFunded(
             400_000,
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             5,
             factory.PROOF_SYSTEM_PLONK()
         );
@@ -264,9 +264,9 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testBestScoreLeaderCannotBeExpiredIntoRefunds() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -275,17 +275,17 @@ contract OpenCompetitionBountyV2Beta1Test {
 
         _requireRevertSelector(
             address(bounty),
-            abi.encodeCall(OpenCompetitionBountyV2Beta1.expireCompetition, ()),
-            OpenCompetitionBountyV2Beta1.V2LeaderRequiresFinalization.selector
+            abi.encodeCall(OpenCompetitionBountyV2Beta2.expireCompetition, ()),
+            OpenCompetitionBountyV2Beta2.V2LeaderRequiresFinalization.selector
         );
         bounty.finalizeBestScore();
         require(bounty.winner() == address(solverA), "leader not finalized");
     }
 
     function testLowerScoreModeAndThreshold() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.LowerIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.LowerIsBetter,
             20,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -295,19 +295,19 @@ contract OpenCompetitionBountyV2Beta1Test {
 
         bytes memory rejected = _journal(bounty, address(solverC), 1, 21, true);
         bytes memory callData = abi.encodeCall(CompetitionV2Actor.submit, (bounty, rejected, _passingProof(bounty)));
-        _requireRevertSelector(address(solverC), callData, OpenCompetitionBountyV2Beta1.V2ScoreThresholdNotMet.selector);
+        _requireRevertSelector(address(solverC), callData, OpenCompetitionBountyV2Beta2.V2ScoreThresholdNotMet.selector);
     }
 
     function testInvalidProofDoesNotConsumeNonceAndCanRetry() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
         bytes memory journal = _journal(bounty, address(solverA), 7, 1, true);
         bytes memory callData = abi.encodeCall(CompetitionV2Actor.submit, (bounty, journal, bytes("bad")));
-        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta1.V2Sp1ProofInvalid.selector);
+        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta2.V2Sp1ProofInvalid.selector);
         require(!bounty.usedSolverNonces(address(solverA), 7), "failed proof consumed nonce");
 
         solverA.submit(bounty, journal, _passingProof(bounty));
@@ -315,43 +315,43 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testNonceReplayRejectedWithoutSecondPayment() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
         bytes memory journal = _journal(bounty, address(solverA), 9, 1, true);
         solverA.submit(bounty, journal, _passingProof(bounty));
         bytes memory callData = abi.encodeCall(CompetitionV2Actor.submit, (bounty, journal, _passingProof(bounty)));
-        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta1.V2SolverNonceUsed.selector);
+        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta2.V2SolverNonceUsed.selector);
         require(bounty.acceptedSequence() == 1, "replay changed sequence");
     }
 
     function testJournalCannotReplayAcrossCompetitionOrPolicy() public {
-        OpenCompetitionBountyV2Beta1 bountyA = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bountyA = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
-        OpenCompetitionBountyV2Beta1 bountyB = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bountyB = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
         bytes memory journalA = _journal(bountyA, address(solverA), 1, 1, true);
         bytes memory callData = abi.encodeCall(CompetitionV2Actor.submit, (bountyB, journalA, _passingProof(bountyB)));
-        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta1.V2JournalScopeMismatch.selector);
+        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta2.V2JournalScopeMismatch.selector);
     }
 
     function testRelayedEoaAuthorizationBindsJournalAndProof() public {
         uint256 solverKey = 0xA11CE;
         address solver = vm.addr(solverKey);
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -372,9 +372,9 @@ contract OpenCompetitionBountyV2Beta1Test {
 
     function testRelayedErc1271Authorization() public {
         CompetitionV2Signer1271 signer = new CompetitionV2Signer1271();
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_PLONK()
         );
@@ -391,9 +391,9 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testErc1271ReturnDataIsCappedAndCannotBombRelay() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -402,19 +402,17 @@ contract OpenCompetitionBountyV2Beta1Test {
         bytes memory proof = _passingProof(bounty);
         uint256 deadline = block.timestamp + 1 hours;
 
-        (bool ok,) = address(bounty).call(
-            abi.encodeCall(bounty.submitProofFor, (journal, proof, deadline, hex"01"))
-        );
+        (bool ok,) = address(bounty).call(abi.encodeCall(bounty.submitProofFor, (journal, proof, deadline, hex"01")));
 
         require(ok, "return-bomb authorization failed");
         require(bounty.winner() == address(signer), "return-bomb signer did not settle");
     }
 
     function testExpiredActiveCompetitionPaysKeeperAndRefundsPoolWithoutContributorAction() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createPartiallyFunded(
+        OpenCompetitionBountyV2Beta2 bounty = _createPartiallyFunded(
             300_000,
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -438,10 +436,10 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testPartialFundingCancellationRefundsEveryReceivedUnit() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createPartiallyFunded(
+        OpenCompetitionBountyV2Beta2 bounty = _createPartiallyFunded(
             123_456,
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -452,70 +450,70 @@ contract OpenCompetitionBountyV2Beta1Test {
         require(token.balanceOf(address(bounty)) == 0, "partial refund stranded");
     }
 
-    function testPartialFundingGatewayLossStopsFundingAndRefundsWithoutKeeperCharge() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createPartiallyFunded(
+    function testPartialFundingVerifierLossStopsFundingAndRefundsWithoutKeeperCharge() public {
+        OpenCompetitionBountyV2Beta2 bounty = _createPartiallyFunded(
             123_456,
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
-        groth16Gateway.setRoute(0x4388a21c, 0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2, true);
+        vm.etch(address(groth16Verifier), hex"");
 
         funder.approve(token, address(bounty), 1);
         _requireRevertSelector(
             address(funder),
             abi.encodeCall(CompetitionV2Actor.fund, (bounty, 1, BETA_RISK_HASH)),
-            OpenCompetitionBountyV2Beta1.V2GatewayUnavailable.selector
+            OpenCompetitionBountyV2Beta2.V2VerifierUnavailable.selector
         );
 
         uint256 keeperBefore = token.balanceOf(address(solverC));
         vm.prank(address(solverC));
-        bounty.cancelForUnavailableGateway();
+        bounty.cancelForUnavailableVerifier();
         require(token.balanceOf(address(solverC)) == keeperBefore, "unfunded keeper charged");
 
         uint256 creatorBefore = token.balanceOf(address(this));
         bounty.withdrawRefundFor(address(this));
-        require(token.balanceOf(address(this)) == creatorBefore + 123_456, "partial gateway refund incomplete");
-        require(token.balanceOf(address(bounty)) == 0, "partial gateway refund stranded");
+        require(token.balanceOf(address(this)) == creatorBefore + 123_456, "partial verifier refund incomplete");
+        require(token.balanceOf(address(bounty)) == 0, "partial verifier refund stranded");
     }
 
-    function testGatewayLossCreatesEarlyPermissionlessRefundPath() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+    function testVerifierLossCreatesEarlyPermissionlessRefundPath() public {
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
-        groth16Gateway.setRoute(0x4388a21c, 0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2, true);
+        vm.etch(address(groth16Verifier), hex"");
         vm.prank(address(solverC));
-        bounty.cancelForUnavailableGateway();
+        bounty.cancelForUnavailableVerifier();
         require(
-            bounty.competitionStatus() == OpenCompetitionBountyV2Beta1.CompetitionStatus.Cancelled,
-            "gateway loss not cancelled"
+            bounty.competitionStatus() == OpenCompetitionBountyV2Beta2.CompetitionStatus.Cancelled,
+            "verifier loss not cancelled"
         );
-        require(token.balanceOf(address(solverC)) == KEEPER_REWARD, "gateway keeper unpaid");
+        require(token.balanceOf(address(solverC)) == KEEPER_REWARD, "verifier keeper unpaid");
         bounty.withdrawRefundFor(address(this));
-        require(token.balanceOf(address(bounty)) == 0, "gateway refund stranded");
+        require(token.balanceOf(address(bounty)) == 0, "verifier refund stranded");
     }
 
     function testAdapterRejectsAValidProofForTheOtherPinnedProofSystem() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
         bytes memory callData = abi.encodeCall(
             CompetitionV2Actor.submit, (bounty, _journal(bounty, address(solverA), 1, 1, true), PLONK_PROOF)
         );
-        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta1.V2Sp1ProofInvalid.selector);
+        _requireRevertSelector(address(solverA), callData, OpenCompetitionBountyV2Beta2.V2Sp1ProofInvalid.selector);
     }
 
     function testSharedReleaseJournalGoldenVectorMatchesExactly() public pure {
         bytes memory encoded = abi.encode(
-            OpenCompetitionBountyV2Beta1.Journal({
-                domain: 0x40c861b5ff675d94ed282cd66e1e55bb38f03fe560786960e64d50b593ada7ba,
+            OpenCompetitionBountyV2Beta2.Journal({
+                domain: 0x110d7acc5c3397f452c974ba4f7296d7d2a2cede57290113d1fd256e1818804b,
                 chainId: 84_532,
                 competition: 0x1111111111111111111111111111111111111111,
                 bountyId: 0x2222222222222222222222222222222222222222222222222222222222222222,
@@ -525,7 +523,7 @@ contract OpenCompetitionBountyV2Beta1Test {
                 evidenceHash: 0x70efee545f9c7d4bd6964f4fa337f41d492ffeb58ca45a013684c74a28aded92,
                 proofSystem: 0x0fbfc39a4f588598b55fce747dc8dde3f1b661a9d538dc174b464d210d12a81d,
                 programVKey: 0x004f46857a039393a0c686abe9c66ed1aa98fc3f86acd20e2778d58ad1ac1bba,
-                sourceHash: 0x4e78a9da5ad688b3461a063d6589bbf17c511c67aaa0a537f448076482ea2c01,
+                sourceHash: 0x59e8a70adb2a5f667ce2f93328c9282d78a0e4d1db4e56dde9a01440a341a53f,
                 elfHash: 0x27a64455409be7a6ddb733251392f45968735bf824f29b85cbf463942ee02353,
                 journalSchemaHash: 0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4,
                 metricProgramHash: 0x1c27fc20ab65264c7db2997c8b76f78d7291cdb91243481bcae1e88f77beb88a,
@@ -539,15 +537,15 @@ contract OpenCompetitionBountyV2Beta1Test {
         );
         require(encoded.length == 640, "journal length drift");
         require(
-            keccak256(encoded) == 0xf8a21ebd4c7533a0817ac2d989f95f698adab55ac0dbeba789105d3dc29d6ae2,
+            keccak256(encoded) == 0xb426b961014cc07730df339122a51f0551220bcd8708d3081d330d0e988838eb,
             "shared journal drift"
         );
     }
 
     function testProofAtExactDeadlineQualifiesAndOneSecondLaterDoesNot() public {
-        OpenCompetitionBountyV2Beta1 exact = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 exact = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -555,42 +553,42 @@ contract OpenCompetitionBountyV2Beta1Test {
         solverA.submit(exact, _journal(exact, address(solverA), 1, 1, true), _passingProof(exact));
         require(exact.winner() == address(solverA), "exact deadline rejected");
 
-        OpenCompetitionBountyV2Beta1 late = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 late = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
         bytes memory lateJournal = _journal(late, address(solverB), 1, 1, true);
         vm.warp(uint256(late.proofDeadline()) + 1);
         bytes memory callData = abi.encodeCall(CompetitionV2Actor.submit, (late, lateJournal, _passingProof(late)));
-        _requireRevertSelector(address(solverB), callData, OpenCompetitionBountyV2Beta1.V2ProofDeadlinePassed.selector);
+        _requireRevertSelector(address(solverB), callData, OpenCompetitionBountyV2Beta2.V2ProofDeadlinePassed.selector);
     }
 
     function testMalformedJournalAndFailedMetricFailClosed() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
         bytes memory malformedCall =
             abi.encodeCall(CompetitionV2Actor.submit, (bounty, bytes("short"), _passingProof(bounty)));
         _requireRevertSelector(
-            address(solverA), malformedCall, OpenCompetitionBountyV2Beta1.V2JournalDecodeInvalid.selector
+            address(solverA), malformedCall, OpenCompetitionBountyV2Beta2.V2JournalDecodeInvalid.selector
         );
         bytes memory failedJournal = _journal(bounty, address(solverA), 1, 1, false);
         bytes memory failedCall =
             abi.encodeCall(CompetitionV2Actor.submit, (bounty, failedJournal, _passingProof(bounty)));
         _requireRevertSelector(
-            address(solverA), failedCall, OpenCompetitionBountyV2Beta1.V2JournalReportedFailure.selector
+            address(solverA), failedCall, OpenCompetitionBountyV2Beta2.V2JournalReportedFailure.selector
         );
     }
 
     function testFactoryNeverReceivesFundsOrUsesContributorAllowance() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -600,10 +598,10 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function testNoOpTokenFundingFailsAccountingCheck() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createPartiallyFunded(
+        OpenCompetitionBountyV2Beta2 bounty = _createPartiallyFunded(
             100_000,
-            OpenCompetitionBountyV2Beta1.WinnerMode.FirstProven,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+            OpenCompetitionBountyV2Beta2.WinnerMode.FirstProven,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -611,15 +609,15 @@ contract OpenCompetitionBountyV2Beta1Test {
         token.approve(address(bounty), 1);
         bytes memory callData = abi.encodeCall(bounty.fund, (1, BETA_RISK_HASH));
         _requireRevertSelector(
-            address(bounty), callData, OpenCompetitionBountyV2Beta1.V2TokenAccountingMismatch.selector
+            address(bounty), callData, OpenCompetitionBountyV2Beta2.V2TokenAccountingMismatch.selector
         );
         require(bounty.fundedAmount() == 100_000, "failed transfer changed funding");
     }
 
     function testGasDoesNotGrowAcrossOneHundredOrTenThousandEntries() public {
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             0,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -653,9 +651,9 @@ contract OpenCompetitionBountyV2Beta1Test {
     function testFuzzThresholdIsExact(int128 rawThreshold, int128 rawScore) public {
         int256 threshold = int256(rawThreshold);
         int256 score = int256(rawScore);
-        OpenCompetitionBountyV2Beta1 bounty = _createFunded(
-            OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-            OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+        OpenCompetitionBountyV2Beta2 bounty = _createFunded(
+            OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+            OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
             threshold,
             factory.PROOF_SYSTEM_GROTH16()
         );
@@ -663,38 +661,38 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function _createFunded(
-        OpenCompetitionBountyV2Beta1.WinnerMode mode,
-        OpenCompetitionBountyV2Beta1.ScoreDirection direction,
+        OpenCompetitionBountyV2Beta2.WinnerMode mode,
+        OpenCompetitionBountyV2Beta2.ScoreDirection direction,
         int256 threshold,
         bytes32 proofSystem
-    ) private returns (OpenCompetitionBountyV2Beta1) {
+    ) private returns (OpenCompetitionBountyV2Beta2) {
         return _createPartiallyFunded(SOLVER_REWARD + KEEPER_REWARD, mode, direction, threshold, proofSystem);
     }
 
     function _createPartiallyFunded(
         uint256 initialFunding,
-        OpenCompetitionBountyV2Beta1.WinnerMode mode,
-        OpenCompetitionBountyV2Beta1.ScoreDirection direction,
+        OpenCompetitionBountyV2Beta2.WinnerMode mode,
+        OpenCompetitionBountyV2Beta2.ScoreDirection direction,
         int256 threshold,
         bytes32 proofSystem
-    ) private returns (OpenCompetitionBountyV2Beta1 bounty) {
-        OpenCompetitionBountyFactoryV2Beta1.CreateCompetitionParams memory params =
+    ) private returns (OpenCompetitionBountyV2Beta2 bounty) {
+        OpenCompetitionBountyFactoryV2Beta2.CreateCompetitionParams memory params =
             _params(mode, direction, threshold, proofSystem);
         bytes32 nonce = bytes32(++creationNonce);
         address predicted = factory.predictCompetitionAddress(address(this), params, nonce);
         token.approve(predicted, initialFunding);
         (address competition,) = factory.createCompetition(params, initialFunding, nonce, BETA_RISK_HASH);
         require(competition == predicted, "prediction mismatch");
-        return OpenCompetitionBountyV2Beta1(competition);
+        return OpenCompetitionBountyV2Beta2(competition);
     }
 
     function _params(
-        OpenCompetitionBountyV2Beta1.WinnerMode mode,
-        OpenCompetitionBountyV2Beta1.ScoreDirection direction,
+        OpenCompetitionBountyV2Beta2.WinnerMode mode,
+        OpenCompetitionBountyV2Beta2.ScoreDirection direction,
         int256 threshold,
         bytes32 proofSystem
-    ) private view returns (OpenCompetitionBountyFactoryV2Beta1.CreateCompetitionParams memory) {
-        return OpenCompetitionBountyFactoryV2Beta1.CreateCompetitionParams({
+    ) private view returns (OpenCompetitionBountyFactoryV2Beta2.CreateCompetitionParams memory) {
+        return OpenCompetitionBountyFactoryV2Beta2.CreateCompetitionParams({
                 solverReward: SOLVER_REWARD,
                 keeperReward: KEEPER_REWARD,
                 fundingDeadline: uint64(block.timestamp + 7 days),
@@ -716,14 +714,14 @@ contract OpenCompetitionBountyV2Beta1Test {
     }
 
     function _journal(
-        OpenCompetitionBountyV2Beta1 bounty,
+        OpenCompetitionBountyV2Beta2 bounty,
         address solver,
         uint256 solverNonce,
         int256 score,
         bool passed
     ) private view returns (bytes memory) {
         return abi.encode(
-            OpenCompetitionBountyV2Beta1.Journal({
+            OpenCompetitionBountyV2Beta2.Journal({
                 domain: bounty.JOURNAL_DOMAIN(),
                 chainId: block.chainid,
                 competition: address(bounty),
@@ -748,7 +746,7 @@ contract OpenCompetitionBountyV2Beta1Test {
         );
     }
 
-    function _passingProof(OpenCompetitionBountyV2Beta1 bounty) private view returns (bytes memory) {
+    function _passingProof(OpenCompetitionBountyV2Beta2 bounty) private view returns (bytes memory) {
         return bounty.proofSystem() == factory.PROOF_SYSTEM_GROTH16() ? GROTH16_PROOF : PLONK_PROOF;
     }
 
@@ -766,10 +764,10 @@ contract OpenCompetitionBountyV2Beta1Test {
 
 contract CompetitionV2FundingHandler {
     CompetitionV2Token public immutable token;
-    OpenCompetitionBountyV2Beta1 public immutable bounty;
+    OpenCompetitionBountyV2Beta2 public immutable bounty;
     bytes32 public immutable riskHash;
 
-    constructor(CompetitionV2Token token_, OpenCompetitionBountyV2Beta1 bounty_, bytes32 riskHash_) {
+    constructor(CompetitionV2Token token_, OpenCompetitionBountyV2Beta2 bounty_, bytes32 riskHash_) {
         token = token_;
         bounty = bounty_;
         riskHash = riskHash_;
@@ -777,7 +775,7 @@ contract CompetitionV2FundingHandler {
     }
 
     function fund(uint128 rawAmount) external {
-        if (bounty.competitionStatus() != OpenCompetitionBountyV2Beta1.CompetitionStatus.Funding) return;
+        if (bounty.competitionStatus() != OpenCompetitionBountyV2Beta2.CompetitionStatus.Funding) return;
         uint256 remaining = bounty.targetAmount() - bounty.fundedAmount();
         if (remaining == 0) return;
         uint256 amount = uint256(rawAmount) % remaining + 1;
@@ -785,38 +783,39 @@ contract CompetitionV2FundingHandler {
     }
 }
 
-contract OpenCompetitionBountyV2Beta1InvariantTest {
+contract OpenCompetitionBountyV2Beta2InvariantTest {
     VmCompetitionV2 constant vm = VmCompetitionV2(address(uint160(uint256(keccak256("hevm cheat code")))));
     bytes32 constant RISK_HASH = keccak256("invariant-risk");
 
     CompetitionV2Token token;
-    OpenCompetitionBountyFactoryV2Beta1 factory;
-    OpenCompetitionBountyV2Beta1 bounty;
+    OpenCompetitionBountyFactoryV2Beta2 factory;
+    OpenCompetitionBountyV2Beta2 bounty;
     address[] private invariantTargets;
 
     function setUp() public {
         token = new CompetitionV2Token();
-        CompetitionV2Gateway groth16 = new CompetitionV2Gateway();
-        CompetitionV2Gateway plonk = new CompetitionV2Gateway();
-        CompetitionV2VerifierMarker marker = new CompetitionV2VerifierMarker();
-        address groth16Verifier = 0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2;
-        address plonkVerifier = 0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A;
-        vm.etch(groth16Verifier, address(marker).code);
-        vm.etch(plonkVerifier, address(marker).code);
-        groth16.setRoute(0x4388a21c, groth16Verifier, false);
-        plonk.setRoute(0x5a093a2f, plonkVerifier, false);
+        CompetitionV2Groth16Verifier groth16 = new CompetitionV2Groth16Verifier();
+        CompetitionV2PlonkVerifier plonk = new CompetitionV2PlonkVerifier();
         groth16.setAcceptedProof(hex"4388a21c01020304");
         plonk.setAcceptedProof(hex"5a093a2f01020304");
-        factory = new OpenCompetitionBountyFactoryV2Beta1(address(token), address(groth16), address(plonk));
+        factory = new OpenCompetitionBountyFactoryV2Beta2(
+            address(token),
+            address(groth16),
+            groth16.VERIFIER_HASH(),
+            address(groth16).codehash,
+            address(plonk),
+            plonk.VERIFIER_HASH(),
+            address(plonk).codehash
+        );
 
-        OpenCompetitionBountyFactoryV2Beta1.CreateCompetitionParams memory params =
-            OpenCompetitionBountyFactoryV2Beta1.CreateCompetitionParams({
+        OpenCompetitionBountyFactoryV2Beta2.CreateCompetitionParams memory params =
+            OpenCompetitionBountyFactoryV2Beta2.CreateCompetitionParams({
                 solverReward: 1_000_000,
                 keeperReward: 50_000,
                 fundingDeadline: uint64(block.timestamp + 30 days),
                 proofWindowSeconds: 3 days,
-                winnerMode: OpenCompetitionBountyV2Beta1.WinnerMode.BestScore,
-                scoreDirection: OpenCompetitionBountyV2Beta1.ScoreDirection.HigherIsBetter,
+                winnerMode: OpenCompetitionBountyV2Beta2.WinnerMode.BestScore,
+                scoreDirection: OpenCompetitionBountyV2Beta2.ScoreDirection.HigherIsBetter,
                 scoreThreshold: 0,
                 proofSystem: factory.PROOF_SYSTEM_GROTH16(),
                 programVKey: keccak256("vkey"),
@@ -830,7 +829,7 @@ contract OpenCompetitionBountyV2Beta1InvariantTest {
                 betaRiskHash: RISK_HASH
             });
         (address competition,) = factory.createCompetition(params, 0, keccak256("invariant"), RISK_HASH);
-        bounty = OpenCompetitionBountyV2Beta1(competition);
+        bounty = OpenCompetitionBountyV2Beta2(competition);
         CompetitionV2FundingHandler handler = new CompetitionV2FundingHandler(token, bounty, RISK_HASH);
         token.mint(address(handler), 100_000_000);
         invariantTargets.push(address(handler));
@@ -846,7 +845,7 @@ contract OpenCompetitionBountyV2Beta1InvariantTest {
     }
 
     function invariantActivationRequiresExactCoverage() public view {
-        if (bounty.competitionStatus() == OpenCompetitionBountyV2Beta1.CompetitionStatus.Active) {
+        if (bounty.competitionStatus() == OpenCompetitionBountyV2Beta2.CompetitionStatus.Active) {
             require(bounty.fundedAmount() == bounty.targetAmount(), "active underfunded");
             require(bounty.proofDeadline() > block.timestamp, "active deadline missing");
         }

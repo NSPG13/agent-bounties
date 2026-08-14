@@ -37,7 +37,7 @@ macro_rules! hex {
 pub const JOURNAL_ABI_LENGTH: usize = 20 * 32;
 pub const MAXIMUM_VECTORS: usize = 10_000;
 pub const JOURNAL_DOMAIN: [u8; 32] =
-    hex!("40c861b5ff675d94ed282cd66e1e55bb38f03fe560786960e64d50b593ada7ba");
+    hex!("110d7acc5c3397f452c974ba4f7296d7d2a2cede57290113d1fd256e1818804b");
 pub const GROTH16_PROOF_SYSTEM: [u8; 32] =
     hex!("0fbfc39a4f588598b55fce747dc8dde3f1b661a9d538dc174b464d210d12a81d");
 pub const PLONK_PROOF_SYSTEM: [u8; 32] =
@@ -473,7 +473,7 @@ mod tests {
                 evaluated += 1;
             }
         }
-        assert!(evaluated >= 100);
+        assert_eq!(evaluated, 384);
     }
 
     #[test]

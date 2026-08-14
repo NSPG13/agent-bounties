@@ -18,9 +18,6 @@ pub const OPEN_COMPETITION_V2_PLONK_ID: &str = "sp1-plonk";
 pub const OPEN_COMPETITION_V2_BASE_USDC: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 pub const OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC: &str =
     "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
-pub const OPEN_COMPETITION_V2_GROTH16_GATEWAY: &str = "0x397A5f7f3dBd538f23DE225B51f532c34448dA9B";
-pub const OPEN_COMPETITION_V2_PLONK_GATEWAY: &str = "0x3B6041173B80E77f038f3F2C0f9744f04837185e";
-
 sol! {
     struct CompetitionV2CreateParamsAbi {
         uint256 solverReward;
@@ -58,7 +55,7 @@ sol! {
         ) external;
     }
 
-    interface IOpenCompetitionFactoryV2Beta1Planner {
+    interface IOpenCompetitionFactoryV2Beta2Planner {
         function createCompetition(
             CompetitionV2CreateParamsAbi params,
             uint256 initialFunding,
@@ -67,7 +64,7 @@ sol! {
         ) external returns (address competitionAddress, bytes32 bountyId);
     }
 
-    interface IOpenCompetitionBountyV2Beta1Planner {
+    interface IOpenCompetitionBountyV2Beta2Planner {
         function fund(uint256 requestedAmount, bytes32 acknowledgedRiskHash)
             external returns (uint256 acceptedAmount);
         function submitProof(bytes publicValues, bytes proofBytes) external;
@@ -80,7 +77,7 @@ sol! {
         function finalizeBestScore() external;
         function cancelFunding() external;
         function expireCompetition() external;
-        function cancelForUnavailableGateway() external;
+        function cancelForUnavailableVerifier() external;
         function withdrawRefundFor(address contributor) external returns (uint256 amount);
     }
 }
@@ -194,11 +191,25 @@ pub struct OpenCompetitionV2MetricProgramRelease {
 pub struct OpenCompetitionV2Release {
     pub protocol_version: String,
     pub network: String,
+    pub source_commit: String,
+    pub repository_subject_hash: String,
+    pub sp1_source_commit: String,
+    pub sp1_circuit_version: String,
     pub factory_contract: String,
+    pub factory_runtime_code_hash: String,
     pub implementation_contract: String,
+    pub implementation_runtime_code_hash: String,
     pub settlement_token: String,
+    pub groth16_verifier: String,
+    pub groth16_verifier_hash: String,
+    pub groth16_verifier_runtime_code_hash: String,
     pub groth16_adapter: String,
+    pub groth16_adapter_runtime_code_hash: String,
+    pub plonk_verifier: String,
+    pub plonk_verifier_hash: String,
+    pub plonk_verifier_runtime_code_hash: String,
     pub plonk_adapter: String,
+    pub plonk_adapter_runtime_code_hash: String,
     pub deployment_block: u64,
     pub release_hash: String,
     pub beta_risk_hash: String,
@@ -325,7 +336,7 @@ pub fn plan_open_competition_v2_creation(
             "approve(address,uint256)",
         ));
     }
-    let create = IOpenCompetitionFactoryV2Beta1Planner::createCompetitionCall {
+    let create = IOpenCompetitionFactoryV2Beta2Planner::createCompetitionCall {
         params,
         initialFunding: U256::from(request.initial_funding),
         creationNonce: creation_nonce,
@@ -381,7 +392,7 @@ pub fn plan_open_competition_v2_funding(
         spender: competition,
         amount: U256::from(amount),
     };
-    let funding = IOpenCompetitionBountyV2Beta1Planner::fundCall {
+    let funding = IOpenCompetitionBountyV2Beta2Planner::fundCall {
         requestedAmount: U256::from(amount),
         acknowledgedRiskHash: parse_b256(acknowledged_risk_hash, "acknowledged_risk_hash")?,
     };
@@ -411,7 +422,7 @@ pub fn plan_open_competition_v2_broker_payment(
     let expected_token = match descriptor.chain_id {
         8453 => OPEN_COMPETITION_V2_BASE_USDC,
         84532 => OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-        _ => return Err(v2_error("V2 Beta1 supports Base and Base Sepolia only")),
+        _ => return Err(v2_error("V2 Beta2 supports Base and Base Sepolia only")),
     };
     if normalize_evm_address(settlement_token)? != normalize_evm_address(expected_token)? {
         return Err(v2_error("proof broker must settle in native Base USDC"));
@@ -454,7 +465,7 @@ pub fn plan_open_competition_v2_broker_refund(
     let expected_token = match descriptor.chain_id {
         8453 => OPEN_COMPETITION_V2_BASE_USDC,
         84532 => OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-        _ => return Err(v2_error("V2 Beta1 supports Base and Base Sepolia only")),
+        _ => return Err(v2_error("V2 Beta2 supports Base and Base Sepolia only")),
     };
     if amount == 0
         || normalize_evm_address(settlement_token)? != normalize_evm_address(expected_token)?
@@ -486,7 +497,7 @@ pub fn open_competition_v2_broker_refund_digest(
     let expected_token = match descriptor.chain_id {
         8453 => OPEN_COMPETITION_V2_BASE_USDC,
         84532 => OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-        _ => return Err(v2_error("V2 Beta1 supports Base and Base Sepolia only")),
+        _ => return Err(v2_error("V2 Beta2 supports Base and Base Sepolia only")),
     };
     if amount == 0
         || valid_before == 0
@@ -566,7 +577,7 @@ pub fn plan_open_competition_v2_proof(
     let solver = parse_address(solver)?;
     let public_values_hash = keccak256(public_values);
     let proof_hash = keccak256(proof);
-    let direct = IOpenCompetitionBountyV2Beta1Planner::submitProofCall {
+    let direct = IOpenCompetitionBountyV2Beta2Planner::submitProofCall {
         publicValues: public_values.to_vec().into(),
         proofBytes: proof.to_vec().into(),
     };
@@ -618,7 +629,7 @@ pub fn plan_open_competition_v2_proof(
         ],
     );
     let relay_call = solver_signature.map(|signature| {
-        let call = IOpenCompetitionBountyV2Beta1Planner::submitProofForCall {
+        let call = IOpenCompetitionBountyV2Beta2Planner::submitProofForCall {
             publicValues: public_values.to_vec().into(),
             proofBytes: proof.to_vec().into(),
             authorizationDeadline: U256::from(authorization_deadline),
@@ -649,7 +660,7 @@ pub fn plan_open_competition_v2_proof(
         relay_authorization: OpenCompetitionV2ProofAuthorizationTypedData {
             types,
             domain: Eip712DomainData {
-                name: "Agent Bounties Open Competition V2 Beta1".to_string(),
+                name: "Agent Bounties Open Competition V2 Beta2".to_string(),
                 version: "1".to_string(),
                 chain_id: descriptor.chain_id,
                 verifying_contract: format!("{competition:#x}"),
@@ -680,29 +691,29 @@ pub fn plan_open_competition_v2_action(
     let from = caller.map(parse_address).transpose()?;
     let (data, function, next_action) = match action {
         "finalize_best_score" => (
-            IOpenCompetitionBountyV2Beta1Planner::finalizeBestScoreCall {}.abi_encode(),
+            IOpenCompetitionBountyV2Beta2Planner::finalizeBestScoreCall {}.abi_encode(),
             "finalizeBestScore()",
             "Wait for safe-block CompetitionSettledV2 and reconcile both solver and keeper transfers.",
         ),
         "cancel_funding" => (
-            IOpenCompetitionBountyV2Beta1Planner::cancelFundingCall {}.abi_encode(),
+            IOpenCompetitionBountyV2Beta2Planner::cancelFundingCall {}.abi_encode(),
             "cancelFunding()",
             "Wait for safe-block CompetitionCancelledV2, then call withdraw_refund_for for each contributor.",
         ),
         "expire_competition" => (
-            IOpenCompetitionBountyV2Beta1Planner::expireCompetitionCall {}.abi_encode(),
+            IOpenCompetitionBountyV2Beta2Planner::expireCompetitionCall {}.abi_encode(),
             "expireCompetition()",
             "Wait for safe-block CompetitionCancelledV2, then return each contributor refund permissionlessly.",
         ),
-        "cancel_unavailable_gateway" => (
-            IOpenCompetitionBountyV2Beta1Planner::cancelForUnavailableGatewayCall {}.abi_encode(),
-            "cancelForUnavailableGateway()",
+        "cancel_unavailable_verifier" => (
+            IOpenCompetitionBountyV2Beta2Planner::cancelForUnavailableVerifierCall {}.abi_encode(),
+            "cancelForUnavailableVerifier()",
             "Wait for safe-block CompetitionCancelledV2, then return each contributor refund permissionlessly.",
         ),
         "withdraw_refund_for" => {
             let contributor = contributor
                 .ok_or_else(|| v2_error("contributor is required for withdraw_refund_for"))?;
-            let call = IOpenCompetitionBountyV2Beta1Planner::withdrawRefundForCall {
+            let call = IOpenCompetitionBountyV2Beta2Planner::withdrawRefundForCall {
                 contributor: parse_address(contributor)?,
             };
             (
@@ -732,10 +743,68 @@ fn validate_release(
     if release.protocol_version != super::OPEN_COMPETITION_V2_PROTOCOL_VERSION {
         return Err(v2_error("release protocol version mismatch"));
     }
-    parse_address(&release.factory_contract)?;
-    parse_address(&release.implementation_contract)?;
-    parse_address(&release.groth16_adapter)?;
-    parse_address(&release.plonk_adapter)?;
+    if release.source_commit.len() != 40
+        || !release
+            .source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(v2_error(
+            "source_commit must be a full lowercase Git commit",
+        ));
+    }
+    if release.sp1_source_commit.len() != 40
+        || !release
+            .sp1_source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || release.sp1_circuit_version.trim().is_empty()
+    {
+        return Err(v2_error(
+            "patched SP1 source commit or circuit version is invalid",
+        ));
+    }
+    for address in [
+        &release.factory_contract,
+        &release.implementation_contract,
+        &release.groth16_verifier,
+        &release.groth16_adapter,
+        &release.plonk_verifier,
+        &release.plonk_adapter,
+    ] {
+        parse_address(address)?;
+    }
+    for (value, field) in [
+        (&release.repository_subject_hash, "repository_subject_hash"),
+        (
+            &release.factory_runtime_code_hash,
+            "factory_runtime_code_hash",
+        ),
+        (
+            &release.implementation_runtime_code_hash,
+            "implementation_runtime_code_hash",
+        ),
+        (&release.groth16_verifier_hash, "groth16_verifier_hash"),
+        (
+            &release.groth16_verifier_runtime_code_hash,
+            "groth16_verifier_runtime_code_hash",
+        ),
+        (
+            &release.groth16_adapter_runtime_code_hash,
+            "groth16_adapter_runtime_code_hash",
+        ),
+        (&release.plonk_verifier_hash, "plonk_verifier_hash"),
+        (
+            &release.plonk_verifier_runtime_code_hash,
+            "plonk_verifier_runtime_code_hash",
+        ),
+        (
+            &release.plonk_adapter_runtime_code_hash,
+            "plonk_adapter_runtime_code_hash",
+        ),
+    ] {
+        require_nonzero(parse_b256(value, field)?, field)?;
+    }
     require_nonzero(
         parse_b256(&release.release_hash, "release_hash")?,
         "release_hash",
@@ -747,7 +816,7 @@ fn validate_release(
     let expected_token = match descriptor.chain_id {
         8453 => OPEN_COMPETITION_V2_BASE_USDC,
         84532 => OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-        _ => return Err(v2_error("V2 Beta1 supports Base and Base Sepolia only")),
+        _ => return Err(v2_error("V2 Beta2 supports Base and Base Sepolia only")),
     };
     if normalize_evm_address(&release.settlement_token)? != normalize_evm_address(expected_token)? {
         return Err(v2_error("release settlement token is not native Base USDC"));
@@ -812,7 +881,7 @@ fn validate_create_params(
     if normalize_hash(acknowledged_risk_hash, "acknowledged_risk_hash")?
         != normalize_hash(&params.beta_risk_hash, "beta_risk_hash")?
     {
-        return Err(v2_error("Beta1 risk hash was not acknowledged exactly"));
+        return Err(v2_error("Beta2 risk hash was not acknowledged exactly"));
     }
     params_abi(params)?;
     Ok(())
@@ -925,11 +994,25 @@ mod tests {
         OpenCompetitionV2Release {
             protocol_version: super::super::OPEN_COMPETITION_V2_PROTOCOL_VERSION.to_string(),
             network: "base-sepolia".to_string(),
+            source_commit: "11".repeat(20),
+            repository_subject_hash: hash(13),
+            sp1_source_commit: "22".repeat(20),
+            sp1_circuit_version: "agent-bounties-sp1-safe-v1".to_string(),
             factory_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            factory_runtime_code_hash: hash(14),
             implementation_contract: "0x2222222222222222222222222222222222222222".to_string(),
+            implementation_runtime_code_hash: hash(15),
             settlement_token: OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC.to_string(),
+            groth16_verifier: "0x5555555555555555555555555555555555555555".to_string(),
+            groth16_verifier_hash: hash(16),
+            groth16_verifier_runtime_code_hash: hash(17),
             groth16_adapter: "0x3333333333333333333333333333333333333333".to_string(),
+            groth16_adapter_runtime_code_hash: hash(18),
+            plonk_verifier: "0x6666666666666666666666666666666666666666".to_string(),
+            plonk_verifier_hash: hash(19),
+            plonk_verifier_runtime_code_hash: hash(20),
             plonk_adapter: "0x4444444444444444444444444444444444444444".to_string(),
+            plonk_adapter_runtime_code_hash: hash(21),
             deployment_block: 1,
             release_hash: hash(1),
             beta_risk_hash: hash(2),

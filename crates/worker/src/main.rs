@@ -9,13 +9,15 @@ use worker::{
     dispatch_discovery_webhooks_once, indexer_error_is_retryable,
     poll_autonomous_indexer_once_with_heartbeat, poll_open_competition_indexer_once_with_heartbeat,
     poll_open_competition_v2_broker_once, poll_open_competition_v2_indexer_once_with_heartbeat,
-    poll_open_competition_v2_keeper_once, redact_operational_error, run_regression_sandbox_request,
-    snapshot_directory, stage_regression_input, validate_regression_candidate,
-    AutonomousIndexerConfig, DiscoveryWebhookConfig, IndexerRecoveryDecision,
-    IndexerRecoveryPolicy, OpenCompetitionIndexerConfig, OpenCompetitionV2BrokerChainConfig,
+    poll_open_competition_v2_keeper_once, poll_open_competition_v2_shadow_once,
+    redact_operational_error, run_regression_sandbox_request, snapshot_directory,
+    stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
+    DiscoveryWebhookConfig, IndexerRecoveryDecision, IndexerRecoveryPolicy,
+    OpenCompetitionIndexerConfig, OpenCompetitionV2BrokerChainConfig,
     OpenCompetitionV2BrokerConfig, OpenCompetitionV2IndexerConfig, OpenCompetitionV2KeeperConfig,
-    RegressionCandidateValidationRequest, RegressionInputKind, RegressionSandboxRunRequest,
-    REGRESSION_SANDBOX_DOCKER_BINARY_ENV, REGRESSION_SANDBOX_STAGING_ROOT_ENV,
+    OpenCompetitionV2ShadowConfig, RegressionCandidateValidationRequest, RegressionInputKind,
+    RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
+    REGRESSION_SANDBOX_STAGING_ROOT_ENV,
 };
 
 #[tokio::main]
@@ -117,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
     if protocol == "open-competition-v1" {
         return run_open_competition_indexer(&store, once).await;
     }
-    if protocol == "open-competition-v2-beta1" {
+    if protocol == "open-competition-v2-beta2" {
         return run_open_competition_v2_indexer(&store, once).await;
     }
     if protocol == "open-competition-v2-broker" {
@@ -126,9 +128,12 @@ async fn main() -> anyhow::Result<()> {
     if protocol == "open-competition-v2-keeper" {
         return run_open_competition_v2_keeper(&store, once).await;
     }
+    if protocol == "open-competition-v2-shadow" {
+        return run_open_competition_v2_shadow(&store, once).await;
+    }
     if protocol != "autonomous-v1" {
         anyhow::bail!(
-            "BASE_INDEXER_PROTOCOL must be autonomous-v1, open-competition-v1, open-competition-v2-beta1, open-competition-v2-broker, or open-competition-v2-keeper"
+            "BASE_INDEXER_PROTOCOL must be autonomous-v1, open-competition-v1, open-competition-v2-beta2, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
         );
     }
     let config = AutonomousIndexerConfig::from_env()?;
@@ -199,6 +204,28 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+async fn run_open_competition_v2_shadow(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = OpenCompetitionV2ShadowConfig::from_env()?;
+    let poll_seconds = env_u64("OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS", 30)?.clamp(5, 300);
+    loop {
+        match poll_open_competition_v2_shadow_once(store, &config).await {
+            Ok(report) => println!("{}", serde_json::to_string(&report)?),
+            Err(error) => eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema": "agent-bounties/open-competition-v2-shadow-recovery-v1",
+                    "error": redact_operational_error(&error.to_string()),
+                    "decision": "retry_full_safe_comparison",
+                    "evidence_boundary": "A failed or stale comparison disables public Beta2 operations; it cannot create chain or payment evidence."
+                }))?
+            ),
+        }
+        if once || wait_or_shutdown(poll_seconds).await? {
+            return Ok(());
+        }
+    }
+}
+
 async fn run_open_competition_v2_keeper(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
     let config = OpenCompetitionV2KeeperConfig::from_env()?;
     let chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
@@ -265,8 +292,8 @@ async fn run_open_competition_v2_indexer(store: &PostgresStore, once: bool) -> a
                 eprintln!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
-                        "schema": "agent-bounties/open-competition-v2-beta1-indexer-recovery-v1",
-                        "protocol_version": "agent-bounties/open-competition-v2-beta1",
+                        "schema": "agent-bounties/open-competition-v2-beta2-indexer-recovery-v1",
+                        "protocol_version": "agent-bounties/open-competition-v2-beta2",
                         "network": config.network,
                         "factory_contract": config.factory_contract,
                         "deployment_block": config.deployment_block,

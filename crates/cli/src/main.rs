@@ -2368,9 +2368,12 @@ async fn open_competition_v2_inspect_cli(
         "network must be base-mainnet or base-sepolia",
     )?;
     let api = normalize_base_url(&api_base_url);
-    let root = format!("{api}/v1/base/open-competition-v2-beta1");
+    let root = format!("{api}/v1/base/open-competition-v2-beta2");
     let client = reqwest::Client::new();
     let request = match operation.as_str() {
+        "release" => client
+            .get(format!("{root}/release"))
+            .query(&[("network", network)]),
         "profiles" => client
             .get(format!("{root}/profiles"))
             .query(&[("network", network)]),
@@ -2395,7 +2398,7 @@ async fn open_competition_v2_inspect_cli(
             let job_id = job_id.context("job_id is required for proof_job")?;
             client.get(format!("{root}/proof-jobs/{job_id}"))
         }
-        _ => bail!("operation must be profiles, inventory, events, or proof_job"),
+        _ => bail!("operation must be release, profiles, inventory, events, or proof_job"),
     };
     let response = request.send().await.context("V2 inspect request failed")?;
     print_json_response(response, &[200]).await
@@ -2426,7 +2429,7 @@ async fn open_competition_v2_prepare_cli(
         "request_file must contain one JSON object",
     )?;
     let url = format!(
-        "{}/v1/base/open-competition-v2-beta1/{path}",
+        "{}/v1/base/open-competition-v2-beta2/{path}",
         normalize_base_url(&api_base_url)
     );
     let response = reqwest::Client::new()
@@ -2444,7 +2447,7 @@ async fn open_competition_v2_pay_proof_cli(
     payment_signature: Option<String>,
 ) -> Result<()> {
     let url = format!(
-        "{}/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/payment",
+        "{}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
         normalize_base_url(&api_base_url)
     );
     let mut request = reqwest::Client::new().post(&url);
@@ -2495,7 +2498,7 @@ async fn open_competition_v2_authorize_relay_cli(
     solver_signature: Option<String>,
 ) -> Result<()> {
     let url = format!(
-        "{}/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/relay-authorization",
+        "{}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization",
         normalize_base_url(&api_base_url)
     );
     let response = reqwest::Client::new()

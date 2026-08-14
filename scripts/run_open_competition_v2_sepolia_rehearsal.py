@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy and rehearse Open Competition V2 Beta1 on live Base Sepolia."""
+"""Rehearse Open Competition V2 Beta2 on live Base Sepolia or mainnet."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 
 from eth_account import Account
 
-import build_open_competition_v2_beta1_release as release
+import build_open_competition_v2_beta2_release as release
 import open_competition_v2_proof_rehearsal as rehearsal
 from _shared.evm import keccak256, keccak_bytes
 from _shared.rpc import rpc
@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROGRAM_ROOT = ROOT / "programs" / "public-vector-metric-v1"
 CHAIN_ID = 84532
 NETWORK = "base-sepolia"
+RUN_LABEL = "sepolia"
 PREPARED_FUNDING_WINDOW = 7 * 24 * 60 * 60
 SETTLED_TOPIC = rehearsal.SETTLED_TOPIC
 CANCELLED_TOPIC = keccak256(
@@ -53,7 +54,9 @@ def normalized_key(value: str) -> bytes:
 
 def derived_actor(root_key: bytes, source_commit: str, label: str) -> Any:
     material = keccak_bytes(
-        b"agent-bounties/open-competition-v2-beta1/sepolia-actor\0"
+        b"agent-bounties/open-competition-v2-beta2/actor\0"
+        + NETWORK.encode()
+        + b"\0"
         + root_key
         + bytes.fromhex(source_commit)
         + label.encode()
@@ -86,7 +89,7 @@ def proof_summary(value: dict[str, Any]) -> dict[str, Any]:
 class SignedRpc:
     def __init__(self, url: str) -> None:
         self.url = url
-        require(int(rpc(url, "eth_chainId", []), 16) == CHAIN_ID, "RPC is not Base Sepolia")
+        require(int(rpc(url, "eth_chainId", []), 16) == CHAIN_ID, f"RPC is not {NETWORK}")
 
     def fees(self) -> tuple[int, int]:
         block = rpc(self.url, "eth_getBlockByNumber", ["latest", False])
@@ -163,11 +166,12 @@ def bundle_for_nonce(bundle: dict[str, Any], nonce: int) -> dict[str, Any]:
         repository_subject=bundle["repository_subject"]["hash"],
         preflight=preflight,
         gates=deepcopy(bundle["release_gates"]),
+        verifier_assets=release.load_verifier_assets(),
     )
 
 
 def resolve_or_deploy_factory(client: SignedRpc, signer: Any, bundle: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    require(bundle.get("network") == NETWORK and bundle.get("chain_id") == CHAIN_ID, "release bundle is not Base Sepolia")
+    require(bundle.get("network") == NETWORK and bundle.get("chain_id") == CHAIN_ID, f"release bundle is not {NETWORK}")
     require(signer.address.lower() == bundle["deployer"], "signer does not match release bundle deployer")
     pending_nonce = int(rpc(client.url, "eth_getTransactionCount", [signer.address, "pending"]), 16)
 
@@ -180,10 +184,8 @@ def resolve_or_deploy_factory(client: SignedRpc, signer: Any, bundle: dict[str, 
         if size and observed == candidate["factory"]["runtime_code_hash"]:
             return candidate, None
 
-    require(
-        pending_nonce == bundle["factory"]["from_nonce"],
-        "deployer nonce moved and no exact prior Beta1 factory was found; rebuild the release bundle",
-    )
+    require(NETWORK == "base-sepolia", "mainnet rehearsal requires the exact factory to be deployed first")
+    require(pending_nonce == bundle["factory"]["from_nonce"], "deployer nonce moved and no exact prior Beta2 factory was found; rebuild the release bundle")
     observed, size = runtime_hash(client.url, bundle["factory"]["address"])
     require(size == 0, f"predicted factory is occupied by {observed}")
     receipt = client.send(signer, data=bundle["factory"]["deployment_calldata"])
@@ -231,7 +233,7 @@ def wait_safe(url: str, receipts: list[dict[str, Any]], timeout: int) -> dict[st
                 "timestamp": int(safe["timestamp"], 16),
             }
         time.sleep(2)
-    raise SepoliaRehearsalError("Base Sepolia safe-block reconciliation timed out")
+    raise SepoliaRehearsalError(f"{NETWORK} safe-block reconciliation timed out")
 
 
 def actors_for(raw_key: bytes, bundle: dict[str, Any]) -> tuple[Any, Any, Any]:
@@ -257,17 +259,17 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         creator=signer.address,
         solver_a=solver_a.address,
         solver_b=solver_b.address,
-        first_label="sepolia-groth16-first",
-        best_label="sepolia-plonk-best",
-        first_nonce_label=f"{bundle['source_commit']}:sepolia-groth16-first",
-        best_nonce_label=f"{bundle['source_commit']}:sepolia-plonk-best",
+        first_label=f"{RUN_LABEL}-groth16-first",
+        best_label=f"{RUN_LABEL}-plonk-best",
+        first_nonce_label=f"{bundle['source_commit']}:{RUN_LABEL}-groth16-first",
+        best_nonce_label=f"{bundle['source_commit']}:{RUN_LABEL}-plonk-best",
         proof_window=90,
         funding_window=PREPARED_FUNDING_WINDOW,
     )
     args.resolved_bundle_output.parent.mkdir(parents=True, exist_ok=True)
     args.resolved_bundle_output.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
     result = {
-        "schema_version": "agent-bounties/open-competition-v2-beta1-sepolia-preparation-v1",
+        "schema_version": f"agent-bounties/open-competition-v2-beta2-{RUN_LABEL}-preparation-v1",
         "passed": True,
         "broadcast": deployment_receipt is not None,
         "factory_deployment_transaction": receipt_hash(deployment_receipt) if deployment_receipt else None,
@@ -300,7 +302,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     token = bundle["settlement_token"]
     factory = bundle["factory"]["address"]
     risk_hash = rehearsal.b32(bundle["risk"]["hash"])
-    work = args.output.parent / "open-competition-v2-sepolia-proof-work"
+    work = args.output.parent / f"open-competition-v2-{RUN_LABEL}-proof-work"
     work.mkdir(parents=True, exist_ok=True)
     prepared = args.prepared_proof_dir or (work / "prepared")
     if args.prepared_proof_dir is None:
@@ -311,10 +313,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             creator=signer.address,
             solver_a=solver_a.address,
             solver_b=solver_b.address,
-            first_label="sepolia-groth16-first",
-            best_label="sepolia-plonk-best",
-            first_nonce_label=f"{bundle['source_commit']}:sepolia-groth16-first",
-            best_nonce_label=f"{bundle['source_commit']}:sepolia-plonk-best",
+            first_label=f"{RUN_LABEL}-groth16-first",
+            best_label=f"{RUN_LABEL}-plonk-best",
+            first_nonce_label=f"{bundle['source_commit']}:{RUN_LABEL}-groth16-first",
+            best_nonce_label=f"{bundle['source_commit']}:{RUN_LABEL}-plonk-best",
             proof_window=90,
             funding_window=PREPARED_FUNDING_WINDOW,
         )
@@ -323,7 +325,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.proof_evidence_dir is None:
         proofs = {}
         for name, (mode, label) in rehearsal.PROOF_SPECS.items():
-            evidence = rehearsal.prove(fixtures[name], mode, f"sepolia-{label}", work)
+            evidence = rehearsal.prove(fixtures[name], mode, f"{RUN_LABEL}-{label}", work)
             proofs[name] = rehearsal.validate_proof_evidence(
                 bundle, context, name, fixtures[name], evidence
             )
@@ -376,20 +378,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     require(rehearsal.token_balance(client.url, token, solver_b.address) - best_before == 250_000, "PLONK solver payout mismatch")
     require(rehearsal.token_balance(client.url, token, signer.address) - keeper_before == 12_500, "PLONK keeper payout mismatch")
 
-    expiry_template = json.loads(
-        (PROGRAM_ROOT / "fixtures/rehearsal-first-proven.json").read_text(encoding="utf-8")
-    )
-    expiry_params = rehearsal.params(client.url, bundle, expiry_template, label="sepolia-expiry", proof_system="groth16", winner_mode=0, solver_reward=100_000, keeper_reward=5_000, proof_window=1)
-    expiry_nonce = rehearsal.b32(rehearsal.hash_label(f"{bundle['source_commit']}:sepolia-expiry"))
-    expiry_address, expiry_id = rehearsal.predict(client.url, factory, signer.address, expiry_params, expiry_nonce)
-    receipts["approve_expiry"] = client.send(signer, to=token, data=rehearsal.function_data("approve(address,uint256)", ["address", "uint256"], [expiry_address, 105_000]))
-    receipts["create_expiry"] = client.send(signer, to=factory, data=rehearsal.function_data(f"createCompetition({rehearsal.PARAM_TYPE},uint256,bytes32,bytes32)", [rehearsal.PARAM_TYPE, "uint256", "bytes32", "bytes32"], [expiry_params, 105_000, expiry_nonce, risk_hash]))
-    wait_until_chain_time(client.url, rehearsal.call_uint(client.url, expiry_address, "proofDeadline()"))
-    receipts["expire"] = client.send(signer, to=expiry_address, data=rehearsal.function_data("expireCompetition()", [], []))
-    require(has_topic(receipts["expire"], CANCELLED_TOPIC), "expiry cancellation event missing")
-    receipts["refund"] = client.send(solver_b, to=expiry_address, data=rehearsal.function_data("withdrawRefundFor(address)", ["address"], [signer.address]))
-    require(has_topic(receipts["refund"], REFUND_TOPIC), "permissionless refund event missing")
-    require(rehearsal.token_balance(client.url, token, expiry_address) == 0, "expiry escrow retained USDC")
+    expiry_result = None
+    if not args.skip_expiry_refund:
+        expiry_template = json.loads(
+            (PROGRAM_ROOT / "fixtures/rehearsal-first-proven.json").read_text(encoding="utf-8")
+        )
+        expiry_params = rehearsal.params(client.url, bundle, expiry_template, label=f"{RUN_LABEL}-expiry", proof_system="groth16", winner_mode=0, solver_reward=100_000, keeper_reward=5_000, proof_window=1)
+        expiry_nonce = rehearsal.b32(rehearsal.hash_label(f"{bundle['source_commit']}:{RUN_LABEL}-expiry"))
+        expiry_address, expiry_id = rehearsal.predict(client.url, factory, signer.address, expiry_params, expiry_nonce)
+        receipts["approve_expiry"] = client.send(signer, to=token, data=rehearsal.function_data("approve(address,uint256)", ["address", "uint256"], [expiry_address, 105_000]))
+        receipts["create_expiry"] = client.send(signer, to=factory, data=rehearsal.function_data(f"createCompetition({rehearsal.PARAM_TYPE},uint256,bytes32,bytes32)", [rehearsal.PARAM_TYPE, "uint256", "bytes32", "bytes32"], [expiry_params, 105_000, expiry_nonce, risk_hash]))
+        wait_until_chain_time(client.url, rehearsal.call_uint(client.url, expiry_address, "proofDeadline()"))
+        receipts["expire"] = client.send(signer, to=expiry_address, data=rehearsal.function_data("expireCompetition()", [], []))
+        require(has_topic(receipts["expire"], CANCELLED_TOPIC), "expiry cancellation event missing")
+        receipts["refund"] = client.send(solver_b, to=expiry_address, data=rehearsal.function_data("withdrawRefundFor(address)", ["address"], [signer.address]))
+        require(has_topic(receipts["refund"], REFUND_TOPIC), "permissionless refund event missing")
+        require(rehearsal.token_balance(client.url, token, expiry_address) == 0, "expiry escrow retained USDC")
+        expiry_result = {"competition": expiry_address, "bounty_id": expiry_id, "permissionless_refund": True, "escrow_balance": 0}
 
     for name, actor in (("solver_a", solver_a), ("solver_b", solver_b)):
         balance = rehearsal.token_balance(client.url, token, actor.address)
@@ -400,7 +405,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     require(rehearsal.token_balance(client.url, token, first_address) == 0, "first-proven escrow retained USDC")
     require(rehearsal.token_balance(client.url, token, best_address) == 0, "best-score escrow retained USDC")
     result = {
-        "schema_version": "agent-bounties/open-competition-v2-beta1-sepolia-rehearsal-v1",
+        "schema_version": f"agent-bounties/open-competition-v2-beta2-{RUN_LABEL}-rehearsal-v1",
         "passed": True,
         "synthetic": True,
         "source_commit": bundle["source_commit"],
@@ -415,9 +420,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "proofs": {name: proof_summary(value) for name, value in proofs.items()},
         "groth16_first_proven": {"competition": first_address, "bounty_id": first_id, "pooled_funding": True, "settled": True},
         "plonk_best_score": {"competition": best_address, "bounty_id": best_id, "entries": 2, "winner": solver_b.address.lower(), "settled": True},
-        "expiry_refund": {"competition": expiry_address, "bounty_id": expiry_id, "permissionless_refund": True, "escrow_balance": 0},
+        "expiry_refund": expiry_result,
         "test_usdc_reclaimed": True,
-        "evidence_boundary": "Live Base Sepolia technical rehearsal. Synthetic entries and testnet tokens are excluded from adoption, earnings, and mainnet payment metrics.",
+        "evidence_boundary": f"Live {NETWORK} technical rehearsal. Synthetic entries are excluded from adoption and external earning metrics.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
@@ -426,8 +431,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--network", choices=("base-sepolia", "base-mainnet"), default="base-sepolia")
     parser.add_argument("--bundle", type=Path, required=True)
-    parser.add_argument("--rpc-url", default=os.environ.get("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org"))
+    parser.add_argument("--rpc-url")
     parser.add_argument("--private-key-env", default="BASE_KEEPER_PRIVATE_KEY")
     parser.add_argument("--actor-eth-wei", type=int, default=100_000_000_000_000)
     parser.add_argument("--safe-timeout", type=int, default=1_800)
@@ -436,11 +442,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolved-bundle-output", type=Path)
     parser.add_argument("--prepared-proof-dir", type=Path)
     parser.add_argument("--proof-evidence-dir", type=Path)
+    parser.add_argument("--skip-expiry-refund", action="store_true")
     return parser.parse_args()
+
+
+def configure_network(args: argparse.Namespace) -> None:
+    global CHAIN_ID, NETWORK, RUN_LABEL
+    NETWORK = args.network
+    if NETWORK == "base-mainnet":
+        CHAIN_ID = 8453
+        RUN_LABEL = "mainnet"
+        args.rpc_url = args.rpc_url or os.environ.get("BASE_MAINNET_RPC_URL", "https://mainnet.base.org")
+    else:
+        CHAIN_ID = 84532
+        RUN_LABEL = "sepolia"
+        args.rpc_url = args.rpc_url or os.environ.get("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org")
 
 
 def main() -> int:
     args = parse_args()
+    configure_network(args)
     if bool(args.prepared_proof_dir) != bool(args.proof_evidence_dir):
         raise SystemExit("--prepared-proof-dir and --proof-evidence-dir must be supplied together")
     if args.prepare_proof_fixtures:

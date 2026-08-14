@@ -16,14 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Enforce disabled V2 SP1 advisory quarantine
-        run: python scripts/verify_sp1_advisory_quarantine.py
+      - name: Enforce the exact patched V2 SP1 graph
+        run: python scripts/verify_sp1_patched_graph.py
 
       - name: Reject newly introduced vulnerable dependencies
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: moderate
-          # SP1 6.3.1 still resolves a transcript dependency covered by this
-          # advisory. The preceding gate confines it to the disabled V2 proof
-          # toolchain and prevents high-severity or mainnet gates from passing.
-          allow-ghsas: GHSA-vj64-rjf3-w3v7

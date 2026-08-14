@@ -1,11 +1,11 @@
-# Open Competition V2 Beta1
+# Open Competition V2 Beta2
 
 Status: implementation beta, not deployed. Creation and hosted proving remain
 disabled until the release gates below produce matching evidence. V2 is
 opt-in and is not the default bounty protocol.
 
 The exact release procedure and current blockers are in
-[`open-competition-v2-beta1-release.md`](open-competition-v2-beta1-release.md).
+[`open-competition-v2-beta2-release.md`](open-competition-v2-beta2-release.md).
 
 ## Purpose
 
@@ -19,28 +19,23 @@ V2 does not alter or migrate Open Competition V1. Only a confirmed canonical
 
 ## Pinned Rails
 
-| Network | Chain ID | USDC | SP1 Groth16 gateway | SP1 PLONK gateway |
-| --- | ---: | --- | --- | --- |
-| Base | 8453 | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | `0x397A5f7f3dBd538f23DE225B51f532c34448dA9B` | `0x3B6041173B80E77f038f3F2C0f9744f04837185e` |
-| Base Sepolia | 84532 | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` | `0x397A5f7f3dBd538f23DE225B51f532c34448dA9B` | `0x3B6041173B80E77f038f3F2C0f9744f04837185e` |
+| Network | Chain ID | USDC |
+| --- | ---: | --- |
+| Base | 8453 | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Base Sepolia | 84532 | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
-The adapters pin the SP1 6.1 verifier route as well as the gateway:
-
-| Proof | Selector | Expected verifier |
-| --- | --- | --- |
-| Groth16 | `0x4388a21c` | `0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2` |
-| PLONK | `0x5a093a2f` | `0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A` |
-
-The adapter rejects a changed or frozen route and a proof carrying the other
-proof system's selector. An unresolved competition then has a permissionless
-refund transition. A different gateway route, program vkey, bytecode
-correction, or SP1 release requires a new Agent Bounties protocol version.
+Beta2 uses project-owned Groth16 and PLONK verifier contracts built from
+`NSPG13/sp1@cac02844905e41f8ad1bedeeb85f455452f9e925`. Each adapter pins one
+verifier address, `VERIFIER_HASH()`, runtime code hash, and proof selector.
+Addresses and hashes are published by the release endpoint only after exact
+deployment. A missing or changed verifier makes the competition refundable. A
+verifier, vkey, bytecode, or SP1 correction requires a new protocol version.
 
 ## Immutable Configuration
 
 Each competition commits to:
 
-- bounty ID, creator, settlement token, and Beta1 risk hash;
+- bounty ID, creator, settlement token, and Beta2 risk hash;
 - solver reward, keeper reward, funding deadline, and proof window;
 - winner mode (`first_proven` or `best_score`), score direction, and threshold;
 - proof system and SP1 program vkey;
@@ -78,7 +73,7 @@ bool passed
 int256 score
 ```
 
-`domain` is `keccak256("agent-bounties/open-competition-v2-beta1/journal")`.
+`domain` is `keccak256("agent-bounties/open-competition-v2-beta2/journal")`.
 The contract ABI-decodes the journal, compares every scoped field with its
 immutable configuration, requires `passed`, and applies the immutable score
 threshold. The selected SP1 adapter then verifies the exact journal bytes and
@@ -104,19 +99,19 @@ SubmitProof(
 
 EOA signatures use strict ECDSA checks. Contract wallets use ERC-1271 with a
 bounded gas call. A nonce is consumed only after the journal is valid and the
-SP1 gateway accepts the proof. Failed proof attempts remain retryable.
+pinned verifier accepts the proof. Failed proof attempts remain retryable.
 
 ## State Machine
 
 ```text
 Funding --target reached--> Active
 Funding --creator cancel or funding timeout--> Cancelled --> refunds
-Funding --gateway route frozen, changed, or unavailable--> Cancelled --> refunds
+Funding --verifier missing, changed, or unavailable--> Cancelled --> refunds
 Active(first_proven) --first qualifying proof--> Settled
 Active(best_score) --qualifying proof--> Active(current leader)
 Active(best_score) --deadline + leader--> Settled
 Active --deadline + no winner--> Cancelled --> refunds
-Active --gateway route frozen, changed, or unavailable--> Cancelled --> refunds
+Active --verifier missing, changed, or unavailable--> Cancelled --> refunds
 ```
 
 The factory deploys isolated deterministic clones and records canonical
@@ -133,7 +128,7 @@ status == Active
 AND block.timestamp <= proof_deadline
 AND solver authorization is valid
 AND solver nonce is unused
-AND SP1 gateway accepts the proof
+AND the pinned SP1 verifier accepts the proof
 AND every journal scope field matches
 AND journal.passed == true
 AND score satisfies the immutable threshold
@@ -227,7 +222,7 @@ public schemas and fixtures pass the adversarial corpus, and measured resource
 limits are published. The hosted proof broker rejects disabled and
 custom-unreviewed profiles; direct BYO proofs remain permissionless. A separate
 `wasm-benchmark-v1` may be developed later with deterministic metering and an
-import-free ABI; Beta1 does not call ordinary host regression tests
+import-free ABI; Beta2 does not call ordinary host regression tests
 "zk-verified".
 
 ## Agent Order Of Operations
@@ -246,7 +241,7 @@ import-free ABI; Beta1 does not call ordinary host regression tests
    broker failure, wait for canonical USDC refund evidence.
 
 The same order is exposed by API, MCP, CLI, Python, and TypeScript. Finalize,
-expire, cancel unavailable gateways, and withdraw contributor refunds through
+expire, cancel unavailable verifiers, and withdraw contributor refunds through
 `prepare_action`; every returned transaction is unsigned and is not evidence
 until its canonical event is indexed.
 

@@ -22,7 +22,8 @@ SOURCE_HASH_WORD = 10
 ELF_HASH_WORD = 11
 JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
-EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (8252c29 "
+EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (cac0284 "
+EXPECTED_SP1_COMMIT = "cac02844905e41f8ad1bedeeb85f455452f9e925"
 IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
 
 
@@ -41,7 +42,7 @@ def canonical_source_hash(root: Path) -> str:
 def read_evidence(path: Path) -> dict:
     lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     if not any(line.startswith(EXPECTED_SP1_VERSION_PREFIX) for line in lines):
-        raise ValueError(f"{path} did not use the pinned SP1 6.3.1 cargo-prove build")
+        raise ValueError(f"{path} did not use the pinned patched SP1 cargo-prove build")
     for line in reversed(lines):
         try:
             value = json.loads(line)
@@ -132,7 +133,8 @@ def main() -> int:
     summary = {
         "schema": "agent-bounties/open-competition-v2-metric-review-evidence-v1",
         "profile_id": "public-vector-metric-v1",
-        "sp1_release_line": "6.3.1",
+        "sp1_release_line": "6.4.0-agent-bounties-sp1-safe-v1",
+        "sp1_commit": EXPECTED_SP1_COMMIT,
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
         "elf_hash": first["elf_keccak256"],

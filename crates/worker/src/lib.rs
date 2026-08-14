@@ -35,6 +35,8 @@ mod regression_sandbox;
 pub use open_competition_v2_broker::*;
 mod open_competition_v2_keeper;
 pub use open_competition_v2_keeper::*;
+mod open_competition_v2_shadow;
+pub use open_competition_v2_shadow::*;
 pub use regression_sandbox::*;
 
 const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;

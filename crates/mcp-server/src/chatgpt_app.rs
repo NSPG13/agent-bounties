@@ -8,10 +8,9 @@ use super::{
     proxy_hosted_json, public_base_url_from_env, publish_autonomous_submission_evidence,
     publish_unfunded_bounty, submit_unfunded_bounty_solution, tools, AgentNativeClaimArgs,
     AutonomousBountyFeedArgs, AutonomousVerificationJobsArgs, CompileObjectiveWithCloudAgentArgs,
-    GetX402RelayStatusArgs, ListUnfundedBountiesArgs, OpenCompetitionV2InspectArgs,
-    OpenCompetitionV2MutationArgs, ObservedInterface, ObservedProtocolEra, OpportunityListArgs,
-    PaidStatusArgs,
-    PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
+    GetX402RelayStatusArgs, ListUnfundedBountiesArgs, ObservedInterface, ObservedProtocolEra,
+    OpenCompetitionV2InspectArgs, OpenCompetitionV2MutationArgs, OpportunityListArgs,
+    PaidStatusArgs, PlanAutonomousAttestationSettlementArgs, PlanAutonomousBountyClaimArgs,
     PlanAutonomousModuleSettlementArgs, PlanAutonomousVerificationAttestationArgs,
     PrepareAgentToEarnInput, PrepareAutonomousBountySubmissionArgs, PrepareBountyPostArgs,
     PublishAutonomousSubmissionEvidenceArgs, PublishUnfundedBountyArgs, SharedState,
@@ -1521,7 +1520,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
                 })?;
             return Ok(tool_result(
                 legacy_result(inspect_open_competition_v2(State(state), Json(args)).await.0)?,
-                "Returned indexed Open Competition V2 Beta1 state. Only CompetitionSettledV2 proves solver payment.",
+                "Returned indexed Open Competition V2 Beta2 state. Only CompetitionSettledV2 proves solver payment.",
                 false,
             ));
         }
@@ -1532,7 +1531,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
                 })?;
             return Ok(tool_result(
                 legacy_result(prepare_open_competition_v2(State(state), Json(args)).await.0)?,
-                "Prepared one exact Open Competition V2 Beta1 action. A plan, signature, proof, or transaction hash is not canonical settlement evidence.",
+                "Prepared one exact Open Competition V2 Beta2 action. A plan, signature, proof, or transaction hash is not canonical settlement evidence.",
                 false,
             ));
         }

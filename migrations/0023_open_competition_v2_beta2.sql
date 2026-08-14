@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS open_competition_v2_events (
   id UUID PRIMARY KEY,
   protocol_version TEXT NOT NULL
-    CHECK (protocol_version = 'agent-bounties/open-competition-v2-beta1'),
+    CHECK (protocol_version = 'agent-bounties/open-competition-v2-beta2'),
   log_key TEXT NOT NULL,
   network TEXT NOT NULL,
   factory_contract TEXT NOT NULL,
@@ -161,3 +161,25 @@ CREATE INDEX IF NOT EXISTS idx_open_competition_v2_proof_jobs_state
 CREATE INDEX IF NOT EXISTS idx_open_competition_v2_proof_jobs_refund_due
   ON open_competition_v2_proof_jobs (refund_due_at)
   WHERE state = 'refund_due';
+
+CREATE TABLE IF NOT EXISTS open_competition_v2_indexer_agreements (
+  network TEXT NOT NULL,
+  factory_contract TEXT NOT NULL,
+  protocol_version TEXT NOT NULL
+    CHECK (protocol_version = 'agent-bounties/open-competition-v2-beta2'),
+  common_safe_block BIGINT NOT NULL CHECK (common_safe_block >= 0),
+  primary_safe_head BIGINT NOT NULL CHECK (primary_safe_head >= common_safe_block),
+  shadow_safe_head BIGINT NOT NULL CHECK (shadow_safe_head >= common_safe_block),
+  primary_block_hash TEXT NOT NULL,
+  shadow_block_hash TEXT NOT NULL,
+  canonical_event_count BIGINT NOT NULL CHECK (canonical_event_count >= 0),
+  canonical_event_set_hash TEXT NOT NULL,
+  agrees BOOLEAN NOT NULL,
+  failure_code TEXT,
+  observed_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (network, factory_contract),
+  CHECK (
+    (agrees AND failure_code IS NULL)
+    OR (NOT agrees AND failure_code IS NOT NULL)
+  )
+);

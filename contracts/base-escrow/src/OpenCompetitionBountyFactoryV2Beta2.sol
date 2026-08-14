@@ -1,31 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.26;
 
-import "./OpenCompetitionBountyV2Beta1.sol";
+import "./OpenCompetitionBountyV2Beta2.sol";
 
-/// @notice Canonical deterministic factory for isolated V2 Beta1 escrows. It
+/// @notice Canonical deterministic factory for isolated V2 Beta2 escrows. It
 /// never receives bounty funds and never spends a contributor allowance.
-contract OpenCompetitionBountyFactoryV2Beta1 {
-    bytes32 public constant SUPPORTED_PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta1");
+contract OpenCompetitionBountyFactoryV2Beta2 {
+    bytes32 public constant SUPPORTED_PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta2");
     bytes32 public constant PROOF_SYSTEM_GROTH16 = keccak256("sp1-groth16");
     bytes32 public constant PROOF_SYSTEM_PLONK = keccak256("sp1-plonk");
 
     address public constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     address public constant BASE_SEPOLIA_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
-    address public constant BASE_GROTH16_GATEWAY = 0x397A5f7f3dBd538f23DE225B51f532c34448dA9B;
-    address public constant BASE_PLONK_GATEWAY = 0x3B6041173B80E77f038f3F2C0f9744f04837185e;
-    address public constant V6_1_GROTH16_VERIFIER = 0xb69f2584CBcFf99a58C4e7002E8b89Af54a6f4e2;
-    address public constant V6_1_PLONK_VERIFIER = 0xc3c6dDDAc8829b233Dc6536Ec024775a57b0AF2A;
-    bytes4 public constant V6_1_GROTH16_SELECTOR = 0x4388a21c;
-    bytes4 public constant V6_1_PLONK_SELECTOR = 0x5a093a2f;
 
     struct CreateCompetitionParams {
         uint256 solverReward;
         uint256 keeperReward;
         uint64 fundingDeadline;
         uint64 proofWindowSeconds;
-        OpenCompetitionBountyV2Beta1.WinnerMode winnerMode;
-        OpenCompetitionBountyV2Beta1.ScoreDirection scoreDirection;
+        OpenCompetitionBountyV2Beta2.WinnerMode winnerMode;
+        OpenCompetitionBountyV2Beta2.ScoreDirection scoreDirection;
         int256 scoreThreshold;
         bytes32 proofSystem;
         bytes32 programVKey;
@@ -96,19 +90,27 @@ contract OpenCompetitionBountyFactoryV2Beta1 {
         _reentrancy = 1;
     }
 
-    constructor(address settlementToken_, address groth16Gateway_, address plonkGateway_) {
-        _requireCanonicalBaseAddresses(settlementToken_, groth16Gateway_, plonkGateway_);
+    constructor(
+        address settlementToken_,
+        address groth16Verifier_,
+        bytes32 groth16VerifierHash_,
+        bytes32 groth16RuntimeCodeHash_,
+        address plonkVerifier_,
+        bytes32 plonkVerifierHash_,
+        bytes32 plonkRuntimeCodeHash_
+    ) {
+        _requireCanonicalBaseToken(settlementToken_);
         require(settlementToken_.code.length > 0, "token missing");
         settlementToken = settlementToken_;
         groth16Adapter = address(
-            new Sp1VerifierAdapterV2Beta1(
-                PROOF_SYSTEM_GROTH16, groth16Gateway_, V6_1_GROTH16_SELECTOR, V6_1_GROTH16_VERIFIER
+            new Sp1VerifierAdapterV2Beta2(
+                PROOF_SYSTEM_GROTH16, groth16Verifier_, groth16VerifierHash_, groth16RuntimeCodeHash_
             )
         );
         plonkAdapter = address(
-            new Sp1VerifierAdapterV2Beta1(PROOF_SYSTEM_PLONK, plonkGateway_, V6_1_PLONK_SELECTOR, V6_1_PLONK_VERIFIER)
+            new Sp1VerifierAdapterV2Beta2(PROOF_SYSTEM_PLONK, plonkVerifier_, plonkVerifierHash_, plonkRuntimeCodeHash_)
         );
-        implementation = address(new OpenCompetitionBountyV2Beta1());
+        implementation = address(new OpenCompetitionBountyV2Beta2());
     }
 
     function createCompetition(
@@ -117,7 +119,7 @@ contract OpenCompetitionBountyFactoryV2Beta1 {
         bytes32 creationNonce,
         bytes32 acknowledgedRiskHash
     ) external nonReentrant returns (address competitionAddress, bytes32 bountyId) {
-        OpenCompetitionBountyV2Beta1 competition;
+        OpenCompetitionBountyV2Beta2 competition;
         (competition, bountyId) = _deploy(msg.sender, params, creationNonce, acknowledgedRiskHash);
         competitionAddress = address(competition);
         _emitConfiguration(bountyId, competitionAddress, msg.sender, params, creationNonce);
@@ -135,7 +137,7 @@ contract OpenCompetitionBountyFactoryV2Beta1 {
         FundingAuthorization calldata authorization
     ) external nonReentrant returns (address competitionAddress, bytes32 bountyId) {
         require(initialFunding > 0, "initial funding zero");
-        OpenCompetitionBountyV2Beta1 competition;
+        OpenCompetitionBountyV2Beta2 competition;
         (competition, bountyId) = _deploy(creator, params, creationNonce, acknowledgedRiskHash);
         competitionAddress = address(competition);
         _emitConfiguration(bountyId, competitionAddress, creator, params, creationNonce);
@@ -173,16 +175,20 @@ contract OpenCompetitionBountyFactoryV2Beta1 {
         CreateCompetitionParams calldata params,
         bytes32 creationNonce,
         bytes32 acknowledgedRiskHash
-    ) private returns (OpenCompetitionBountyV2Beta1 competition, bytes32 bountyId) {
+    ) private returns (OpenCompetitionBountyV2Beta2 competition, bytes32 bountyId) {
         require(creator != address(0), "creator zero");
         require(creationNonce != bytes32(0), "creation nonce zero");
         require(acknowledgedRiskHash == params.betaRiskHash, "risk hash mismatch");
         bountyId = bountyIdFor(creator, params, creationNonce);
         address competitionAddress = _cloneDeterministic(implementation, bountyId);
-        competition = OpenCompetitionBountyV2Beta1(competitionAddress);
+        competition = OpenCompetitionBountyV2Beta2(competitionAddress);
+        require(
+            params.proofSystem == PROOF_SYSTEM_GROTH16 || params.proofSystem == PROOF_SYSTEM_PLONK,
+            "unsupported proof system"
+        );
         address adapter = params.proofSystem == PROOF_SYSTEM_GROTH16 ? groth16Adapter : plonkAdapter;
         competition.initialize(
-            OpenCompetitionBountyV2Beta1.Config({
+            OpenCompetitionBountyV2Beta2.Config({
                 bountyId: bountyId,
                 creator: creator,
                 factory: address(this),
@@ -244,15 +250,11 @@ contract OpenCompetitionBountyFactoryV2Beta1 {
         );
     }
 
-    function _requireCanonicalBaseAddresses(address token, address groth16Gateway, address plonkGateway) private view {
+    function _requireCanonicalBaseToken(address token) private view {
         if (block.chainid == 8453) {
             require(token == BASE_USDC, "noncanonical Base USDC");
-            require(groth16Gateway == BASE_GROTH16_GATEWAY, "noncanonical Groth16 gateway");
-            require(plonkGateway == BASE_PLONK_GATEWAY, "noncanonical PLONK gateway");
         } else if (block.chainid == 84532) {
             require(token == BASE_SEPOLIA_USDC, "noncanonical Base Sepolia USDC");
-            require(groth16Gateway == BASE_GROTH16_GATEWAY, "noncanonical Groth16 gateway");
-            require(plonkGateway == BASE_PLONK_GATEWAY, "noncanonical PLONK gateway");
         }
     }
 

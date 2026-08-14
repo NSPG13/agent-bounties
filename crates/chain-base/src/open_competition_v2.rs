@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
-pub const OPEN_COMPETITION_V2_PROTOCOL_VERSION: &str = "agent-bounties/open-competition-v2-beta1";
+pub const OPEN_COMPETITION_V2_PROTOCOL_VERSION: &str = "agent-bounties/open-competition-v2-beta2";
 pub const OPEN_COMPETITION_V2_JOURNAL_SCHEMA: &str =
-    "agent-bounties/open-competition-v2-beta1/journal";
+    "agent-bounties/open-competition-v2-beta2/journal";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

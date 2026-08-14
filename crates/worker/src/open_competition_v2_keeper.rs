@@ -62,7 +62,7 @@ pub async fn poll_open_competition_v2_keeper_once(
     let action = choose_keeper_action(&projections, &events, safe.timestamp);
     let action = match action {
         Some(action) => Some(action),
-        None => find_unavailable_gateway_action(&projections, &rpc_url, safe.number).await?,
+        None => find_unavailable_verifier_action(&projections, &rpc_url, safe.number).await?,
     };
     let Some(action) = action else {
         return Ok(OpenCompetitionV2KeeperReport {
@@ -164,7 +164,7 @@ fn choose_keeper_action(
     None
 }
 
-async fn find_unavailable_gateway_action(
+async fn find_unavailable_verifier_action(
     projections: &[OpenCompetitionV2StoredProjection],
     rpc_url: &str,
     safe_block: u64,
@@ -180,10 +180,10 @@ async fn find_unavailable_gateway_action(
         let Some(adapter) = projection.verifier_adapter.as_deref() else {
             continue;
         };
-        if !fetch_contract_bool_at(rpc_url, adapter, "0xc7776bc8", safe_block, 92).await? {
+        if !fetch_contract_bool_at(rpc_url, adapter, "0x5d7a55da", safe_block, 92).await? {
             return Ok(Some(KeeperAction {
                 competition: projection.competition.clone(),
-                action: "cancel_unavailable_gateway",
+                action: "cancel_unavailable_verifier",
                 contributor: None,
             }));
         }
@@ -277,7 +277,7 @@ mod tests {
     fn event(kind: OpenCompetitionV2EventKind, contributor: &str) -> OpenCompetitionV2Event {
         OpenCompetitionV2Event {
             id: Uuid::new_v4(),
-            protocol_version: "agent-bounties/open-competition-v2-beta1".to_string(),
+            protocol_version: "agent-bounties/open-competition-v2-beta2".to_string(),
             log_key: Uuid::new_v4().to_string(),
             tx_hash: format!("0x{}", "05".repeat(32)),
             block_number: 9,

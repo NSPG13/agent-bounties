@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay an exact V2 Beta1 mainnet deployment bundle on an isolated Anvil fork."""
+"""Replay an exact V2 Beta2 mainnet deployment bundle on an isolated Anvil fork."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ import open_competition_v2_proof_rehearsal
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_SCHEMA = "agent-bounties/open-competition-v2-beta1-release-bundle-v1"
-OUTPUT_SCHEMA = "agent-bounties/open-competition-v2-beta1-mainnet-fork-replay-v1"
+EXPECTED_SCHEMA = "agent-bounties/open-competition-v2-beta2-release-bundle-v1"
+OUTPUT_SCHEMA = "agent-bounties/open-competition-v2-beta2-mainnet-fork-replay-v1"
 
 
 def selector(signature: str) -> str:
@@ -99,9 +99,9 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
     if bundle.get("network") != "base-mainnet" or bundle.get("chain_id") != 8453:
         raise ValueError("fork replay requires a Base mainnet release bundle")
     if bundle.get("activation", {}).get("mainnet_signing_allowed") is True:
-        raise ValueError("an ungraduated Beta1 bundle must not authorize mainnet signing")
+        raise ValueError("an ungraduated Beta2 bundle must not authorize mainnet signing")
     if bundle.get("deployment_state") != "blocked":
-        raise ValueError("current Beta1 replay expects a fail-closed release bundle")
+        raise ValueError("current Beta2 replay expects a fail-closed release bundle")
 
 
 def replay(
@@ -133,26 +133,42 @@ def replay(
     try:
         wait_for_rpc(local_rpc, process)
         deployer = bundle["deployer"]
-        expected_factory = bundle["factory"]["address"]
-        if rpc(local_rpc, "eth_getCode", [expected_factory, "latest"]) != "0x":
-            raise RuntimeError("predicted factory address is occupied at the pinned fork block")
+        for item in bundle["deployment_transactions"]:
+            if rpc(local_rpc, "eth_getCode", [item["predicted_address"], "latest"]) != "0x":
+                raise RuntimeError(
+                    f"predicted {item['component']} address is occupied at the pinned fork block"
+                )
         rpc(local_rpc, "anvil_setBalance", [deployer, hex(10**20)])
         rpc(local_rpc, "anvil_impersonateAccount", [deployer])
-        transaction = {
-            "from": deployer,
-            "data": bundle["factory"]["deployment_calldata"],
-            "value": "0x0",
-        }
-        gas = int(rpc(local_rpc, "eth_estimateGas", [transaction]), 16)
-        transaction["gas"] = hex(gas * 5 // 4 + 50_000)
-        receipt = wait_receipt(local_rpc, rpc(local_rpc, "eth_sendTransaction", [transaction]))
+        receipts: dict[str, dict[str, Any]] = {}
+        for item in bundle["deployment_transactions"]:
+            transaction = {
+                "from": deployer,
+                "data": item["data"],
+                "value": "0x0",
+            }
+            gas = int(rpc(local_rpc, "eth_estimateGas", [transaction]), 16)
+            transaction["gas"] = hex(gas * 5 // 4 + 50_000)
+            receipt = wait_receipt(
+                local_rpc, rpc(local_rpc, "eth_sendTransaction", [transaction])
+            )
+            deployed = str(receipt.get("contractAddress", "")).lower()
+            if deployed != item["predicted_address"]:
+                raise RuntimeError(
+                    f"{item['component']} address differs from the release bundle"
+                )
+            receipts[item["component"]] = receipt
         rpc(local_rpc, "anvil_stopImpersonatingAccount", [deployer])
-        deployed = str(receipt.get("contractAddress", "")).lower()
-        if deployed != expected_factory:
-            raise RuntimeError("fork deployment address differs from the release bundle")
 
         components: dict[str, Any] = {}
-        for key in ("factory", "groth16_adapter", "plonk_adapter", "implementation"):
+        for key in (
+            "groth16_verifier",
+            "plonk_verifier",
+            "factory",
+            "groth16_adapter",
+            "plonk_adapter",
+            "implementation",
+        ):
             expected = bundle[key]
             observed_hash, observed_bytes = runtime(local_rpc, expected["address"])
             if observed_hash != expected["runtime_code_hash"] or observed_bytes != expected["runtime_code_bytes"]:
@@ -177,8 +193,8 @@ def replay(
                 raise RuntimeError(f"factory {name} getter differs from the release bundle")
             observed_getters[name] = observed
         for key in ("groth16_adapter", "plonk_adapter"):
-            if not bool_result(call(local_rpc, bundle[key]["address"], "gatewayAvailable()")):
-                raise RuntimeError(f"{key} rejected the canonical SP1 route on the fork")
+            if not bool_result(call(local_rpc, bundle[key]["address"], "verifierAvailable()")):
+                raise RuntimeError(f"{key} rejected its pinned immutable verifier on the fork")
 
         proof_rehearsal = None
         if prepare_proof_fixtures is not None:
@@ -206,11 +222,16 @@ def replay(
             "source_commit": bundle["source_commit"],
             "source_tree_hash": bundle["source_tree_hash"],
             "fork_block": bundle["preflight_safe_block"],
-            "deployment_transaction_hash": receipt["transactionHash"],
-            "deployment_block_number": int(receipt["blockNumber"], 16),
+            "deployment_transactions": {
+                name: {
+                    "transaction_hash": receipt["transactionHash"],
+                    "block_number": int(receipt["blockNumber"], 16),
+                }
+                for name, receipt in receipts.items()
+            },
             "components": components,
             "factory_getters": observed_getters,
-            "canonical_sp1_routes_available": True,
+            "pinned_sp1_verifiers_available": True,
             "proof_rehearsal": proof_rehearsal,
             "release_remains_blocked": True,
             "evidence_boundary": "This proves exact deployment and immutable configuration on an isolated Base mainnet fork. It is not a live deployment, proof canary, settlement, payment, independent review, or public activation.",

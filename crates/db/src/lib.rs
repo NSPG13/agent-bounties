@@ -66,8 +66,8 @@ pub const INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0021_interface_usage.sql");
 pub const EXTERNAL_INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0022_external_interface_usage.sql");
-pub const OPEN_COMPETITION_V2_BETA1_MIGRATION: &str =
-    include_str!("../../../migrations/0023_open_competition_v2_beta1.sql");
+pub const OPEN_COMPETITION_V2_BETA2_MIGRATION: &str =
+    include_str!("../../../migrations/0023_open_competition_v2_beta2.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1105,6 +1105,23 @@ pub struct PostgresStore {
     pool: PgPool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionV2IndexerAgreement {
+    pub network: String,
+    pub factory_contract: String,
+    pub protocol_version: String,
+    pub common_safe_block: u64,
+    pub primary_safe_head: u64,
+    pub shadow_safe_head: u64,
+    pub primary_block_hash: String,
+    pub shadow_block_hash: String,
+    pub canonical_event_count: u64,
+    pub canonical_event_set_hash: String,
+    pub agrees: bool,
+    pub failure_code: Option<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
 impl PostgresStore {
     pub async fn connect(database_url: &str) -> DbResult<Self> {
         let pool = PgPool::connect(database_url).await?;
@@ -1145,7 +1162,7 @@ impl PostgresStore {
                 OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
                 INTERFACE_USAGE_MIGRATION,
                 EXTERNAL_INTERFACE_USAGE_MIGRATION,
-                OPEN_COMPETITION_V2_BETA1_MIGRATION,
+                OPEN_COMPETITION_V2_BETA2_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -6312,6 +6329,89 @@ impl PostgresStore {
             .collect()
     }
 
+    pub async fn upsert_open_competition_v2_indexer_agreement(
+        &self,
+        agreement: &OpenCompetitionV2IndexerAgreement,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO open_competition_v2_indexer_agreements
+              (network, factory_contract, protocol_version, common_safe_block,
+               primary_safe_head, shadow_safe_head,
+               primary_block_hash, shadow_block_hash, canonical_event_count,
+               canonical_event_set_hash, agrees, failure_code, observed_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (network, factory_contract) DO UPDATE SET
+              protocol_version = EXCLUDED.protocol_version,
+              common_safe_block = EXCLUDED.common_safe_block,
+              primary_safe_head = EXCLUDED.primary_safe_head,
+              shadow_safe_head = EXCLUDED.shadow_safe_head,
+              primary_block_hash = EXCLUDED.primary_block_hash,
+              shadow_block_hash = EXCLUDED.shadow_block_hash,
+              canonical_event_count = EXCLUDED.canonical_event_count,
+              canonical_event_set_hash = EXCLUDED.canonical_event_set_hash,
+              agrees = EXCLUDED.agrees,
+              failure_code = EXCLUDED.failure_code,
+              observed_at = EXCLUDED.observed_at
+            "#,
+        )
+        .bind(&agreement.network)
+        .bind(normalize_key_address(&agreement.factory_contract))
+        .bind(&agreement.protocol_version)
+        .bind(i64_from_u64(agreement.common_safe_block)?)
+        .bind(i64_from_u64(agreement.primary_safe_head)?)
+        .bind(i64_from_u64(agreement.shadow_safe_head)?)
+        .bind(normalize_key_address(&agreement.primary_block_hash))
+        .bind(normalize_key_address(&agreement.shadow_block_hash))
+        .bind(i64_from_u64(agreement.canonical_event_count)?)
+        .bind(normalize_key_address(&agreement.canonical_event_set_hash))
+        .bind(agreement.agrees)
+        .bind(&agreement.failure_code)
+        .bind(agreement.observed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_open_competition_v2_indexer_agreement(
+        &self,
+        network: &str,
+        factory_contract: &str,
+    ) -> DbResult<Option<OpenCompetitionV2IndexerAgreement>> {
+        let row = sqlx::query(
+            r#"
+            SELECT network, factory_contract, protocol_version, common_safe_block,
+                   primary_safe_head, shadow_safe_head,
+                   primary_block_hash, shadow_block_hash, canonical_event_count,
+                   canonical_event_set_hash, agrees, failure_code, observed_at
+            FROM open_competition_v2_indexer_agreements
+            WHERE network = $1 AND factory_contract = $2
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(factory_contract))
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(OpenCompetitionV2IndexerAgreement {
+                network: row.try_get("network")?,
+                factory_contract: row.try_get("factory_contract")?,
+                protocol_version: row.try_get("protocol_version")?,
+                common_safe_block: u64_from_i64(row.try_get("common_safe_block")?)?,
+                primary_safe_head: u64_from_i64(row.try_get("primary_safe_head")?)?,
+                shadow_safe_head: u64_from_i64(row.try_get("shadow_safe_head")?)?,
+                primary_block_hash: row.try_get("primary_block_hash")?,
+                shadow_block_hash: row.try_get("shadow_block_hash")?,
+                canonical_event_count: u64_from_i64(row.try_get("canonical_event_count")?)?,
+                canonical_event_set_hash: row.try_get("canonical_event_set_hash")?,
+                agrees: row.try_get("agrees")?,
+                failure_code: row.try_get("failure_code")?,
+                observed_at: row.try_get("observed_at")?,
+            })
+        })
+        .transpose()
+    }
+
     pub async fn list_open_competition_v2_events_for_contract(
         &self,
         network: &str,
@@ -9716,7 +9816,7 @@ mod tests {
     #[test]
     fn open_competition_v2_migration_is_safe_block_and_refund_complete() {
         for invariant in [
-            "protocol_version = 'agent-bounties/open-competition-v2-beta1'",
+            "protocol_version = 'agent-bounties/open-competition-v2-beta2'",
             "safe_block_number BIGINT NOT NULL CHECK (safe_block_number >= block_number)",
             "UNIQUE (network, factory_contract, log_key)",
             "UNIQUE (network, factory_contract, tx_hash, log_index)",
@@ -9727,7 +9827,7 @@ mod tests {
             "refund_due_at TIMESTAMPTZ",
         ] {
             assert!(
-                OPEN_COMPETITION_V2_BETA1_MIGRATION.contains(invariant),
+                OPEN_COMPETITION_V2_BETA2_MIGRATION.contains(invariant),
                 "missing Open Competition V2 persistence invariant {invariant}"
             );
         }

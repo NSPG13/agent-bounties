@@ -104,8 +104,8 @@ def compile_python(platform: str) -> None:
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
         "scripts/build_canonical_child_verifier_bundle.py",
         "scripts/rehearse_canonical_child_verifier.py", "scripts/build_base_sepolia_sponsor_bundle.py",
-        "scripts/build_open_competition_v2_beta1_release.py",
-        "scripts/test_build_open_competition_v2_beta1_release.py",
+        "scripts/build_open_competition_v2_beta2_release.py",
+        "scripts/test_build_open_competition_v2_beta2_release.py",
         "scripts/prepare_open_competition_v2_metric_fixture.py",
         "scripts/test_prepare_open_competition_v2_metric_fixture.py",
         "scripts/open_competition_v2_proof_rehearsal.py",
@@ -115,8 +115,8 @@ def compile_python(platform: str) -> None:
         "scripts/test_run_open_competition_v2_sepolia_rehearsal.py",
         "scripts/verify_open_competition_v2_slither.py",
         "scripts/test_verify_open_competition_v2_slither.py",
-        "scripts/verify_sp1_advisory_quarantine.py",
-        "scripts/test_verify_sp1_advisory_quarantine.py",
+        "scripts/verify_sp1_patched_graph.py",
+        "scripts/test_verify_sp1_patched_graph.py",
         "scripts/run_open_competition_v2_mainnet_fork_replay.py",
         "scripts/test_run_open_competition_v2_mainnet_fork_replay.py",
     ]
@@ -299,13 +299,17 @@ def main() -> int:
     run(forge, "build", "--force", "--ast", cwd=ROOT / "contracts/base-escrow")
     py(
         "-m", "unittest",
-        "scripts.test_build_open_competition_v2_beta1_release",
+        "scripts.test_build_open_competition_v2_beta2_release",
         "scripts.test_prepare_open_competition_v2_metric_fixture",
         "scripts.test_open_competition_v2_proof_rehearsal",
+        "scripts.test_open_competition_v2_prover_service",
         "scripts.test_run_open_competition_v2_mainnet_fork_replay",
         "scripts.test_run_open_competition_v2_sepolia_rehearsal",
+        "scripts.test_deploy_open_competition_v2_beta2",
+        "scripts.test_record_open_competition_v2_beta2_gate",
+        "scripts.test_build_open_competition_v2_verifier_assets",
         "scripts.test_verify_open_competition_v2_slither",
-        "scripts.test_verify_sp1_advisory_quarantine",
+        "scripts.test_verify_sp1_patched_graph",
         "-v",
     )
     check_deployment_bundles(cargo, platform)

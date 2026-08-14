@@ -13,7 +13,7 @@ OPEN_COMPETITION_COMMITMENT_SCHEMA = (
     "agent-bounties/open-competition-v1-commitment-v1"
 )
 OPEN_COMPETITION_V2_JOURNAL_DOMAIN = bytes.fromhex(
-    "40c861b5ff675d94ed282cd66e1e55bb38f03fe560786960e64d50b593ada7ba"
+    "110d7acc5c3397f452c974ba4f7296d7d2a2cede57290113d1fd256e1818804b"
 )
 OPEN_COMPETITION_V2_POLICY_DOMAIN = bytes.fromhex(
     "f6a226ca20aaca3b9c0b4a609939c334b6c2b03500a5df45188df8bcd7c2b369"
@@ -686,7 +686,15 @@ class AgentBountiesClient:
     def get_open_competition_v2_profiles(self, network: str = "base-mainnet"):
         return self._request(
             "GET",
-            "/v1/base/open-competition-v2-beta1/profiles",
+            "/v1/base/open-competition-v2-beta2/profiles",
+            params={"network": network},
+        )
+
+    def get_open_competition_v2_release(self, network: str = "base-mainnet"):
+        """Return the exact immutable Beta2 identities and activation state."""
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v2-beta2/release",
             params={"network": network},
         )
 
@@ -694,7 +702,7 @@ class AgentBountiesClient:
         payload = dict(request)
         payload.setdefault("network", "base-mainnet")
         return self._request(
-            "POST", "/v1/base/open-competition-v2-beta1/validate", json=payload
+            "POST", "/v1/base/open-competition-v2-beta2/validate", json=payload
         )
 
     def prepare_open_competition_v2_creation(self, request: dict):
@@ -702,7 +710,7 @@ class AgentBountiesClient:
         payload.setdefault("network", "base-mainnet")
         return self._request(
             "POST",
-            "/v1/base/open-competition-v2-beta1/creation-preparation",
+            "/v1/base/open-competition-v2-beta2/creation-preparation",
             json=payload,
         )
 
@@ -711,7 +719,7 @@ class AgentBountiesClient:
         payload.setdefault("network", "base-mainnet")
         return self._request(
             "POST",
-            "/v1/base/open-competition-v2-beta1/funding-preparation",
+            "/v1/base/open-competition-v2-beta2/funding-preparation",
             json=payload,
         )
 
@@ -720,7 +728,7 @@ class AgentBountiesClient:
     ):
         return self._request(
             "GET",
-            "/v1/base/open-competition-v2-beta1/inventory",
+            "/v1/base/open-competition-v2-beta2/inventory",
             params={"network": network, "state": state},
         )
 
@@ -729,7 +737,7 @@ class AgentBountiesClient:
     ):
         return self._request(
             "GET",
-            "/v1/base/open-competition-v2-beta1/events",
+            "/v1/base/open-competition-v2-beta2/events",
             params={"network": network, "bounty_id": bounty_id},
         )
 
@@ -738,7 +746,7 @@ class AgentBountiesClient:
         payload.setdefault("network", "base-mainnet")
         return self._request(
             "POST",
-            "/v1/base/open-competition-v2-beta1/proof-quotes",
+            "/v1/base/open-competition-v2-beta2/proof-quotes",
             json=payload,
         )
 
@@ -747,7 +755,7 @@ class AgentBountiesClient:
         payload.setdefault("network", "base-mainnet")
         return self._request(
             "POST",
-            "/v1/base/open-competition-v2-beta1/proof-preparation",
+            "/v1/base/open-competition-v2-beta2/proof-preparation",
             json=payload,
         )
 
@@ -756,13 +764,13 @@ class AgentBountiesClient:
         payload.setdefault("network", "base-mainnet")
         return self._request(
             "POST",
-            "/v1/base/open-competition-v2-beta1/action-preparation",
+            "/v1/base/open-competition-v2-beta2/action-preparation",
             json=payload,
         )
 
     def get_open_competition_v2_proof_job(self, job_id: str):
         return self._request(
-            "GET", f"/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}"
+            "GET", f"/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}"
         )
 
     def pay_open_competition_v2_proof_job(
@@ -770,7 +778,7 @@ class AgentBountiesClient:
     ):
         response = self._http(
             "POST",
-            f"/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/payment",
+            f"/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
             headers=(
                 {"PAYMENT-SIGNATURE": payment_signature}
                 if payment_signature
@@ -795,7 +803,7 @@ class AgentBountiesClient:
         """Prepare the exact relay signature, then persist the signed authorization."""
         return self._request(
             "POST",
-            f"/v1/base/open-competition-v2-beta1/proof-jobs/{job_id}/relay-authorization",
+            f"/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization",
             json={
                 "authorization_deadline": authorization_deadline,
                 "solver_signature": solver_signature,

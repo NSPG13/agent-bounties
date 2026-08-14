@@ -16,7 +16,7 @@ from typing import Any
 
 from eth_abi import encode
 
-import build_open_competition_v2_beta1_release as release
+import build_open_competition_v2_beta2_release as release
 import prepare_open_competition_v2_metric_fixture as fixture_builder
 from _shared.evm import keccak256, keccak_bytes
 from _shared.rpc import rpc
@@ -54,8 +54,8 @@ PARAM_TYPES = (
 SETTLED_TOPIC = keccak256(
     b"CompetitionSettledV2(bytes32,uint256,address,uint256,address,uint256,bytes32,bytes32,int256,bytes32)"
 )
-PREPARED_SCHEMA = "agent-bounties/open-competition-v2-beta1-proof-context-v1"
-JOURNAL_DOMAIN = keccak_bytes(b"agent-bounties/open-competition-v2-beta1/journal")
+PREPARED_SCHEMA = "agent-bounties/open-competition-v2-beta2-proof-context-v1"
+JOURNAL_DOMAIN = keccak_bytes(b"agent-bounties/open-competition-v2-beta2/journal")
 SUBMISSION_DOMAIN = bytes.fromhex("402204460b00978c26cee42ae0089d94fe8b0b17bd90c45a6cd78d466463a507")
 EVIDENCE_DOMAIN = bytes.fromhex("16f60f26d350a38e6993a5454967d1efb0461d93785b7cdb38ba463284c5ab15")
 PROOF_SPECS = {
@@ -608,6 +608,8 @@ def generate_proof(
     mode, label = PROOF_SPECS[name]
     evidence = prove(fixtures[name], mode, label, log_work)
     validate_proof_evidence(bundle, context, name, fixtures[name], evidence)
+    evidence["self_verified"] = True
+    evidence["gpu_proving_enabled"] = False
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     return evidence

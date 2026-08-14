@@ -1,4 +1,4 @@
-# Open Competition V2 Beta1 Slither Triage
+# Open Competition V2 Beta2 Slither Triage
 
 Tool: `slither-analyzer 0.11.5`, 101 detectors, V2 factory dependency graph.
 Generated JSON stays in `target/tmp/open-competition-v2-slither.json`.
@@ -20,16 +20,16 @@ reviews required for graduation.
 | `reentrancy-no-eth` / `reentrancy-benign` in funding | Covered by the contract-wide `_reentrancy` state guard. Every external funding entry acquires it before USDC or EIP-3009 calls. Base deployments pin native USDC and exact post-transfer balance deltas. Malicious callback and accounting tests remain required. |
 | `reentrancy-benign` in factory initialization | The external target is a just-created deterministic clone of the release implementation. Both public creation methods hold the factory guard; initialization is one-shot, and canonical registration occurs in the same transaction. |
 | `events-maths` in clone initialization | Configuration is emitted by the factory as canonical economics, verification, and policy events immediately after initialization and before initial funding. The clone cannot be initialized outside the factory. |
-| `missing-zero-check` for gateways | The adapter constructor requires gateway bytecode, expected verifier bytecode, and the exact unfrozen route. Base and Base Sepolia additionally require exact canonical addresses. |
+| `missing-zero-check` for verifiers | The adapter constructor requires verifier bytecode, an exact self-reported circuit hash, and the expected runtime code hash. It rejects missing or mismatched immutable verifier deployments. |
 | `timestamp` | Intentional protocol deadlines. Boundary semantics are explicit: proof submission is inclusive at the deadline; finalization and expiry require a later timestamp. Dedicated exact-boundary tests cover each transition. |
 | `assembly` | Limited to deterministic minimal-proxy deployment, bounded ERC-1271 output, and strict ECDSA parsing. Each block has focused tests and no arbitrary storage access. |
-| `low-level-calls` | Intentional fail-closed boundaries for optional-return ERC-20 behavior, SP1 proof rejection mapping, gateway liveness, and bounded ERC-1271 validation. Return lengths and status are checked. |
+| `low-level-calls` | Intentional fail-closed boundaries for optional-return ERC-20 behavior, SP1 proof rejection mapping, immutable-verifier liveness, and bounded ERC-1271 validation. Return lengths and status are checked. |
 
 ## Re-run
 
 ```powershell
 $env:Path = "$PWD\.tools\foundry;$env:APPDATA\Python\Python312\Scripts;$env:Path"
-slither contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta1.sol `
+slither contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta2.sol `
   --compile-force-framework foundry `
   --foundry-out-directory out `
   --exclude-dependencies `

@@ -2,9 +2,9 @@
 pragma solidity ^0.8.26;
 
 import "./IAgentBounty.sol";
-import "./Sp1VerifierAdapterV2Beta1.sol";
+import "./Sp1VerifierAdapterV2Beta2.sol";
 
-interface IOpenCompetitionBountyV2Beta1 is IERC165 {
+interface IOpenCompetitionBountyV2Beta2 is IERC165 {
     function protocolVersion() external pure returns (bytes32);
     function bountyId() external view returns (bytes32);
     function creator() external view returns (address);
@@ -16,11 +16,11 @@ interface IOpenCompetitionBountyV2Beta1 is IERC165 {
 
 /// @notice Isolated, immutable, SP1-verified competition escrow. The contract
 /// stores no participant list and no operation depends on participant count.
-contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
+contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
     using SafeBountyToken for address;
 
-    bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta1");
-    bytes32 public constant JOURNAL_DOMAIN = keccak256("agent-bounties/open-competition-v2-beta1/journal");
+    bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta2");
+    bytes32 public constant JOURNAL_DOMAIN = keccak256("agent-bounties/open-competition-v2-beta2/journal");
     bytes32 public constant PROOF_SYSTEM_GROTH16 = keccak256("sp1-groth16");
     bytes32 public constant PROOF_SYSTEM_PLONK = keccak256("sp1-plonk");
 
@@ -29,7 +29,7 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
     uint256 private constant SECP256K1_HALF_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes32 private constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 private constant NAME_HASH = keccak256("Agent Bounties Open Competition V2 Beta1");
+    bytes32 private constant NAME_HASH = keccak256("Agent Bounties Open Competition V2 Beta2");
     bytes32 private constant VERSION_HASH = keccak256("1");
     bytes32 private constant SUBMIT_PROOF_TYPEHASH = keccak256(
         "SubmitProof(address solver,uint256 solverNonce,bytes32 publicValuesHash,bytes32 proofHash,uint256 authorizationDeadline)"
@@ -126,8 +126,8 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
     error V2FinalizeTooEarly();
     error V2RefundUnavailable();
     error V2NothingToRefund();
-    error V2GatewayStillAvailable();
-    error V2GatewayUnavailable();
+    error V2VerifierStillAvailable();
+    error V2VerifierUnavailable();
     error V2TokenAccountingMismatch();
     error V2ReentrantCall();
 
@@ -281,7 +281,7 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
 
     function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
         return
-            interfaceId == type(IOpenCompetitionBountyV2Beta1).interfaceId || interfaceId == type(IERC165).interfaceId;
+            interfaceId == type(IOpenCompetitionBountyV2Beta2).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     function domainSeparator() public view returns (bytes32) {
@@ -384,15 +384,15 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
         _cancel(bytes32("proof_deadline_expired"), msg.sender, keeperReward, solverReward, targetAmount);
     }
 
-    function cancelForUnavailableGateway() external nonReentrant {
+    function cancelForUnavailableVerifier() external nonReentrant {
         if (_status != CompetitionStatus.Funding && _status != CompetitionStatus.Active) {
             revert V2NotActive();
         }
-        if (_gatewayAvailable()) revert V2GatewayStillAvailable();
+        if (_verifierAvailable()) revert V2VerifierStillAvailable();
         if (_status == CompetitionStatus.Funding) {
-            _cancel(bytes32("sp1_gateway_unavailable"), address(0), 0, fundedAmount, fundedAmount);
+            _cancel(bytes32("sp1_verifier_unavailable"), address(0), 0, fundedAmount, fundedAmount);
         } else {
-            _cancel(bytes32("sp1_gateway_unavailable"), msg.sender, keeperReward, solverReward, targetAmount);
+            _cancel(bytes32("sp1_verifier_unavailable"), msg.sender, keeperReward, solverReward, targetAmount);
         }
     }
 
@@ -425,7 +425,7 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
     ) private returns (uint256 acceptedAmount) {
         if (_status != CompetitionStatus.Funding) revert V2NotFunding();
         if (block.timestamp > fundingDeadline) revert V2FundingClosed();
-        if (!_gatewayAvailable()) revert V2GatewayUnavailable();
+        if (!_verifierAvailable()) revert V2VerifierUnavailable();
         if (acknowledgedRiskHash != betaRiskHash) revert V2RiskHashMismatch();
         if (contributor == address(0) || requestedAmount == 0) revert V2FundingAmountInvalid();
         uint256 remaining = targetAmount - fundedAmount;
@@ -475,7 +475,7 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
         address proofSubmitter
     ) private {
         (bool verified,) = verifierAdapter.staticcall(
-            abi.encodeCall(ISp1VerifierAdapterV2Beta1.verify, (programVKey, publicValues, proofBytes))
+            abi.encodeCall(ISp1VerifierAdapterV2Beta2.verify, (programVKey, publicValues, proofBytes))
         );
         if (!verified) revert V2Sp1ProofInvalid();
 
@@ -560,9 +560,9 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
         return scoreDirection == ScoreDirection.HigherIsBetter ? candidate > current : candidate < current;
     }
 
-    function _gatewayAvailable() private view returns (bool) {
+    function _verifierAvailable() private view returns (bool) {
         (bool ok, bytes memory result) =
-            verifierAdapter.staticcall(abi.encodeCall(ISp1VerifierAdapterV2Beta1.gatewayAvailable, ()));
+            verifierAdapter.staticcall(abi.encodeCall(ISp1VerifierAdapterV2Beta2.verifierAvailable, ()));
         return ok && result.length == 32 && abi.decode(result, (bool));
     }
 
@@ -581,8 +581,8 @@ contract OpenCompetitionBountyV2Beta1 is IOpenCompetitionBountyV2Beta1 {
                 || config.fundingDeadline > block.timestamp + MAX_FUNDING_WINDOW || config.proofWindowSeconds == 0
                 || config.proofWindowSeconds > MAX_PROOF_WINDOW
                 || (config.proofSystem != PROOF_SYSTEM_GROTH16 && config.proofSystem != PROOF_SYSTEM_PLONK)
-                || ISp1VerifierAdapterV2Beta1(config.verifierAdapter).proofSystem() != config.proofSystem
-                || !ISp1VerifierAdapterV2Beta1(config.verifierAdapter).gatewayAvailable()
+                || ISp1VerifierAdapterV2Beta2(config.verifierAdapter).proofSystem() != config.proofSystem
+                || !ISp1VerifierAdapterV2Beta2(config.verifierAdapter).verifierAvailable()
         ) revert V2InvalidConfiguration();
     }
 

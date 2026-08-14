@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = Path(__file__).with_name("build_open_competition_v2_beta1_release.py")
+SCRIPT = Path(__file__).with_name("build_open_competition_v2_beta2_release.py")
 SPEC = importlib.util.spec_from_file_location("open_competition_v2_release", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -14,6 +14,33 @@ SPEC.loader.exec_module(MODULE)
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     subject_hash = "0x" + "33" * 32
 
+    @staticmethod
+    def verifier_assets() -> dict:
+        systems = {}
+        for index, name in enumerate(("groth16", "plonk"), start=1):
+            creation = bytes([0x60, index, 0x60, 0x00])
+            runtime = bytes([0x60, index])
+            systems[name] = {
+                "verifier_hash": "0x" + f"{index:02x}" * 32,
+                "creation_code": "0x" + creation.hex(),
+                "creation_code_hash": MODULE.keccak256(creation),
+                "runtime_code": "0x" + runtime.hex(),
+                "runtime_code_hash": MODULE.keccak256(runtime),
+            }
+        return {
+            "schema_version": "agent-bounties/open-competition-v2-beta2-verifier-assets-v1",
+            "sp1_source_commit": MODULE.SP1_COMMIT,
+            "circuit_version": MODULE.SP1_SAFE_CIRCUIT_VERSION,
+            "gpu_proving_enabled": False,
+            "asset_state": "self_verified",
+            "proof_systems": systems,
+            "proof_evidence": {
+                "groth16_self_verified": "0x" + "11" * 32,
+                "plonk_self_verified_1": "0x" + "22" * 32,
+                "plonk_self_verified_2": "0x" + "33" * 32,
+            },
+        }
+
     def test_metric_identity_is_single_release_source_of_truth(self) -> None:
         identity = MODULE.METRIC_IDENTITY
         self.assertEqual(
@@ -21,6 +48,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "agent-bounties/open-competition-v2-metric-release-identity-v1",
         )
         self.assertEqual(identity["rust_version"], "1.96.1")
+        self.assertEqual(identity["status"], "pending_patched_rebuild")
         self.assertEqual(MODULE.PROGRAM_VKEY, identity["program_vkey"])
         self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
         self.assertEqual(MODULE.ELF_HASH, identity["elf_keccak256"])
@@ -28,7 +56,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
     def test_current_manifest_fails_closed(self) -> None:
         gates = MODULE.load_gates(
-            MODULE.ROOT / "deployments/open-competition-v2-beta1-release-gates.json"
+            MODULE.ROOT / "deployments/open-competition-v2-beta2-release-gates.json"
         )
         self.assertFalse(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
@@ -44,8 +72,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "uri": "https://example.test/evidence",
         }
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta1-release-gates-v2",
-            "protocol_version": "agent-bounties/open-competition-v2-beta1",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -75,10 +103,36 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["mainnet_signing_allowed"])
+        self.assertFalse(bundle["activation"]["broker_canary_enabled"])
         self.assertFalse(bundle["activation"]["public_creation_enabled"])
         self.assertFalse(bundle["activation"]["default_protocol_enabled"])
+
+        for name in MODULE.BROKER_CANARY_GATE_NAMES:
+            value["gates"][name] = True
+            value["evidence"][name] = evidence
+        path.write_text(__import__("json").dumps(value), encoding="utf-8")
+        gates = MODULE.load_gates(path, self.subject_hash)
+        self.assertTrue(gates["broker_canary_ready"])
+        self.assertFalse(gates["public_beta_launch_complete"])
+        bundle = MODULE.build_bundle(
+            network_name="base-mainnet",
+            deployer=MODULE.DEFAULT_DEPLOYER,
+            source_commit="a" * 40,
+            repository_subject=self.subject_hash,
+            preflight=preflight,
+            gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
+        )
+        self.assertTrue(bundle["activation"]["broker_canary_enabled"])
+        with mock.patch.dict(MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}):
+            runtime = MODULE.runtime_manifest(bundle, 10)
+        self.assertTrue(runtime["proof_broker_enabled"])
+        self.assertFalse(runtime["public_creation_enabled"])
 
         for name in MODULE.PUBLIC_BETA_GATE_NAMES:
             value["gates"][name] = True
@@ -94,6 +148,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["public_creation_enabled"])
         self.assertFalse(bundle["activation"]["default_protocol_enabled"])
@@ -111,6 +167,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["default_protocol_enabled"])
 
@@ -119,8 +177,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         gates = {name: False for name in MODULE.REQUIRED_GATE_NAMES}
         gates["repository_gate_complete"] = True
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta1-release-gates-v2",
-            "protocol_version": "agent-bounties/open-competition-v2-beta1",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": gates,
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -133,8 +191,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     def test_completed_gate_must_target_exact_repository_subject(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-wrong-subject.json"
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta1-release-gates-v2",
-            "protocol_version": "agent-bounties/open-competition-v2-beta1",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: name == "repository_gate_complete" for name in MODULE.REQUIRED_GATE_NAMES},
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -186,34 +244,20 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "tracked worktree changes"):
                 MODULE.verify_exact_checkout("a" * 40)
 
-    def test_official_route_decoder_rejects_malformed_data(self) -> None:
-        with self.assertRaisesRegex(ValueError, "two ABI words"):
-            MODULE.decode_route("0x00")
-        encoded = "0x" + (
-            MODULE.address_word(MODULE.GROTH16_VERIFIER) + bytes(32)
-        ).hex()
-        self.assertEqual(
-            MODULE.decode_route(encoded), (MODULE.GROTH16_VERIFIER, False)
-        )
-
-    def test_pinned_addresses_match_factory_source(self) -> None:
+    def test_factory_requires_project_owned_verifier_identities(self) -> None:
         source = (
             MODULE.ROOT
-            / "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta1.sol"
+            / "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta2.sol"
         ).read_text(encoding="utf-8").lower()
-        for address in (
-            MODULE.GROTH16_GATEWAY,
-            MODULE.PLONK_GATEWAY,
-            MODULE.GROTH16_VERIFIER,
-            MODULE.PLONK_VERIFIER,
-            MODULE.NETWORKS["base-mainnet"]["usdc"],
-            MODULE.NETWORKS["base-sepolia"]["usdc"],
-        ):
-            self.assertIn(address.removeprefix("0x"), source)
+        self.assertIn("groth16verifierhash", source)
+        self.assertIn("groth16runtimecodehash", source)
+        self.assertIn("plonkverifierhash", source)
+        self.assertIn("plonkruntimecodehash", source)
+        self.assertNotIn("gateway", source)
 
     def test_immutable_names_are_bound_by_ast_not_sort_order(self) -> None:
         artifact = MODULE.artifact(
-            "OpenCompetitionBountyFactoryV2Beta1", "OpenCompetitionBountyFactoryV2Beta1"
+            "OpenCompetitionBountyFactoryV2Beta2", "OpenCompetitionBountyFactoryV2Beta2"
         )
         self.assertEqual(
             set(MODULE.immutable_names(artifact).values()),
@@ -222,7 +266,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
     def test_deployer_does_not_need_to_hold_canary_usdc(self) -> None:
         gates = MODULE.load_gates(
-            MODULE.ROOT / "deployments/open-competition-v2-beta1-release-gates.json"
+            MODULE.ROOT / "deployments/open-competition-v2-beta2-release-gates.json"
         )
         preflight = {
             "number": 1,
@@ -240,6 +284,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             repository_subject=self.subject_hash,
             preflight=preflight,
             gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["canary_budget"]["deployer_is_not_required_to_fund"])
         self.assertEqual(
