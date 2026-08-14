@@ -23,7 +23,7 @@ python scripts/check-mcp-protocol-eras.py \
 | Modern `initialize` or `ping` | `404` with JSON-RPC `-32601`; those methods are not in the modern core |
 | Modern `GET /mcp` or `DELETE /mcp` | `405`; modern Streamable HTTP uses one `POST` per request |
 | Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Eleven-tool core catalog, including the cached-client compatibility tool `list_autonomous_bounties` |
-| Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Ten-tool app catalog; `get_bounty_feed` is the only bounty-discovery entry point |
+| Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Ten-tool app catalog; the only bounty-discovery entry point is **get_bounty_feed** |
 | Discovery from an exact ChatGPT browser `Origin` | Ten-tool app catalog as a browser-client fallback |
 | `tools/call` for `list_autonomous_bounties` from a cached ChatGPT registration | Accepted and dispatched even though the alias is absent from new ChatGPT discovery |
 

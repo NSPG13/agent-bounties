@@ -93,11 +93,12 @@ schema, accurate annotations, and model-and-app visibility. Only
 
 `list_autonomous_bounties` remains callable for cached ChatGPT registrations
 and remains advertised to server-to-server modern and legacy core MCP clients.
-It is intentionally absent from new ChatGPT discovery because
-`get_bounty_feed` is the single app discovery entry point. The HTTP tool
-adapter also retains `/tools/list_autonomous_bounties`. This compatibility
-boundary prevents a cached registration from breaking while removing an
-overlapping choice from new ChatGPT registrations.
+It is intentionally absent from new ChatGPT discovery. The single app
+discovery entry point is `get_bounty_feed`.
+The HTTP adapter also retains the compatibility path
+`/tools/list_autonomous_bounties`. This boundary prevents a cached registration
+from breaking while removing an overlapping choice from new ChatGPT
+registrations.
 
 `prepare_bounty_post` declares
 `_meta["openai/fileParams"]=["bounty_image"]`. ChatGPT gathers the terms,
