@@ -6,10 +6,14 @@ Plugin Directory status.
 
 ## One product profile
 
-Agent Bounties has one production product profile. A public endpoint and a
-developer-installed endpoint expose the same live feed and the same hosted
-post, MoonPay top-up, fund, solve, complete, verify, comment, breakdown, and
-share capabilities.
+Agent Bounties has one production product profile and exactly two durable
+ChatGPT registrations. `Agent Bounties` is the public anonymous registration;
+`Agent Bounties Operator QA` is the private OAuth-linked maintainer
+registration whose requests are excluded from public adoption metrics. Both
+use `https://mcp.agentbounties.app/mcp` and expose the same live feed and the
+same hosted post, MoonPay top-up, fund, solve, complete, verify, comment,
+breakdown, and share capabilities. OAuth changes analytics attribution only;
+it grants no wallet, payment, publishing, or operator authority.
 
 | Profile | Setting | Purpose |
 | --- | --- | --- |
@@ -67,6 +71,8 @@ It must not be treated as permission to submit.
 
 ## Full tool surface
 
+New ChatGPT scans advertise exactly these ten non-overlapping tools:
+
 | Tool | Effect | Required annotations |
 | --- | --- | --- |
 | `get_bounty_feed` | Reads the unified live bounty projection | read-only, closed-world, idempotent |
@@ -84,6 +90,15 @@ Every tool declares no MCP authentication, a bounded input schema, an output
 schema, accurate annotations, and model-and-app visibility. Only
 `render_bounty_feed` links the mounted
 `ui://agent-bounties/live-feed-v4.html` component.
+
+`list_autonomous_bounties` remains callable for cached ChatGPT registrations
+and remains advertised to server-to-server modern and legacy core MCP clients.
+It is intentionally absent from new ChatGPT discovery. The single app
+discovery entry point is `get_bounty_feed`.
+The HTTP adapter also retains the compatibility path
+`/tools/list_autonomous_bounties`. This boundary prevents a cached registration
+from breaking while removing an overlapping choice from new ChatGPT
+registrations.
 
 `prepare_bounty_post` declares
 `_meta["openai/fileParams"]=["bounty_image"]`. ChatGPT gathers the terms,
@@ -223,6 +238,29 @@ MCP_BASE_URL=https://<sandbox-mcp-origin>
 The endpoint uses MCP `2026-07-28` stateless discovery and strict per-request
 transport metadata, with a separate legacy initialization lane for current
 clients. See [MCP protocol compatibility](mcp-protocol-compatibility.md).
+Modern requests whose standard MCP client-info name is exactly `openai-mcp`
+receive the ten-tool app catalog. Exact ChatGPT browser origins provide the
+same fallback. Other server-to-server clients receive the core catalog with
+the compatibility alias. These self-declared signals select metadata only and
+are never authorization signals.
+
+The final registration contract is:
+
+| Name | Description | Authorization |
+| --- | --- | --- |
+| `Agent Bounties` | Discover, post, fund, solve, complete, verify, comment on, and share verifiable AI bounties in ChatGPT. Wallet, payment, identity, and transaction authorization remain on first-party hosted pages. | None |
+| `Agent Bounties Operator QA` | Private maintainer QA connection to production Agent Bounties. OAuth only excludes authorized maintainer tests from public interface metrics; it grants no wallet, payment, publishing, or operator authority. | OAuth |
+
+Refresh Operator QA first for every metadata, schema, annotation, instruction,
+authentication, or widget change. Confirm exact metadata, rerun the evaluation
+set in a new conversation, and verify a redacted exclusion event at the exact
+revision. Only then refresh the public registration, and never owner-test
+through it. Reauthorize Operator QA before its 90-day bearer lifetime expires.
+
+Any temporary registration must include its purpose, date, short revision,
+owner, and `DELETE-TODAY` or an explicit expiry, and must be removed in the
+same release session. Do not create durable registrations named `Current`,
+`Latest`, `Final`, `Release`, or `Proven`.
 
 The exact domain challenge is served at:
 
@@ -269,18 +307,22 @@ Before a developer-mode public beta:
 5. Run `python scripts/check-chatgpt-app-submission.py`.
 6. Run `python scripts/check-moonpay-onramp.py`.
 7. Run `python scripts/check-site.py` and the widget JavaScript syntax checks.
-8. Confirm the endpoint lists exactly the ten full-product tools, including
+8. Confirm a modern request with exact MCP client-info name `openai-mcp` and no
+   `Origin` lists exactly the ten full-product tools, including
    `prepare_bounty_post` with `openai/fileParams=["bounty_image"]`.
-9. Confirm the MoonPay tool returns a first-party handoff with
+9. Confirm modern and legacy server-to-server discovery retain
+   `list_autonomous_bounties`, while a cached ChatGPT `tools/call` can still
+   execute it and fails closed when inventory is unavailable.
+10. Confirm the MoonPay tool returns a first-party handoff with
    `checkout_created=false`, `purchase_completed=false`,
    `bounty_funded=false`, and no provider checkout URL.
-10. Inspect the mounted resource MIME type, widget domain, CSP, redirect
+11. Inspect the mounted resource MIME type, widget domain, CSP, redirect
    domains, bridge calls, state persistence, external-link path, and PNG
    fallback.
-11. Exercise the full sandbox loop and then the hosted production loop without
+12. Exercise the full sandbox loop and then the hosted production loop without
     real funds before any live canary.
-12. Verify privacy, terms, support, and retention disclosures.
-13. Complete the exact domain challenge.
+13. Verify privacy, terms, support, and retention disclosures.
+14. Complete the exact domain challenge.
 
 Before a Plugin Directory submission, additionally obtain written OpenAI
 approval or confirm that the published policy changed. Without that, stop after

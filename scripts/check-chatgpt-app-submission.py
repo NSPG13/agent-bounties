@@ -56,9 +56,51 @@ def main() -> None:
         (ROOT / "chatgpt-app-submission.json").read_text(encoding="utf-8")
     )
     tools = artifact.get("tools", {})
+    server = (ROOT / "crates" / "mcp-server" / "src" / "chatgpt_app.rs").read_text(
+        encoding="utf-8"
+    )
+    dossier = (ROOT / "docs" / "chatgpt-app-submission.md").read_text(
+        encoding="utf-8"
+    )
+    advertised_match = re.search(
+        r"const CHATGPT_ADVERTISED_TOOL_NAMES:.*?=\s*&\[(.*?)\];",
+        server,
+        re.DOTALL,
+    )
+    require(advertised_match is not None, "code ChatGPT allowlist is missing")
+    code_tools = set(re.findall(r'"([a-z][a-z0-9_]+)"', advertised_match.group(1)))
+    dossier_table = dossier.split("## Full tool surface", 1)[1].split(
+        "Every tool declares", 1
+    )[0]
+    dossier_tools = set(re.findall(r"\| `([a-z][a-z0-9_]+)` \|", dossier_table))
     require(artifact.get("$schema") == CANONICAL_SCHEMA, "official schema URL drifted")
     require(artifact.get("schema_version") == 1, "schema_version must equal 1")
     require(set(tools) == FULL_TOOLS, "artifact must equal the ten-tool full product")
+    require(code_tools == FULL_TOOLS, "code allowlist must equal the ten-tool artifact")
+    require(dossier_tools == FULL_TOOLS, "release dossier must equal the ten-tool artifact")
+    require(
+        "list_autonomous_bounties" not in code_tools,
+        "compatibility alias leaked into ChatGPT discovery",
+    )
+    compatibility_match = re.search(
+        r"const CHATGPT_COMPATIBILITY_TOOL_NAMES:.*?=\s*&\[(.*?)\];",
+        server,
+        re.DOTALL,
+    )
+    require(compatibility_match is not None, "compatibility allowlist is missing")
+    compatibility_tools = set(
+        re.findall(r'"([a-z][a-z0-9_]+)"', compatibility_match.group(1))
+    )
+    require(
+        compatibility_tools == {"list_autonomous_bounties"}
+        and '"list_autonomous_bounties" =>' in server,
+        "cached ChatGPT compatibility dispatch drifted",
+    )
+    require(
+        "`list_autonomous_bounties` remains callable" in dossier
+        and "list_autonomous_bounties" in artifact["app_info"]["description"],
+        "compatibility boundary is missing from the dossier or artifact",
+    )
     require(
         not DIRECT_EXECUTION_TOOLS.intersection(tools),
         "lower-level wallet or settlement execution tool leaked into ChatGPT",
@@ -207,9 +249,6 @@ def main() -> None:
             f"unauthorized blue remains in the ChatGPT UI: {blue}",
         )
 
-    server = (ROOT / "crates" / "mcp-server" / "src" / "chatgpt_app.rs").read_text(
-        encoding="utf-8"
-    )
     require(
         "CHATGPT_APP_PUBLIC_REVIEW_MODE" not in server,
         "reduced public-review environment switch must be removed",

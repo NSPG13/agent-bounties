@@ -84,6 +84,19 @@ in an issue, prompt, log, or repository. Direct REST requests send it in
 `analyticsExclusionToken` in `AgentBountiesClientOptions`.
 An accepted credential is explicitly attested with
 `X-Agent-Bounties-Analytics-Excluded: true`; the secret itself is never echoed.
+For protocol MCP requests, the service also emits one private structured log
+event after exclusion is applied:
+
+```json
+{"event":"interface_usage_excluded","interface":"mcp","protocol_era":"modern|legacy","success":true,"revision":"<git-sha>"}
+```
+
+This event is operational proof for the private Operator QA connection. It is
+not stored in the public database or dashboard and contains no credential,
+account/client identifier, IP address, user agent, prompt, tool, arguments,
+bounty, wallet, or session data. An unchanged dashboard count is not proof of
+one excluded request because unrelated external traffic can change the same
+hourly aggregate.
 
 ```powershell
 $env:AGENT_BOUNTIES_ANALYTICS_EXCLUSION_TOKEN = "<scoped-exclusion-token>"

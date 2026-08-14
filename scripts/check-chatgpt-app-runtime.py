@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FULL_TOOLS = {
+CHATGPT_TOOLS = {
     "get_bounty_feed",
     "render_bounty_feed",
     "prepare_moonpay_onramp",
@@ -25,11 +25,12 @@ FULL_TOOLS = {
     "prepare_bounty_action",
     "get_bounty_action_status",
     "compile_objective_with_cloud_agent",
-    "list_autonomous_bounties",
     "list_bounty_comments",
     "add_bounty_comment",
     "create_share_bundle",
 }
+CORE_COMPATIBILITY_TOOLS = {"list_autonomous_bounties"}
+CORE_TOOLS = CHATGPT_TOOLS | CORE_COMPATIBILITY_TOOLS
 FEED_WIDGET_URI = "ui://agent-bounties/live-feed-v4.html"
 MODERN_PROTOCOL_VERSION = "2026-07-28"
 LEGACY_PROTOCOL_VERSION = "2025-06-18"
@@ -52,17 +53,22 @@ def request(
     method: str,
     params: dict,
     modern: bool = False,
+    chatgpt: bool = False,
+    extra_headers: dict[str, str] | None = None,
+    expect_excluded: bool = False,
 ) -> dict:
     headers = {
         "Accept": "application/json, text/event-stream",
         "Content-Type": "application/json",
     }
+    if extra_headers:
+        headers.update(extra_headers)
     if modern:
         params = dict(params)
         params["_meta"] = {
             "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
             "io.modelcontextprotocol/clientInfo": {
-                "name": "agent-bounties-release-harness",
+                "name": "openai-mcp" if chatgpt else "agent-bounties-release-harness",
                 "version": "1",
             },
             "io.modelcontextprotocol/clientCapabilities": {},
@@ -86,6 +92,11 @@ def request(
         method="POST",
     )
     with urllib.request.urlopen(http_request, timeout=5) as response:
+        if expect_excluded:
+            require(
+                response.headers.get("X-Agent-Bounties-Analytics-Excluded") == "true",
+                "authorized exclusion request was not attested",
+            )
         body = json.loads(response.read())
     require("error" not in body, f"{method} failed: {body.get('error')}")
     return body["result"]
@@ -124,6 +135,7 @@ def main() -> int:
             "CHATGPT_APP_SANDBOX_MODE": "false",
             # Prove this retired flag cannot reduce the production product.
             "CHATGPT_APP_PUBLIC_REVIEW_MODE": "true",
+            "ANALYTICS_EXCLUSION_TOKEN": "local-runtime-exclusion-fixture",
         }
     )
     process = subprocess.Popen(
@@ -137,10 +149,26 @@ def main() -> int:
 
     request_id = 0
 
-    def rpc(method: str, params: dict | None = None, modern: bool = True) -> dict:
+    def rpc(
+        method: str,
+        params: dict | None = None,
+        modern: bool = True,
+        chatgpt: bool = False,
+        extra_headers: dict[str, str] | None = None,
+        expect_excluded: bool = False,
+    ) -> dict:
         nonlocal request_id
         request_id += 1
-        return request(endpoint, request_id, method, params or {}, modern=modern)
+        return request(
+            endpoint,
+            request_id,
+            method,
+            params or {},
+            modern=modern,
+            chatgpt=chatgpt,
+            extra_headers=extra_headers,
+            expect_excluded=expect_excluded,
+        )
 
     try:
         last_error: Exception | None = None
@@ -198,16 +226,37 @@ def main() -> int:
             "legacy response shape unexpectedly became modern",
         )
 
-        tools = rpc("tools/list")["tools"]
+        core_tools = rpc("tools/list")["tools"]
+        core_tool_names = {tool["name"] for tool in core_tools}
+        require(
+            len(core_tools) == len(CORE_TOOLS) and core_tool_names == CORE_TOOLS,
+            f"modern core tool set drifted: {sorted(core_tool_names)}",
+        )
+        legacy_core_tools = rpc("tools/list", modern=False)["tools"]
+        require(
+            {tool["name"] for tool in legacy_core_tools} == CORE_TOOLS,
+            "legacy core tool catalog drifted",
+        )
+
+        tools = rpc("tools/list", chatgpt=True)["tools"]
         tool_names = {tool["name"] for tool in tools}
         require(
-            len(tools) == len(FULL_TOOLS) and tool_names == FULL_TOOLS,
-            f"runtime tool set drifted: {sorted(tool_names)}",
+            len(tools) == len(CHATGPT_TOOLS) and tool_names == CHATGPT_TOOLS,
+            f"ChatGPT-advertised tool set drifted: {sorted(tool_names)}",
         )
-        legacy_tools = rpc("tools/list", modern=False)["tools"]
         require(
-            {tool["name"] for tool in legacy_tools} == FULL_TOOLS,
-            "legacy tool catalog drifted",
+            not CORE_COMPATIBILITY_TOOLS.intersection(tool_names),
+            "compatibility alias leaked into ChatGPT discovery",
+        )
+        legacy_tools = rpc(
+            "tools/list",
+            modern=False,
+            chatgpt=True,
+            extra_headers={"Origin": "https://chatgpt.com"},
+        )["tools"]
+        require(
+            {tool["name"] for tool in legacy_tools} == CHATGPT_TOOLS,
+            "legacy ChatGPT tool catalog drifted",
         )
         moonpay_descriptor = next(
             tool for tool in tools if tool["name"] == "prepare_moonpay_onramp"
@@ -319,6 +368,50 @@ def main() -> int:
             handoff["canonical_funding_event"] is None,
             "canonical funding was overclaimed",
         )
+        cached_alias = rpc(
+            "tools/call",
+            {
+                "name": "list_autonomous_bounties",
+                "arguments": {"network": "base-mainnet", "claimable_only": True},
+            },
+            chatgpt=True,
+        )
+        require(
+            "unknown or unavailable" not in json.dumps(cached_alias)
+            and "DATABASE_URL" in json.dumps(cached_alias),
+            "cached ChatGPT alias is no longer callable or did not fail closed",
+        )
+        rpc(
+            "tools/list",
+            chatgpt=True,
+            extra_headers={
+                "X-Agent-Bounties-Analytics-Exclusion":
+                    "local-runtime-exclusion-fixture"
+            },
+            expect_excluded=True,
+        )
+        process.terminate()
+        _, stderr = process.communicate(timeout=5)
+        exclusion_events = []
+        for line in stderr.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "interface_usage_excluded":
+                exclusion_events.append(event)
+        require(len(exclusion_events) == 1, "expected one private exclusion event")
+        require(
+            exclusion_events[0]
+            == {
+                "event": "interface_usage_excluded",
+                "interface": "mcp",
+                "protocol_era": "modern",
+                "success": True,
+                "revision": "local",
+            },
+            f"private exclusion event drifted: {exclusion_events[0]}",
+        )
     except AssertionError as error:
         print(
             f"chatgpt_runtime_check=failed reason={error}",
@@ -338,10 +431,12 @@ def main() -> int:
         "chatgpt_runtime_check=ok "
         f"mcp_modern={MODERN_PROTOCOL_VERSION} "
         f"mcp_legacy={LEGACY_PROTOCOL_VERSION} "
-        f"tools={len(FULL_TOOLS)} "
+        f"chatgpt_tools={len(CHATGPT_TOOLS)} "
+        f"core_tools={len(CORE_TOOLS)} "
         "profile=full_hosted_execution "
         "chatgpt_image_handoff=file_param "
         "moonpay_handoff=first_party "
+        "exclusion_evidence=redacted "
         "legacy_public_review_flag=ignored"
     )
     return 0

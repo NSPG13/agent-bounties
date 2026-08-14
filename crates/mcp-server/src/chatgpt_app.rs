@@ -52,19 +52,19 @@ const BOUNTY_CARD_PREVIEW_HTML: &str =
     include_str!("../../../site/chatgpt-bounty-card-preview.html");
 const FEED_CARD_ART: &[u8] = include_bytes!("../../../site/assets/bounty-quest-agent-v1.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
-const CHATGPT_FULL_TOOL_NAMES: &[&str] = &[
+const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
     "prepare_moonpay_onramp",
+    "prepare_bounty_post",
     "prepare_bounty_action",
     "get_bounty_action_status",
     "compile_objective_with_cloud_agent",
     "list_bounty_comments",
     "add_bounty_comment",
     "create_share_bundle",
-    "prepare_bounty_post",
-    "list_autonomous_bounties",
 ];
+const CHATGPT_COMPATIBILITY_TOOL_NAMES: &[&str] = &["list_autonomous_bounties"];
 #[derive(Debug, Clone, Deserialize)]
 struct ChatgptFeedArgs {
     network: Option<String>,
@@ -549,27 +549,28 @@ pub(super) async fn mcp_post(
     Json(payload): Json<Value>,
 ) -> Response {
     let era = mcp_protocol_era(&headers, &payload);
+    let catalog_profile = mcp_catalog_profile(&headers, &payload);
     let excluded = super::analytics_exclusion_is_authorized(&state, &headers);
-    let mut response = handle_mcp_post(state.clone(), headers, payload, era).await;
+    let mut response = handle_mcp_post(state.clone(), headers, payload, era, catalog_profile).await;
     super::attest_analytics_exclusion(&mut response, excluded);
-    if !excluded {
-        if let Some(store) = state.store.clone() {
-            let succeeded = response.status().is_success();
-            let protocol_era = match era {
-                McpProtocolEra::Legacy => ObservedProtocolEra::McpLegacy,
-                McpProtocolEra::Modern => ObservedProtocolEra::McpModern,
-            };
-            tokio::spawn(async move {
-                let _ = store
-                    .record_interface_usage(
-                        ObservedInterface::Mcp,
-                        protocol_era,
-                        succeeded,
-                        chrono::Utc::now(),
-                    )
-                    .await;
-            });
-        }
+    let protocol_era = match era {
+        McpProtocolEra::Legacy => ObservedProtocolEra::McpLegacy,
+        McpProtocolEra::Modern => ObservedProtocolEra::McpModern,
+    };
+    if excluded {
+        super::emit_interface_usage_excluded(protocol_era);
+    } else if let Some(store) = state.store.clone() {
+        let succeeded = response.status().is_success();
+        tokio::spawn(async move {
+            let _ = store
+                .record_interface_usage(
+                    ObservedInterface::Mcp,
+                    protocol_era,
+                    succeeded,
+                    chrono::Utc::now(),
+                )
+                .await;
+        });
     }
     response
 }
@@ -579,6 +580,7 @@ async fn handle_mcp_post(
     headers: HeaderMap,
     payload: Value,
     era: McpProtocolEra,
+    catalog_profile: McpCatalogProfile,
 ) -> Response {
     if !mcp_origin_is_allowed(&headers) {
         return StatusCode::FORBIDDEN.into_response();
@@ -597,7 +599,8 @@ async fn handle_mcp_post(
         if let Err(error) = validate_modern_request(&headers, &payload) {
             return error.into_response(payload_id(&payload));
         }
-        let Some((status, response)) = handle_request(state, payload, McpProtocolEra::Modern).await
+        let Some((status, response)) =
+            handle_request(state, payload, McpProtocolEra::Modern, catalog_profile).await
         else {
             return StatusCode::ACCEPTED.into_response();
         };
@@ -607,8 +610,13 @@ async fn handle_mcp_post(
     let responses = if let Some(batch) = payload.as_array() {
         let mut responses = Vec::new();
         for request in batch {
-            if let Some((_, response)) =
-                handle_request(state.clone(), request.clone(), McpProtocolEra::Legacy).await
+            if let Some((_, response)) = handle_request(
+                state.clone(),
+                request.clone(),
+                McpProtocolEra::Legacy,
+                catalog_profile,
+            )
+            .await
             {
                 responses.push(response);
             }
@@ -617,7 +625,8 @@ async fn handle_mcp_post(
             return StatusCode::ACCEPTED.into_response();
         }
         Value::Array(responses)
-    } else if let Some((_, response)) = handle_request(state, payload, McpProtocolEra::Legacy).await
+    } else if let Some((_, response)) =
+        handle_request(state, payload, McpProtocolEra::Legacy, catalog_profile).await
     {
         response
     } else {
@@ -650,6 +659,12 @@ pub(super) async fn mcp_delete(headers: HeaderMap) -> Response {
 enum McpProtocolEra {
     Legacy,
     Modern,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpCatalogProfile {
+    Chatgpt,
+    Core,
 }
 
 #[derive(Debug)]
@@ -727,6 +742,31 @@ fn mcp_protocol_era(headers: &HeaderMap, payload: &Value) -> McpProtocolEra {
         McpProtocolEra::Modern
     } else {
         McpProtocolEra::Legacy
+    }
+}
+
+fn mcp_catalog_profile(headers: &HeaderMap, payload: &Value) -> McpCatalogProfile {
+    let exact_chatgpt_origin = headers
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .and_then(normalized_mcp_origin)
+        .is_some_and(|origin| {
+            matches!(
+                origin.as_str(),
+                "https://chatgpt.com" | "https://chat.openai.com"
+            )
+        });
+    let exact_openai_client = payload
+        .get("params")
+        .and_then(|params| params.get("_meta"))
+        .and_then(|metadata| metadata.get(MCP_CLIENT_INFO_META))
+        .and_then(|client_info| client_info.get("name"))
+        .and_then(Value::as_str)
+        == Some("openai-mcp");
+    if exact_chatgpt_origin || exact_openai_client {
+        McpCatalogProfile::Chatgpt
+    } else {
+        McpCatalogProfile::Core
     }
 }
 
@@ -875,6 +915,7 @@ async fn handle_request(
     state: SharedState,
     request: Value,
     era: McpProtocolEra,
+    catalog_profile: McpCatalogProfile,
 ) -> Option<(StatusCode, Value)> {
     let Some(object) = request.as_object() else {
         return Some((
@@ -897,7 +938,7 @@ async fn handle_request(
         "initialize" if era == McpProtocolEra::Legacy => Ok(initialize_result(&params)),
         "ping" if era == McpProtocolEra::Legacy => Ok(json!({})),
         "tools/list" => {
-            let mut tools = chatgpt_tools().await;
+            let mut tools = mcp_tools_for_catalog(catalog_profile).await;
             if era == McpProtocolEra::Modern {
                 tools.sort_by(|left, right| {
                     left.get("name")
@@ -1115,10 +1156,13 @@ fn is_loopback_http_origin(origin: &str) -> bool {
     }
 }
 
-async fn chatgpt_tools() -> Vec<Value> {
+async fn mcp_tools_for_catalog(catalog_profile: McpCatalogProfile) -> Vec<Value> {
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
-    let tool_names = chatgpt_tool_names(sandbox, public_review);
+    let tool_names = match catalog_profile {
+        McpCatalogProfile::Chatgpt => chatgpt_tool_names(sandbox, public_review).to_vec(),
+        McpCatalogProfile::Core => core_mcp_tool_names(),
+    };
     let mut descriptors = tools().await.0;
     descriptors.extend(custom_tool_descriptors());
     descriptors
@@ -1276,7 +1320,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
 
     let sandbox = chatgpt_sandbox_mode();
     let public_review = !sandbox && chatgpt_public_review_mode();
-    if !chatgpt_tool_names(sandbox, public_review).contains(&name) {
+    if !chatgpt_tool_is_callable(name) {
         return Err(format!(
             "unknown or unavailable public ChatGPT app tool: {name}"
         ));
@@ -1675,7 +1719,20 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn chatgpt_tool_names(_sandbox: bool, _public_review: bool) -> &'static [&'static str] {
-    CHATGPT_FULL_TOOL_NAMES
+    CHATGPT_ADVERTISED_TOOL_NAMES
+}
+
+fn core_mcp_tool_names() -> Vec<&'static str> {
+    CHATGPT_ADVERTISED_TOOL_NAMES
+        .iter()
+        .chain(CHATGPT_COMPATIBILITY_TOOL_NAMES)
+        .copied()
+        .collect()
+}
+
+fn chatgpt_tool_is_callable(name: &str) -> bool {
+    CHATGPT_ADVERTISED_TOOL_NAMES.contains(&name)
+        || CHATGPT_COMPATIBILITY_TOOL_NAMES.contains(&name)
 }
 
 fn validate_public_review_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
@@ -1900,14 +1957,15 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
             let comment_id = match args.comment_id.as_deref() {
                 Some(value) => Uuid::parse_str(value)
                     .map_err(|_| "comment_id must be a UUID when provided".to_string())?,
-                None => Uuid::new_v4(),
+                None => Uuid::parse_str("00000000-0000-4000-8000-00000000c001")
+                    .expect("static sandbox comment UUID must be valid"),
             };
             let mut comments = sandbox_comments(&bounty_id);
             comments.push(json!({
                 "id": comment_id,
                 "author": author,
                 "body": body,
-                "created_at": chrono::Utc::now().to_rfc3339(),
+                "created_at": "2026-07-25T18:05:00Z",
                 "sandbox": true
             }));
             let comment_count = comments.len();
@@ -2394,7 +2452,7 @@ fn sandbox_action_response(
         },
         "confirmed_block": null,
         "paid": false,
-        "expires_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        "expires_at": "2026-07-25T19:00:00Z",
         "share_after": true,
         "next_action": if status == "confirmed" {
             "Sandbox UI confirmation complete. Share only as a sandbox test."
@@ -2477,8 +2535,8 @@ fn sandbox_feed_projection() -> Value {
     };
     json!({
         "schema_version": "agent-bounties/opportunity-projection-v1",
-        "generated_at": chrono::Utc::now().to_rfc3339(),
-        "state_token": Uuid::new_v4(),
+        "generated_at": "2026-07-25T18:00:00Z",
+        "state_token": "00000000-0000-4000-8000-00000000feed",
         "network": "base-mainnet",
         "degraded": false,
         "sandbox": true,
@@ -4064,16 +4122,34 @@ mod tests {
         assert!(!chatgpt_public_review_mode());
         assert_eq!(
             chatgpt_tool_names(false, chatgpt_public_review_mode()),
-            CHATGPT_FULL_TOOL_NAMES
+            CHATGPT_ADVERTISED_TOOL_NAMES
         );
         assert_eq!(
             chatgpt_tool_names(false, true),
-            CHATGPT_FULL_TOOL_NAMES,
+            CHATGPT_ADVERTISED_TOOL_NAMES,
             "the removed public-review flag cannot reduce the product"
         );
-        assert!(CHATGPT_FULL_TOOL_NAMES.contains(&"prepare_moonpay_onramp"));
-        assert!(CHATGPT_FULL_TOOL_NAMES.contains(&"prepare_bounty_action"));
-        assert!(CHATGPT_FULL_TOOL_NAMES.contains(&"get_bounty_action_status"));
+        assert_eq!(CHATGPT_ADVERTISED_TOOL_NAMES.len(), 10);
+        assert_eq!(
+            CHATGPT_ADVERTISED_TOOL_NAMES,
+            [
+                "get_bounty_feed",
+                "render_bounty_feed",
+                "prepare_moonpay_onramp",
+                "prepare_bounty_post",
+                "prepare_bounty_action",
+                "get_bounty_action_status",
+                "compile_objective_with_cloud_agent",
+                "list_bounty_comments",
+                "add_bounty_comment",
+                "create_share_bundle",
+            ]
+        );
+        assert!(!CHATGPT_ADVERTISED_TOOL_NAMES.contains(&"list_autonomous_bounties"));
+        assert_eq!(
+            CHATGPT_COMPATIBILITY_TOOL_NAMES,
+            ["list_autonomous_bounties"]
+        );
     }
 
     #[test]
@@ -4180,7 +4256,7 @@ mod tests {
 
     #[tokio::test]
     async fn app_tools_have_required_annotations_and_widget_metadata() {
-        let tools = chatgpt_tools().await;
+        let tools = mcp_tools_for_catalog(McpCatalogProfile::Chatgpt).await;
         for tool in &tools {
             assert!(
                 tool["description"]
@@ -4200,6 +4276,13 @@ mod tests {
                 "{} must declare its structured output contract",
                 tool["name"]
             );
+            if tool["name"] == "render_bounty_feed" {
+                assert_eq!(tool["_meta"]["ui"]["resourceUri"], FEED_WIDGET_URI);
+                assert_eq!(tool["_meta"]["openai/outputTemplate"], FEED_WIDGET_URI);
+            } else {
+                assert!(tool["_meta"]["ui"].get("resourceUri").is_none());
+                assert!(tool["_meta"].get("openai/outputTemplate").is_none());
+            }
         }
         let prepare = tools
             .iter()
@@ -4209,17 +4292,6 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "get_bounty_action_status")
             .expect("canonical action status tool");
-        let autonomous_feed = tools
-            .iter()
-            .find(|tool| tool["name"] == "list_autonomous_bounties")
-            .expect("canonical autonomous feed tool");
-        assert!(
-            autonomous_feed["outputSchema"]["properties"]["items"]["items"]["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("gross_cash_margin"))
-        );
-
         assert_eq!(prepare["annotations"]["readOnlyHint"], false);
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(prepare["annotations"]["openWorldHint"], false);
@@ -4284,13 +4356,15 @@ mod tests {
             "add_bounty_comment",
             "create_share_bundle",
             "prepare_bounty_post",
-            "list_autonomous_bounties",
         ] {
             assert!(
                 tools.iter().any(|tool| tool["name"] == name),
                 "missing public ChatGPT app tool: {name}"
             );
         }
+        assert!(tools
+            .iter()
+            .all(|tool| tool["name"] != "list_autonomous_bounties"));
         for forbidden in [
             "fund_bounty_with_x402",
             "agent_native_claim",
@@ -4400,10 +4474,14 @@ mod tests {
         assert_eq!(mcp_protocol_era(&headers, &request), McpProtocolEra::Modern);
         validate_modern_request(&headers, &request).unwrap();
 
-        let (status, response) =
-            handle_request(public_tool_test_state(), request, McpProtocolEra::Modern)
-                .await
-                .unwrap();
+        let (status, response) = handle_request(
+            public_tool_test_state(),
+            request,
+            McpProtocolEra::Modern,
+            McpCatalogProfile::Core,
+        )
+        .await
+        .unwrap();
         let result = &response["result"];
         assert_eq!(status, StatusCode::OK);
         assert_eq!(result["supportedVersions"], json!([MCP_PROTOCOL_VERSION]));
@@ -4423,10 +4501,14 @@ mod tests {
     async fn modern_tool_catalog_is_deterministic_typed_and_cacheable() {
         let (headers, request) = modern_request("tools/list", json!({}), None);
         validate_modern_request(&headers, &request).unwrap();
-        let (_, response) =
-            handle_request(public_tool_test_state(), request, McpProtocolEra::Modern)
-                .await
-                .unwrap();
+        let (_, response) = handle_request(
+            public_tool_test_state(),
+            request,
+            McpProtocolEra::Modern,
+            McpCatalogProfile::Core,
+        )
+        .await
+        .unwrap();
         let result = &response["result"];
         let names = result["tools"]
             .as_array()
@@ -4442,6 +4524,85 @@ mod tests {
         assert_eq!(result["ttlMs"], MCP_CATALOG_TTL_MS);
         assert_eq!(result["cacheScope"], "public");
         assert!(result["_meta"][MCP_SERVER_INFO_META].is_object());
+        assert!(names.contains(&"list_autonomous_bounties"));
+    }
+
+    #[tokio::test]
+    async fn chatgpt_catalog_is_exactly_ten_while_core_eras_keep_compatibility() {
+        let (_, modern_request) = modern_request("tools/list", json!({}), None);
+        let (_, modern_chatgpt) = handle_request(
+            public_tool_test_state(),
+            modern_request.clone(),
+            McpProtocolEra::Modern,
+            McpCatalogProfile::Chatgpt,
+        )
+        .await
+        .unwrap();
+        let chatgpt_names = modern_chatgpt["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(chatgpt_names.len(), 10);
+        assert!(chatgpt_names
+            .iter()
+            .all(|name| CHATGPT_ADVERTISED_TOOL_NAMES.contains(name)));
+        assert!(!chatgpt_names.contains(&"list_autonomous_bounties"));
+
+        for era in [McpProtocolEra::Modern, McpProtocolEra::Legacy] {
+            let (_, response) = handle_request(
+                public_tool_test_state(),
+                modern_request.clone(),
+                era,
+                McpCatalogProfile::Core,
+            )
+            .await
+            .unwrap();
+            let names = response["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert!(names.contains(&"list_autonomous_bounties"), "{era:?}");
+        }
+    }
+
+    #[test]
+    fn exact_chatgpt_metadata_selects_only_the_app_catalog() {
+        for origin in ["https://chatgpt.com", "https://chat.openai.com"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(ORIGIN, origin.parse().unwrap());
+            assert_eq!(
+                mcp_catalog_profile(&headers, &json!({})),
+                McpCatalogProfile::Chatgpt
+            );
+        }
+        assert_eq!(
+            mcp_catalog_profile(&HeaderMap::new(), &json!({})),
+            McpCatalogProfile::Core
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(ORIGIN, "https://chatgpt.com.evil.example".parse().unwrap());
+        assert_eq!(
+            mcp_catalog_profile(&headers, &json!({})),
+            McpCatalogProfile::Core
+        );
+
+        let (_, openai_request) = modern_request("tools/list", json!({}), None);
+        let mut openai_request = openai_request;
+        openai_request["params"]["_meta"][MCP_CLIENT_INFO_META]["name"] = json!("openai-mcp");
+        assert_eq!(
+            mcp_catalog_profile(&HeaderMap::new(), &openai_request),
+            McpCatalogProfile::Chatgpt
+        );
+        openai_request["params"]["_meta"][MCP_CLIENT_INFO_META]["name"] =
+            json!("openai-mcp-lookalike");
+        assert_eq!(
+            mcp_catalog_profile(&HeaderMap::new(), &openai_request),
+            McpCatalogProfile::Core
+        );
     }
 
     #[test]
@@ -4492,10 +4653,14 @@ mod tests {
             mcp_protocol_era(&HeaderMap::new(), &request),
             McpProtocolEra::Legacy
         );
-        let (status, response) =
-            handle_request(public_tool_test_state(), request, McpProtocolEra::Legacy)
-                .await
-                .unwrap();
+        let (status, response) = handle_request(
+            public_tool_test_state(),
+            request,
+            McpProtocolEra::Legacy,
+            McpCatalogProfile::Core,
+        )
+        .await
+        .unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             response["result"]["protocolVersion"],
@@ -4529,10 +4694,14 @@ mod tests {
     async fn removed_handshake_methods_are_not_exposed_to_modern_clients() {
         let (headers, request) = modern_request("initialize", json!({}), None);
         validate_modern_request(&headers, &request).unwrap();
-        let (status, response) =
-            handle_request(public_tool_test_state(), request, McpProtocolEra::Modern)
-                .await
-                .unwrap();
+        let (status, response) = handle_request(
+            public_tool_test_state(),
+            request,
+            McpProtocolEra::Modern,
+            McpCatalogProfile::Core,
+        )
+        .await
+        .unwrap();
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(response["error"]["code"], -32601);
     }
@@ -4779,11 +4948,11 @@ mod tests {
         descriptors.extend(custom_tool_descriptors());
         let sandbox_tools = descriptors
             .into_iter()
-            .filter(|descriptor| CHATGPT_FULL_TOOL_NAMES.contains(&descriptor.name))
+            .filter(|descriptor| CHATGPT_ADVERTISED_TOOL_NAMES.contains(&descriptor.name))
             .map(|descriptor| mcp_tool_descriptor_for_mode(descriptor, true, false))
             .collect::<Vec<_>>();
 
-        assert_eq!(sandbox_tools.len(), CHATGPT_FULL_TOOL_NAMES.len());
+        assert_eq!(sandbox_tools.len(), CHATGPT_ADVERTISED_TOOL_NAMES.len());
         for tool in &sandbox_tools {
             assert_eq!(tool["annotations"]["readOnlyHint"], true, "{tool}");
             assert_eq!(tool["annotations"]["destructiveHint"], false, "{tool}");
@@ -4810,7 +4979,7 @@ mod tests {
             .map(|descriptor| mcp_tool_descriptor_for_mode(descriptor, false, true))
             .collect::<Vec<_>>();
 
-        assert_eq!(public_tools.len(), CHATGPT_FULL_TOOL_NAMES.len());
+        assert_eq!(public_tools.len(), CHATGPT_ADVERTISED_TOOL_NAMES.len());
         for required in [
             "prepare_moonpay_onramp",
             "prepare_bounty_action",
@@ -5116,6 +5285,126 @@ mod tests {
             );
             assert_eq!(refreshed["structuredContent"]["paid"], false);
         }
+    }
+
+    #[tokio::test]
+    async fn sandbox_exercises_every_advertised_tool_with_stable_safe_results() {
+        let bounty_id = "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001";
+        let bounty_contract = "0xabc1000000000000000000000000000000000001";
+        let action_arguments = json!({
+            "idempotency_key": "sandbox-release-action-001",
+            "action": "solve",
+            "network": "base-mainnet",
+            "opportunity_id": bounty_id,
+            "bounty_contract": bounty_contract,
+            "details": {}
+        });
+        let first_action = sandbox_tool_result("prepare_bounty_action", &action_arguments)
+            .await
+            .unwrap();
+        let repeated_action = sandbox_tool_result("prepare_bounty_action", &action_arguments)
+            .await
+            .unwrap();
+        assert_eq!(first_action, repeated_action);
+        let intent_id = first_action["structuredContent"]["intent_id"].clone();
+
+        let calls = [
+            ("get_bounty_feed", json!({"view": "ready_to_earn"})),
+            (
+                "render_bounty_feed",
+                json!({"opportunity_ids": [bounty_id]}),
+            ),
+            (
+                "prepare_moonpay_onramp",
+                json!({
+                    "bounty_contract": bounty_contract,
+                    "amount_base_units": 1_000_000
+                }),
+            ),
+            (
+                "prepare_bounty_post",
+                json!({
+                    "title": "Publish the sandbox release checklist",
+                    "goal": "Create a deterministic release checklist for the MCP app.",
+                    "acceptance_criteria": ["The checklist names every required release gate."],
+                    "solver_reward_usdc": "2.00",
+                    "verifier_reward_usdc": "0.10",
+                    "task_window_days": 7,
+                    "crowdfund": false,
+                    "discovery_source": "ephemeral ChatGPT QA",
+                    "image_prompt": "A bounded green release checklist on a dark background.",
+                    "image_alt_text": "A green release checklist.",
+                    "bounty_image": {
+                        "download_url": "https://files.oaiusercontent.com/sandbox-fixture",
+                        "file_id": "file-sandbox-fixture",
+                        "mime_type": "image/png",
+                        "file_name": "sandbox-checklist.png"
+                    }
+                }),
+            ),
+            ("prepare_bounty_action", action_arguments),
+            ("get_bounty_action_status", json!({"intent_id": intent_id})),
+            (
+                "compile_objective_with_cloud_agent",
+                json!({
+                    "objective": "Consolidate the ChatGPT registration catalog",
+                    "constraints": ["No external writes"]
+                }),
+            ),
+            ("list_bounty_comments", json!({"bounty_id": bounty_id})),
+            (
+                "add_bounty_comment",
+                json!({
+                    "bounty_id": bounty_id,
+                    "body": "Sandbox-only release comment",
+                    "author": "operator-qa",
+                    "comment_id": "00000000-0000-4000-8000-00000000c001"
+                }),
+            ),
+            (
+                "create_share_bundle",
+                json!({
+                    "bounty_id": bounty_id,
+                    "title": "Sandbox release checklist",
+                    "stage": "prepared",
+                    "bounty_url": "https://agentbounties.app/earn.html",
+                    "status": "sandbox only",
+                    "reward": "2 USDC",
+                    "payment_state": "sandbox"
+                }),
+            ),
+        ];
+
+        let mut called_names = Vec::new();
+        for (name, arguments) in calls {
+            let result = sandbox_tool_result(name, &arguments).await.unwrap();
+            assert!(result.get("isError").is_none(), "{name}: {result}");
+            assert_eq!(
+                result["structuredContent"]["sandbox"], true,
+                "{name}: {result}"
+            );
+            assert!(
+                result["structuredContent"]["evidence_boundary"]
+                    .as_str()
+                    .is_some_and(|boundary| !boundary.is_empty()),
+                "{name}: {result}"
+            );
+            called_names.push(name);
+        }
+        assert_eq!(called_names.as_slice(), CHATGPT_ADVERTISED_TOOL_NAMES);
+
+        assert!(sandbox_tool_result("prepare_bounty_action", &json!({}))
+            .await
+            .is_err());
+        assert!(sandbox_tool_result(
+            "get_bounty_action_status",
+            &json!({"intent_id": "not-a-uuid"})
+        )
+        .await
+        .is_err());
+        assert!(sandbox_tool_result("not_a_public_tool", &json!({}))
+            .await
+            .is_err());
     }
 
     #[test]
