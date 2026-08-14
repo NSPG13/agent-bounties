@@ -559,20 +559,18 @@ pub(super) async fn mcp_post(
     };
     if excluded {
         super::emit_interface_usage_excluded(protocol_era);
-    } else {
-        if let Some(store) = state.store.clone() {
-            let succeeded = response.status().is_success();
-            tokio::spawn(async move {
-                let _ = store
-                    .record_interface_usage(
-                        ObservedInterface::Mcp,
-                        protocol_era,
-                        succeeded,
-                        chrono::Utc::now(),
-                    )
-                    .await;
-            });
-        }
+    } else if let Some(store) = state.store.clone() {
+        let succeeded = response.status().is_success();
+        tokio::spawn(async move {
+            let _ = store
+                .record_interface_usage(
+                    ObservedInterface::Mcp,
+                    protocol_era,
+                    succeeded,
+                    chrono::Utc::now(),
+                )
+                .await;
+        });
     }
     response
 }
