@@ -66,10 +66,8 @@ const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "create_share_bundle",
 ];
 const CHATGPT_COMPATIBILITY_TOOL_NAMES: &[&str] = &["list_autonomous_bounties"];
-const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] = &[
-    "inspect_open_competition_v2",
-    "prepare_open_competition_v2",
-];
+const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] =
+    &["inspect_open_competition_v2", "prepare_open_competition_v2"];
 #[derive(Debug, Clone, Deserialize)]
 struct ChatgptFeedArgs {
     network: Option<String>,
