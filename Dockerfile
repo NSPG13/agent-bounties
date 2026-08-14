@@ -8,7 +8,6 @@ WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY contracts ./contracts
-COPY fixtures ./fixtures
 COPY migrations ./migrations
 COPY schemas ./schemas
 COPY site ./site

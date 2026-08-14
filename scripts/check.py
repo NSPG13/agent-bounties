@@ -97,6 +97,7 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
         "scripts/check-site.py", "scripts/check-coinbase-embedded-wallet.py", "scripts/configure-wallet-providers.py",
         "scripts/check-moonpay-onramp.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
+        "scripts/check-agent-discovery-contract.py", "scripts/test_check_agent_discovery_contract.py",
         "scripts/test_check_render_blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
@@ -246,6 +247,8 @@ def main() -> int:
     py("scripts/check-site.py")
     py("scripts/check-moonpay-onramp.py")
     py("scripts/check-migration-history.py")
+    py("scripts/test_check_agent_discovery_contract.py", "-v")
+    py("scripts/check-agent-discovery-contract.py")
     run_many([[node, *args] for args in (
         ["--check", "skills/agent-bounties/scripts/check-in.mjs"], ["--test", "scripts/test_agent_bounties_openclaw_skill.mjs"],
         ["benchmarks/standing-meta-v2/mcp-discovery/self-test.mjs"], ["benchmarks/direct-v1/agent-loop/self-test.mjs"],
