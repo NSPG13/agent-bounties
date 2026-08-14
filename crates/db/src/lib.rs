@@ -65,6 +65,10 @@ pub const INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0021_interface_usage.sql");
 pub const EXTERNAL_INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0022_external_interface_usage.sql");
+pub const DURABLE_RECOVERY_ATTEMPTS_MIGRATION: &str =
+    include_str!("../../../migrations/0023_durable_recovery_attempts.sql");
+pub const RECOVERY_AUTHORIZED_SIGNER_MIGRATION: &str =
+    include_str!("../../../migrations/0024_recovery_authorized_signer.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -171,6 +175,8 @@ pub enum DbError {
     OpenCompetitionEntrantRelayConflict(String),
     #[error("open-competition entrant relay quota exceeded: {0}")]
     OpenCompetitionEntrantRelayQuotaExceeded(String),
+    #[error("durable recovery attempt conflict: {0}")]
+    RecoveryAttemptConflict(String),
     #[error("objective {0} already exists")]
     ObjectiveAlreadyExists(Id),
     #[error("objective {0} was not found")]
@@ -743,6 +749,43 @@ pub enum X402RelayStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryAttemptStatus { Reserved, Broadcast, Confirmed }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewRecoveryAttempt {
+    pub recovery_identity: String, pub network: String, pub pending_nonce: u64,
+    pub contract_address: String, pub contract_code_hash: String, pub bounty_id: String,
+    pub expected_status: i16, pub expected_round: u64, pub solver_address: String,
+    pub authorized_signer: String,
+    pub verification_expires_at: u64, pub active_bond: u64, pub calldata: String,
+    pub lease_token: Uuid, pub signed_transaction_hash: String,
+    pub signed_transaction: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryAttempt {
+    pub recovery_identity: String, pub network: String, pub pending_nonce: u64,
+    pub contract_address: String, pub contract_code_hash: String, pub bounty_id: String,
+    pub expected_status: i16, pub expected_round: u64, pub solver_address: String,
+    pub authorized_signer: String,
+    pub verification_expires_at: u64, pub active_bond: u64, pub calldata: String,
+    pub lease_source: String, pub lease_token: Uuid, pub lease_expires_at: DateTime<Utc>,
+    pub lease_attested_at: DateTime<Utc>, pub lease_recovered_at: Option<DateTime<Utc>>,
+    pub status: RecoveryAttemptStatus, pub signed_transaction_hash: String,
+    #[serde(skip_serializing)] pub signed_transaction: String,
+    pub broadcast_started_at: Option<DateTime<Utc>>, pub rpc_transaction_hash: Option<String>,
+    pub receipt_block: Option<u64>, pub receipt_status: Option<i16>,
+    pub canonical_event_id: Option<Uuid>, pub created_at: DateTime<Utc>, pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct X402RelayerLeaseAttestation {
+    pub network: String, pub lease_token: Uuid, pub lease_expires_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>, pub expired: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewX402RelayAttempt {
     pub id: Uuid,
@@ -1016,14 +1059,10 @@ impl PostgresStore {
                 OPEN_COMPETITION_ENTRANT_RELAYS_MIGRATION,
                 INTERFACE_USAGE_MIGRATION,
                 EXTERNAL_INTERFACE_USAGE_MIGRATION,
+                DURABLE_RECOVERY_ATTEMPTS_MIGRATION,
+                RECOVERY_AUTHORIZED_SIGNER_MIGRATION,
             ] {
-                for statement in migration
-                    .split(';')
-                    .map(str::trim)
-                    .filter(|statement| !statement.is_empty())
-                {
-                    sqlx::query(statement).execute(&mut *connection).await?;
-                }
+                sqlx::raw_sql(migration).execute(&mut *connection).await?;
             }
             Ok::<(), sqlx::Error>(())
         }
@@ -3206,6 +3245,106 @@ impl PostgresStore {
             .map_err(Into::into)
     }
 
+    pub async fn get_recovery_attempt(&self, identity: &str) -> DbResult<Option<RecoveryAttempt>> {
+        let row = sqlx::query("SELECT * FROM recovery_attempts WHERE recovery_identity = $1")
+            .bind(identity).fetch_optional(&self.pool).await?;
+        row.map(recovery_attempt_from_row).transpose()
+    }
+
+    pub async fn get_x402_relayer_lease_attestation(&self, network: &str) -> DbResult<Option<X402RelayerLeaseAttestation>> {
+        let row = sqlx::query(r#"SELECT network,lease_token,lease_expires_at,updated_at,
+            lease_expires_at <= now() AS expired FROM x402_relayer_leases WHERE network=$1"#)
+            .bind(network).fetch_optional(&self.pool).await?;
+        row.map(|row| Ok(X402RelayerLeaseAttestation { network: row.try_get("network")?,
+            lease_token: row.try_get("lease_token")?, lease_expires_at: row.try_get("lease_expires_at")?,
+            updated_at: row.try_get("updated_at")?, expired: row.try_get("expired")? })).transpose()
+    }
+
+    /// Inserts the exact signed transaction while recovering only the specifically attested,
+    /// expired transient lease. A replay returns the immutable row and never changes its state.
+    pub async fn reserve_recovery_attempt(&self, attempt: &NewRecoveryAttempt) -> DbResult<RecoveryAttempt> {
+        if attempt.network != "base-mainnet" {
+            return Err(DbError::RecoveryAttemptConflict(
+                "only the fixed Base mainnet lease is recoverable".into()));
+        }
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("durable-recovery:{}", attempt.recovery_identity))
+            .execute(&mut *tx).await?;
+        if let Some(row) = sqlx::query("SELECT * FROM recovery_attempts WHERE recovery_identity = $1")
+            .bind(&attempt.recovery_identity).fetch_optional(&mut *tx).await? {
+            let existing = recovery_attempt_from_row(row)?;
+            validate_recovery_replay(&existing, attempt)?;
+            tx.commit().await?;
+            return Ok(existing);
+        }
+        let lease = sqlx::query(r#"SELECT lease_token,lease_expires_at,updated_at,now() AS attested_at
+            FROM x402_relayer_leases WHERE network=$1 FOR UPDATE"#)
+            .bind(&attempt.network).fetch_optional(&mut *tx).await?
+            .ok_or_else(|| DbError::RecoveryAttemptConflict("production relayer lease row is absent".into()))?;
+        let lease_token: Uuid = lease.try_get("lease_token")?;
+        let lease_expires_at: DateTime<Utc> = lease.try_get("lease_expires_at")?;
+        let lease_attested_at: DateTime<Utc> = lease.try_get("attested_at")?;
+        if lease_token != attempt.lease_token || lease_expires_at > lease_attested_at {
+            return Err(DbError::RecoveryAttemptConflict("lease token mismatch or lease is active".into()));
+        }
+        let row = sqlx::query(r#"
+            INSERT INTO recovery_attempts
+              (recovery_identity,network,pending_nonce,contract_address,contract_code_hash,
+               bounty_id,expected_status,expected_round,solver_address,authorized_signer,verification_expires_at,
+               active_bond,calldata,lease_source,lease_token,lease_expires_at,lease_attested_at,
+               lease_recovered_at,status,signed_transaction_hash,signed_transaction)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),'reserved',$18,$19)
+            RETURNING *"#)
+            .bind(&attempt.recovery_identity).bind(&attempt.network)
+            .bind(i64_from_u64(attempt.pending_nonce)?).bind(normalize_key_address(&attempt.contract_address))
+            .bind(attempt.contract_code_hash.to_ascii_lowercase()).bind(attempt.bounty_id.to_ascii_lowercase())
+            .bind(attempt.expected_status).bind(i64_from_u64(attempt.expected_round)?)
+            .bind(normalize_key_address(&attempt.solver_address)).bind(normalize_key_address(&attempt.authorized_signer)).bind(i64_from_u64(attempt.verification_expires_at)?)
+            .bind(i64_from_u64(attempt.active_bond)?).bind(attempt.calldata.to_ascii_lowercase())
+            .bind("x402_relayer_leases").bind(lease_token).bind(lease_expires_at)
+            .bind(lease_attested_at).bind(attempt.signed_transaction_hash.to_ascii_lowercase())
+            .bind(attempt.signed_transaction.to_ascii_lowercase()).fetch_one(&mut *tx).await?;
+        let result = recovery_attempt_from_row(row)?;
+        let cleared = sqlx::query(r#"DELETE FROM x402_relayer_leases
+            WHERE network=$1 AND lease_token=$2 AND lease_expires_at <= now()"#)
+            .bind(&attempt.network).bind(lease_token).execute(&mut *tx).await?;
+        if cleared.rows_affected() != 1 {
+            return Err(DbError::RecoveryAttemptConflict("expired lease changed before selective clear".into()));
+        }
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    /// Durable point of no return. Call this and commit before the sole raw RPC broadcast.
+    pub async fn mark_recovery_broadcast_started(&self, identity: &str, hash: &str) -> DbResult<Option<RecoveryAttempt>> {
+        let row = sqlx::query(r#"UPDATE recovery_attempts SET status='broadcast',
+            broadcast_started_at=now(),updated_at=now()
+            WHERE recovery_identity=$1 AND status='reserved' AND signed_transaction_hash=$2 RETURNING *"#)
+            .bind(identity).bind(hash.to_ascii_lowercase()).fetch_optional(&self.pool).await?;
+        row.map(recovery_attempt_from_row).transpose()
+    }
+
+    pub async fn record_recovery_rpc_hash(&self, identity: &str, hash: &str) -> DbResult<RecoveryAttempt> {
+        let row = sqlx::query(r#"UPDATE recovery_attempts SET rpc_transaction_hash=$2,updated_at=now()
+            WHERE recovery_identity=$1 AND status='broadcast' AND signed_transaction_hash=$2 RETURNING *"#)
+            .bind(identity).bind(hash.to_ascii_lowercase()).fetch_optional(&self.pool).await?
+            .ok_or_else(|| DbError::RecoveryAttemptConflict("RPC hash differs or attempt is not broadcast".into()))?;
+        recovery_attempt_from_row(row)
+    }
+
+    pub async fn confirm_recovery_attempt(&self, identity: &str, hash: &str, block: u64,
+        event_id: Uuid) -> DbResult<RecoveryAttempt> {
+        let row = sqlx::query(r#"UPDATE recovery_attempts SET status='confirmed',rpc_transaction_hash=$2,
+            receipt_block=$3,receipt_status=1,canonical_event_id=$4,updated_at=now()
+            WHERE recovery_identity=$1 AND status IN ('broadcast','confirmed')
+              AND signed_transaction_hash=$2 RETURNING *"#)
+            .bind(identity).bind(hash.to_ascii_lowercase()).bind(i64_from_u64(block)?)
+            .bind(event_id).fetch_optional(&self.pool).await?
+            .ok_or_else(|| DbError::RecoveryAttemptConflict("confirmation does not bind the durable hash".into()))?;
+        recovery_attempt_from_row(row)
+    }
+
     pub async fn reserve_x402_relay_attempt(
         &self,
         attempt: &NewX402RelayAttempt,
@@ -3377,6 +3516,20 @@ impl PostgresStore {
     ) -> DbResult<Option<Uuid>> {
         let lease_token = Uuid::new_v4();
         let lease_seconds = i64_from_u64(lease_seconds)?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('durable-recovery:agent-bounties-772-round4-expiry-v2', 0))")
+            .execute(&mut *transaction)
+            .await?;
+        let recovery_reserved: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM recovery_attempts WHERE network = $1 AND status IN ('reserved', 'broadcast'))",
+        )
+        .bind(network)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if recovery_reserved {
+            transaction.rollback().await?;
+            return Ok(None);
+        }
         let row = sqlx::query(
             r#"
             INSERT INTO x402_relayer_leases
@@ -3393,11 +3546,13 @@ impl PostgresStore {
         .bind(network)
         .bind(lease_token)
         .bind(lease_seconds)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *transaction)
         .await?;
-        row.map(|row| row.try_get("lease_token"))
+        let result = row.map(|row| row.try_get("lease_token"))
             .transpose()
-            .map_err(Into::into)
+            .map_err(Into::into);
+        transaction.commit().await?;
+        result
     }
 
     pub async fn release_x402_relayer_lease(
@@ -7333,6 +7488,50 @@ fn parse_x402_relay_status(value: String) -> DbResult<X402RelayStatus> {
     }
 }
 
+fn recovery_attempt_from_row(row: PgRow) -> DbResult<RecoveryAttempt> {
+    let status = match row.try_get::<String, _>("status")?.as_str() {
+        "reserved" => RecoveryAttemptStatus::Reserved,
+        "broadcast" => RecoveryAttemptStatus::Broadcast,
+        "confirmed" => RecoveryAttemptStatus::Confirmed,
+        other => return Err(DbError::InvalidEnum(other.into())),
+    };
+    Ok(RecoveryAttempt {
+        recovery_identity: row.try_get("recovery_identity")?, network: row.try_get("network")?,
+        pending_nonce: u64_from_i64(row.try_get("pending_nonce")?)?,
+        contract_address: row.try_get("contract_address")?, contract_code_hash: row.try_get("contract_code_hash")?,
+        bounty_id: row.try_get("bounty_id")?, expected_status: row.try_get("expected_status")?,
+        expected_round: u64_from_i64(row.try_get("expected_round")?)?, solver_address: row.try_get("solver_address")?,
+        authorized_signer: row.try_get("authorized_signer")?,
+        verification_expires_at: u64_from_i64(row.try_get("verification_expires_at")?)?,
+        active_bond: u64_from_i64(row.try_get("active_bond")?)?, calldata: row.try_get("calldata")?,
+        lease_source: row.try_get("lease_source")?, lease_token: row.try_get("lease_token")?,
+        lease_expires_at: row.try_get("lease_expires_at")?, lease_attested_at: row.try_get("lease_attested_at")?,
+        lease_recovered_at: row.try_get("lease_recovered_at")?, status,
+        signed_transaction_hash: row.try_get("signed_transaction_hash")?, signed_transaction: row.try_get("signed_transaction")?,
+        broadcast_started_at: row.try_get("broadcast_started_at")?, rpc_transaction_hash: row.try_get("rpc_transaction_hash")?,
+        receipt_block: row.try_get::<Option<i64>, _>("receipt_block")?.map(u64_from_i64).transpose()?,
+        receipt_status: row.try_get("receipt_status")?, canonical_event_id: row.try_get("canonical_event_id")?,
+        created_at: row.try_get("created_at")?, updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn validate_recovery_replay(existing: &RecoveryAttempt, proposed: &NewRecoveryAttempt) -> DbResult<()> {
+    let exact = existing.network == proposed.network && existing.pending_nonce == proposed.pending_nonce
+        && existing.contract_address.eq_ignore_ascii_case(&proposed.contract_address)
+        && existing.contract_code_hash.eq_ignore_ascii_case(&proposed.contract_code_hash)
+        && existing.bounty_id.eq_ignore_ascii_case(&proposed.bounty_id)
+        && existing.expected_status == proposed.expected_status && existing.expected_round == proposed.expected_round
+        && existing.solver_address.eq_ignore_ascii_case(&proposed.solver_address)
+        && existing.authorized_signer.eq_ignore_ascii_case(&proposed.authorized_signer)
+        && existing.verification_expires_at == proposed.verification_expires_at
+        && existing.active_bond == proposed.active_bond && existing.calldata.eq_ignore_ascii_case(&proposed.calldata)
+        && existing.lease_token == proposed.lease_token
+        && existing.signed_transaction_hash.eq_ignore_ascii_case(&proposed.signed_transaction_hash)
+        && existing.signed_transaction.eq_ignore_ascii_case(&proposed.signed_transaction);
+    if exact { Ok(()) } else { Err(DbError::RecoveryAttemptConflict(
+        "recovery identity replay changed an immutable binding".into())) }
+}
+
 fn x402_relay_attempt_from_row(row: PgRow) -> DbResult<X402RelayAttempt> {
     Ok(X402RelayAttempt {
         id: row.try_get("id")?,
@@ -8222,6 +8421,109 @@ mod tests {
                 "missing x402 invariant {invariant}"
             );
         }
+    }
+
+    #[test]
+    fn durable_recovery_migration_is_separate_and_hash_before_broadcast() {
+        let sql = DURABLE_RECOVERY_ATTEMPTS_MIGRATION;
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS recovery_attempts"));
+        assert!(!sql.contains("x402_relay_attempts"));
+        for binding in ["recovery_identity TEXT PRIMARY KEY", "pending_nonce BIGINT",
+            "contract_code_hash TEXT", "lease_token UUID", "lease_expires_at TIMESTAMPTZ",
+            "signed_transaction_hash TEXT NOT NULL", "broadcast_started_at TIMESTAMPTZ"] {
+            assert!(sql.contains(binding), "missing {binding}");
+        }
+        assert!(sql.contains("status IN ('reserved', 'broadcast', 'confirmed')"));
+        assert!(sql.contains("status = 'reserved' AND broadcast_started_at IS NULL"));
+        assert!(sql.contains("status IN ('broadcast', 'confirmed') AND broadcast_started_at IS NOT NULL"));
+        assert!(sql.contains("status <> 'confirmed' OR (receipt_status = 1"));
+        assert!(!sql.contains("authorized_signer"),
+            "the shipped migration must remain immutable; signer binding is forward-only");
+        let signer_sql = RECOVERY_AUTHORIZED_SIGNER_MIGRATION;
+        assert!(signer_sql.contains("ADD COLUMN IF NOT EXISTS authorized_signer TEXT"));
+        assert!(signer_sql.contains("WHERE authorized_signer IS NULL"));
+        assert!(signer_sql.contains("ALTER COLUMN authorized_signer SET NOT NULL"));
+        assert!(signer_sql.contains("recovery_attempts_authorized_signer_pin"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn durable_recovery_attempt_is_exactly_once_and_replay_bound() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        sqlx::raw_sql(DURABLE_RECOVERY_ATTEMPTS_MIGRATION)
+            .execute(&store.pool).await.unwrap();
+        let signer_before: bool = sqlx::query_scalar(r#"SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='recovery_attempts'
+              AND column_name='authorized_signer')"#)
+            .fetch_one(&store.pool).await.unwrap();
+        assert!(!signer_before, "fixture must reproduce the shipped 0021 schema");
+        store.migrate().await.unwrap();
+        let signer_after: bool = sqlx::query_scalar(r#"SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='recovery_attempts'
+              AND column_name='authorized_signer' AND is_nullable='NO')"#)
+            .fetch_one(&store.pool).await.unwrap();
+        assert!(signer_after, "forward migration must upgrade an existing 0021 table");
+        let identity = "agent-bounties-772-round4-expiry-v2".to_string();
+        let now = Utc::now();
+        let attempt = NewRecoveryAttempt {
+            recovery_identity: identity.clone(), network: "base-mainnet".into(), pending_nonce: 41,
+            contract_address: "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274".into(),
+            contract_code_hash: "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1".into(), bounty_id: "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb".into(),
+            expected_status: 3, expected_round: 4, solver_address: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(), authorized_signer: "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a".into(),
+            verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: "0xf9251ec7".into(),
+            lease_token: Uuid::new_v4(),
+            signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x010203".into(),
+        };
+        assert_eq!(attempt.solver_address, attempt.authorized_signer,
+            "the fixed tuple intentionally uses the solver as its independently authorized relayer signer");
+        sqlx::query("INSERT INTO x402_relayer_leases(network,lease_token,lease_expires_at,updated_at) VALUES('base-mainnet',$1,$2,now()) ON CONFLICT(network) DO UPDATE SET lease_token=$1,lease_expires_at=$2,updated_at=now()")
+            .bind(attempt.lease_token).bind(now + chrono::Duration::minutes(2))
+            .execute(&store.pool).await.unwrap();
+        assert!(matches!(store.reserve_recovery_attempt(&attempt).await,
+            Err(DbError::RecoveryAttemptConflict(_))));
+        assert_eq!(store.get_x402_relayer_lease_attestation("base-mainnet").await.unwrap().unwrap().lease_token,
+            attempt.lease_token, "active lease failure must roll back without clearing");
+        let forged_token=Uuid::new_v4();
+        sqlx::query("UPDATE x402_relayer_leases SET lease_token=$1,lease_expires_at=$2 WHERE network='base-mainnet'")
+            .bind(forged_token).bind(now-chrono::Duration::minutes(2)).execute(&store.pool).await.unwrap();
+        assert!(matches!(store.reserve_recovery_attempt(&attempt).await,
+            Err(DbError::RecoveryAttemptConflict(_))));
+        assert_eq!(store.get_x402_relayer_lease_attestation("base-mainnet").await.unwrap().unwrap().lease_token,
+            forged_token, "forged token failure must roll back without clearing");
+        sqlx::query("UPDATE x402_relayer_leases SET lease_token=$1 WHERE network='base-mainnet'")
+            .bind(attempt.lease_token).execute(&store.pool).await.unwrap();
+        let (first, second) = tokio::join!(
+            store.reserve_recovery_attempt(&attempt),
+            store.reserve_recovery_attempt(&attempt),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.status, RecoveryAttemptStatus::Reserved);
+        assert_eq!(second.recovery_identity, first.recovery_identity,
+            "concurrent reservation must converge on one durable row");
+        assert_eq!(second.signed_transaction_hash, first.signed_transaction_hash);
+        assert_eq!(first.authorized_signer, attempt.authorized_signer);
+        assert!(store.acquire_x402_relayer_lease("base-mainnet",30).await.unwrap().is_none(),
+            "generic lease acquisition must remain fenced after recovery reservation");
+        let (first_mark, second_mark) = tokio::join!(
+            store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash),
+            store.mark_recovery_broadcast_started(&identity, &attempt.signed_transaction_hash),
+        );
+        let broadcast_authorities = [first_mark.unwrap(), second_mark.unwrap()]
+            .into_iter().filter(Option::is_some).count();
+        assert_eq!(broadcast_authorities, 1,
+            "exactly one concurrent caller may cross the durable broadcast boundary");
+        let replay = store.reserve_recovery_attempt(&attempt).await.unwrap();
+        assert_eq!(replay.status, RecoveryAttemptStatus::Broadcast);
+        let mut conflict = attempt.clone();
+        conflict.pending_nonce = 42;
+        assert!(matches!(store.reserve_recovery_attempt(&conflict).await,
+            Err(DbError::RecoveryAttemptConflict(_))));
+        sqlx::query("DELETE FROM recovery_attempts WHERE recovery_identity=$1")
+            .bind(identity).execute(&store.pool).await.unwrap();
     }
 
     #[test]

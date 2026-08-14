@@ -1,4 +1,6 @@
 use alloy::{
+    consensus::{Transaction as ConsensusTransaction, TxEnvelope},
+    eips::eip2718::Decodable2718,
     network::TransactionBuilder,
     primitives::{Address, Bytes, B256, U256},
     providers::{Provider, ProviderBuilder},
@@ -5885,6 +5887,117 @@ fn normalize_signed_transaction(transaction: &str) -> Result<String, ChainBaseEr
     Ok(format!("0x{}", trimmed.to_ascii_lowercase()))
 }
 
+/// Returns the canonical EVM transaction hash without broadcasting.
+pub fn signed_transaction_hash(transaction: &str) -> Result<String, ChainBaseError> {
+    let normalized = normalize_signed_transaction(transaction)?;
+    let bytes = hex::decode(normalized.trim_start_matches("0x"))
+        .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    Ok(format!("0x{}", hex::encode(Keccak256::digest(bytes))))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedTransactionBinding {
+    pub hash: String,
+    pub signer: String,
+    pub chain_id: u64,
+    pub nonce: u64,
+    pub to: String,
+    pub value: U256,
+    pub input: String,
+}
+
+pub fn decode_signed_transaction_binding(transaction: &str) -> Result<SignedTransactionBinding, ChainBaseError> {
+    let normalized = normalize_signed_transaction(transaction)?;
+    let bytes = hex::decode(normalized.trim_start_matches("0x"))
+        .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    let mut slice = bytes.as_slice();
+    let envelope = TxEnvelope::decode_2718(&mut slice)
+        .map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    if !slice.is_empty() { return Err(ChainBaseError::InvalidSignedTransaction(transaction.to_string())); }
+    let signer = match &envelope {
+        TxEnvelope::Legacy(tx) => tx.recover_signer(),
+        TxEnvelope::Eip2930(tx) => tx.recover_signer(),
+        TxEnvelope::Eip1559(tx) => tx.recover_signer(),
+        TxEnvelope::Eip7702(tx) => tx.recover_signer(),
+        TxEnvelope::Eip4844(_) => return Err(ChainBaseError::InvalidSignedTransaction(
+            "blob transaction is prohibited for recovery".into())),
+    }.map_err(|_| ChainBaseError::InvalidSignedTransaction(transaction.to_string()))?;
+    let chain_id = envelope.chain_id().ok_or_else(||
+        ChainBaseError::InvalidSignedTransaction("legacy transaction lacks protected chain id".into()))?;
+    let to = envelope.to().ok_or_else(||
+        ChainBaseError::InvalidSignedTransaction("contract creation is prohibited".into()))?;
+    Ok(SignedTransactionBinding {
+        hash: signed_transaction_hash(transaction)?, signer: format!("{signer:#x}"), chain_id,
+        nonce: envelope.nonce(), to: format!("{to:#x}"), value: envelope.value(),
+        input: format!("0x{}", hex::encode(envelope.input())),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryChainPreflight {
+    pub block_number: u64, pub block_hash: String,
+    pub code_hash: String, pub latest_nonce: u64, pub pending_nonce: u64,
+    pub status: u64, pub round: u64, pub solver: String,
+    pub verification_expires_at: u64, pub active_bond: u64,
+}
+
+pub async fn observe_recovery_preflight(rpc_url: &str, contract: &str, relayer: &str,
+    request_id: u64) -> Result<RecoveryChainPreflight, ChainBaseError> {
+    let transport = ReqwestJsonRpcTransport::default();
+    observe_recovery_preflight_with_transport(rpc_url,contract,relayer,request_id,&transport).await
+}
+
+pub async fn observe_recovery_preflight_with_transport<T>(rpc_url: &str, contract: &str,
+    relayer: &str, request_id: u64, transport: &T) -> Result<RecoveryChainPreflight, ChainBaseError>
+where T: JsonRpcTransport + ?Sized {
+    let contract = normalize_address(contract)?; let relayer = normalize_address(relayer)?;
+    let block=rpc_result(transport.post_json_value(rpc_url,&json!({"jsonrpc":"2.0","id":request_id,
+        "method":"eth_getBlockByNumber","params":["latest",false]})).await?,request_id,"eth_getBlockByNumber")?;
+    let block_number=parse_rpc_quantity(block.get("number").and_then(Value::as_str)
+        .ok_or_else(||ChainBaseError::InvalidRpcResponse("preflight block number missing".into()))?)?;
+    let block_hash=normalize_hash(block.get("hash").and_then(Value::as_str)
+        .ok_or_else(||ChainBaseError::InvalidRpcResponse("preflight block hash missing".into()))?)?;
+    let block_tag=hex_quantity(block_number);
+    let code_hash = fetch_account_code_hash(rpc_url, &contract, &block_tag, request_id+1, transport).await?;
+    let quantity = |value: Value, method: &str| -> Result<u64, ChainBaseError> {
+        parse_rpc_quantity(value.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse(
+            format!("{method} result is not a quantity")))?)
+    };
+    async fn rpc_value<T:JsonRpcTransport+?Sized>(t:&T,url:&str,id:u64,method:&'static str,params:Value)->Result<Value,ChainBaseError>{
+        rpc_result(t.post_json_value(url,&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})).await?,id,method)
+    }
+    let latest_nonce = quantity(rpc_value(transport,rpc_url,request_id+2,"eth_getTransactionCount",json!([relayer,&block_tag])).await?, "latest nonce")?;
+    let pending_nonce = quantity(rpc_value(transport,rpc_url,request_id+3,"eth_getTransactionCount",json!([relayer,"pending"])).await?, "pending nonce")?;
+    async fn call_word<T:JsonRpcTransport+?Sized>(rpc_url: &str, contract: &str, signature: &str, id: u64,
+        block_tag:&str, transport: &T) -> Result<[u8;32], ChainBaseError> {
+        let value = rpc_result(transport.post_json_value(rpc_url, &json!({"jsonrpc":"2.0","id":id,
+            "method":"eth_call","params":[{"to":contract,"data":encode_call(signature,vec![])},block_tag]})).await?,id,"eth_call")?;
+        parse_bytes32(value.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse("eth_call word missing".into()))?)
+    }
+    let status = word_to_u64(call_word(rpc_url,&contract,"status()",request_id+4,&block_tag,transport).await?,"status")?;
+    let round = word_to_u64(call_word(rpc_url,&contract,"round()",request_id+5,&block_tag,transport).await?,"round")?;
+    let solver = address_from_word(call_word(rpc_url,&contract,"solver()",request_id+6,&block_tag,transport).await?);
+    let verification_expires_at = word_to_u64(call_word(rpc_url,&contract,"verificationExpiresAt()",request_id+7,&block_tag,transport).await?,"expiry")?;
+    let active_bond = word_to_u64(call_word(rpc_url,&contract,"activeClaimBond()",request_id+8,&block_tag,transport).await?,"bond")?;
+    Ok(RecoveryChainPreflight { block_number,block_hash,code_hash,latest_nonce,pending_nonce,status,round,solver,verification_expires_at,active_bond })
+}
+
+pub async fn observe_word_at_block(rpc_url: &str, contract: &str, signature: &str,
+    block: u64, request_id: u64) -> Result<[u8;32], ChainBaseError> {
+    let transport=ReqwestJsonRpcTransport::default();
+    let result=rpc_result(transport.post_json_value(rpc_url,&json!({"jsonrpc":"2.0","id":request_id,
+        "method":"eth_call","params":[{"to":normalize_address(contract)?,"data":encode_call(signature,vec![])},hex_quantity(block)]})).await?,request_id,"eth_call")?;
+    parse_bytes32(result.as_str().ok_or_else(|| ChainBaseError::InvalidRpcResponse("eth_call word missing".into()))?)
+}
+
+pub async fn observe_erc20_balance_at_block(rpc_url:&str,token:&str,account:&str,block:u64,id:u64)->Result<u128,ChainBaseError>{
+    let transport=ReqwestJsonRpcTransport::default();
+    let data=encode_call("balanceOf(address)",vec![encode_address(&normalize_address(account)?)?]);
+    let result=rpc_result(transport.post_json_value(rpc_url,&json!({"jsonrpc":"2.0","id":id,"method":"eth_call",
+        "params":[{"to":normalize_address(token)?,"data":data},hex_quantity(block)]})).await?,id,"eth_call")?;
+    word_to_u128(parse_bytes32(result.as_str().ok_or_else(||ChainBaseError::InvalidRpcResponse("balance word missing".into()))?)?)
+}
+
 fn normalize_data(data: &str) -> Result<String, ChainBaseError> {
     let trimmed = data.strip_prefix("0x").unwrap_or(data);
     if !trimmed.len().is_multiple_of(2)
@@ -9476,6 +9589,18 @@ mod tests {
         assert_eq!(request["params"][0], "0x0102");
     }
 
+    #[test]
+    fn signed_transaction_hash_is_deterministic_and_fail_closed() {
+        let first = signed_transaction_hash("0x010203").unwrap();
+        let second = signed_transaction_hash("0x010203").unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 66);
+        assert!(first.starts_with("0x"));
+        assert!(signed_transaction_hash("010203").is_err());
+        assert!(signed_transaction_hash("0x1").is_err());
+        assert!(signed_transaction_hash("0xzz").is_err());
+    }
+
     #[tokio::test]
     async fn fetches_receipt_and_normalizes_logs() {
         let tx_hash = format!("0x{}", "ef".repeat(32));
@@ -9662,6 +9787,43 @@ mod tests {
             ChainBaseError::InvalidVerificationConfiguration(message)
                 if message.contains("factory settlement token mismatch")
         ));
+    }
+
+    #[tokio::test]
+    async fn recovery_preflight_transport_pins_one_block_and_pending_nonce() {
+        let word = |value: &str| format!("0x{:0>64}", value);
+        let solver = "c49e5374f0072abc0b4c134b2fd413d87aa6354a";
+        let responses = VecDeque::from(vec![
+            json!({"jsonrpc":"2.0","id":40,"result":{"number":"0x64","hash":format!("0x{}","aa".repeat(32))}}),
+            json!({"jsonrpc":"2.0","id":41,"result":{"codeHash":format!("0x{}","bb".repeat(32))}}),
+            json!({"jsonrpc":"2.0","id":42,"result":"0x29"}),
+            json!({"jsonrpc":"2.0","id":43,"result":"0x29"}),
+            json!({"jsonrpc":"2.0","id":44,"result":word("3")}),
+            json!({"jsonrpc":"2.0","id":45,"result":word("4")}),
+            json!({"jsonrpc":"2.0","id":46,"result":word(solver)}),
+            json!({"jsonrpc":"2.0","id":47,"result":word("6a7d2717")}),
+            json!({"jsonrpc":"2.0","id":48,"result":word("2710")}),
+        ]);
+        let seen_requests = Arc::new(Mutex::new(Vec::new()));
+        let transport = SequenceTransport { seen_requests: seen_requests.clone(), responses: Mutex::new(responses) };
+        let observed = observe_recovery_preflight_with_transport(
+            "https://example.invalid", "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+            "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a", 40, &transport,
+        ).await.unwrap();
+        assert_eq!(observed.block_number, 100);
+        assert_eq!(observed.latest_nonce, 41);
+        assert_eq!(observed.pending_nonce, 41);
+        assert_eq!(observed.status, 3);
+        assert_eq!(observed.round, 4);
+        assert_eq!(observed.solver, format!("0x{solver}"));
+        assert_eq!(observed.verification_expires_at, 1_786_586_903);
+        assert_eq!(observed.active_bond, 10_000);
+        let requests = seen_requests.lock().unwrap();
+        assert_eq!(requests.len(), 9);
+        assert_eq!(requests[1]["params"][2], "0x64");
+        assert_eq!(requests[2]["params"][1], "0x64");
+        assert_eq!(requests[3]["params"][1], "pending");
+        for request in &requests[4..] { assert_eq!(request["params"][1], "0x64"); }
     }
 
     struct MockTransport {

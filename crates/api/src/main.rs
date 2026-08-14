@@ -46,7 +46,8 @@ use chain_base::{
     plan_open_competition_action, plan_open_competition_creation,
     plan_open_competition_entrant_action, plan_standing_meta_v4_action,
     prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
-    standing_meta_v2_parent_context, standing_meta_v4_readiness,
+    decode_signed_transaction_binding, observe_erc20_balance_at_block, observe_recovery_preflight,
+    observe_word_at_block, standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
     validate_autonomous_creation_for_public_earning, validate_open_competition_commitment_envelope,
     AgentWalletReadinessReport, AtomicClaimSponsorGrant, AutonomousBountyAuthorizationSignature,
@@ -91,11 +92,12 @@ use db::{
     NewBondSponsorship, NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription,
     NewLegalAcceptance, NewOpenCompetitionEntrantRelay, NewOpportunityComment,
     NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
-    NewX402RelayAttempt, ObservedInterface, ObservedProtocolEra, OpenCompetitionEntrantRelay,
-    OpenCompetitionEntrantRelayStatus, OpportunityComment as DbOpportunityComment,
-    OpportunityLifecycleStats, PlatformMetricsStats, PostgresStore, SiteAnalyticsStats,
+    NewRecoveryAttempt, NewX402RelayAttempt, ObservedInterface, ObservedProtocolEra,
+    OpenCompetitionEntrantRelay, OpenCompetitionEntrantRelayStatus,
+    OpportunityComment as DbOpportunityComment, OpportunityLifecycleStats, PlatformMetricsStats,
+    PostgresStore, RecoveryAttempt, RecoveryAttemptStatus, SiteAnalyticsStats,
     SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
-    X402RelayAttempt, X402RelayStatus,
+    X402RelayAttempt, X402RelayerLeaseAttestation, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -2049,6 +2051,87 @@ struct BaseTransactionReceiptReport {
     receipt: Option<RpcTransactionReceipt>,
 }
 
+const RECOVERY_772_IDENTITY: &str = "agent-bounties-772-round4-expiry-v2";
+const RECOVERY_772_CONTRACT: &str = "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274";
+const RECOVERY_772_BOUNTY: &str = "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb";
+const RECOVERY_772_CODE_HASH: &str = "0x6e7d6297e170d10e6484c9b72314bb0e2173cd967aa8e05231ee369dbde0c0a1";
+const RECOVERY_772_SOLVER: &str = "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
+// Public address of wallet_registry.json's evm-base-primary signer. This is an
+// authorization binding, independently pinned from the solver identity below;
+// the two addresses intentionally coincide for this one fixed recovery tuple.
+const RECOVERY_772_AUTHORIZED_SIGNER_PIN: &str = "0xc49e5374f0072abc0b4c134b2fd413d87aa6354a";
+
+#[derive(Debug, Clone, Deserialize)]
+struct DurableRecoveryRequest {
+    recovery_identity: String,
+    pending_nonce: u64,
+    contract_address: String,
+    contract_code_hash: String,
+    bounty_id: String,
+    status: i16,
+    round: u64,
+    solver_address: String,
+    verification_expires_at: u64,
+    active_bond: u64,
+    calldata: String,
+    lease_token: Uuid,
+    signed_transaction: String,
+    request_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DurableRecoveryReport {
+    attempt: RecoveryAttempt,
+    disposition: String,
+    evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RecoveryReconciliationRequest {
+    recovery_identity: String, request_id: Option<u64>,
+}
+
+fn valid_recovery_772_tuple(request: &DurableRecoveryRequest, code_hash: &str,
+    solver: &str, calldata: &str) -> bool {
+    request.recovery_identity == RECOVERY_772_IDENTITY && request.pending_nonce == 41
+        && request.contract_address.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
+        && request.contract_code_hash.eq_ignore_ascii_case(code_hash)
+        && request.bounty_id.eq_ignore_ascii_case(RECOVERY_772_BOUNTY)
+        && request.status == 3 && request.round == 4
+        && request.solver_address.eq_ignore_ascii_case(solver)
+        && request.verification_expires_at == 1_786_586_903 && request.active_bond == 10_000
+        && request.calldata.eq_ignore_ascii_case(calldata)
+        && request.calldata.eq_ignore_ascii_case("0xf9251ec7")
+}
+
+fn valid_live_recovery_preflight(observed: &chain_base::RecoveryChainPreflight,
+    code_hash: &str, solver: &str) -> bool {
+    observed.block_number > 0 && observed.block_hash.len() == 66
+        && observed.block_hash.starts_with("0x")
+        && observed.code_hash.eq_ignore_ascii_case(code_hash) && observed.latest_nonce == 41
+        && observed.pending_nonce == 41 && observed.status == 3 && observed.round == 4
+        && observed.solver.eq_ignore_ascii_case(solver)
+        && observed.verification_expires_at == 1_786_586_903 && observed.active_bond == 10_000
+}
+
+fn valid_recovery_signed_binding(
+    binding: &chain_base::SignedTransactionBinding,
+    attempt: &RecoveryAttempt,
+) -> bool {
+    binding.hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash)
+        && binding.chain_id == 8_453
+        && binding.nonce == attempt.pending_nonce
+        && binding.signer.eq_ignore_ascii_case(RECOVERY_772_AUTHORIZED_SIGNER_PIN)
+        && binding.signer.eq_ignore_ascii_case(&attempt.authorized_signer)
+        && binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
+        && binding.value.is_zero()
+        && binding.input.eq_ignore_ascii_case(&attempt.calldata)
+}
+
+fn valid_recovery_poststate(status:u64,round:u64,bond:u64,before:u128,after:u128)->bool{
+    status==1 && round==4 && bond==0 && after.checked_sub(before)==Some(10_000)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let store = match env::var("DATABASE_URL") {
@@ -2399,6 +2482,22 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/broadcast-signed-transaction",
             post(broadcast_base_signed_transaction),
+        )
+        .route(
+            "/v1/internal/recovery-attempts/:recovery_identity",
+            get(get_durable_recovery_attempt),
+        )
+        .route(
+            "/v1/internal/recovery-attempts",
+            post(run_durable_recovery_attempt),
+        )
+        .route(
+            "/v1/internal/recovery-attempts/reconcile",
+            post(reconcile_durable_recovery_attempt),
+        )
+        .route(
+            "/v1/internal/recovery-leases/:network",
+            get(get_recovery_lease_attestation),
         )
         .route(
             "/v1/base/transaction-receipt",
@@ -10192,6 +10291,191 @@ async fn broadcast_base_signed_transaction(
             "Poll POST /v1/base/transaction-receipt for inclusion. The autonomous indexer independently reconciles canonical factory and bounty logs; a receipt alone never proves settlement."
                 .to_string(),
     }))
+}
+
+async fn get_durable_recovery_attempt(
+    State(state): State<SharedState>, headers: HeaderMap, Path(identity): Path<String>,
+) -> Result<Json<DurableRecoveryReport>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let store = state.store.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let attempt = store.get_recovery_attempt(&identity).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(DurableRecoveryReport { attempt, disposition: "read_only_attestation".into(),
+        evidence_boundary: "Lease and recovery state are read-only evidence. This endpoint never signs, broadcasts, clears a lease, or proves the canonical event.".into() }))
+}
+
+async fn get_recovery_lease_attestation(
+    State(state): State<SharedState>, headers: HeaderMap, Path(network): Path<String>,
+) -> Result<Json<X402RelayerLeaseAttestation>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if network != "base-mainnet" { return Err(StatusCode::BAD_REQUEST); }
+    let store = state.store.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let lease = store.get_x402_relayer_lease_attestation(&network).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(lease))
+}
+
+async fn run_durable_recovery_attempt(
+    State(state): State<SharedState>, headers: HeaderMap, Json(request): Json<DurableRecoveryRequest>,
+) -> Result<Json<DurableRecoveryReport>, StatusCode> {
+    require_operator(&state, &headers)?;
+    let store = state.store.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if request.recovery_identity != RECOVERY_772_IDENTITY { return Err(StatusCode::BAD_REQUEST); }
+    // Durable replay is authoritative: once a row exists, return its immutable hash/state
+    // without requiring chain preflight (nonce/state necessarily drift after broadcast).
+    if let Some(attempt) = store.get_recovery_attempt(&request.recovery_identity).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+        let immutable_match = request.pending_nonce == attempt.pending_nonce
+            && request.contract_address.eq_ignore_ascii_case(&attempt.contract_address)
+            && request.contract_code_hash.eq_ignore_ascii_case(&attempt.contract_code_hash)
+            && request.bounty_id.eq_ignore_ascii_case(&attempt.bounty_id)
+            && request.status == attempt.expected_status && request.round == attempt.expected_round
+            && request.solver_address.eq_ignore_ascii_case(&attempt.solver_address)
+            && request.verification_expires_at == attempt.verification_expires_at
+            && request.active_bond == attempt.active_bond
+            && request.calldata.eq_ignore_ascii_case(&attempt.calldata)
+            && request.lease_token == attempt.lease_token
+            && request.signed_transaction.eq_ignore_ascii_case(&attempt.signed_transaction)
+            && decode_signed_transaction_binding(&request.signed_transaction)
+                .map(|binding| valid_recovery_signed_binding(&binding, &attempt))
+                .unwrap_or(false);
+        if !immutable_match { return Err(StatusCode::CONFLICT); }
+        return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
+            evidence_boundary: "Existing durable recovery state is authoritative; replay performs zero resend and requires reconciliation for canonical evidence.".into() }));
+    }
+    if !state.base_broadcast_enabled { return Err(StatusCode::SERVICE_UNAVAILABLE); }
+    let expected_code_hash = RECOVERY_772_CODE_HASH.to_string();
+    let expected_solver = RECOVERY_772_SOLVER.to_string();
+    let expected_calldata = env::var("RECOVERY_772_EXPIRE_CALLDATA").ok().and_then(non_empty_secret)
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let exact = valid_recovery_772_tuple(&request, &expected_code_hash, &expected_solver, &expected_calldata);
+    if !exact { return Err(StatusCode::BAD_REQUEST); }
+    let binding = decode_signed_transaction_binding(&request.signed_transaction)
+        .map_err(|error| base_rpc_fetch_status(&error))?;
+    let authorized_signer = env::var("RECOVERY_772_AUTHORIZED_SIGNER").ok().and_then(non_empty_secret)
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    if !authorized_signer.eq_ignore_ascii_case(RECOVERY_772_AUTHORIZED_SIGNER_PIN) {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if binding.chain_id != 8_453 || binding.nonce != 41
+        || !binding.signer.eq_ignore_ascii_case(&authorized_signer)
+        || !binding.to.eq_ignore_ascii_case(RECOVERY_772_CONTRACT)
+        || !binding.value.is_zero() || !binding.input.eq_ignore_ascii_case("0xf9251ec7") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let hash = binding.hash;
+    let (_, rpc_url) = state.base_rpc_urls.resolve("base-mainnet").map_err(|e| base_rpc_fetch_status(&e))?;
+    let preflight = observe_recovery_preflight(&rpc_url, RECOVERY_772_CONTRACT,
+        &authorized_signer, request.request_id.unwrap_or(1)).await.map_err(|e| base_rpc_fetch_status(&e))?;
+    if !valid_live_recovery_preflight(&preflight,&expected_code_hash,&expected_solver) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let request_id = request.request_id.unwrap_or(1);
+    let proposed = NewRecoveryAttempt {
+        recovery_identity: request.recovery_identity, network: "base-mainnet".into(),
+        pending_nonce: request.pending_nonce, contract_address: request.contract_address,
+        contract_code_hash: request.contract_code_hash, bounty_id: request.bounty_id,
+        expected_status: request.status, expected_round: request.round,
+        solver_address: request.solver_address, verification_expires_at: request.verification_expires_at,
+        authorized_signer: authorized_signer.clone(),
+        active_bond: request.active_bond, calldata: request.calldata,
+        lease_token: request.lease_token, signed_transaction_hash: hash.clone(),
+        signed_transaction: request.signed_transaction,
+    };
+    let attempt = store.reserve_recovery_attempt(&proposed).await.map_err(|error| match error {
+        DbError::RecoveryAttemptConflict(_) => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    })?;
+    if attempt.status != RecoveryAttemptStatus::Reserved {
+        return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
+            evidence_boundary: "A stored hash is not canonical expiry evidence; reconcile the receipt and exact SubmissionExpired event.".into() }));
+    }
+    // Re-observe the complete tuple after the lease transaction. No durable broadcast
+    // authority is granted if state or nonce drifted while the row was being reserved.
+    let recheck = observe_recovery_preflight(&rpc_url, RECOVERY_772_CONTRACT,
+        &authorized_signer, request_id + 100).await.map_err(|e| base_rpc_fetch_status(&e))?;
+    if !valid_live_recovery_preflight(&recheck,&expected_code_hash,&expected_solver) {
+        return Err(StatusCode::CONFLICT);
+    }
+    // Commit the point-of-no-return before making the one permitted raw RPC call.
+    let Some(attempt) = store.mark_recovery_broadcast_started(&attempt.recovery_identity, &hash).await
+        .map_err(|_| StatusCode::CONFLICT)? else {
+        let attempt = store.get_recovery_attempt(&proposed.recovery_identity).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::CONFLICT)?;
+        return Ok(Json(DurableRecoveryReport { attempt, disposition: "stored_zero_resend".into(),
+            evidence_boundary: "Another request already crossed the durable broadcast boundary. This replay performs zero resend.".into() }));
+    };
+    match broadcast_signed_transaction(&rpc_url, &proposed.signed_transaction, request_id).await {
+        Ok(response) => {
+            if !response.result.eq_ignore_ascii_case(&hash) { return Err(StatusCode::BAD_GATEWAY); }
+            let attempt = store.record_recovery_rpc_hash(&attempt.recovery_identity, &hash).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            Ok(Json(DurableRecoveryReport { attempt, disposition: "broadcast_once_reconcile_receipt".into(),
+                evidence_boundary: "The transaction hash is not expiry or payment evidence; require receipt status 1 and the exact canonical SubmissionExpired event.".into() }))
+        }
+        Err(_) => Ok(Json(DurableRecoveryReport { attempt, disposition: "ambiguous_stored_zero_resend".into(),
+            evidence_boundary: "RPC outcome was ambiguous. The durable broadcast state and hash are returned; replay is reconciliation-only and must never resend.".into() })),
+    }
+}
+
+async fn reconcile_durable_recovery_attempt(
+    State(state): State<SharedState>, headers: HeaderMap, Json(request): Json<RecoveryReconciliationRequest>,
+) -> Result<Json<DurableRecoveryReport>, StatusCode> {
+    require_operator(&state, &headers)?;
+    if request.recovery_identity != RECOVERY_772_IDENTITY { return Err(StatusCode::BAD_REQUEST); }
+    let store = state.store.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let attempt = store.get_recovery_attempt(&request.recovery_identity).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    if !matches!(attempt.status, RecoveryAttemptStatus::Broadcast | RecoveryAttemptStatus::Confirmed) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let (_, rpc_url) = state.base_rpc_urls.resolve("base-mainnet").map_err(|e| base_rpc_fetch_status(&e))?;
+    let response = fetch_transaction_receipt(&rpc_url, &attempt.signed_transaction_hash,
+        request.request_id.unwrap_or(1)).await.map_err(|e| base_rpc_fetch_status(&e))?;
+    let receipt = response.result.ok_or(StatusCode::ACCEPTED)?;
+    if !receipt.transaction_hash.eq_ignore_ascii_case(&attempt.signed_transaction_hash)
+        || receipt.succeeded().map_err(|e| base_rpc_fetch_status(&e))? != Some(true) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let block = receipt.block_number().map_err(|e| base_rpc_fetch_status(&e))?
+        .ok_or(StatusCode::CONFLICT)?;
+    let mut exact_event = false;
+    for log in &receipt.logs {
+        if !log.address.eq_ignore_ascii_case(RECOVERY_772_CONTRACT) { continue; }
+        let event = decode_autonomous_bounty_logs(vec![EvmLog {
+            address: log.address.clone(), topics: log.topics.clone(), data: log.data.clone(),
+            tx_hash: log.transaction_hash.clone(),
+            block_number: u64::from_str_radix(log.block_number.trim_start_matches("0x"), 16)
+                .map_err(|_| StatusCode::BAD_GATEWAY)?,
+            log_index: u64::from_str_radix(log.log_index.trim_start_matches("0x"), 16)
+                .map_err(|_| StatusCode::BAD_GATEWAY)?, occurred_at: None,
+        }]).map_err(|_| StatusCode::CONFLICT)?.pop().ok_or(StatusCode::CONFLICT)?;
+        exact_event |= event.kind == AutonomousBountyEventKind::SubmissionExpired
+            && event.bounty_id.eq_ignore_ascii_case(RECOVERY_772_BOUNTY)
+            && event.data["round"] == 4 && event.data["claim_bond_refunded"] == 10_000
+            && event.data["solver"].as_str().is_some_and(|v| v.eq_ignore_ascii_case(RECOVERY_772_SOLVER));
+    }
+    if block == 0 { return Err(StatusCode::CONFLICT); }
+    let id=request.request_id.unwrap_or(1)+20;
+    let post_status = u64::from_be_bytes(observe_word_at_block(&rpc_url,RECOVERY_772_CONTRACT,"status()",block,id).await
+        .map_err(|e|base_rpc_fetch_status(&e))?[24..].try_into().unwrap());
+    let post_round = u64::from_be_bytes(observe_word_at_block(&rpc_url,RECOVERY_772_CONTRACT,"round()",block,id+1).await
+        .map_err(|e|base_rpc_fetch_status(&e))?[24..].try_into().unwrap());
+    let post_bond = u64::from_be_bytes(observe_word_at_block(&rpc_url,RECOVERY_772_CONTRACT,"activeClaimBond()",block,id+2).await
+        .map_err(|e|base_rpc_fetch_status(&e))?[24..].try_into().unwrap());
+    let before = observe_erc20_balance_at_block(&rpc_url,"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        &attempt.solver_address,block-1,id+3).await.map_err(|e|base_rpc_fetch_status(&e))?;
+    let after = observe_erc20_balance_at_block(&rpc_url,"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        &attempt.solver_address,block,id+4).await.map_err(|e|base_rpc_fetch_status(&e))?;
+    let exact_poststate = valid_recovery_poststate(post_status,post_round,post_bond,before,after);
+    if !exact_event || !exact_poststate { return Err(StatusCode::CONFLICT); }
+    let event_id = Uuid::new_v5(&Uuid::NAMESPACE_URL,
+        format!("{}:{}", attempt.signed_transaction_hash, block).as_bytes());
+    let attempt = store.confirm_recovery_attempt(&attempt.recovery_identity,
+        &attempt.signed_transaction_hash, block, event_id).await
+        .map_err(|_| StatusCode::CONFLICT)?;
+    Ok(Json(DurableRecoveryReport { attempt, disposition: "confirmed_exact_expiry".into(),
+        evidence_boundary: "Receipt status 1, exact SubmissionExpired, Claimable poststate, zero bond, and +10000 solver balance reconciled.".into() }))
 }
 
 #[utoipa::path(
@@ -21530,5 +21814,96 @@ fix-ci-failure
 {funding_mode}
 "#
         )
+    }
+
+    #[test]
+    fn durable_recovery_tuple_rejects_every_mutable_money_binding() {
+        let code_hash = RECOVERY_772_CODE_HASH;
+        let solver = RECOVERY_772_SOLVER;
+        let calldata = "0xf9251ec7";
+        let base = DurableRecoveryRequest {
+            recovery_identity: RECOVERY_772_IDENTITY.into(), pending_nonce: 41,
+            contract_address: RECOVERY_772_CONTRACT.into(), contract_code_hash: code_hash.to_string(),
+            bounty_id: RECOVERY_772_BOUNTY.into(), status: 3, round: 4, solver_address: solver.into(),
+            verification_expires_at: 1_786_586_903, active_bond: 10_000, calldata: calldata.into(),
+            lease_token: Uuid::new_v4(),
+            signed_transaction: "0x010203".into(), request_id: None,
+        };
+        assert!(valid_recovery_772_tuple(&base, &code_hash, solver, calldata));
+        let mutations: Vec<Box<dyn Fn(&mut DurableRecoveryRequest)>> = vec![
+            Box::new(|v| v.pending_nonce = 42), Box::new(|v| v.status = 1),
+            Box::new(|v| v.round = 5), Box::new(|v| v.active_bond = 9_999),
+            Box::new(|v| v.verification_expires_at += 1),
+            Box::new(|v| v.contract_address = "0x3333333333333333333333333333333333333333".into()),
+            Box::new(|v| v.bounty_id = format!("0x{}", "44".repeat(32))),
+        ];
+        for mutate in mutations {
+            let mut changed = base.clone(); mutate(&mut changed);
+            assert!(!valid_recovery_772_tuple(&changed, &code_hash, solver, calldata));
+        }
+    }
+
+    #[test]
+    fn durable_recovery_authorized_signer_is_independent_and_envelope_bound() {
+        let now = Utc::now();
+        let attempt = RecoveryAttempt {
+            recovery_identity: RECOVERY_772_IDENTITY.into(), network: "base-mainnet".into(),
+            pending_nonce: 41, contract_address: RECOVERY_772_CONTRACT.into(),
+            contract_code_hash: RECOVERY_772_CODE_HASH.into(), bounty_id: RECOVERY_772_BOUNTY.into(),
+            expected_status: 3, expected_round: 4, solver_address: RECOVERY_772_SOLVER.into(),
+            authorized_signer: RECOVERY_772_AUTHORIZED_SIGNER_PIN.into(),
+            verification_expires_at: 1_786_586_903, active_bond: 10_000,
+            calldata: "0xf9251ec7".into(), lease_source: "x402_relayer_leases".into(),
+            lease_token: Uuid::new_v4(), lease_expires_at: now, lease_attested_at: now,
+            lease_recovered_at: Some(now), status: RecoveryAttemptStatus::Broadcast,
+            signed_transaction_hash: format!("0x{}", "55".repeat(32)), signed_transaction: "0x01".into(),
+            broadcast_started_at: Some(now), rpc_transaction_hash: None, receipt_block: None,
+            receipt_status: None, canonical_event_id: None, created_at: now, updated_at: now,
+        };
+        assert_eq!(attempt.solver_address, attempt.authorized_signer,
+            "same address is intentional; solver and signing authority remain separate fields");
+        let binding = chain_base::SignedTransactionBinding {
+            hash: attempt.signed_transaction_hash.clone(), signer: attempt.authorized_signer.clone(),
+            chain_id: 8_453, nonce: 41, to: RECOVERY_772_CONTRACT.into(),
+            value: alloy::primitives::U256::ZERO, input: attempt.calldata.clone(),
+        };
+        assert!(valid_recovery_signed_binding(&binding, &attempt));
+        let mutations: Vec<Box<dyn Fn(&mut chain_base::SignedTransactionBinding)>> = vec![
+            Box::new(|v| v.signer = "0x0000000000000000000000000000000000000001".into()),
+            Box::new(|v| v.chain_id = 84_532), Box::new(|v| v.nonce = 42),
+            Box::new(|v| v.to = "0x0000000000000000000000000000000000000001".into()),
+            Box::new(|v| v.value = alloy::primitives::U256::from(1)),
+            Box::new(|v| v.input = "0xdeadbeef".into()),
+            Box::new(|v| v.hash = format!("0x{}", "66".repeat(32))),
+        ];
+        for mutate in mutations {
+            let mut changed = binding.clone(); mutate(&mut changed);
+            assert!(!valid_recovery_signed_binding(&changed, &attempt));
+        }
+        let mut independently_forged_attempt = attempt.clone();
+        independently_forged_attempt.authorized_signer =
+            "0x0000000000000000000000000000000000000001".into();
+        assert!(!valid_recovery_signed_binding(&binding, &independently_forged_attempt));
+    }
+
+    #[test]
+    fn recovery_live_preflight_and_poststate_reject_every_drift() {
+        let hash=RECOVERY_772_CODE_HASH.to_string();
+        let solver=RECOVERY_772_SOLVER;
+        let base=chain_base::RecoveryChainPreflight{block_number:1,block_hash:format!("0x{}","aa".repeat(32)),code_hash:hash.clone(),latest_nonce:41,
+            pending_nonce:41,status:3,round:4,solver:solver.into(),verification_expires_at:1_786_586_903,
+            active_bond:10_000};
+        assert!(valid_live_recovery_preflight(&base,&hash,solver));
+        let mutations:Vec<Box<dyn Fn(&mut chain_base::RecoveryChainPreflight)>>=vec![
+            Box::new(|v|v.latest_nonce=40),Box::new(|v|v.pending_nonce=42),Box::new(|v|v.status=1),
+            Box::new(|v|v.round=5),Box::new(|v|v.verification_expires_at+=1),Box::new(|v|v.active_bond=0),
+            Box::new(|v|v.solver="0x0000000000000000000000000000000000000001".into()),
+            Box::new(|v|v.code_hash=format!("0x{}","22".repeat(32))), Box::new(|v|v.block_number=0),
+            Box::new(|v|v.block_hash="0x00".into())];
+        for mutate in mutations {let mut changed=base.clone();mutate(&mut changed);
+            assert!(!valid_live_recovery_preflight(&changed,&hash,solver));}
+        assert!(valid_recovery_poststate(1,4,0,100,10_100));
+        for args in [(3,4,0,100,10_100),(1,5,0,100,10_100),(1,4,1,100,10_100),
+            (1,4,0,100,10_099),(1,4,0,10_100,100)] {assert!(!valid_recovery_poststate(args.0,args.1,args.2,args.3,args.4));}
     }
 }
