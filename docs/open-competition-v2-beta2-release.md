@@ -7,7 +7,7 @@ A build, transaction hash, or deployment receipt does not clear a gate.
 ## Proof Stack
 
 Beta2 pins the immutable fork
-`NSPG13/sp1@cac02844905e41f8ad1bedeeb85f455452f9e925`, identified as
+`NSPG13/sp1@0b729d415bf024ae425b27e6a829bed7642bbe7f`, identified as
 `agent-bounties-sp1-safe-v1`. The fork backports an injective Fiat-Shamir
 transcript into native proving and recursion, and carries regressions for
 partial-chunk padding, upper squeeze bits, and high digest bits.

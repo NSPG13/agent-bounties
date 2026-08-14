@@ -4,7 +4,7 @@
   "status": "pending_patched_rebuild",
   "rust_version": "1.96.1",
   "sp1_version": "6.4.0-agent-bounties-sp1-safe-v1",
-  "sp1_commit": "cac02844905e41f8ad1bedeeb85f455452f9e925",
+  "sp1_commit": "0b729d415bf024ae425b27e6a829bed7642bbe7f",
   "program_vkey": "0x004f46857a039393a0c686abe9c66ed1aa98fc3f86acd20e2778d58ad1ac1bba",
   "source_hash": "0x59e8a70adb2a5f667ce2f93328c9282d78a0e4d1db4e56dde9a01440a341a53f",
   "elf_keccak256": "0x27a64455409be7a6ddb733251392f45968735bf824f29b85cbf463942ee02353",

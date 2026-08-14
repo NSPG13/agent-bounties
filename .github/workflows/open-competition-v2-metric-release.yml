@@ -15,7 +15,7 @@ permissions:
 
 env:
   SP1_SAFE_REPOSITORY: https://github.com/NSPG13/sp1
-  SP1_SAFE_COMMIT: cac02844905e41f8ad1bedeeb85f455452f9e925
+  SP1_SAFE_COMMIT: 0b729d415bf024ae425b27e6a829bed7642bbe7f
 
 jobs:
   isolated-build:

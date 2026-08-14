@@ -61,7 +61,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SP1_SAFE_COMMIT: cac02844905e41f8ad1bedeeb85f455452f9e925
+  SP1_SAFE_COMMIT: 0b729d415bf024ae425b27e6a829bed7642bbe7f
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v1
 
 jobs:
@@ -131,7 +131,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: cac02844905e41f8ad1bedeeb85f455452f9e925
+          ref: 0b729d415bf024ae425b27e6a829bed7642bbe7f
           path: .sp1-safe
       - name: Verify patched native and recursion transcript paths
         run: |
@@ -173,7 +173,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: cac02844905e41f8ad1bedeeb85f455452f9e925
+          ref: 0b729d415bf024ae425b27e6a829bed7642bbe7f
           path: .sp1-safe
       - name: Install patched cargo-prove
         run: |
@@ -248,7 +248,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: cac02844905e41f8ad1bedeeb85f455452f9e925
+          ref: 0b729d415bf024ae425b27e6a829bed7642bbe7f
           path: .sp1-safe
       - name: Build patched circuits, verifier bytecode and CPU runner
         env:
