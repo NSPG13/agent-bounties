@@ -140,9 +140,20 @@ jobs:
           test "$(cat .sp1-safe/SP1_CIRCUIT_VERSION)" = "$SP1_SAFE_CIRCUIT_VERSION"
           python scripts/verify_sp1_patched_graph.py | tee sp1-patched-graph.json
           cd .sp1-safe
-          test "$(cargo tree --locked -p sp1-prover --prefix none | grep '^p3-challenger ' | sort -u | wc -l)" = 1
-          cargo tree --locked -p sp1-prover --prefix none \
-            | grep '^p3-challenger ' | grep -F 'vendor/p3-challenger-safe-v1'
+          cargo metadata --locked --format-version 1 > cargo-metadata.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          metadata = json.loads(Path("cargo-metadata.json").read_text(encoding="utf-8"))
+          packages = [package for package in metadata["packages"] if package["name"] == "p3-challenger"]
+          if len(packages) != 1:
+              raise SystemExit(f"expected exactly one p3-challenger package, found {len(packages)}")
+          actual = Path(packages[0]["manifest_path"]).resolve()
+          expected = (Path.cwd() / "vendor/p3-challenger-safe-v1/Cargo.toml").resolve()
+          if actual != expected or packages[0]["source"] is not None:
+              raise SystemExit(f"p3-challenger is not the vendored safe package: {actual}")
+          PY
           cargo test --locked -p slop-bn254 --lib
           cargo check --locked -p sp1-recursion-circuit
 
