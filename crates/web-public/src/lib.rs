@@ -133,7 +133,6 @@ pub struct DiscoveryEndpoints {
     pub autonomous_submission_evidence_get: String,
     pub autonomous_bounty_feed: String,
     pub solver_leaderboard: String,
-    pub agent_card: String,
     pub autonomous_bounty_analysis: String,
     pub autonomous_inventory_summary: String,
     pub autonomous_inventory_badge: String,
@@ -676,7 +675,6 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         ),
         autonomous_bounty_feed: format!("{api}/v1/base/autonomous-bounties/feed"),
         solver_leaderboard: format!("{api}/v1/base/autonomous-bounties/leaderboard"),
-        agent_card: format!("{api}/.well-known/agent-card.json"),
         autonomous_bounty_analysis: format!(
             "{api}/v1/base/autonomous-bounties/{{bounty_contract}}/analysis?network=base-mainnet"
         ),
