@@ -28,7 +28,12 @@ class PromotionTests(unittest.TestCase):
             "plonk_verifier": {"address": address("6"), "verifier_hash": digest("9"), "runtime_code_hash": digest("a")},
             "plonk_adapter": {"address": address("7"), "runtime_code_hash": digest("b")},
             "source_commit": "c" * 40,
-            "sp1": {"patched_source_commit": "d" * 40, "circuit_version": "safe"},
+            "sp1": {
+                "patched_source_commit": "d" * 40,
+                "circuit_version": "safe",
+                "host_rust_version": "1.96.1",
+                "guest_rust_version": "1.94.0-dev",
+            },
             "metric_profile": {
                 "profile_id": "public-vector-metric-v1",
                 "program_vkey": digest("c"),
@@ -62,6 +67,8 @@ class PromotionTests(unittest.TestCase):
         self.assertTrue(runtime["proof_broker_enabled"])
         self.assertEqual(runtime["factory_contract"], bundle["factory"]["address"])
         self.assertEqual(runtime["deployment_block"], 123)
+        self.assertEqual(runtime["sp1_host_rust_version"], "1.96.1")
+        self.assertEqual(runtime["sp1_guest_rust_version"], "1.94.0-dev")
 
     def test_promotion_rejects_identity_drift(self):
         bundle, deployment, gates = self.fixture()

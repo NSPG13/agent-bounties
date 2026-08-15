@@ -37,6 +37,8 @@ PROOF_SYSTEM_GROTH16 = keccak256(b"sp1-groth16")
 PROOF_SYSTEM_PLONK = keccak256(b"sp1-plonk")
 SP1_COMMIT = METRIC_IDENTITY["sp1_commit"]
 SP1_VERSION = METRIC_IDENTITY["sp1_version"]
+HOST_RUST_VERSION = METRIC_IDENTITY["rust_version"]
+SP1_GUEST_RUST_VERSION = METRIC_IDENTITY["sp1_guest_rust_version"]
 SOLC_VERSION = "0.8.26+commit.8a97fa7a"
 SOLC_IMAGE = (
     "docker.io/ethereum/solc@"
@@ -527,6 +529,8 @@ def build_bundle(
         "sp1": {
             "version": SP1_VERSION,
             "commit": SP1_COMMIT,
+            "host_rust_version": HOST_RUST_VERSION,
+            "guest_rust_version": SP1_GUEST_RUST_VERSION,
             "patched_source_commit": verifier_assets["sp1_source_commit"],
             "circuit_version": verifier_assets["circuit_version"],
             "gpu_proving_enabled": False,
@@ -654,6 +658,8 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
         "repository_subject_hash": bundle["repository_subject"]["hash"],
         "sp1_source_commit": bundle["sp1"]["patched_source_commit"],
         "sp1_circuit_version": bundle["sp1"]["circuit_version"],
+        "sp1_host_rust_version": bundle["sp1"]["host_rust_version"],
+        "sp1_guest_rust_version": bundle["sp1"]["guest_rust_version"],
         "factory_contract": bundle["factory"]["address"],
         "factory_runtime_code_hash": bundle["factory"]["runtime_code_hash"],
         "implementation_contract": bundle["implementation"]["address"],

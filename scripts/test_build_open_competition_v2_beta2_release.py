@@ -49,6 +49,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertEqual(identity["rust_version"], "1.96.1")
         self.assertEqual(identity["sp1_guest_rust_version"], "1.94.0-dev")
+        self.assertEqual(MODULE.HOST_RUST_VERSION, "1.96.1")
+        self.assertEqual(MODULE.SP1_GUEST_RUST_VERSION, "1.94.0-dev")
         self.assertEqual(identity["status"], "reproduced_beta2")
         self.assertEqual(MODULE.PROGRAM_VKEY, identity["program_vkey"])
         self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
@@ -109,6 +111,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["mainnet_signing_allowed"])
+        self.assertEqual(bundle["sp1"]["host_rust_version"], "1.96.1")
+        self.assertEqual(bundle["sp1"]["guest_rust_version"], "1.94.0-dev")
         self.assertFalse(bundle["activation"]["broker_canary_enabled"])
         self.assertFalse(bundle["activation"]["public_creation_enabled"])
         self.assertFalse(bundle["activation"]["default_protocol_enabled"])
