@@ -21,10 +21,13 @@ exact-source graph gate and transcript attack regressions must pass; any
 registry fallback or additional advisory still blocks the release.
 
 GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
-128 GiB x86-64 Linux runner builds both circuits and project-owned Groth16 and
-PLONK verifiers, then creates one Groth16 and two PLONK proofs on CPU. The
-contracts call those exact verifiers directly; no gateway, proxy, owner, or
-upgrade route exists.
+x86-64 Linux runner with at least 180 GiB physical memory and 288 GiB combined
+memory and swap builds both circuits and project-owned Groth16 and PLONK
+verifiers, then creates one Groth16 and two PLONK proofs on CPU. These limits
+come from a measured Groth16 address-space peak near 280 GiB; a 128 GiB runner
+and a 192 GiB runner without swap both exhausted memory. The contracts call
+the exact generated verifiers directly; no gateway, proxy, owner, or upgrade
+route exists.
 
 The official SP1 installer is used only to install the compatible zkVM compiler
 toolchain. CI verifies its pinned installer hash, installs SP1 6.4.0, then
@@ -48,8 +51,8 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
    builders.
 3. Commit the reproduced identity as `reproduced_beta2`; stale Beta1 values may
    never be reused.
-4. On the 128 GiB CPU runner, build circuits, verifier bytecode, and three real
-   self-verified proofs.
+4. On the capacity-gated CPU runner, build circuits, verifier bytecode, and
+   three real self-verified proofs.
 5. Replay the exact verifier and factory deployment plus both winner modes on a
    fresh Base-mainnet fork.
 6. In protected environment `v2-beta2-sepolia`, deploy the same bytecode and
@@ -106,7 +109,7 @@ gh workflow run open-competition-v2-beta2-release.yml --ref main \
   -f run_mainnet_canaries=true
 ```
 
-It requires a self-hosted runner with labels `linux`, `x64`, `ram-128gb`, and
+It requires a self-hosted runner with labels `linux`, `x64`, `ram-192gb`, and
 `open-competition-v2-prover`. Configure protected environments as follows:
 
 - `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL` and
@@ -147,7 +150,7 @@ The shadow process persists a canonical event-set digest and common safe-block
 identity. Public creation and new broker quotes fail closed if that agreement
 is absent, false, older than 120 seconds, or predates deployment.
 
-The 128 GiB host runs
+The same high-memory host runs
 `scripts/open_competition_v2_prover_service.py` with
 `ops/open-competition-v2-prover.service`. Caddy terminates HTTPS using
 `ops/open-competition-v2-prover.Caddyfile`. Set:

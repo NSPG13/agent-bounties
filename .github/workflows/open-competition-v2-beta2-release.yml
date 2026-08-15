@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       build_release_assets:
-        description: Build both patched verifiers and three CPU proofs on the 128 GiB host
+        description: Build patched verifiers and proofs on the capacity-gated high-memory host
         type: boolean
         required: true
         default: false
@@ -237,7 +237,7 @@ jobs:
   build-release-assets:
     if: github.event_name == 'workflow_dispatch' && inputs.build_release_assets && github.ref == 'refs/heads/main'
     needs: [deterministic-release, static-analysis, patched-sp1-source, compare-metric-builds]
-    runs-on: [self-hosted, linux, x64, ram-128gb, open-competition-v2-prover]
+    runs-on: [self-hosted, linux, x64, ram-192gb, open-competition-v2-prover]
     timeout-minutes: 720
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
@@ -356,7 +356,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_live_sepolia_rehearsal && github.ref == 'refs/heads/main'
     needs: build-release-assets
     environment: v2-beta2-sepolia
-    runs-on: [self-hosted, linux, x64, ram-128gb, open-competition-v2-prover]
+    runs-on: [self-hosted, linux, x64, ram-192gb, open-competition-v2-prover]
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
@@ -459,7 +459,7 @@ jobs:
     if: always() && github.event_name == 'workflow_dispatch' && inputs.run_mainnet_canaries && github.ref == 'refs/heads/main' && needs.build-release-assets.result == 'success' && needs.deploy-mainnet.result == 'success'
     needs: [build-release-assets, deploy-mainnet]
     environment: v2-beta2-mainnet
-    runs-on: [self-hosted, linux, x64, ram-128gb, open-competition-v2-prover]
+    runs-on: [self-hosted, linux, x64, ram-192gb, open-competition-v2-prover]
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a

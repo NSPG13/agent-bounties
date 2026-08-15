@@ -54,6 +54,8 @@ def verify(
     if "ghcr.io/succinctlabs/sp1-gnark" in release_source:
         raise ValueError("release workflow must not use the upstream mutable gnark image route")
     required_builder_fragments = (
+        "minimum_memory_kib=$((180 * 1024 * 1024))",
+        "minimum_combined_kib=$((288 * 1024 * 1024))",
         'source_root="$(cd "$source_root" && pwd)"',
         '--build-dir="$build_dir/groth16"',
         '--build-dir="$build_dir/plonk"',
