@@ -1,0 +1,56 @@
+name: Seed Open Competition V2 discovery bounties
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: seed-open-competition-v2-discovery
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate and seed five active competitions
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/test_seed_open_competition_v2_discovery.py
+          python scripts/seed_open_competition_v2_discovery.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/open-competition-v2-discovery-seed.json \
+            --issue-output-dir target/open-competition-v2-discovery-issues
+      - name: Publish only canonically active funded issues
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/publish_open_competition_v2_seed_issues.py \
+            --index target/open-competition-v2-discovery-issues/index.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --output target/open-competition-v2-discovery-issues.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-discovery-seed-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            target/open-competition-v2-discovery-seed.json
+            target/open-competition-v2-discovery-issues.json
+            target/open-competition-v2-discovery-issues/*.md
+            target/open-competition-v2-discovery-issues/index.json
+          if-no-files-found: error
+          retention-days: 365

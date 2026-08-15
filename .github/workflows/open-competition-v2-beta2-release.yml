@@ -116,7 +116,9 @@ jobs:
             scripts.test_verify_open_competition_v2_fresh_agent_flow \
             scripts.test_verify_open_competition_v2_plonk_setup \
             scripts.test_verify_open_competition_v2_wrap_template \
-            scripts.test_verify_sp1_patched_graph -v
+            scripts.test_verify_sp1_patched_graph \
+            scripts.test_seed_open_competition_v2_discovery \
+            scripts.test_publish_open_competition_v2_seed_issues -v
           docker run --rm \
             -v "$GITHUB_WORKSPACE/tools/open-competition-v2-ceremony:/work" \
             -w /work \

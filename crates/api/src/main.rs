@@ -19712,6 +19712,7 @@ mod tests {
         for v2 in [
             "/v1/base/open-competition-v2-beta2/release",
             "/v1/base/open-competition-v2-beta2/profiles",
+            "/v1/base/open-competition-v2-beta2/structured-artifact-profile",
             "/v1/base/open-competition-v2-beta2/validate",
             "/v1/base/open-competition-v2-beta2/creation-preparation",
             "/v1/base/open-competition-v2-beta2/funding-preparation",
