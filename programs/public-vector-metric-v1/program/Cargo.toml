@@ -5,7 +5,7 @@ resolver = "2"
 name = "public-vector-metric-v1-program"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.96"
+rust-version = "1.94"
 license = "Apache-2.0"
 publish = false
 

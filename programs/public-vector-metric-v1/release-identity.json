@@ -3,6 +3,7 @@
   "profile_id": "public-vector-metric-v1",
   "status": "reproduced_beta2",
   "rust_version": "1.96.1",
+  "sp1_guest_rust_version": "1.94.0-dev",
   "sp1_version": "6.4.0-agent-bounties-sp1-safe-v4",
   "sp1_commit": "caf43bb80fab6745347fda83bb428cb08a463f8d",
   "program_vkey": "0x000300bff9900725cb52afb50b42fffdfdae35767d303b414d3f931288189855",

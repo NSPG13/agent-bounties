@@ -80,7 +80,9 @@ class Sp1PatchedGraphTests(unittest.TestCase):
         manifest = self.root / MODULE.EXPECTED_MANIFESTS[1]
         manifest.write_text(
             manifest.read_text(encoding="utf-8").replace(
-                f'rust-version = "{MODULE.RUST_MIN_VERSION}"', 'rust-version = "1.97"', 1
+                f'rust-version = "{MODULE.GUEST_RUST_MIN_VERSION}"',
+                'rust-version = "1.95"',
+                1,
             ),
             encoding="utf-8",
         )
@@ -93,6 +95,14 @@ class Sp1PatchedGraphTests(unittest.TestCase):
         identity["sp1_commit"] = "0" * 40
         identity_path.write_text(json.dumps(identity), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "release identity"):
+            MODULE.verify(self.root)
+
+    def test_guest_toolchain_identity_drift_fails_closed(self) -> None:
+        identity_path = self.root / MODULE.IDENTITY_PATH
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        identity["sp1_guest_rust_version"] = "1.95.0-dev"
+        identity_path.write_text(json.dumps(identity), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "SP1 guest Rust toolchain"):
             MODULE.verify(self.root)
 
 
