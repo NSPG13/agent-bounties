@@ -109,6 +109,8 @@ jobs:
             scripts.test_record_open_competition_v2_beta2_gate \
             scripts.test_rebind_open_competition_v2_sp1_wrapper \
             scripts.test_verify_open_competition_v2_gnark_image \
+            scripts.test_verify_open_competition_v2_groth16_ceremony \
+            scripts.test_verify_open_competition_v2_plonk_setup \
             scripts.test_verify_open_competition_v2_wrap_template \
             scripts.test_verify_sp1_patched_graph -v
           docker run --rm \

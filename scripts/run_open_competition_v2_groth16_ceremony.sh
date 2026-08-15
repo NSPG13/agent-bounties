@@ -87,4 +87,8 @@ value = {
 }
 (root / "transcript.json").write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 PY
+python scripts/verify_open_competition_v2_groth16_ceremony.py \
+  --root "$output_dir" --r1cs "$r1cs" \
+  --ceremony-uri https://github.com/NSPG13/agent-bounties/issues/888 \
+  --output "$output_dir/verification-evidence.json"
 touch "$output_dir/complete"
