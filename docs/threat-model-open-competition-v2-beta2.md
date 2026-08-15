@@ -32,7 +32,7 @@ decide payment eligibility.
 | Best-score tie manipulation | Strict improvement only; canonical accepted sequence wins ties. |
 | Timestamp ambiguity | Inclusive proof deadline and strictly-after finalization/expiry. |
 | Refund griefing | Anyone may withdraw for a contributor, but cannot redirect the recipient. |
-| Broker overcharge or abandonment | Five-minute bound quote, maximum charge, 30-minute canonical refund SLA, and segregated refund reserve. |
+| Broker overcharge or abandonment | Five-minute bound quote, maximum charge, 30-minute canonical refund SLA, dedicated broker key, and a safe-block gate requiring one full-charge USDC refund reserve plus bounded relay gas. |
 | Indexer reorg | Safe-block projection, event identity dedupe, and primary/shadow RPC comparison. |
 | Synthetic adoption inflation | Canary IDs are marked and excluded from adoption metrics. |
 
@@ -68,4 +68,6 @@ decide payment eligibility.
   metric identity.
 - Mainnet deployment, canaries, and activation require separate evidence-bound
   owner approvals.
+- The broker, keeper, and deployment signer must be distinct. Broker and public
+  activation fail closed below the release-pinned USDC and Base ETH reserves.
 - Deployment and transaction hashes are never payment evidence.

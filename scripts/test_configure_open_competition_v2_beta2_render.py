@@ -47,12 +47,16 @@ class Beta2RenderTests(unittest.TestCase):
             prover_url="https://prover.example/v1/prove",
             prover_api_key="a" * 32,
             broker_address="0x" + "55" * 20,
+            keeper_address="0x" + "66" * 20,
+            deployer_address="0x" + "77" * 20,
+            refund_reserve_min_base_units=110_000,
         )
         manifest = json.loads(environment["BASE_MAINNET_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON"])
         self.assertFalse(manifest["public_creation_enabled"])
         self.assertFalse(manifest["proof_broker_enabled"])
         self.assertEqual(environment["OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK"], "123")
         self.assertNotIn("X402_RELAYER_PRIVATE_KEY", environment)
+        self.assertEqual(environment["OPEN_COMPETITION_V2_REFUND_RESERVE_MIN_BASE_UNITS"], "110000")
 
     def test_environment_rejects_shared_rpc_and_insecure_prover(self):
         common = dict(
@@ -62,9 +66,26 @@ class Beta2RenderTests(unittest.TestCase):
             prover_url="http://prover.example/v1/prove",
             prover_api_key="a" * 32,
             broker_address="0x" + "55" * 20,
+            keeper_address="0x" + "66" * 20,
+            deployer_address="0x" + "77" * 20,
+            refund_reserve_min_base_units=110_000,
         )
         with self.assertRaises(MODULE.Beta2RenderError):
             MODULE.runtime_environment(**common)
+
+    def test_environment_rejects_reused_signing_role(self):
+        with self.assertRaisesRegex(MODULE.Beta2RenderError, "must be distinct"):
+            MODULE.runtime_environment(
+                runtime(),
+                primary_rpc_url="https://primary.example",
+                shadow_rpc_url="https://shadow.example",
+                prover_url="https://prover.example/v1/prove",
+                prover_api_key="a" * 32,
+                broker_address="0x" + "55" * 20,
+                keeper_address="0x" + "55" * 20,
+                deployer_address="0x" + "77" * 20,
+                refund_reserve_min_base_units=110_000,
+            )
 
 
 if __name__ == "__main__":
