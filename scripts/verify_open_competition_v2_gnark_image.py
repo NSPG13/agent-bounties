@@ -47,6 +47,8 @@ def verify(
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",
         'docker image inspect "$SP1_GNARK_IMAGE"',
+        'sha256sum "$SP1_GNARK_IMAGE" /gnark-cli',
+        "target/gnark-cli.sha256",
         "bash scripts/build_open_competition_v2_circuits.sh .sp1-safe",
     )
     if any(fragment not in release_source for fragment in required_workflow_fragments):

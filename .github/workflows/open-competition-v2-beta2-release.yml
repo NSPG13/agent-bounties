@@ -376,6 +376,9 @@ jobs:
           test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_COMMIT"
           test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "app.agent-bounties.circuit-version" }}')" = "$SP1_SAFE_CIRCUIT_VERSION"
           docker image inspect "$SP1_GNARK_IMAGE" > target/gnark-image.json
+          docker run --rm --entrypoint sha256sum "$SP1_GNARK_IMAGE" /gnark-cli \
+            | tee target/gnark-cli.sha256
+          grep -Eq '^[0-9a-f]{64}  /gnark-cli$' target/gnark-cli.sha256
           bash scripts/build_open_competition_v2_circuits.sh .sp1-safe
           cache="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION"
           for system in groth16 plonk; do
@@ -476,6 +479,7 @@ jobs:
             target/public-vector-metric-v1-script
             target/prover-capabilities.json
             target/gnark-image.json
+            target/gnark-cli.sha256
           if-no-files-found: error
           retention-days: 90
 
