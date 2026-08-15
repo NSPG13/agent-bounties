@@ -16,15 +16,10 @@ import time
 from typing import Any
 
 from Crypto.Hash import keccak
-from _shared.rpc import rpc, select_working_base_rpc
+from _shared.rpc import rpc
 
 
 MAX_ACTIVATION_FUNDING_MINOR = 8_040_000
-
-
-def public_base_rpc(preferred: str | None = None) -> str:
-    """Return the chain-valid HTTPS Base endpoint that passed validation."""
-    return select_working_base_rpc(preferred=(preferred or "").strip() or None)
 
 
 def selector(signature: str) -> str:
@@ -559,7 +554,6 @@ def main() -> int:
     parser.add_argument(
         "--fork-url",
         default=os.environ.get("BASE_MAINNET_RPC_URL", "https://mainnet.base.org"),
-        help="preferred Base HTTPS RPC; failover validates chain id 8453 before use",
     )
     parser.add_argument("--anvil", help="path to the anvil executable")
     parser.add_argument(
@@ -580,11 +574,10 @@ def main() -> int:
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     try:
-        fork_url = public_base_rpc(args.fork_url)
         result = rehearse(
             repo,
             repo / args.bundle,
-            fork_url,
+            args.fork_url,
             args.anvil,
             expect_existing_factory=args.expect_existing_factory,
             verifier_deployment_path=(repo / args.verifier_deployment)

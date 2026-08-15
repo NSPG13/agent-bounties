@@ -6,8 +6,11 @@ on:
       - ".github/workflows/routed-v3-activation-check.yml"
       - "scripts/activate_routed_v3_dynamic.py"
       - "scripts/activate_routed_v3_replacements.py"
+      - "scripts/_shared/rpc.py"
       - "scripts/check_routed_v3_activation_readiness.py"
       - "scripts/test_activate_routed_v3_replacements.py"
+      - "scripts/test_shared_rpc.py"
+      - "benchmarks/direct-inventory-v1/rpc-failover/check.py"
       - "scripts/test-durable-wallet-policy.js"
       - "site/durable-wallet-policy.html"
       - "site/durable-wallet-policy.js"
@@ -20,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}
-      ROUTER: "0x380c1af742593dd88b6f20387e9ee693a0536731"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
@@ -30,33 +32,17 @@ jobs:
 
       - name: Offline activation and owner-page tests
         run: |
+          python scripts/test_shared_rpc.py -v
+          WORKSPACE_ROOT=. python benchmarks/direct-inventory-v1/rpc-failover/check.py
           python -m unittest scripts.test_activate_routed_v3_replacements -v
           python -m py_compile scripts/activate_routed_v3_dynamic.py scripts/activate_routed_v3_replacements.py scripts/check_routed_v3_activation_readiness.py
           node --check site/durable-wallet-policy.js
           node scripts/test-durable-wallet-policy.js
 
-      - name: Router runtime exists
+      - name: Dynamic direct-chain attestation passes with RPC failover
         run: |
-          mkdir -p target
-          code="$(cast code "$ROUTER" --rpc-url "$BASE_MAINNET_RPC_URL")"
-          test "$code" != "0x"
-          test "$code" != "0x0"
-
-      - name: Bootstrap event exists
-        env:
-          LOG_RPC_URL: https://mainnet.base.org
-        run: |
-          mkdir -p target
-          cast logs --rpc-url "$LOG_RPC_URL" --address "$ROUTER" --from-block 49069936 --to-block 49069936 "PolicyBootstrapped(bytes32,address,bytes32)" --json > target/router-bootstrap.json
-          python -c 'import json; x=json.load(open("target/router-bootstrap.json")); assert isinstance(x,list) and len(x)==1, len(x)'
-
-      - name: Dynamic direct-chain attestation passes
-        run: |
-          python - <<'PY'
-          import json, os, sys
-          sys.path.insert(0, 'scripts')
-          import activate_routed_v3_dynamic as dynamic
-          import activate_routed_v3_replacements as activation
-          report = dynamic.discover_deployment(activation.Cast('cast', os.environ['BASE_MAINNET_RPC_URL']))
-          print(json.dumps(report, sort_keys=True))
-          PY
+          python scripts/check_routed_v3_activation_readiness.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/routed-v3-readiness.json \
+            --require-ready
+          cat target/routed-v3-readiness.json

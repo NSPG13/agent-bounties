@@ -13,12 +13,7 @@ import subprocess
 import time
 from typing import Any
 
-from _shared.rpc import rpc, select_working_base_rpc
-
-
-def public_base_rpc(preferred: str | None = None) -> str:
-    """Return the chain-valid HTTPS Base endpoint that passed validation."""
-    return select_working_base_rpc(preferred=(preferred or "").strip() or None)
+from _shared.rpc import rpc
 
 
 def free_port() -> int:
@@ -169,8 +164,7 @@ def main() -> int:
     args = parse_args()
     repo = Path(__file__).resolve().parents[1]
     bundle_path = args.bundle if args.bundle.is_absolute() else repo / args.bundle
-    rpc_url = public_base_rpc(args.rpc_url)
-    print(json.dumps(rehearse(repo, bundle_path, rpc_url, args.anvil), indent=2))
+    print(json.dumps(rehearse(repo, bundle_path, args.rpc_url, args.anvil), indent=2))
     return 0
 
 

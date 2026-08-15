@@ -86,6 +86,60 @@ class PolicyCast:
         raise AssertionError(f"unexpected call {target} {signature} {args}")
 
 
+class DiscoveryCast:
+    def __init__(self) -> None:
+        self.executable = "cast"
+        self.policy = "0x" + "21" * 32
+        self.adapter = "0x" + "22" * 20
+        self.runtime = "0x" + "23" * 32
+
+    def chain_id(self) -> int:
+        return MODULE.CHAIN_ID
+
+    def code(self, _target: str) -> str:
+        return "0x6000"
+
+    def rpc(self, *args: str, timeout: int = 300) -> str:
+        if args[0] != "logs":
+            raise AssertionError(f"unexpected rpc {args}")
+        return json.dumps(
+            [
+                {
+                    "topics": [
+                        "0x" + "20" * 32,
+                        self.policy,
+                        "0x" + "00" * 12 + self.adapter[2:],
+                    ],
+                    "data": self.runtime,
+                    "transactionHash": "0x" + "24" * 32,
+                    "blockNumber": hex(DYNAMIC.BOOTSTRAP_BLOCK),
+                }
+            ]
+        )
+
+    def call(self, target: str, signature: str, *args: str) -> str:
+        values = {
+            "canonicalFactory()(address)": MODULE.FACTORY,
+            "registrar()(address)": MODULE.durable.KEEPER,
+            "guardian()(address)": MODULE.OWNER,
+            "activationDelay()(uint64)": str(DYNAMIC.ACTIVATION_DELAY),
+            "bootstrapUsed()(bool)": "true",
+            "isPolicyActive(bytes32)(bool)": "true",
+            "verifierRouter()(address)": DYNAMIC.ROUTER,
+            "committedPolicyHash()(bytes32)": self.policy,
+            "ACCEPTANCE_CRITERIA_HASH()(bytes32)": "0x" + "25" * 32,
+            "MINIMUM_CHILD_TARGET()(uint256)": "1000000",
+            "MINIMUM_PARENT_GROSS_MARGIN()(uint256)": "1000000",
+        }
+        if signature.startswith("policies(bytes32)"):
+            return "\n".join(
+                [self.adapter, self.runtime, "1", "1", "1", "false"]
+            )
+        if signature in values:
+            return values[signature]
+        raise AssertionError(f"unexpected call {target} {signature} {args}")
+
+
 class ActivateRoutedV3Tests(unittest.TestCase):
     def deployment_fixture(self) -> dict:
         return {
@@ -146,6 +200,17 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ActivationError, "exactly one"):
             DYNAMIC.parse_bootstrap_logs("[]")
 
+    def test_router_registrar_and_wallet_delegate_are_distinct_roles(self) -> None:
+        self.assertNotEqual(MODULE.KEEPER, MODULE.durable.KEEPER)
+        with mock.patch.object(
+            MODULE,
+            "run",
+            return_value="0x" + "23" * 32,
+        ):
+            report = DYNAMIC.discover_deployment(DiscoveryCast())
+        self.assertEqual(report["router_address"], DYNAMIC.ROUTER)
+        self.assertEqual(report["adapter_address"], "0x" + "22" * 20)
+
     def test_issue_body_advertises_routed_profit_and_payment_boundary(self) -> None:
         deployment = self.deployment_fixture()
         deployment.update({
@@ -179,11 +244,68 @@ class ActivateRoutedV3Tests(unittest.TestCase):
         self.assertEqual(value.count("***"), 2)
 
     def test_readiness_probe_fails_closed_without_raising(self) -> None:
-        with mock.patch.object(DYNAMIC, "discover_deployment", side_effect=RuntimeError("attestation failed")):
+        with mock.patch.object(
+            READINESS,
+            "ReadOnlyFailoverCast",
+            return_value=mock.Mock(rpc_url="https://base.local"),
+        ), mock.patch.object(
+            DYNAMIC,
+            "discover_deployment",
+            side_effect=RuntimeError("attestation failed"),
+        ):
             report = READINESS.inspect("https://mainnet.base.org", "cast")
         self.assertFalse(report["ready"])
         self.assertFalse(report["financial_action_taken"])
         self.assertIn("attestation failed", report["reason"])
+
+    def test_readonly_cast_rotates_after_a_429(self) -> None:
+        def select(**kwargs: object) -> str:
+            return str(kwargs["endpoints"][0])  # type: ignore[index]
+
+        with mock.patch.object(
+            READINESS,
+            "select_working_base_rpc",
+            side_effect=select,
+        ), mock.patch.object(
+            MODULE,
+            "run",
+            side_effect=[
+                MODULE.ActivationError("HTTP error 429: over rate limit"),
+                "8453",
+            ],
+        ) as run:
+            cast = READINESS.ReadOnlyFailoverCast("cast", "https://preferred.local")
+            self.assertEqual(cast.rpc("chain-id"), "8453")
+
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(cast.rpc_url, "https://base.drpc.org")
+
+    def test_wrong_chain_never_reaches_cast(self) -> None:
+        with mock.patch.object(
+            READINESS,
+            "select_working_base_rpc",
+            side_effect=RuntimeError("wrong chain 1"),
+        ), mock.patch.object(MODULE, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "wrong chain"):
+                READINESS.ReadOnlyFailoverCast("cast", "https://wrong.local")
+        run.assert_not_called()
+
+    def test_json_rpc_cast_error_never_fails_over(self) -> None:
+        with mock.patch.object(
+            READINESS,
+            "select_working_base_rpc",
+            return_value="https://base.local",
+        ), mock.patch.object(
+            MODULE,
+            "run",
+            side_effect=MODULE.ActivationError(
+                "JSON-RPC error: execution reverted"
+            ),
+        ) as run:
+            cast = READINESS.ReadOnlyFailoverCast("cast", "https://base.local")
+            with self.assertRaisesRegex(MODULE.ActivationError, "execution reverted"):
+                cast.rpc("call", "0x" + "11" * 20, "owner()(address)")
+        self.assertEqual(run.call_count, 1)
 
     def test_economics_and_scope_are_exact(self) -> None:
         self.assertEqual(MODULE.TARGET, 2_010_000)
@@ -237,16 +359,25 @@ class ActivateRoutedV3Tests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaisesRegex(MODULE.ActivationError, field):
                 MODULE.policy_state(PolicyCast(**{field: observed}), deployment)
 
-    def test_router_address_is_quoted_in_activation_workflow_yaml(self) -> None:
-        expected = 'ROUTER: "0x380c1af742593dd88b6f20387e9ee693a0536731"'
+    def test_activation_workflows_use_retry_safe_readiness(self) -> None:
         for name in (
             "activate-routed-v3-replacements.yml",
             "routed-v3-activation-check.yml",
         ):
             workflow = (WORKFLOWS / name).read_text(encoding="utf-8")
-            self.assertIn(expected, workflow, name)
-            self.assertIn("--from-block 49069936", workflow, name)
-            self.assertIn("--to-block 49069936", workflow, name)
+            self.assertIn("check_routed_v3_activation_readiness.py", workflow, name)
+            self.assertIn("--require-ready", workflow, name)
+            self.assertIn("scripts/test_shared_rpc.py", workflow, name)
+            self.assertNotIn("LOG_RPC_URL: https://mainnet.base.org", workflow, name)
+            self.assertNotIn('cast code "$ROUTER"', workflow, name)
+        dynamic = (SCRIPTS / "activate_routed_v3_dynamic.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("BOOTSTRAP_BLOCK = 49_069_936", dynamic)
+        self.assertNotIn(
+            "activation.Cast(cast.executable, activation.RPC_DEFAULT)",
+            dynamic,
+        )
 
     def test_resume_skips_planning_and_send_for_an_existing_canonical_contract(self) -> None:
         cast = mock.Mock()

@@ -9,10 +9,15 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = Path(__file__).resolve().parent / "bounty_inventory_guard.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+if str(SCRIPT.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT.parent))
+
+import bounty_inventory_guard as GUARD
 
 
 def run_guard(
@@ -92,6 +97,32 @@ def standing_meta_report(
 
 
 class BountyInventoryGuardTests(unittest.TestCase):
+    def test_rpc_probe_uses_failover_pool_and_redacts_credentials(self) -> None:
+        credentialed = "https://user:pass@rpc.example/v2/secret?api_key=hidden"
+        with mock.patch.object(
+            GUARD,
+            "resolve_inventory_base_rpc",
+            return_value=credentialed,
+        ), mock.patch.object(
+            GUARD,
+            "rpc_failover",
+            return_value="0xabc",
+        ) as failover:
+            result = GUARD.probe_inventory_rpc("https://preferred.example")
+
+        self.assertEqual(
+            result["base_rpc_preferred_endpoint"],
+            "https://rpc.example",
+        )
+        self.assertTrue(result["failover_enabled"])
+        self.assertEqual(result["eth_blockNumber"], "0xabc")
+        failover.assert_called_once_with(
+            "eth_blockNumber",
+            [],
+            preferred=credentialed,
+            max_retries=2,
+        )
+
     def test_default_standing_meta_floor_requires_five(self) -> None:
         passing = run_guard(
             "--fixture",

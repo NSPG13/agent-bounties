@@ -1,35 +1,58 @@
 #!/usr/bin/env python3
-"""Characterization tests for retry-safe Base RPC failover transport."""
+"""Tests for retry-safe Base RPC selection and read failover."""
 
 from __future__ import annotations
 
 import io
+import json
 import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-# Allow `python -m unittest scripts.test_shared_rpc` and direct file runs from repo root.
-_SCRIPTS = Path(__file__).resolve().parent
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
 from _shared.rpc import (
     BASE_CHAIN_ID,
     BASE_RPC_ENDPOINTS,
     RpcError,
     TransportError,
+    _redact_endpoint,
     _validate_chain,
+    is_retryable_transport_output,
     rpc,
     rpc_failover,
     select_working_base_rpc,
 )
 
 
+class Response(io.BytesIO):
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        super().__init__(body)
+        self.status = status
+
+    def getcode(self) -> int:
+        return self.status
+
+    def __enter__(self) -> "Response":
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        self.close()
+        return False
+
+
+def request_method(request: object) -> str:
+    return str(json.loads(getattr(request, "data").decode("utf-8"))["method"])
+
+
 class RpcTest(unittest.TestCase):
-    def test_result_and_rpc_error_contracts(self) -> None:
-        for body, expected, message in (
+    def test_single_endpoint_result_and_rpc_error_contracts(self) -> None:
+        cases = (
             (b'{"result":"0x2105"}', "0x2105", None),
             (
                 b'{"error":{"code":-1,"message":"bad"}}',
@@ -37,270 +60,202 @@ class RpcTest(unittest.TestCase):
                 'RPC eth_chainId failed: {"code": -1, "message": "bad"}',
             ),
             (b"{}", None, None),
-        ):
+        )
+        for body, expected, message in cases:
             with self.subTest(body=body), patch(
-                "_shared.rpc.urlopen", return_value=io.BytesIO(body)
+                "_shared.rpc.urlopen", return_value=Response(body)
             ):
                 if message:
-                    with self.assertRaises(RuntimeError) as raised:
-                        rpc("http://localhost", "eth_chainId", [], 7)
-                    self.assertEqual(str(raised.exception), message)
+                    with self.assertRaisesRegex(RpcError, message):
+                        rpc("https://base.local", "eth_chainId", [], 7)
                 else:
                     self.assertEqual(
-                        rpc("http://localhost", "eth_chainId", [], 7), expected
+                        rpc("https://base.local", "eth_chainId", [], 7),
+                        expected,
                     )
 
-    def test_transport_error_contract(self) -> None:
-        with patch(
-            "_shared.rpc.urlopen", side_effect=URLError("offline")
-        ), self.assertRaisesRegex(
-            RuntimeError, "^RPC transport failed for eth_call:"
-        ):
-            rpc("http://localhost", "eth_call", [], retry_delay=0)
-
-    def test_retries_transient_timeout_then_returns_result(self) -> None:
-        responses = [TimeoutError("slow"), io.BytesIO(b'{"result":"0x14a34"}')]
+    def test_single_endpoint_retries_timeout_then_recovers(self) -> None:
+        responses = [TimeoutError("slow"), Response(b'{"result":"0x14a34"}')]
         with patch("_shared.rpc.urlopen", side_effect=responses) as opened, patch(
             "_shared.rpc.time.sleep"
         ) as slept:
             self.assertEqual(
-                rpc("http://localhost", "eth_chainId", [], retry_delay=0.25),
+                rpc(
+                    "https://base.local",
+                    "eth_chainId",
+                    [],
+                    retry_delay=0.25,
+                ),
                 "0x14a34",
             )
         self.assertEqual(opened.call_count, 2)
         slept.assert_called_once_with(0.25)
 
-    def test_nonretryable_http_error_fails_immediately(self) -> None:
-        error = HTTPError("http://localhost", 401, "unauthorized", {}, None)
+    def test_single_endpoint_nonretryable_http_error_fails_immediately(self) -> None:
+        error = HTTPError("https://base.local", 401, "unauthorized", {}, None)
         with patch("_shared.rpc.urlopen", side_effect=error) as opened, self.assertRaisesRegex(
             RuntimeError, "^RPC transport failed for eth_call:"
         ):
-            rpc("http://localhost", "eth_call", [], retry_delay=0)
+            rpc("https://base.local", "eth_call", [], retry_delay=0)
         self.assertEqual(opened.call_count, 1)
 
-    def test_rejects_invalid_retry_policy(self) -> None:
+    def test_invalid_retry_policies_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "attempts must be positive"):
-            rpc("http://localhost", "eth_call", [], attempts=0)
+            rpc("https://base.local", "eth_call", [], attempts=0)
+        with self.assertRaisesRegex(ValueError, "max_retries must be positive"):
+            select_working_base_rpc(max_retries=0)
 
-    def test_chain_validation_accepts_8453(self) -> None:
+    def test_chain_validation_preserves_observed_chain(self) -> None:
         with patch(
             "_shared.rpc.urlopen",
-            return_value=io.BytesIO(b'{"result":"0x2105"}'),
+            return_value=Response(b'{"result":"0x2105"}'),
         ):
-            chain_id = _validate_chain("https://mainnet.base.org")
-        self.assertEqual(chain_id, 8453)
-
-    def test_chain_validation_rejects_wrong_chain(self) -> None:
-        """wrong chain: Ethereum mainnet eth_chainId is rejected offline."""
+            self.assertEqual(_validate_chain("https://base.local"), 8453)
         with patch(
             "_shared.rpc.urlopen",
-            return_value=io.BytesIO(b'{"result":"0x1"}'),
+            return_value=Response(b'{"result":"0x1"}'),
         ):
-            chain_id = _validate_chain("https://wrong.chain")
-        self.assertIsNone(chain_id)
+            self.assertEqual(_validate_chain("https://wrong.local"), 1)
 
-    def test_chain_validation_transport_failure_returns_none(self) -> None:
-        with patch("_shared.rpc.urlopen", side_effect=URLError("offline")):
-            chain_id = _validate_chain("https://dead.endpoint")
-        self.assertIsNone(chain_id)
+    def test_chain_validation_propagates_transport_error(self) -> None:
+        with patch(
+            "_shared.rpc.urlopen", side_effect=URLError("offline")
+        ), self.assertRaises(TransportError):
+            _validate_chain("https://dead.local")
 
-    def test_rpc_error_not_retried(self) -> None:
-        """JSON-RPC execution errors are preserved and never retried."""
-        call_count = [0]
+    def test_chain_rpc_error_never_calls_a_second_endpoint(self) -> None:
+        with patch(
+            "_shared.rpc.urlopen",
+            return_value=Response(
+                b'{"error":{"code":-32000,"message":"execution reverted"}}'
+            ),
+        ) as opened, self.assertRaisesRegex(RpcError, "execution reverted"):
+            select_working_base_rpc(
+                endpoints=("https://first.local", "https://second.local")
+            )
+        self.assertEqual(opened.call_count, 1)
 
-        def mock_open(*_args, **_kwargs):
-            call_count[0] += 1
-            return io.BytesIO(
+    def test_method_rpc_error_never_retries_or_fails_over(self) -> None:
+        calls = 0
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            nonlocal calls
+            calls += 1
+            if request_method(request) == "eth_chainId":
+                return Response(b'{"result":"0x2105"}')
+            return Response(
                 b'{"error":{"code":-32000,"message":"execution reverted"}}'
             )
 
-        with patch("_shared.rpc.urlopen", side_effect=mock_open):
-            # first call is eth_chainId validation
-            # second would be eth_call — but validation may consume first
-            with self.assertRaises((RpcError, RuntimeError)):
-                rpc_failover(
-                    "eth_call",
-                    [{"to": "0x00"}],
-                    endpoints=["https://base.local"],
-                    max_retries=3,
-                )
-        # Must not thrash on execution errors after a valid chain id path.
-        self.assertLessEqual(call_count[0], 4)
-
-    def test_rpc_error_after_valid_chain(self) -> None:
-        """rpc error must be preserved after chain validation (never retried)."""
-        call_count = [0]
-
-        def mock_open(*_args, **_kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return io.BytesIO(b'{"result":"0x2105"}')
-            return io.BytesIO(
-                b'{"error":{"code":-32000,"message":"execution reverted"}}'
+        with patch(
+            "_shared.rpc.urlopen", side_effect=open_response
+        ), self.assertRaisesRegex(RpcError, "execution reverted"):
+            rpc_failover(
+                "eth_call",
+                [{"to": "0x00"}],
+                endpoints=("https://first.local", "https://second.local"),
             )
+        self.assertEqual(calls, 2)
 
-        with patch("_shared.rpc.urlopen", side_effect=mock_open):
-            with self.assertRaises(RpcError) as ctx:
-                rpc_failover(
-                    "eth_call",
-                    [{"to": "0x00"}],
-                    endpoints=["https://base.local"],
-                    max_retries=3,
-                )
-        self.assertIn("execution reverted", str(ctx.exception))
-        self.assertEqual(call_count[0], 2)
-
-    def test_http_429_retried_then_exhaust(self) -> None:
-        """HTTP 429 is retried, then exhaust after max_retries."""
-
-        class MockResponse:
-            def getcode(self):
-                return 429
-
-            def read(self):
-                return b"{}"
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-        seq = {"n": 0}
-
-        def mock_open(*_args, **_kwargs):
-            seq["n"] += 1
-            if seq["n"] == 1:
-                return io.BytesIO(b'{"result":"0x2105"}')
-            return MockResponse()
-
-        with patch("_shared.rpc.urlopen", side_effect=mock_open), patch(
+    def test_selection_retries_two_429s_then_uses_same_endpoint(self) -> None:
+        responses = [
+            Response(b"{}", 429),
+            Response(b"{}", 429),
+            Response(b'{"result":"0x2105"}'),
+        ]
+        with patch("_shared.rpc.urlopen", side_effect=responses) as opened, patch(
             "_shared.rpc.time.sleep"
-        ):
-            with self.assertRaises(RuntimeError) as ctx:
-                rpc_failover(
-                    "eth_blockNumber",
-                    [],
-                    endpoints=["https://base.local"],
-                    max_retries=3,
-                )
-        self.assertIn("RPC failover exhausted", str(ctx.exception))
-        self.assertIn("429", str(ctx.exception))
-
-    def test_http_500_retried_and_recovered(self) -> None:
-        """HTTP 500 then recovery path."""
-        call_count = [0]
-
-        class FailResponse:
-            def getcode(self):
-                return 500
-
-            def read(self):
-                return b"{}"
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-        def mock_fn(*_args, **_kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return io.BytesIO(b'{"result":"0x2105"}')  # chain id ok
-            if call_count[0] == 2:
-                return FailResponse()
-            return io.BytesIO(b'{"result":"0xabc"}')
-
-        with patch("_shared.rpc.urlopen", side_effect=mock_fn), patch(
-            "_shared.rpc.time.sleep"
-        ):
-            result = rpc_failover(
-                "eth_blockNumber",
-                [],
-                endpoints=["https://base.local"],
+        ) as slept:
+            selected = select_working_base_rpc(
+                endpoints=("https://base.local",),
                 max_retries=3,
             )
-        self.assertEqual(result, "0xabc")
+        self.assertEqual(selected, "https://base.local")
+        self.assertEqual(opened.call_count, 3)
+        self.assertEqual(slept.call_count, 2)
 
-    def test_https_endpoints_used(self) -> None:
-        for endpoint in BASE_RPC_ENDPOINTS:
-            self.assertTrue(
-                endpoint.startswith("https://"),
-                f"Endpoint {endpoint} must use HTTPS",
-            )
-        self.assertEqual(BASE_CHAIN_ID, 8453)
+    def test_wrong_chain_is_skipped_before_requested_read(self) -> None:
+        """A wrong chain endpoint is rejected before the requested read reaches it."""
+        seen: list[tuple[str, str]] = []
 
-    def test_failover_skips_invalid_chain(self) -> None:
-        """Wrong-chain endpoint is skipped; next endpoint is used."""
-
-        def mock_fn(req, **_kwargs):
-            url = getattr(req, "full_url", str(req))
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
             if "wrong" in url:
-                return io.BytesIO(b'{"result":"0x1"}')
-            return io.BytesIO(b'{"result":"0x2105"}')
+                return Response(b'{"result":"0x1"}')
+            if method == "eth_chainId":
+                return Response(b'{"result":"0x2105"}')
+            return Response(b'{"result":"0xabc"}')
 
-        with patch("_shared.rpc.urlopen", side_effect=mock_fn):
+        with patch("_shared.rpc.urlopen", side_effect=open_response):
             result = rpc_failover(
                 "eth_blockNumber",
                 [],
-                endpoints=["https://wrong.chain", "https://base.local"],
+                endpoints=("https://wrong.local", "https://base.local"),
                 max_retries=1,
             )
-        self.assertEqual(result, "0x2105")
+        self.assertEqual(result, "0xabc")
+        self.assertNotIn(("https://wrong.local", "eth_blockNumber"), seen)
 
-    def test_endpoint_exhaust(self) -> None:
-        """exhaust all endpoints after transport failures."""
+    def test_failed_preferred_followup_read_uses_fallback(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if "preferred" in url:
+                return Response(b"{}", 429)
+            if method == "eth_chainId":
+                return Response(b'{"result":"0x2105"}')
+            return Response(b'{"result":"0xabc"}')
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            result = rpc_failover(
+                "eth_blockNumber",
+                [],
+                preferred="https://preferred.local",
+                endpoints=("https://fallback.local",),
+                max_retries=1,
+            )
+        self.assertEqual(result, "0xabc")
+        self.assertIn(("https://fallback.local", "eth_blockNumber"), seen)
+
+    def test_endpoint_exhaustion_is_explicit(self) -> None:
         with patch("_shared.rpc.urlopen", side_effect=URLError("offline")), patch(
             "_shared.rpc.time.sleep"
-        ):
-            with self.assertRaisesRegex(RuntimeError, "RPC failover exhausted"):
-                rpc_failover(
-                    "eth_chainId",
-                    [],
-                    endpoints=["https://a.local", "https://b.local"],
-                    max_retries=1,
-                )
-
-    def test_select_working_returns_fallback_not_failed_preferred(self) -> None:
-        """When preferred fails/429s, selection returns the endpoint that passed."""
-
-        class Fail429:
-            def getcode(self):
-                return 429
-
-            def read(self):
-                return b"{}"
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-        def mock_fn(req, **_kwargs):
-            url = getattr(req, "full_url", str(req))
-            if "preferred.fail" in url:
-                return Fail429()
-            return io.BytesIO(b'{"result":"0x2105"}')
-
-        with patch("_shared.rpc.urlopen", side_effect=mock_fn), patch(
-            "_shared.rpc.time.sleep"
-        ):
-            selected = select_working_base_rpc(
-                preferred="https://preferred.fail",
-                endpoints=["https://preferred.fail", "https://fallback.ok"],
-                max_retries=1,
-            )
-            # Follow-up read must use the selected fallback, not the preferred URL.
-            result = rpc_failover(
-                "eth_blockNumber",
+        ), self.assertRaisesRegex(RuntimeError, "RPC failover exhausted"):
+            rpc_failover(
+                "eth_chainId",
                 [],
-                endpoints=[selected],
+                endpoints=("https://a.local", "https://b.local"),
                 max_retries=1,
             )
-        self.assertEqual(selected, "https://fallback.ok")
-        self.assertEqual(result, "0x2105")
+
+    def test_endpoint_catalog_is_https_base_mainnet(self) -> None:
+        self.assertTrue(BASE_RPC_ENDPOINTS)
+        self.assertTrue(all(item.startswith("https://") for item in BASE_RPC_ENDPOINTS))
+        self.assertEqual(BASE_CHAIN_ID, 8453)
+
+    def test_endpoint_redaction_removes_all_secret_locations(self) -> None:
+        value = _redact_endpoint(
+            "https://user:pass@rpc.example/v2/secret?api_key=also-secret"
+        )
+        self.assertEqual(value, "https://rpc.example")
+        self.assertNotIn("secret", value)
+        self.assertNotIn("user", value)
+
+    def test_cast_transport_classifier_excludes_json_rpc_errors(self) -> None:
+        self.assertTrue(is_retryable_transport_output("HTTP error 429: over rate limit"))
+        self.assertTrue(is_retryable_transport_output("connection reset by peer"))
+        self.assertFalse(
+            is_retryable_transport_output(
+                "JSON-RPC error: execution reverted"
+            )
+        )
 
 
 if __name__ == "__main__":

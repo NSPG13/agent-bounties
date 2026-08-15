@@ -25,7 +25,11 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 # Inventory automation shares the Base RPC failover transport with readiness checks.
-from _shared.rpc import rpc_failover, select_working_base_rpc
+from _shared.rpc import (
+    redact_rpc_endpoint,
+    rpc_failover,
+    select_working_base_rpc,
+)
 
 NON_ACTIONABLE_LABELS = frozenset(
     {
@@ -211,11 +215,11 @@ def probe_inventory_rpc(preferred: str | None = None) -> dict[str, Any]:
         "eth_blockNumber",
         [],
         preferred=endpoint,
-        endpoints=[endpoint],
         max_retries=2,
     )
     return {
-        "base_rpc_endpoint": endpoint,
+        "base_rpc_preferred_endpoint": redact_rpc_endpoint(endpoint),
+        "failover_enabled": True,
         "eth_blockNumber": block,
         "chain_id": 8453,
     }

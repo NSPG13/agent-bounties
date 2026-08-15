@@ -71,6 +71,11 @@ def _redact_endpoint(endpoint: str) -> str:
         return "<redacted-endpoint>"
 
 
+def redact_rpc_endpoint(endpoint: str) -> str:
+    """Public credential-safe endpoint label for reports and logs."""
+    return _redact_endpoint(endpoint)
+
+
 def _is_https(endpoint: str) -> bool:
     try:
         parsed = urlsplit(endpoint)
