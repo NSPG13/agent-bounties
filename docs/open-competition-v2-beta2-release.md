@@ -7,25 +7,27 @@ A build, transaction hash, or deployment receipt does not clear a gate.
 ## Proof Stack
 
 Beta2 pins the immutable fork
-`NSPG13/sp1@f205ebada7f3bf35a71a28492ca8481aff3679ca`, identified as
-`agent-bounties-sp1-safe-v2`. The fork backports an injective Fiat-Shamir
+`NSPG13/sp1@caf43bb80fab6745347fda83bb428cb08a463f8d`, identified as
+`agent-bounties-sp1-safe-v4`. The fork backports an injective Fiat-Shamir
 transcript into native proving and recursion, and carries regressions for
 partial-chunk padding, upper squeeze bits, and high digest bits.
 
-Both metric Cargo roots patch `p3-challenger` and `p3-field` to that exact
-commit. `scripts/verify_sp1_patched_graph.py` rejects a registry fallback,
-revision drift, duplicate package, or release-identity mismatch. Dependency
+Both metric Cargo roots patch `p3-challenger` to that exact commit. They resolve
+exactly one `p3-field 0.4.3-succinct` from the canonical registry with its pinned
+checksum. `scripts/verify_sp1_patched_graph.py` rejects a challenger registry
+fallback, a field fork, revision drift, duplicate package, or release-identity mismatch. Dependency
 review permits only `GHSA-vj64-rjf3-w3v7` because GitHub matches the retained
 upstream package name and version without considering the patched source. The
 exact-source graph gate and transcript attack regressions must pass; any
 registry fallback or additional advisory still blocks the release.
 
 GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
-x86-64 Linux runner with at least 180 GiB physical memory and 288 GiB combined
-memory and swap builds both circuits and project-owned Groth16 and PLONK
-verifiers, then creates one Groth16 and two PLONK proofs on CPU. These limits
-come from a measured Groth16 address-space peak near 280 GiB; a 128 GiB runner
-and a 192 GiB runner without swap both exhausted memory. The contracts call
+x86-64 Linux runner with at least 250 GiB reported physical memory and 60 GiB
+free disk builds both circuits and project-owned Groth16 and PLONK verifiers,
+then creates one Groth16 and two PLONK proofs on CPU. The capacity floor comes
+from a measured Groth16 resident-memory peak near 247 GiB; 128 GiB and 192 GiB
+runners exhausted memory or entered release-invalid paging. Swap is emergency
+headroom and does not qualify a host. The contracts call
 the exact generated verifiers directly; no gateway, proxy, owner, or upgrade
 route exists.
 
@@ -109,7 +111,7 @@ gh workflow run open-competition-v2-beta2-release.yml --ref main \
   -f run_mainnet_canaries=true
 ```
 
-It requires a self-hosted runner with labels `linux`, `x64`, `ram-192gb`, and
+It requires a self-hosted runner with labels `linux`, `x64`, `ram-256gb`, and
 `open-competition-v2-prover`. Configure protected environments as follows:
 
 - `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL` and

@@ -46,6 +46,27 @@ class Sp1PatchedGraphTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "patched SP1 commit"):
             MODULE.verify(self.root)
 
+    def test_forked_field_fails_closed(self) -> None:
+        manifest = self.root / MODULE.EXPECTED_MANIFESTS[0]
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8")
+            + f'\np3-field = {{ git = "{MODULE.SP1_REPOSITORY}", rev = "{MODULE.SP1_COMMIT}" }}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "must not replace"):
+            MODULE.verify(self.root)
+
+    def test_field_checksum_drift_fails_closed(self) -> None:
+        lock = self.root / MODULE.EXPECTED_LOCKS[0]
+        lock.write_text(
+            lock.read_text(encoding="utf-8").replace(
+                MODULE.P3_FIELD_CHECKSUM, "0" * 64, 1
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            MODULE.verify(self.root)
+
     def test_manifest_revision_drift_fails_closed(self) -> None:
         manifest = self.root / MODULE.EXPECTED_MANIFESTS[0]
         manifest.write_text(
@@ -53,6 +74,17 @@ class Sp1PatchedGraphTests(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(ValueError, "must pin"):
+            MODULE.verify(self.root)
+
+    def test_rust_version_drift_fails_closed(self) -> None:
+        manifest = self.root / MODULE.EXPECTED_MANIFESTS[1]
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                f'rust-version = "{MODULE.RUST_MIN_VERSION}"', 'rust-version = "1.97"', 1
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "rust-version"):
             MODULE.verify(self.root)
 
     def test_release_identity_drift_fails_closed(self) -> None:

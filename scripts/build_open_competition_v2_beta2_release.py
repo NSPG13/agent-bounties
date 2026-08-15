@@ -21,7 +21,7 @@ CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
 OUT = CONTRACT_ROOT / "out"
 DEFAULT_DEPLOYER = "0x884834e884d6e93462655a2820140ad03e6747bc"
 VERIFIER_ASSETS_PATH = ROOT / "deployments/open-competition-v2-beta2-verifier-assets.json"
-SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v2"
+SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
 METRIC_IDENTITY_PATH = ROOT / "programs/public-vector-metric-v1/release-identity.json"
 METRIC_IDENTITY = json.loads(METRIC_IDENTITY_PATH.read_text(encoding="utf-8"))
 METRIC_REVIEW_EVIDENCE_HASH = keccak256(

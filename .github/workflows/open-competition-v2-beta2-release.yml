@@ -62,9 +62,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SP1_SAFE_COMMIT: f205ebada7f3bf35a71a28492ca8481aff3679ca
-  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v2
-  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v2:f205ebada7f3bf35a71a28492ca8481aff3679ca
+  SP1_SAFE_COMMIT: caf43bb80fab6745347fda83bb428cb08a463f8d
+  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v4
+  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v4:caf43bb80fab6745347fda83bb428cb08a463f8d
 
 jobs:
   deterministic-release:
@@ -139,7 +139,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: f205ebada7f3bf35a71a28492ca8481aff3679ca
+          ref: caf43bb80fab6745347fda83bb428cb08a463f8d
           path: .sp1-safe
       - name: Verify patched native and recursion transcript paths
         run: |
@@ -163,6 +163,15 @@ jobs:
           expected = (Path.cwd() / "vendor/p3-challenger-safe-v1/Cargo.toml").resolve()
           if actual != expected or packages[0]["source"] is not None:
               raise SystemExit(f"p3-challenger is not the vendored safe package: {actual}")
+          fields = [package for package in metadata["packages"] if package["name"] == "p3-field"]
+          if len(fields) != 1:
+              raise SystemExit(f"expected exactly one p3-field package, found {len(fields)}")
+          field = fields[0]
+          if (
+              field["version"] != "0.4.3-succinct"
+              or field["source"] != "registry+https://github.com/rust-lang/crates.io-index"
+          ):
+              raise SystemExit(f"p3-field is not the canonical registry package: {field}")
           PY
           cargo test --locked -p slop-bn254 --lib
           cargo check --locked -p sp1-recursion-circuit
@@ -184,7 +193,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: f205ebada7f3bf35a71a28492ca8481aff3679ca
+          ref: caf43bb80fab6745347fda83bb428cb08a463f8d
           path: .sp1-safe
       - name: Install patched cargo-prove
         run: |
@@ -195,7 +204,7 @@ jobs:
           "$HOME/.sp1/bin/sp1up" -v 6.4.0
           cargo install --locked --force --root "$HOME/.sp1" --path .sp1-safe/crates/cli
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'f205eba'
+          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'caf43bb'
       - name: Reproduce the metric release
         working-directory: programs/public-vector-metric-v1
         env:
@@ -244,7 +253,7 @@ jobs:
   build-release-assets:
     if: github.event_name == 'workflow_dispatch' && inputs.build_release_assets && github.ref == 'refs/heads/main'
     needs: [deterministic-release, static-analysis, patched-sp1-source, compare-metric-builds]
-    runs-on: [self-hosted, linux, x64, ram-192gb, open-competition-v2-prover]
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
     timeout-minutes: 720
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
@@ -259,7 +268,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: f205ebada7f3bf35a71a28492ca8481aff3679ca
+          ref: caf43bb80fab6745347fda83bb428cb08a463f8d
           path: .sp1-safe
       - name: Build patched circuits, verifier bytecode and CPU runner
         env:
@@ -365,7 +374,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_live_sepolia_rehearsal && github.ref == 'refs/heads/main'
     needs: build-release-assets
     environment: v2-beta2-sepolia
-    runs-on: [self-hosted, linux, x64, ram-192gb, open-competition-v2-prover]
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
@@ -468,7 +477,7 @@ jobs:
     if: always() && github.event_name == 'workflow_dispatch' && inputs.run_mainnet_canaries && github.ref == 'refs/heads/main' && needs.build-release-assets.result == 'success' && needs.deploy-mainnet.result == 'success'
     needs: [build-release-assets, deploy-mainnet]
     environment: v2-beta2-mainnet
-    runs-on: [self-hosted, linux, x64, ram-192gb, open-competition-v2-prover]
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a

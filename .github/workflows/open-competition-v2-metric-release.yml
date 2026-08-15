@@ -15,7 +15,7 @@ permissions:
 
 env:
   SP1_SAFE_REPOSITORY: https://github.com/NSPG13/sp1
-  SP1_SAFE_COMMIT: f205ebada7f3bf35a71a28492ca8481aff3679ca
+  SP1_SAFE_COMMIT: caf43bb80fab6745347fda83bb428cb08a463f8d
 
 jobs:
   isolated-build:
@@ -46,7 +46,7 @@ jobs:
           cargo install --locked --force --root "$HOME/.sp1" \
             --path /tmp/agent-bounties-sp1-safe/crates/cli
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'f205eba'
+          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'caf43bb'
       - name: Build and execute public vector guest
         working-directory: programs/public-vector-metric-v1
         env:

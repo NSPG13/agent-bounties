@@ -2118,7 +2118,7 @@ mod tests {
             source_commit: "11".repeat(20),
             repository_subject_hash: hash(13),
             sp1_source_commit: "22".repeat(20),
-            sp1_circuit_version: "agent-bounties-sp1-safe-v2".to_string(),
+            sp1_circuit_version: "agent-bounties-sp1-safe-v4".to_string(),
             factory_contract: "0x1111111111111111111111111111111111111111".to_string(),
             factory_runtime_code_hash: hash(14),
             implementation_contract: "0x2222222222222222222222222222222222222222".to_string(),
