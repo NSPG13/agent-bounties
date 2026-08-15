@@ -1,6 +1,6 @@
 module github.com/NSPG13/agent-bounties/tools/open-competition-v2-ceremony
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/consensys/gnark v0.0.0-20251217225531-cd7874155e26
@@ -17,9 +17,9 @@ require (
 	github.com/ronanh/intcomp v1.1.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )
 
 replace github.com/consensys/gnark => github.com/p4u/gnark v0.0.0-20251217225531-cd7874155e26
