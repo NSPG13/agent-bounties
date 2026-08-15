@@ -52,13 +52,34 @@ def normalized_key(value: str) -> bytes:
     return raw
 
 
-def derived_actor(root_key: bytes, source_commit: str, label: str) -> Any:
+def actor_derivation_id(source_commit: str, derivation_salt: str) -> str:
+    require(
+        1 <= len(derivation_salt) <= 200,
+        "actor derivation salt must contain 1 to 200 characters",
+    )
+    return keccak256(
+        b"agent-bounties/open-competition-v2-beta2/actor-derivation\0"
+        + NETWORK.encode()
+        + b"\0"
+        + bytes.fromhex(source_commit)
+        + b"\0"
+        + derivation_salt.encode()
+    )
+
+
+def derived_actor(
+    root_key: bytes, source_commit: str, label: str, derivation_salt: str = "local"
+) -> Any:
+    actor_derivation_id(source_commit, derivation_salt)
     material = keccak_bytes(
         b"agent-bounties/open-competition-v2-beta2/actor\0"
         + NETWORK.encode()
         + b"\0"
         + root_key
         + bytes.fromhex(source_commit)
+        + b"\0"
+        + derivation_salt.encode()
+        + b"\0"
         + label.encode()
     )
     require(int.from_bytes(material, "big") != 0, "derived an invalid actor key")
@@ -255,11 +276,13 @@ def wait_safe(url: str, receipts: list[dict[str, Any]], timeout: int) -> dict[st
     raise SepoliaRehearsalError(f"{NETWORK} safe-block reconciliation timed out")
 
 
-def actors_for(raw_key: bytes, bundle: dict[str, Any]) -> tuple[Any, Any, Any]:
+def actors_for(
+    raw_key: bytes, bundle: dict[str, Any], derivation_salt: str
+) -> tuple[Any, Any, Any]:
     return (
         Account.from_key(raw_key),
-        derived_actor(raw_key, bundle["source_commit"], "solver-a"),
-        derived_actor(raw_key, bundle["source_commit"], "solver-b"),
+        derived_actor(raw_key, bundle["source_commit"], "solver-a", derivation_salt),
+        derived_actor(raw_key, bundle["source_commit"], "solver-b", derivation_salt),
     )
 
 
@@ -270,7 +293,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     client = SignedRpc(args.rpc_url)
     bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
     components = verify_components(client.url, bundle)
-    signer, solver_a, solver_b = actors_for(raw_key, bundle)
+    signer, solver_a, solver_b = actors_for(raw_key, bundle, args.actor_derivation_salt)
     context = rehearsal.prepare_context(
         client.url,
         bundle,
@@ -307,6 +330,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "solver_a": solver_a.address.lower(),
             "solver_b": solver_b.address.lower(),
         },
+        "actor_derivation_id": actor_derivation_id(
+            bundle["source_commit"], args.actor_derivation_salt
+        ),
         "proof_context_hash": context["context_hash"],
         "funds_moved": False,
         "evidence_boundary": "Factory preparation and proof-input binding only. No competition was funded or settled.",
@@ -324,7 +350,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
     components = verify_components(client.url, bundle)
 
-    signer, solver_a, solver_b = actors_for(raw_key, bundle)
+    signer, solver_a, solver_b = actors_for(raw_key, bundle, args.actor_derivation_salt)
     actors = {"deployer": signer.address.lower(), "solver_a": solver_a.address.lower(), "solver_b": solver_b.address.lower()}
     token = bundle["settlement_token"]
     factory = bundle["factory"]["address"]
@@ -548,6 +574,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "safe_block": safe,
         "components": components,
         "actors": actors,
+        "actor_derivation_id": actor_derivation_id(
+            bundle["source_commit"], args.actor_derivation_salt
+        ),
         "transactions": {name: {"transaction_hash": receipt_hash(value), "block_number": int(value["blockNumber"], 16), "block_hash": value["blockHash"].lower()} for name, value in receipts.items()},
         "proofs": {name: proof_summary(value) for name, value in proofs.items()},
         "groth16_first_proven": (
@@ -584,6 +613,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--rpc-url")
     parser.add_argument("--private-key-env", default="BASE_KEEPER_PRIVATE_KEY")
+    parser.add_argument("--actor-derivation-salt", default="local")
     parser.add_argument("--actor-eth-wei", type=int, default=100_000_000_000_000)
     parser.add_argument("--safe-timeout", type=int, default=1_800)
     parser.add_argument("--output", type=Path, required=True)

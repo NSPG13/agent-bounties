@@ -20,6 +20,21 @@ class SepoliaRehearsalTests(unittest.TestCase):
         self.assertEqual(first.address, second.address)
         self.assertNotEqual(first.address, other.address)
 
+    def test_actor_derivation_is_unique_per_release_attempt(self):
+        key = bytes.fromhex("11" * 32)
+        commit = "22" * 20
+        first = MODULE.derived_actor(key, commit, "solver-a", "run-1:attempt-1")
+        retry = MODULE.derived_actor(key, commit, "solver-a", "run-1:attempt-2")
+        self.assertNotEqual(first.address, retry.address)
+        self.assertNotEqual(
+            MODULE.actor_derivation_id(commit, "run-1:attempt-1"),
+            MODULE.actor_derivation_id(commit, "run-1:attempt-2"),
+        )
+
+    def test_actor_derivation_rejects_empty_salt(self):
+        with self.assertRaises(MODULE.SepoliaRehearsalError):
+            MODULE.actor_derivation_id("22" * 20, "")
+
     def test_proof_summary_drops_sensitive_bulk_bytes(self):
         value = {
             "mode": "groth16",

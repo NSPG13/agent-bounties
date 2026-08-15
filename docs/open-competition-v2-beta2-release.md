@@ -83,8 +83,11 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
 7. Record owner deployment approval against the exact repository subject.
 8. In protected environment `v2-beta2-mainnet`, deploy immutable verifiers and
    factory while public creation remains disabled.
-9. Run the two 0.25 USDC canaries, x402 success/failure refund, fresh-wallet
-   flow, and primary/shadow indexer comparison.
+9. Run the two 0.25 USDC canaries, x402 success/failure refund, and
+   primary/shadow indexer comparison. Derive a unique solver wallet for the
+   release run and attempt, fund its bounded gas and USDC budgets, and require
+   that exact wallet to pay, authorize relay, and settle without manual state
+   correction before clearing the fresh-wallet gate.
 10. Record owner activation approval, then enable the exact runtime manifest.
 
 The source of truth is

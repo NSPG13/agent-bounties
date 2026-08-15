@@ -227,6 +227,7 @@ def main() -> int:
     parser.add_argument("--hosted-workers", action="store_true")
     parser.add_argument("--expect-refund", action="store_true")
     parser.add_argument("--private-key-env", default="BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY")
+    parser.add_argument("--actor-derivation-salt", default="local")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=1_800)
     args = parser.parse_args()
@@ -241,7 +242,19 @@ def main() -> int:
     byo = rehearsal.get("byo_proof_submission")
     require(isinstance(byo, dict) and byo.get("transaction_hash"), "BYO proof evidence is missing")
     root_key = sepolia.normalized_key(os.environ.get(args.private_key_env, ""))
-    solver = sepolia.derived_actor(root_key, rehearsal["source_commit"], "solver-a")
+    derivation_id = sepolia.actor_derivation_id(
+        rehearsal["source_commit"], args.actor_derivation_salt
+    )
+    require(
+        rehearsal.get("actor_derivation_id") == derivation_id,
+        "actor derivation identity differs from the prepared canary",
+    )
+    solver = sepolia.derived_actor(
+        root_key,
+        rehearsal["source_commit"],
+        "solver-a",
+        args.actor_derivation_salt,
+    )
     require(solver.address.lower() == spec["solver"], "derived solver differs from canary")
     require(
         args.hosted_workers != bool(args.worker_binary),
@@ -295,6 +308,7 @@ def main() -> int:
             "source_commit": rehearsal["source_commit"],
             "competition": spec["competition"],
             "solver": spec["solver"],
+            "actor_derivation_id": derivation_id,
             "generated_agent_wallet": True,
             "manual_state_corrections": 0,
             "quote_id": quote["quote"]["quote_id"],
@@ -377,6 +391,7 @@ def main() -> int:
         "source_commit": rehearsal["source_commit"],
         "competition": spec["competition"],
         "solver": spec["solver"],
+        "actor_derivation_id": derivation_id,
         "generated_agent_wallet": True,
         "manual_state_corrections": 0,
         "quote_id": quote["quote"]["quote_id"],

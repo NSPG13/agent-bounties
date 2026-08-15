@@ -110,6 +110,7 @@ jobs:
             scripts.test_rebind_open_competition_v2_sp1_wrapper \
             scripts.test_verify_open_competition_v2_gnark_image \
             scripts.test_verify_open_competition_v2_groth16_ceremony \
+            scripts.test_verify_open_competition_v2_fresh_agent_flow \
             scripts.test_verify_open_competition_v2_plonk_setup \
             scripts.test_verify_open_competition_v2_wrap_template \
             scripts.test_verify_sp1_patched_graph -v
@@ -575,6 +576,7 @@ jobs:
           set -euo pipefail
           export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
+          export BETA2_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:sepolia"
           test -n "$BASE_SEPOLIA_RPC_URL" && test -n "$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
           python -m pip install -r scripts/requirements-wallet.txt
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
@@ -588,6 +590,7 @@ jobs:
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepare-proof-fixtures target/sepolia-proof-inputs \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --resolved-bundle-output target/sepolia.json \
             --resolved-runtime-output target/sepolia.runtime.json \
             --output target/sepolia-preparation.json
@@ -599,6 +602,7 @@ jobs:
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepared-proof-dir target/sepolia-proof-inputs \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --proof-evidence-dir target/sepolia-proofs --prepare-x402-canary \
             --output target/sepolia-rehearsal.json
           export BASE_SEPOLIA_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON="$(jq -c . target/sepolia.runtime.json)"
@@ -649,6 +653,7 @@ jobs:
             --api http://127.0.0.1:8787 --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --rehearsal target/sepolia-rehearsal.json --worker-binary target/release/worker \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --output target/sepolia-x402-rehearsal.json
           cp target/release-assets/release-gates.json target/release-gates.json
           evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -967,6 +972,7 @@ jobs:
           set -euo pipefail
           export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
+          export BETA2_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:mainnet"
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
           test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete" && test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
           python -m pip install -r scripts/requirements-wallet.txt
@@ -976,6 +982,7 @@ jobs:
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --prepare-proof-fixtures target/mainnet-proof-inputs \
             --resolved-bundle-output target/mainnet-canary-bundle.json \
             --output target/mainnet-canary-preparation.json --skip-expiry-refund
@@ -987,6 +994,7 @@ jobs:
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle target/mainnet-canary-bundle.json --rpc-url "$BASE_MAINNET_RPC_URL" \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --prepared-proof-dir target/mainnet-proof-inputs \
             --proof-evidence-dir target/mainnet-proofs \
             --output target/mainnet-canaries.json --skip-expiry-refund \
@@ -1036,6 +1044,7 @@ jobs:
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
             --worker-binary target/release/worker --expect-refund \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --output target/mainnet-x402-refund.json
           cleanup
           trap - EXIT
@@ -1043,7 +1052,12 @@ jobs:
             --network base-mainnet --api https://api.agentbounties.app \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA2_ACTOR_DERIVATION_SALT" \
             --output target/mainnet-x402-success.json
+          python scripts/verify_open_competition_v2_fresh_agent_flow.py \
+            --rehearsal target/mainnet-canaries.json \
+            --x402-success target/mainnet-x402-success.json \
+            --output target/mainnet-fresh-agent-flow.json
           python - <<'PY'
           import json
           canaries = json.load(open("target/mainnet-canaries.json"))
@@ -1071,11 +1085,15 @@ jobs:
           python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
             --gate mainnet_plonk_canary_complete --evidence target/mainnet-canaries.json \
             --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
-          for gate in mainnet_canary_accounting_reconciled x402_success_and_refund_canaries_complete fresh_agent_wallet_flow_complete; do
+          for gate in mainnet_canary_accounting_reconciled x402_success_and_refund_canaries_complete; do
             python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
               --gate "$gate" --evidence target/mainnet-accounting.json \
               --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
           done
+          python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
+            --gate fresh_agent_wallet_flow_complete \
+            --evidence target/mainnet-fresh-agent-flow.json \
+            --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: open-competition-v2-beta2-mainnet-canaries-${{ github.sha }}
@@ -1086,6 +1104,7 @@ jobs:
             target/mainnet-x402-success.json
             target/mainnet-x402-refund.json
             target/mainnet-accounting.json
+            target/mainnet-fresh-agent-flow.json
             target/mainnet-proofs/*.json
             target/release-gates.json
             target/mainnet-canary-api.log
