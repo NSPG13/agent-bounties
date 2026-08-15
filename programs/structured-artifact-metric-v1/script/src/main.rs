@@ -1,5 +1,6 @@
 use competition_metric_core::{
     execute_structured_artifact_program, StructuredArtifactProgramInput,
+    StructuredArtifactProgramWireInput,
 };
 use sha2::{Digest, Sha256};
 use sp1_sdk::{
@@ -46,7 +47,7 @@ async fn main() {
             .expect("fixture JSON does not match StructuredArtifactProgramInput");
     let expected = execute_structured_artifact_program(&input).expect("fixture is invalid");
     let mut stdin = SP1Stdin::new();
-    stdin.write(&input);
+    stdin.write(&StructuredArtifactProgramWireInput::from(&input));
 
     let client = ProverClient::from_env().await;
     let pk = client.setup(ELF).await.expect("SP1 setup failed");
@@ -59,6 +60,9 @@ async fn main() {
                 .execute(ELF, stdin)
                 .await
                 .expect("SP1 execution failed");
+            if public_values.as_slice() != expected.journal {
+                eprintln!("structured artifact guest execution report: {report:#?}");
+            }
             assert_eq!(public_values.as_slice(), expected.journal);
             println!(
                 "{}",

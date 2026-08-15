@@ -182,6 +182,161 @@ pub struct StructuredArtifactProgramInput {
     pub requirements: Vec<ArtifactRequirement>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArtifactRequirementWire {
+    Utf8Contains {
+        needle: String,
+        minimum_occurrences: u32,
+        weight: u32,
+    },
+    Utf8Excludes {
+        needle: String,
+        weight: u32,
+    },
+    MaximumBytes {
+        maximum: u32,
+        weight: u32,
+    },
+    JsonValid {
+        weight: u32,
+    },
+    JsonPointerExists {
+        pointer: String,
+        weight: u32,
+    },
+    JsonPointerStringEquals {
+        pointer: String,
+        expected: String,
+        weight: u32,
+    },
+    JsonArrayMinimumLength {
+        pointer: String,
+        minimum: u32,
+        weight: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructuredArtifactProgramWireInput {
+    pub scope: JournalScopeV2,
+    pub threshold: u128,
+    pub artifact: Vec<u8>,
+    pub requirements: Vec<ArtifactRequirementWire>,
+}
+
+impl From<&StructuredArtifactProgramInput> for StructuredArtifactProgramWireInput {
+    fn from(input: &StructuredArtifactProgramInput) -> Self {
+        Self {
+            scope: input.scope.clone(),
+            threshold: input.threshold,
+            artifact: input.artifact.clone(),
+            requirements: input.requirements.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<StructuredArtifactProgramWireInput> for StructuredArtifactProgramInput {
+    fn from(input: StructuredArtifactProgramWireInput) -> Self {
+        Self {
+            scope: input.scope,
+            threshold: input.threshold,
+            artifact: input.artifact,
+            requirements: input.requirements.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&ArtifactRequirement> for ArtifactRequirementWire {
+    fn from(requirement: &ArtifactRequirement) -> Self {
+        match requirement {
+            ArtifactRequirement::Utf8Contains {
+                needle,
+                minimum_occurrences,
+                weight,
+            } => Self::Utf8Contains {
+                needle: needle.clone(),
+                minimum_occurrences: *minimum_occurrences,
+                weight: *weight,
+            },
+            ArtifactRequirement::Utf8Excludes { needle, weight } => Self::Utf8Excludes {
+                needle: needle.clone(),
+                weight: *weight,
+            },
+            ArtifactRequirement::MaximumBytes { maximum, weight } => Self::MaximumBytes {
+                maximum: *maximum,
+                weight: *weight,
+            },
+            ArtifactRequirement::JsonValid { weight } => Self::JsonValid { weight: *weight },
+            ArtifactRequirement::JsonPointerExists { pointer, weight } => Self::JsonPointerExists {
+                pointer: pointer.clone(),
+                weight: *weight,
+            },
+            ArtifactRequirement::JsonPointerStringEquals {
+                pointer,
+                expected,
+                weight,
+            } => Self::JsonPointerStringEquals {
+                pointer: pointer.clone(),
+                expected: expected.clone(),
+                weight: *weight,
+            },
+            ArtifactRequirement::JsonArrayMinimumLength {
+                pointer,
+                minimum,
+                weight,
+            } => Self::JsonArrayMinimumLength {
+                pointer: pointer.clone(),
+                minimum: *minimum,
+                weight: *weight,
+            },
+        }
+    }
+}
+
+impl From<ArtifactRequirementWire> for ArtifactRequirement {
+    fn from(requirement: ArtifactRequirementWire) -> Self {
+        match requirement {
+            ArtifactRequirementWire::Utf8Contains {
+                needle,
+                minimum_occurrences,
+                weight,
+            } => Self::Utf8Contains {
+                needle,
+                minimum_occurrences,
+                weight,
+            },
+            ArtifactRequirementWire::Utf8Excludes { needle, weight } => {
+                Self::Utf8Excludes { needle, weight }
+            }
+            ArtifactRequirementWire::MaximumBytes { maximum, weight } => {
+                Self::MaximumBytes { maximum, weight }
+            }
+            ArtifactRequirementWire::JsonValid { weight } => Self::JsonValid { weight },
+            ArtifactRequirementWire::JsonPointerExists { pointer, weight } => {
+                Self::JsonPointerExists { pointer, weight }
+            }
+            ArtifactRequirementWire::JsonPointerStringEquals {
+                pointer,
+                expected,
+                weight,
+            } => Self::JsonPointerStringEquals {
+                pointer,
+                expected,
+                weight,
+            },
+            ArtifactRequirementWire::JsonArrayMinimumLength {
+                pointer,
+                minimum,
+                weight,
+            } => Self::JsonArrayMinimumLength {
+                pointer,
+                minimum,
+                weight,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructuredArtifactProgramOutput {
     pub passed: bool,
@@ -945,6 +1100,13 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn structured_artifact_guest_wire_round_trips_every_requirement() {
+        let input = artifact_fixture();
+        let wire = StructuredArtifactProgramWireInput::from(&input);
+        assert_eq!(StructuredArtifactProgramInput::from(wire), input);
     }
 
     #[test]
