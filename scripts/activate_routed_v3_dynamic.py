@@ -57,8 +57,7 @@ def discover_deployment(cast: activation.Cast) -> dict[str, Any]:
     router_code = cast.code(ROUTER)
     if router_code in {"0x", "0x0"}:
         raise activation.ActivationError("durable verifier router runtime code is missing")
-    log_cast = activation.Cast(cast.executable, activation.RPC_DEFAULT)
-    logs_raw = log_cast.rpc(
+    logs_raw = cast.rpc(
         "logs",
         "--address",
         ROUTER,
@@ -97,7 +96,11 @@ def discover_deployment(cast: activation.Cast) -> dict[str, Any]:
         6,
         "router policy record",
     )
-    if factory != activation.FACTORY or registrar != activation.KEEPER or guardian != activation.OWNER:
+    if (
+        factory != activation.FACTORY
+        or registrar != activation.durable.KEEPER
+        or guardian != activation.OWNER
+    ):
         raise activation.ActivationError("router authority or factory binding mismatch")
     if delay != ACTIVATION_DELAY or not bootstrap_used or not active:
         raise activation.ActivationError("router bootstrap or activation-delay invariant mismatch")
