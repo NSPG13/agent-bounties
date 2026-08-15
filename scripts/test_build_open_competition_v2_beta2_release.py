@@ -27,12 +27,34 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
                 "runtime_code": "0x" + runtime.hex(),
                 "runtime_code_hash": MODULE.keccak256(runtime),
             }
+        setup_systems = {}
+        for index, name, model in (
+            (1, "groth16", "mpc_phase2"),
+            (2, "plonk", "public_mpc_kzg_srs"),
+        ):
+            setup_systems[name] = {
+                "security_model": model,
+                "verification_passed": True,
+                "verifier_hash": systems[name]["verifier_hash"],
+                "constraint_system_sha256": f"{index:02x}" * 32,
+                "proving_key_sha256": "44" * 32,
+                "verifying_key_sha256": "55" * 32,
+                "transcript_sha256": "66" * 32,
+                "verification_evidence_sha256": "77" * 32,
+                "contribution_count": 3,
+            }
         return {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-verifier-assets-v1",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-verifier-assets-v2",
             "sp1_source_commit": MODULE.SP1_COMMIT,
             "circuit_version": MODULE.SP1_SAFE_CIRCUIT_VERSION,
             "gpu_proving_enabled": False,
             "asset_state": "self_verified",
+            "setup_provenance": {
+                "state": "trusted_mpc",
+                "mainnet_eligible": True,
+                "manifest_sha256": "0x" + "44" * 32,
+                "systems": setup_systems,
+            },
             "proof_systems": systems,
             "proof_evidence": {
                 "groth16_self_verified": "0x" + "11" * 32,
@@ -48,6 +70,9 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "agent-bounties/open-competition-v2-metric-release-identity-v1",
         )
         self.assertEqual(identity["rust_version"], "1.96.1")
+        self.assertEqual(identity["sp1_guest_rust_version"], "1.94.0-dev")
+        self.assertEqual(MODULE.HOST_RUST_VERSION, "1.96.1")
+        self.assertEqual(MODULE.SP1_GUEST_RUST_VERSION, "1.94.0-dev")
         self.assertEqual(identity["status"], "reproduced_beta2")
         self.assertEqual(MODULE.PROGRAM_VKEY, identity["program_vkey"])
         self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
@@ -60,8 +85,45 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertFalse(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
+        self.assertFalse(gates["sepolia_broker_rehearsal_ready"])
         self.assertFalse(gates["graduation_complete"])
         self.assertRegex(gates["beta_risk_hash"], r"^0x[0-9a-f]{64}$")
+
+    def test_mainnet_rejects_test_only_setup(self) -> None:
+        assets = self.verifier_assets()
+        assets["setup_provenance"] = {
+            "state": "test_only_unsafe",
+            "mainnet_eligible": False,
+            "manifest_sha256": None,
+            "systems": {
+                "groth16": {"security_model": "single_party_local_setup"},
+                "plonk": {"security_model": "unverified_setup_provenance"},
+            },
+        }
+        gates = MODULE.load_gates(
+            MODULE.ROOT / "deployments/open-competition-v2-beta2-release-gates.json"
+        )
+        preflight = {
+            "number": 1,
+            "hash": "0x" + "22" * 32,
+            "timestamp": 1,
+            "deployer_nonce": 1,
+            "deployer_eth_wei": MODULE.MIN_DEPLOYER_ETH_WEI,
+            "deployer_usdc_base_units": 0,
+            "dependency_runtime_hashes": {},
+        }
+        common = dict(
+            deployer=MODULE.DEFAULT_DEPLOYER,
+            source_commit="a" * 40,
+            repository_subject=self.subject_hash,
+            preflight=preflight,
+            gates=gates,
+            verifier_assets=assets,
+            allow_pending_metric_identity=True,
+        )
+        MODULE.build_bundle(network_name="base-sepolia", **common)
+        with self.assertRaisesRegex(RuntimeError, "trusted setup provenance"):
+            MODULE.build_bundle(network_name="base-mainnet", **common)
 
     def test_release_stages_do_not_require_graduation_before_beta(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-staged-gates.json"
@@ -72,7 +134,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "uri": "https://example.test/evidence",
         }
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
@@ -107,6 +169,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["mainnet_signing_allowed"])
+        self.assertEqual(bundle["sp1"]["host_rust_version"], "1.96.1")
+        self.assertEqual(bundle["sp1"]["guest_rust_version"], "1.94.0-dev")
         self.assertFalse(bundle["activation"]["broker_canary_enabled"])
         self.assertFalse(bundle["activation"]["public_creation_enabled"])
         self.assertFalse(bundle["activation"]["default_protocol_enabled"])
@@ -172,12 +236,61 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertTrue(bundle["activation"]["default_protocol_enabled"])
 
+    def test_sepolia_broker_rehearsal_breaks_no_mainnet_gate(self) -> None:
+        path = MODULE.ROOT / "target/tmp/open-competition-v2-sepolia-broker-gates.json"
+        evidence = {
+            "source_commit": "a" * 40,
+            "subject_hash": self.subject_hash,
+            "evidence_hash": "0x" + "11" * 32,
+            "uri": "https://example.test/evidence",
+        }
+        value = {
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
+            "protocol_version": "agent-bounties/open-competition-v2-beta2",
+            "beta_risk_preimage": "risk",
+            "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
+            "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
+        }
+        for name in MODULE.SEPOLIA_BROKER_REHEARSAL_GATE_NAMES:
+            value["gates"][name] = True
+            value["evidence"][name] = evidence
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(__import__("json").dumps(value), encoding="utf-8")
+        gates = MODULE.load_gates(path, self.subject_hash)
+        self.assertTrue(gates["sepolia_broker_rehearsal_ready"])
+        self.assertFalse(gates["prelaunch_complete"])
+        preflight = {
+            "number": 1,
+            "hash": "0x" + "22" * 32,
+            "timestamp": 1,
+            "deployer_nonce": 1,
+            "deployer_eth_wei": MODULE.MIN_DEPLOYER_ETH_WEI,
+            "deployer_usdc_base_units": 0,
+            "dependency_runtime_hashes": {},
+        }
+        common = dict(
+            deployer=MODULE.DEFAULT_DEPLOYER,
+            source_commit="a" * 40,
+            repository_subject=self.subject_hash,
+            preflight=preflight,
+            gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
+        )
+        sepolia = MODULE.build_bundle(network_name="base-sepolia", **common)
+        mainnet = MODULE.build_bundle(network_name="base-mainnet", **common)
+        self.assertTrue(sepolia["activation"]["sepolia_broker_rehearsal_enabled"])
+        self.assertFalse(mainnet["activation"]["sepolia_broker_rehearsal_enabled"])
+        with mock.patch.dict(MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}):
+            self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
+            self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])
+
     def test_completed_gate_requires_hash_bound_evidence(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-unevidenced-gate.json"
         gates = {name: False for name in MODULE.REQUIRED_GATE_NAMES}
         gates["repository_gate_complete"] = True
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": gates,
@@ -191,7 +304,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     def test_completed_gate_must_target_exact_repository_subject(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-wrong-subject.json"
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: name == "repository_gate_complete" for name in MODULE.REQUIRED_GATE_NAMES},

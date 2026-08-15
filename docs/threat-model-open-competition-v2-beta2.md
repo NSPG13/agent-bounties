@@ -23,6 +23,8 @@ decide payment eligibility.
 | Participant-count denial | No participant array or participant-dependent loop. |
 | Malformed journal | Fixed-length ABI decode and exact field comparison. |
 | Unsafe verifier replacement | Adapter pins verifier address, runtime code hash, verifier hash, and proof selector; no proxy or owner exists. |
+| Groth16 toxic-waste compromise | Mainnet requires a hash-chained Phase 1 and Phase 2 MPC with at least two ephemeral contributions in each phase and post-contribution beacons; local `groth16.Setup` assets are test-only. |
+| PLONK SRS forgery | The release pins the Aztec Ignition public MPC SRS transcript, derived keys, verification evidence, and exact verifier bytecode. |
 | Missing verifier | Permissionless cancellation and contributor refunds restore liveness. |
 | Transcript malleability | Every downstream prover graph pins the injective safe fork; native and recursion regressions run in CI. |
 | Fee-on-transfer or false-return token | Base release pins USDC and checks exact balance changes and safe-call results. |
@@ -41,6 +43,10 @@ decide payment eligibility.
 - The patched SP1 fork is project-maintained. A source pin prevents silent
   drift, but a defect requires a new circuit version, vkeys, verifiers, and
   protocol version.
+- The initial Groth16 ceremony is internally orchestrated. Ephemeral isolated
+  contributors and post-contribution beacons prevent retained randomness under
+  the documented process, but this Beta does not claim independent public
+  ceremony participants.
 - Immutable verifier failure cannot be repaired in place. Competitions cancel
   into permissionless refunds.
 - Base sequencer order selects first-proven winners. Transaction ordering and

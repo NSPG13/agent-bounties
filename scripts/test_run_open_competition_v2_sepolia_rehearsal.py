@@ -20,6 +20,21 @@ class SepoliaRehearsalTests(unittest.TestCase):
         self.assertEqual(first.address, second.address)
         self.assertNotEqual(first.address, other.address)
 
+    def test_actor_derivation_is_unique_per_release_attempt(self):
+        key = bytes.fromhex("11" * 32)
+        commit = "22" * 20
+        first = MODULE.derived_actor(key, commit, "solver-a", "run-1:attempt-1")
+        retry = MODULE.derived_actor(key, commit, "solver-a", "run-1:attempt-2")
+        self.assertNotEqual(first.address, retry.address)
+        self.assertNotEqual(
+            MODULE.actor_derivation_id(commit, "run-1:attempt-1"),
+            MODULE.actor_derivation_id(commit, "run-1:attempt-2"),
+        )
+
+    def test_actor_derivation_rejects_empty_salt(self):
+        with self.assertRaises(MODULE.SepoliaRehearsalError):
+            MODULE.actor_derivation_id("22" * 20, "")
+
     def test_proof_summary_drops_sensitive_bulk_bytes(self):
         value = {
             "mode": "groth16",
@@ -37,6 +52,37 @@ class SepoliaRehearsalTests(unittest.TestCase):
         for value in ("", "0x1", "0x" + "00" * 32):
             with self.assertRaises(MODULE.SepoliaRehearsalError):
                 MODULE.normalized_key(value)
+
+    def test_x402_canary_spec_binds_artifact_to_the_journal(self):
+        fixture = {
+            "scope": {
+                "chain_id": 84532,
+                "competition": [17] * 20,
+                "bounty_id": [34] * 32,
+                "solver": [51] * 20,
+                "solver_nonce": 3,
+                "proof_system": [68] * 32,
+                "program_vkey": [85] * 32,
+                "source_hash": [102] * 32,
+                "elf_hash": [119] * 32,
+                "execution_policy_hash": [136] * 32,
+                "settlement_policy_hash": [153] * 32,
+                "beta_risk_hash": [170] * 32,
+            },
+            "mode": "maximize_exact_matches",
+            "threshold": 1,
+            "vectors": [{"expected": 2, "observed": 2, "weight": 1}],
+        }
+        spec = MODULE.x402_canary_spec(
+            fixture,
+            "0x" + "11" * 20,
+            "0x" + "22" * 32,
+            "0x" + "33" * 20,
+            3,
+        )
+        journal = MODULE.rehearsal.expected_journal(fixture)
+        self.assertEqual(spec["artifact_hash"], "0x" + journal[192:224].hex())
+        self.assertEqual(spec["metric"]["threshold"], "1")
 
 
 if __name__ == "__main__":

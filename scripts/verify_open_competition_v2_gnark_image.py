@@ -42,29 +42,39 @@ def verify(
     if any(fragment not in image_source for fragment in required_image_fragments):
         raise ValueError("gnark image omits a compiler or source-identity pin")
     required_workflow_fragments = (
-        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v1:87c57583c77a15fa6dd191a1c6ff6947564e4ef8",
+        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v4:caf43bb80fab6745347fda83bb428cb08a463f8d",
+        "OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v4-trusted",
         "rm -rf .sp1-safe/crates/prover/build",
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",
         'docker image inspect "$SP1_GNARK_IMAGE"',
-        "bash scripts/build_open_competition_v2_circuits.sh .sp1-safe",
+        'sha256sum "$SP1_GNARK_IMAGE" /gnark-cli',
+        "target/gnark-cli.sha256",
+        'test -f "$trusted_root/trusted-setup.json"',
+        'cp -a "$trusted_root/$system" ".sp1-safe/crates/prover/build/$system"',
+        '--trusted-setup-manifest "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"',
     )
     if any(fragment not in release_source for fragment in required_workflow_fragments):
-        raise ValueError("release workflow does not build and inspect the local gnark image")
+        raise ValueError(
+            "release workflow does not build the local gnark image and consume verified setup assets"
+        )
+    if "bash scripts/build_open_competition_v2_circuits.sh .sp1-safe" in release_source:
+        raise ValueError("release workflow reintroduces the unsafe single-party setup route")
     if "ghcr.io/succinctlabs/sp1-gnark" in release_source:
         raise ValueError("release workflow must not use the upstream mutable gnark image route")
     required_builder_fragments = (
-        "minimum_memory_kib=$((180 * 1024 * 1024))",
-        "minimum_combined_kib=$((288 * 1024 * 1024))",
+        "minimum_memory_kib=$((250 * 1024 * 1024))",
+        "minimum_disk_kib=$((60 * 1024 * 1024))",
+        "swap does not qualify",
         'source_root="$(cd "$source_root" && pwd)"',
         '--build-dir="$build_dir/groth16"',
         '--build-dir="$build_dir/plonk"',
     )
     if any(fragment not in circuit_source for fragment in required_builder_fragments):
-        raise ValueError("circuit builder must pass absolute Groth16 and PLONK mount paths")
+        raise ValueError("circuit builder omits a capacity or absolute-path gate")
     return {
         "schema": "agent-bounties/open-competition-v2-gnark-image-check-v1",
-        "status": "digest_pinned_local_build",
+        "status": "digest_pinned_local_build_with_trusted_setup",
         "base_images": list(EXPECTED_BASES),
         "dockerfile": str(dockerfile.relative_to(ROOT)).replace("\\", "/"),
     }

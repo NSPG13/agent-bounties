@@ -7,37 +7,59 @@ A build, transaction hash, or deployment receipt does not clear a gate.
 ## Proof Stack
 
 Beta2 pins the immutable fork
-`NSPG13/sp1@87c57583c77a15fa6dd191a1c6ff6947564e4ef8`, identified as
-`agent-bounties-sp1-safe-v1`. The fork backports an injective Fiat-Shamir
+`NSPG13/sp1@caf43bb80fab6745347fda83bb428cb08a463f8d`, identified as
+`agent-bounties-sp1-safe-v4`. The fork backports an injective Fiat-Shamir
 transcript into native proving and recursion, and carries regressions for
 partial-chunk padding, upper squeeze bits, and high digest bits.
 
-Both metric Cargo roots patch `p3-challenger` and `p3-field` to that exact
-commit. `scripts/verify_sp1_patched_graph.py` rejects a registry fallback,
-revision drift, duplicate package, or release-identity mismatch. Dependency
+Both metric Cargo roots patch `p3-challenger` to that exact commit. They resolve
+exactly one `p3-field 0.4.3-succinct` from the canonical registry with its pinned
+checksum. `scripts/verify_sp1_patched_graph.py` rejects a challenger registry
+fallback, a field fork, revision drift, duplicate package, or release-identity mismatch. Dependency
 review permits only `GHSA-vj64-rjf3-w3v7` because GitHub matches the retained
 upstream package name and version without considering the patched source. The
 exact-source graph gate and transcript attack regressions must pass; any
 registry fallback or additional advisory still blocks the release.
 
 GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
-x86-64 Linux runner with at least 180 GiB physical memory and 288 GiB combined
-memory and swap builds both circuits and project-owned Groth16 and PLONK
-verifiers, then creates one Groth16 and two PLONK proofs on CPU. These limits
-come from a measured Groth16 address-space peak near 280 GiB; a 128 GiB runner
-and a 192 GiB runner without swap both exhausted memory. The contracts call
+x86-64 Linux runner with at least 256 GiB physical memory consumes the frozen
+trusted-setup bundle, builds project-owned Groth16 and PLONK verifier bytecode,
+then creates one Groth16 and two
+PLONK proofs on CPU. This limit comes from a measured Groth16 resident-memory
+peak near 247 GiB; 128 GiB and 192 GiB runners exhausted memory or entered
+release-invalid paging. Swap is emergency headroom, not qualifying capacity.
+The contracts call
 the exact generated verifiers directly; no gateway, proxy, owner, or upgrade
 route exists.
 
+Mainnet Groth16 keys never come from `groth16.Setup`. They are finalized from
+the exact frozen R1CS with gnark's BN254 Phase 1 and circuit-specific Phase 2
+MPC. At least two ephemeral contributions are required in each phase, each
+contribution is hash chained, and post-contribution beacons are recorded.
+`tools/open-competition-v2-ceremony` verifies both complete chains and exports
+the proving key in the dump format consumed by the SP1 CPU prover. Sepolia may
+use explicitly labeled single-party test assets, but the release builder
+rejects them for Base mainnet.
+
+PLONK uses the Aztec Ignition public MPC KZG SRS downloaded and verified by the
+pinned SP1 builder. Its circuit, proving key, verifying key, SRS transcript,
+contribution evidence, and generated verifier are frozen with the Groth16
+assets. `scripts/build_open_competition_v2_trusted_setup_manifest.py` binds both
+systems into one manifest. The verifier-asset builder rehashes every referenced
+file and mainnet generation fails unless `trusted_setup_provenance_complete` is
+recorded for the exact repository subject.
+
 The official SP1 installer is used only to install the compatible zkVM compiler
-toolchain. CI verifies its pinned installer hash, installs SP1 6.4.0, then
+toolchain. The host builder is Rust 1.96.1 and the SP1 guest compiler reports
+Rust 1.94.0-dev; both values are bound into the release identity and runtime
+manifest. CI verifies the pinned installer hash, installs SP1 6.4.0, then
 overwrites `cargo-prove` with a binary compiled from the safe fork.
 
 The gnark CLI is not pulled from Succinct's circuit-version registry. The
 release builds `ops/open-competition-v2-gnark-safe.Dockerfile` locally from the
 exact safe-fork checkout, pins all three base-image digests and the Rust
 toolchain, verifies source-commit and circuit-version labels, and publishes the
-resulting image inspection record with the proof bundle. The Dockerfile is
+resulting image inspection plus the `/gnark-cli` SHA-256 with the proof bundle. The Dockerfile is
 passed over stdin so the exact SP1 checkout remains the only image build
 context, and stale generated circuit output is removed before every attempt.
 The release circuit wrapper resolves the SP1 checkout before invoking either
@@ -51,8 +73,8 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
    builders.
 3. Commit the reproduced identity as `reproduced_beta2`; stale Beta1 values may
    never be reused.
-4. On the capacity-gated CPU runner, build circuits, verifier bytecode, and
-   three real self-verified proofs.
+4. On the capacity-gated CPU runner, verify the frozen trusted-setup bundle,
+   build verifier bytecode, and create three real self-verified proofs.
 5. Replay the exact verifier and factory deployment plus both winner modes on a
    fresh Base-mainnet fork.
 6. In protected environment `v2-beta2-sepolia`, deploy the same bytecode and
@@ -61,8 +83,11 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
 7. Record owner deployment approval against the exact repository subject.
 8. In protected environment `v2-beta2-mainnet`, deploy immutable verifiers and
    factory while public creation remains disabled.
-9. Run the two 0.25 USDC canaries, x402 success/failure refund, fresh-wallet
-   flow, and primary/shadow indexer comparison.
+9. Run the two 0.25 USDC canaries, x402 success/failure refund, and
+   primary/shadow indexer comparison. Derive a unique solver wallet for the
+   release run and attempt, fund its bounded gas and USDC budgets, and require
+   that exact wallet to pay, authorize relay, and settle without manual state
+   correction before clearing the fresh-wallet gate.
 10. Record owner activation approval, then enable the exact runtime manifest.
 
 The source of truth is
@@ -81,6 +106,10 @@ Verifier generation has two explicit stages:
 - `self_verified` contains hashes of all three CPU proof records. Only this
   state can produce a deployable release bundle.
 
+Both stages require trusted setup for a Base-mainnet bundle. Test-only setup is
+accepted only when `--allow-test-only-setup` is explicit, and the resulting
+asset record is permanently marked `mainnet_eligible: false`.
+
 `programs/public-vector-metric-v1/release-identity.json` is
 `reproduced_beta2`: two isolated builders reproduced the pinned ELF and vkey.
 Production bundle generation rejects any other state.
@@ -91,6 +120,7 @@ Production bundle generation rejects any other state.
 python scripts/verify_sp1_patched_graph.py
 $env:PYTHONPATH = "$PWD\scripts"
 python -m unittest scripts.test_build_open_competition_v2_beta2_release `
+  scripts.test_build_open_competition_v2_trusted_setup_manifest `
   scripts.test_build_open_competition_v2_verifier_assets -v
 $env:FOUNDRY_INVARIANT_RUNS = "10000"
 $env:FOUNDRY_INVARIANT_DEPTH = "50"
@@ -109,8 +139,10 @@ gh workflow run open-competition-v2-beta2-release.yml --ref main \
   -f run_mainnet_canaries=true
 ```
 
-It requires a self-hosted runner with labels `linux`, `x64`, `ram-192gb`, and
-`open-competition-v2-prover`. Configure protected environments as follows:
+It requires a self-hosted runner with labels `linux`, `x64`, `ram-256gb`, and
+`open-competition-v2-prover`, plus the verified setup bundle at
+`/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted`. Configure protected
+environments as follows:
 
 - `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL` and
   `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`;

@@ -16,7 +16,7 @@ SPEC.loader.exec_module(MODULE)
 class GnarkImageTests(unittest.TestCase):
     def test_current_image_build_is_exact(self) -> None:
         result = MODULE.verify()
-        self.assertEqual(result["status"], "digest_pinned_local_build")
+        self.assertEqual(result["status"], "digest_pinned_local_build_with_trusted_setup")
 
     def test_unpinned_base_fails_closed(self) -> None:
         source = MODULE.DOCKERFILE.read_text(encoding="utf-8").replace(
@@ -37,6 +37,15 @@ class GnarkImageTests(unittest.TestCase):
             path.write_text(source, encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "absolute"):
                 MODULE.verify(MODULE.DOCKERFILE, MODULE.WORKFLOW, path)
+
+    def test_release_rejects_single_party_setup_route(self) -> None:
+        source = MODULE.WORKFLOW.read_text(encoding="utf-8")
+        source += "\n# bash scripts/build_open_competition_v2_circuits.sh .sp1-safe\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.yml"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "single-party setup"):
+                MODULE.verify(MODULE.DOCKERFILE, path, MODULE.CIRCUIT_BUILDER)
 
 
 if __name__ == "__main__":

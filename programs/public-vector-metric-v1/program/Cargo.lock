@@ -475,8 +475,9 @@ dependencies = [
 [[package]]
 name = "p3-challenger"
 version = "0.4.3-succinct"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
+ "num-bigint 0.4.8",
  "p3-field",
  "p3-maybe-rayon",
  "p3-symmetric",
@@ -501,7 +502,8 @@ dependencies = [
 [[package]]
 name = "p3-field"
 version = "0.4.3-succinct"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3dc75969ca3ac847f43e632ab979d59ff7a68f9eac8dbf8edcbba47fc2e1d3aa"
 dependencies = [
  "itertools 0.12.1",
  "num-bigint 0.4.8",
@@ -770,7 +772,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "slop-algebra"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "itertools 0.14.0",
  "p3-field",
@@ -780,7 +782,7 @@ dependencies = [
 [[package]]
 name = "slop-bn254"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "ff",
  "p3-bn254-fr",
@@ -794,7 +796,7 @@ dependencies = [
 [[package]]
 name = "slop-challenger"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "futures",
  "p3-challenger",
@@ -806,7 +808,7 @@ dependencies = [
 [[package]]
 name = "slop-koala-bear"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "lazy_static",
  "p3-koala-bear",
@@ -820,7 +822,7 @@ dependencies = [
 [[package]]
 name = "slop-poseidon2"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "p3-poseidon2",
 ]
@@ -828,7 +830,7 @@ dependencies = [
 [[package]]
 name = "slop-primitives"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "slop-algebra",
 ]
@@ -836,7 +838,7 @@ dependencies = [
 [[package]]
 name = "slop-symmetric"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "p3-symmetric",
 ]
@@ -844,7 +846,7 @@ dependencies = [
 [[package]]
 name = "sp1-lib"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "bincode",
  "serde",
@@ -854,7 +856,7 @@ dependencies = [
 [[package]]
 name = "sp1-primitives"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "bincode",
  "blake3",
@@ -877,7 +879,7 @@ dependencies = [
 [[package]]
 name = "sp1-zkvm"
 version = "6.4.0"
-source = "git+https://github.com/NSPG13/sp1?rev=87c57583c77a15fa6dd191a1c6ff6947564e4ef8#87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
+source = "git+https://github.com/NSPG13/sp1?rev=caf43bb80fab6745347fda83bb428cb08a463f8d#caf43bb80fab6745347fda83bb428cb08a463f8d"
 dependencies = [
  "cfg-if",
  "critical-section",

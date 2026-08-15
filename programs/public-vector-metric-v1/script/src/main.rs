@@ -24,8 +24,8 @@ async fn main() {
             "{}",
             serde_json::json!({
                 "schema_version": "agent-bounties/open-competition-v2-prover-capabilities-v1",
-                "sp1_version": "6.4.0-agent-bounties-sp1-safe-v1",
-                "sp1_commit": "87c57583c77a15fa6dd191a1c6ff6947564e4ef8",
+                "sp1_version": "6.4.0-agent-bounties-sp1-safe-v4",
+                "sp1_commit": "caf43bb80fab6745347fda83bb428cb08a463f8d",
                 "gpu_proving_enabled": false,
                 "backends": backends,
                 "proof_systems": ["groth16", "plonk"]

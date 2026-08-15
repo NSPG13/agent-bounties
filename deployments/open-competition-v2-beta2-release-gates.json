@@ -1,12 +1,13 @@
 {
-  "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+  "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
   "protocol_version": "agent-bounties/open-competition-v2-beta2",
-  "beta_risk_preimage": "agent-bounties/open-competition-v2-beta2/risk/2026-08-11",
+  "beta_risk_preimage": "agent-bounties/open-competition-v2-beta2/risk/2026-08-15-trusted-setup-v1",
   "gates": {
     "repository_gate_complete": false,
     "patched_sp1_dependency_graph_clean": false,
     "isolated_sp1_builds_match": false,
     "advisory_regression_vectors_complete": false,
+    "trusted_setup_provenance_complete": false,
     "real_groth16_plonk_proofs_self_verified": false,
     "static_analysis_triaged": false,
     "base_sepolia_groth16_first_proven_complete": false,
@@ -43,6 +44,7 @@
     "patched_sp1_dependency_graph_clean": null,
     "isolated_sp1_builds_match": null,
     "advisory_regression_vectors_complete": null,
+    "trusted_setup_provenance_complete": null,
     "real_groth16_plonk_proofs_self_verified": null,
     "static_analysis_triaged": null,
     "base_sepolia_groth16_first_proven_complete": null,

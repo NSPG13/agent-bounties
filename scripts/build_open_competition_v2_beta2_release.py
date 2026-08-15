@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -20,8 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
 OUT = CONTRACT_ROOT / "out"
 DEFAULT_DEPLOYER = "0x884834e884d6e93462655a2820140ad03e6747bc"
+PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta2"
 VERIFIER_ASSETS_PATH = ROOT / "deployments/open-competition-v2-beta2-verifier-assets.json"
-SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v1"
+SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
 METRIC_IDENTITY_PATH = ROOT / "programs/public-vector-metric-v1/release-identity.json"
 METRIC_IDENTITY = json.loads(METRIC_IDENTITY_PATH.read_text(encoding="utf-8"))
 METRIC_REVIEW_EVIDENCE_HASH = keccak256(
@@ -37,6 +37,8 @@ PROOF_SYSTEM_GROTH16 = keccak256(b"sp1-groth16")
 PROOF_SYSTEM_PLONK = keccak256(b"sp1-plonk")
 SP1_COMMIT = METRIC_IDENTITY["sp1_commit"]
 SP1_VERSION = METRIC_IDENTITY["sp1_version"]
+HOST_RUST_VERSION = METRIC_IDENTITY["rust_version"]
+SP1_GUEST_RUST_VERSION = METRIC_IDENTITY["sp1_guest_rust_version"]
 SOLC_VERSION = "0.8.26+commit.8a97fa7a"
 SOLC_IMAGE = (
     "docker.io/ethereum/solc@"
@@ -49,6 +51,7 @@ PRELAUNCH_GATE_NAMES = (
     "patched_sp1_dependency_graph_clean",
     "isolated_sp1_builds_match",
     "advisory_regression_vectors_complete",
+    "trusted_setup_provenance_complete",
     "real_groth16_plonk_proofs_self_verified",
     "static_analysis_triaged",
     "base_sepolia_groth16_first_proven_complete",
@@ -75,6 +78,16 @@ PUBLIC_BETA_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
 BROKER_CANARY_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
     "mainnet_verifiers_factory_deployed",
     "production_indexers_agree",
+)
+SEPOLIA_BROKER_REHEARSAL_GATE_NAMES = (
+    "repository_gate_complete",
+    "patched_sp1_dependency_graph_clean",
+    "isolated_sp1_builds_match",
+    "advisory_regression_vectors_complete",
+    "real_groth16_plonk_proofs_self_verified",
+    "static_analysis_triaged",
+    "base_mainnet_fork_exact_replay_complete",
+    "critical_and_high_findings_resolved",
 )
 GRADUATION_GATE_NAMES = PUBLIC_BETA_GATE_NAMES + (
     "independent_reviews_complete",
@@ -240,12 +253,52 @@ def load_verifier_assets(
     path: Path = VERIFIER_ASSETS_PATH, *, require_proof_evidence: bool = True
 ) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-verifier-assets-v1":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-verifier-assets-v2":
         raise ValueError("verifier asset schema mismatch")
     if value.get("circuit_version") != SP1_SAFE_CIRCUIT_VERSION:
         raise ValueError("verifier assets target another circuit version")
     if value.get("gpu_proving_enabled") is not False:
         raise ValueError("Beta2 verifier assets must come from the CPU-only release path")
+    setup = value.get("setup_provenance")
+    if not isinstance(setup, dict):
+        raise ValueError("verifier assets lack setup provenance")
+    setup_state = setup.get("state")
+    if setup_state not in {"trusted_mpc", "test_only_unsafe"}:
+        raise ValueError("verifier setup provenance state is invalid")
+    if setup.get("mainnet_eligible") is not (setup_state == "trusted_mpc"):
+        raise ValueError("verifier setup mainnet eligibility is inconsistent")
+    manifest_hash = setup.get("manifest_sha256")
+    if setup_state == "trusted_mpc":
+        if not re.fullmatch(r"0x[0-9a-f]{64}", str(manifest_hash)):
+            raise ValueError("trusted setup manifest hash is invalid")
+        setup_systems = setup.get("systems")
+        expected_models = {
+            "groth16": "mpc_phase2",
+            "plonk": "public_mpc_kzg_srs",
+        }
+        if not isinstance(setup_systems, dict) or set(setup_systems) != set(expected_models):
+            raise ValueError("trusted setup proof-system inventory mismatch")
+        for name, model in expected_models.items():
+            item = setup_systems[name]
+            if not isinstance(item, dict) or item.get("security_model") != model:
+                raise ValueError(f"{name} trusted setup security model is invalid")
+            if item.get("verification_passed") is not True:
+                raise ValueError(f"{name} trusted setup verification is incomplete")
+            if item.get("verifier_hash") != value.get("proof_systems", {}).get(name, {}).get("verifier_hash"):
+                raise ValueError(f"{name} trusted setup verifier binding mismatch")
+            for field in (
+                "constraint_system_sha256",
+                "proving_key_sha256",
+                "verifying_key_sha256",
+                "transcript_sha256",
+                "verification_evidence_sha256",
+            ):
+                if not re.fullmatch(r"[0-9a-f]{64}", str(item.get(field, ""))):
+                    raise ValueError(f"{name} trusted setup {field} is invalid")
+            if int(item.get("contribution_count", 0)) < 2:
+                raise ValueError(f"{name} trusted setup lacks multi-party contributions")
+    elif manifest_hash is not None:
+        raise ValueError("test-only setup cannot claim a trusted manifest")
     source_commit = value.get("sp1_source_commit", "")
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise ValueError("verifier assets require an exact patched SP1 source commit")
@@ -288,7 +341,7 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v3":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v4":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
         raise ValueError("release gate inventory mismatch")
@@ -325,10 +378,27 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
         gates[name] for name in PUBLIC_BETA_GATE_NAMES
     )
     value["broker_canary_ready"] = all(gates[name] for name in BROKER_CANARY_GATE_NAMES)
+    value["sepolia_broker_rehearsal_ready"] = all(
+        gates[name] for name in SEPOLIA_BROKER_REHEARSAL_GATE_NAMES
+    )
     value["graduation_complete"] = all(
         gates[name] for name in GRADUATION_GATE_NAMES
     )
     return value
+
+
+def activation_state(network_name: str, gates: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "mainnet_signing_allowed": gates["prelaunch_complete"],
+        "broker_canary_enabled": gates["broker_canary_ready"],
+        "sepolia_broker_rehearsal_enabled": (
+            network_name == "base-sepolia"
+            and gates["sepolia_broker_rehearsal_ready"]
+        ),
+        "public_creation_enabled": gates["public_beta_launch_complete"],
+        "default_protocol_enabled": gates["graduation_complete"],
+        "synthetic_canaries_excluded_from_adoption_metrics": True,
+    }
 
 
 def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> dict[str, Any]:
@@ -372,6 +442,7 @@ def build_bundle(
     gates: dict[str, Any],
     verifier_assets: dict[str, Any],
     allow_pending_metric_identity: bool = False,
+    allow_test_only_setup: bool = False,
 ) -> dict[str, Any]:
     network = NETWORKS[network_name]
     deployer = deployer.lower()
@@ -394,6 +465,13 @@ def build_bundle(
     adapter_artifact = artifact("Sp1VerifierAdapterV2Beta2", "Sp1VerifierAdapterV2Beta2")
     bounty_artifact = artifact("OpenCompetitionBountyV2Beta2", "OpenCompetitionBountyV2Beta2")
     systems = verifier_assets["proof_systems"]
+    trusted_setup = verifier_assets["setup_provenance"]
+    if (
+        network_name == "base-mainnet"
+        and trusted_setup["mainnet_eligible"] is not True
+        and not allow_test_only_setup
+    ):
+        raise RuntimeError("Base mainnet requires hash-bound trusted setup provenance")
     if verifier_assets["sp1_source_commit"] != SP1_COMMIT:
         raise ValueError("metric identity and verifier assets use different SP1 source commits")
     groth16_verifier_hash = systems["groth16"]["verifier_hash"]
@@ -479,7 +557,7 @@ def build_bundle(
     source_hashes = {relative: normalized_sha256(ROOT / relative) for relative in SOURCE_FILES}
     return {
         "schema_version": "agent-bounties/open-competition-v2-beta2-release-bundle-v1",
-        "protocol_version": "agent-bounties/open-competition-v2-beta2",
+        "protocol_version": PROTOCOL_VERSION,
         "network": network_name,
         "chain_id": network["chain_id"],
         "source_commit": source_commit,
@@ -500,10 +578,13 @@ def build_bundle(
         "sp1": {
             "version": SP1_VERSION,
             "commit": SP1_COMMIT,
+            "host_rust_version": HOST_RUST_VERSION,
+            "guest_rust_version": SP1_GUEST_RUST_VERSION,
             "patched_source_commit": verifier_assets["sp1_source_commit"],
             "circuit_version": verifier_assets["circuit_version"],
             "gpu_proving_enabled": False,
             "proof_evidence": verifier_assets["proof_evidence"],
+            "setup_provenance": trusted_setup,
         },
         "metric_profile": {
             "profile_id": "public-vector-metric-v1",
@@ -574,13 +655,7 @@ def build_bundle(
             "deployer_is_not_required_to_fund": True,
             "funding_source": "any external Base USDC wallet that acknowledges the exact Beta2 risk hash",
         },
-        "activation": {
-            "mainnet_signing_allowed": gates["prelaunch_complete"],
-            "broker_canary_enabled": gates["broker_canary_ready"],
-            "public_creation_enabled": gates["public_beta_launch_complete"],
-            "default_protocol_enabled": gates["graduation_complete"],
-            "synthetic_canaries_excluded_from_adoption_metrics": True,
-        },
+        "activation": activation_state(network_name, gates),
         "deployment_transactions": [
             {
                 "component": "groth16_verifier",
@@ -623,6 +698,9 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
     metric_ready = METRIC_IDENTITY.get("status") == "reproduced_beta2"
     public_beta = bool(bundle["activation"]["public_creation_enabled"])
     broker_canary = bool(bundle["activation"]["broker_canary_enabled"])
+    sepolia_broker_rehearsal = bool(
+        bundle["activation"].get("sepolia_broker_rehearsal_enabled", False)
+    )
     return {
         "protocol_version": bundle["protocol_version"],
         "network": bundle["network"],
@@ -630,6 +708,8 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
         "repository_subject_hash": bundle["repository_subject"]["hash"],
         "sp1_source_commit": bundle["sp1"]["patched_source_commit"],
         "sp1_circuit_version": bundle["sp1"]["circuit_version"],
+        "sp1_host_rust_version": bundle["sp1"]["host_rust_version"],
+        "sp1_guest_rust_version": bundle["sp1"]["guest_rust_version"],
         "factory_contract": bundle["factory"]["address"],
         "factory_runtime_code_hash": bundle["factory"]["runtime_code_hash"],
         "implementation_contract": bundle["implementation"]["address"],
@@ -649,7 +729,9 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
         "release_hash": bundle["source_tree_hash"],
         "beta_risk_hash": bundle["risk"]["hash"],
         "public_creation_enabled": public_beta,
-        "proof_broker_enabled": broker_canary and metric_ready,
+        "proof_broker_enabled": (
+            broker_canary or sepolia_broker_rehearsal
+        ) and metric_ready,
         "metric_programs": [
             {
                 "profile_id": bundle["metric_profile"]["profile_id"],
