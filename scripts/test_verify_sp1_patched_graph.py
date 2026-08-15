@@ -21,7 +21,7 @@ class Sp1PatchedGraphTests(unittest.TestCase):
         for relative in (
             *MODULE.EXPECTED_LOCKS,
             *MODULE.EXPECTED_MANIFESTS,
-            MODULE.IDENTITY_PATH,
+            *MODULE.IDENTITY_PATHS,
         ):
             destination = self.root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -90,15 +90,15 @@ class Sp1PatchedGraphTests(unittest.TestCase):
             MODULE.verify(self.root)
 
     def test_release_identity_drift_fails_closed(self) -> None:
-        identity_path = self.root / MODULE.IDENTITY_PATH
+        identity_path = self.root / MODULE.IDENTITY_PATHS[0]
         identity = json.loads(identity_path.read_text(encoding="utf-8"))
         identity["sp1_commit"] = "0" * 40
         identity_path.write_text(json.dumps(identity), encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "release identity"):
+        with self.assertRaisesRegex(ValueError, "does not pin the patched SP1 commit"):
             MODULE.verify(self.root)
 
     def test_guest_toolchain_identity_drift_fails_closed(self) -> None:
-        identity_path = self.root / MODULE.IDENTITY_PATH
+        identity_path = self.root / MODULE.IDENTITY_PATHS[0]
         identity = json.loads(identity_path.read_text(encoding="utf-8"))
         identity["sp1_guest_rust_version"] = "1.95.0-dev"
         identity_path.write_text(json.dumps(identity), encoding="utf-8")
