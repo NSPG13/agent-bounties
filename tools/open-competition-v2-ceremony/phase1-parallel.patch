@@ -1,0 +1,91 @@
+diff --git a/backend/groth16/bn254/mpcsetup/phase1.go b/backend/groth16/bn254/mpcsetup/phase1.go
+--- a/backend/groth16/bn254/mpcsetup/phase1.go
++++ b/backend/groth16/bn254/mpcsetup/phase1.go
+@@ -17,6 +17,7 @@ import (
+ 	curve "github.com/consensys/gnark-crypto/ecc/bn254"
+ 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+ 	"github.com/consensys/gnark-crypto/ecc/bn254/mpcsetup"
++	"github.com/consensys/gnark/internal/utils"
+ )
+ 
+ // SrsCommons are the circuit-independent components of the Groth16 SRS,
+@@ -105,37 +106,48 @@ func (c *SrsCommons) update(tauUpdate, alphaUpdate, betaUpdate *fr.Element) {
+ 	c.G1.BetaTau[0].ScalarMultiplication(&c.G1.BetaTau[0], &coeff)
+ 	c.G2.Beta.ScalarMultiplication(&c.G2.Beta, &coeff)
+ 
+-	// update all values from 1 to N-1
+-	tauPowI := *tauUpdate
+-	for i := 1; i < len(c.G2.Tau); i++ {
+-		tauPowI.BigInt(&coeff)
+-
+-		c.G1.Tau[i].ScalarMultiplication(&c.G1.Tau[i], &coeff)
+-		c.G2.Tau[i].ScalarMultiplication(&c.G2.Tau[i], &coeff)
+-
+-		var tauPowIScaled fr.Element
+-
+-		// let α₁ = α₀.α', τ₁ = τ₀.τ'
+-		// then α₁τ₁ⁱ = (α₀τ₀ⁱ)α'τ'ⁱ
+-		tauPowIScaled.Mul(&tauPowI, alphaUpdate)
+-		tauPowIScaled.BigInt(&coeff)
+-		c.G1.AlphaTau[i].ScalarMultiplication(&c.G1.AlphaTau[i], &coeff)
+-
+-		// similarly for β
+-		tauPowIScaled.Mul(&tauPowI, betaUpdate)
+-		tauPowIScaled.BigInt(&coeff)
+-		c.G1.BetaTau[i].ScalarMultiplication(&c.G1.BetaTau[i], &coeff)
+-
+-		tauPowI.Mul(&tauPowI, tauUpdate)
+-	}
+-
+-	// update the rest of [τⁱ]₁
+-	for i := len(c.G2.Tau); i < len(c.G1.Tau); i++ {
+-		tauPowI.BigInt(&coeff)
+-		c.G1.Tau[i].ScalarMultiplication(&c.G1.Tau[i], &coeff)
+-
+-		tauPowI.Mul(&tauPowI, tauUpdate)
+-	}
++	// Each point update is independent once the first tau power in a worker's
++	// range is known. Compute that power once, then advance it locally.
++	utils.Parallelize(len(c.G2.Tau)-1, func(start, end int) {
++		first := start + 1
++		var exponent, localCoeff big.Int
++		exponent.SetUint64(uint64(first))
++		var tauPowI fr.Element
++		tauPowI.Exp(*tauUpdate, &exponent)
++
++		for offset := start; offset < end; offset++ {
++			i := offset + 1
++			tauPowI.BigInt(&localCoeff)
++			c.G1.Tau[i].ScalarMultiplication(&c.G1.Tau[i], &localCoeff)
++			c.G2.Tau[i].ScalarMultiplication(&c.G2.Tau[i], &localCoeff)
++
++			var tauPowIScaled fr.Element
++			tauPowIScaled.Mul(&tauPowI, alphaUpdate)
++			tauPowIScaled.BigInt(&localCoeff)
++			c.G1.AlphaTau[i].ScalarMultiplication(&c.G1.AlphaTau[i], &localCoeff)
++
++			tauPowIScaled.Mul(&tauPowI, betaUpdate)
++			tauPowIScaled.BigInt(&localCoeff)
++			c.G1.BetaTau[i].ScalarMultiplication(&c.G1.BetaTau[i], &localCoeff)
++			tauPowI.Mul(&tauPowI, tauUpdate)
++		}
++	})
++
++	remaining := len(c.G1.Tau) - len(c.G2.Tau)
++	utils.Parallelize(remaining, func(start, end int) {
++		first := len(c.G2.Tau) + start
++		var exponent, localCoeff big.Int
++		exponent.SetUint64(uint64(first))
++		var tauPowI fr.Element
++		tauPowI.Exp(*tauUpdate, &exponent)
++
++		for offset := start; offset < end; offset++ {
++			i := len(c.G2.Tau) + offset
++			tauPowI.BigInt(&localCoeff)
++			c.G1.Tau[i].ScalarMultiplication(&c.G1.Tau[i], &localCoeff)
++			tauPowI.Mul(&tauPowI, tauUpdate)
++		}
++	})
+ }
+ 
+ // Seal performs the final contribution and outputs the final parameters.
