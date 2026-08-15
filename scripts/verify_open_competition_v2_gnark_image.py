@@ -43,16 +43,23 @@ def verify(
         raise ValueError("gnark image omits a compiler or source-identity pin")
     required_workflow_fragments = (
         "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v4:caf43bb80fab6745347fda83bb428cb08a463f8d",
+        "OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v4-trusted",
         "rm -rf .sp1-safe/crates/prover/build",
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",
         'docker image inspect "$SP1_GNARK_IMAGE"',
         'sha256sum "$SP1_GNARK_IMAGE" /gnark-cli',
         "target/gnark-cli.sha256",
-        "bash scripts/build_open_competition_v2_circuits.sh .sp1-safe",
+        'test -f "$trusted_root/trusted-setup.json"',
+        'cp -a "$trusted_root/$system" ".sp1-safe/crates/prover/build/$system"',
+        '--trusted-setup-manifest "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"',
     )
     if any(fragment not in release_source for fragment in required_workflow_fragments):
-        raise ValueError("release workflow does not build and inspect the local gnark image")
+        raise ValueError(
+            "release workflow does not build the local gnark image and consume verified setup assets"
+        )
+    if "bash scripts/build_open_competition_v2_circuits.sh .sp1-safe" in release_source:
+        raise ValueError("release workflow reintroduces the unsafe single-party setup route")
     if "ghcr.io/succinctlabs/sp1-gnark" in release_source:
         raise ValueError("release workflow must not use the upstream mutable gnark image route")
     required_builder_fragments = (
@@ -67,7 +74,7 @@ def verify(
         raise ValueError("circuit builder omits a capacity or absolute-path gate")
     return {
         "schema": "agent-bounties/open-competition-v2-gnark-image-check-v1",
-        "status": "digest_pinned_local_build",
+        "status": "digest_pinned_local_build_with_trusted_setup",
         "base_images": list(EXPECTED_BASES),
         "dockerfile": str(dockerfile.relative_to(ROOT)).replace("\\", "/"),
     }
