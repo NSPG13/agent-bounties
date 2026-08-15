@@ -65,9 +65,9 @@ Verifier generation has two explicit stages:
 - `self_verified` contains hashes of all three CPU proof records. Only this
   state can produce a deployable release bundle.
 
-`programs/public-vector-metric-v1/release-identity.json` similarly remains
-`pending_patched_rebuild` until two isolated builders reproduce the new ELF and
-vkey. Production bundle generation rejects that state.
+`programs/public-vector-metric-v1/release-identity.json` is
+`reproduced_beta2`: two isolated builders reproduced the pinned ELF and vkey.
+Production bundle generation rejects any other state.
 
 ## Commands
 

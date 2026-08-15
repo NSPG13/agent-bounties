@@ -48,7 +48,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "agent-bounties/open-competition-v2-metric-release-identity-v1",
         )
         self.assertEqual(identity["rust_version"], "1.96.1")
-        self.assertEqual(identity["status"], "pending_patched_rebuild")
+        self.assertEqual(identity["status"], "reproduced_beta2")
         self.assertEqual(MODULE.PROGRAM_VKEY, identity["program_vkey"])
         self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
         self.assertEqual(MODULE.ELF_HASH, identity["elf_keccak256"])
