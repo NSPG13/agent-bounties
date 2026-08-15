@@ -14,11 +14,11 @@ publish = false
 competition-metric-core = { path = "../../crates/competition-metric-core" }
 serde_json = "1"
 sha2 = "0.10"
-sp1-build = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
-sp1-sdk = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
+sp1-build = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }
+sp1-sdk = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }
 tiny-keccak = { version = "2", features = ["keccak"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [patch.crates-io]
-p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
-p3-field = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
+p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }
+p3-field = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }

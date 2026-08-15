@@ -10,8 +10,8 @@ publish = false
 
 [dependencies]
 competition-metric-core = { path = "../../../crates/competition-metric-core", default-features = false }
-sp1-zkvm = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
+sp1-zkvm = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }
 
 [patch.crates-io]
-p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
-p3-field = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
+p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }
+p3-field = { git = "https://github.com/NSPG13/sp1", rev = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8" }

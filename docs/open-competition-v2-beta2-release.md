@@ -7,7 +7,7 @@ A build, transaction hash, or deployment receipt does not clear a gate.
 ## Proof Stack
 
 Beta2 pins the immutable fork
-`NSPG13/sp1@0b729d415bf024ae425b27e6a829bed7642bbe7f`, identified as
+`NSPG13/sp1@87c57583c77a15fa6dd191a1c6ff6947564e4ef8`, identified as
 `agent-bounties-sp1-safe-v1`. The fork backports an injective Fiat-Shamir
 transcript into native proving and recursion, and carries regressions for
 partial-chunk padding, upper squeeze bits, and high digest bits.
@@ -15,7 +15,10 @@ partial-chunk padding, upper squeeze bits, and high digest bits.
 Both metric Cargo roots patch `p3-challenger` and `p3-field` to that exact
 commit. `scripts/verify_sp1_patched_graph.py` rejects a registry fallback,
 revision drift, duplicate package, or release-identity mismatch. Dependency
-review has no exception for `GHSA-vj64-rjf3-w3v7`.
+review permits only `GHSA-vj64-rjf3-w3v7` because GitHub matches the retained
+upstream package name and version without considering the patched source. The
+exact-source graph gate and transcript attack regressions must pass; any
+registry fallback or additional advisory still blocks the release.
 
 GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
 128 GiB x86-64 Linux runner builds both circuits and project-owned Groth16 and
