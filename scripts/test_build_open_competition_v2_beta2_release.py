@@ -14,6 +14,29 @@ SPEC.loader.exec_module(MODULE)
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     subject_hash = "0x" + "33" * 32
 
+    def test_mainnet_workflow_records_the_exact_x402_gate(self):
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta2-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "mainnet_canary_accounting_reconciled x402_success_and_refund_complete",
+            workflow,
+        )
+        self.assertNotIn("x402_success_and_refund_canaries_complete", workflow)
+
+    def test_sepolia_rehearsal_uses_an_isolated_broker(self):
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta2-release.yml").read_text(
+            encoding="utf-8"
+        )
+        sepolia = workflow.split("  live-sepolia-rehearsal:", 1)[1].split(
+            "  deploy-mainnet:", 1
+        )[0]
+        self.assertIn("OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY", sepolia)
+        self.assertIn("--network base-sepolia", sepolia)
+        self.assertIn('OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"', sepolia)
+        self.assertIn('X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"', sepolia)
+        self.assertNotIn('X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"', sepolia)
+
     @staticmethod
     def verifier_assets() -> dict:
         systems = {}
@@ -134,7 +157,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "uri": "https://example.test/evidence",
         }
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
@@ -245,7 +268,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "uri": "https://example.test/evidence",
         }
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
@@ -290,7 +313,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         gates = {name: False for name in MODULE.REQUIRED_GATE_NAMES}
         gates["repository_gate_complete"] = True
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": gates,
@@ -304,7 +327,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     def test_completed_gate_must_target_exact_repository_subject(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-wrong-subject.json"
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
             "protocol_version": "agent-bounties/open-competition-v2-beta2",
             "beta_risk_preimage": "risk",
             "gates": {name: name == "repository_gate_complete" for name in MODULE.REQUIRED_GATE_NAMES},

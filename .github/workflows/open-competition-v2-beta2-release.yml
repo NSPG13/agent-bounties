@@ -101,7 +101,9 @@ jobs:
             scripts.test_open_competition_v2_prover_service \
             scripts.test_run_open_competition_v2_sepolia_rehearsal \
             scripts.test_run_open_competition_v2_x402_rehearsal \
+            scripts.test_fund_open_competition_v2_beta2_broker \
             scripts.test_configure_open_competition_v2_beta2_render \
+            scripts.test_verify_open_competition_v2_beta2_broker_reserve \
             scripts.test_promote_open_competition_v2_beta2_release \
             scripts.test_wait_open_competition_v2_beta2_runtime \
             scripts.test_verify_open_competition_v2_beta2_interfaces \
@@ -568,6 +570,8 @@ jobs:
           BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
           BASE_SEPOLIA_SHADOW_RPC_URL: ${{ vars.BASE_SEPOLIA_SHADOW_RPC_URL }}
           BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
           DATABASE_URL: postgresql://agent_bounties:agent_bounties@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/agent_bounties_v2
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/release-assets/public-vector-metric-v1-script
           OPEN_COMPETITION_V2_PROVER_API_KEY: beta2-sepolia-rehearsal-only-api-key
@@ -578,11 +582,19 @@ jobs:
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
           export BETA2_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:sepolia"
           test -n "$BASE_SEPOLIA_RPC_URL" && test -n "$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY" && test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           python -m pip install -r scripts/requirements-wallet.txt
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
           forge build --root contracts/base-escrow --force --ast
           cargo build --locked --release -p api -p worker
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          test "$BROKER" = "$(printf '%s' "$OPEN_COMPETITION_V2_BROKER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
+          test "$BROKER" != "$DEPLOYER"
+          python scripts/fund_open_competition_v2_beta2_broker.py --network base-sepolia \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --broker "$BROKER" --target-usdc-base-units 0 --target-eth-wei 100000000000000 \
+            --output target/sepolia-broker-seed.json
           python scripts/build_open_competition_v2_beta2_release.py --network base-sepolia \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/release-assets/verifier-assets.json \
@@ -612,7 +624,7 @@ jobs:
           export OPEN_COMPETITION_V2_INDEXER_RPC_URL="$BASE_SEPOLIA_RPC_URL"
           export OPEN_COMPETITION_V2_SHADOW_RPC_URL="$BASE_SEPOLIA_SHADOW_RPC_URL"
           export OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS=2
-          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$DEPLOYER"
+          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"
           export OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS=100000
           export OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS=100000
           export OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS=10000
@@ -623,7 +635,7 @@ jobs:
           export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=630
           export OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
           export OPEN_COMPETITION_V2_PROVER_JOB_DIR="$RUNNER_TEMP/beta2-sepolia-prover-jobs"
-          export X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
+          export X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
           export X402_RELAYER_MIN_USDC_BASE_UNITS=100000
           export X402_RELAYER_MAX_USDC_BASE_UNITS=500000
           export ENABLE_X402_HOSTED_RELAY=true
@@ -679,6 +691,7 @@ jobs:
           path: |
             target/sepolia.json
             target/sepolia.runtime.json
+            target/sepolia-broker-seed.json
             target/sepolia-rehearsal.json
             target/sepolia-x402-rehearsal.json
             target/sepolia-proofs/*.json
@@ -713,10 +726,15 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
         run: |
           set -euo pipefail
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/fund_open_competition_v2_beta2_broker.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --output target/mainnet-broker-seed.json
           forge build --root contracts/base-escrow --force --ast
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           cp target/live-sepolia/release-gates.json target/release-gates.json
@@ -747,6 +765,7 @@ jobs:
             target/mainnet-exact.json
             target/mainnet-exact.runtime.json
             target/mainnet-deployment-evidence.json
+            target/mainnet-broker-seed.json
             target/owner-mainnet-deployment-approval.json
             target/release-gates.json
           if-no-files-found: error
@@ -781,17 +800,33 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
           OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
-          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
           BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
         run: |
           set -euo pipefail
           python -m pip install -r scripts/requirements-wallet.txt
+          test -n "$BASE_KEEPER_ADDRESS" && test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          test -n "$BASE_DEPLOYER_ADDRESS"
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          KEEPER="${BASE_KEEPER_ADDRESS,,}"
+          DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
           python scripts/verify_open_competition_v2_beta2_interfaces.py \
             --runtime target/production-control-plane/mainnet-broker.runtime.json \
             --output target/production-interfaces.json
           cp target/mainnet-canaries/release-gates.json target/release-gates.json
           evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python scripts/verify_open_competition_v2_beta2_broker_reserve.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
+            --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/activation-broker-reserve.json
+          python scripts/record_open_competition_v2_beta2_gate.py \
+            --manifest target/release-gates.json --gate broker_refund_reserve_ready \
+            --evidence target/activation-broker-reserve.json --uri "$evidence_uri" \
+            --source-commit "$GITHUB_SHA"
           python scripts/record_open_competition_v2_beta2_gate.py \
             --manifest target/release-gates.json --gate production_interfaces_agree \
             --evidence target/production-interfaces.json --uri "$evidence_uri" \
@@ -819,12 +854,12 @@ jobs:
             --runtime-output target/mainnet-public-beta.runtime.json
           jq -e '.public_creation_enabled == true and .proof_broker_enabled == true' \
             target/mainnet-public-beta.runtime.json >/dev/null
-          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_KEEPER_PRIVATE_KEY"]).address.lower())')"
           python scripts/configure_open_competition_v2_beta2_render.py \
             --runtime target/mainnet-public-beta.runtime.json --revision "$GITHUB_SHA" \
             --primary-rpc-url "$BASE_MAINNET_RPC_URL" \
             --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
+            --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
             --output target/render-public-beta.json
           python scripts/wait_open_competition_v2_beta2_runtime.py \
             --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
@@ -836,6 +871,7 @@ jobs:
             target/mainnet-public-beta.json
             target/mainnet-public-beta.runtime.json
             target/owner-public-beta-activation.json
+            target/activation-broker-reserve.json
             target/production-interfaces.json
             target/public-beta-activation.json
             target/render-public-beta.json
@@ -864,22 +900,28 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
           OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
-          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
           BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
         run: |
           set -euo pipefail
           test -n "$RENDER_API_KEY" && test -n "$OPEN_COMPETITION_V2_PROVER_API_KEY"
-          test -n "$OPEN_COMPETITION_V2_PROVER_URL" && test -n "$BASE_KEEPER_PRIVATE_KEY"
+          test -n "$OPEN_COMPETITION_V2_PROVER_URL" && test -n "$BASE_KEEPER_ADDRESS"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY" && test -n "$BASE_DEPLOYER_ADDRESS"
           python -m pip install -r scripts/requirements-wallet.txt
           jq -e '.complete == true' target/mainnet-deployment/mainnet-deployment-evidence.json >/dev/null
           jq '.runtime_manifest' target/mainnet-deployment/mainnet-deployment-evidence.json >target/mainnet-prebroker.runtime.json
-          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_KEEPER_PRIVATE_KEY"]).address.lower())')"
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          KEEPER="${BASE_KEEPER_ADDRESS,,}"
+          DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
           python scripts/configure_open_competition_v2_beta2_render.py \
             --runtime target/mainnet-prebroker.runtime.json --revision "$GITHUB_SHA" \
             --primary-rpc-url "$BASE_MAINNET_RPC_URL" \
             --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
+            --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
             --output target/render-prebroker.json
           python scripts/wait_open_competition_v2_beta2_runtime.py \
             --runtime target/mainnet-prebroker.runtime.json --expect-broker false \
@@ -888,6 +930,15 @@ jobs:
           python scripts/record_open_competition_v2_beta2_gate.py \
             --manifest target/release-gates.json --gate production_indexers_agree \
             --evidence target/production-indexer-agreement.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$GITHUB_SHA"
+          python scripts/verify_open_competition_v2_beta2_broker_reserve.py \
+            --runtime target/mainnet-prebroker.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --broker "$BROKER" --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/production-broker-reserve.json
+          python scripts/record_open_competition_v2_beta2_gate.py \
+            --manifest target/release-gates.json --gate broker_refund_reserve_ready \
+            --evidence target/production-broker-reserve.json \
             --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --source-commit "$GITHUB_SHA"
           python scripts/promote_open_competition_v2_beta2_release.py \
@@ -902,6 +953,7 @@ jobs:
             --primary-rpc-url "$BASE_MAINNET_RPC_URL" \
             --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
+            --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
             --output target/render-broker-enabled.json
           python scripts/wait_open_competition_v2_beta2_runtime.py \
             --runtime target/mainnet-broker.runtime.json --expect-broker true \
@@ -915,6 +967,7 @@ jobs:
             target/mainnet-prebroker.runtime.json
             target/production-indexer-agreement.json
             target/production-broker-runtime.json
+            target/production-broker-reserve.json
             target/render-prebroker.json
             target/render-broker-enabled.json
             target/release-gates.json
@@ -963,7 +1016,8 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
-          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
           DATABASE_URL: postgresql://agent_bounties:agent_bounties@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/agent_bounties_v2_mainnet_canary
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/release-assets/public-vector-metric-v1-script
           OPEN_COMPETITION_V2_PROVER_API_KEY: beta2-mainnet-refund-canary-only-key
@@ -974,11 +1028,20 @@ jobs:
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
           export BETA2_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:mainnet"
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test -n "$BASE_KEEPER_ADDRESS" && test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
           test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete" && test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
           python -m pip install -r scripts/requirements-wallet.txt
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          KEEPER="${BASE_KEEPER_ADDRESS,,}"
+          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
           cargo build --locked --release -p api -p worker
           bundle=target/mainnet-deployment/mainnet-exact.json
+          python scripts/verify_open_competition_v2_beta2_broker_reserve.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
+            --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/mainnet-broker-reserve-before.json
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
@@ -1006,8 +1069,8 @@ jobs:
           export OPEN_COMPETITION_V2_INDEXER_RPC_URL="$BASE_MAINNET_RPC_URL"
           export OPEN_COMPETITION_V2_SHADOW_RPC_URL="${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}"
           export OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS=2
-          export X402_RELAYER_PRIVATE_KEY="$BASE_KEEPER_PRIVATE_KEY"
-          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_KEEPER_PRIVATE_KEY"]).address.lower())')"
+          export X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"
           export OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS=100000
           export OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS=100000
           export OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS=10000
@@ -1058,6 +1121,11 @@ jobs:
             --rehearsal target/mainnet-canaries.json \
             --x402-success target/mainnet-x402-success.json \
             --output target/mainnet-fresh-agent-flow.json
+          python scripts/verify_open_competition_v2_beta2_broker_reserve.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
+            --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/mainnet-broker-reserve-after.json
           python - <<'PY'
           import json
           canaries = json.load(open("target/mainnet-canaries.json"))
@@ -1080,12 +1148,15 @@ jobs:
           cp target/production-control-plane/release-gates.json target/release-gates.json
           evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
+            --gate broker_refund_reserve_ready --evidence target/mainnet-broker-reserve-after.json \
+            --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
+          python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
             --gate mainnet_groth16_canary_complete --evidence target/mainnet-x402-success.json \
             --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
           python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
             --gate mainnet_plonk_canary_complete --evidence target/mainnet-canaries.json \
             --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
-          for gate in mainnet_canary_accounting_reconciled x402_success_and_refund_canaries_complete; do
+          for gate in mainnet_canary_accounting_reconciled x402_success_and_refund_complete; do
             python scripts/record_open_competition_v2_beta2_gate.py --manifest target/release-gates.json \
               --gate "$gate" --evidence target/mainnet-accounting.json \
               --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
@@ -1105,6 +1176,8 @@ jobs:
             target/mainnet-x402-refund.json
             target/mainnet-accounting.json
             target/mainnet-fresh-agent-flow.json
+            target/mainnet-broker-reserve-before.json
+            target/mainnet-broker-reserve-after.json
             target/mainnet-proofs/*.json
             target/release-gates.json
             target/mainnet-canary-api.log

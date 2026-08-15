@@ -13,6 +13,8 @@ import re
 import urllib.parse
 from typing import Any
 
+from eth_account import Account
+
 import render_deploy_recovery as render
 
 
@@ -68,13 +70,22 @@ def runtime_environment(
     prover_url: str,
     prover_api_key: str,
     broker_address: str,
+    keeper_address: str,
+    deployer_address: str,
+    refund_reserve_min_base_units: int,
 ) -> dict[str, str]:
     require(primary_rpc_url.startswith("https://"), "primary RPC must use HTTPS")
     require(shadow_rpc_url.startswith("https://"), "shadow RPC must use HTTPS")
     require(primary_rpc_url.rstrip("/") != shadow_rpc_url.rstrip("/"), "primary and shadow RPCs must differ")
     require(prover_url.startswith("https://"), "production prover must use HTTPS")
     require(len(prover_api_key) >= 32, "prover API key must contain at least 32 characters")
-    require(ADDRESS.fullmatch(broker_address) is not None, "broker address is invalid")
+    roles = {broker_address.lower(), keeper_address.lower(), deployer_address.lower()}
+    require(
+        all(ADDRESS.fullmatch(value) is not None for value in roles),
+        "broker, keeper or deployer address is invalid",
+    )
+    require(len(roles) == 3, "broker, keeper and deployer addresses must be distinct")
+    require(refund_reserve_min_base_units > 0, "refund reserve minimum must be positive")
     return {
         "BASE_MAINNET_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON": json.dumps(runtime, separators=(",", ":"), sort_keys=True),
         "OPEN_COMPETITION_V2_FACTORY_CONTRACT": runtime["factory_contract"].lower(),
@@ -85,6 +96,7 @@ def runtime_environment(
         "OPEN_COMPETITION_V2_PROVER_URL": prover_url,
         "OPEN_COMPETITION_V2_PROVER_API_KEY": prover_api_key,
         "OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS": broker_address.lower(),
+        "OPEN_COMPETITION_V2_REFUND_RESERVE_MIN_BASE_UNITS": str(refund_reserve_min_base_units),
         "OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS": "100000",
         "OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS": "100000",
         "OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS": "10000",
@@ -118,6 +130,11 @@ def deploy(
 ) -> dict[str, Any]:
     revision = render.validate_revision(revision)
     require(re.fullmatch(r"0x[0-9a-fA-F]{64}", relayer_private_key) is not None, "relayer private key is invalid")
+    require(
+        Account.from_key(relayer_private_key).address.lower()
+        == environment["OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS"],
+        "relayer private key does not match the isolated broker address",
+    )
     services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
     owner_ids = {str(service.get("ownerId")) for service in services.values()}
     require(len(owner_ids) == 1, "Beta2 services do not share one Render workspace")
@@ -185,8 +202,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shadow-rpc-url", required=True)
     parser.add_argument("--prover-url", required=True)
     parser.add_argument("--prover-api-key-env", default="OPEN_COMPETITION_V2_PROVER_API_KEY")
-    parser.add_argument("--relayer-private-key-env", default="BASE_KEEPER_PRIVATE_KEY")
+    parser.add_argument("--relayer-private-key-env", default="OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY")
     parser.add_argument("--broker-address", required=True)
+    parser.add_argument("--keeper-address", required=True)
+    parser.add_argument("--deployer-address", required=True)
+    parser.add_argument("--refund-reserve-min-base-units", type=int, default=110_000)
     parser.add_argument("--timeout-seconds", type=float, default=2400)
     parser.add_argument("--poll-seconds", type=float, default=10)
     parser.add_argument("--output", type=Path, required=True)
@@ -205,6 +225,9 @@ def main() -> int:
         prover_url=args.prover_url,
         prover_api_key=prover_api_key,
         broker_address=args.broker_address,
+        keeper_address=args.keeper_address,
+        deployer_address=args.deployer_address,
+        refund_reserve_min_base_units=args.refund_reserve_min_base_units,
     )
     client = render.RenderClient(os.environ.get("RENDER_API_KEY", ""))
     evidence = deploy(

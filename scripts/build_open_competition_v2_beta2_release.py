@@ -69,6 +69,7 @@ PUBLIC_BETA_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
     "mainnet_groth16_canary_complete",
     "mainnet_plonk_canary_complete",
     "mainnet_canary_accounting_reconciled",
+    "broker_refund_reserve_ready",
     "x402_success_and_refund_complete",
     "production_indexers_agree",
     "fresh_agent_wallet_flow_complete",
@@ -78,6 +79,7 @@ PUBLIC_BETA_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
 BROKER_CANARY_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
     "mainnet_verifiers_factory_deployed",
     "production_indexers_agree",
+    "broker_refund_reserve_ready",
 )
 SEPOLIA_BROKER_REHEARSAL_GATE_NAMES = (
     "repository_gate_complete",
@@ -341,7 +343,7 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v4":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v5":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
         raise ValueError("release gate inventory mismatch")

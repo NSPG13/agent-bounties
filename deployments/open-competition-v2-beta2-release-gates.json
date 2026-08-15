@@ -1,7 +1,7 @@
 {
-  "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v4",
+  "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
   "protocol_version": "agent-bounties/open-competition-v2-beta2",
-  "beta_risk_preimage": "agent-bounties/open-competition-v2-beta2/risk/2026-08-15-trusted-setup-v1",
+  "beta_risk_preimage": "agent-bounties/open-competition-v2-beta2/risk/2026-08-15-segregated-broker-v2",
   "gates": {
     "repository_gate_complete": false,
     "patched_sp1_dependency_graph_clean": false,
@@ -23,6 +23,7 @@
     "mainnet_groth16_canary_complete": false,
     "mainnet_plonk_canary_complete": false,
     "mainnet_canary_accounting_reconciled": false,
+    "broker_refund_reserve_ready": false,
     "x402_success_and_refund_complete": false,
     "production_indexers_agree": false,
     "fresh_agent_wallet_flow_complete": false,
@@ -60,6 +61,7 @@
     "mainnet_groth16_canary_complete": null,
     "mainnet_plonk_canary_complete": null,
     "mainnet_canary_accounting_reconciled": null,
+    "broker_refund_reserve_ready": null,
     "x402_success_and_refund_complete": null,
     "production_indexers_agree": null,
     "fresh_agent_wallet_flow_complete": null,

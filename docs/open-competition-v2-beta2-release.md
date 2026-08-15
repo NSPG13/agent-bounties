@@ -83,12 +83,21 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
 7. Record owner deployment approval against the exact repository subject.
 8. In protected environment `v2-beta2-mainnet`, deploy immutable verifiers and
    factory while public creation remains disabled.
-9. Run the two 0.25 USDC canaries, x402 success/failure refund, and
+9. Fund a dedicated broker address with at least 0.11 USDC of segregated
+   refund reserve and 0.00002 ETH for relay gas. The broker, keeper and
+   deployment signer must be three distinct keys. Safe-block reserve evidence
+   is required before the broker can be enabled. For the initial release, fund
+   the deployment signer with 0.745 USDC and 0.0012 ETH. The protected job
+   idempotently moves 0.11 USDC and 0.0001 ETH to the broker, leaving the
+   signer with the exact 0.635 USDC canary and generated-agent budget plus
+   deployment gas.
+10. Run the two 0.25 USDC canaries, x402 success/failure refund, and
    primary/shadow indexer comparison. Derive a unique solver wallet for the
    release run and attempt, fund its bounded gas and USDC budgets, and require
    that exact wallet to pay, authorize relay, and settle without manual state
    correction before clearing the fresh-wallet gate.
-10. Record owner activation approval, then enable the exact runtime manifest.
+11. Recheck the broker reserve, record owner activation approval, then enable
+    the exact runtime manifest.
 
 The source of truth is
 `deployments/open-competition-v2-beta2-release-gates.json`. Each true gate must
@@ -144,10 +153,19 @@ It requires a self-hosted runner with labels `linux`, `x64`, `ram-256gb`, and
 `/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted`. Configure protected
 environments as follows:
 
-- `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL` and
-  `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`;
+- `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL`,
+  `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`, a dedicated
+  `OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY` secret, and its public
+  `OPEN_COMPETITION_V2_BROKER_ADDRESS` variable. The protected job derives the
+  broker address from the key, rejects deployer reuse, and seeds only its
+  bounded Base Sepolia ETH relay reserve before rehearsal;
 - `v2-beta2-mainnet`: `BASE_MAINNET_RPC_URL` and
-  `BASE_MAINNET_DEPLOYER_PRIVATE_KEY`.
+  `BASE_MAINNET_DEPLOYER_PRIVATE_KEY`, plus the isolated
+  `OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY` secret and the public
+  `OPEN_COMPETITION_V2_BROKER_ADDRESS`, `BASE_DEPLOYER_ADDRESS`, and
+  `BASE_KEEPER_ADDRESS` variables. Keeper signing authority stays in its
+  existing operations environment and is not exposed to release control-plane
+  jobs.
 
 The mainnet deployment job refuses to sign unless every prelaunch gate is true,
 has HTTPS hash-bound evidence, targets the exact repository subject, and the
@@ -207,7 +225,10 @@ restart, rejects journal drift, and never enables GPU or network proving.
 The initial deployment manifest has both public flags false. After immutable
 deployment and live primary/shadow indexer agreement are recorded, rebuild the
 same manifest to enable the broker only for internal canaries while
-`public_creation_enabled` stays false. Run one paid x402 proof job and one
+`public_creation_enabled` stays false. Render configuration rejects a broker
+key that resolves to the keeper or deployment address. The release also checks
+at a Base safe block that the broker controls at least 0.11 USDC for one full
+refund and 0.00002 ETH for bounded relay gas. Run one paid x402 proof job and one
 forced provider failure, then record canonical USDC success or refund evidence.
 Only the complete public launch gate enables creation.
 
