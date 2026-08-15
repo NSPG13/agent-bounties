@@ -25,7 +25,7 @@ V2 does not alter or migrate Open Competition V1. Only a confirmed canonical
 | Base Sepolia | 84532 | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
 Beta2 uses project-owned Groth16 and PLONK verifier contracts built from
-`NSPG13/sp1@0b729d415bf024ae425b27e6a829bed7642bbe7f`. Each adapter pins one
+`NSPG13/sp1@87c57583c77a15fa6dd191a1c6ff6947564e4ef8`. Each adapter pins one
 verifier address, `VERIFIER_HASH()`, runtime code hash, and proof selector.
 Addresses and hashes are published by the release endpoint only after exact
 deployment. A missing or changed verifier makes the competition refundable. A
