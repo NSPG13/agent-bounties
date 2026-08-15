@@ -22,14 +22,32 @@ exact-source graph gate and transcript attack regressions must pass; any
 registry fallback or additional advisory still blocks the release.
 
 GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
-x86-64 Linux runner with at least 256 GiB physical memory builds both circuits
-and project-owned Groth16 and PLONK verifiers, then creates one Groth16 and two
+x86-64 Linux runner with at least 256 GiB physical memory consumes the frozen
+trusted-setup bundle, builds project-owned Groth16 and PLONK verifier bytecode,
+then creates one Groth16 and two
 PLONK proofs on CPU. This limit comes from a measured Groth16 resident-memory
 peak near 247 GiB; 128 GiB and 192 GiB runners exhausted memory or entered
 release-invalid paging. Swap is emergency headroom, not qualifying capacity.
 The contracts call
 the exact generated verifiers directly; no gateway, proxy, owner, or upgrade
 route exists.
+
+Mainnet Groth16 keys never come from `groth16.Setup`. They are finalized from
+the exact frozen R1CS with gnark's BN254 Phase 1 and circuit-specific Phase 2
+MPC. At least two ephemeral contributions are required in each phase, each
+contribution is hash chained, and post-contribution beacons are recorded.
+`tools/open-competition-v2-ceremony` verifies both complete chains and exports
+the proving key in the dump format consumed by the SP1 CPU prover. Sepolia may
+use explicitly labeled single-party test assets, but the release builder
+rejects them for Base mainnet.
+
+PLONK uses the Aztec Ignition public MPC KZG SRS downloaded and verified by the
+pinned SP1 builder. Its circuit, proving key, verifying key, SRS transcript,
+contribution evidence, and generated verifier are frozen with the Groth16
+assets. `scripts/build_open_competition_v2_trusted_setup_manifest.py` binds both
+systems into one manifest. The verifier-asset builder rehashes every referenced
+file and mainnet generation fails unless `trusted_setup_provenance_complete` is
+recorded for the exact repository subject.
 
 The official SP1 installer is used only to install the compatible zkVM compiler
 toolchain. The host builder is Rust 1.96.1 and the SP1 guest compiler reports
@@ -55,8 +73,8 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
    builders.
 3. Commit the reproduced identity as `reproduced_beta2`; stale Beta1 values may
    never be reused.
-4. On the capacity-gated CPU runner, build circuits, verifier bytecode, and
-   three real self-verified proofs.
+4. On the capacity-gated CPU runner, verify the frozen trusted-setup bundle,
+   build verifier bytecode, and create three real self-verified proofs.
 5. Replay the exact verifier and factory deployment plus both winner modes on a
    fresh Base-mainnet fork.
 6. In protected environment `v2-beta2-sepolia`, deploy the same bytecode and
@@ -85,6 +103,10 @@ Verifier generation has two explicit stages:
 - `self_verified` contains hashes of all three CPU proof records. Only this
   state can produce a deployable release bundle.
 
+Both stages require trusted setup for a Base-mainnet bundle. Test-only setup is
+accepted only when `--allow-test-only-setup` is explicit, and the resulting
+asset record is permanently marked `mainnet_eligible: false`.
+
 `programs/public-vector-metric-v1/release-identity.json` is
 `reproduced_beta2`: two isolated builders reproduced the pinned ELF and vkey.
 Production bundle generation rejects any other state.
@@ -95,6 +117,7 @@ Production bundle generation rejects any other state.
 python scripts/verify_sp1_patched_graph.py
 $env:PYTHONPATH = "$PWD\scripts"
 python -m unittest scripts.test_build_open_competition_v2_beta2_release `
+  scripts.test_build_open_competition_v2_trusted_setup_manifest `
   scripts.test_build_open_competition_v2_verifier_assets -v
 $env:FOUNDRY_INVARIANT_RUNS = "10000"
 $env:FOUNDRY_INVARIANT_DEPTH = "50"
@@ -114,7 +137,9 @@ gh workflow run open-competition-v2-beta2-release.yml --ref main \
 ```
 
 It requires a self-hosted runner with labels `linux`, `x64`, `ram-256gb`, and
-`open-competition-v2-prover`. Configure protected environments as follows:
+`open-competition-v2-prover`, plus the verified setup bundle at
+`/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted`. Configure protected
+environments as follows:
 
 - `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL` and
   `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`;

@@ -30,6 +30,7 @@ on:
       - "render.yaml"
       - "scripts/*open_competition_v2*"
       - "scripts/*sp1*"
+      - "tools/open-competition-v2-ceremony/**"
       - "docs/open-competition-v2-beta2*"
   workflow_dispatch:
     inputs:
@@ -65,6 +66,7 @@ env:
   SP1_SAFE_COMMIT: caf43bb80fab6745347fda83bb428cb08a463f8d
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v4
   SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v4:caf43bb80fab6745347fda83bb428cb08a463f8d
+  OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v4-trusted
 
 jobs:
   deterministic-release:
@@ -90,6 +92,7 @@ jobs:
             --fuzz-runs 10000 -vv
           python -m unittest \
             scripts.test_build_open_competition_v2_beta2_release \
+            scripts.test_build_open_competition_v2_trusted_setup_manifest \
             scripts.test_build_open_competition_v2_verifier_assets \
             scripts.test_prepare_open_competition_v2_metric_fixture \
             scripts.test_run_open_competition_v2_mainnet_fork_replay \
@@ -103,9 +106,15 @@ jobs:
             scripts.test_verify_open_competition_v2_beta2_interfaces \
             scripts.test_deploy_open_competition_v2_beta2 \
             scripts.test_record_open_competition_v2_beta2_gate \
+            scripts.test_rebind_open_competition_v2_sp1_wrapper \
             scripts.test_verify_open_competition_v2_gnark_image \
             scripts.test_verify_open_competition_v2_wrap_template \
             scripts.test_verify_sp1_patched_graph -v
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/tools/open-competition-v2-ceremony:/work" \
+            -w /work \
+            golang:1.26@sha256:26326682769ca980f8f1d3b1f52be2dd1c1d25270e3de3fe0c97d6bb65df3556 \
+            /usr/local/go/bin/go test ./...
 
   static-analysis:
     runs-on: ubuntu-24.04
@@ -379,7 +388,26 @@ jobs:
           docker run --rm --entrypoint sha256sum "$SP1_GNARK_IMAGE" /gnark-cli \
             | tee target/gnark-cli.sha256
           grep -Eq '^[0-9a-f]{64}  /gnark-cli$' target/gnark-cli.sha256
-          bash scripts/build_open_competition_v2_circuits.sh .sp1-safe
+          trusted_root="$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT"
+          test -f "$trusted_root/trusted-setup.json"
+          rm -rf .sp1-safe/crates/prover/build
+          mkdir -p .sp1-safe/crates/prover/build
+          for system in groth16 plonk; do
+            test -f "$trusted_root/$system/${system}_circuit.bin"
+            test -f "$trusted_root/$system/${system}_pk.bin"
+            test -f "$trusted_root/$system/${system}_vk.bin"
+            test -f "$trusted_root/$system/SP1Verifier${system^}.sol"
+            test -f "$trusted_root/$system/transcript.json"
+            test -f "$trusted_root/$system/verification-evidence.json"
+            cp -a "$trusted_root/$system" ".sp1-safe/crates/prover/build/$system"
+          done
+          mkdir -p target/trusted-setup-evidence/groth16 target/trusted-setup-evidence/plonk
+          cp "$trusted_root/trusted-setup.json" target/trusted-setup-evidence/
+          for system in groth16 plonk; do
+            cp "$trusted_root/$system/transcript.json" \
+              "$trusted_root/$system/verification-evidence.json" \
+              "target/trusted-setup-evidence/$system/"
+          done
           cache="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION"
           for system in groth16 plonk; do
             root="target/generated-verifier-$system"
@@ -419,7 +447,21 @@ jobs:
           GROTH_HASH="$(python -c 'import re,sys; print(re.search(r"return (0x[0-9a-f]{64});", open(sys.argv[1]).read()).group(1))' "$groth_source")"
           PLONK_HASH="$(python -c 'import re,sys; print(re.search(r"return (0x[0-9a-f]{64});", open(sys.argv[1]).read()).group(1))' "$plonk_source")"
           common=(--sp1-source-commit "$SP1_SAFE_COMMIT" --groth16-artifact target/generated-verifier-groth16/out/SP1VerifierGroth16.sol/SP1Verifier.json --groth16-verifier-hash "$GROTH_HASH" --plonk-artifact target/generated-verifier-plonk/out/SP1VerifierPlonk.sol/SP1Verifier.json --plonk-verifier-hash "$PLONK_HASH")
+          setup=(
+            --trusted-setup-manifest "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+            --groth16-constraint-system .sp1-safe/crates/prover/build/groth16/groth16_circuit.bin
+            --groth16-proving-key .sp1-safe/crates/prover/build/groth16/groth16_pk.bin
+            --groth16-verifying-key .sp1-safe/crates/prover/build/groth16/groth16_vk.bin
+            --groth16-setup-transcript .sp1-safe/crates/prover/build/groth16/transcript.json
+            --groth16-setup-verification-evidence .sp1-safe/crates/prover/build/groth16/verification-evidence.json
+            --plonk-constraint-system .sp1-safe/crates/prover/build/plonk/plonk_circuit.bin
+            --plonk-proving-key .sp1-safe/crates/prover/build/plonk/plonk_pk.bin
+            --plonk-verifying-key .sp1-safe/crates/prover/build/plonk/plonk_vk.bin
+            --plonk-setup-transcript .sp1-safe/crates/prover/build/plonk/transcript.json
+            --plonk-setup-verification-evidence .sp1-safe/crates/prover/build/plonk/verification-evidence.json
+          )
           python scripts/build_open_competition_v2_verifier_assets.py "${common[@]}" \
+            "${setup[@]}" \
             --allow-pending-proof-evidence --output target/verifier-assets.pending.json
           python scripts/build_open_competition_v2_beta2_release.py --network base-mainnet \
             --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
@@ -434,6 +476,7 @@ jobs:
               --output "target/proofs/$proof.json" --log-dir "target/proof-logs/$proof"
           done
           python scripts/build_open_competition_v2_verifier_assets.py "${common[@]}" \
+            "${setup[@]}" \
             --groth16-proof-evidence target/proofs/groth16_first.json \
             --plonk-proof-evidence-1 target/proofs/plonk_best_a.json \
             --plonk-proof-evidence-2 target/proofs/plonk_best_b.json \
@@ -456,6 +499,7 @@ jobs:
           record_gate patched_sp1_dependency_graph_clean target/prerequisites/patched-source/sp1-patched-graph.json
           record_gate isolated_sp1_builds_match target/prerequisites/metric-release/public-vector-metric-v1.json
           record_gate advisory_regression_vectors_complete target/prerequisites/patched-source/sp1-patched-graph.json
+          record_gate trusted_setup_provenance_complete "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
           record_gate real_groth16_plonk_proofs_self_verified target/verifier-assets.json
           record_gate static_analysis_triaged target/prerequisites/static-analysis/open-competition-v2-beta2-slither-triage.json
           record_gate base_mainnet_fork_exact_replay_complete target/mainnet-fork-replay.json
@@ -480,6 +524,7 @@ jobs:
             target/prover-capabilities.json
             target/gnark-image.json
             target/gnark-cli.sha256
+            target/trusted-setup-evidence/**
           if-no-files-found: error
           retention-days: 90
 

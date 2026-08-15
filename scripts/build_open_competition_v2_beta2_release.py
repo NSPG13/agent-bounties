@@ -51,6 +51,7 @@ PRELAUNCH_GATE_NAMES = (
     "patched_sp1_dependency_graph_clean",
     "isolated_sp1_builds_match",
     "advisory_regression_vectors_complete",
+    "trusted_setup_provenance_complete",
     "real_groth16_plonk_proofs_self_verified",
     "static_analysis_triaged",
     "base_sepolia_groth16_first_proven_complete",
@@ -252,12 +253,52 @@ def load_verifier_assets(
     path: Path = VERIFIER_ASSETS_PATH, *, require_proof_evidence: bool = True
 ) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-verifier-assets-v1":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-verifier-assets-v2":
         raise ValueError("verifier asset schema mismatch")
     if value.get("circuit_version") != SP1_SAFE_CIRCUIT_VERSION:
         raise ValueError("verifier assets target another circuit version")
     if value.get("gpu_proving_enabled") is not False:
         raise ValueError("Beta2 verifier assets must come from the CPU-only release path")
+    setup = value.get("setup_provenance")
+    if not isinstance(setup, dict):
+        raise ValueError("verifier assets lack setup provenance")
+    setup_state = setup.get("state")
+    if setup_state not in {"trusted_mpc", "test_only_unsafe"}:
+        raise ValueError("verifier setup provenance state is invalid")
+    if setup.get("mainnet_eligible") is not (setup_state == "trusted_mpc"):
+        raise ValueError("verifier setup mainnet eligibility is inconsistent")
+    manifest_hash = setup.get("manifest_sha256")
+    if setup_state == "trusted_mpc":
+        if not re.fullmatch(r"0x[0-9a-f]{64}", str(manifest_hash)):
+            raise ValueError("trusted setup manifest hash is invalid")
+        setup_systems = setup.get("systems")
+        expected_models = {
+            "groth16": "mpc_phase2",
+            "plonk": "public_mpc_kzg_srs",
+        }
+        if not isinstance(setup_systems, dict) or set(setup_systems) != set(expected_models):
+            raise ValueError("trusted setup proof-system inventory mismatch")
+        for name, model in expected_models.items():
+            item = setup_systems[name]
+            if not isinstance(item, dict) or item.get("security_model") != model:
+                raise ValueError(f"{name} trusted setup security model is invalid")
+            if item.get("verification_passed") is not True:
+                raise ValueError(f"{name} trusted setup verification is incomplete")
+            if item.get("verifier_hash") != value.get("proof_systems", {}).get(name, {}).get("verifier_hash"):
+                raise ValueError(f"{name} trusted setup verifier binding mismatch")
+            for field in (
+                "constraint_system_sha256",
+                "proving_key_sha256",
+                "verifying_key_sha256",
+                "transcript_sha256",
+                "verification_evidence_sha256",
+            ):
+                if not re.fullmatch(r"[0-9a-f]{64}", str(item.get(field, ""))):
+                    raise ValueError(f"{name} trusted setup {field} is invalid")
+            if int(item.get("contribution_count", 0)) < 2:
+                raise ValueError(f"{name} trusted setup lacks multi-party contributions")
+    elif manifest_hash is not None:
+        raise ValueError("test-only setup cannot claim a trusted manifest")
     source_commit = value.get("sp1_source_commit", "")
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise ValueError("verifier assets require an exact patched SP1 source commit")
@@ -300,7 +341,7 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v3":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v4":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
         raise ValueError("release gate inventory mismatch")
@@ -401,6 +442,7 @@ def build_bundle(
     gates: dict[str, Any],
     verifier_assets: dict[str, Any],
     allow_pending_metric_identity: bool = False,
+    allow_test_only_setup: bool = False,
 ) -> dict[str, Any]:
     network = NETWORKS[network_name]
     deployer = deployer.lower()
@@ -423,6 +465,13 @@ def build_bundle(
     adapter_artifact = artifact("Sp1VerifierAdapterV2Beta2", "Sp1VerifierAdapterV2Beta2")
     bounty_artifact = artifact("OpenCompetitionBountyV2Beta2", "OpenCompetitionBountyV2Beta2")
     systems = verifier_assets["proof_systems"]
+    trusted_setup = verifier_assets["setup_provenance"]
+    if (
+        network_name == "base-mainnet"
+        and trusted_setup["mainnet_eligible"] is not True
+        and not allow_test_only_setup
+    ):
+        raise RuntimeError("Base mainnet requires hash-bound trusted setup provenance")
     if verifier_assets["sp1_source_commit"] != SP1_COMMIT:
         raise ValueError("metric identity and verifier assets use different SP1 source commits")
     groth16_verifier_hash = systems["groth16"]["verifier_hash"]
@@ -535,6 +584,7 @@ def build_bundle(
             "circuit_version": verifier_assets["circuit_version"],
             "gpu_proving_enabled": False,
             "proof_evidence": verifier_assets["proof_evidence"],
+            "setup_provenance": trusted_setup,
         },
         "metric_profile": {
             "profile_id": "public-vector-metric-v1",
