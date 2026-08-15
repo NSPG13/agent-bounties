@@ -42,7 +42,7 @@ def verify(
     if any(fragment not in image_source for fragment in required_image_fragments):
         raise ValueError("gnark image omits a compiler or source-identity pin")
     required_workflow_fragments = (
-        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v2:f205ebada7f3bf35a71a28492ca8481aff3679ca",
+        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v4:caf43bb80fab6745347fda83bb428cb08a463f8d",
         "rm -rf .sp1-safe/crates/prover/build",
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",
@@ -54,14 +54,15 @@ def verify(
     if "ghcr.io/succinctlabs/sp1-gnark" in release_source:
         raise ValueError("release workflow must not use the upstream mutable gnark image route")
     required_builder_fragments = (
-        "minimum_memory_kib=$((180 * 1024 * 1024))",
-        "minimum_combined_kib=$((288 * 1024 * 1024))",
+        "minimum_memory_kib=$((250 * 1024 * 1024))",
+        "minimum_disk_kib=$((60 * 1024 * 1024))",
+        "swap does not qualify",
         'source_root="$(cd "$source_root" && pwd)"',
         '--build-dir="$build_dir/groth16"',
         '--build-dir="$build_dir/plonk"',
     )
     if any(fragment not in circuit_source for fragment in required_builder_fragments):
-        raise ValueError("circuit builder must pass absolute Groth16 and PLONK mount paths")
+        raise ValueError("circuit builder omits a capacity or absolute-path gate")
     return {
         "schema": "agent-bounties/open-competition-v2-gnark-image-check-v1",
         "status": "digest_pinned_local_build",

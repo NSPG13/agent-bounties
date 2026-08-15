@@ -38,6 +38,37 @@ class SepoliaRehearsalTests(unittest.TestCase):
             with self.assertRaises(MODULE.SepoliaRehearsalError):
                 MODULE.normalized_key(value)
 
+    def test_x402_canary_spec_binds_artifact_to_the_journal(self):
+        fixture = {
+            "scope": {
+                "chain_id": 84532,
+                "competition": [17] * 20,
+                "bounty_id": [34] * 32,
+                "solver": [51] * 20,
+                "solver_nonce": 3,
+                "proof_system": [68] * 32,
+                "program_vkey": [85] * 32,
+                "source_hash": [102] * 32,
+                "elf_hash": [119] * 32,
+                "execution_policy_hash": [136] * 32,
+                "settlement_policy_hash": [153] * 32,
+                "beta_risk_hash": [170] * 32,
+            },
+            "mode": "maximize_exact_matches",
+            "threshold": 1,
+            "vectors": [{"expected": 2, "observed": 2, "weight": 1}],
+        }
+        spec = MODULE.x402_canary_spec(
+            fixture,
+            "0x" + "11" * 20,
+            "0x" + "22" * 32,
+            "0x" + "33" * 20,
+            3,
+        )
+        journal = MODULE.rehearsal.expected_journal(fixture)
+        self.assertEqual(spec["artifact_hash"], "0x" + journal[192:224].hex())
+        self.assertEqual(spec["metric"]["threshold"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

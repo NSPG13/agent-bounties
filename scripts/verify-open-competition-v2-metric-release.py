@@ -22,8 +22,8 @@ SOURCE_HASH_WORD = 10
 ELF_HASH_WORD = 11
 JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
-EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (f205eba "
-EXPECTED_SP1_COMMIT = "f205ebada7f3bf35a71a28492ca8481aff3679ca"
+EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (caf43bb "
+EXPECTED_SP1_COMMIT = "caf43bb80fab6745347fda83bb428cb08a463f8d"
 IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
 
 
@@ -133,7 +133,7 @@ def main() -> int:
     summary = {
         "schema": "agent-bounties/open-competition-v2-metric-review-evidence-v1",
         "profile_id": "public-vector-metric-v1",
-        "sp1_release_line": "6.4.0-agent-bounties-sp1-safe-v2",
+        "sp1_release_line": "6.4.0-agent-bounties-sp1-safe-v4",
         "sp1_commit": EXPECTED_SP1_COMMIT,
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
