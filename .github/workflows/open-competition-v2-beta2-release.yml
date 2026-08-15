@@ -62,9 +62,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SP1_SAFE_COMMIT: 87c57583c77a15fa6dd191a1c6ff6947564e4ef8
-  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v1
-  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v1:87c57583c77a15fa6dd191a1c6ff6947564e4ef8
+  SP1_SAFE_COMMIT: f205ebada7f3bf35a71a28492ca8481aff3679ca
+  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v2
+  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v2:f205ebada7f3bf35a71a28492ca8481aff3679ca
 
 jobs:
   deterministic-release:
@@ -99,6 +99,7 @@ jobs:
             scripts.test_deploy_open_competition_v2_beta2 \
             scripts.test_record_open_competition_v2_beta2_gate \
             scripts.test_verify_open_competition_v2_gnark_image \
+            scripts.test_verify_open_competition_v2_wrap_template \
             scripts.test_verify_sp1_patched_graph -v
 
   static-analysis:
@@ -135,7 +136,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: 87c57583c77a15fa6dd191a1c6ff6947564e4ef8
+          ref: f205ebada7f3bf35a71a28492ca8481aff3679ca
           path: .sp1-safe
       - name: Verify patched native and recursion transcript paths
         run: |
@@ -143,6 +144,8 @@ jobs:
           test "$(git -C .sp1-safe rev-parse HEAD)" = "$SP1_SAFE_COMMIT"
           test "$(cat .sp1-safe/SP1_CIRCUIT_VERSION)" = "$SP1_SAFE_CIRCUIT_VERSION"
           python scripts/verify_sp1_patched_graph.py | tee sp1-patched-graph.json
+          python scripts/verify_open_competition_v2_wrap_template.py .sp1-safe \
+            --expected-version "$SP1_SAFE_CIRCUIT_VERSION" | tee sp1-wrap-template.json
           cd .sp1-safe
           cargo metadata --locked --format-version 1 > cargo-metadata.json
           python - <<'PY'
@@ -160,6 +163,7 @@ jobs:
           PY
           cargo test --locked -p slop-bn254 --lib
           cargo check --locked -p sp1-recursion-circuit
+          cargo check --locked -p sp1-prover --bin regenerate_wrap_template
 
   isolated-metric-build:
     runs-on: ubuntu-24.04
@@ -177,7 +181,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: 87c57583c77a15fa6dd191a1c6ff6947564e4ef8
+          ref: f205ebada7f3bf35a71a28492ca8481aff3679ca
           path: .sp1-safe
       - name: Install patched cargo-prove
         run: |
@@ -188,7 +192,7 @@ jobs:
           "$HOME/.sp1/bin/sp1up" -v 6.4.0
           cargo install --locked --force --root "$HOME/.sp1" --path .sp1-safe/crates/cli
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F '87c5758'
+          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'f205eba'
       - name: Reproduce the metric release
         working-directory: programs/public-vector-metric-v1
         env:
@@ -252,7 +256,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
-          ref: 87c57583c77a15fa6dd191a1c6ff6947564e4ef8
+          ref: f205ebada7f3bf35a71a28492ca8481aff3679ca
           path: .sp1-safe
       - name: Build patched circuits, verifier bytecode and CPU runner
         env:
@@ -260,6 +264,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/verify_open_competition_v2_wrap_template.py .sp1-safe \
+            --expected-version "$SP1_SAFE_CIRCUIT_VERSION"
           test "$(python -c 'import json; print(json.load(open("programs/public-vector-metric-v1/release-identity.json"))["status"])')" = reproduced_beta2
           rm -rf .sp1-safe/crates/prover/build
           DOCKER_BUILDKIT=1 docker build --pull=false \

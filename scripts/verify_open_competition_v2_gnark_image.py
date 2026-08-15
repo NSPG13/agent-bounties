@@ -42,7 +42,7 @@ def verify(
     if any(fragment not in image_source for fragment in required_image_fragments):
         raise ValueError("gnark image omits a compiler or source-identity pin")
     required_workflow_fragments = (
-        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v1:87c57583c77a15fa6dd191a1c6ff6947564e4ef8",
+        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v2:f205ebada7f3bf35a71a28492ca8481aff3679ca",
         "rm -rf .sp1-safe/crates/prover/build",
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",

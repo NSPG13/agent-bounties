@@ -14,7 +14,7 @@ from _shared.evm import artifact_hex, keccak256
 
 
 SCHEMA = "agent-bounties/open-competition-v2-beta2-verifier-assets-v1"
-CIRCUIT_VERSION = "agent-bounties-sp1-safe-v1"
+CIRCUIT_VERSION = "agent-bounties-sp1-safe-v2"
 
 
 def proof_evidence_hash(path: Path) -> str:

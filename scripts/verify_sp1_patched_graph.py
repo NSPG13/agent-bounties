@@ -11,8 +11,8 @@ import tomllib
 
 ADVISORY = "GHSA-vj64-rjf3-w3v7"
 SP1_REPOSITORY = "https://github.com/NSPG13/sp1"
-SP1_COMMIT = "87c57583c77a15fa6dd191a1c6ff6947564e4ef8"
-SP1_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v1"
+SP1_COMMIT = "f205ebada7f3bf35a71a28492ca8481aff3679ca"
+SP1_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v2"
 PATCHED_PACKAGES = ("p3-challenger", "p3-field")
 EXPECTED_LOCKS = (
     Path("programs/public-vector-metric-v1/Cargo.lock"),
@@ -84,7 +84,7 @@ def verify(root: Path) -> dict[str, object]:
     identity = json.loads((root / IDENTITY_PATH).read_text(encoding="utf-8"))
     if identity.get("sp1_commit") != SP1_COMMIT:
         raise ValueError("metric release identity does not pin the patched SP1 commit")
-    if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v1":
+    if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v2":
         raise ValueError("metric release identity does not pin the patched circuit version")
 
     return {
