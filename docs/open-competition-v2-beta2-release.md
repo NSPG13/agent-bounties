@@ -162,9 +162,10 @@ environments as follows:
 - `v2-beta2-mainnet`: `BASE_MAINNET_RPC_URL` and
   `BASE_MAINNET_DEPLOYER_PRIVATE_KEY`, plus the isolated
   `OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY` secret and the public
-  `BASE_DEPLOYER_ADDRESS` and `BASE_KEEPER_ADDRESS` variables. Keeper signing
-  authority stays in its existing operations environment and is not exposed to
-  release control-plane jobs.
+  `OPEN_COMPETITION_V2_BROKER_ADDRESS`, `BASE_DEPLOYER_ADDRESS`, and
+  `BASE_KEEPER_ADDRESS` variables. Keeper signing authority stays in its
+  existing operations environment and is not exposed to release control-plane
+  jobs.
 
 The mainnet deployment job refuses to sign unless every prelaunch gate is true,
 has HTTPS hash-bound evidence, targets the exact repository subject, and the
