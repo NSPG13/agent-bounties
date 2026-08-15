@@ -1,0 +1,24 @@
+[package]
+name = "public-vector-metric-v1-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+default-run = "public-vector-metric-v1-script"
+
+[features]
+default = []
+network = ["sp1-sdk/network"]
+
+[dependencies]
+competition-metric-core = { workspace = true, features = ["std"] }
+hex = "0.4"
+serde_json.workspace = true
+sha2.workspace = true
+sp1-sdk.workspace = true
+tiny-keccak.workspace = true
+tokio.workspace = true
+
+[build-dependencies]
+sp1-build.workspace = true

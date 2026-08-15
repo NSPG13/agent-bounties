@@ -1,4 +1,5 @@
 mod github_discovery;
+mod open_competition_v2_api;
 mod opportunities;
 
 use app::{
@@ -229,6 +230,19 @@ use worker::{
         get_open_competition_entrant_relay,
         get_open_competition_status,
         withdraw_open_competition_bond,
+        open_competition_v2_api::release,
+        open_competition_v2_api::profiles,
+        open_competition_v2_api::validate_creation,
+        open_competition_v2_api::prepare_creation,
+        open_competition_v2_api::prepare_funding,
+        open_competition_v2_api::inventory,
+        open_competition_v2_api::events,
+        open_competition_v2_api::create_proof_quote,
+        open_competition_v2_api::prepare_proof,
+        open_competition_v2_api::prepare_action,
+        open_competition_v2_api::get_proof_job,
+        open_competition_v2_api::pay_proof_job,
+        open_competition_v2_api::authorize_proof_job_relay,
         get_standing_meta_v4_readiness,
         prepare_standing_meta_v4_claim,
         prepare_anonymous_stake_registration,
@@ -2279,6 +2293,7 @@ async fn main() -> anyhow::Result<()> {
             "/v1/base/open-competition-v1/bond-withdrawal-preparation",
             post(withdraw_open_competition_bond),
         )
+        .merge(open_competition_v2_api::router())
         .route(
             "/v1/base/standing-meta-v4/readiness",
             get(get_standing_meta_v4_readiness),
@@ -19693,6 +19708,23 @@ mod tests {
         assert!(paths.contains_key("/.well-known/x402.json"));
         assert!(paths.contains_key("/v1/x402/base/bounties/{bounty_contract}/funding"));
         assert!(paths.contains_key("/v1/x402/base/relays/{relay_id}"));
+        for v2 in [
+            "/v1/base/open-competition-v2-beta2/release",
+            "/v1/base/open-competition-v2-beta2/profiles",
+            "/v1/base/open-competition-v2-beta2/validate",
+            "/v1/base/open-competition-v2-beta2/creation-preparation",
+            "/v1/base/open-competition-v2-beta2/funding-preparation",
+            "/v1/base/open-competition-v2-beta2/inventory",
+            "/v1/base/open-competition-v2-beta2/events",
+            "/v1/base/open-competition-v2-beta2/proof-quotes",
+            "/v1/base/open-competition-v2-beta2/proof-preparation",
+            "/v1/base/open-competition-v2-beta2/action-preparation",
+            "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}",
+            "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
+            "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization",
+        ] {
+            assert!(paths.contains_key(v2), "missing {v2}");
+        }
         assert!(paths.contains_key("/v1/base/broadcast-signed-transaction"));
         assert!(paths.contains_key("/v1/base/transaction-receipt"));
         for autonomous in [

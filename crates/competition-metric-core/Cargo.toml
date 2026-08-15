@@ -1,0 +1,19 @@
+[package]
+name = "competition-metric-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["std"]
+std = ["serde/std"]
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+tiny-keccak = { version = "2", features = ["keccak"] }
+
+[dev-dependencies]
+hex.workspace = true
+serde_json.workspace = true

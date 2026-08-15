@@ -919,7 +919,11 @@ mod tests {
         assert!(query.contains("currencyCode=usdc_base"));
         assert!(query.contains("walletAddress=0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"));
         assert!(query.contains("allowedIpAddress="));
-        assert!(query.split('&').last().unwrap().starts_with("signature="));
+        assert!(query
+            .split('&')
+            .next_back()
+            .unwrap()
+            .starts_with("signature="));
         assert!(!plan.checkout_url.contains("sk_live_example"));
         assert!(!plan.bounty_funded);
         assert!(plan.canonical_funding_event.is_none());

@@ -24,10 +24,14 @@ use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
 mod open_competition;
+mod open_competition_v2;
+mod open_competition_v2_planner;
 mod standing_meta_v4;
 
 pub use agent_wallet_readiness::*;
 pub use open_competition::*;
+pub use open_competition_v2::*;
+pub use open_competition_v2_planner::*;
 pub use standing_meta_v4::*;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -50,6 +54,8 @@ pub enum ChainBaseError {
     InitialFundingExceedsTarget,
     #[error("invalid autonomous bounty verification configuration: {0}")]
     InvalidVerificationConfiguration(String),
+    #[error("invalid Open Competition V2 request: {0}")]
+    InvalidOpenCompetitionV2(String),
     #[error("invalid canonical JSON commitment: {0}")]
     InvalidCanonicalJson(String),
     #[error("invalid autonomous bounty terms document: {0}")]
@@ -108,6 +114,8 @@ pub enum ChainBaseError {
     RelayerFeeCapExceeded { estimated: u128, maximum: u128 },
     #[error("Base relayer balance {balance} is below bounded transaction cost {required}")]
     RelayerInsufficientBalance { balance: u128, required: u128 },
+    #[error("Base relay simulation rejected the transaction: {0}")]
+    RelayerSimulation(String),
     #[error("Base relayer provider error: {0}")]
     RelayerProvider(String),
 }
@@ -227,7 +235,7 @@ impl BaseTransactionRelayer {
         provider
             .call(transaction.clone())
             .await
-            .map_err(sanitize_relayer_provider_error)?;
+            .map_err(sanitize_relayer_simulation_error)?;
         let estimated_gas = provider
             .estimate_gas(transaction.clone())
             .await
@@ -310,11 +318,18 @@ fn parse_alloy_bytes(value: &str) -> Result<Bytes, ChainBaseError> {
     Ok(Bytes::from(decoded))
 }
 
-fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
+fn sanitize_relayer_error_message(error: impl std::fmt::Display) -> String {
     let message = redact_provider_urls(&error.to_string());
     let first_line = message.lines().next().unwrap_or("provider request failed");
-    let bounded = first_line.chars().take(300).collect::<String>();
-    ChainBaseError::RelayerProvider(bounded)
+    first_line.chars().take(300).collect::<String>()
+}
+
+fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
+    ChainBaseError::RelayerProvider(sanitize_relayer_error_message(error))
+}
+
+fn sanitize_relayer_simulation_error(error: impl std::fmt::Display) -> ChainBaseError {
+    ChainBaseError::RelayerSimulation(sanitize_relayer_error_message(error))
 }
 
 pub fn redact_provider_urls(message: &str) -> String {
@@ -688,7 +703,7 @@ pub struct Eip3009AuthorizationMessage {
     pub nonce: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Eip712DomainData {
     pub name: String,
     pub version: String,
@@ -698,7 +713,7 @@ pub struct Eip712DomainData {
     pub verifying_contract: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Eip712TypeField {
     pub name: String,
     #[serde(rename = "type")]
@@ -2996,6 +3011,77 @@ pub async fn fetch_exact_block_identity(
         &ReqwestJsonRpcTransport::default(),
     )
     .await
+}
+
+pub async fn fetch_contract_code_at(
+    rpc_url: &str,
+    contract: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<String, ChainBaseError> {
+    fetch_contract_code_at_with_transport(
+        rpc_url,
+        contract,
+        block_number,
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await
+}
+
+pub async fn fetch_contract_bool_at(
+    rpc_url: &str,
+    contract: &str,
+    call_data: &str,
+    block_number: u64,
+    request_id: u64,
+) -> Result<bool, ChainBaseError> {
+    let word = fetch_contract_word(
+        rpc_url,
+        &normalize_address(contract)?,
+        &normalize_data(call_data)?,
+        &hex_quantity(block_number),
+        request_id,
+        &ReqwestJsonRpcTransport::default(),
+    )
+    .await?;
+    let word = parse_bytes32(&word)?;
+    if word[..31].iter().any(|byte| *byte != 0) || word[31] > 1 {
+        return Err(ChainBaseError::InvalidRpcResponse(
+            "eth_call result is not an ABI bool".to_string(),
+        ));
+    }
+    Ok(word[31] == 1)
+}
+
+pub async fn fetch_contract_code_at_with_transport<T>(
+    rpc_url: &str,
+    contract: &str,
+    block_number: u64,
+    request_id: u64,
+    transport: &T,
+) -> Result<String, ChainBaseError>
+where
+    T: JsonRpcTransport + ?Sized,
+{
+    let result = rpc_result(
+        transport
+            .post_json_value(
+                rpc_url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "eth_getCode",
+                    "params": [normalize_address(contract)?, hex_quantity(block_number)]
+                }),
+            )
+            .await?,
+        request_id,
+        "eth_getCode",
+    )?;
+    normalize_data(result.as_str().ok_or_else(|| {
+        ChainBaseError::InvalidRpcResponse("eth_getCode result is not hex data".to_string())
+    })?)
 }
 
 pub async fn fetch_block_identity_with_transport<T>(
@@ -7066,6 +7152,19 @@ mod tests {
         assert!(!message.contains("secret"));
         assert!(!message.contains("api-key"));
         assert!(!message.contains("ws-key"));
+    }
+
+    #[test]
+    fn hosted_relayer_simulation_errors_are_typed_and_redacted() {
+        let error = sanitize_relayer_simulation_error(
+            "execution reverted at https://user:secret@rpc.example/v2/private-key",
+        );
+        let ChainBaseError::RelayerSimulation(message) = error else {
+            panic!("expected a relayer simulation error");
+        };
+        assert_eq!(message, "execution reverted at [redacted-url]");
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("private-key"));
     }
 
     #[tokio::test]

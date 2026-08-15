@@ -16,7 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Enforce the exact patched V2 SP1 graph
+        run: python scripts/verify_sp1_patched_graph.py
+
       - name: Reject newly introduced vulnerable dependencies
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: moderate
+          # GitHub matches this advisory by package name/version and cannot see
+          # the exact patched git source enforced by the preceding graph gate.
+          allow-ghsas: GHSA-vj64-rjf3-w3v7

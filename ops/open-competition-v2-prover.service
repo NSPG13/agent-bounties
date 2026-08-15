@@ -1,0 +1,24 @@
+[Unit]
+Description=Agent Bounties Open Competition V2 Beta2 CPU prover
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent-bounties-prover
+Group=agent-bounties-prover
+EnvironmentFile=/etc/agent-bounties/prover.env
+ExecStart=/usr/bin/python3 /opt/agent-bounties/scripts/open_competition_v2_prover_service.py
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/var/lib/agent-bounties-prover
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-bounties-prover
+MemoryMax=120G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

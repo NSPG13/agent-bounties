@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "public-vector-metric-v1-program"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+competition-metric-core = { path = "../../../crates/competition-metric-core", default-features = false }
+sp1-zkvm = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
+
+[patch.crates-io]
+p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }
+p3-field = { git = "https://github.com/NSPG13/sp1", rev = "0b729d415bf024ae425b27e6a829bed7642bbe7f" }

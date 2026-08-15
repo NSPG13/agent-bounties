@@ -865,6 +865,41 @@ tool_args! {
 
 tool_args! {
     #[derive(Default)]
+    struct OpenCompetitionV2InspectArgs {
+        operation: String,
+        network: Option<String>,
+        state: Option<String>,
+        bounty_id: Option<String>,
+        job_id: Option<String>,
+    }
+    schema object_tool_schema(
+        json!({
+            "operation": enum_property(&["release", "profiles", "inventory", "events", "proof_job"], "Read one exact V2 Beta2 surface."),
+            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Defaults to base-mainnet."),
+            "state": nullable_enum_property(&["announced", "funding", "active", "settled", "cancelled"], "Inventory-only state filter."),
+            "bounty_id": nullable_string_property("Events-only bytes32 bounty filter."),
+            "job_id": nullable_string_property("Proof-job UUID; required for proof_job.")
+        }),
+        &["operation"],
+    );
+}
+
+tool_args! {
+    struct OpenCompetitionV2MutationArgs {
+        operation: String,
+        arguments: Value,
+    }
+    schema object_tool_schema(
+        json!({
+            "operation": enum_property(&["validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"], "Execute one ordered V2 Beta2 transition."),
+            "arguments": { "type": "object", "description": "Exact API request. pay_proof requires proof_job_id and optionally payment_signature. authorize_relay requires proof_job_id.", "additionalProperties": true }
+        }),
+        &["operation", "arguments"],
+    );
+}
+
+tool_args! {
+    #[derive(Default)]
     struct StandingMetaV4ReadinessArgs {
         network: Option<String>,
     }
@@ -1916,6 +1951,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/tools/get_open_competition_entrant_relay",
             post(get_open_competition_entrant_relay),
+        )
+        .route(
+            "/tools/inspect_open_competition_v2",
+            post(inspect_open_competition_v2),
+        )
+        .route(
+            "/tools/prepare_open_competition_v2",
+            post(prepare_open_competition_v2),
         )
         .route(
             "/tools/get_standing_meta_v4_readiness",
@@ -3317,6 +3360,16 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
             "get_open_competition_entrant_relay",
             "Poll one entrant relay through canonical Base safe-block reconciliation. Only BountySettled proves solver payment.",
             GetOpenCompetitionEntrantRelayArgs::input_schema(),
+        ),
+        tool(
+            "inspect_open_competition_v2",
+            "Read V2 in order: release, profiles, active inventory, events, then proof-job state. Only CompetitionSettledV2 proves solver payment.",
+            OpenCompetitionV2InspectArgs::input_schema(),
+        ),
+        tool(
+            "prepare_open_competition_v2",
+            "Execute one V2 step in order: validate, create, fund, quote proof, pay proof, prepare proof, authorize relay, prepare action. Submit only returned exact calls.",
+            OpenCompetitionV2MutationArgs::input_schema(),
         ),
         tool(
             "get_standing_meta_v4_readiness",
@@ -5481,6 +5534,172 @@ async fn get_open_competition_entrant_relay(
     .await
 }
 
+async fn inspect_open_competition_v2(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionV2InspectArgs>,
+) -> Json<serde_json::Value> {
+    let api = public_base_url_from_env();
+    let root = format!(
+        "{}/v1/base/open-competition-v2-beta2",
+        api.trim_end_matches('/')
+    );
+    let network = args.network.as_deref().unwrap_or("base-mainnet");
+    let request = match args.operation.as_str() {
+        "release" => reqwest::Client::new()
+            .get(format!("{root}/release"))
+            .query(&[("network", network)]),
+        "profiles" => reqwest::Client::new()
+            .get(format!("{root}/profiles"))
+            .query(&[("network", network)]),
+        "inventory" => {
+            let mut query = vec![("network", network.to_string())];
+            if let Some(state) = args.state {
+                query.push(("state", state));
+            }
+            reqwest::Client::new()
+                .get(format!("{root}/inventory"))
+                .query(&query)
+        }
+        "events" => {
+            let mut query = vec![("network", network.to_string())];
+            if let Some(bounty_id) = args.bounty_id {
+                query.push(("bounty_id", bounty_id));
+            }
+            reqwest::Client::new()
+                .get(format!("{root}/events"))
+                .query(&query)
+        }
+        "proof_job" => {
+            let Some(job_id) = args.job_id else {
+                return mcp_error("job_id is required for proof_job");
+            };
+            if uuid::Uuid::parse_str(&job_id).is_err() {
+                return mcp_error("job_id must be a UUID");
+            }
+            reqwest::Client::new().get(format!("{root}/proof-jobs/{job_id}"))
+        }
+        _ => return mcp_error("unsupported V2 inspect operation"),
+    };
+    proxy_public_json_response_with_timeout(request, "Open Competition V2 API", 60).await
+}
+
+async fn prepare_open_competition_v2(
+    State(_state): State<SharedState>,
+    Json(args): Json<OpenCompetitionV2MutationArgs>,
+) -> Json<serde_json::Value> {
+    let mut arguments = args.arguments;
+    if args.operation == "pay_proof" {
+        let Some(object) = arguments.as_object_mut() else {
+            return mcp_error("pay_proof arguments must be an object");
+        };
+        let Some(job_id) = object
+            .remove("proof_job_id")
+            .and_then(|value| value.as_str().map(str::to_string))
+        else {
+            return mcp_error("pay_proof requires proof_job_id");
+        };
+        if uuid::Uuid::parse_str(&job_id).is_err() {
+            return mcp_error("proof_job_id must be a UUID");
+        }
+        let payment_signature = object
+            .remove("payment_signature")
+            .and_then(|value| value.as_str().map(str::to_string));
+        if payment_signature.as_deref().is_some_and(|value| {
+            value.is_empty() || value.bytes().any(|byte| byte.is_ascii_control())
+        }) {
+            return mcp_error("payment_signature cannot be empty or contain control characters");
+        }
+        let url = format!(
+            "{}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
+            public_base_url_from_env().trim_end_matches('/')
+        );
+        let mut request = reqwest::Client::new().post(url);
+        if let Some(signature) = payment_signature {
+            request = request.header("PAYMENT-SIGNATURE", signature);
+        }
+        return proxy_open_competition_v2_payment(request).await;
+    }
+    let path = match args.operation.as_str() {
+        "validate" => "validate".to_string(),
+        "create" => "creation-preparation".to_string(),
+        "fund" => "funding-preparation".to_string(),
+        "quote_proof" => "proof-quotes".to_string(),
+        "prepare_proof" => "proof-preparation".to_string(),
+        "authorize_relay" => {
+            let Some(object) = arguments.as_object_mut() else {
+                return mcp_error("authorize_relay arguments must be an object");
+            };
+            let Some(job_id) = object
+                .remove("proof_job_id")
+                .and_then(|value| value.as_str().map(str::to_string))
+            else {
+                return mcp_error("authorize_relay requires proof_job_id");
+            };
+            if uuid::Uuid::parse_str(&job_id).is_err() {
+                return mcp_error("proof_job_id must be a UUID");
+            }
+            format!("proof-jobs/{job_id}/relay-authorization")
+        }
+        "prepare_action" => "action-preparation".to_string(),
+        _ => return mcp_error("unsupported V2 preparation operation"),
+    };
+    let url = format!(
+        "{}/v1/base/open-competition-v2-beta2/{path}",
+        public_base_url_from_env().trim_end_matches('/')
+    );
+    proxy_public_json_response_with_timeout(
+        reqwest::Client::new().post(url).json(&arguments),
+        "Open Competition V2 API",
+        90,
+    )
+    .await
+}
+
+async fn proxy_open_competition_v2_payment(
+    request: reqwest::RequestBuilder,
+) -> Json<serde_json::Value> {
+    let response =
+        match tokio::time::timeout(std::time::Duration::from_secs(90), request.send()).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                return mcp_error(format!("Open Competition V2 payment API failed: {error}"))
+            }
+            Err(_) => return mcp_error("Open Competition V2 payment API timed out"),
+        };
+    let status = response.status().as_u16();
+    let payment_required = response
+        .headers()
+        .get("PAYMENT-REQUIRED")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let payment_response = response
+        .headers()
+        .get("PAYMENT-RESPONSE")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = match response.text().await {
+        Ok(body) => serde_json::from_str(&body).unwrap_or_else(|_| json!({"text": body})),
+        Err(error) => {
+            return mcp_error(format!("Open Competition V2 payment body failed: {error}"))
+        }
+    };
+    Json(json!({
+        "status": status,
+        "payment_required": payment_required,
+        "payment_response": payment_response,
+        "body": body,
+        "next_action": if status == 402 {
+            "Sign the exact PAYMENT-REQUIRED challenge, then call pay_proof once with payment_signature."
+        } else if status == 202 {
+            "Poll proof_job; do not sign or pay again."
+        } else if status == 200 {
+            "Poll proof_job until proved, then sign the relay authorization only if relay was requested."
+        } else {
+            "Read body.error_code and retry only when it says retryable."
+        }
+    }))
+}
+
 async fn proxy_open_competition_action(
     path: &str,
     args: OpenCompetitionActionArgs,
@@ -6801,7 +7020,7 @@ mod tests {
             .as_array()
             .expect("tool registry contains tools");
 
-        assert_eq!(descriptors.len(), 119);
+        assert_eq!(descriptors.len(), 121);
         assert_eq!(
             descriptors
                 .iter()

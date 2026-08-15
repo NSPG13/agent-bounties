@@ -2,15 +2,17 @@ use anyhow::{anyhow, Context};
 use app::BountyNetwork;
 use chain_base::{
     autonomous_bounty_event_topics, base_network_descriptor, build_autonomous_bounty_feed,
-    decode_autonomous_bounty_logs, decode_open_competition_logs, fetch_base_contract_logs,
-    fetch_base_multi_contract_logs, fetch_block_number, fetch_block_timestamp,
-    open_competition_event_topics, redact_provider_urls, rpc_logs_to_evm_logs,
-    AutonomousBountyEvent, AutonomousBountyEventKind, BaseContractLogQuery,
-    BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError, OpenCompetitionEventKind,
-    OPEN_COMPETITION_PROTOCOL_VERSION,
+    decode_autonomous_bounty_logs, decode_open_competition_logs, decode_open_competition_v2_logs,
+    fetch_base_contract_logs, fetch_base_multi_contract_logs, fetch_block_number,
+    fetch_block_timestamp, fetch_exact_block_identity, fetch_safe_block_identity,
+    open_competition_event_topics, open_competition_v2_event_topics, project_open_competition_v2,
+    redact_provider_urls, rpc_logs_to_evm_logs, AutonomousBountyEvent, AutonomousBountyEventKind,
+    BaseContractLogQuery, BaseMultiContractLogQuery, BaseNetworkDescriptor, ChainBaseError,
+    OpenCompetitionEventKind, OpenCompetitionV2EventKind, OPEN_COMPETITION_PROTOCOL_VERSION,
+    OPEN_COMPETITION_V2_PROTOCOL_VERSION,
 };
 use chrono::{DateTime, Utc};
-use db::{BaseIndexerHeartbeat, DbError, PostgresStore};
+use db::{BaseIndexerHeartbeat, DbError, OpenCompetitionV2SafeContext, PostgresStore};
 use domain::{
     AgentWebhookEventType, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, Submission,
     VerifierResult,
@@ -28,7 +30,13 @@ use std::{
 use tokio::net::lookup_host;
 use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
+mod open_competition_v2_broker;
 mod regression_sandbox;
+pub use open_competition_v2_broker::*;
+mod open_competition_v2_keeper;
+pub use open_competition_v2_keeper::*;
+mod open_competition_v2_shadow;
+pub use open_competition_v2_shadow::*;
 pub use regression_sandbox::*;
 
 const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
@@ -371,6 +379,93 @@ impl OpenCompetitionIndexerConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenCompetitionV2IndexerConfig {
+    pub network: String,
+    pub rpc_url: String,
+    pub factory_contract: String,
+    pub deployment_block: u64,
+    pub poll_seconds: u64,
+    pub confirmations: u64,
+    pub max_blocks_per_query: u64,
+    pub request_id: u64,
+}
+
+impl OpenCompetitionV2IndexerConfig {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    pub fn from_lookup<F>(lookup: F) -> anyhow::Result<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let requested_network = lookup("OPEN_COMPETITION_V2_INDEXER_NETWORK")
+            .filter(|value| nonempty(value))
+            .unwrap_or_else(|| "base-sepolia".to_string());
+        let descriptor = base_network_descriptor(&requested_network)?;
+        let network = canonical_base_network(&descriptor);
+        let factory_contract = lookup("OPEN_COMPETITION_V2_FACTORY_CONTRACT")
+            .filter(|value| nonempty(value))
+            .ok_or_else(|| anyhow!("OPEN_COMPETITION_V2_FACTORY_CONTRACT is required"))?;
+        let rpc_url = lookup("OPEN_COMPETITION_V2_INDEXER_RPC_URL")
+            .filter(|value| nonempty(value))
+            .or_else(|| lookup(&descriptor.rpc_url_env).filter(|value| nonempty(value)))
+            .ok_or_else(|| {
+                anyhow!(
+                    "set OPEN_COMPETITION_V2_INDEXER_RPC_URL or {}",
+                    descriptor.rpc_url_env
+                )
+            })?;
+        let deployment_block = lookup("OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK")
+            .filter(|value| nonempty(value))
+            .ok_or_else(|| anyhow!("OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK is required"))
+            .and_then(|value| parse_u64_env("OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK", &value))?;
+        let poll_seconds = lookup("OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS", &value))
+            .transpose()?
+            .unwrap_or(15);
+        let confirmations = lookup("OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS", &value))
+            .transpose()?
+            .unwrap_or(2);
+        let max_blocks_per_query = lookup("OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY", &value))
+            .transpose()?
+            .unwrap_or(2_000)
+            .max(1);
+        let request_id = lookup("OPEN_COMPETITION_V2_INDEXER_REQUEST_ID")
+            .filter(|value| nonempty(value))
+            .map(|value| parse_u64_env("OPEN_COMPETITION_V2_INDEXER_REQUEST_ID", &value))
+            .transpose()?
+            .unwrap_or(200_000);
+        let factory_contract = BaseContractLogQuery::new(
+            factory_contract,
+            deployment_block,
+            None,
+            open_competition_v2_event_topics(),
+        )?
+        .contract;
+        Ok(Self {
+            network,
+            rpc_url,
+            factory_contract,
+            deployment_block,
+            poll_seconds,
+            confirmations,
+            max_blocks_per_query,
+            request_id,
+        })
+    }
+
+    pub fn network_descriptor(&self) -> anyhow::Result<BaseNetworkDescriptor> {
+        Ok(base_network_descriptor(&self.network)?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenCompetitionIndexerPollReport {
     pub protocol_version: String,
@@ -385,6 +480,25 @@ pub struct OpenCompetitionIndexerPollReport {
     pub canonical_competitions: usize,
     pub fetched_logs: usize,
     pub persisted_events: usize,
+    pub persisted_cursor_block: Option<u64>,
+    pub skipped_reason: Option<String>,
+    pub evidence_boundary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCompetitionV2IndexerPollReport {
+    pub protocol_version: String,
+    pub network: BaseNetworkDescriptor,
+    pub factory_contract: String,
+    pub deployment_block: u64,
+    pub latest_block: u64,
+    pub safe_block: u64,
+    pub from_block: u64,
+    pub to_block: Option<u64>,
+    pub canonical_competitions: usize,
+    pub fetched_logs: usize,
+    pub persisted_events: usize,
+    pub projected_competitions: usize,
     pub persisted_cursor_block: Option<u64>,
     pub skipped_reason: Option<String>,
     pub evidence_boundary: String,
@@ -965,6 +1079,290 @@ pub async fn poll_open_competition_indexer_once_with_heartbeat(
             Err(anyhow::Error::new(IndexerOperationalError {
                 message: error_message,
                 retryable,
+            }))
+        }
+    }
+}
+
+pub async fn poll_open_competition_v2_indexer_once(
+    store: &PostgresStore,
+    config: &OpenCompetitionV2IndexerConfig,
+) -> anyhow::Result<OpenCompetitionV2IndexerPollReport> {
+    let descriptor = config.network_descriptor()?;
+    let latest_block = fetch_block_number(&config.rpc_url, config.request_id).await?;
+    let rpc_safe = fetch_safe_block_identity(&config.rpc_url, config.request_id + 1).await?;
+    let confirmed = latest_block.saturating_sub(config.confirmations);
+    let safe_to = rpc_safe.number.min(confirmed);
+    let safe_identity = if safe_to == rpc_safe.number {
+        rpc_safe
+    } else {
+        fetch_exact_block_identity(&config.rpc_url, safe_to, config.request_id + 2).await?
+    };
+    let cursor = store
+        .get_base_log_cursor(&config.network, &config.factory_contract)
+        .await?;
+    let from_block = next_indexer_from_block(
+        cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+        None,
+        Some(config.deployment_block),
+    )?;
+    if from_block < config.deployment_block {
+        return Err(anyhow!(
+            "V2 cursor predates the immutable factory deployment"
+        ));
+    }
+    let skipped = |reason: &str| {
+        OpenCompetitionV2IndexerPollReport {
+        protocol_version: OPEN_COMPETITION_V2_PROTOCOL_VERSION.to_string(),
+        network: descriptor.clone(),
+        factory_contract: config.factory_contract.clone(),
+        deployment_block: config.deployment_block,
+        latest_block,
+        safe_block: safe_to,
+        from_block,
+        to_block: None,
+        canonical_competitions: 0,
+        fetched_logs: 0,
+        persisted_events: 0,
+        projected_competitions: 0,
+        persisted_cursor_block: cursor.as_ref().map(|cursor| cursor.last_scanned_block),
+        skipped_reason: Some(reason.to_string()),
+        evidence_boundary: "A skipped poll creates no competition or payment evidence. Only safe-block CompetitionSettledV2 proves solver payment.".to_string(),
+    }
+    };
+    if safe_to < from_block {
+        return Ok(skipped("no safe blocks are ready to scan"));
+    }
+    let to_block = bounded_to_block(from_block, safe_to, config.max_blocks_per_query);
+    let topics = open_competition_v2_event_topics();
+    let factory_query = BaseContractLogQuery::new(
+        &config.factory_contract,
+        from_block,
+        Some(to_block),
+        topics.clone(),
+    )?;
+    let factory_logs = rpc_logs_to_evm_logs(
+        fetch_base_contract_logs(&config.rpc_url, &factory_query, config.request_id + 3)
+            .await?
+            .result,
+    )?;
+    let mut events = decode_open_competition_v2_logs(factory_logs.clone())?;
+    if events.iter().any(|event| {
+        !event
+            .contract_address
+            .eq_ignore_ascii_case(&config.factory_contract)
+            || !matches!(
+                event.kind,
+                OpenCompetitionV2EventKind::CanonicalCompetitionCreated
+                    | OpenCompetitionV2EventKind::CanonicalCompetitionEconomics
+                    | OpenCompetitionV2EventKind::CanonicalCompetitionVerification
+                    | OpenCompetitionV2EventKind::CanonicalCompetitionPolicies
+            )
+    }) {
+        return Err(anyhow!(
+            "V2 factory query returned an invalid emitter or event"
+        ));
+    }
+    let stored_events = store
+        .list_open_competition_v2_events(&config.network, &config.factory_contract)
+        .await?;
+    let mut competitions = stored_events
+        .iter()
+        .chain(events.iter())
+        .filter(|event| event.kind == OpenCompetitionV2EventKind::CanonicalCompetitionCreated)
+        .map(|event| {
+            event.data["competition"]
+                .as_str()
+                .map(str::to_ascii_lowercase)
+                .ok_or_else(|| anyhow!("V2 creation event is missing competition"))
+        })
+        .collect::<anyhow::Result<HashSet<_>>>()?;
+    let mut fetched_logs = factory_logs.len();
+    let mut ordered = competitions.iter().cloned().collect::<Vec<_>>();
+    ordered.sort();
+    for (index, batch) in ordered
+        .chunks(AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE)
+        .enumerate()
+    {
+        let query = BaseMultiContractLogQuery::new(
+            batch.iter().cloned(),
+            from_block,
+            Some(to_block),
+            topics.clone(),
+        )?;
+        let logs = rpc_logs_to_evm_logs(
+            fetch_base_multi_contract_logs(
+                &config.rpc_url,
+                &query,
+                config.request_id + 4 + index as u64,
+            )
+            .await?
+            .result,
+        )?;
+        fetched_logs += logs.len();
+        let decoded = decode_open_competition_v2_logs(logs)?;
+        let emitters = batch
+            .iter()
+            .map(|address| address.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        if decoded.iter().any(|event| {
+            !emitters.contains(&event.contract_address.to_ascii_lowercase())
+                || matches!(
+                    event.kind,
+                    OpenCompetitionV2EventKind::CanonicalCompetitionCreated
+                        | OpenCompetitionV2EventKind::CanonicalCompetitionEconomics
+                        | OpenCompetitionV2EventKind::CanonicalCompetitionVerification
+                        | OpenCompetitionV2EventKind::CanonicalCompetitionPolicies
+                )
+        }) {
+            return Err(anyhow!(
+                "V2 competition query returned an invalid emitter or factory event"
+            ));
+        }
+        events.extend(decoded);
+    }
+    events.sort_by_key(|event| (event.block_number, event.log_index));
+    let mut seen = HashSet::new();
+    events.retain(|event| seen.insert(event.log_key.clone()));
+    let mut block_numbers = events
+        .iter()
+        .map(|event| event.block_number)
+        .collect::<Vec<_>>();
+    block_numbers.sort_unstable();
+    block_numbers.dedup();
+    let mut blocks = std::collections::HashMap::new();
+    for (index, block) in block_numbers.into_iter().enumerate() {
+        blocks.insert(
+            block,
+            fetch_exact_block_identity(
+                &config.rpc_url,
+                block,
+                config.request_id + 30_000 + index as u64,
+            )
+            .await?,
+        );
+    }
+    for event in &mut events {
+        let block = blocks
+            .get(&event.block_number)
+            .ok_or_else(|| anyhow!("V2 event block identity is unavailable"))?;
+        event.occurred_at = DateTime::from_timestamp(block.timestamp as i64, 0)
+            .ok_or_else(|| anyhow!("V2 event block timestamp is invalid"))?;
+        store
+            .upsert_open_competition_v2_event(
+                &config.network,
+                &config.factory_contract,
+                event,
+                &OpenCompetitionV2SafeContext {
+                    block_hash: block.hash.clone(),
+                    safe_block_number: safe_identity.number,
+                    safe_block_hash: safe_identity.hash.clone(),
+                },
+            )
+            .await?;
+    }
+    let all_events = store
+        .list_open_competition_v2_events(&config.network, &config.factory_contract)
+        .await?;
+    let projections = project_open_competition_v2(all_events)?;
+    for projection in projections.values() {
+        store
+            .upsert_open_competition_v2_projection(
+                &config.network,
+                &config.factory_contract,
+                projection,
+                safe_identity.number,
+                &safe_identity.hash,
+            )
+            .await?;
+    }
+    for projection in projections.values() {
+        competitions.insert(projection.competition.to_ascii_lowercase());
+    }
+    store
+        .upsert_base_log_cursor(
+            &config.network,
+            &config.factory_contract,
+            to_block,
+            events.last().map(|event| event.log_key.as_str()),
+        )
+        .await?;
+    Ok(OpenCompetitionV2IndexerPollReport {
+        protocol_version: OPEN_COMPETITION_V2_PROTOCOL_VERSION.to_string(),
+        network: descriptor,
+        factory_contract: config.factory_contract.clone(),
+        deployment_block: config.deployment_block,
+        latest_block,
+        safe_block: safe_identity.number,
+        from_block,
+        to_block: Some(to_block),
+        canonical_competitions: competitions.len(),
+        fetched_logs,
+        persisted_events: events.len(),
+        projected_competitions: projections.len(),
+        persisted_cursor_block: Some(to_block),
+        skipped_reason: None,
+        evidence_boundary: "Inventory is rebuilt from immutable V2 events at an RPC-safe block. Only CompetitionSettledV2 proves solver payment.".to_string(),
+    })
+}
+
+pub async fn poll_open_competition_v2_indexer_once_with_heartbeat(
+    store: &PostgresStore,
+    config: &OpenCompetitionV2IndexerConfig,
+) -> anyhow::Result<OpenCompetitionV2IndexerPollReport> {
+    let started_at = Utc::now();
+    let result = poll_open_competition_v2_indexer_once(store, config).await;
+    let completed_at = Utc::now();
+    match result {
+        Ok(report) => {
+            store
+                .upsert_base_indexer_heartbeat(&BaseIndexerHeartbeat {
+                    network: config.network.clone(),
+                    escrow_contract: config.factory_contract.clone(),
+                    status: if report.skipped_reason.is_some() {
+                        INDEXER_HEARTBEAT_SKIPPED
+                    } else {
+                        INDEXER_HEARTBEAT_SUCCESS
+                    }
+                    .to_string(),
+                    started_at,
+                    completed_at: Some(completed_at),
+                    latest_block: Some(report.latest_block),
+                    confirmed_to_block: Some(report.safe_block),
+                    from_block: Some(report.from_block),
+                    to_block: report.to_block,
+                    fetched_logs: report.fetched_logs as u64,
+                    persisted_cursor_block: report.persisted_cursor_block,
+                    skipped_reason: report.skipped_reason.clone(),
+                    error_message: None,
+                    updated_at: completed_at,
+                })
+                .await?;
+            Ok(report)
+        }
+        Err(error) => {
+            let message = redact_operational_error(&error.to_string());
+            store
+                .upsert_base_indexer_heartbeat(&BaseIndexerHeartbeat {
+                    network: config.network.clone(),
+                    escrow_contract: config.factory_contract.clone(),
+                    status: INDEXER_HEARTBEAT_FAILED.to_string(),
+                    started_at,
+                    completed_at: Some(completed_at),
+                    latest_block: None,
+                    confirmed_to_block: None,
+                    from_block: None,
+                    to_block: None,
+                    fetched_logs: 0,
+                    persisted_cursor_block: None,
+                    skipped_reason: None,
+                    error_message: Some(message.clone()),
+                    updated_at: completed_at,
+                })
+                .await?;
+            Err(anyhow::Error::new(IndexerOperationalError {
+                message,
+                retryable: indexer_error_is_retryable(&error),
             }))
         }
     }

@@ -8,10 +8,14 @@ use tokio::time::sleep;
 use worker::{
     dispatch_discovery_webhooks_once, indexer_error_is_retryable,
     poll_autonomous_indexer_once_with_heartbeat, poll_open_competition_indexer_once_with_heartbeat,
+    poll_open_competition_v2_broker_once, poll_open_competition_v2_indexer_once_with_heartbeat,
+    poll_open_competition_v2_keeper_once, poll_open_competition_v2_shadow_once,
     redact_operational_error, run_regression_sandbox_request, snapshot_directory,
     stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
     DiscoveryWebhookConfig, IndexerRecoveryDecision, IndexerRecoveryPolicy,
-    OpenCompetitionIndexerConfig, RegressionCandidateValidationRequest, RegressionInputKind,
+    OpenCompetitionIndexerConfig, OpenCompetitionV2BrokerChainConfig,
+    OpenCompetitionV2BrokerConfig, OpenCompetitionV2IndexerConfig, OpenCompetitionV2KeeperConfig,
+    OpenCompetitionV2ShadowConfig, RegressionCandidateValidationRequest, RegressionInputKind,
     RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
     REGRESSION_SANDBOX_STAGING_ROOT_ENV,
 };
@@ -115,8 +119,22 @@ async fn main() -> anyhow::Result<()> {
     if protocol == "open-competition-v1" {
         return run_open_competition_indexer(&store, once).await;
     }
+    if protocol == "open-competition-v2-beta2" {
+        return run_open_competition_v2_indexer(&store, once).await;
+    }
+    if protocol == "open-competition-v2-broker" {
+        return run_open_competition_v2_broker(&store, once).await;
+    }
+    if protocol == "open-competition-v2-keeper" {
+        return run_open_competition_v2_keeper(&store, once).await;
+    }
+    if protocol == "open-competition-v2-shadow" {
+        return run_open_competition_v2_shadow(&store, once).await;
+    }
     if protocol != "autonomous-v1" {
-        anyhow::bail!("BASE_INDEXER_PROTOCOL must be autonomous-v1 or open-competition-v1");
+        anyhow::bail!(
+            "BASE_INDEXER_PROTOCOL must be autonomous-v1, open-competition-v1, open-competition-v2-beta2, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
+        );
     }
     let config = AutonomousIndexerConfig::from_env()?;
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?;
@@ -174,6 +192,129 @@ async fn main() -> anyhow::Result<()> {
                         anyhow::bail!(
                             "autonomous Base indexer exhausted its bounded recovery budget; inspect the redacted failure heartbeat"
                         );
+                    }
+                    IndexerRecoveryDecision::HaltForOperatorInvestigation { .. } => loop {
+                        if wait_or_shutdown(86_400).await? {
+                            return Ok(());
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
+async fn run_open_competition_v2_shadow(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = OpenCompetitionV2ShadowConfig::from_env()?;
+    let poll_seconds = env_u64("OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS", 30)?.clamp(5, 300);
+    loop {
+        match poll_open_competition_v2_shadow_once(store, &config).await {
+            Ok(report) => println!("{}", serde_json::to_string(&report)?),
+            Err(error) => eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema": "agent-bounties/open-competition-v2-shadow-recovery-v1",
+                    "error": redact_operational_error(&error.to_string()),
+                    "decision": "retry_full_safe_comparison",
+                    "evidence_boundary": "A failed or stale comparison disables public Beta2 operations; it cannot create chain or payment evidence."
+                }))?
+            ),
+        }
+        if once || wait_or_shutdown(poll_seconds).await? {
+            return Ok(());
+        }
+    }
+}
+
+async fn run_open_competition_v2_keeper(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = OpenCompetitionV2KeeperConfig::from_env()?;
+    let chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
+    let poll_seconds = env_u64("OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS", 5)?.clamp(1, 60);
+    loop {
+        match poll_open_competition_v2_keeper_once(store, &config, &chain).await {
+            Ok(report) => println!("{}", serde_json::to_string(&report)?),
+            Err(error) => eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema": "agent-bounties/open-competition-v2-keeper-recovery-v1",
+                    "error": redact_operational_error(&error.to_string()),
+                    "decision": "retry_from_safe_projection",
+                    "evidence_boundary": "Keeper retries are permissionless and idempotent at the contract state machine; only safe canonical V2 events prove outcomes."
+                }))?
+            ),
+        }
+        if once || wait_or_shutdown(poll_seconds).await? {
+            return Ok(());
+        }
+    }
+}
+
+async fn run_open_competition_v2_broker(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = OpenCompetitionV2BrokerConfig::from_env()?;
+    let chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
+    let poll_seconds = env_u64("OPEN_COMPETITION_V2_BROKER_POLL_SECONDS", 5)?.clamp(1, 60);
+    loop {
+        match poll_open_competition_v2_broker_once(store, &config, &chain).await {
+            Ok(report) => println!("{}", serde_json::to_string(&report)?),
+            Err(error) => eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "schema": "agent-bounties/open-competition-v2-broker-recovery-v1",
+                    "error": redact_operational_error(&error.to_string()),
+                    "decision": "retry_from_persisted_lease",
+                    "evidence_boundary": "A retry cannot create payment evidence. Only safe canonical USDC and CompetitionSettledV2 events change proof-job outcomes."
+                }))?
+            ),
+        }
+        if once || wait_or_shutdown(poll_seconds).await? {
+            return Ok(());
+        }
+    }
+}
+
+async fn run_open_competition_v2_indexer(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
+    let config = OpenCompetitionV2IndexerConfig::from_env()?;
+    let recovery_policy = IndexerRecoveryPolicy::from_env()?;
+    let mut consecutive_failures = 0_u32;
+    loop {
+        match poll_open_competition_v2_indexer_once_with_heartbeat(store, &config).await {
+            Ok(report) => {
+                consecutive_failures = 0;
+                println!("{}", serde_json::to_string(&report)?);
+                if once || wait_or_shutdown(config.poll_seconds).await? {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let decision = recovery_policy
+                    .decision(consecutive_failures, indexer_error_is_retryable(&error));
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "schema": "agent-bounties/open-competition-v2-beta2-indexer-recovery-v1",
+                        "protocol_version": "agent-bounties/open-competition-v2-beta2",
+                        "network": config.network,
+                        "factory_contract": config.factory_contract,
+                        "deployment_block": config.deployment_block,
+                        "error": redact_operational_error(&error.to_string()),
+                        "decision": decision,
+                        "evidence_boundary": "Recovery resumes only from the isolated V2 factory cursor and cannot create settlement evidence."
+                    }))?
+                );
+                if once {
+                    anyhow::bail!("Open Competition V2 Base indexer poll failed");
+                }
+                match decision {
+                    IndexerRecoveryDecision::RetryFromPersistedCursor {
+                        backoff_seconds, ..
+                    } => {
+                        if wait_or_shutdown(backoff_seconds).await? {
+                            return Ok(());
+                        }
+                    }
+                    IndexerRecoveryDecision::ExitForSupervisorRestart { .. } => {
+                        anyhow::bail!("Open Competition V2 indexer exhausted its recovery budget");
                     }
                     IndexerRecoveryDecision::HaltForOperatorInvestigation { .. } => loop {
                         if wait_or_shutdown(86_400).await? {
@@ -265,4 +406,15 @@ fn env_flag(name: &str) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn env_u64(name: &str, default: u64) -> anyhow::Result<u64> {
+    match env::var(name) {
+        Ok(value) => value
+            .trim()
+            .parse::<u64>()
+            .with_context(|| format!("{name} must be an unsigned integer")),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error).with_context(|| format!("failed to read {name}")),
+    }
 }

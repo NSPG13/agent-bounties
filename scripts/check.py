@@ -104,6 +104,21 @@ def compile_python(platform: str) -> None:
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
         "scripts/build_canonical_child_verifier_bundle.py",
         "scripts/rehearse_canonical_child_verifier.py", "scripts/build_base_sepolia_sponsor_bundle.py",
+        "scripts/build_open_competition_v2_beta2_release.py",
+        "scripts/test_build_open_competition_v2_beta2_release.py",
+        "scripts/prepare_open_competition_v2_metric_fixture.py",
+        "scripts/test_prepare_open_competition_v2_metric_fixture.py",
+        "scripts/open_competition_v2_proof_rehearsal.py",
+        "scripts/generate_open_competition_v2_proof.py",
+        "scripts/test_open_competition_v2_proof_rehearsal.py",
+        "scripts/run_open_competition_v2_sepolia_rehearsal.py",
+        "scripts/test_run_open_competition_v2_sepolia_rehearsal.py",
+        "scripts/verify_open_competition_v2_slither.py",
+        "scripts/test_verify_open_competition_v2_slither.py",
+        "scripts/verify_sp1_patched_graph.py",
+        "scripts/test_verify_sp1_patched_graph.py",
+        "scripts/run_open_competition_v2_mainnet_fork_replay.py",
+        "scripts/test_run_open_competition_v2_mainnet_fork_replay.py",
     ]
     if platform == "powershell":
         first = """
@@ -195,6 +210,11 @@ def main() -> int:
     platform = parser.parse_args().platform
     cargo, node, npm, forge = map(executable, ("cargo", "node", "npm", "forge"))
     os.environ["PATH"] = os.pathsep.join((str(ROOT / ".tools/foundry"), os.environ.get("PATH", "")))
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(ROOT / "scripts"), os.environ.get("PYTHONPATH", ""))
+        if value
+    )
 
     platform_script("preflight", platform, "-Mode", "full") if platform == "powershell" else platform_script("preflight", platform, "full")
     run_many([
@@ -277,6 +297,21 @@ def main() -> int:
     run(npm, "run", "check:examples", cwd=ROOT / "crates/sdk-typescript")
     run(forge, "test", "--fuzz-runs", "1000", cwd=ROOT / "contracts/base-escrow")
     run(forge, "build", "--force", "--ast", cwd=ROOT / "contracts/base-escrow")
+    py(
+        "-m", "unittest",
+        "scripts.test_build_open_competition_v2_beta2_release",
+        "scripts.test_prepare_open_competition_v2_metric_fixture",
+        "scripts.test_open_competition_v2_proof_rehearsal",
+        "scripts.test_open_competition_v2_prover_service",
+        "scripts.test_run_open_competition_v2_mainnet_fork_replay",
+        "scripts.test_run_open_competition_v2_sepolia_rehearsal",
+        "scripts.test_deploy_open_competition_v2_beta2",
+        "scripts.test_record_open_competition_v2_beta2_gate",
+        "scripts.test_build_open_competition_v2_verifier_assets",
+        "scripts.test_verify_open_competition_v2_slither",
+        "scripts.test_verify_sp1_patched_graph",
+        "-v",
+    )
     check_deployment_bundles(cargo, platform)
     return 0
 

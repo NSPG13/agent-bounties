@@ -12,6 +12,38 @@ from eth_hash.auto import keccak
 OPEN_COMPETITION_COMMITMENT_SCHEMA = (
     "agent-bounties/open-competition-v1-commitment-v1"
 )
+OPEN_COMPETITION_V2_JOURNAL_DOMAIN = bytes.fromhex(
+    "110d7acc5c3397f452c974ba4f7296d7d2a2cede57290113d1fd256e1818804b"
+)
+OPEN_COMPETITION_V2_POLICY_DOMAIN = bytes.fromhex(
+    "f6a226ca20aaca3b9c0b4a609939c334b6c2b03500a5df45188df8bcd7c2b369"
+)
+OPEN_COMPETITION_V2_SUBMISSION_DOMAIN = bytes.fromhex(
+    "402204460b00978c26cee42ae0089d94fe8b0b17bd90c45a6cd78d466463a507"
+)
+OPEN_COMPETITION_V2_EVIDENCE_DOMAIN = bytes.fromhex(
+    "16f60f26d350a38e6993a5454967d1efb0461d93785b7cdb38ba463284c5ab15"
+)
+OPEN_COMPETITION_V2_JOURNAL_SCHEMA_HASH = bytes.fromhex(
+    "d9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4"
+)
+OPEN_COMPETITION_V2_METRIC_PROGRAM_HASH = bytes.fromhex(
+    "1c27fc20ab65264c7db2997c8b76f78d7291cdb91243481bcae1e88f77beb88a"
+)
+OPEN_COMPETITION_V2_PROOF_SYSTEMS = {
+    "groth16": bytes.fromhex(
+        "0fbfc39a4f588598b55fce747dc8dde3f1b661a9d538dc174b464d210d12a81d"
+    ),
+    "plonk": bytes.fromhex(
+        "91e36d74d5d8703299314b82f85cab384a3df8064725b371f1f9f4ad49238f1b"
+    ),
+}
+OPEN_COMPETITION_V2_MODE_TAGS = {
+    "all_equal": 0,
+    "maximize_exact_matches": 1,
+    "minimize_absolute_error": 2,
+}
+OPEN_COMPETITION_V2_MAXIMUM_VECTORS = 10_000
 
 
 def _open_competition_address_word(value: str) -> bytes:
@@ -80,6 +112,111 @@ def generate_open_competition_commitment(
             "send only commitment during entry preparation."
         ),
     }
+
+
+def build_open_competition_v2_public_vector(input: dict) -> dict:
+    """Build the exact public-vector-metric-v1 input commitments and journal."""
+    scope = input.get("scope")
+    vectors = input.get("vectors")
+    mode = input.get("mode")
+    threshold = input.get("threshold")
+    if not isinstance(scope, dict):
+        raise ValueError("scope must be an object")
+    if mode not in OPEN_COMPETITION_V2_MODE_TAGS:
+        raise ValueError("mode is unsupported")
+    if not isinstance(threshold, int) or isinstance(threshold, bool) or not -(2**127) <= threshold < 2**127:
+        raise ValueError("threshold must be an i128 integer")
+    if mode != "all_equal" and threshold < 0:
+        raise ValueError("threshold cannot be negative for this mode")
+    if not isinstance(vectors, list) or not 1 <= len(vectors) <= OPEN_COMPETITION_V2_MAXIMUM_VECTORS:
+        raise ValueError("vectors must contain 1..10000 cases")
+
+    score = 0
+    total_weight = 0
+    policy = bytearray(OPEN_COMPETITION_V2_POLICY_DOMAIN)
+    policy.append(OPEN_COMPETITION_V2_MODE_TAGS[mode])
+    policy.extend(threshold.to_bytes(16, "big", signed=True))
+    policy.extend(len(vectors).to_bytes(4, "big"))
+    submission = bytearray(OPEN_COMPETITION_V2_SUBMISSION_DOMAIN)
+    submission.extend(len(vectors).to_bytes(4, "big"))
+    for vector in vectors:
+        if not isinstance(vector, dict):
+            raise ValueError("each vector must be an object")
+        expected = vector.get("expected")
+        observed = vector.get("observed")
+        weight = vector.get("weight")
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in (expected, observed, weight)):
+            raise ValueError("expected, observed, and weight must be integers")
+        if not -(2**63) <= expected < 2**63 or not -(2**63) <= observed < 2**63:
+            raise ValueError("expected and observed must fit i64")
+        if not 1 <= weight < 2**32:
+            raise ValueError("weight must fit positive u32")
+        total_weight += weight
+        if mode in ("all_equal", "maximize_exact_matches"):
+            if expected == observed:
+                score += weight
+        else:
+            score += abs(expected - observed) * weight
+        if not -(2**127) <= score < 2**127 or total_weight >= 2**127:
+            raise ValueError("metric arithmetic overflow")
+        policy.extend(expected.to_bytes(8, "big", signed=True))
+        policy.extend(weight.to_bytes(4, "big"))
+        submission.extend(observed.to_bytes(8, "big", signed=True))
+
+    passed = (
+        score == total_weight
+        if mode == "all_equal"
+        else score >= threshold
+        if mode == "maximize_exact_matches"
+        else score <= threshold
+    )
+    verification_policy_hash = keccak(bytes(policy))
+    submission_hash = keccak(bytes(submission))
+    evidence_hash = keccak(
+        OPEN_COMPETITION_V2_EVIDENCE_DOMAIN
+        + verification_policy_hash
+        + submission_hash
+    )
+    proof_system = scope.get("proof_system")
+    if proof_system not in OPEN_COMPETITION_V2_PROOF_SYSTEMS:
+        raise ValueError("scope.proof_system must be groth16 or plonk")
+    words = [
+        OPEN_COMPETITION_V2_JOURNAL_DOMAIN,
+        _v2_uint_word(scope.get("chain_id"), "scope.chain_id", 64),
+        _open_competition_address_word(scope.get("competition")),
+        _open_competition_bytes32(scope.get("bounty_id"), "scope.bounty_id"),
+        _open_competition_address_word(scope.get("solver")),
+        _v2_uint_word(scope.get("solver_nonce"), "scope.solver_nonce", 128),
+        submission_hash,
+        evidence_hash,
+        OPEN_COMPETITION_V2_PROOF_SYSTEMS[proof_system],
+        _open_competition_bytes32(scope.get("program_vkey"), "scope.program_vkey"),
+        _open_competition_bytes32(scope.get("source_hash"), "scope.source_hash"),
+        _open_competition_bytes32(scope.get("elf_hash"), "scope.elf_hash"),
+        OPEN_COMPETITION_V2_JOURNAL_SCHEMA_HASH,
+        OPEN_COMPETITION_V2_METRIC_PROGRAM_HASH,
+        _open_competition_bytes32(scope.get("execution_policy_hash"), "scope.execution_policy_hash"),
+        verification_policy_hash,
+        _open_competition_bytes32(scope.get("settlement_policy_hash"), "scope.settlement_policy_hash"),
+        _open_competition_bytes32(scope.get("beta_risk_hash"), "scope.beta_risk_hash"),
+        _v2_uint_word(1 if passed else 0, "passed", 8),
+        score.to_bytes(32, "big", signed=True),
+    ]
+    journal = b"".join(words)
+    return {
+        "passed": passed,
+        "score": str(score),
+        "verification_policy_hash": f"0x{verification_policy_hash.hex()}",
+        "submission_hash": f"0x{submission_hash.hex()}",
+        "evidence_hash": f"0x{evidence_hash.hex()}",
+        "journal_hex": f"0x{journal.hex()}",
+    }
+
+
+def _v2_uint_word(value, label: str, bits: int) -> bytes:
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 2**bits:
+        raise ValueError(f"{label} must fit u{bits}")
+    return value.to_bytes(32, "big")
 
 
 class AgentBountiesHttpError(httpx.HTTPStatusError):
@@ -544,6 +681,133 @@ class AgentBountiesClient:
         return self._request(
             "GET",
             f"/v1/base/open-competition-v1/entrant-action-relays/{relay_id}",
+        )
+
+    def get_open_competition_v2_profiles(self, network: str = "base-mainnet"):
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v2-beta2/profiles",
+            params={"network": network},
+        )
+
+    def get_open_competition_v2_release(self, network: str = "base-mainnet"):
+        """Return the exact immutable Beta2 identities and activation state."""
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v2-beta2/release",
+            params={"network": network},
+        )
+
+    def validate_open_competition_v2(self, request: dict):
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST", "/v1/base/open-competition-v2-beta2/validate", json=payload
+        )
+
+    def prepare_open_competition_v2_creation(self, request: dict):
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v2-beta2/creation-preparation",
+            json=payload,
+        )
+
+    def prepare_open_competition_v2_funding(self, request: dict):
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v2-beta2/funding-preparation",
+            json=payload,
+        )
+
+    def list_open_competition_v2_inventory(
+        self, network: str = "base-mainnet", state: str | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v2-beta2/inventory",
+            params={"network": network, "state": state},
+        )
+
+    def list_open_competition_v2_events(
+        self, network: str = "base-mainnet", bounty_id: str | None = None
+    ):
+        return self._request(
+            "GET",
+            "/v1/base/open-competition-v2-beta2/events",
+            params={"network": network, "bounty_id": bounty_id},
+        )
+
+    def create_open_competition_v2_proof_quote(self, request: dict):
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v2-beta2/proof-quotes",
+            json=payload,
+        )
+
+    def prepare_open_competition_v2_proof(self, request: dict):
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v2-beta2/proof-preparation",
+            json=payload,
+        )
+
+    def prepare_open_competition_v2_action(self, request: dict):
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v2-beta2/action-preparation",
+            json=payload,
+        )
+
+    def get_open_competition_v2_proof_job(self, job_id: str):
+        return self._request(
+            "GET", f"/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}"
+        )
+
+    def pay_open_competition_v2_proof_job(
+        self, job_id: str, payment_signature: str | None = None
+    ):
+        response = self._http(
+            "POST",
+            f"/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
+            headers=(
+                {"PAYMENT-SIGNATURE": payment_signature}
+                if payment_signature
+                else None
+            ),
+        )
+        if response.status_code not in (200, 202, 402, 404, 409, 422, 503):
+            response.raise_for_status()
+        return {
+            "status": response.status_code,
+            "payment_required": response.headers.get("PAYMENT-REQUIRED"),
+            "payment_response": response.headers.get("PAYMENT-RESPONSE"),
+            "body": _x402_response_body(response),
+        }
+
+    def authorize_open_competition_v2_proof_relay(
+        self,
+        job_id: str,
+        authorization_deadline: int,
+        solver_signature: str | None = None,
+    ):
+        """Prepare the exact relay signature, then persist the signed authorization."""
+        return self._request(
+            "POST",
+            f"/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization",
+            json={
+                "authorization_deadline": authorization_deadline,
+                "solver_signature": solver_signature,
+            },
         )
 
     def _standing_meta_v4_action(
