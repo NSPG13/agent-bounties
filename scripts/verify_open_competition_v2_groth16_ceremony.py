@@ -14,20 +14,6 @@ from typing import Any
 COMMAND_SCHEMA = "agent-bounties/open-competition-v2-beta2-groth16-mpc-command-v1"
 TRANSCRIPT_SCHEMA = "agent-bounties/open-competition-v2-beta2-groth16-mpc-transcript-v1"
 EVIDENCE_SCHEMA = "agent-bounties/open-competition-v2-beta2-setup-verification-evidence-v1"
-COMMANDS = (
-    "init-phase1",
-    "contribute-phase1",
-    "contribute-phase1",
-    "contribute-phase1",
-    "verify-phase1",
-    "init-phase2",
-    "contribute-phase2",
-    "contribute-phase2",
-    "contribute-phase2",
-    "finalize",
-)
-
-
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -54,34 +40,84 @@ def verify(transcript: dict[str, Any], root: Path, r1cs: Path) -> tuple[int, str
     if transcript.get("schema_version") != TRANSCRIPT_SCHEMA:
         raise ValueError("Groth16 transcript schema mismatch")
     records = transcript.get("records")
-    if not isinstance(records, list) or len(records) != len(COMMANDS):
+    if not isinstance(records, list) or len(records) < 8:
         raise ValueError("Groth16 transcript command inventory mismatch")
-    for index, (record, command) in enumerate(zip(records, COMMANDS, strict=True)):
+    for index, record in enumerate(records):
         if record.get("schema_version") != COMMAND_SCHEMA:
             raise ValueError(f"Groth16 command {index} schema mismatch")
-        if record.get("command") != command or record.get("verified") is not True:
-            raise ValueError(f"Groth16 command {index} is not verified {command}")
-    for offset in (1, 2, 3, 6, 7, 8):
-        expected_id = offset if offset <= 3 else offset - 5
+        if record.get("verified") is not True:
+            raise ValueError(f"Groth16 command {index} is not verified")
+
+    if records[0].get("command") != "init-phase1":
+        raise ValueError("Groth16 transcript must start with init-phase1")
+    phase1_indexes = []
+    cursor = 1
+    while cursor < len(records) and records[cursor].get("command") == "contribute-phase1":
+        phase1_indexes.append(cursor)
+        cursor += 1
+    if len(phase1_indexes) < 2:
+        raise ValueError("Groth16 Phase 1 requires at least two contributions")
+    phase1_verify_index = cursor
+    if cursor >= len(records) or records[cursor].get("command") != "verify-phase1":
+        raise ValueError("Groth16 Phase 1 verification is missing")
+    cursor += 1
+    phase2_init_index = cursor
+    if cursor >= len(records) or records[cursor].get("command") != "init-phase2":
+        raise ValueError("Groth16 Phase 2 initialization is missing")
+    cursor += 1
+    phase2_indexes = []
+    while cursor < len(records) and records[cursor].get("command") == "contribute-phase2":
+        phase2_indexes.append(cursor)
+        cursor += 1
+    if len(phase2_indexes) < 2:
+        raise ValueError("Groth16 Phase 2 requires at least two contributions")
+    if len(phase1_indexes) != len(phase2_indexes):
+        raise ValueError("Groth16 phase contribution counts differ")
+    finalize_index = cursor
+    if cursor != len(records) - 1 or records[cursor].get("command") != "finalize":
+        raise ValueError("Groth16 transcript must end with finalize")
+
+    for expected_id, offset in enumerate(phase1_indexes, start=1):
+        if records[offset].get("contribution_id") != expected_id:
+            raise ValueError("Groth16 contribution sequence is not contiguous")
+    for expected_id, offset in enumerate(phase2_indexes, start=1):
         if records[offset].get("contribution_id") != expected_id:
             raise ValueError("Groth16 contribution sequence is not contiguous")
     r1cs_hash = sha256(r1cs)
     if inventory(records[0], "inputs").get(r1cs.name) != r1cs_hash:
         raise ValueError("Groth16 Phase 1 targets another R1CS")
-    chains = ((0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (6, 7), (7, 8))
+    for index in (phase1_verify_index, phase2_init_index, finalize_index):
+        if inventory(records[index], "inputs").get(r1cs.name) != r1cs_hash:
+            raise ValueError("Groth16 ceremony changed R1CS")
+    chains = []
+    previous = 0
+    for current in phase1_indexes:
+        chains.append((previous, current))
+        previous = current
+    chains.append((phase1_verify_index, phase2_init_index))
+    previous = phase2_init_index
+    for current in phase2_indexes:
+        chains.append((previous, current))
+        previous = current
     for previous, current in chains:
         outputs = inventory(records[previous], "outputs")
         inputs = inventory(records[current], "inputs")
         if not set(outputs.items()).issubset(set(inputs.items())):
             raise ValueError("Groth16 contribution hash chain is broken")
-    for verify_index, contribution_indexes in ((4, (1, 2, 3)), (9, (6, 7, 8))):
+    for verify_index, contribution_indexes in (
+        (phase1_verify_index, phase1_indexes),
+        (finalize_index, phase2_indexes),
+    ):
         inputs = inventory(records[verify_index], "inputs")
         for contribution_index in contribution_indexes:
             if not set(inventory(records[contribution_index], "outputs").items()).issubset(
                 set(inputs.items())
             ):
                 raise ValueError("Groth16 verifier did not consume every contribution")
-    for phase, verify_index in (("phase1", 4), ("phase2", 9)):
+    for phase, verify_index in (
+        ("phase1", phase1_verify_index),
+        ("phase2", finalize_index),
+    ):
         beacon = transcript.get(f"{phase}_beacon")
         if not isinstance(beacon, dict):
             raise ValueError(f"Groth16 {phase} beacon is missing")
@@ -94,11 +130,11 @@ def verify(transcript: dict[str, Any], root: Path, r1cs: Path) -> tuple[int, str
         transcript["phase1_beacon"].get("round", 0)
     ):
         raise ValueError("Groth16 Phase 2 beacon is not newer than Phase 1")
-    final_outputs = inventory(records[9], "outputs")
+    final_outputs = inventory(records[finalize_index], "outputs")
     for name in ("groth16_pk.bin", "groth16_vk.bin", "Groth16Verifier.sol"):
         if final_outputs.get(name) != sha256(root / name):
             raise ValueError(f"Groth16 final output mismatch: {name}")
-    return 3, r1cs_hash
+    return len(phase1_indexes), r1cs_hash
 
 
 def main() -> int:
