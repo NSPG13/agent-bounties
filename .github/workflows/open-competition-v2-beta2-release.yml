@@ -184,7 +184,7 @@ jobs:
           "$HOME/.sp1/bin/sp1up" -v 6.4.0
           cargo install --locked --force --root "$HOME/.sp1" --path .sp1-safe/crates/cli
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" --version | grep -F 'cac0284'
+          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F '0b729d4'
       - name: Reproduce the metric release
         working-directory: programs/public-vector-metric-v1
         env:

@@ -46,7 +46,7 @@ jobs:
           cargo install --locked --force --root "$HOME/.sp1" \
             --path /tmp/agent-bounties-sp1-safe/crates/cli
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" --version | grep -F 'cac0284'
+          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F '0b729d4'
       - name: Build and execute public vector guest
         working-directory: programs/public-vector-metric-v1
         env:

@@ -22,7 +22,7 @@ SOURCE_HASH_WORD = 10
 ELF_HASH_WORD = 11
 JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
-EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (cac0284 "
+EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (0b729d4 "
 EXPECTED_SP1_COMMIT = "0b729d415bf024ae425b27e6a829bed7642bbe7f"
 IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
 
