@@ -158,7 +158,7 @@ pub fn validate_direct_bounty_evidence(
         errors.push("artifact_sha256 must be a 64-character hexadecimal SHA-256 digest".to_string());
     }
     if !is_immutable_artifact_url(&evidence.artifact_url) {
-        errors.push("artifact_url must be immutable by construction (pinned commit blob/raw or content-addressed HTTPS form)".to_string());
+        errors.push("artifact_url must be immutable by construction (pinned commit blob/raw HTTPS URL)".to_string());
     }
 
     DirectBountyEvidenceReport {
@@ -380,33 +380,25 @@ fn is_hex_sha(value: &str, expected_len: usize) -> bool {
 }
 
 fn is_immutable_artifact_url(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-
-    if !lower.starts_with("https://") {
+    if !url.starts_with("https://") {
         return false;
     }
 
     // Reject query parameters, fragments, or percent-encoded lookalikes that could evade branch/tag checks
-    if lower.contains('?') || lower.contains('#') || lower.contains("%2f") || lower.contains("%2e") || lower.contains("%3a") {
-        return false;
-    }
-
-    // Reject known mutable path components or replaceable release downloads
-    if lower.contains("/releases/download/")
-        || lower.contains("/releases/tag/")
-        || lower.contains("/tags/")
-        || lower.contains("/branches/")
-        || lower.contains("/tree/")
-    {
+    if url.contains('?') || url.contains('#') || url.contains('%') {
         return false;
     }
 
     // Check for GitHub pinned commit SHA (raw or blob)
     // Format 1: https://github.com/{owner}/{repo}/blob/{40-hex-sha}/{path...}
     // Format 2: https://github.com/{owner}/{repo}/raw/{40-hex-sha}/{path...}
-    if let Some(rest) = lower.strip_prefix("https://github.com/") {
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
         let parts: Vec<&str> = rest.split('/').collect();
-        if parts.len() >= 5 && (parts[2] == "blob" || parts[2] == "raw") {
+        if parts.len() >= 5
+            && !parts[0].is_empty()
+            && !parts[1].is_empty()
+            && (parts[2] == "blob" || parts[2] == "raw")
+        {
             let sha = parts[3];
             if is_hex_sha(sha, 40) {
                 return true;
@@ -415,33 +407,11 @@ fn is_immutable_artifact_url(url: &str) -> bool {
     }
 
     // Format 3: https://raw.githubusercontent.com/{owner}/{repo}/{40-hex-sha}/{path...}
-    if let Some(rest) = lower.strip_prefix("https://raw.githubusercontent.com/") {
+    if let Some(rest) = url.strip_prefix("https://raw.githubusercontent.com/") {
         let parts: Vec<&str> = rest.split('/').collect();
-        if parts.len() >= 4 {
+        if parts.len() >= 4 && !parts[0].is_empty() && !parts[1].is_empty() {
             let sha = parts[2];
             if is_hex_sha(sha, 40) {
-                return true;
-            }
-        }
-    }
-
-    // Check for IPFS content-addressed URL (CIDv0 Qm... or CIDv1 bafy.../bafk...)
-    if lower.contains("/ipfs/") {
-        if let Some(pos) = lower.find("/ipfs/") {
-            let cid_part = &lower[pos + 6..];
-            let cid = cid_part.split('/').next().unwrap_or("");
-            if (cid.starts_with("qm") && cid.len() >= 46) || cid.starts_with("bafy") || cid.starts_with("bafk") {
-                return true;
-            }
-        }
-    }
-
-    // Check for Arweave content-addressed transaction
-    if lower.contains("/arweave/") {
-        if let Some(pos) = lower.find("/arweave/") {
-            let tx_part = &lower[pos + 9..];
-            let tx_id = tx_part.split('/').next().unwrap_or("");
-            if tx_id.len() == 43 {
                 return true;
             }
         }
@@ -585,9 +555,6 @@ mod tests {
         assert!(is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/blob/0123456789abcdef0123456789abcdef01234567/crates/risk/report.json"));
         // Pinned valid commit SHA github raw URL -> Allowed
         assert!(is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/raw/0123456789abcdef0123456789abcdef01234567/crates/risk/report.json"));
-        // Content-addressed IPFS URL -> Allowed
-        assert!(is_immutable_artifact_url("https://ipfs.io/ipfs/QmT78zSuBKGvaFFB8JNjAYAkChFSFCZa17z5W33cyS2PHe/report.json"));
-        assert!(is_immutable_artifact_url("https://gateway.pinata.cloud/ipfs/bafybeicg2wtshqqgahsqe4h7jhvhw4gjrxzgy3pd52mxuvpfs6yv67m75e/artifact.json"));
 
         // Mutable branch URLs -> Denied
         assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/raw/main/report.json"));
@@ -599,13 +566,16 @@ mod tests {
         assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/releases/tag/v1.0.0"));
         assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/tags/v1.0.0"));
 
-        // Query parameters and lookalikes -> Denied
+        // Query parameters, fragments, and lookalikes -> Denied
         assert!(!is_immutable_artifact_url("https://example.com/report.json?commit=0123456789abcdef0123456789abcdef01234567"));
         assert!(!is_immutable_artifact_url("https://github.com/org/repo/raw/0123456789abcdef0123456789abcdef01234567/report.json?v=latest"));
         assert!(!is_immutable_artifact_url("https://github.com/org/repo/raw/0123456789abcdef0123456789abcdef01234567%2Freport.json"));
 
-        // Generic unpinned URLs -> Denied
+        // Generic unpinned URLs, IPFS, Arweave or other mutable paths -> Denied
         assert!(!is_immutable_artifact_url("https://example.com/report.json"));
+        assert!(!is_immutable_artifact_url("https://example.com/ipfs/bafy"));
+        assert!(!is_immutable_artifact_url("https://example.com/arweave/abcdef"));
+        assert!(!is_immutable_artifact_url("https://ipfs.io/ipfs/QmT78zSuBKGvaFFB8JNjAYAkChFSFCZa17z5W33cyS2PHe/report.json"));
         assert!(!is_immutable_artifact_url("http://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/report.json"));
     }
 
