@@ -30,6 +30,16 @@ The official SP1 installer is used only to install the compatible zkVM compiler
 toolchain. CI verifies its pinned installer hash, installs SP1 6.4.0, then
 overwrites `cargo-prove` with a binary compiled from the safe fork.
 
+The gnark CLI is not pulled from Succinct's circuit-version registry. The
+release builds `ops/open-competition-v2-gnark-safe.Dockerfile` locally from the
+exact safe-fork checkout, pins all three base-image digests and the Rust
+toolchain, verifies source-commit and circuit-version labels, and publishes the
+resulting image inspection record with the proof bundle. The Dockerfile is
+passed over stdin so the exact SP1 checkout remains the only image build
+context, and stale generated circuit output is removed before every attempt.
+The release circuit wrapper resolves the SP1 checkout before invoking either
+builder because Docker bind mounts reject SP1's relative Makefile output path.
+
 ## Release Order
 
 1. Run repository tests, 10,000-run Foundry fuzz/invariants, dependency review,

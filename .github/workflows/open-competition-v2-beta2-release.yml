@@ -25,6 +25,7 @@ on:
       - "deployments/open-competition-v2-beta2-*"
       - "migrations/0023_open_competition_v2_beta2.sql"
       - "migrations/checksums.json"
+      - "ops/open-competition-v2-gnark-safe.Dockerfile"
       - "ops/open-competition-v2-prover*"
       - "render.yaml"
       - "scripts/*open_competition_v2*"
@@ -63,6 +64,7 @@ concurrency:
 env:
   SP1_SAFE_COMMIT: 87c57583c77a15fa6dd191a1c6ff6947564e4ef8
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v1
+  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v1:87c57583c77a15fa6dd191a1c6ff6947564e4ef8
 
 jobs:
   deterministic-release:
@@ -81,6 +83,7 @@ jobs:
           set -euo pipefail
           python -m pip install -r scripts/requirements-wallet.txt
           python scripts/verify_sp1_patched_graph.py
+          python scripts/verify_open_competition_v2_gnark_image.py
           forge build --root contracts/base-escrow --force --ast
           FOUNDRY_INVARIANT_RUNS=10000 FOUNDRY_INVARIANT_DEPTH=50 forge test --root contracts/base-escrow \
             --match-contract '(OpenCompetitionBountyV2Beta2Test|OpenCompetitionBountyV2Beta2InvariantTest)' \
@@ -95,6 +98,7 @@ jobs:
             scripts.test_run_open_competition_v2_sepolia_rehearsal \
             scripts.test_deploy_open_competition_v2_beta2 \
             scripts.test_record_open_competition_v2_beta2_gate \
+            scripts.test_verify_open_competition_v2_gnark_image \
             scripts.test_verify_sp1_patched_graph -v
 
   static-analysis:
@@ -257,7 +261,17 @@ jobs:
           set -euo pipefail
           python -m pip install -r scripts/requirements-wallet.txt
           test "$(python -c 'import json; print(json.load(open("programs/public-vector-metric-v1/release-identity.json"))["status"])')" = reproduced_beta2
-          make -C .sp1-safe/crates/prover build-circuits
+          rm -rf .sp1-safe/crates/prover/build
+          DOCKER_BUILDKIT=1 docker build --pull=false \
+            --file - \
+            --build-arg SP1_SOURCE_COMMIT="$SP1_SAFE_COMMIT" \
+            --build-arg SP1_CIRCUIT_VERSION="$SP1_SAFE_CIRCUIT_VERSION" \
+            --tag "$SP1_GNARK_IMAGE" .sp1-safe \
+            < ops/open-competition-v2-gnark-safe.Dockerfile
+          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_COMMIT"
+          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "app.agent-bounties.circuit-version" }}')" = "$SP1_SAFE_CIRCUIT_VERSION"
+          docker image inspect "$SP1_GNARK_IMAGE" > target/gnark-image.json
+          bash scripts/build_open_competition_v2_circuits.sh .sp1-safe
           cache="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION"
           for system in groth16 plonk; do
             root="target/generated-verifier-$system"
@@ -334,6 +348,7 @@ jobs:
             target/proofs/*.json
             target/public-vector-metric-v1-script
             target/prover-capabilities.json
+            target/gnark-image.json
           if-no-files-found: error
           retention-days: 90
 
