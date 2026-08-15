@@ -41,7 +41,7 @@ PY
 
 container init-phase1 --r1cs /inputs/groth16_circuit.bin --output /data/phase1-init.bin \
   | tee "$output_dir/01-phase1-init.json"
-for id in 1 2 3; do
+for id in 1 2; do
   previous="phase1-init.bin"
   if (( id > 1 )); then previous="phase1-$((id - 1)).bin"; fi
   container contribute-phase1 --input "/data/$previous" --output "/data/phase1-$id.bin" \
@@ -49,14 +49,14 @@ for id in 1 2 3; do
 done
 phase1_beacon="$(fetch_beacon "$output_dir/phase1-beacon.json")"
 container verify-phase1 --r1cs /inputs/groth16_circuit.bin \
-  --inputs /data/phase1-1.bin,/data/phase1-2.bin,/data/phase1-3.bin \
+  --inputs /data/phase1-1.bin,/data/phase1-2.bin \
   --beacon "$phase1_beacon" --output /data/phase1-commons.bin \
   | tee "$output_dir/05-phase1-verify.json"
 
 container init-phase2 --r1cs /inputs/groth16_circuit.bin \
   --commons /data/phase1-commons.bin --output /data/phase2-init.bin \
   | tee "$output_dir/06-phase2-init.json"
-for id in 1 2 3; do
+for id in 1 2; do
   previous="phase2-init.bin"
   if (( id > 1 )); then previous="phase2-$((id - 1)).bin"; fi
   container contribute-phase2 --input "/data/$previous" --output "/data/phase2-$id.bin" \
@@ -64,7 +64,7 @@ for id in 1 2 3; do
 done
 phase2_beacon="$(fetch_beacon "$output_dir/phase2-beacon.json")"
 container finalize --r1cs /inputs/groth16_circuit.bin --commons /data/phase1-commons.bin \
-  --inputs /data/phase2-1.bin,/data/phase2-2.bin,/data/phase2-3.bin \
+  --inputs /data/phase2-1.bin,/data/phase2-2.bin \
   --beacon "$phase2_beacon" --pk /data/groth16_pk.bin --vk /data/groth16_vk.bin \
   --solidity /data/Groth16Verifier.sol | tee "$output_dir/10-finalize.json"
 
