@@ -13,3 +13,10 @@ before producing the final PK, VK, and Solidity verifier.
 Never use `groth16.Setup` output as a mainnet release key. Never reuse a
 contributor environment or claim independent participation when one operator
 controlled every entropy source.
+
+The release orchestrator runs every contribution in a fresh, networkless,
+read-only container and fetches a new drand beacon only after each phase's last
+contribution. Build the runtime from `ops/open-competition-v2-ceremony.Dockerfile`
+and run `scripts/run_open_competition_v2_groth16_ceremony.sh`. The initial Beta2
+ceremony is internally orchestrated and must not be described as independently
+contributed.

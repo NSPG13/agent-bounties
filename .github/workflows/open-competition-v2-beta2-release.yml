@@ -26,6 +26,7 @@ on:
       - "migrations/0023_open_competition_v2_beta2.sql"
       - "migrations/checksums.json"
       - "ops/open-competition-v2-gnark-safe.Dockerfile"
+      - "ops/open-competition-v2-ceremony.Dockerfile"
       - "ops/open-competition-v2-prover*"
       - "render.yaml"
       - "scripts/*open_competition_v2*"
