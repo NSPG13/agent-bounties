@@ -60,6 +60,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertFalse(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
+        self.assertFalse(gates["sepolia_broker_rehearsal_ready"])
         self.assertFalse(gates["graduation_complete"])
         self.assertRegex(gates["beta_risk_hash"], r"^0x[0-9a-f]{64}$")
 
@@ -171,6 +172,55 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["default_protocol_enabled"])
+
+    def test_sepolia_broker_rehearsal_breaks_no_mainnet_gate(self) -> None:
+        path = MODULE.ROOT / "target/tmp/open-competition-v2-sepolia-broker-gates.json"
+        evidence = {
+            "source_commit": "a" * 40,
+            "subject_hash": self.subject_hash,
+            "evidence_hash": "0x" + "11" * 32,
+            "uri": "https://example.test/evidence",
+        }
+        value = {
+            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v3",
+            "protocol_version": "agent-bounties/open-competition-v2-beta2",
+            "beta_risk_preimage": "risk",
+            "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
+            "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
+        }
+        for name in MODULE.SEPOLIA_BROKER_REHEARSAL_GATE_NAMES:
+            value["gates"][name] = True
+            value["evidence"][name] = evidence
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(__import__("json").dumps(value), encoding="utf-8")
+        gates = MODULE.load_gates(path, self.subject_hash)
+        self.assertTrue(gates["sepolia_broker_rehearsal_ready"])
+        self.assertFalse(gates["prelaunch_complete"])
+        preflight = {
+            "number": 1,
+            "hash": "0x" + "22" * 32,
+            "timestamp": 1,
+            "deployer_nonce": 1,
+            "deployer_eth_wei": MODULE.MIN_DEPLOYER_ETH_WEI,
+            "deployer_usdc_base_units": 0,
+            "dependency_runtime_hashes": {},
+        }
+        common = dict(
+            deployer=MODULE.DEFAULT_DEPLOYER,
+            source_commit="a" * 40,
+            repository_subject=self.subject_hash,
+            preflight=preflight,
+            gates=gates,
+            verifier_assets=self.verifier_assets(),
+            allow_pending_metric_identity=True,
+        )
+        sepolia = MODULE.build_bundle(network_name="base-sepolia", **common)
+        mainnet = MODULE.build_bundle(network_name="base-mainnet", **common)
+        self.assertTrue(sepolia["activation"]["sepolia_broker_rehearsal_enabled"])
+        self.assertFalse(mainnet["activation"]["sepolia_broker_rehearsal_enabled"])
+        with mock.patch.dict(MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}):
+            self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
+            self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])
 
     def test_completed_gate_requires_hash_bound_evidence(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-unevidenced-gate.json"

@@ -22,7 +22,15 @@ class WrapTemplateTests(unittest.TestCase):
         (prover / "wrap_vk.bin").write_bytes(b"vk")
         (prover / "wrapped_proof.bin").write_bytes(b"proof")
         (prover / "scripts/regenerate_wrap_template.rs").write_text(
-            "expected_elf_sha256 template ELF hash mismatch wrap-template-manifest.json",
+            " ".join(
+                (
+                    "expected_elf_sha256",
+                    "template ELF hash mismatch",
+                    "generated wrap template has a stale recursion-vkey root",
+                    "generated wrap template is not bound to the template guest vkey",
+                    "wrap-template-manifest.json",
+                )
+            ),
             encoding="utf-8",
         )
         manifest = {

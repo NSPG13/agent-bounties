@@ -53,6 +53,8 @@ def verify(source_root: Path, expected_version: str) -> dict[str, str]:
     required_generator_fragments = (
         "expected_elf_sha256",
         "template ELF hash mismatch",
+        "generated wrap template has a stale recursion-vkey root",
+        "generated wrap template is not bound to the template guest vkey",
         "wrap-template-manifest.json",
     )
     if any(fragment not in generator_source for fragment in required_generator_fragments):

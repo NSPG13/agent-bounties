@@ -22,12 +22,12 @@ exact-source graph gate and transcript attack regressions must pass; any
 registry fallback or additional advisory still blocks the release.
 
 GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
-x86-64 Linux runner with at least 250 GiB reported physical memory and 60 GiB
-free disk builds both circuits and project-owned Groth16 and PLONK verifiers,
-then creates one Groth16 and two PLONK proofs on CPU. The capacity floor comes
-from a measured Groth16 resident-memory peak near 247 GiB; 128 GiB and 192 GiB
-runners exhausted memory or entered release-invalid paging. Swap is emergency
-headroom and does not qualify a host. The contracts call
+x86-64 Linux runner with at least 256 GiB physical memory builds both circuits
+and project-owned Groth16 and PLONK verifiers, then creates one Groth16 and two
+PLONK proofs on CPU. This limit comes from a measured Groth16 resident-memory
+peak near 247 GiB; 128 GiB and 192 GiB runners exhausted memory or entered
+release-invalid paging. Swap is emergency headroom, not qualifying capacity.
+The contracts call
 the exact generated verifiers directly; no gateway, proxy, owner, or upgrade
 route exists.
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -20,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
 OUT = CONTRACT_ROOT / "out"
 DEFAULT_DEPLOYER = "0x884834e884d6e93462655a2820140ad03e6747bc"
+PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta2"
 VERIFIER_ASSETS_PATH = ROOT / "deployments/open-competition-v2-beta2-verifier-assets.json"
 SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
 METRIC_IDENTITY_PATH = ROOT / "programs/public-vector-metric-v1/release-identity.json"
@@ -75,6 +75,16 @@ PUBLIC_BETA_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
 BROKER_CANARY_GATE_NAMES = PRELAUNCH_GATE_NAMES + (
     "mainnet_verifiers_factory_deployed",
     "production_indexers_agree",
+)
+SEPOLIA_BROKER_REHEARSAL_GATE_NAMES = (
+    "repository_gate_complete",
+    "patched_sp1_dependency_graph_clean",
+    "isolated_sp1_builds_match",
+    "advisory_regression_vectors_complete",
+    "real_groth16_plonk_proofs_self_verified",
+    "static_analysis_triaged",
+    "base_mainnet_fork_exact_replay_complete",
+    "critical_and_high_findings_resolved",
 )
 GRADUATION_GATE_NAMES = PUBLIC_BETA_GATE_NAMES + (
     "independent_reviews_complete",
@@ -325,10 +335,27 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
         gates[name] for name in PUBLIC_BETA_GATE_NAMES
     )
     value["broker_canary_ready"] = all(gates[name] for name in BROKER_CANARY_GATE_NAMES)
+    value["sepolia_broker_rehearsal_ready"] = all(
+        gates[name] for name in SEPOLIA_BROKER_REHEARSAL_GATE_NAMES
+    )
     value["graduation_complete"] = all(
         gates[name] for name in GRADUATION_GATE_NAMES
     )
     return value
+
+
+def activation_state(network_name: str, gates: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "mainnet_signing_allowed": gates["prelaunch_complete"],
+        "broker_canary_enabled": gates["broker_canary_ready"],
+        "sepolia_broker_rehearsal_enabled": (
+            network_name == "base-sepolia"
+            and gates["sepolia_broker_rehearsal_ready"]
+        ),
+        "public_creation_enabled": gates["public_beta_launch_complete"],
+        "default_protocol_enabled": gates["graduation_complete"],
+        "synthetic_canaries_excluded_from_adoption_metrics": True,
+    }
 
 
 def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> dict[str, Any]:
@@ -479,7 +506,7 @@ def build_bundle(
     source_hashes = {relative: normalized_sha256(ROOT / relative) for relative in SOURCE_FILES}
     return {
         "schema_version": "agent-bounties/open-competition-v2-beta2-release-bundle-v1",
-        "protocol_version": "agent-bounties/open-competition-v2-beta2",
+        "protocol_version": PROTOCOL_VERSION,
         "network": network_name,
         "chain_id": network["chain_id"],
         "source_commit": source_commit,
@@ -574,13 +601,7 @@ def build_bundle(
             "deployer_is_not_required_to_fund": True,
             "funding_source": "any external Base USDC wallet that acknowledges the exact Beta2 risk hash",
         },
-        "activation": {
-            "mainnet_signing_allowed": gates["prelaunch_complete"],
-            "broker_canary_enabled": gates["broker_canary_ready"],
-            "public_creation_enabled": gates["public_beta_launch_complete"],
-            "default_protocol_enabled": gates["graduation_complete"],
-            "synthetic_canaries_excluded_from_adoption_metrics": True,
-        },
+        "activation": activation_state(network_name, gates),
         "deployment_transactions": [
             {
                 "component": "groth16_verifier",
@@ -623,6 +644,9 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
     metric_ready = METRIC_IDENTITY.get("status") == "reproduced_beta2"
     public_beta = bool(bundle["activation"]["public_creation_enabled"])
     broker_canary = bool(bundle["activation"]["broker_canary_enabled"])
+    sepolia_broker_rehearsal = bool(
+        bundle["activation"].get("sepolia_broker_rehearsal_enabled", False)
+    )
     return {
         "protocol_version": bundle["protocol_version"],
         "network": bundle["network"],
@@ -649,7 +673,9 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
         "release_hash": bundle["source_tree_hash"],
         "beta_risk_hash": bundle["risk"]["hash"],
         "public_creation_enabled": public_beta,
-        "proof_broker_enabled": broker_canary and metric_ready,
+        "proof_broker_enabled": (
+            broker_canary or sepolia_broker_rehearsal
+        ) and metric_ready,
         "metric_programs": [
             {
                 "profile_id": bundle["metric_profile"]["profile_id"],

@@ -55,7 +55,7 @@ def verify(
         raise ValueError("release workflow must not use the upstream mutable gnark image route")
     required_builder_fragments = (
         "minimum_memory_kib=$((250 * 1024 * 1024))",
-        "minimum_available_kib=$((60 * 1024 * 1024))",
+        "minimum_disk_kib=$((60 * 1024 * 1024))",
         "swap does not qualify",
         'source_root="$(cd "$source_root" && pwd)"',
         '--build-dir="$build_dir/groth16"',
