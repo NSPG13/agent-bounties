@@ -28,12 +28,8 @@ for phrase in ("wrong chain", "rpc error", "exhaust"):
     if phrase not in tests:
         raise SystemExit(f"shared RPC tests lack {phrase}")
 
-# Run tests as a file so imports resolve without an undeclared PYTHONPATH.
-test_file = ROOT / "scripts" / "test_shared_rpc.py"
-if not test_file.is_file():
-    raise SystemExit("missing required file: scripts/test_shared_rpc.py")
 completed = subprocess.run(
-    [sys.executable, str(test_file), "-v"],
+    [sys.executable, "-m", "unittest", "scripts.test_shared_rpc", "-v"],
     cwd=ROOT,
     text=True,
     stdout=subprocess.PIPE,
