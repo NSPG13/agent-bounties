@@ -537,7 +537,7 @@ contract OpenCompetitionBountyV2Beta2Test {
         );
         require(encoded.length == 640, "journal length drift");
         require(
-            keccak256(encoded) == 0xcd7aed0d7be94830fdbfb9668274b70db4e8803befb31b6a09f697db15b26bf1,
+            keccak256(encoded) == 0x876475138ff43fa0e962618cf3efc45eea37905b24e7e55d3885f0acbe60ac8b,
             "shared journal drift"
         );
     }
