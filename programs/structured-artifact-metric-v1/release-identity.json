@@ -1,0 +1,13 @@
+{
+  "schema": "agent-bounties/open-competition-v2-metric-release-identity-v1",
+  "profile_id": "structured-artifact-metric-v1",
+  "status": "pending_beta2_reproduction",
+  "rust_version": "1.96.1",
+  "sp1_guest_rust_version": "1.94.0-dev",
+  "sp1_version": "6.4.0-agent-bounties-sp1-safe-v4",
+  "sp1_commit": "caf43bb80fab6745347fda83bb428cb08a463f8d",
+  "program_vkey": "0x6666666666666666666666666666666666666666666666666666666666666666",
+  "source_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+  "elf_keccak256": "0x8888888888888888888888888888888888888888888888888888888888888888",
+  "elf_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+}

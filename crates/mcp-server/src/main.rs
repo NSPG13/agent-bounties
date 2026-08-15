@@ -891,8 +891,8 @@ tool_args! {
     }
     schema object_tool_schema(
         json!({
-            "operation": enum_property(&["validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"], "Execute one ordered V2 Beta2 transition."),
-            "arguments": { "type": "object", "description": "Exact API request. pay_proof requires proof_job_id and optionally payment_signature. authorize_relay requires proof_job_id.", "additionalProperties": true }
+            "operation": enum_property(&["prepare_profile", "validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"], "Execute one ordered V2 Beta2 transition."),
+            "arguments": { "type": "object", "description": "Exact API request. prepare_profile derives immutable structured-artifact fields. pay_proof requires proof_job_id and optionally payment_signature. authorize_relay requires proof_job_id.", "additionalProperties": true }
         }),
         &["operation", "arguments"],
     );
@@ -3368,7 +3368,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "prepare_open_competition_v2",
-            "Execute one V2 step in order: validate, create, fund, quote proof, pay proof, prepare proof, authorize relay, prepare action. Submit only returned exact calls.",
+            "Execute one V2 step in order: prepare profile, validate, create, fund, quote proof, pay proof, prepare proof, authorize relay, prepare action. Submit only returned exact calls.",
             OpenCompetitionV2MutationArgs::input_schema(),
         ),
         tool(
@@ -5620,6 +5620,7 @@ async fn prepare_open_competition_v2(
         return proxy_open_competition_v2_payment(request).await;
     }
     let path = match args.operation.as_str() {
+        "prepare_profile" => "structured-artifact-profile".to_string(),
         "validate" => "validate".to_string(),
         "create" => "creation-preparation".to_string(),
         "fund" => "funding-preparation".to_string(),

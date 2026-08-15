@@ -2,8 +2,8 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use tiny_keccak::{Hasher, Keccak};
 
@@ -133,10 +133,21 @@ pub enum ArtifactRequirement {
         minimum_occurrences: u32,
         weight: u32,
     },
-    Utf8Excludes { needle: String, weight: u32 },
-    MaximumBytes { maximum: u32, weight: u32 },
-    JsonValid { weight: u32 },
-    JsonPointerExists { pointer: String, weight: u32 },
+    Utf8Excludes {
+        needle: String,
+        weight: u32,
+    },
+    MaximumBytes {
+        maximum: u32,
+        weight: u32,
+    },
+    JsonValid {
+        weight: u32,
+    },
+    JsonPointerExists {
+        pointer: String,
+        weight: u32,
+    },
     JsonPointerStringEquals {
         pointer: String,
         expected: String,
@@ -249,30 +260,23 @@ pub fn execute_structured_artifact_program(
     if input.artifact.len() > MAXIMUM_ARTIFACT_BYTES {
         return Err(MetricError::ArtifactTooLarge);
     }
-    if input.requirements.is_empty()
-        || input.requirements.len() > MAXIMUM_ARTIFACT_REQUIREMENTS
-        || input.requirements.iter().any(|requirement| requirement.weight() == 0)
-    {
-        return Err(MetricError::InvalidArtifactRequirements);
-    }
-    let total_weight = input.requirements.iter().try_fold(0_u128, |total, requirement| {
-        total
-            .checked_add(u128::from(requirement.weight()))
-            .ok_or(MetricError::ArithmeticOverflow)
-    })?;
-    if input.threshold == 0 || input.threshold > total_weight {
-        return Err(MetricError::InvalidArtifactRequirements);
-    }
-    validate_requirements(&input.requirements)?;
+    let verification_policy_hash =
+        structured_artifact_policy_hash_for(input.threshold, &input.requirements)?;
 
     let needs_text = input.requirements.iter().any(|requirement| {
-        matches!(requirement, ArtifactRequirement::Utf8Contains { .. } | ArtifactRequirement::Utf8Excludes { .. })
+        matches!(
+            requirement,
+            ArtifactRequirement::Utf8Contains { .. } | ArtifactRequirement::Utf8Excludes { .. }
+        )
     });
     let needs_json = input.requirements.iter().any(|requirement| {
-        matches!(requirement, ArtifactRequirement::JsonValid { .. }
-            | ArtifactRequirement::JsonPointerExists { .. }
-            | ArtifactRequirement::JsonPointerStringEquals { .. }
-            | ArtifactRequirement::JsonArrayMinimumLength { .. })
+        matches!(
+            requirement,
+            ArtifactRequirement::JsonValid { .. }
+                | ArtifactRequirement::JsonPointerExists { .. }
+                | ArtifactRequirement::JsonPointerStringEquals { .. }
+                | ArtifactRequirement::JsonArrayMinimumLength { .. }
+        )
     });
     let text = if needs_text || needs_json {
         Some(core::str::from_utf8(&input.artifact).map_err(|_| MetricError::InvalidUtf8)?)
@@ -280,20 +284,18 @@ pub fn execute_structured_artifact_program(
         None
     };
     let json = if needs_json {
-        Some(serde_json::from_str::<serde_json::Value>(text.expect("UTF-8 was validated"))
-            .map_err(|_| MetricError::InvalidJson)?)
+        Some(
+            serde_json::from_str::<serde_json::Value>(text.expect("UTF-8 was validated"))
+                .map_err(|_| MetricError::InvalidJson)?,
+        )
     } else {
         None
     };
 
     let mut score = 0_u128;
     for requirement in &input.requirements {
-        let satisfied = artifact_requirement_satisfied(
-            requirement,
-            &input.artifact,
-            text,
-            json.as_ref(),
-        );
+        let satisfied =
+            artifact_requirement_satisfied(requirement, &input.artifact, text, json.as_ref());
         if satisfied {
             score = score
                 .checked_add(u128::from(requirement.weight()))
@@ -302,12 +304,9 @@ pub fn execute_structured_artifact_program(
     }
     let passed = score >= input.threshold;
     let score = i128::try_from(score).map_err(|_| MetricError::ArithmeticOverflow)?;
-    let verification_policy_hash = structured_artifact_policy_hash(input);
     let submission_hash = structured_artifact_submission_hash(&input.artifact);
-    let evidence_hash = structured_artifact_evidence_hash(
-        verification_policy_hash,
-        submission_hash,
-    );
+    let evidence_hash =
+        structured_artifact_evidence_hash(verification_policy_hash, submission_hash);
     let journal = encode_journal(
         &input.scope,
         submission_hash,
@@ -329,7 +328,10 @@ pub fn execute_structured_artifact_program(
 }
 
 fn validate_scope(scope: &JournalScopeV2) -> Result<(), MetricError> {
-    if matches!(scope.proof_system, GROTH16_PROOF_SYSTEM | PLONK_PROOF_SYSTEM) {
+    if matches!(
+        scope.proof_system,
+        GROTH16_PROOF_SYSTEM | PLONK_PROOF_SYSTEM
+    ) {
         Ok(())
     } else {
         Err(MetricError::UnsupportedProofSystem)
@@ -339,7 +341,11 @@ fn validate_scope(scope: &JournalScopeV2) -> Result<(), MetricError> {
 fn validate_requirements(requirements: &[ArtifactRequirement]) -> Result<(), MetricError> {
     for requirement in requirements {
         match requirement {
-            ArtifactRequirement::Utf8Contains { needle, minimum_occurrences, .. } => {
+            ArtifactRequirement::Utf8Contains {
+                needle,
+                minimum_occurrences,
+                ..
+            } => {
                 if needle.is_empty() || needle.len() > 4096 || *minimum_occurrences == 0 {
                     return Err(MetricError::InvalidArtifactRequirements);
                 }
@@ -350,7 +356,11 @@ fn validate_requirements(requirements: &[ArtifactRequirement]) -> Result<(), Met
                 }
             }
             ArtifactRequirement::MaximumBytes { maximum, .. } => {
-                if *maximum == 0 || usize::try_from(*maximum).ok().is_none_or(|value| value > MAXIMUM_ARTIFACT_BYTES) {
+                if *maximum == 0
+                    || usize::try_from(*maximum)
+                        .ok()
+                        .is_none_or(|value| value > MAXIMUM_ARTIFACT_BYTES)
+                {
                     return Err(MetricError::InvalidArtifactRequirements);
                 }
             }
@@ -361,7 +371,9 @@ fn validate_requirements(requirements: &[ArtifactRequirement]) -> Result<(), Met
                     return Err(MetricError::InvalidArtifactRequirements);
                 }
             }
-            ArtifactRequirement::JsonPointerStringEquals { pointer, expected, .. } => {
+            ArtifactRequirement::JsonPointerStringEquals {
+                pointer, expected, ..
+            } => {
                 if !valid_json_pointer(pointer) || expected.len() > 4096 {
                     return Err(MetricError::InvalidArtifactRequirements);
                 }
@@ -382,23 +394,30 @@ fn artifact_requirement_satisfied(
     json: Option<&serde_json::Value>,
 ) -> bool {
     match requirement {
-        ArtifactRequirement::Utf8Contains { needle, minimum_occurrences, .. } => text
-            .is_some_and(|text| text.match_indices(needle).count() >= *minimum_occurrences as usize),
+        ArtifactRequirement::Utf8Contains {
+            needle,
+            minimum_occurrences,
+            ..
+        } => text.is_some_and(|text| {
+            text.match_indices(needle).count() >= *minimum_occurrences as usize
+        }),
         ArtifactRequirement::Utf8Excludes { needle, .. } => {
             text.is_some_and(|text| !text.contains(needle))
         }
-        ArtifactRequirement::MaximumBytes { maximum, .. } => {
-            artifact.len() <= *maximum as usize
-        }
+        ArtifactRequirement::MaximumBytes { maximum, .. } => artifact.len() <= *maximum as usize,
         ArtifactRequirement::JsonValid { .. } => json.is_some(),
         ArtifactRequirement::JsonPointerExists { pointer, .. } => {
             json.is_some_and(|value| value.pointer(pointer).is_some())
         }
-        ArtifactRequirement::JsonPointerStringEquals { pointer, expected, .. } => json
+        ArtifactRequirement::JsonPointerStringEquals {
+            pointer, expected, ..
+        } => json
             .and_then(|value| value.pointer(pointer))
             .and_then(serde_json::Value::as_str)
             .is_some_and(|value| value == expected),
-        ArtifactRequirement::JsonArrayMinimumLength { pointer, minimum, .. } => json
+        ArtifactRequirement::JsonArrayMinimumLength {
+            pointer, minimum, ..
+        } => json
             .and_then(|value| value.pointer(pointer))
             .and_then(serde_json::Value::as_array)
             .is_some_and(|value| value.len() >= *minimum as usize),
@@ -406,11 +425,45 @@ fn artifact_requirement_satisfied(
 }
 
 pub fn structured_artifact_policy_hash(input: &StructuredArtifactProgramInput) -> [u8; 32] {
+    structured_artifact_policy_hash_unchecked(input.threshold, &input.requirements)
+}
+
+pub fn structured_artifact_policy_hash_for(
+    threshold: u128,
+    requirements: &[ArtifactRequirement],
+) -> Result<[u8; 32], MetricError> {
+    if requirements.is_empty()
+        || requirements.len() > MAXIMUM_ARTIFACT_REQUIREMENTS
+        || requirements
+            .iter()
+            .any(|requirement| requirement.weight() == 0)
+    {
+        return Err(MetricError::InvalidArtifactRequirements);
+    }
+    let total_weight = requirements.iter().try_fold(0_u128, |total, requirement| {
+        total
+            .checked_add(u128::from(requirement.weight()))
+            .ok_or(MetricError::ArithmeticOverflow)
+    })?;
+    if threshold == 0 || threshold > total_weight {
+        return Err(MetricError::InvalidArtifactRequirements);
+    }
+    validate_requirements(requirements)?;
+    Ok(structured_artifact_policy_hash_unchecked(
+        threshold,
+        requirements,
+    ))
+}
+
+fn structured_artifact_policy_hash_unchecked(
+    threshold: u128,
+    requirements: &[ArtifactRequirement],
+) -> [u8; 32] {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&ARTIFACT_POLICY_DOMAIN);
-    bytes.extend_from_slice(&input.threshold.to_be_bytes());
-    bytes.extend_from_slice(&(input.requirements.len() as u32).to_be_bytes());
-    for requirement in &input.requirements {
+    bytes.extend_from_slice(&threshold.to_be_bytes());
+    bytes.extend_from_slice(&(requirements.len() as u32).to_be_bytes());
+    for requirement in requirements {
         encode_artifact_requirement(&mut bytes, requirement);
     }
     keccak256(&bytes)
@@ -422,7 +475,11 @@ fn encode_artifact_requirement(bytes: &mut Vec<u8>, requirement: &ArtifactRequir
         bytes.extend_from_slice(value.as_bytes());
     }
     match requirement {
-        ArtifactRequirement::Utf8Contains { needle, minimum_occurrences, weight } => {
+        ArtifactRequirement::Utf8Contains {
+            needle,
+            minimum_occurrences,
+            weight,
+        } => {
             bytes.push(0);
             bytes.extend_from_slice(&weight.to_be_bytes());
             bytes.extend_from_slice(&minimum_occurrences.to_be_bytes());
@@ -447,13 +504,21 @@ fn encode_artifact_requirement(bytes: &mut Vec<u8>, requirement: &ArtifactRequir
             bytes.extend_from_slice(&weight.to_be_bytes());
             push_string(bytes, pointer);
         }
-        ArtifactRequirement::JsonPointerStringEquals { pointer, expected, weight } => {
+        ArtifactRequirement::JsonPointerStringEquals {
+            pointer,
+            expected,
+            weight,
+        } => {
             bytes.push(5);
             bytes.extend_from_slice(&weight.to_be_bytes());
             push_string(bytes, pointer);
             push_string(bytes, expected);
         }
-        ArtifactRequirement::JsonArrayMinimumLength { pointer, minimum, weight } => {
+        ArtifactRequirement::JsonArrayMinimumLength {
+            pointer,
+            minimum,
+            weight,
+        } => {
             bytes.push(6);
             bytes.extend_from_slice(&weight.to_be_bytes());
             bytes.extend_from_slice(&minimum.to_be_bytes());
@@ -470,10 +535,7 @@ pub fn structured_artifact_submission_hash(artifact: &[u8]) -> [u8; 32] {
     keccak256(&bytes)
 }
 
-fn structured_artifact_evidence_hash(
-    policy_hash: [u8; 32],
-    submission_hash: [u8; 32],
-) -> [u8; 32] {
+fn structured_artifact_evidence_hash(policy_hash: [u8; 32], submission_hash: [u8; 32]) -> [u8; 32] {
     let mut bytes = [0_u8; 96];
     bytes[..32].copy_from_slice(&ARTIFACT_EVIDENCE_DOMAIN);
     bytes[32..64].copy_from_slice(&policy_hash);
@@ -891,7 +953,14 @@ mod tests {
         let output = execute_structured_artifact_program(&input).unwrap();
         assert!(output.passed);
         assert_eq!(output.score, 9);
-        assert_eq!(output.submission_hash, structured_artifact_submission_hash(&input.artifact));
+        assert_eq!(
+            output.verification_policy_hash,
+            structured_artifact_policy_hash_for(input.threshold, &input.requirements).unwrap()
+        );
+        assert_eq!(
+            output.submission_hash,
+            structured_artifact_submission_hash(&input.artifact)
+        );
         assert_eq!(
             &output.journal[12 * 32..13 * 32],
             &STRUCTURED_ARTIFACT_JOURNAL_SCHEMA_HASH
@@ -905,7 +974,8 @@ mod tests {
     #[test]
     fn structured_artifact_cannot_claim_unobserved_success() {
         let mut input = artifact_fixture();
-        input.artifact = br#"{"schema":"wrong","canonical_url":"http://localhost","steps":[]}"#.to_vec();
+        input.artifact =
+            br#"{"schema":"wrong","canonical_url":"http://localhost","steps":[]}"#.to_vec();
         let output = execute_structured_artifact_program(&input).unwrap();
         assert!(!output.passed);
         assert_eq!(output.score, 2);
@@ -923,14 +993,19 @@ mod tests {
             *maximum += 1;
         }
         let changed_policy = execute_structured_artifact_program(&changed_policy).unwrap();
-        assert_ne!(output.verification_policy_hash, changed_policy.verification_policy_hash);
+        assert_ne!(
+            output.verification_policy_hash,
+            changed_policy.verification_policy_hash
+        );
         assert_ne!(output.journal, changed_policy.journal);
 
         let mut changed_solver = input;
         changed_solver.scope.solver[0] ^= 1;
         assert_ne!(
             output.journal,
-            execute_structured_artifact_program(&changed_solver).unwrap().journal
+            execute_structured_artifact_program(&changed_solver)
+                .unwrap()
+                .journal
         );
     }
 

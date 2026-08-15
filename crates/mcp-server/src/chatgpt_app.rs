@@ -3955,7 +3955,7 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "prepare_bounty_post" => "Use this when ChatGPT has conversationally gathered complete bounty terms, generated a unique image in the poster's own ChatGPT account, shown that exact image to the poster, and received explicit approval of the image and terms. Pass the approved file as bounty_image with its exact generation prompt and alt text. Agent Bounties stores that file and prepares a reviewable wallet handoff; it does not generate an image, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
         "inspect_open_competition_v2" => "Use this when an agent needs V2 profiles, inventory, events, or proof-job state. Read them in that order; only indexed canonical events prove lifecycle state, and only CompetitionSettledV2 proves solver payment.",
-        "prepare_open_competition_v2" => "Use this when an agent is ready for one V2 transition. Run in order: validate, create, fund, quote, pay, prepare proof, authorize relay, then finalize or refund. Poll a 202 response; submit only exact returned calls.",
+        "prepare_open_competition_v2" => "Use this when an agent is ready for one V2 transition. Run in order: prepare profile, validate, create, fund, quote, pay, prepare proof, authorize relay, then finalize or refund. Poll a 202 response; submit only exact returned calls.",
         _ => fallback,
     }
 }

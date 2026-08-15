@@ -23,12 +23,19 @@ HOST_RUST_TOOLCHAIN_VERSION = "1.96.1"
 EXPECTED_LOCKS = (
     Path("programs/public-vector-metric-v1/Cargo.lock"),
     Path("programs/public-vector-metric-v1/program/Cargo.lock"),
+    Path("programs/structured-artifact-metric-v1/Cargo.lock"),
+    Path("programs/structured-artifact-metric-v1/program/Cargo.lock"),
 )
 EXPECTED_MANIFESTS = (
     Path("programs/public-vector-metric-v1/Cargo.toml"),
     Path("programs/public-vector-metric-v1/program/Cargo.toml"),
+    Path("programs/structured-artifact-metric-v1/Cargo.toml"),
+    Path("programs/structured-artifact-metric-v1/program/Cargo.toml"),
 )
-IDENTITY_PATH = Path("programs/public-vector-metric-v1/release-identity.json")
+IDENTITY_PATHS = (
+    Path("programs/public-vector-metric-v1/release-identity.json"),
+    Path("programs/structured-artifact-metric-v1/release-identity.json"),
+)
 
 
 def _exact_git_dependency(value: object, field: str) -> None:
@@ -111,15 +118,18 @@ def verify(root: Path) -> dict[str, object]:
         for relative in EXPECTED_LOCKS
     }
 
-    identity = json.loads((root / IDENTITY_PATH).read_text(encoding="utf-8"))
-    if identity.get("sp1_commit") != SP1_COMMIT:
-        raise ValueError("metric release identity does not pin the patched SP1 commit")
-    if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v4":
-        raise ValueError("metric release identity does not pin the patched circuit version")
-    if identity.get("rust_version") != HOST_RUST_TOOLCHAIN_VERSION:
-        raise ValueError("metric release identity does not pin the host Rust toolchain")
-    if identity.get("sp1_guest_rust_version") != GUEST_RUST_TOOLCHAIN_VERSION:
-        raise ValueError("metric release identity does not pin the SP1 guest Rust toolchain")
+    identities = {}
+    for relative in IDENTITY_PATHS:
+        identity = json.loads((root / relative).read_text(encoding="utf-8"))
+        if identity.get("sp1_commit") != SP1_COMMIT:
+            raise ValueError(f"{relative} does not pin the patched SP1 commit")
+        if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v4":
+            raise ValueError(f"{relative} does not pin the patched circuit version")
+        if identity.get("rust_version") != HOST_RUST_TOOLCHAIN_VERSION:
+            raise ValueError(f"{relative} does not pin the host Rust toolchain")
+        if identity.get("sp1_guest_rust_version") != GUEST_RUST_TOOLCHAIN_VERSION:
+            raise ValueError(f"{relative} does not pin the SP1 guest Rust toolchain")
+        identities[identity["profile_id"]] = str(relative).replace("\\", "/")
 
     return {
         "advisory": ADVISORY,
@@ -130,6 +140,7 @@ def verify(root: Path) -> dict[str, object]:
         "host_rust_toolchain": HOST_RUST_TOOLCHAIN_VERSION,
         "sp1_guest_rust_toolchain": GUEST_RUST_TOOLCHAIN_VERSION,
         "locks": lock_sources,
+        "metric_release_identities": identities,
         "proof_assets_required_before_activation": True,
     }
 

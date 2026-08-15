@@ -232,6 +232,7 @@ use worker::{
         withdraw_open_competition_bond,
         open_competition_v2_api::release,
         open_competition_v2_api::profiles,
+        open_competition_v2_api::prepare_structured_artifact_profile,
         open_competition_v2_api::validate_creation,
         open_competition_v2_api::prepare_creation,
         open_competition_v2_api::prepare_funding,
