@@ -101,6 +101,7 @@ jobs:
             scripts.test_open_competition_v2_prover_service \
             scripts.test_run_open_competition_v2_sepolia_rehearsal \
             scripts.test_run_open_competition_v2_x402_rehearsal \
+            scripts.test_fund_open_competition_v2_beta2_broker \
             scripts.test_configure_open_competition_v2_beta2_render \
             scripts.test_verify_open_competition_v2_beta2_broker_reserve \
             scripts.test_promote_open_competition_v2_beta2_release \
@@ -714,10 +715,15 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
         run: |
           set -euo pipefail
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/fund_open_competition_v2_beta2_broker.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --output target/mainnet-broker-seed.json
           forge build --root contracts/base-escrow --force --ast
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           cp target/live-sepolia/release-gates.json target/release-gates.json
@@ -748,6 +754,7 @@ jobs:
             target/mainnet-exact.json
             target/mainnet-exact.runtime.json
             target/mainnet-deployment-evidence.json
+            target/mainnet-broker-seed.json
             target/owner-mainnet-deployment-approval.json
             target/release-gates.json
           if-no-files-found: error

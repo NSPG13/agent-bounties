@@ -86,7 +86,11 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
 9. Fund a dedicated broker address with at least 0.11 USDC of segregated
    refund reserve and 0.00002 ETH for relay gas. The broker, keeper and
    deployment signer must be three distinct keys. Safe-block reserve evidence
-   is required before the broker can be enabled.
+   is required before the broker can be enabled. For the initial release, fund
+   the deployment signer with 0.745 USDC and 0.0012 ETH. The protected job
+   idempotently moves 0.11 USDC and 0.0001 ETH to the broker, leaving the
+   signer with the exact 0.635 USDC canary and generated-agent budget plus
+   deployment gas.
 10. Run the two 0.25 USDC canaries, x402 success/failure refund, and
    primary/shadow indexer comparison. Derive a unique solver wallet for the
    release run and attempt, fund its bounded gas and USDC budgets, and require
