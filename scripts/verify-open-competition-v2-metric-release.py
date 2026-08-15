@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 
-SOURCE_FILES = (
+DEFAULT_SOURCE_FILES = (
     "crates/competition-metric-core/Cargo.toml",
     "crates/competition-metric-core/src/lib.rs",
     "programs/public-vector-metric-v1/program/Cargo.toml",
@@ -24,12 +24,15 @@ JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
 EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (caf43bb "
 EXPECTED_SP1_COMMIT = "caf43bb80fab6745347fda83bb428cb08a463f8d"
-IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
+DEFAULT_IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
+DEFAULT_PROFILE_ID = "public-vector-metric-v1"
+DEFAULT_JOURNAL_SCHEMA_HASH = "0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4"
+DEFAULT_METRIC_PROGRAM_HASH = "0x1c27fc20ab65264c7db2997c8b76f78d7291cdb91243481bcae1e88f77beb88a"
 
 
-def canonical_source_hash(root: Path) -> str:
+def canonical_source_hash(root: Path, source_files: tuple[str, ...] = DEFAULT_SOURCE_FILES) -> str:
     digest = hashlib.sha256()
-    for relative in SOURCE_FILES:
+    for relative in source_files:
         data = (root / relative).read_bytes().replace(b"\r\n", b"\n")
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
@@ -88,10 +91,17 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--source-hash", action="store_true")
+    parser.add_argument("--profile-id", default=DEFAULT_PROFILE_ID)
+    parser.add_argument("--identity-path", default=DEFAULT_IDENTITY_PATH)
+    parser.add_argument("--source-file", action="append", dest="source_files")
+    parser.add_argument("--journal-schema-hash", default=DEFAULT_JOURNAL_SCHEMA_HASH)
+    parser.add_argument("--metric-program-hash", default=DEFAULT_METRIC_PROGRAM_HASH)
     args = parser.parse_args()
 
+    source_files = tuple(args.source_files or DEFAULT_SOURCE_FILES)
+
     if args.source_hash:
-        print(canonical_source_hash(args.root))
+        print(canonical_source_hash(args.root, source_files))
         return 0
     if args.first is None or args.second is None or args.output is None:
         parser.error("--first, --second, and --output are required unless --source-hash is used")
@@ -108,9 +118,9 @@ def main() -> int:
         raise ValueError("elf_sha256 must contain 64 lowercase hex digits")
     int(first["elf_sha256"], 16)
     public_values = journal(first["journal_hex"])
-    source_hash_hex = canonical_source_hash(args.root)
+    source_hash_hex = canonical_source_hash(args.root, source_files)
     source_hash = bytes32(source_hash_hex, "source_hash")
-    identity = json.loads((args.root / IDENTITY_PATH).read_text(encoding="utf-8"))
+    identity = json.loads((args.root / args.identity_path).read_text(encoding="utf-8"))
     expected_identity = {
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
@@ -129,10 +139,14 @@ def main() -> int:
         raise ValueError("journal source_hash does not match the canonical source digest")
     if word(public_values, ELF_HASH_WORD) != elf_hash:
         raise ValueError("journal elf_hash does not match the built ELF Keccak-256")
+    if "0x" + word(public_values, JOURNAL_SCHEMA_WORD).hex() != args.journal_schema_hash:
+        raise ValueError("journal schema hash does not match the selected profile")
+    if "0x" + word(public_values, METRIC_PROGRAM_WORD).hex() != args.metric_program_hash:
+        raise ValueError("metric program hash does not match the selected profile")
 
     summary = {
         "schema": "agent-bounties/open-competition-v2-metric-review-evidence-v1",
-        "profile_id": "public-vector-metric-v1",
+        "profile_id": args.profile_id,
         "sp1_release_line": "6.4.0-agent-bounties-sp1-safe-v4",
         "sp1_commit": EXPECTED_SP1_COMMIT,
         "program_vkey": first["program_vkey"],

@@ -232,6 +232,7 @@ use worker::{
         withdraw_open_competition_bond,
         open_competition_v2_api::release,
         open_competition_v2_api::profiles,
+        open_competition_v2_api::prepare_structured_artifact_profile,
         open_competition_v2_api::validate_creation,
         open_competition_v2_api::prepare_creation,
         open_competition_v2_api::prepare_funding,
@@ -19711,6 +19712,7 @@ mod tests {
         for v2 in [
             "/v1/base/open-competition-v2-beta2/release",
             "/v1/base/open-competition-v2-beta2/profiles",
+            "/v1/base/open-competition-v2-beta2/structured-artifact-profile",
             "/v1/base/open-competition-v2-beta2/validate",
             "/v1/base/open-competition-v2-beta2/creation-preparation",
             "/v1/base/open-competition-v2-beta2/funding-preparation",

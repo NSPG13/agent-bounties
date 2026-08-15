@@ -8,10 +8,11 @@ rust-version.workspace = true
 
 [features]
 default = ["std"]
-std = ["serde/std"]
+std = ["serde/std", "serde_json/std"]
 
 [dependencies]
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
 
 [dev-dependencies]

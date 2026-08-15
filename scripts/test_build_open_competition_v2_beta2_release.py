@@ -216,7 +216,11 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             allow_pending_metric_identity=True,
         )
         self.assertTrue(bundle["activation"]["broker_canary_enabled"])
-        with mock.patch.dict(MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}):
+        with mock.patch.dict(
+            MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}
+        ), mock.patch.dict(
+            MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta2"}
+        ):
             runtime = MODULE.runtime_manifest(bundle, 10)
         self.assertTrue(runtime["proof_broker_enabled"])
         self.assertFalse(runtime["public_creation_enabled"])
@@ -304,7 +308,11 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         mainnet = MODULE.build_bundle(network_name="base-mainnet", **common)
         self.assertTrue(sepolia["activation"]["sepolia_broker_rehearsal_enabled"])
         self.assertFalse(mainnet["activation"]["sepolia_broker_rehearsal_enabled"])
-        with mock.patch.dict(MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}):
+        with mock.patch.dict(
+            MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}
+        ), mock.patch.dict(
+            MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta2"}
+        ):
             self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
             self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])
 

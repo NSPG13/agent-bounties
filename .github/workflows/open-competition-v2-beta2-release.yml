@@ -22,6 +22,7 @@ on:
       - "crates/sdk-typescript/**"
       - "crates/worker/**"
       - "programs/public-vector-metric-v1/**"
+      - "programs/structured-artifact-metric-v1/**"
       - "deployments/open-competition-v2-beta2-*"
       - "migrations/0023_open_competition_v2_beta2.sql"
       - "migrations/checksums.json"
@@ -115,7 +116,9 @@ jobs:
             scripts.test_verify_open_competition_v2_fresh_agent_flow \
             scripts.test_verify_open_competition_v2_plonk_setup \
             scripts.test_verify_open_competition_v2_wrap_template \
-            scripts.test_verify_sp1_patched_graph -v
+            scripts.test_verify_sp1_patched_graph \
+            scripts.test_seed_open_competition_v2_discovery \
+            scripts.test_publish_open_competition_v2_seed_issues -v
           docker run --rm \
             -v "$GITHUB_WORKSPACE/tools/open-competition-v2-ceremony:/work" \
             -w /work \
@@ -269,12 +272,14 @@ jobs:
           retention-days: 90
 
   isolated-metric-build:
+    name: Isolated metric ${{ matrix.profile }} ${{ matrix.builder }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         builder: [a, b]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
@@ -298,7 +303,7 @@ jobs:
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
           "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'caf43bb'
       - name: Reproduce the metric release
-        working-directory: programs/public-vector-metric-v1
+        working-directory: programs/${{ matrix.profile }}
         env:
           CARGO_BUILD_JOBS: "2"
         run: |
@@ -307,38 +312,59 @@ jobs:
           test "$(rustc --version | awk '{print $2}')" = "$expected_rust"
           {
             cargo prove --version
-            cargo run --locked --release -p public-vector-metric-v1-script -- \
+            cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
-          } | tee "evidence-${{ matrix.builder }}.jsonl"
+          } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: open-competition-v2-beta2-metric-${{ matrix.builder }}-${{ github.sha }}
-          path: programs/public-vector-metric-v1/evidence-${{ matrix.builder }}.jsonl
+          name: open-competition-v2-beta2-metric-${{ matrix.profile }}-${{ matrix.builder }}-${{ github.sha }}
+          path: programs/${{ matrix.profile }}/evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl
           if-no-files-found: error
           retention-days: 90
 
   compare-metric-builds:
+    name: Compare metric ${{ matrix.profile }}
     needs: isolated-metric-build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: open-competition-v2-beta2-metric-*-${{ github.sha }}
+          pattern: open-competition-v2-beta2-metric-${{ matrix.profile }}-*-${{ github.sha }}
           path: evidence
           merge-multiple: true
       - name: Compare exact ELF, vkey and journal evidence
         run: |
           set -euo pipefail
-          python scripts/verify-open-competition-v2-metric-release.py \
-            --first evidence/evidence-a.jsonl --second evidence/evidence-b.jsonl \
-            --output target/public-vector-metric-v1.json
+          args=(
+            --first "evidence/evidence-${{ matrix.profile }}-a.jsonl"
+            --second "evidence/evidence-${{ matrix.profile }}-b.jsonl"
+            --profile-id "${{ matrix.profile }}"
+            --identity-path "programs/${{ matrix.profile }}/release-identity.json"
+            --output "target/${{ matrix.profile }}.json"
+          )
+          if [[ "${{ matrix.profile }}" = structured-artifact-metric-v1 ]]; then
+            args+=(
+              --source-file crates/competition-metric-core/Cargo.toml
+              --source-file crates/competition-metric-core/src/lib.rs
+              --source-file programs/structured-artifact-metric-v1/program/Cargo.toml
+              --source-file programs/structured-artifact-metric-v1/program/Cargo.lock
+              --source-file programs/structured-artifact-metric-v1/program/src/main.rs
+              --journal-schema-hash 0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d
+              --metric-program-hash 0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9
+            )
+          fi
+          python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
           cargo test --locked -p competition-metric-core
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: open-competition-v2-beta2-metric-release-${{ github.sha }}
-          path: target/public-vector-metric-v1.json
+          name: open-competition-v2-beta2-metric-release-${{ matrix.profile }}-${{ github.sha }}
+          path: target/${{ matrix.profile }}.json
           if-no-files-found: error
           retention-days: 90
 
@@ -373,8 +399,9 @@ jobs:
           path: target/prerequisites/patched-source
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: open-competition-v2-beta2-metric-release-${{ github.sha }}
+          pattern: open-competition-v2-beta2-metric-release-*-${{ github.sha }}
           path: target/prerequisites/metric-release
+          merge-multiple: true
       - name: Build patched circuits, verifier bytecode and CPU runner
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
@@ -384,6 +411,7 @@ jobs:
           python scripts/verify_open_competition_v2_wrap_template.py .sp1-safe \
             --expected-version "$SP1_SAFE_CIRCUIT_VERSION"
           test "$(python -c 'import json; print(json.load(open("programs/public-vector-metric-v1/release-identity.json"))["status"])')" = reproduced_beta2
+          test "$(python -c 'import json; print(json.load(open("programs/structured-artifact-metric-v1/release-identity.json"))["status"])')" = reproduced_beta2
           rm -rf .sp1-safe/crates/prover/build
           DOCKER_BUILDKIT=1 docker build --pull=false \
             --file - \
@@ -440,6 +468,12 @@ jobs:
           install -m 0755 "$CARGO_TARGET_DIR/release/public-vector-metric-v1-script" target/public-vector-metric-v1-script
           target/public-vector-metric-v1-script --capabilities | tee target/prover-capabilities.json
           python -c 'import json; v=json.load(open("target/prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False'
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-structured-artifact"
+          cargo build --locked --release --manifest-path programs/structured-artifact-metric-v1/Cargo.toml \
+            -p structured-artifact-metric-v1-script
+          install -m 0755 "$CARGO_TARGET_DIR/release/structured-artifact-metric-v1-script" target/structured-artifact-metric-v1-script
+          target/structured-artifact-metric-v1-script --capabilities | tee target/structured-artifact-prover-capabilities.json
+          python -c 'import json; v=json.load(open("target/structured-artifact-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False'
       - name: Generate three real proofs and replay the exact mainnet release
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
@@ -506,7 +540,18 @@ jobs:
           }
           record_gate repository_gate_complete target/mainnet-fork-replay.json
           record_gate patched_sp1_dependency_graph_clean target/prerequisites/patched-source/sp1-patched-graph.json
-          record_gate isolated_sp1_builds_match target/prerequisites/metric-release/public-vector-metric-v1.json
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          evidence = {}
+          for profile in ("public-vector-metric-v1", "structured-artifact-metric-v1"):
+              path = Path("target/prerequisites/metric-release") / f"{profile}.json"
+              evidence[profile] = hashlib.sha256(path.read_bytes()).hexdigest()
+          Path("target/metric-release-evidence.json").write_text(
+              json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+          record_gate isolated_sp1_builds_match target/metric-release-evidence.json
           record_gate advisory_regression_vectors_complete target/prerequisites/patched-source/sp1-patched-graph.json
           record_gate trusted_setup_provenance_complete "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
           record_gate real_groth16_plonk_proofs_self_verified target/verifier-assets.json
@@ -530,7 +575,9 @@ jobs:
             target/release-gates.json
             target/proofs/*.json
             target/public-vector-metric-v1-script
+            target/structured-artifact-metric-v1-script
             target/prover-capabilities.json
+            target/structured-artifact-prover-capabilities.json
             target/gnark-image.json
             target/gnark-cli.sha256
             target/trusted-setup-evidence/**
@@ -882,9 +929,79 @@ jobs:
           if-no-files-found: error
           retention-days: 365
 
+  deploy-production-prover:
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.deploy_mainnet && github.ref == 'refs/heads/main' && needs.build-release-assets.result == 'success' && needs.deploy-mainnet.result == 'success'
+    needs: [build-release-assets, deploy-mainnet]
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta2-release-assets-${{ github.sha }}
+          path: target/release-assets
+      - name: Install both reviewed CPU provers as one fail-closed service
+        env:
+          OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
+          OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
+        run: |
+          set -euo pipefail
+          test "${#OPEN_COMPETITION_V2_PROVER_API_KEY}" -ge 32
+          test -f "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+          sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
+          sudo install -m 0755 target/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 target/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/
+          sudo install -m 0644 ops/open-competition-v2-prover.service /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
+          umask 077
+          cat >target/prover.env <<EOF
+          OPEN_COMPETITION_V2_PROVER_API_KEY='$OPEN_COMPETITION_V2_PROVER_API_KEY'
+          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script"}'
+          OPEN_COMPETITION_V2_PROVER_JOB_DIR=/var/lib/agent-bounties-prover/jobs
+          OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
+          OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
+          OPEN_COMPETITION_V2_PROVER_BIND=127.0.0.1
+          PORT=9070
+          SP1_PROVER=cpu
+          SP1_GROTH16_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/groth16
+          SP1_PLONK_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/plonk
+          EOF
+          sudo install -m 0600 target/prover.env /etc/agent-bounties/prover.env
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now agent-bounties-open-competition-v2-prover.service
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:9070/health >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:9070/health | tee target/prover-health.json
+          public_health="${OPEN_COMPETITION_V2_PROVER_URL%/v1/prove}/health"
+          curl --fail --silent "$public_health" | tee target/prover-public-health.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          json.dump({
+              "schema_version": "agent-bounties/open-competition-v2-beta2-prover-deployment-v1",
+              "passed": True,
+              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1"],
+              "backend": "cpu",
+              "gpu_proving_enabled": False,
+          }, Path("target/prover-deployment.json").open("w"), sort_keys=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta2-production-prover-${{ github.sha }}
+          path: |
+            target/prover-deployment.json
+            target/prover-health.json
+            target/prover-public-health.json
+          if-no-files-found: error
+          retention-days: 365
+
   deploy-production-control-plane:
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.deploy_mainnet && github.ref == 'refs/heads/main' && needs.deploy-mainnet.result == 'success'
-    needs: deploy-mainnet
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.deploy_mainnet && github.ref == 'refs/heads/main' && needs.deploy-mainnet.result == 'success' && needs.deploy-production-prover.result == 'success'
+    needs: [deploy-mainnet, deploy-production-prover]
     environment: v2-beta2-mainnet
     runs-on: ubuntu-24.04
     timeout-minutes: 90

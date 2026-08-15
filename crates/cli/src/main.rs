@@ -2410,6 +2410,7 @@ async fn open_competition_v2_prepare_cli(
     request_file: String,
 ) -> Result<()> {
     let path = match operation.as_str() {
+        "prepare_profile" => "structured-artifact-profile",
         "validate" => "validate",
         "create" => "creation-preparation",
         "fund" => "funding-preparation",
@@ -2417,7 +2418,7 @@ async fn open_competition_v2_prepare_cli(
         "prepare_proof" => "proof-preparation",
         "prepare_action" => "action-preparation",
         _ => bail!(
-            "operation must be validate, create, fund, quote_proof, prepare_proof, or prepare_action"
+            "operation must be prepare_profile, validate, create, fund, quote_proof, prepare_proof, or prepare_action"
         ),
     };
     let raw = fs::read_to_string(&request_file)

@@ -4626,20 +4626,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "public-vector-metric-v1-script"
-version = "0.1.0"
-dependencies = [
- "competition-metric-core",
- "hex",
- "serde_json",
- "sha2 0.10.9",
- "sp1-build",
- "sp1-sdk",
- "tiny-keccak",
- "tokio",
-]
-
-[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6673,6 +6659,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "structured-artifact-metric-v1-script"
+version = "0.1.0"
+dependencies = [
+ "competition-metric-core",
+ "hex",
+ "serde_json",
+ "sha2 0.10.9",
+ "sp1-build",
+ "sp1-sdk",
+ "tiny-keccak",
+ "tokio",
 ]
 
 [[package]]

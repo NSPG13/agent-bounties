@@ -7,6 +7,7 @@ on:
       - ".github/workflows/open-competition-v2-metric-release.yml"
       - "crates/competition-metric-core/**"
       - "programs/public-vector-metric-v1/**"
+      - "programs/structured-artifact-metric-v1/**"
       - "scripts/verify-open-competition-v2-metric-release.py"
       - "scripts/verify_sp1_patched_graph.py"
 
@@ -19,13 +20,14 @@ env:
 
 jobs:
   isolated-build:
-    name: Isolated SP1 build ${{ matrix.builder }}
+    name: Isolated SP1 build ${{ matrix.profile }} ${{ matrix.builder }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         builder: [a, b]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
@@ -48,8 +50,8 @@ jobs:
             --path /tmp/agent-bounties-sp1-safe/crates/cli
           echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
           "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'caf43bb'
-      - name: Build and execute public vector guest
-        working-directory: programs/public-vector-metric-v1
+      - name: Build and execute metric guest
+        working-directory: programs/${{ matrix.profile }}
         env:
           CARGO_BUILD_JOBS: "2"
         run: |
@@ -59,40 +61,59 @@ jobs:
           python ../../scripts/verify_sp1_patched_graph.py
           {
             cargo prove --version
-            cargo run --locked --release -p public-vector-metric-v1-script -- \
+            cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
-          } | tee "evidence-${{ matrix.builder }}.jsonl"
+          } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: metric-evidence-${{ matrix.builder }}
-          path: programs/public-vector-metric-v1/evidence-${{ matrix.builder }}.jsonl
+          name: metric-evidence-${{ matrix.profile }}-${{ matrix.builder }}
+          path: programs/${{ matrix.profile }}/evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl
           if-no-files-found: error
           retention-days: 30
 
   compare:
-    name: Compare isolated release evidence
+    name: Compare isolated release evidence ${{ matrix.profile }}
     needs: isolated-build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: metric-evidence-*
+          pattern: metric-evidence-${{ matrix.profile }}-*
           path: evidence
           merge-multiple: true
       - name: Verify exact build and journal bindings
         run: |
           set -euo pipefail
-          python scripts/verify-open-competition-v2-metric-release.py \
-            --first evidence/evidence-a.jsonl \
-            --second evidence/evidence-b.jsonl \
-            --output release/public-vector-metric-v1.json
+          args=(
+            --first "evidence/evidence-${{ matrix.profile }}-a.jsonl"
+            --second "evidence/evidence-${{ matrix.profile }}-b.jsonl"
+            --profile-id "${{ matrix.profile }}"
+            --identity-path "programs/${{ matrix.profile }}/release-identity.json"
+            --output "release/${{ matrix.profile }}.json"
+          )
+          if [[ "${{ matrix.profile }}" = structured-artifact-metric-v1 ]]; then
+            args+=(
+              --source-file crates/competition-metric-core/Cargo.toml
+              --source-file crates/competition-metric-core/src/lib.rs
+              --source-file programs/structured-artifact-metric-v1/program/Cargo.toml
+              --source-file programs/structured-artifact-metric-v1/program/Cargo.lock
+              --source-file programs/structured-artifact-metric-v1/program/src/main.rs
+              --journal-schema-hash 0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d
+              --metric-program-hash 0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9
+            )
+          fi
+          python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
       - name: Run adversarial metric corpus
         run: cargo test --locked -p competition-metric-core
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: public-vector-metric-v1-reviewed-release
-          path: release/public-vector-metric-v1.json
+          name: ${{ matrix.profile }}-reviewed-release
+          path: release/${{ matrix.profile }}.json
           if-no-files-found: error
           retention-days: 90

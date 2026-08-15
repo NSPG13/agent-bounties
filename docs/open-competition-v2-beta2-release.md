@@ -119,8 +119,9 @@ Both stages require trusted setup for a Base-mainnet bundle. Test-only setup is
 accepted only when `--allow-test-only-setup` is explicit, and the resulting
 asset record is permanently marked `mainnet_eligible: false`.
 
-`programs/public-vector-metric-v1/release-identity.json` is
-`reproduced_beta2`: two isolated builders reproduced the pinned ELF and vkey.
+Both `programs/public-vector-metric-v1/release-identity.json` and
+`programs/structured-artifact-metric-v1/release-identity.json` must be
+`reproduced_beta2`: two isolated builders reproduce each pinned ELF and vkey.
 Production bundle generation rejects any other state.
 
 ## Commands
@@ -207,13 +208,15 @@ The same high-memory host runs
 
 ```text
 OPEN_COMPETITION_V2_PROVER_API_KEY=<random 32+ character secret>
-OPEN_COMPETITION_V2_PROVER_BINARY=/opt/agent-bounties/bin/public-vector-metric-v1-script
+OPEN_COMPETITION_V2_PROVER_BINARIES={"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script"}
 OPEN_COMPETITION_V2_PROVER_JOB_DIR=/var/lib/agent-bounties-prover/jobs
-OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=600
+OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
 OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
 OPEN_COMPETITION_V2_PROVER_BIND=127.0.0.1
 PORT=9070
 SP1_PROVER=cpu
+SP1_GROTH16_PK_PATH=/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted/groth16/groth16_pk.bin
+SP1_PLONK_PK_PATH=/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted/plonk/plonk_pk.bin
 ```
 
 Give the same API key only to the Render broker and point

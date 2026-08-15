@@ -33,6 +33,31 @@ ELF_HASH = METRIC_IDENTITY["elf_keccak256"]
 ELF_SHA256 = METRIC_IDENTITY["elf_sha256"]
 JOURNAL_SCHEMA_HASH = "0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4"
 METRIC_PROGRAM_HASH = "0x1c27fc20ab65264c7db2997c8b76f78d7291cdb91243481bcae1e88f77beb88a"
+STRUCTURED_ARTIFACT_IDENTITY_PATH = (
+    ROOT / "programs/structured-artifact-metric-v1/release-identity.json"
+)
+STRUCTURED_ARTIFACT_IDENTITY = json.loads(
+    STRUCTURED_ARTIFACT_IDENTITY_PATH.read_text(encoding="utf-8")
+)
+STRUCTURED_ARTIFACT_REVIEW_EVIDENCE_HASH = keccak256(
+    STRUCTURED_ARTIFACT_IDENTITY_PATH.read_bytes().replace(b"\r\n", b"\n")
+)
+METRIC_PROFILES = (
+    {
+        "identity": METRIC_IDENTITY,
+        "identity_path": METRIC_IDENTITY_PATH,
+        "journal_schema_hash": JOURNAL_SCHEMA_HASH,
+        "metric_program_hash": METRIC_PROGRAM_HASH,
+        "review_evidence_hash": METRIC_REVIEW_EVIDENCE_HASH,
+    },
+    {
+        "identity": STRUCTURED_ARTIFACT_IDENTITY,
+        "identity_path": STRUCTURED_ARTIFACT_IDENTITY_PATH,
+        "journal_schema_hash": "0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d",
+        "metric_program_hash": "0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9",
+        "review_evidence_hash": STRUCTURED_ARTIFACT_REVIEW_EVIDENCE_HASH,
+    },
+)
 PROOF_SYSTEM_GROTH16 = keccak256(b"sp1-groth16")
 PROOF_SYSTEM_PLONK = keccak256(b"sp1-plonk")
 SP1_COMMIT = METRIC_IDENTITY["sp1_commit"]
@@ -127,7 +152,37 @@ SOURCE_FILES = (
     "contracts/base-escrow/src/Sp1VerifierAdapterV2Beta2.sol",
     "crates/competition-metric-core/src/lib.rs",
     "programs/public-vector-metric-v1/program/src/main.rs",
+    "programs/structured-artifact-metric-v1/program/src/main.rs",
 )
+
+
+def metric_profiles_ready() -> bool:
+    return all(profile["identity"].get("status") == "reproduced_beta2" for profile in METRIC_PROFILES)
+
+
+def metric_profile_documents() -> list[dict[str, str]]:
+    for profile in METRIC_PROFILES:
+        identity = profile["identity"]
+        if (
+            identity.get("sp1_commit") != SP1_COMMIT
+            or identity.get("sp1_version") != SP1_VERSION
+            or identity.get("rust_version") != HOST_RUST_VERSION
+            or identity.get("sp1_guest_rust_version") != SP1_GUEST_RUST_VERSION
+        ):
+            raise ValueError("metric profiles must share the exact patched SP1 and Rust toolchains")
+    return [
+        {
+            "profile_id": profile["identity"]["profile_id"],
+            "program_vkey": profile["identity"]["program_vkey"],
+            "source_hash": profile["identity"]["source_hash"],
+            "elf_hash": profile["identity"]["elf_keccak256"],
+            "elf_sha256": profile["identity"]["elf_sha256"],
+            "journal_schema_hash": profile["journal_schema_hash"],
+            "metric_program_hash": profile["metric_program_hash"],
+            "review_evidence_hash": profile["review_evidence_hash"],
+        }
+        for profile in METRIC_PROFILES
+    ]
 
 
 def normalized_sha256(path: Path) -> str:
@@ -453,8 +508,8 @@ def build_bundle(
         raise ValueError("source commit must be a full lowercase Git commit")
     if not re.fullmatch(r"0x[0-9a-f]{64}", repository_subject):
         raise ValueError("repository subject must be a 32-byte hash")
-    if METRIC_IDENTITY.get("status") != "reproduced_beta2" and not allow_pending_metric_identity:
-        raise RuntimeError("patched Beta2 metric ELF and vkey have not been reproduced")
+    if not metric_profiles_ready() and not allow_pending_metric_identity:
+        raise RuntimeError("every patched Beta2 metric ELF and vkey must be reproduced")
     if preflight["deployer_eth_wei"] < MIN_DEPLOYER_ETH_WEI:
         raise RuntimeError("deployer ETH is below the bounded deployment reserve")
     groth16_verifier = create_address(deployer, preflight["deployer_nonce"])
@@ -597,6 +652,7 @@ def build_bundle(
             "journal_schema_hash": JOURNAL_SCHEMA_HASH,
             "metric_program_hash": METRIC_PROGRAM_HASH,
         },
+        "metric_profiles": metric_profile_documents(),
         "risk": {
             "preimage": gates["beta_risk_preimage"],
             "hash": gates["beta_risk_hash"],
@@ -697,7 +753,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[str, Any]:
-    metric_ready = METRIC_IDENTITY.get("status") == "reproduced_beta2"
+    metric_ready = metric_profiles_ready()
     public_beta = bool(bundle["activation"]["public_creation_enabled"])
     broker_canary = bool(bundle["activation"]["broker_canary_enabled"])
     sepolia_broker_rehearsal = bool(
@@ -736,15 +792,16 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
         ) and metric_ready,
         "metric_programs": [
             {
-                "profile_id": bundle["metric_profile"]["profile_id"],
+                "profile_id": profile["profile_id"],
                 "classification": "reviewed" if metric_ready else "disabled",
-                "program_vkey": bundle["metric_profile"]["program_vkey"],
-                "source_hash": bundle["metric_profile"]["source_hash"],
-                "elf_hash": bundle["metric_profile"]["elf_hash"],
-                "journal_schema_hash": bundle["metric_profile"]["journal_schema_hash"],
-                "metric_program_hash": bundle["metric_profile"]["metric_program_hash"],
-                "review_evidence_hash": METRIC_REVIEW_EVIDENCE_HASH,
+                "program_vkey": profile["program_vkey"],
+                "source_hash": profile["source_hash"],
+                "elf_hash": profile["elf_hash"],
+                "journal_schema_hash": profile["journal_schema_hash"],
+                "metric_program_hash": profile["metric_program_hash"],
+                "review_evidence_hash": profile["review_evidence_hash"],
             }
+            for profile in bundle["metric_profiles"]
         ],
     }
 

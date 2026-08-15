@@ -698,6 +698,16 @@ class AgentBountiesClient:
             params={"network": network},
         )
 
+    def prepare_open_competition_v2_structured_artifact_profile(self, request: dict):
+        """Derive exact reviewed metric fields from deterministic artifact requirements."""
+        payload = dict(request)
+        payload.setdefault("network", "base-mainnet")
+        return self._request(
+            "POST",
+            "/v1/base/open-competition-v2-beta2/structured-artifact-profile",
+            json=payload,
+        )
+
     def validate_open_competition_v2(self, request: dict):
         payload = dict(request)
         payload.setdefault("network", "base-mainnet")

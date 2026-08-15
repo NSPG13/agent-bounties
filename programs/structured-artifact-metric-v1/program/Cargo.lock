@@ -632,14 +632,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "public-vector-metric-v1-program"
-version = "0.1.0"
-dependencies = [
- "competition-metric-core",
- "sp1-zkvm",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -912,6 +904,14 @@ dependencies = [
  "sha2",
  "sp1-lib",
  "sp1-primitives",
+]
+
+[[package]]
+name = "structured-artifact-metric-v1-program"
+version = "0.1.0"
+dependencies = [
+ "competition-metric-core",
+ "sp1-zkvm",
 ]
 
 [[package]]

@@ -443,6 +443,38 @@ export interface OpenCompetitionV2MetricRequest {
   vectors: OpenCompetitionV2MetricCase[];
 }
 
+export type OpenCompetitionV2ArtifactRequirement =
+  | { kind: "utf8_contains"; needle: string; minimum_occurrences: number; weight: number }
+  | { kind: "utf8_excludes"; needle: string; weight: number }
+  | { kind: "maximum_bytes"; maximum: number; weight: number }
+  | { kind: "json_valid"; weight: number }
+  | { kind: "json_pointer_exists"; pointer: string; weight: number }
+  | {
+      kind: "json_pointer_string_equals";
+      pointer: string;
+      expected: string;
+      weight: number;
+    }
+  | {
+      kind: "json_array_minimum_length";
+      pointer: string;
+      minimum: number;
+      weight: number;
+    };
+
+export interface OpenCompetitionV2StructuredArtifactProfileRequest {
+  network?: OpenCompetitionV2Network | null;
+  threshold: string;
+  requirements: OpenCompetitionV2ArtifactRequirement[];
+}
+
+export interface OpenCompetitionV2StructuredArtifactMetricRequest {
+  profile_id: "structured-artifact-metric-v1";
+  threshold: string;
+  artifact_utf8: string;
+  requirements: OpenCompetitionV2ArtifactRequirement[];
+}
+
 export interface OpenCompetitionV2MetricScope {
   chain_id: number;
   competition: string;
@@ -515,7 +547,7 @@ export interface OpenCompetitionV2ProofQuoteRequest {
   solver_nonce: string;
   artifact_hash: string;
   relay: boolean;
-  metric: OpenCompetitionV2MetricRequest;
+  metric: OpenCompetitionV2MetricRequest | OpenCompetitionV2StructuredArtifactMetricRequest;
 }
 
 export interface OpenCompetitionV2ProofRequest {
@@ -1625,6 +1657,15 @@ export class AgentBountiesClient {
     network: OpenCompetitionV2Network = "base-mainnet",
   ): Promise<unknown> {
     return this.query("/v1/base/open-competition-v2-beta2/release", { network });
+  }
+
+  async prepareOpenCompetitionV2StructuredArtifactProfile(
+    request: OpenCompetitionV2StructuredArtifactProfileRequest,
+  ): Promise<unknown> {
+    return this.post("/v1/base/open-competition-v2-beta2/structured-artifact-profile", {
+      ...request,
+      network: request.network ?? "base-mainnet",
+    });
   }
 
   async validateOpenCompetitionV2(request: OpenCompetitionV2CreationRequest): Promise<unknown> {

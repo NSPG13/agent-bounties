@@ -1,0 +1,89 @@
+// Injected into the pinned Gnark module during the ceremony image build.
+package mpcsetup
+
+import (
+	"bytes"
+	"math/big"
+	"testing"
+
+	curve "github.com/consensys/gnark-crypto/ecc/bn254"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+)
+
+func clonePhase1(t *testing.T, source *Phase1) *Phase1 {
+	t.Helper()
+	var encoded bytes.Buffer
+	if _, err := source.WriteTo(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	result := new(Phase1)
+	if _, err := result.ReadFrom(bytes.NewReader(encoded.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func sequentialUpdate(c *SrsCommons, tauUpdate, alphaUpdate, betaUpdate *fr.Element) {
+	var coeff big.Int
+	alphaUpdate.BigInt(&coeff)
+	c.G1.AlphaTau[0].ScalarMultiplication(&c.G1.AlphaTau[0], &coeff)
+	betaUpdate.BigInt(&coeff)
+	c.G1.BetaTau[0].ScalarMultiplication(&c.G1.BetaTau[0], &coeff)
+	c.G2.Beta.ScalarMultiplication(&c.G2.Beta, &coeff)
+
+	tauPowI := *tauUpdate
+	for i := 1; i < len(c.G2.Tau); i++ {
+		tauPowI.BigInt(&coeff)
+		c.G1.Tau[i].ScalarMultiplication(&c.G1.Tau[i], &coeff)
+		c.G2.Tau[i].ScalarMultiplication(&c.G2.Tau[i], &coeff)
+
+		var scaled fr.Element
+		scaled.Mul(&tauPowI, alphaUpdate)
+		scaled.BigInt(&coeff)
+		c.G1.AlphaTau[i].ScalarMultiplication(&c.G1.AlphaTau[i], &coeff)
+		scaled.Mul(&tauPowI, betaUpdate)
+		scaled.BigInt(&coeff)
+		c.G1.BetaTau[i].ScalarMultiplication(&c.G1.BetaTau[i], &coeff)
+		tauPowI.Mul(&tauPowI, tauUpdate)
+	}
+	for i := len(c.G2.Tau); i < len(c.G1.Tau); i++ {
+		tauPowI.BigInt(&coeff)
+		c.G1.Tau[i].ScalarMultiplication(&c.G1.Tau[i], &coeff)
+		tauPowI.Mul(&tauPowI, tauUpdate)
+	}
+}
+
+func TestParallelUpdateMatchesSequential(t *testing.T) {
+	for _, domain := range []uint64{1, 2, 16, 64} {
+		t.Run(new(big.Int).SetUint64(domain).String(), func(t *testing.T) {
+			initial := new(Phase1)
+			initial.Initialize(domain)
+			parallel := clonePhase1(t, initial)
+			sequential := clonePhase1(t, initial)
+
+			var tau, alpha, beta fr.Element
+			tau.SetUint64(3)
+			alpha.SetUint64(5)
+			beta.SetUint64(7)
+			parallel.parameters.update(&tau, &alpha, &beta)
+			sequentialUpdate(&sequential.parameters, &tau, &alpha, &beta)
+
+			if !bytes.Equal(parallel.hash(), sequential.hash()) {
+				t.Fatal("parallel update changed the Phase 1 transcript")
+			}
+			assertSamePoints(t, parallel.parameters.G1.Tau, sequential.parameters.G1.Tau)
+		})
+	}
+}
+
+func assertSamePoints(t *testing.T, left, right []curve.G1Affine) {
+	t.Helper()
+	if len(left) != len(right) {
+		t.Fatalf("point count differs: %d != %d", len(left), len(right))
+	}
+	for i := range left {
+		if !left[i].Equal(&right[i]) {
+			t.Fatalf("point %d differs", i)
+		}
+	}
+}
