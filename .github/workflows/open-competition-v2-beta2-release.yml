@@ -162,6 +162,7 @@ jobs:
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           version: "28.3"
+          repo-token: ${{ github.token }}
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
@@ -280,6 +281,7 @@ jobs:
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           version: "28.3"
+          repo-token: ${{ github.token }}
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
@@ -352,6 +354,7 @@ jobs:
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
         with:
           version: "28.3"
+          repo-token: ${{ github.token }}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
