@@ -27,8 +27,12 @@ class BrokerFundingTests(unittest.TestCase):
         )
 
     def test_deficits_reject_invalid_targets(self):
-        with self.assertRaisesRegex(MODULE.BrokerFundingError, "must be positive"):
-            MODULE.deficits(current_usdc=0, current_eth=0, target_usdc=0, target_eth=100)
+        self.assertEqual(
+            MODULE.deficits(current_usdc=0, current_eth=0, target_usdc=0, target_eth=100),
+            (0, 100),
+        )
+        with self.assertRaisesRegex(MODULE.BrokerFundingError, "are invalid"):
+            MODULE.deficits(current_usdc=0, current_eth=0, target_usdc=0, target_eth=0)
 
 
 if __name__ == "__main__":

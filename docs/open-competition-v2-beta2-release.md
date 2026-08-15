@@ -153,8 +153,12 @@ It requires a self-hosted runner with labels `linux`, `x64`, `ram-256gb`, and
 `/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted`. Configure protected
 environments as follows:
 
-- `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL` and
-  `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`;
+- `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL`,
+  `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`, a dedicated
+  `OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY` secret, and its public
+  `OPEN_COMPETITION_V2_BROKER_ADDRESS` variable. The protected job derives the
+  broker address from the key, rejects deployer reuse, and seeds only its
+  bounded Base Sepolia ETH relay reserve before rehearsal;
 - `v2-beta2-mainnet`: `BASE_MAINNET_RPC_URL` and
   `BASE_MAINNET_DEPLOYER_PRIVATE_KEY`, plus the isolated
   `OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY` secret and the public

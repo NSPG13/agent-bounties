@@ -24,6 +24,19 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertNotIn("x402_success_and_refund_canaries_complete", workflow)
 
+    def test_sepolia_rehearsal_uses_an_isolated_broker(self):
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta2-release.yml").read_text(
+            encoding="utf-8"
+        )
+        sepolia = workflow.split("  live-sepolia-rehearsal:", 1)[1].split(
+            "  deploy-mainnet:", 1
+        )[0]
+        self.assertIn("OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY", sepolia)
+        self.assertIn("--network base-sepolia", sepolia)
+        self.assertIn('OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"', sepolia)
+        self.assertIn('X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"', sepolia)
+        self.assertNotIn('X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"', sepolia)
+
     @staticmethod
     def verifier_assets() -> dict:
         systems = {}

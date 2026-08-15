@@ -17,12 +17,22 @@ from _shared.evm import address_word, uint_word
 from _shared.rpc import rpc
 
 
-CHAIN_ID = 8453
-USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+NETWORKS = {
+    "base-mainnet": {
+        "chain_id": 8453,
+        "usdc": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "minimum_deployer_usdc_after": 635_000,
+        "minimum_deployer_eth_after": 100_000_000_000_000,
+    },
+    "base-sepolia": {
+        "chain_id": 84532,
+        "usdc": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+        "minimum_deployer_usdc_after": 900_000,
+        "minimum_deployer_eth_after": 500_000_000_000_000,
+    },
+}
 TRANSFER_SELECTOR = "a9059cbb"
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
-MIN_DEPLOYER_USDC_AFTER = 635_000
-MIN_DEPLOYER_ETH_AFTER = 100_000_000_000_000
 
 
 class BrokerFundingError(RuntimeError):
@@ -38,20 +48,21 @@ def deficits(
     *, current_usdc: int, current_eth: int, target_usdc: int, target_eth: int
 ) -> tuple[int, int]:
     require(min(current_usdc, current_eth, target_usdc, target_eth) >= 0, "balances cannot be negative")
-    require(target_usdc > 0 and target_eth > 0, "broker reserve targets must be positive")
+    require(target_usdc >= 0 and target_eth > 0, "broker reserve targets are invalid")
     return max(target_usdc - current_usdc, 0), max(target_eth - current_eth, 0)
 
 
-def usdc_balance(url: str, address: str, block: str) -> int:
+def usdc_balance(url: str, token: str, address: str, block: str) -> int:
     data = "0x70a08231" + address_word(address).hex()
-    return int(rpc(url, "eth_call", [{"to": USDC, "data": data}, block]), 16)
+    return int(rpc(url, "eth_call", [{"to": token, "data": data}, block]), 16)
 
 
 class SignedRpc:
-    def __init__(self, url: str, signer: Any) -> None:
+    def __init__(self, url: str, signer: Any, chain_id: int) -> None:
         self.url = url
         self.signer = signer
-        require(int(rpc(url, "eth_chainId", []), 16) == CHAIN_ID, "RPC is not Base mainnet")
+        self.chain_id = chain_id
+        require(int(rpc(url, "eth_chainId", []), 16) == chain_id, "RPC chain ID mismatch")
 
     def send(self, *, to: str, data: str = "0x", value: int = 0) -> dict[str, Any]:
         nonce = int(rpc(self.url, "eth_getTransactionCount", [self.signer.address, "pending"]), 16)
@@ -75,7 +86,7 @@ class SignedRpc:
         require(gas <= 150_000, "broker reserve transfer gas exceeds cap")
         signed = self.signer.sign_transaction(
             {
-                "chainId": CHAIN_ID,
+                "chainId": self.chain_id,
                 "from": self.signer.address,
                 "to": to,
                 "nonce": nonce,
@@ -113,20 +124,23 @@ class SignedRpc:
 
 def fund(
     *,
+    network_name: str,
     rpc_url: str,
     private_key: str,
     broker: str,
     target_usdc: int,
     target_eth: int,
 ) -> dict[str, Any]:
-    require(rpc_url.startswith("https://"), "production RPC must use HTTPS")
+    require(network_name in NETWORKS, "unsupported broker funding network")
+    network = NETWORKS[network_name]
+    require(rpc_url.startswith("https://"), "broker funding RPC must use HTTPS")
     require(ADDRESS.fullmatch(broker) is not None, "broker address is invalid")
     signer = Account.from_key(private_key)
     require(signer.address.lower() != broker.lower(), "broker and deployer must be distinct")
-    client = SignedRpc(rpc_url, signer)
+    client = SignedRpc(rpc_url, signer, network["chain_id"])
     safe_before = rpc(rpc_url, "eth_getBlockByNumber", ["safe", False])
     require(safe_before and safe_before.get("hash"), "RPC did not return a safe block")
-    current_usdc = usdc_balance(rpc_url, broker, safe_before["number"])
+    current_usdc = usdc_balance(rpc_url, network["usdc"], broker, safe_before["number"])
     current_eth = int(rpc(rpc_url, "eth_getBalance", [broker, safe_before["number"]]), 16)
     usdc_deficit, eth_deficit = deficits(
         current_usdc=current_usdc,
@@ -134,21 +148,21 @@ def fund(
         target_usdc=target_usdc,
         target_eth=target_eth,
     )
-    deployer_usdc = usdc_balance(rpc_url, signer.address, "latest")
+    deployer_usdc = usdc_balance(rpc_url, network["usdc"], signer.address, "latest")
     deployer_eth = int(rpc(rpc_url, "eth_getBalance", [signer.address, "latest"]), 16)
     require(
-        deployer_usdc >= usdc_deficit + MIN_DEPLOYER_USDC_AFTER,
+        deployer_usdc >= usdc_deficit + network["minimum_deployer_usdc_after"],
         "deployer USDC cannot seed broker and retain the canary budget",
     )
     require(
-        deployer_eth >= eth_deficit + MIN_DEPLOYER_ETH_AFTER,
+        deployer_eth >= eth_deficit + network["minimum_deployer_eth_after"],
         "deployer ETH cannot seed broker and retain deployment gas",
     )
 
     receipts: list[dict[str, Any]] = []
     if usdc_deficit:
         calldata = "0x" + TRANSFER_SELECTOR + address_word(broker).hex() + uint_word(usdc_deficit).hex()
-        receipts.append(client.send(to=USDC, data=calldata))
+        receipts.append(client.send(to=network["usdc"], data=calldata))
     if eth_deficit:
         receipts.append(client.send(to=broker, value=eth_deficit))
     last_block = max(
@@ -156,14 +170,14 @@ def fund(
         or [int(safe_before["number"], 16)]
     )
     safe_after = client.wait_safe(last_block)
-    final_usdc = usdc_balance(rpc_url, broker, safe_after["number"])
+    final_usdc = usdc_balance(rpc_url, network["usdc"], broker, safe_after["number"])
     final_eth = int(rpc(rpc_url, "eth_getBalance", [broker, safe_after["number"]]), 16)
     require(final_usdc >= target_usdc, "broker USDC reserve did not reconcile")
     require(final_eth >= target_eth, "broker ETH reserve did not reconcile")
     return {
         "schema_version": "agent-bounties/open-competition-v2-beta2-broker-seed-v1",
         "passed": True,
-        "network": "base-mainnet",
+        "network": network_name,
         "deployer": signer.address.lower(),
         "broker": broker.lower(),
         "target_usdc_base_units": target_usdc,
@@ -181,20 +195,25 @@ def fund(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--network", choices=tuple(NETWORKS), default="base-mainnet")
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--private-key-env", default="BASE_MAINNET_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--broker", required=True)
-    parser.add_argument("--target-usdc-base-units", type=int, default=110_000)
+    parser.add_argument("--target-usdc-base-units", type=int)
     parser.add_argument("--target-eth-wei", type=int, default=100_000_000_000_000)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     private_key = os.environ.get(args.private_key_env, "")
     require(bool(private_key), f"{args.private_key_env} is required")
+    target_usdc = args.target_usdc_base_units
+    if target_usdc is None:
+        target_usdc = 110_000 if args.network == "base-mainnet" else 0
     result = fund(
+        network_name=args.network,
         rpc_url=args.rpc_url,
         private_key=private_key,
         broker=args.broker,
-        target_usdc=args.target_usdc_base_units,
+        target_usdc=target_usdc,
         target_eth=args.target_eth_wei,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

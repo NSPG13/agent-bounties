@@ -570,6 +570,8 @@ jobs:
           BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
           BASE_SEPOLIA_SHADOW_RPC_URL: ${{ vars.BASE_SEPOLIA_SHADOW_RPC_URL }}
           BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
           DATABASE_URL: postgresql://agent_bounties:agent_bounties@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/agent_bounties_v2
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/release-assets/public-vector-metric-v1-script
           OPEN_COMPETITION_V2_PROVER_API_KEY: beta2-sepolia-rehearsal-only-api-key
@@ -580,11 +582,19 @@ jobs:
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
           export BETA2_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:sepolia"
           test -n "$BASE_SEPOLIA_RPC_URL" && test -n "$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY" && test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           python -m pip install -r scripts/requirements-wallet.txt
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
           forge build --root contracts/base-escrow --force --ast
           cargo build --locked --release -p api -p worker
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          test "$BROKER" = "$(printf '%s' "$OPEN_COMPETITION_V2_BROKER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
+          test "$BROKER" != "$DEPLOYER"
+          python scripts/fund_open_competition_v2_beta2_broker.py --network base-sepolia \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --broker "$BROKER" --target-usdc-base-units 0 --target-eth-wei 100000000000000 \
+            --output target/sepolia-broker-seed.json
           python scripts/build_open_competition_v2_beta2_release.py --network base-sepolia \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/release-assets/verifier-assets.json \
@@ -614,7 +624,7 @@ jobs:
           export OPEN_COMPETITION_V2_INDEXER_RPC_URL="$BASE_SEPOLIA_RPC_URL"
           export OPEN_COMPETITION_V2_SHADOW_RPC_URL="$BASE_SEPOLIA_SHADOW_RPC_URL"
           export OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS=2
-          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$DEPLOYER"
+          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"
           export OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS=100000
           export OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS=100000
           export OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS=10000
@@ -625,7 +635,7 @@ jobs:
           export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=630
           export OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
           export OPEN_COMPETITION_V2_PROVER_JOB_DIR="$RUNNER_TEMP/beta2-sepolia-prover-jobs"
-          export X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
+          export X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
           export X402_RELAYER_MIN_USDC_BASE_UNITS=100000
           export X402_RELAYER_MAX_USDC_BASE_UNITS=500000
           export ENABLE_X402_HOSTED_RELAY=true
@@ -681,6 +691,7 @@ jobs:
           path: |
             target/sepolia.json
             target/sepolia.runtime.json
+            target/sepolia-broker-seed.json
             target/sepolia-rehearsal.json
             target/sepolia-x402-rehearsal.json
             target/sepolia-proofs/*.json
