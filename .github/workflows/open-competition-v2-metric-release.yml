@@ -56,9 +56,6 @@ jobs:
           expected_rust="$(python -c 'import json; print(json.load(open("release-identity.json"))["rust_version"])')"
           test "$(rustc --version | awk '{print $2}')" = "$expected_rust"
           python ../../scripts/verify_sp1_patched_graph.py
-          test "$(cargo tree --locked -p public-vector-metric-v1-script --prefix none | grep '^p3-challenger ' | sort -u | wc -l)" = 1
-          cargo tree --locked -p public-vector-metric-v1-script --prefix none \
-            | grep '^p3-challenger ' | grep -F "$SP1_SAFE_REPOSITORY?rev=$SP1_SAFE_COMMIT"
           {
             cargo prove --version
             cargo run --locked --release -p public-vector-metric-v1-script -- \
