@@ -5,8 +5,8 @@
   "rust_version": "1.96.1",
   "sp1_version": "6.4.0-agent-bounties-sp1-safe-v2",
   "sp1_commit": "f205ebada7f3bf35a71a28492ca8481aff3679ca",
-  "program_vkey": "0x00eef4297c56ab28f02ea278ced640852269cb39f9fd062b3b0def1c11bc3b2b",
-  "source_hash": "0x48b61197699dcd2e87f683c1d95f2baca4aeaedf2caaa3e4988dfce10c1152a7",
-  "elf_keccak256": "0xb2dc353084ecb54a22c4dc637be5d532e59b7c1c24819eee037a410388bb0800",
-  "elf_sha256": "bd827e63658a5454a895778dd9a445268705a650feb25183a4cbcddca914e124"
+  "program_vkey": "0x000300bff9900725cb52afb50b42fffdfdae35767d303b414d3f931288189855",
+  "source_hash": "0xd69cebefd1dfe7a3aa3e6d7573db695bc208af3f5534ee3372852307bab0cd4a",
+  "elf_keccak256": "0xdf475db507c83a14d47a61a53d8182437a0485619a2eaa6f052740d30c35c960",
+  "elf_sha256": "5f0996a0bc23882f43a78e88286b319d9df753e7b172e9e6ca237aa279249d55"
 }
