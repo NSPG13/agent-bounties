@@ -19,9 +19,11 @@ use chain_base::{
 };
 use chrono::{DateTime, Utc};
 use competition_metric_core::{
-    execute_public_vector_program, JournalScopeV2, PublicVectorCase, PublicVectorMode,
-    PublicVectorProgramInput, GROTH16_PROOF_SYSTEM, JOURNAL_SCHEMA_HASH, METRIC_PROGRAM_HASH,
-    PLONK_PROOF_SYSTEM,
+    execute_public_vector_program, execute_structured_artifact_program, ArtifactRequirement,
+    JournalScopeV2, PublicVectorCase, PublicVectorMode, PublicVectorProgramInput,
+    StructuredArtifactProgramInput, GROTH16_PROOF_SYSTEM, JOURNAL_SCHEMA_HASH,
+    METRIC_PROGRAM_HASH, PLONK_PROOF_SYSTEM, STRUCTURED_ARTIFACT_JOURNAL_SCHEMA_HASH,
+    STRUCTURED_ARTIFACT_METRIC_PROGRAM_HASH,
 };
 use db::{
     OpenCompetitionV2ProofJob, OpenCompetitionV2ProofJobState, OpenCompetitionV2ProofJobUpdate,
@@ -179,7 +181,7 @@ pub(crate) struct ProofQuoteBody {
     solver_nonce: String,
     artifact_hash: String,
     relay: bool,
-    metric: PublicVectorMetricBody,
+    metric: ProofMetricBody,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +190,22 @@ struct PublicVectorMetricBody {
     mode: PublicVectorMode,
     threshold: String,
     vectors: Vec<PublicVectorCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredArtifactMetricBody {
+    profile_id: String,
+    threshold: String,
+    artifact_utf8: String,
+    requirements: Vec<ArtifactRequirement>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ProofMetricBody {
+    PublicVector(PublicVectorMetricBody),
+    StructuredArtifact(StructuredArtifactMetricBody),
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,7 +557,7 @@ pub(crate) async fn create_proof_quote(
         }
     };
     let (program_input, expected_public_values) =
-        build_public_vector_proof_input(&network, &record.projection, &body)?;
+        build_metric_proof_input(&network, &record.projection, &body)?;
     let now = u64::try_from(Utc::now().timestamp()).map_err(|_| {
         service_error(
             "quote_proof",
@@ -1450,10 +1468,26 @@ fn unix_timestamp(value: DateTime<Utc>, field: &str) -> Result<u64, (StatusCode,
         .map_err(|_| service_error("read_quote", "invalid_timestamp", field))
 }
 
+fn build_metric_proof_input(
+    network: &str,
+    projection: &chain_base::OpenCompetitionV2Projection,
+    body: &ProofQuoteBody,
+) -> Result<(Value, String), (StatusCode, Json<Value>)> {
+    match &body.metric {
+        ProofMetricBody::PublicVector(metric) => {
+            build_public_vector_proof_input(network, projection, body, metric)
+        }
+        ProofMetricBody::StructuredArtifact(metric) => {
+            build_structured_artifact_proof_input(network, projection, body, metric)
+        }
+    }
+}
+
 fn build_public_vector_proof_input(
     network: &str,
     projection: &chain_base::OpenCompetitionV2Projection,
     body: &ProofQuoteBody,
+    metric: &PublicVectorMetricBody,
 ) -> Result<(Value, String), (StatusCode, Json<Value>)> {
     let required = |value: &Option<String>, field: &str| {
         value.clone().ok_or_else(|| {
@@ -1464,7 +1498,7 @@ fn build_public_vector_proof_input(
             )
         })
     };
-    let threshold = body.metric.threshold.parse::<i128>().map_err(|_| {
+    let threshold = metric.threshold.parse::<i128>().map_err(|_| {
         bad_request(
             "quote_proof",
             "invalid_metric_threshold",
@@ -1487,7 +1521,7 @@ fn build_public_vector_proof_input(
             "metric.threshold must equal the competition's immutable score threshold",
         ));
     }
-    let expected_direction = match body.metric.mode {
+    let expected_direction = match metric.mode {
         PublicVectorMode::AllEqual | PublicVectorMode::MaximizeExactMatches => "higher_is_better",
         PublicVectorMode::MinimizeAbsoluteError => "lower_is_better",
     };
@@ -1497,13 +1531,12 @@ fn build_public_vector_proof_input(
             "metric_direction_mismatch",
             format!(
                 "{} requires score_direction={expected_direction}",
-                metric_mode_name(body.metric.mode)
+                metric_mode_name(metric.mode)
             ),
         ));
     }
-    if body.metric.mode == PublicVectorMode::AllEqual {
-        let total_weight = body
-            .metric
+    if metric.mode == PublicVectorMode::AllEqual {
+        let total_weight = metric
             .vectors
             .iter()
             .try_fold(0_i128, |total, vector| {
@@ -1588,9 +1621,9 @@ fn build_public_vector_proof_input(
                 "beta_risk_hash",
             )?,
         },
-        mode: body.metric.mode,
+        mode: metric.mode,
         threshold,
-        vectors: body.metric.vectors.clone(),
+        vectors: metric.vectors.clone(),
     };
     let output = execute_public_vector_program(&input).map_err(|error| {
         bad_request(
@@ -1628,6 +1661,140 @@ fn build_public_vector_proof_input(
                 error.to_string(),
             )
         })?,
+        format!("0x{}", hex::encode(output.journal)),
+    ))
+}
+
+fn build_structured_artifact_proof_input(
+    network: &str,
+    projection: &chain_base::OpenCompetitionV2Projection,
+    body: &ProofQuoteBody,
+    metric: &StructuredArtifactMetricBody,
+) -> Result<(Value, String), (StatusCode, Json<Value>)> {
+    if metric.profile_id != "structured-artifact-metric-v1" {
+        return Err(bad_request(
+            "quote_proof",
+            "unsupported_metric_profile",
+            "Use profile_id=structured-artifact-metric-v1.",
+        ));
+    }
+    let required = |value: &Option<String>, field: &str| {
+        value.clone().ok_or_else(|| {
+            conflict(
+                "quote_proof",
+                "competition_profile_incomplete",
+                format!("Safe-block projection is missing {field}; wait for index reconciliation."),
+            )
+        })
+    };
+    let threshold = decimal_u128(&metric.threshold, "metric.threshold")?;
+    let contract_threshold = required(&projection.score_threshold, "score_threshold")?
+        .parse::<u128>()
+        .map_err(|_| {
+            service_error(
+                "quote_proof",
+                "invalid_indexed_threshold",
+                "Indexed competition score threshold is invalid.",
+            )
+        })?;
+    if threshold != contract_threshold {
+        return Err(bad_request(
+            "quote_proof",
+            "metric_threshold_mismatch",
+            "metric.threshold must equal the competition's immutable score threshold",
+        ));
+    }
+    if projection.score_direction.as_deref() != Some("higher_is_better") {
+        return Err(bad_request(
+            "quote_proof",
+            "metric_direction_mismatch",
+            "structured-artifact-metric-v1 requires score_direction=higher_is_better",
+        ));
+    }
+    let proof_system = match projection.proof_system.as_deref() {
+        Some("groth16") => GROTH16_PROOF_SYSTEM,
+        Some("plonk") => PLONK_PROOF_SYSTEM,
+        _ => {
+            return Err(conflict(
+                "quote_proof",
+                "proof_system_unknown",
+                "Wait for index reconciliation.",
+            ))
+        }
+    };
+    if !required(&projection.metric_program_hash, "metric_program_hash")?
+        .eq_ignore_ascii_case(&bytes32_hex(STRUCTURED_ARTIFACT_METRIC_PROGRAM_HASH))
+    {
+        return Err(conflict(
+            "quote_proof",
+            "unsupported_metric_program",
+            "The competition is not pinned to structured-artifact-metric-v1.",
+        ));
+    }
+    if !required(&projection.journal_schema_hash, "journal_schema_hash")?
+        .eq_ignore_ascii_case(&bytes32_hex(STRUCTURED_ARTIFACT_JOURNAL_SCHEMA_HASH))
+    {
+        return Err(conflict(
+            "quote_proof",
+            "unsupported_journal_schema",
+            "The competition journal schema is not structured-artifact-metric-v1.",
+        ));
+    }
+    let input = StructuredArtifactProgramInput {
+        scope: JournalScopeV2 {
+            chain_id: network_chain_id(network).map_err(|_| {
+                bad_request("quote_proof", "unknown_network", "Use base-mainnet or base-sepolia.")
+            })?,
+            competition: fixed_hex(&projection.competition, "competition_contract")?,
+            bounty_id: fixed_hex(&projection.bounty_id, "bounty_id")?,
+            solver: fixed_hex(&body.solver, "solver")?,
+            solver_nonce: decimal_u128(&body.solver_nonce, "solver_nonce")?,
+            proof_system,
+            program_vkey: fixed_hex(&required(&projection.program_vkey, "program_vkey")?, "program_vkey")?,
+            source_hash: fixed_hex(&required(&projection.source_hash, "source_hash")?, "source_hash")?,
+            elf_hash: fixed_hex(&required(&projection.elf_hash, "elf_hash")?, "elf_hash")?,
+            execution_policy_hash: fixed_hex(&required(&projection.execution_policy_hash, "execution_policy_hash")?, "execution_policy_hash")?,
+            settlement_policy_hash: fixed_hex(&required(&projection.settlement_policy_hash, "settlement_policy_hash")?, "settlement_policy_hash")?,
+            beta_risk_hash: fixed_hex(&required(&projection.beta_risk_hash, "beta_risk_hash")?, "beta_risk_hash")?,
+        },
+        threshold,
+        artifact: metric.artifact_utf8.as_bytes().to_vec(),
+        requirements: metric.requirements.clone(),
+    };
+    let output = execute_structured_artifact_program(&input).map_err(|error| {
+        bad_request(
+            "quote_proof",
+            "invalid_metric_input",
+            format!("structured-artifact-metric-v1 rejected the input: {error:?}"),
+        )
+    })?;
+    let verification_policy = required(&projection.verification_policy_hash, "verification_policy_hash")?;
+    if !verification_policy.eq_ignore_ascii_case(&bytes32_hex(output.verification_policy_hash)) {
+        return Err(bad_request(
+            "quote_proof",
+            "verification_policy_mismatch",
+            "The artifact requirements or threshold do not match the immutable verification policy.",
+        ));
+    }
+    if !body.artifact_hash.eq_ignore_ascii_case(&bytes32_hex(output.submission_hash)) {
+        return Err(bad_request(
+            "quote_proof",
+            "artifact_hash_mismatch",
+            "artifact_hash must equal the canonical hash of artifact_utf8",
+        ));
+    }
+    let mut program_input = serde_json::to_value(input).map_err(|error| {
+        service_error("quote_proof", "metric_serialization_failed", error.to_string())
+    })?;
+    program_input
+        .as_object_mut()
+        .expect("structured artifact input serializes as an object")
+        .insert(
+            "_profile_id".to_string(),
+            Value::String("structured-artifact-metric-v1".to_string()),
+        );
+    Ok((
+        program_input,
         format!("0x{}", hex::encode(output.journal)),
     ))
 }
@@ -1846,8 +2013,7 @@ fn require_reviewed_broker_profile(
             .is_some_and(|value| value.eq_ignore_ascii_case(released))
     };
     let reviewed = release.metric_programs.iter().any(|profile| {
-        profile.profile_id == "public-vector-metric-v1"
-            && profile.classification == OpenCompetitionV2ProgramClassification::Reviewed
+        profile.classification == OpenCompetitionV2ProgramClassification::Reviewed
             && equals(&projection.program_vkey, &profile.program_vkey)
             && equals(&projection.source_hash, &profile.source_hash)
             && equals(&projection.elf_hash, &profile.elf_hash)

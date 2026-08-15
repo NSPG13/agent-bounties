@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "structured-artifact-metric-v1-program"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+competition-metric-core = { path = "../../../crates/competition-metric-core", default-features = false }
+sp1-zkvm = { git = "https://github.com/NSPG13/sp1", rev = "caf43bb80fab6745347fda83bb428cb08a463f8d" }
+
+[patch.crates-io]
+p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "caf43bb80fab6745347fda83bb428cb08a463f8d" }

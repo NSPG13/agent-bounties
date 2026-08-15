@@ -22,6 +22,7 @@ from typing import Any
 REQUEST_SCHEMA = "agent-bounties/open-competition-v2-prover-request-v1"
 MAX_BODY_BYTES = 1_048_576
 IDEMPOTENCY = re.compile(r"^[A-Za-z0-9:_-]{1,200}$")
+PROFILE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 HEX_640 = re.compile(r"^0x[0-9a-fA-F]{1280}$")
 
 
@@ -70,10 +71,14 @@ def validate_request(value: Any, idempotency_header: str, now: int) -> dict[str,
 
 class ProverJobs:
     def __init__(
-        self, root: Path, binary: Path, maximum_seconds: int, maximum_queued: int
+        self,
+        root: Path,
+        binaries: dict[str, Path],
+        maximum_seconds: int,
+        maximum_queued: int,
     ) -> None:
         self.root = root
-        self.binary = binary
+        self.binaries = binaries
         self.maximum_seconds = maximum_seconds
         self.maximum_queued = maximum_queued
         self.root.mkdir(parents=True, exist_ok=True)
@@ -141,6 +146,13 @@ class ProverJobs:
             return
         try:
             request = record["request"]
+            program_input = dict(request["program_input"])
+            profile_id = program_input.pop("_profile_id", "public-vector-metric-v1")
+            if not isinstance(profile_id, str) or not PROFILE_ID.fullmatch(profile_id):
+                raise RuntimeError("program profile is invalid")
+            binary = self.binaries.get(profile_id)
+            if binary is None:
+                raise RuntimeError("program profile is unavailable")
             remaining = request["proof_sla_deadline"] - int(time.time())
             if remaining <= 0:
                 raise TimeoutError("proof SLA expired before execution")
@@ -148,11 +160,11 @@ class ProverJobs:
             with tempfile.TemporaryDirectory(dir=self.root) as directory:
                 fixture = Path(directory) / "program-input.json"
                 fixture.write_text(
-                    json.dumps(request["program_input"], separators=(",", ":")),
+                    json.dumps(program_input, separators=(",", ":")),
                     encoding="utf-8",
                 )
                 completed = subprocess.run(
-                    [str(self.binary), str(fixture), request["proof_system"]],
+                    [str(binary), str(fixture), request["proof_system"]],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -260,19 +272,30 @@ class ProverServer(ThreadingHTTPServer):
 
 def main() -> int:
     api_key = os.environ.get("OPEN_COMPETITION_V2_PROVER_API_KEY", "")
-    binary = Path(os.environ.get("OPEN_COMPETITION_V2_PROVER_BINARY", ""))
+    configured = os.environ.get("OPEN_COMPETITION_V2_PROVER_BINARIES", "").strip()
+    if configured:
+        value = json.loads(configured)
+        if not isinstance(value, dict) or not value:
+            raise SystemExit("OPEN_COMPETITION_V2_PROVER_BINARIES must be a nonempty JSON object")
+        binaries = {str(profile): Path(str(path)) for profile, path in value.items()}
+    else:
+        binaries = {
+            "public-vector-metric-v1": Path(
+                os.environ.get("OPEN_COMPETITION_V2_PROVER_BINARY", "")
+            )
+        }
     root = Path(os.environ.get("OPEN_COMPETITION_V2_PROVER_JOB_DIR", "prover-jobs"))
     if len(api_key) < 32:
         raise SystemExit("OPEN_COMPETITION_V2_PROVER_API_KEY must contain at least 32 characters")
-    if not binary.is_file():
-        raise SystemExit("OPEN_COMPETITION_V2_PROVER_BINARY is unavailable")
+    if any(not PROFILE_ID.fullmatch(profile) or not binary.is_file() for profile, binary in binaries.items()):
+        raise SystemExit("an OPEN_COMPETITION_V2_PROVER_BINARIES profile is invalid or unavailable")
     maximum_seconds = int(os.environ.get("OPEN_COMPETITION_V2_PROVER_MAX_SECONDS", "600"))
     maximum_queued = int(os.environ.get("OPEN_COMPETITION_V2_PROVER_MAX_QUEUED", "2"))
     if not 30 <= maximum_seconds <= 3600:
         raise SystemExit("OPEN_COMPETITION_V2_PROVER_MAX_SECONDS must be between 30 and 3600")
     if not 1 <= maximum_queued <= 16:
         raise SystemExit("OPEN_COMPETITION_V2_PROVER_MAX_QUEUED must be between 1 and 16")
-    jobs = ProverJobs(root, binary, maximum_seconds, maximum_queued)
+    jobs = ProverJobs(root, binaries, maximum_seconds, maximum_queued)
     jobs.resume_pending()
     server = ProverServer(
         (

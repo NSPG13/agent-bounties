@@ -52,7 +52,12 @@ class ProverServiceTests(unittest.TestCase):
 
     def test_queue_capacity_rejects_before_persisting_a_job(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            jobs = service.ProverJobs(Path(directory), Path("missing"), 60, 1)
+            jobs = service.ProverJobs(
+                Path(directory),
+                {"public-vector-metric-v1": Path("missing")},
+                60,
+                1,
+            )
             jobs.queued.add("already-running")
             with self.assertRaisesRegex(service.QueueFullError, "bounded capacity"):
                 jobs.submit(request())
