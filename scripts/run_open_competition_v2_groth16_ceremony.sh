@@ -17,6 +17,7 @@ if find "$output_dir" -mindepth 1 -print -quit | grep -q .; then
   echo "ceremony output directory must be empty: $output_dir" >&2
   exit 2
 fi
+cp --reflink=auto "$r1cs" "$output_dir/groth16_circuit.bin"
 
 container() {
   docker run --rm --network none --read-only \

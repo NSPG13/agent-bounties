@@ -41,6 +41,10 @@ the proving key in the dump format consumed by the SP1 CPU prover. Sepolia may
 use explicitly labeled single-party test assets, but the release builder
 rejects them for Base mainnet.
 
+The ceremony output includes the exact hash-bound `groth16_circuit.bin` used
+to derive the keys. The release runner consumes that bundled file and never
+substitutes a separately copied constraint system.
+
 PLONK uses the Aztec Ignition public MPC KZG SRS downloaded and verified by the
 pinned SP1 builder. Its circuit, proving key, verifying key, SRS transcript,
 contribution evidence, and generated verifier are frozen with the Groth16
