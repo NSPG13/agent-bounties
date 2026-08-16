@@ -2,6 +2,10 @@
 set -euo pipefail
 
 : "${OPEN_COMPETITION_V2_CEREMONY_IMAGE:?set the digest-pinned ceremony image}"
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 is required to run the ceremony" >&2
+  exit 127
+}
 
 if [[ $# -ne 3 ]]; then
   echo "usage: $0 OUTPUT_DIR R1CS SAFE_V5_REFERENCE_WRAPPER" >&2
@@ -21,6 +25,7 @@ cp --reflink=auto "$r1cs" "$output_dir/groth16_circuit.bin"
 
 container() {
   docker run --rm --network none --read-only \
+    --user "$(id -u):$(id -g)" \
     -v "$output_dir:/data" \
     -v "$r1cs:/inputs/groth16_circuit.bin:ro" \
     "$OPEN_COMPETITION_V2_CEREMONY_IMAGE" "$@"
@@ -30,7 +35,7 @@ fetch_beacon() {
   local destination="$1"
   curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
     https://api.drand.sh/public/latest -o "$destination"
-  python - "$destination" <<'PY'
+  python3 - "$destination" <<'PY'
 import json, re, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 randomness = value.get("randomness", "")
@@ -69,11 +74,11 @@ container finalize --r1cs /inputs/groth16_circuit.bin --commons /data/phase1-com
   --beacon "$phase2_beacon" --pk /data/groth16_pk.bin --vk /data/groth16_vk.bin \
   --solidity /data/Groth16Verifier.sol | tee "$output_dir/10-finalize.json"
 
-python scripts/rebind_open_competition_v2_sp1_wrapper.py \
+python3 scripts/rebind_open_competition_v2_sp1_wrapper.py \
   --reference "$reference" --verifying-key "$output_dir/groth16_vk.bin" \
   --proof-system groth16 --output "$output_dir/SP1VerifierGroth16.sol" \
   | tee "$output_dir/verifier-hash.txt"
-python - "$output_dir" "$r1cs" <<'PY'
+python3 - "$output_dir" "$r1cs" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 records = []
@@ -88,7 +93,7 @@ value = {
 }
 (root / "transcript.json").write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 PY
-python scripts/verify_open_competition_v2_groth16_ceremony.py \
+python3 scripts/verify_open_competition_v2_groth16_ceremony.py \
   --root "$output_dir" --r1cs "$r1cs" \
   --ceremony-uri https://github.com/NSPG13/agent-bounties/issues/888 \
   --output "$output_dir/verification-evidence.json"
