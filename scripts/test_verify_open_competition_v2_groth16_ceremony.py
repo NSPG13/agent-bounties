@@ -20,6 +20,12 @@ class Groth16CeremonyTests(unittest.TestCase):
         self.assertIn(copy, source)
         self.assertLess(source.index(copy), source.index("container init-phase1"))
 
+    def test_runner_requires_the_portable_python3_command(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("command -v python3", source)
+        self.assertNotIn("\npython ", source)
+        self.assertNotIn("  python -", source)
+
     def test_inventory_rejects_ambiguous_or_invalid_entries(self) -> None:
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             MODULE.inventory(
