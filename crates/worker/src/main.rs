@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
     if protocol == "open-competition-v1" {
         return run_open_competition_indexer(&store, once).await;
     }
-    if protocol == "open-competition-v2-beta2" {
+    if protocol == "open-competition-v2-beta3" {
         return run_open_competition_v2_indexer(&store, once).await;
     }
     if protocol == "open-competition-v2-broker" {
@@ -133,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if protocol != "autonomous-v1" {
         anyhow::bail!(
-            "BASE_INDEXER_PROTOCOL must be autonomous-v1, open-competition-v1, open-competition-v2-beta2, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
+            "BASE_INDEXER_PROTOCOL must be autonomous-v1, open-competition-v1, open-competition-v2-beta3, open-competition-v2-broker, open-competition-v2-keeper, or open-competition-v2-shadow"
         );
     }
     let config = AutonomousIndexerConfig::from_env()?;
@@ -216,7 +216,7 @@ async fn run_open_competition_v2_shadow(store: &PostgresStore, once: bool) -> an
                     "schema": "agent-bounties/open-competition-v2-shadow-recovery-v1",
                     "error": redact_operational_error(&error.to_string()),
                     "decision": "retry_full_safe_comparison",
-                    "evidence_boundary": "A failed or stale comparison disables public Beta2 operations; it cannot create chain or payment evidence."
+                    "evidence_boundary": "A failed or stale comparison disables public Beta3 operations; it cannot create chain or payment evidence."
                 }))?
             ),
         }
@@ -292,8 +292,8 @@ async fn run_open_competition_v2_indexer(store: &PostgresStore, once: bool) -> a
                 eprintln!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
-                        "schema": "agent-bounties/open-competition-v2-beta2-indexer-recovery-v1",
-                        "protocol_version": "agent-bounties/open-competition-v2-beta2",
+                        "schema": "agent-bounties/open-competition-v2-beta3-indexer-recovery-v1",
+                        "protocol_version": "agent-bounties/open-competition-v2-beta3",
                         "network": config.network,
                         "factory_contract": config.factory_contract,
                         "deployment_block": config.deployment_block,

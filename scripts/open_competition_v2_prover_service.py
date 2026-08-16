@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authenticated, durable HTTP wrapper for the pinned Beta2 CPU prover."""
+"""Authenticated, durable HTTP wrapper for the pinned Beta3 CPU prover."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class ProverJobs:
         self.maximum_seconds = maximum_seconds
         self.maximum_queued = maximum_queued
         self.root.mkdir(parents=True, exist_ok=True)
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beta2-prover")
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beta3-prover")
         self.lock = threading.Lock()
         self.queued: set[str] = set()
 
@@ -118,7 +118,7 @@ class ProverJobs:
                     "request_hash": request_hash,
                     "request": request,
                     "status": "pending",
-                    "provider_job_id": "beta2-" + hashlib.sha256(key.encode()).hexdigest(),
+                    "provider_job_id": "beta3-" + hashlib.sha256(key.encode()).hexdigest(),
                     "proof": None,
                     "public_values": None,
                     "failure_code": None,
@@ -218,7 +218,7 @@ def response_for(record: dict[str, Any]) -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AgentBountiesBeta2Prover/1"
+    server_version = "AgentBountiesBeta3Prover/1"
 
     def send_json(self, status: int, value: Any) -> None:
         body = json.dumps(value, separators=(",", ":")).encode()

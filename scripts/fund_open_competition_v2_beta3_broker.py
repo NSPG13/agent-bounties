@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently seed the isolated Beta2 broker from the protected deployer."""
+"""Idempotently seed the isolated Beta3 broker from the protected deployer."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def fund(
     require(final_usdc >= target_usdc, "broker USDC reserve did not reconcile")
     require(final_eth >= target_eth, "broker ETH reserve did not reconcile")
     return {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-broker-seed-v1",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-broker-seed-v1",
         "passed": True,
         "network": network_name,
         "deployer": signer.address.lower(),

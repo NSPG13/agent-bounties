@@ -3,8 +3,8 @@ from pathlib import Path
 import unittest
 
 
-PATH = Path(__file__).with_name("fund_open_competition_v2_beta2_broker.py")
-SPEC = importlib.util.spec_from_file_location("fund_open_competition_v2_beta2_broker", PATH)
+PATH = Path(__file__).with_name("fund_open_competition_v2_beta3_broker.py")
+SPEC = importlib.util.spec_from_file_location("fund_open_competition_v2_beta3_broker", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a hash-bound Beta2 trusted-setup manifest from verified setup files."""
+"""Build a hash-bound Beta3 trusted-setup manifest from verified setup files."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import re
 from typing import Any
 
 
-SCHEMA = "agent-bounties/open-competition-v2-beta2-trusted-setup-v1"
-CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
+SCHEMA = "agent-bounties/open-competition-v2-beta3-trusted-setup-v1"
+CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 MODELS = {"groth16": "mpc_phase2", "plonk": "public_mpc_kzg_srs"}
 
 
@@ -31,7 +31,7 @@ def verification_evidence(
 ) -> tuple[dict[str, Any], int, str]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if value.get("schema_version") != (
-        "agent-bounties/open-competition-v2-beta2-setup-verification-evidence-v1"
+        "agent-bounties/open-competition-v2-beta3-setup-verification-evidence-v1"
     ):
         raise ValueError(f"{system} setup verification evidence schema mismatch")
     if value.get("proof_system") != system:

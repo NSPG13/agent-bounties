@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind an exact safe-v4 SP1 wrapper to a ceremony-generated verifier key."""
+"""Bind an exact safe-v5 SP1 wrapper to a ceremony-generated verifier key."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 
 
-CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
+CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 SYSTEMS = {
     "groth16": ("Groth16Verifier", "SP1VerifierGroth16.sol"),
     "plonk": ("PlonkVerifier", "SP1VerifierPlonk.sol"),

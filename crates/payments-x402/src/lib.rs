@@ -896,7 +896,7 @@ mod tests {
         })
         .unwrap();
         base_usdc_exact_service_challenge(
-            "https://api.example/v1/base/open-competition-v2-beta2/proof-jobs/1/payment",
+            "https://api.example/v1/base/open-competition-v2-beta3/proof-jobs/1/payment",
             "eip155:8453",
             ASSET,
             BOUNTY,

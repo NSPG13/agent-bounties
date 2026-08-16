@@ -6,6 +6,7 @@ import unittest
 
 
 SCRIPT = Path(__file__).with_name("verify_open_competition_v2_groth16_ceremony.py")
+RUNNER = Path(__file__).with_name("run_open_competition_v2_groth16_ceremony.sh")
 SPEC = importlib.util.spec_from_file_location("v2_groth16_ceremony", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -13,6 +14,12 @@ SPEC.loader.exec_module(MODULE)
 
 
 class Groth16CeremonyTests(unittest.TestCase):
+    def test_runner_bundles_the_exact_constraint_system(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        copy = 'cp --reflink=auto "$r1cs" "$output_dir/groth16_circuit.bin"'
+        self.assertIn(copy, source)
+        self.assertLess(source.index(copy), source.index("container init-phase1"))
+
     def test_inventory_rejects_ambiguous_or_invalid_entries(self) -> None:
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             MODULE.inventory(

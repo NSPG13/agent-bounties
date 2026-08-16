@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Broadcast an exact, prelaunch-approved Open Competition V2 Beta2 bundle."""
+"""Broadcast an exact, prelaunch-approved Open Competition V2 Beta3 bundle."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ from typing import Any
 
 from eth_account import Account
 
-import build_open_competition_v2_beta2_release as release
+import build_open_competition_v2_beta3_release as release
 from _shared.evm import keccak256
 from _shared.rpc import rpc
 
 
-SCHEMA = "agent-bounties/open-competition-v2-beta2-deployment-evidence-v1"
+SCHEMA = "agent-bounties/open-competition-v2-beta3-deployment-evidence-v1"
 
 
 def require(condition: bool, message: str) -> None:
@@ -29,7 +29,7 @@ def require(condition: bool, message: str) -> None:
 def validate_bundle(bundle: dict[str, Any], signer_address: str) -> None:
     require(
         bundle.get("schema_version")
-        == "agent-bounties/open-competition-v2-beta2-release-bundle-v1",
+        == "agent-bounties/open-competition-v2-beta3-release-bundle-v1",
         "release bundle schema mismatch",
     )
     require(bundle.get("network") == "base-mainnet", "bundle is not Base mainnet")

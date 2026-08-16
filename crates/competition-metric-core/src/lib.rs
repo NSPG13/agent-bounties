@@ -40,7 +40,7 @@ pub const MAXIMUM_VECTORS: usize = 10_000;
 pub const MAXIMUM_ARTIFACT_BYTES: usize = 1024 * 1024;
 pub const MAXIMUM_ARTIFACT_REQUIREMENTS: usize = 256;
 pub const JOURNAL_DOMAIN: [u8; 32] =
-    hex!("110d7acc5c3397f452c974ba4f7296d7d2a2cede57290113d1fd256e1818804b");
+    hex!("a8419ea6c5f9619b70f42d0174b0af0b2b32688c23ebc159efa67232113819db");
 pub const GROTH16_PROOF_SYSTEM: [u8; 32] =
     hex!("0fbfc39a4f588598b55fce747dc8dde3f1b661a9d538dc174b464d210d12a81d");
 pub const PLONK_PROOF_SYSTEM: [u8; 32] =

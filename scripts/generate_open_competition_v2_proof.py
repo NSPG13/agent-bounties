@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and validate one exact Open Competition V2 Beta2 SP1 proof artifact."""
+"""Generate and validate one exact Open Competition V2 Beta3 SP1 proof artifact."""
 
 from __future__ import annotations
 

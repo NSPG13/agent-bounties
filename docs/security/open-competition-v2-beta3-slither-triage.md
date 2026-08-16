@@ -1,4 +1,4 @@
-# Open Competition V2 Beta2 Slither Triage
+# Open Competition V2 Beta3 Slither Triage
 
 Tool: `slither-analyzer 0.11.5`, 101 detectors, V2 factory dependency graph.
 Generated JSON stays in `target/tmp/open-competition-v2-slither.json`.
@@ -29,7 +29,7 @@ reviews required for graduation.
 
 ```powershell
 $env:Path = "$PWD\.tools\foundry;$env:APPDATA\Python\Python312\Scripts;$env:Path"
-slither contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta2.sol `
+slither contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta3.sol `
   --compile-force-framework foundry `
   --foundry-out-directory out `
   --exclude-dependencies `

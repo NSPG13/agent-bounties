@@ -79,10 +79,10 @@ envVarGroups:
       - key: X402_RELAYER_PRIVATE_KEY
         sync: false
 
-  - name: agent-bounties-v2-beta2
+  - name: agent-bounties-v2-beta3
     envVars:
-      # These identities come only from the signed Beta2 deployment evidence bundle.
-      - key: BASE_MAINNET_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON
+      # These identities come only from the signed Beta3 deployment evidence bundle.
+      - key: BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON
         sync: false
       - key: OPEN_COMPETITION_V2_FACTORY_CONTRACT
         sync: false
@@ -252,7 +252,7 @@ services:
       - fromGroup: agent-bounties-x402-relayer
       - fromGroup: agent-bounties-bond-sponsor
       - fromGroup: agent-bounties-discovery
-      - fromGroup: agent-bounties-v2-beta2
+      - fromGroup: agent-bounties-v2-beta3
 
   - type: web
     name: agent-bounties-mcp
@@ -318,7 +318,7 @@ services:
       - fromGroup: agent-bounties-operator
       - fromGroup: agent-bounties-stripe
       - fromGroup: agent-bounties-base
-      - fromGroup: agent-bounties-v2-beta2
+      - fromGroup: agent-bounties-v2-beta3
 
   - type: worker
     name: agent-bounties-base-indexer
@@ -418,7 +418,7 @@ services:
       - fromGroup: agent-bounties-base
 
   - type: worker
-    name: agent-bounties-open-competition-v2-beta2-indexer
+    name: agent-bounties-open-competition-v2-beta3-indexer
     runtime: docker
     plan: starter
     region: oregon
@@ -439,7 +439,7 @@ services:
           name: agent-bounties-postgres
           property: connectionString
       - key: BASE_INDEXER_PROTOCOL
-        value: open-competition-v2-beta2
+        value: open-competition-v2-beta3
       - key: OPEN_COMPETITION_V2_INDEXER_NETWORK
         value: base-mainnet
       - key: OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS
@@ -455,10 +455,10 @@ services:
       - key: BASE_INDEXER_EXIT_AFTER_FAILURES
         value: "8"
       - fromGroup: agent-bounties-base
-      - fromGroup: agent-bounties-v2-beta2
+      - fromGroup: agent-bounties-v2-beta3
 
   - type: worker
-    name: agent-bounties-open-competition-v2-beta2-shadow
+    name: agent-bounties-open-competition-v2-beta3-shadow
     runtime: docker
     plan: starter
     region: oregon
@@ -487,10 +487,10 @@ services:
       - key: OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS
         value: "30"
       - fromGroup: agent-bounties-base
-      - fromGroup: agent-bounties-v2-beta2
+      - fromGroup: agent-bounties-v2-beta3
 
   - type: worker
-    name: agent-bounties-open-competition-v2-beta2-keeper
+    name: agent-bounties-open-competition-v2-beta3-keeper
     runtime: docker
     plan: starter
     region: oregon
@@ -518,10 +518,10 @@ services:
         value: "5"
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-x402-relayer
-      - fromGroup: agent-bounties-v2-beta2
+      - fromGroup: agent-bounties-v2-beta3
 
   - type: worker
-    name: agent-bounties-open-competition-v2-beta2-broker
+    name: agent-bounties-open-competition-v2-beta3-broker
     runtime: docker
     plan: starter
     region: oregon
@@ -547,7 +547,7 @@ services:
         value: "5"
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-x402-relayer
-      - fromGroup: agent-bounties-v2-beta2
+      - fromGroup: agent-bounties-v2-beta3
 
 databases:
   - name: agent-bounties-postgres

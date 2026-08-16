@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconcile and deploy the exact Open Competition V2 Beta2 Render runtime."""
+"""Reconcile and deploy the exact Open Competition V2 Beta3 Render runtime."""
 
 from __future__ import annotations
 
@@ -18,26 +18,26 @@ from eth_account import Account
 import render_deploy_recovery as render
 
 
-V2_GROUP = "agent-bounties-v2-beta2"
+V2_GROUP = "agent-bounties-v2-beta3"
 RELAYER_GROUP = "agent-bounties-x402-relayer"
 V2_SERVICES = (
     render.ServiceSpec("agent-bounties-api", "web_service", "https://api.agentbounties.app/health"),
     render.ServiceSpec("agent-bounties-mcp", "web_service", "https://mcp.agentbounties.app/health"),
-    render.ServiceSpec("agent-bounties-open-competition-v2-beta2-indexer", "background_worker", None),
-    render.ServiceSpec("agent-bounties-open-competition-v2-beta2-shadow", "background_worker", None),
-    render.ServiceSpec("agent-bounties-open-competition-v2-beta2-keeper", "background_worker", None),
-    render.ServiceSpec("agent-bounties-open-competition-v2-beta2-broker", "background_worker", None),
+    render.ServiceSpec("agent-bounties-open-competition-v2-beta3-indexer", "background_worker", None),
+    render.ServiceSpec("agent-bounties-open-competition-v2-beta3-shadow", "background_worker", None),
+    render.ServiceSpec("agent-bounties-open-competition-v2-beta3-keeper", "background_worker", None),
+    render.ServiceSpec("agent-bounties-open-competition-v2-beta3-broker", "background_worker", None),
 )
 RELAYER_SERVICE_NAMES = {
     "agent-bounties-api",
-    "agent-bounties-open-competition-v2-beta2-keeper",
-    "agent-bounties-open-competition-v2-beta2-broker",
+    "agent-bounties-open-competition-v2-beta3-keeper",
+    "agent-bounties-open-competition-v2-beta3-broker",
 }
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 
-class Beta2RenderError(RuntimeError):
+class Beta3RenderError(RuntimeError):
     pass
 
 
@@ -47,12 +47,12 @@ def utc_now() -> str:
 
 def require(condition: bool, message: str) -> None:
     if not condition:
-        raise Beta2RenderError(message)
+        raise Beta3RenderError(message)
 
 
 def validated_runtime(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    require(value.get("protocol_version") == "agent-bounties/open-competition-v2-beta2", "runtime protocol mismatch")
+    require(value.get("protocol_version") == "agent-bounties/open-competition-v2-beta3", "runtime protocol mismatch")
     require(value.get("network") == "base-mainnet", "Render accepts only the mainnet runtime")
     require(ADDRESS.fullmatch(str(value.get("factory_contract", ""))) is not None, "factory address is invalid")
     require(ADDRESS.fullmatch(str(value.get("settlement_token", ""))) is not None, "settlement token is invalid")
@@ -87,7 +87,7 @@ def runtime_environment(
     require(len(roles) == 3, "broker, keeper and deployer addresses must be distinct")
     require(refund_reserve_min_base_units > 0, "refund reserve minimum must be positive")
     return {
-        "BASE_MAINNET_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON": json.dumps(runtime, separators=(",", ":"), sort_keys=True),
+        "BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON": json.dumps(runtime, separators=(",", ":"), sort_keys=True),
         "OPEN_COMPETITION_V2_FACTORY_CONTRACT": runtime["factory_contract"].lower(),
         "OPEN_COMPETITION_V2_KEEPER_FACTORY": runtime["factory_contract"].lower(),
         "OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK": str(runtime["deployment_block"]),
@@ -137,7 +137,7 @@ def deploy(
     )
     services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
     owner_ids = {str(service.get("ownerId")) for service in services.values()}
-    require(len(owner_ids) == 1, "Beta2 services do not share one Render workspace")
+    require(len(owner_ids) == 1, "Beta3 services do not share one Render workspace")
     owner_id = render.validate_owner_id(owner_ids.pop())
     v2_group = named_group(client, owner_id, V2_GROUP)
     relayer_group = named_group(client, owner_id, RELAYER_GROUP)
@@ -173,7 +173,7 @@ def deploy(
         poll_seconds=poll_seconds,
     )
     return {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-render-deployment-v1",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-render-deployment-v1",
         "passed": True,
         "recorded_at": utc_now(),
         "revision": revision,

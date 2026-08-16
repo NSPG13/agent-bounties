@@ -1,13 +1,13 @@
 import copy
 import unittest
 
-import record_open_competition_v2_beta2_gate as recorder
+import record_open_competition_v2_beta3_gate as recorder
 
 
 def manifest() -> dict:
     gates = {name: False for name in recorder.release.REQUIRED_GATE_NAMES}
     return {
-        "beta_risk_preimage": "agent-bounties/open-competition-v2-beta2/risk/test",
+        "beta_risk_preimage": "agent-bounties/open-competition-v2-beta3/risk/test",
         "gates": gates,
         "evidence": {name: None for name in gates},
     }

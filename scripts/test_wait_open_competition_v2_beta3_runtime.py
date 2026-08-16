@@ -3,8 +3,8 @@ from pathlib import Path
 import unittest
 
 
-PATH = Path(__file__).with_name("wait_open_competition_v2_beta2_runtime.py")
-SPEC = importlib.util.spec_from_file_location("wait_open_competition_v2_beta2_runtime", PATH)
+PATH = Path(__file__).with_name("wait_open_competition_v2_beta3_runtime.py")
+SPEC = importlib.util.spec_from_file_location("wait_open_competition_v2_beta3_runtime", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)

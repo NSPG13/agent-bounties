@@ -20,7 +20,7 @@ class SeedIssuePublisherTests(unittest.TestCase):
             seed_id = f"seed-{index}"
             competition = "0x" + f"{index + 1:02x}" * 20
             body_path = root / f"{seed_id}.md"
-            body_path.write_text(f"<!-- beta2-seed:{seed_id}:{competition} -->\n", encoding="utf-8")
+            body_path.write_text(f"<!-- beta3-seed:{seed_id}:{competition} -->\n", encoding="utf-8")
             documents.append({
                 "seed_id": seed_id,
                 "title": f"Seed {index}",

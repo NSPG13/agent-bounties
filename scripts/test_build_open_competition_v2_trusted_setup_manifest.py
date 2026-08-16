@@ -24,7 +24,7 @@ class TrustedSetupManifestTests(unittest.TestCase):
         evidence.write_text(
             json.dumps(
                 {
-                    "schema_version": "agent-bounties/open-competition-v2-beta2-setup-verification-evidence-v1",
+                    "schema_version": "agent-bounties/open-competition-v2-beta3-setup-verification-evidence-v1",
                     "proof_system": system,
                     "security_model": MODULE.MODELS[system],
                     "verification_passed": True,

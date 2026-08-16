@@ -1094,7 +1094,7 @@ function openCompetitionHex(value: Uint8Array): string {
 }
 
 const OPEN_COMPETITION_V2_JOURNAL_DOMAIN = openCompetitionHexBytes(
-  "0x110d7acc5c3397f452c974ba4f7296d7d2a2cede57290113d1fd256e1818804b",
+  "0xa8419ea6c5f9619b70f42d0174b0af0b2b32688c23ebc159efa67232113819db",
   32,
   "journal domain",
 );
@@ -1650,26 +1650,26 @@ export class AgentBountiesClient {
   async getOpenCompetitionV2Profiles(
     network: OpenCompetitionV2Network = "base-mainnet",
   ): Promise<unknown> {
-    return this.query("/v1/base/open-competition-v2-beta2/profiles", { network });
+    return this.query("/v1/base/open-competition-v2-beta3/profiles", { network });
   }
 
   async getOpenCompetitionV2Release(
     network: OpenCompetitionV2Network = "base-mainnet",
   ): Promise<unknown> {
-    return this.query("/v1/base/open-competition-v2-beta2/release", { network });
+    return this.query("/v1/base/open-competition-v2-beta3/release", { network });
   }
 
   async prepareOpenCompetitionV2StructuredArtifactProfile(
     request: OpenCompetitionV2StructuredArtifactProfileRequest,
   ): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/structured-artifact-profile", {
+    return this.post("/v1/base/open-competition-v2-beta3/structured-artifact-profile", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
   }
 
   async validateOpenCompetitionV2(request: OpenCompetitionV2CreationRequest): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/validate", {
+    return this.post("/v1/base/open-competition-v2-beta3/validate", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
@@ -1678,7 +1678,7 @@ export class AgentBountiesClient {
   async prepareOpenCompetitionV2Creation(
     request: OpenCompetitionV2CreationRequest,
   ): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/creation-preparation", {
+    return this.post("/v1/base/open-competition-v2-beta3/creation-preparation", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
@@ -1687,7 +1687,7 @@ export class AgentBountiesClient {
   async prepareOpenCompetitionV2Funding(
     request: OpenCompetitionV2FundingRequest,
   ): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/funding-preparation", {
+    return this.post("/v1/base/open-competition-v2-beta3/funding-preparation", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
@@ -1697,14 +1697,14 @@ export class AgentBountiesClient {
     network: OpenCompetitionV2Network = "base-mainnet",
     state?: string,
   ): Promise<unknown> {
-    return this.query("/v1/base/open-competition-v2-beta2/inventory", { network, state });
+    return this.query("/v1/base/open-competition-v2-beta3/inventory", { network, state });
   }
 
   async listOpenCompetitionV2Events(
     network: OpenCompetitionV2Network = "base-mainnet",
     bountyId?: string,
   ): Promise<unknown> {
-    return this.query("/v1/base/open-competition-v2-beta2/events", {
+    return this.query("/v1/base/open-competition-v2-beta3/events", {
       network,
       bounty_id: bountyId,
     });
@@ -1713,7 +1713,7 @@ export class AgentBountiesClient {
   async createOpenCompetitionV2ProofQuote(
     request: OpenCompetitionV2ProofQuoteRequest,
   ): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/proof-quotes", {
+    return this.post("/v1/base/open-competition-v2-beta3/proof-quotes", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
@@ -1722,7 +1722,7 @@ export class AgentBountiesClient {
   async prepareOpenCompetitionV2Proof(
     request: OpenCompetitionV2ProofRequest,
   ): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/proof-preparation", {
+    return this.post("/v1/base/open-competition-v2-beta3/proof-preparation", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
@@ -1731,7 +1731,7 @@ export class AgentBountiesClient {
   async prepareOpenCompetitionV2Action(
     request: OpenCompetitionV2ActionRequest,
   ): Promise<unknown> {
-    return this.post("/v1/base/open-competition-v2-beta2/action-preparation", {
+    return this.post("/v1/base/open-competition-v2-beta3/action-preparation", {
       ...request,
       network: request.network ?? "base-mainnet",
     });
@@ -1739,7 +1739,7 @@ export class AgentBountiesClient {
 
   async getOpenCompetitionV2ProofJob(jobId: string): Promise<unknown> {
     return this.request(
-      `/v1/base/open-competition-v2-beta2/proof-jobs/${encodeURIComponent(jobId)}`,
+      `/v1/base/open-competition-v2-beta3/proof-jobs/${encodeURIComponent(jobId)}`,
     );
   }
 
@@ -1747,7 +1747,7 @@ export class AgentBountiesClient {
     jobId: string,
     paymentSignature?: string,
   ): Promise<X402BountyFundingResponse> {
-    const path = `/v1/base/open-competition-v2-beta2/proof-jobs/${encodeURIComponent(jobId)}/payment`;
+    const path = `/v1/base/open-competition-v2-beta3/proof-jobs/${encodeURIComponent(jobId)}/payment`;
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: {
@@ -1772,7 +1772,7 @@ export class AgentBountiesClient {
     solverSignature?: string,
   ): Promise<unknown> {
     return this.post(
-      `/v1/base/open-competition-v2-beta2/proof-jobs/${encodeURIComponent(jobId)}/relay-authorization`,
+      `/v1/base/open-competition-v2-beta3/proof-jobs/${encodeURIComponent(jobId)}/relay-authorization`,
       {
         authorization_deadline: authorizationDeadline,
         solver_signature: solverSignature,

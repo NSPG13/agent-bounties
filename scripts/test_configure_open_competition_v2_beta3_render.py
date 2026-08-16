@@ -5,8 +5,8 @@ import tempfile
 import unittest
 
 
-PATH = Path(__file__).with_name("configure_open_competition_v2_beta2_render.py")
-SPEC = importlib.util.spec_from_file_location("configure_open_competition_v2_beta2_render", PATH)
+PATH = Path(__file__).with_name("configure_open_competition_v2_beta3_render.py")
+SPEC = importlib.util.spec_from_file_location("configure_open_competition_v2_beta3_render", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
@@ -14,7 +14,7 @@ SPEC.loader.exec_module(MODULE)
 
 def runtime() -> dict:
     return {
-        "protocol_version": "agent-bounties/open-competition-v2-beta2",
+        "protocol_version": "agent-bounties/open-competition-v2-beta3",
         "network": "base-mainnet",
         "factory_contract": "0x" + "11" * 20,
         "settlement_token": "0x" + "22" * 20,
@@ -26,7 +26,7 @@ def runtime() -> dict:
     }
 
 
-class Beta2RenderTests(unittest.TestCase):
+class Beta3RenderTests(unittest.TestCase):
     def test_runtime_validation_rejects_non_mainnet_or_pending_deployment(self):
         for network, block in (("base-sepolia", 123), ("base-mainnet", 0)):
             value = runtime()
@@ -35,7 +35,7 @@ class Beta2RenderTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "runtime.json"
                 path.write_text(json.dumps(value), encoding="utf-8")
-                with self.assertRaises(MODULE.Beta2RenderError):
+                with self.assertRaises(MODULE.Beta3RenderError):
                     MODULE.validated_runtime(path)
 
     def test_environment_is_exact_and_keeps_public_creation_fail_closed(self):
@@ -51,7 +51,7 @@ class Beta2RenderTests(unittest.TestCase):
             deployer_address="0x" + "77" * 20,
             refund_reserve_min_base_units=110_000,
         )
-        manifest = json.loads(environment["BASE_MAINNET_OPEN_COMPETITION_V2_BETA2_RELEASE_MANIFEST_JSON"])
+        manifest = json.loads(environment["BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON"])
         self.assertFalse(manifest["public_creation_enabled"])
         self.assertFalse(manifest["proof_broker_enabled"])
         self.assertEqual(environment["OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK"], "123")
@@ -70,11 +70,11 @@ class Beta2RenderTests(unittest.TestCase):
             deployer_address="0x" + "77" * 20,
             refund_reserve_min_base_units=110_000,
         )
-        with self.assertRaises(MODULE.Beta2RenderError):
+        with self.assertRaises(MODULE.Beta3RenderError):
             MODULE.runtime_environment(**common)
 
     def test_environment_rejects_reused_signing_role(self):
-        with self.assertRaisesRegex(MODULE.Beta2RenderError, "must be distinct"):
+        with self.assertRaisesRegex(MODULE.Beta3RenderError, "must be distinct"):
             MODULE.runtime_environment(
                 runtime(),
                 primary_rpc_url="https://primary.example",

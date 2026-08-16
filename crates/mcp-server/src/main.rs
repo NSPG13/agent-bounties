@@ -874,7 +874,7 @@ tool_args! {
     }
     schema object_tool_schema(
         json!({
-            "operation": enum_property(&["release", "profiles", "inventory", "events", "proof_job"], "Read one exact V2 Beta2 surface."),
+            "operation": enum_property(&["release", "profiles", "inventory", "events", "proof_job"], "Read one exact V2 Beta3 surface."),
             "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Defaults to base-mainnet."),
             "state": nullable_enum_property(&["announced", "funding", "active", "settled", "cancelled"], "Inventory-only state filter."),
             "bounty_id": nullable_string_property("Events-only bytes32 bounty filter."),
@@ -891,7 +891,7 @@ tool_args! {
     }
     schema object_tool_schema(
         json!({
-            "operation": enum_property(&["prepare_profile", "validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"], "Execute one ordered V2 Beta2 transition."),
+            "operation": enum_property(&["prepare_profile", "validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"], "Execute one ordered V2 Beta3 transition."),
             "arguments": { "type": "object", "description": "Exact API request. prepare_profile derives immutable structured-artifact fields. pay_proof requires proof_job_id and optionally payment_signature. authorize_relay requires proof_job_id.", "additionalProperties": true }
         }),
         &["operation", "arguments"],
@@ -5540,7 +5540,7 @@ async fn inspect_open_competition_v2(
 ) -> Json<serde_json::Value> {
     let api = public_base_url_from_env();
     let root = format!(
-        "{}/v1/base/open-competition-v2-beta2",
+        "{}/v1/base/open-competition-v2-beta3",
         api.trim_end_matches('/')
     );
     let network = args.network.as_deref().unwrap_or("base-mainnet");
@@ -5610,7 +5610,7 @@ async fn prepare_open_competition_v2(
             return mcp_error("payment_signature cannot be empty or contain control characters");
         }
         let url = format!(
-            "{}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
+            "{}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment",
             public_base_url_from_env().trim_end_matches('/')
         );
         let mut request = reqwest::Client::new().post(url);
@@ -5645,7 +5645,7 @@ async fn prepare_open_competition_v2(
         _ => return mcp_error("unsupported V2 preparation operation"),
     };
     let url = format!(
-        "{}/v1/base/open-competition-v2-beta2/{path}",
+        "{}/v1/base/open-competition-v2-beta3/{path}",
         public_base_url_from_env().trim_end_matches('/')
     );
     proxy_public_json_response_with_timeout(

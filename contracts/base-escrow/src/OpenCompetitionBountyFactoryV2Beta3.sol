@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.26;
 
-import "./OpenCompetitionBountyV2Beta2.sol";
+import "./OpenCompetitionBountyV2Beta3.sol";
 
-/// @notice Canonical deterministic factory for isolated V2 Beta2 escrows. It
+/// @notice Canonical deterministic factory for isolated V2 Beta3 escrows. It
 /// never receives bounty funds and never spends a contributor allowance.
-contract OpenCompetitionBountyFactoryV2Beta2 {
-    bytes32 public constant SUPPORTED_PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta2");
+contract OpenCompetitionBountyFactoryV2Beta3 {
+    bytes32 public constant SUPPORTED_PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta3");
     bytes32 public constant PROOF_SYSTEM_GROTH16 = keccak256("sp1-groth16");
     bytes32 public constant PROOF_SYSTEM_PLONK = keccak256("sp1-plonk");
 
@@ -18,8 +18,8 @@ contract OpenCompetitionBountyFactoryV2Beta2 {
         uint256 keeperReward;
         uint64 fundingDeadline;
         uint64 proofWindowSeconds;
-        OpenCompetitionBountyV2Beta2.WinnerMode winnerMode;
-        OpenCompetitionBountyV2Beta2.ScoreDirection scoreDirection;
+        OpenCompetitionBountyV2Beta3.WinnerMode winnerMode;
+        OpenCompetitionBountyV2Beta3.ScoreDirection scoreDirection;
         int256 scoreThreshold;
         bytes32 proofSystem;
         bytes32 programVKey;
@@ -103,14 +103,14 @@ contract OpenCompetitionBountyFactoryV2Beta2 {
         require(settlementToken_.code.length > 0, "token missing");
         settlementToken = settlementToken_;
         groth16Adapter = address(
-            new Sp1VerifierAdapterV2Beta2(
+            new Sp1VerifierAdapterV2Beta3(
                 PROOF_SYSTEM_GROTH16, groth16Verifier_, groth16VerifierHash_, groth16RuntimeCodeHash_
             )
         );
         plonkAdapter = address(
-            new Sp1VerifierAdapterV2Beta2(PROOF_SYSTEM_PLONK, plonkVerifier_, plonkVerifierHash_, plonkRuntimeCodeHash_)
+            new Sp1VerifierAdapterV2Beta3(PROOF_SYSTEM_PLONK, plonkVerifier_, plonkVerifierHash_, plonkRuntimeCodeHash_)
         );
-        implementation = address(new OpenCompetitionBountyV2Beta2());
+        implementation = address(new OpenCompetitionBountyV2Beta3());
     }
 
     function createCompetition(
@@ -119,7 +119,7 @@ contract OpenCompetitionBountyFactoryV2Beta2 {
         bytes32 creationNonce,
         bytes32 acknowledgedRiskHash
     ) external nonReentrant returns (address competitionAddress, bytes32 bountyId) {
-        OpenCompetitionBountyV2Beta2 competition;
+        OpenCompetitionBountyV2Beta3 competition;
         (competition, bountyId) = _deploy(msg.sender, params, creationNonce, acknowledgedRiskHash);
         competitionAddress = address(competition);
         _emitConfiguration(bountyId, competitionAddress, msg.sender, params, creationNonce);
@@ -137,7 +137,7 @@ contract OpenCompetitionBountyFactoryV2Beta2 {
         FundingAuthorization calldata authorization
     ) external nonReentrant returns (address competitionAddress, bytes32 bountyId) {
         require(initialFunding > 0, "initial funding zero");
-        OpenCompetitionBountyV2Beta2 competition;
+        OpenCompetitionBountyV2Beta3 competition;
         (competition, bountyId) = _deploy(creator, params, creationNonce, acknowledgedRiskHash);
         competitionAddress = address(competition);
         _emitConfiguration(bountyId, competitionAddress, creator, params, creationNonce);
@@ -175,20 +175,20 @@ contract OpenCompetitionBountyFactoryV2Beta2 {
         CreateCompetitionParams calldata params,
         bytes32 creationNonce,
         bytes32 acknowledgedRiskHash
-    ) private returns (OpenCompetitionBountyV2Beta2 competition, bytes32 bountyId) {
+    ) private returns (OpenCompetitionBountyV2Beta3 competition, bytes32 bountyId) {
         require(creator != address(0), "creator zero");
         require(creationNonce != bytes32(0), "creation nonce zero");
         require(acknowledgedRiskHash == params.betaRiskHash, "risk hash mismatch");
         bountyId = bountyIdFor(creator, params, creationNonce);
         address competitionAddress = _cloneDeterministic(implementation, bountyId);
-        competition = OpenCompetitionBountyV2Beta2(competitionAddress);
+        competition = OpenCompetitionBountyV2Beta3(competitionAddress);
         require(
             params.proofSystem == PROOF_SYSTEM_GROTH16 || params.proofSystem == PROOF_SYSTEM_PLONK,
             "unsupported proof system"
         );
         address adapter = params.proofSystem == PROOF_SYSTEM_GROTH16 ? groth16Adapter : plonkAdapter;
         competition.initialize(
-            OpenCompetitionBountyV2Beta2.Config({
+            OpenCompetitionBountyV2Beta3.Config({
                 bountyId: bountyId,
                 creator: creator,
                 factory: address(this),

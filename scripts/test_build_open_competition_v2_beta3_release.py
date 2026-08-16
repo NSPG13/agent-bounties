@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = Path(__file__).with_name("build_open_competition_v2_beta2_release.py")
+SCRIPT = Path(__file__).with_name("build_open_competition_v2_beta3_release.py")
 SPEC = importlib.util.spec_from_file_location("open_competition_v2_release", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -15,7 +15,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     subject_hash = "0x" + "33" * 32
 
     def test_mainnet_workflow_records_the_exact_x402_gate(self):
-        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta2-release.yml").read_text(
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn(
@@ -25,7 +25,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertNotIn("x402_success_and_refund_canaries_complete", workflow)
 
     def test_sepolia_rehearsal_uses_an_isolated_broker(self):
-        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta2-release.yml").read_text(
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
             encoding="utf-8"
         )
         sepolia = workflow.split("  live-sepolia-rehearsal:", 1)[1].split(
@@ -67,7 +67,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
                 "contribution_count": 3,
             }
         return {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-verifier-assets-v2",
+            "schema_version": "agent-bounties/open-competition-v2-beta3-verifier-assets-v2",
             "sp1_source_commit": MODULE.SP1_COMMIT,
             "circuit_version": MODULE.SP1_SAFE_CIRCUIT_VERSION,
             "gpu_proving_enabled": False,
@@ -96,7 +96,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertEqual(identity["sp1_guest_rust_version"], "1.94.0-dev")
         self.assertEqual(MODULE.HOST_RUST_VERSION, "1.96.1")
         self.assertEqual(MODULE.SP1_GUEST_RUST_VERSION, "1.94.0-dev")
-        self.assertEqual(identity["status"], "reproduced_beta2")
+        self.assertEqual(identity["status"], "reproduced_beta3")
         self.assertEqual(MODULE.PROGRAM_VKEY, identity["program_vkey"])
         self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
         self.assertEqual(MODULE.ELF_HASH, identity["elf_keccak256"])
@@ -104,7 +104,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
     def test_current_manifest_fails_closed(self) -> None:
         gates = MODULE.load_gates(
-            MODULE.ROOT / "deployments/open-competition-v2-beta2-release-gates.json"
+            MODULE.ROOT / "deployments/open-competition-v2-beta3-release-gates.json"
         )
         self.assertFalse(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
@@ -124,7 +124,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             },
         }
         gates = MODULE.load_gates(
-            MODULE.ROOT / "deployments/open-competition-v2-beta2-release-gates.json"
+            MODULE.ROOT / "deployments/open-competition-v2-beta3-release-gates.json"
         )
         preflight = {
             "number": 1,
@@ -157,8 +157,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "uri": "https://example.test/evidence",
         }
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
-            "protocol_version": "agent-bounties/open-competition-v2-beta2",
+            "schema_version": "agent-bounties/open-competition-v2-beta3-release-gates-v5",
+            "protocol_version": "agent-bounties/open-competition-v2-beta3",
             "beta_risk_preimage": "risk",
             "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -217,9 +217,9 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertTrue(bundle["activation"]["broker_canary_enabled"])
         with mock.patch.dict(
-            MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}
+            MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
-            MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta2"}
+            MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
         ):
             runtime = MODULE.runtime_manifest(bundle, 10)
         self.assertTrue(runtime["proof_broker_enabled"])
@@ -272,8 +272,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "uri": "https://example.test/evidence",
         }
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
-            "protocol_version": "agent-bounties/open-competition-v2-beta2",
+            "schema_version": "agent-bounties/open-competition-v2-beta3-release-gates-v5",
+            "protocol_version": "agent-bounties/open-competition-v2-beta3",
             "beta_risk_preimage": "risk",
             "gates": {name: False for name in MODULE.REQUIRED_GATE_NAMES},
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -309,9 +309,9 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertTrue(sepolia["activation"]["sepolia_broker_rehearsal_enabled"])
         self.assertFalse(mainnet["activation"]["sepolia_broker_rehearsal_enabled"])
         with mock.patch.dict(
-            MODULE.METRIC_IDENTITY, {"status": "reproduced_beta2"}
+            MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
-            MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta2"}
+            MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
         ):
             self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
             self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])
@@ -321,8 +321,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         gates = {name: False for name in MODULE.REQUIRED_GATE_NAMES}
         gates["repository_gate_complete"] = True
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
-            "protocol_version": "agent-bounties/open-competition-v2-beta2",
+            "schema_version": "agent-bounties/open-competition-v2-beta3-release-gates-v5",
+            "protocol_version": "agent-bounties/open-competition-v2-beta3",
             "beta_risk_preimage": "risk",
             "gates": gates,
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -335,8 +335,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     def test_completed_gate_must_target_exact_repository_subject(self) -> None:
         path = MODULE.ROOT / "target/tmp/open-competition-v2-wrong-subject.json"
         value = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
-            "protocol_version": "agent-bounties/open-competition-v2-beta2",
+            "schema_version": "agent-bounties/open-competition-v2-beta3-release-gates-v5",
+            "protocol_version": "agent-bounties/open-competition-v2-beta3",
             "beta_risk_preimage": "risk",
             "gates": {name: name == "repository_gate_complete" for name in MODULE.REQUIRED_GATE_NAMES},
             "evidence": {name: None for name in MODULE.REQUIRED_GATE_NAMES},
@@ -391,7 +391,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     def test_factory_requires_project_owned_verifier_identities(self) -> None:
         source = (
             MODULE.ROOT
-            / "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta2.sol"
+            / "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta3.sol"
         ).read_text(encoding="utf-8").lower()
         self.assertIn("groth16verifierhash", source)
         self.assertIn("groth16runtimecodehash", source)
@@ -401,7 +401,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
     def test_immutable_names_are_bound_by_ast_not_sort_order(self) -> None:
         artifact = MODULE.artifact(
-            "OpenCompetitionBountyFactoryV2Beta2", "OpenCompetitionBountyFactoryV2Beta2"
+            "OpenCompetitionBountyFactoryV2Beta3", "OpenCompetitionBountyFactoryV2Beta3"
         )
         self.assertEqual(
             set(MODULE.immutable_names(artifact).values()),
@@ -410,7 +410,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
     def test_deployer_does_not_need_to_hold_canary_usdc(self) -> None:
         gates = MODULE.load_gates(
-            MODULE.ROOT / "deployments/open-competition-v2-beta2-release-gates.json"
+            MODULE.ROOT / "deployments/open-competition-v2-beta3-release-gates.json"
         )
         preflight = {
             "number": 1,

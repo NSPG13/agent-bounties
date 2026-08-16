@@ -31,7 +31,7 @@ class ProverServiceTests(unittest.TestCase):
     def test_response_has_only_broker_contract_fields(self) -> None:
         value = {
             "status": "pending",
-            "provider_job_id": "beta2-1",
+            "provider_job_id": "beta3-1",
             "proof": None,
             "public_values": None,
             "failure_code": None,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a pinned, unsigned Open Competition V2 Beta2 deployment bundle."""
+"""Build a pinned, unsigned Open Competition V2 Beta3 deployment bundle."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
 OUT = CONTRACT_ROOT / "out"
 DEFAULT_DEPLOYER = "0x884834e884d6e93462655a2820140ad03e6747bc"
-PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta2"
-VERIFIER_ASSETS_PATH = ROOT / "deployments/open-competition-v2-beta2-verifier-assets.json"
-SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
+PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta3"
+VERIFIER_ASSETS_PATH = ROOT / "deployments/open-competition-v2-beta3-verifier-assets.json"
+SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 METRIC_IDENTITY_PATH = ROOT / "programs/public-vector-metric-v1/release-identity.json"
 METRIC_IDENTITY = json.loads(METRIC_IDENTITY_PATH.read_text(encoding="utf-8"))
 METRIC_REVIEW_EVIDENCE_HASH = keccak256(
@@ -129,7 +129,7 @@ GRADUATION_GATE_NAMES = PUBLIC_BETA_GATE_NAMES + (
     "graduation_review_approved",
 )
 REQUIRED_GATE_NAMES = GRADUATION_GATE_NAMES
-GATE_MANIFEST_RELATIVE = "deployments/open-competition-v2-beta2-release-gates.json"
+GATE_MANIFEST_RELATIVE = "deployments/open-competition-v2-beta3-release-gates.json"
 NETWORKS = {
     "base-mainnet": {
         "chain_id": 8453,
@@ -147,9 +147,9 @@ NETWORKS = {
 SOURCE_FILES = (
     "contracts/base-escrow/src/IAgentBounty.sol",
     "contracts/base-escrow/src/ISP1Verifier.sol",
-    "contracts/base-escrow/src/OpenCompetitionBountyV2Beta2.sol",
-    "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta2.sol",
-    "contracts/base-escrow/src/Sp1VerifierAdapterV2Beta2.sol",
+    "contracts/base-escrow/src/OpenCompetitionBountyV2Beta3.sol",
+    "contracts/base-escrow/src/OpenCompetitionBountyFactoryV2Beta3.sol",
+    "contracts/base-escrow/src/Sp1VerifierAdapterV2Beta3.sol",
     "crates/competition-metric-core/src/lib.rs",
     "programs/public-vector-metric-v1/program/src/main.rs",
     "programs/structured-artifact-metric-v1/program/src/main.rs",
@@ -157,7 +157,7 @@ SOURCE_FILES = (
 
 
 def metric_profiles_ready() -> bool:
-    return all(profile["identity"].get("status") == "reproduced_beta2" for profile in METRIC_PROFILES)
+    return all(profile["identity"].get("status") == "reproduced_beta3" for profile in METRIC_PROFILES)
 
 
 def metric_profile_documents() -> list[dict[str, str]]:
@@ -310,12 +310,12 @@ def load_verifier_assets(
     path: Path = VERIFIER_ASSETS_PATH, *, require_proof_evidence: bool = True
 ) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-verifier-assets-v2":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta3-verifier-assets-v2":
         raise ValueError("verifier asset schema mismatch")
     if value.get("circuit_version") != SP1_SAFE_CIRCUIT_VERSION:
         raise ValueError("verifier assets target another circuit version")
     if value.get("gpu_proving_enabled") is not False:
-        raise ValueError("Beta2 verifier assets must come from the CPU-only release path")
+        raise ValueError("Beta3 verifier assets must come from the CPU-only release path")
     setup = value.get("setup_provenance")
     if not isinstance(setup, dict):
         raise ValueError("verifier assets lack setup provenance")
@@ -398,7 +398,7 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
-    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta2-release-gates-v5":
+    if value.get("schema_version") != "agent-bounties/open-competition-v2-beta3-release-gates-v5":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
         raise ValueError("release gate inventory mismatch")
@@ -509,7 +509,7 @@ def build_bundle(
     if not re.fullmatch(r"0x[0-9a-f]{64}", repository_subject):
         raise ValueError("repository subject must be a 32-byte hash")
     if not metric_profiles_ready() and not allow_pending_metric_identity:
-        raise RuntimeError("every patched Beta2 metric ELF and vkey must be reproduced")
+        raise RuntimeError("every patched Beta3 metric ELF and vkey must be reproduced")
     if preflight["deployer_eth_wei"] < MIN_DEPLOYER_ETH_WEI:
         raise RuntimeError("deployer ETH is below the bounded deployment reserve")
     groth16_verifier = create_address(deployer, preflight["deployer_nonce"])
@@ -518,9 +518,9 @@ def build_bundle(
     groth16_adapter = create_address(factory_address, 1)
     plonk_adapter = create_address(factory_address, 2)
     implementation = create_address(factory_address, 3)
-    factory_artifact = artifact("OpenCompetitionBountyFactoryV2Beta2", "OpenCompetitionBountyFactoryV2Beta2")
-    adapter_artifact = artifact("Sp1VerifierAdapterV2Beta2", "Sp1VerifierAdapterV2Beta2")
-    bounty_artifact = artifact("OpenCompetitionBountyV2Beta2", "OpenCompetitionBountyV2Beta2")
+    factory_artifact = artifact("OpenCompetitionBountyFactoryV2Beta3", "OpenCompetitionBountyFactoryV2Beta3")
+    adapter_artifact = artifact("Sp1VerifierAdapterV2Beta3", "Sp1VerifierAdapterV2Beta3")
+    bounty_artifact = artifact("OpenCompetitionBountyV2Beta3", "OpenCompetitionBountyV2Beta3")
     systems = verifier_assets["proof_systems"]
     trusted_setup = verifier_assets["setup_provenance"]
     if (
@@ -613,7 +613,7 @@ def build_bundle(
         }
     source_hashes = {relative: normalized_sha256(ROOT / relative) for relative in SOURCE_FILES}
     return {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-release-bundle-v1",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-release-bundle-v1",
         "protocol_version": PROTOCOL_VERSION,
         "network": network_name,
         "chain_id": network["chain_id"],
@@ -711,7 +711,7 @@ def build_bundle(
         "canary_budget": {
             "required_usdc_base_units": CANARY_BUDGET,
             "deployer_is_not_required_to_fund": True,
-            "funding_source": "any external Base USDC wallet that acknowledges the exact Beta2 risk hash",
+            "funding_source": "any external Base USDC wallet that acknowledges the exact Beta3 risk hash",
         },
         "activation": activation_state(network_name, gates),
         "deployment_transactions": [
@@ -744,7 +744,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deployer", default=DEFAULT_DEPLOYER)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--rpc-url")
-    parser.add_argument("--gates", type=Path, default=ROOT / "deployments/open-competition-v2-beta2-release-gates.json")
+    parser.add_argument("--gates", type=Path, default=ROOT / "deployments/open-competition-v2-beta3-release-gates.json")
     parser.add_argument("--verifier-assets", type=Path, default=VERIFIER_ASSETS_PATH)
     parser.add_argument("--allow-pending-proof-evidence", action="store_true")
     parser.add_argument("--output", type=Path, required=True)

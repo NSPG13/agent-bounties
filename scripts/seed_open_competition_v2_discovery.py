@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently create five canonically funded Beta2 discovery competitions."""
+"""Idempotently create five canonically funded Beta3 discovery competitions."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from _shared.evm import address_word
 from _shared.rpc import rpc
 
 
-PROTOCOL = "agent-bounties/open-competition-v2-beta2"
+PROTOCOL = "agent-bounties/open-competition-v2-beta3"
 NETWORK = "base-mainnet"
 CHAIN_ID = 8453
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
@@ -332,7 +332,7 @@ def verify_competition(
 
 def inventory_has_active(api: str, competition: str) -> bool:
     query = urlencode({"network": NETWORK, "state": "active"})
-    inventory = http_json("GET", f"{api}/v1/base/open-competition-v2-beta2/inventory?{query}")
+    inventory = http_json("GET", f"{api}/v1/base/open-competition-v2-beta3/inventory?{query}")
     for item in inventory.get("competitions", []):
         projection = item.get("record", {}).get("projection", {})
         if projection.get("competition", "").lower() == competition.lower() and projection.get("state") == "active":
@@ -357,7 +357,7 @@ def issue_body(
 ) -> str:
     requirements = json.dumps(task["requirements"], indent=2, ensure_ascii=True)
     template = json.dumps(task["artifact_template"], indent=2, ensure_ascii=True)
-    marker = f"<!-- beta2-seed:{task['seed_id']}:{result['competition']} -->"
+    marker = f"<!-- beta3-seed:{task['seed_id']}:{result['competition']} -->"
     return f"""{marker}
 ## Funded Open Competition V2
 
@@ -378,7 +378,7 @@ The 2.89 USDC figure uses the pinned hosted fees and is conditional on winning. 
 
 ## Earn
 
-1. Read the active record from `https://api.agentbounties.app/v1/base/open-competition-v2-beta2/inventory?network=base-mainnet&state=active`.
+1. Read the active record from `https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet&state=active`.
 2. Produce one UTF-8 JSON artifact matching the template and every requirement below.
 3. Call `quote_proof` with your wallet, a fresh nonce, and the exact artifact.
 4. Pay the returned x402 challenge once.
@@ -413,9 +413,9 @@ def seed(
     economics = validate_manifest(manifest)
     api = api.rstrip("/")
     client = SignedRpc(rpc_url, private_key)
-    release_document = http_json("GET", f"{api}/v1/base/open-competition-v2-beta2/release?network={NETWORK}")
-    require(release_document.get("activation_state") == "public_beta", "Beta2 public creation is not operational")
-    require(release_document.get("indexer_agreement", {}).get("agrees") is True, "Beta2 indexers do not agree")
+    release_document = http_json("GET", f"{api}/v1/base/open-competition-v2-beta3/release?network={NETWORK}")
+    require(release_document.get("activation_state") == "public_beta", "Beta3 public creation is not operational")
+    require(release_document.get("indexer_agreement", {}).get("agrees") is True, "Beta3 indexers do not agree")
     release = release_document.get("release", {})
     require(release.get("protocol_version") == PROTOCOL and release.get("network") == NETWORK, "production release identity mismatch")
     require(release.get("public_creation_enabled") is True and release.get("proof_broker_enabled") is True, "production release is not fully enabled")
@@ -432,7 +432,7 @@ def seed(
         threshold = total_requirement_weight(task)
         profile_document = http_json(
             "POST",
-            f"{api}/v1/base/open-competition-v2-beta2/structured-artifact-profile",
+            f"{api}/v1/base/open-competition-v2-beta3/structured-artifact-profile",
             {"network": NETWORK, "threshold": str(threshold), "requirements": task["requirements"]},
         )
         require(profile_document.get("profile", {}).get("profile_id") == manifest["profile_id"], "structured profile response mismatch")
@@ -446,7 +446,7 @@ def seed(
             funding_deadline=funding_deadline,
             profile_document=profile_document,
         )
-        response = http_json("POST", f"{api}/v1/base/open-competition-v2-beta2/creation-preparation", body)
+        response = http_json("POST", f"{api}/v1/base/open-competition-v2-beta3/creation-preparation", body)
         plan = response.get("plan", {})
         require(response.get("state") == "awaiting_wallet_calls", f"{task['seed_id']} is not atomically fundable")
         require(plan.get("public_inventory_eligible_after_confirmation") is True, f"{task['seed_id']} would not activate on creation")

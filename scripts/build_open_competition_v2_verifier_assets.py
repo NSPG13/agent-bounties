@@ -13,9 +13,9 @@ from typing import Any
 from _shared.evm import artifact_hex, keccak256
 
 
-SCHEMA = "agent-bounties/open-competition-v2-beta2-verifier-assets-v2"
-TRUSTED_SETUP_SCHEMA = "agent-bounties/open-competition-v2-beta2-trusted-setup-v1"
-CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
+SCHEMA = "agent-bounties/open-competition-v2-beta3-verifier-assets-v2"
+TRUSTED_SETUP_SCHEMA = "agent-bounties/open-competition-v2-beta3-trusted-setup-v1"
+CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 
 
 def proof_evidence_hash(path: Path) -> str:

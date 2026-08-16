@@ -6,8 +6,8 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: &str = "agent-bounties/open-competition-v2-beta2";
-pub const JOURNAL_DOMAIN: &str = "agent-bounties/open-competition-v2-beta2/journal";
+pub const PROTOCOL_VERSION: &str = "agent-bounties/open-competition-v2-beta3";
+pub const JOURNAL_DOMAIN: &str = "agent-bounties/open-competition-v2-beta3/journal";
 pub const PUBLIC_VECTOR_METRIC_V1: &str = "agent-bounties/public-vector-metric-v1";
 pub const JOURNAL_ABI_LENGTH: usize = 20 * 32;
 pub const MAXIMUM_VECTORS: usize = 10_000;
@@ -47,7 +47,7 @@ pub enum MetricSdkError {
     InvalidJournalLength(usize),
     #[error("journal ABI decode failed")]
     JournalDecode,
-    #[error("journal domain is not Open Competition V2 Beta2")]
+    #[error("journal domain is not Open Competition V2 Beta3")]
     JournalDomain,
     #[error("metric input has no vectors")]
     EmptyVectors,
@@ -355,7 +355,7 @@ mod tests {
         validate_journal_abi(&encoded).unwrap();
         assert_eq!(
             fixture().abi_hash().unwrap(),
-            "0x4e5101adf422615af036e756448e0c016e7bd04051f4cb33c0248f2b072d41e7"
+            "0x83057a33d88687ffcffaff1a5019653acf8a7b2fcae55ed02a4a733553dccf03"
         );
     }
 

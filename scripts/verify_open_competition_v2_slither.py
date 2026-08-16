@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail on any untriaged high/medium Slither finding in V2 Beta2."""
+"""Fail on any untriaged high/medium Slither finding in V2 Beta3."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-SOURCE = "contracts/base-escrow/src/OpenCompetitionBountyV2Beta2.sol"
+SOURCE = "contracts/base-escrow/src/OpenCompetitionBountyV2Beta3.sol"
 TRIAGED = {
     ("High", "arbitrary-send-erc20", "fundFromFactory(address,uint256,bytes32)"),
     ("Medium", "reentrancy-no-eth", "fund(uint256,bytes32)"),

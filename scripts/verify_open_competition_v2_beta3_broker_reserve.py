@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the isolated Beta2 broker has bounded Base gas and refund reserves."""
+"""Verify the isolated Beta3 broker has bounded Base gas and refund reserves."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from _shared.evm import address_word
 from _shared.rpc import rpc
 
 
-PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta2"
+PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta3"
 BASE_MAINNET_CHAIN_ID = "0x2105"
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -63,7 +63,7 @@ def inspect_reserve(
     require(eth_balance >= minimum_eth_wei, "broker Base ETH gas reserve is below minimum")
 
     return {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-broker-reserve-v1",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-broker-reserve-v1",
         "passed": True,
         "network": "base-mainnet",
         "broker": roles["broker"],

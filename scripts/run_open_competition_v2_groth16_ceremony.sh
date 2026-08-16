@@ -4,7 +4,7 @@ set -euo pipefail
 : "${OPEN_COMPETITION_V2_CEREMONY_IMAGE:?set the digest-pinned ceremony image}"
 
 if [[ $# -ne 3 ]]; then
-  echo "usage: $0 OUTPUT_DIR R1CS SAFE_V4_REFERENCE_WRAPPER" >&2
+  echo "usage: $0 OUTPUT_DIR R1CS SAFE_V5_REFERENCE_WRAPPER" >&2
   exit 2
 fi
 
@@ -17,6 +17,7 @@ if find "$output_dir" -mindepth 1 -print -quit | grep -q .; then
   echo "ceremony output directory must be empty: $output_dir" >&2
   exit 2
 fi
+cp --reflink=auto "$r1cs" "$output_dir/groth16_circuit.bin"
 
 container() {
   docker run --rm --network none --read-only \
@@ -79,7 +80,7 @@ records = []
 for path in sorted(root.glob("[0-9][0-9]-*.json")):
     records.append(json.loads(path.read_text(encoding="utf-8")))
 value = {
-    "schema_version": "agent-bounties/open-competition-v2-beta2-groth16-mpc-transcript-v1",
+    "schema_version": "agent-bounties/open-competition-v2-beta3-groth16-mpc-transcript-v1",
     "r1cs": pathlib.Path(sys.argv[2]).name,
     "records": records,
     "phase1_beacon": json.loads((root / "phase1-beacon.json").read_text()),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and freeze the Beta2 Aztec Ignition PLONK setup evidence."""
+"""Verify and freeze the Beta3 Aztec Ignition PLONK setup evidence."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from pathlib import Path
 import re
 
 
-EVIDENCE_SCHEMA = "agent-bounties/open-competition-v2-beta2-setup-verification-evidence-v1"
-TRANSCRIPT_SCHEMA = "agent-bounties/open-competition-v2-beta2-plonk-ignition-transcript-v1"
+EVIDENCE_SCHEMA = "agent-bounties/open-competition-v2-beta3-setup-verification-evidence-v1"
+TRANSCRIPT_SCHEMA = "agent-bounties/open-competition-v2-beta3-plonk-ignition-transcript-v1"
 START_INDEX = 174
 
 
