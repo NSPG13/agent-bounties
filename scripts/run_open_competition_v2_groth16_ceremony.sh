@@ -25,6 +25,7 @@ cp --reflink=auto "$r1cs" "$output_dir/groth16_circuit.bin"
 
 container() {
   docker run --rm --network none --read-only \
+    --user "$(id -u):$(id -g)" \
     -v "$output_dir:/data" \
     -v "$r1cs:/inputs/groth16_circuit.bin:ro" \
     "$OPEN_COMPETITION_V2_CEREMONY_IMAGE" "$@"

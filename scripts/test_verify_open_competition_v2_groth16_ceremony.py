@@ -26,6 +26,10 @@ class Groth16CeremonyTests(unittest.TestCase):
         self.assertNotIn("\npython ", source)
         self.assertNotIn("  python -", source)
 
+    def test_container_outputs_use_the_host_runner_identity(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('--user "$(id -u):$(id -g)"', source)
+
     def test_inventory_rejects_ambiguous_or_invalid_entries(self) -> None:
         with self.assertRaisesRegex(ValueError, "ambiguous"):
             MODULE.inventory(
