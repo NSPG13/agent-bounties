@@ -4,7 +4,7 @@ set -euo pipefail
 : "${OPEN_COMPETITION_V2_CEREMONY_IMAGE:?set the digest-pinned ceremony image}"
 
 if [[ $# -ne 3 ]]; then
-  echo "usage: $0 OUTPUT_DIR R1CS SAFE_V4_REFERENCE_WRAPPER" >&2
+  echo "usage: $0 OUTPUT_DIR R1CS SAFE_V5_REFERENCE_WRAPPER" >&2
   exit 2
 fi
 
