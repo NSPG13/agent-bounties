@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -24,6 +26,7 @@ def main() -> int:
     parser.add_argument("--sp1-source-commit", required=True)
     parser.add_argument("--expected-srs", type=Path, required=True)
     parser.add_argument("--replayed-srs", type=Path, required=True)
+    parser.add_argument("--manifest-output", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     args = parser.parse_args()
 
@@ -40,6 +43,7 @@ def main() -> int:
         raise SystemExit(f"expected SRS is missing: {args.expected_srs}")
 
     args.replayed_srs.parent.mkdir(parents=True, exist_ok=True)
+    args.manifest_output.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
     args.replayed_srs.unlink(missing_ok=True)
     helper = """package main
@@ -77,6 +81,12 @@ func main() {
             status = process.wait()
             if status != 0:
                 raise SystemExit(f"PLONK setup replay failed with exit code {status}")
+
+    cached_manifest = module_root / "data" / "MAIN IGNITION" / "manifest.json"
+    manifest = json.loads(cached_manifest.read_text(encoding="utf-8"))
+    if manifest.get("name") != "MAIN IGNITION" or not isinstance(manifest.get("participants"), list):
+        raise SystemExit("replayed PLONK setup did not preserve a valid MAIN IGNITION manifest")
+    shutil.copyfile(cached_manifest, args.manifest_output)
 
     expected_hash = sha256(args.expected_srs)
     replayed_hash = sha256(args.replayed_srs)

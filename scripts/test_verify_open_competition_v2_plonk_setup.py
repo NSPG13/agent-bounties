@@ -13,15 +13,27 @@ SPEC.loader.exec_module(MODULE)
 
 class PlonkSetupTests(unittest.TestCase):
     def test_requires_chain_and_kzg_success(self) -> None:
-        log = "processing contribution 176\nsuccess ✅: all contributions are valid\nsuccess ✅: kzg sanity check with SRS"
-        final, count = MODULE.contribution_count(log)
+        manifest = {"name": "MAIN IGNITION", "participants": [{}] * 176}
+        log = "success ✅: all contributions are valid\nsuccess ✅: kzg sanity check with SRS"
+        final, count = MODULE.contribution_count(log, manifest)
         self.assertEqual((final, count), (176, 2))
-        for invalid in (
-            "processing contribution 176\nsuccess ✅: all contributions are valid",
-            "processing contribution 175\nsuccess ✅: all contributions are valid\nsuccess ✅: kzg sanity check with SRS",
+        for invalid_log, invalid_manifest in (
+            ("success ✅: all contributions are valid", manifest),
+            (log, {"name": "MAIN IGNITION", "participants": [{}] * 175}),
+            ("processing contribution 176\n" + log, manifest),
+            (log, {"name": "TINY_TEST_5", "participants": [{}] * 176}),
         ):
             with self.assertRaises(ValueError):
-                MODULE.contribution_count(invalid)
+                MODULE.contribution_count(invalid_log, invalid_manifest)
+
+    def test_matches_manifest_entries_after_initial_pair(self) -> None:
+        manifest = {"name": "MAIN IGNITION", "participants": [{}] * 178}
+        log = (
+            "processing contribution 177\nprocessing contribution 178\n"
+            "success ✅: all contributions are valid\n"
+            "success ✅: kzg sanity check with SRS"
+        )
+        self.assertEqual(MODULE.contribution_count(log, manifest), (178, 4))
 
     def test_pins_safe_source_branches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
