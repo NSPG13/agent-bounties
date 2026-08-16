@@ -1,18 +1,116 @@
+diff --git a/backend/groth16/bn254/mpcsetup/marshal.go b/backend/groth16/bn254/mpcsetup/marshal.go
+index 23642e06..f34da87c 100644
+--- a/backend/groth16/bn254/mpcsetup/marshal.go
++++ b/backend/groth16/bn254/mpcsetup/marshal.go
+@@ -9,0 +10 @@ import (
++	"errors"
+@@ -10,0 +12 @@ import (
++	"sync/atomic"
+@@ -45 +46,0 @@ func (p *Phase1) ReadFrom(reader io.Reader) (n int64, err error) {
+-		&p.parameters,
+@@ -53,0 +55,6 @@ func (p *Phase1) ReadFrom(reader io.Reader) (n int64, err error) {
++	dn, err = p.parameters.readFromParallelCompressed(reader)
++	n += dn
++	if err != nil {
++		return
++	}
++
+@@ -58,0 +66,88 @@ func (p *Phase1) ReadFrom(reader io.Reader) (n int64, err error) {
++func (c *SrsCommons) readFromParallelCompressed(reader io.Reader) (n int64, err error) {
++	var domain uint64
++	if err = binary.Read(reader, binary.BigEndian, &domain); err != nil {
++		return -1, err
++	}
++	n = 8
++	if domain == 0 || domain&(domain-1) != 0 || domain > 1<<27 {
++		return n, errors.New("invalid Phase 1 domain")
++	}
++
++	c.setContributionsZero(domain)
++	g1Count := 4*domain - 2
++	g2Count := domain
++	encodedBytes := g1Count*curve.SizeOfG1AffineCompressed + g2Count*curve.SizeOfG2AffineCompressed
++	raw := make([]byte, int(encodedBytes))
++	read, readErr := io.ReadFull(reader, raw)
++	n += int64(read)
++	if readErr != nil {
++		return n, readErr
++	}
++
++	offset := 0
++	decodeG1 := func(points []curve.G1Affine) error {
++		if len(points) == 0 {
++			return nil
++		}
++		startOffset := offset
++		offset += len(points) * curve.SizeOfG1AffineCompressed
++		var invalid atomic.Uint64
++		utils.Parallelize(len(points), func(start, end int) {
++			for i := start; i < end; i++ {
++				pointOffset := startOffset + i*curve.SizeOfG1AffineCompressed
++				consumed, pointErr := points[i].SetBytes(raw[pointOffset : pointOffset+curve.SizeOfG1AffineCompressed])
++				if pointErr != nil || consumed != curve.SizeOfG1AffineCompressed {
++					invalid.Add(1)
++				}
++			}
++		})
++		if invalid.Load() != 0 {
++			return errors.New("G1 point decompression failed")
++		}
++		return nil
++	}
++	decodeG2 := func(points []curve.G2Affine) error {
++		if len(points) == 0 {
++			return nil
++		}
++		startOffset := offset
++		offset += len(points) * curve.SizeOfG2AffineCompressed
++		var invalid atomic.Uint64
++		utils.Parallelize(len(points), func(start, end int) {
++			for i := start; i < end; i++ {
++				pointOffset := startOffset + i*curve.SizeOfG2AffineCompressed
++				consumed, pointErr := points[i].SetBytes(raw[pointOffset : pointOffset+curve.SizeOfG2AffineCompressed])
++				if pointErr != nil || consumed != curve.SizeOfG2AffineCompressed {
++					invalid.Add(1)
++				}
++			}
++		})
++		if invalid.Load() != 0 {
++			return errors.New("G2 point decompression failed")
++		}
++		return nil
++	}
++
++	beta := []curve.G2Affine{c.G2.Beta}
++	if err = decodeG2(beta); err != nil {
++		return n, err
++	}
++	c.G2.Beta = beta[0]
++	if err = decodeG1(c.G1.Tau[1:]); err != nil {
++		return n, err
++	}
++	if err = decodeG2(c.G2.Tau[1:]); err != nil {
++		return n, err
++	}
++	if err = decodeG1(c.G1.BetaTau); err != nil {
++		return n, err
++	}
++	if err = decodeG1(c.G1.AlphaTau); err != nil {
++		return n, err
++	}
++	if offset != len(raw) {
++		return n, errors.New("Phase 1 transcript length mismatch")
++	}
++	return n, nil
++}
++
 diff --git a/backend/groth16/bn254/mpcsetup/phase1.go b/backend/groth16/bn254/mpcsetup/phase1.go
+index 3f08b2cd..8186824a 100644
 --- a/backend/groth16/bn254/mpcsetup/phase1.go
 +++ b/backend/groth16/bn254/mpcsetup/phase1.go
-@@ -17,6 +17,7 @@ import (
- 	curve "github.com/consensys/gnark-crypto/ecc/bn254"
- 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
- 	"github.com/consensys/gnark-crypto/ecc/bn254/mpcsetup"
+@@ -18,0 +19 @@ import (
 +	"github.com/consensys/gnark/internal/utils"
- )
- 
- // SrsCommons are the circuit-independent components of the Groth16 SRS,
-@@ -105,37 +106,48 @@ func (c *SrsCommons) update(tauUpdate, alphaUpdate, betaUpdate *fr.Element) {
- 	c.G1.BetaTau[0].ScalarMultiplication(&c.G1.BetaTau[0], &coeff)
- 	c.G2.Beta.ScalarMultiplication(&c.G2.Beta, &coeff)
- 
+@@ -116,31 +117,42 @@ func (c *SrsCommons) update(tauUpdate, alphaUpdate, betaUpdate *fr.Element) {
 -	// update all values from 1 to N-1
 -	tauPowI := *tauUpdate
 -	for i := 1; i < len(c.G2.Tau); i++ {
@@ -86,6 +184,3 @@ diff --git a/backend/groth16/bn254/mpcsetup/phase1.go b/backend/groth16/bn254/mp
 +			tauPowI.Mul(&tauPowI, tauUpdate)
 +		}
 +	})
- }
- 
- // Seal performs the final contribution and outputs the final parameters.

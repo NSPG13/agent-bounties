@@ -3,11 +3,13 @@ package mpcsetup
 
 import (
 	"bytes"
+	"io"
 	"math/big"
 	"testing"
 
 	curve "github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
+	gIo "github.com/consensys/gnark/io"
 )
 
 func clonePhase1(t *testing.T, source *Phase1) *Phase1 {
@@ -74,6 +76,87 @@ func TestParallelUpdateMatchesSequential(t *testing.T) {
 			assertSamePoints(t, parallel.parameters.G1.Tau, sequential.parameters.G1.Tau)
 		})
 	}
+}
+
+func TestParallelCompressedReadMatchesCanonicalRead(t *testing.T) {
+	for _, domain := range []uint64{1, 2, 16, 64} {
+		t.Run(new(big.Int).SetUint64(domain).String(), func(t *testing.T) {
+			source := new(Phase1)
+			source.Initialize(domain)
+			var encoded bytes.Buffer
+			if _, err := source.WriteTo(&encoded); err != nil {
+				t.Fatal(err)
+			}
+
+			canonical := new(Phase1)
+			if _, err := readPhase1Canonical(canonical, bytes.NewReader(encoded.Bytes())); err != nil {
+				t.Fatal(err)
+			}
+			parallel := new(Phase1)
+			if _, err := parallel.ReadFrom(bytes.NewReader(encoded.Bytes())); err != nil {
+				t.Fatal(err)
+			}
+
+			var canonicalBytes, parallelBytes bytes.Buffer
+			if _, err := canonical.WriteTo(&canonicalBytes); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parallel.WriteTo(&parallelBytes); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(canonicalBytes.Bytes(), parallelBytes.Bytes()) {
+				t.Fatal("parallel reader changed the canonical transcript")
+			}
+		})
+	}
+}
+
+func TestParallelCompressedReadRejectsMalformedPoint(t *testing.T) {
+	source := new(Phase1)
+	source.Initialize(2)
+	var encoded bytes.Buffer
+	if _, err := source.WriteTo(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	malformed := append([]byte(nil), encoded.Bytes()...)
+
+	// Locate the parameter encoding by serializing the three update proofs.
+	var proofs bytes.Buffer
+	if _, err := source.proofs.Tau.WriteTo(&proofs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.proofs.Alpha.WriteTo(&proofs); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.proofs.Beta.WriteTo(&proofs); err != nil {
+		t.Fatal(err)
+	}
+	firstPoint := proofs.Len() + 8
+	malformed[firstPoint] &^= 0xc0
+
+	decoded := new(Phase1)
+	if _, err := decoded.ReadFrom(bytes.NewReader(malformed)); err == nil {
+		t.Fatal("malformed compressed point was accepted")
+	}
+}
+
+func readPhase1Canonical(p *Phase1, reader io.Reader) (n int64, err error) {
+	var dn int64
+	for _, value := range []io.ReaderFrom{
+		&p.proofs.Tau,
+		&p.proofs.Alpha,
+		&p.proofs.Beta,
+		&p.parameters,
+	} {
+		dn, err = value.ReadFrom(reader)
+		n += dn
+		if err != nil {
+			return
+		}
+	}
+	challenge, dn, err := gIo.ReadBytesShort(reader)
+	p.Challenge = challenge
+	return n + dn, err
 }
 
 func assertSamePoints(t *testing.T, left, right []curve.G1Affine) {
