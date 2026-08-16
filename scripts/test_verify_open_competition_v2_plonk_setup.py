@@ -34,14 +34,44 @@ class PlonkSetupTests(unittest.TestCase):
             )
             setup.write_text(
                 'BaseURL:  "https://aztec-ignition.s3.amazonaws.com/"\n'
-                'Ceremony: "MAIN IGNITION"\nif !next.Follows(&current)\nsanityCheck(&srs)',
+                'Ceremony: "MAIN IGNITION"\nif !next.Follows(&current)\n'
+                'if !next.Follows(&current)\nsanityCheck(&srs)',
                 encoding="utf-8",
             )
             value = MODULE.verify_source(build, setup)
             self.assertRegex(value["build_go_sha256"], r"^[0-9a-f]{64}$")
             setup.write_text(setup.read_text().replace("MAIN IGNITION", "TINY_TEST_5"))
-            with self.assertRaisesRegex(ValueError, "lacks exact fragment"):
+            with self.assertRaisesRegex(ValueError, "requires 1 exact occurrences"):
                 MODULE.verify_source(build, setup)
+
+    def test_requires_both_chain_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build = root / "build.go"
+            setup = root / "trusted_setup.go"
+            build.write_text(
+                'DownloadAndSaveAztecIgnitionSrs(174, srsFileName)\nif !strings.Contains(dataDir, "dev")',
+                encoding="utf-8",
+            )
+            setup.write_text(
+                'BaseURL:  "https://aztec-ignition.s3.amazonaws.com/"\n'
+                'Ceremony: "MAIN IGNITION"\nif !next.Follows(&current)\nsanityCheck(&srs)',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "requires 2 exact occurrences"):
+                MODULE.verify_source(build, setup)
+
+    def test_replayed_srs_must_match_build_srs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = root / "expected.bin"
+            replayed = root / "replayed.bin"
+            expected.write_bytes(b"canonical-srs")
+            replayed.write_bytes(b"canonical-srs")
+            self.assertEqual(MODULE.require_matching_srs(expected, replayed), MODULE.sha256(expected))
+            replayed.write_bytes(b"different-srs")
+            with self.assertRaisesRegex(ValueError, "differs from the build SRS"):
+                MODULE.require_matching_srs(expected, replayed)
 
 
 if __name__ == "__main__":
