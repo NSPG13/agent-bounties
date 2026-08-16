@@ -1,4 +1,4 @@
-# Open Competition V2 Beta2 Threat Model
+# Open Competition V2 Beta3 Threat Model
 
 Risk class: R4. Immutable contracts hold Base USDC, call project-owned SP1
 verifiers, accept scoped signatures, and settle without operator approval.
@@ -61,7 +61,7 @@ decide payment eligibility.
 
 - No proxy, owner, admin withdrawal, mutable vkey, mutable verifier, or shared
   competition custody.
-- No GPU or public-network proof is release evidence for Beta2.
+- No GPU or public-network proof is release evidence for Beta3.
 - Any bytecode, ABI, verifier, vkey, journal, or metric correction creates a new
   version.
 - Production generation requires self-verified proof assets and a reproduced

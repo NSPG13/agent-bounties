@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish canonically active Beta2 seed competitions as idempotent GitHub issues."""
+"""Publish canonically active Beta3 seed competitions as idempotent GitHub issues."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def publish(index_path: Path, repository: str, token: str) -> dict[str, Any]:
         body_path = Path(document["body_path"])
         require(body_path.is_file(), f"missing issue body {body_path}")
         body = body_path.read_text(encoding="utf-8")
-        marker = f"<!-- beta2-seed:{document['seed_id']}:{document['competition']} -->"
+        marker = f"<!-- beta3-seed:{document['seed_id']}:{document['competition']} -->"
         require(marker in body, f"issue body does not bind {document['seed_id']} to its contract")
         matches = [issue for issue in issues if marker in (issue.get("body") or "")]
         require(len(matches) <= 1, f"multiple GitHub issues exist for {document['seed_id']}")

@@ -2,9 +2,9 @@
 pragma solidity ^0.8.26;
 
 import "./IAgentBounty.sol";
-import "./Sp1VerifierAdapterV2Beta2.sol";
+import "./Sp1VerifierAdapterV2Beta3.sol";
 
-interface IOpenCompetitionBountyV2Beta2 is IERC165 {
+interface IOpenCompetitionBountyV2Beta3 is IERC165 {
     function protocolVersion() external pure returns (bytes32);
     function bountyId() external view returns (bytes32);
     function creator() external view returns (address);
@@ -16,11 +16,11 @@ interface IOpenCompetitionBountyV2Beta2 is IERC165 {
 
 /// @notice Isolated, immutable, SP1-verified competition escrow. The contract
 /// stores no participant list and no operation depends on participant count.
-contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
+contract OpenCompetitionBountyV2Beta3 is IOpenCompetitionBountyV2Beta3 {
     using SafeBountyToken for address;
 
-    bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta2");
-    bytes32 public constant JOURNAL_DOMAIN = keccak256("agent-bounties/open-competition-v2-beta2/journal");
+    bytes32 public constant PROTOCOL_VERSION = keccak256("agent-bounties/open-competition-v2-beta3");
+    bytes32 public constant JOURNAL_DOMAIN = keccak256("agent-bounties/open-competition-v2-beta3/journal");
     bytes32 public constant PROOF_SYSTEM_GROTH16 = keccak256("sp1-groth16");
     bytes32 public constant PROOF_SYSTEM_PLONK = keccak256("sp1-plonk");
 
@@ -29,7 +29,7 @@ contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
     uint256 private constant SECP256K1_HALF_ORDER = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
     bytes32 private constant EIP712_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
-    bytes32 private constant NAME_HASH = keccak256("Agent Bounties Open Competition V2 Beta2");
+    bytes32 private constant NAME_HASH = keccak256("Agent Bounties Open Competition V2 Beta3");
     bytes32 private constant VERSION_HASH = keccak256("1");
     bytes32 private constant SUBMIT_PROOF_TYPEHASH = keccak256(
         "SubmitProof(address solver,uint256 solverNonce,bytes32 publicValuesHash,bytes32 proofHash,uint256 authorizationDeadline)"
@@ -281,7 +281,7 @@ contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
 
     function supportsInterface(bytes4 interfaceId) external pure override returns (bool) {
         return
-            interfaceId == type(IOpenCompetitionBountyV2Beta2).interfaceId || interfaceId == type(IERC165).interfaceId;
+            interfaceId == type(IOpenCompetitionBountyV2Beta3).interfaceId || interfaceId == type(IERC165).interfaceId;
     }
 
     function domainSeparator() public view returns (bytes32) {
@@ -475,7 +475,7 @@ contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
         address proofSubmitter
     ) private {
         (bool verified,) = verifierAdapter.staticcall(
-            abi.encodeCall(ISp1VerifierAdapterV2Beta2.verify, (programVKey, publicValues, proofBytes))
+            abi.encodeCall(ISp1VerifierAdapterV2Beta3.verify, (programVKey, publicValues, proofBytes))
         );
         if (!verified) revert V2Sp1ProofInvalid();
 
@@ -562,7 +562,7 @@ contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
 
     function _verifierAvailable() private view returns (bool) {
         (bool ok, bytes memory result) =
-            verifierAdapter.staticcall(abi.encodeCall(ISp1VerifierAdapterV2Beta2.verifierAvailable, ()));
+            verifierAdapter.staticcall(abi.encodeCall(ISp1VerifierAdapterV2Beta3.verifierAvailable, ()));
         return ok && result.length == 32 && abi.decode(result, (bool));
     }
 
@@ -581,8 +581,8 @@ contract OpenCompetitionBountyV2Beta2 is IOpenCompetitionBountyV2Beta2 {
                 || config.fundingDeadline > block.timestamp + MAX_FUNDING_WINDOW || config.proofWindowSeconds == 0
                 || config.proofWindowSeconds > MAX_PROOF_WINDOW
                 || (config.proofSystem != PROOF_SYSTEM_GROTH16 && config.proofSystem != PROOF_SYSTEM_PLONK)
-                || ISp1VerifierAdapterV2Beta2(config.verifierAdapter).proofSystem() != config.proofSystem
-                || !ISp1VerifierAdapterV2Beta2(config.verifierAdapter).verifierAvailable()
+                || ISp1VerifierAdapterV2Beta3(config.verifierAdapter).proofSystem() != config.proofSystem
+                || !ISp1VerifierAdapterV2Beta3(config.verifierAdapter).verifierAvailable()
         ) revert V2InvalidConfiguration();
     }
 

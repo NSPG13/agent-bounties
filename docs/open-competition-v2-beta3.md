@@ -1,11 +1,11 @@
-# Open Competition V2 Beta2
+# Open Competition V2 Beta3
 
 Status: implementation beta, not deployed. Creation and hosted proving remain
 disabled until the release gates below produce matching evidence. V2 is
 opt-in and is not the default bounty protocol.
 
 The exact release procedure and current blockers are in
-[`open-competition-v2-beta2-release.md`](open-competition-v2-beta2-release.md).
+[`open-competition-v2-beta3-release.md`](open-competition-v2-beta3-release.md).
 
 ## Purpose
 
@@ -24,8 +24,8 @@ V2 does not alter or migrate Open Competition V1. Only a confirmed canonical
 | Base | 8453 | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | Base Sepolia | 84532 | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 
-Beta2 uses project-owned Groth16 and PLONK verifier contracts built from
-`NSPG13/sp1@caf43bb80fab6745347fda83bb428cb08a463f8d`. Each adapter pins one
+Beta3 uses project-owned Groth16 and PLONK verifier contracts built from
+`NSPG13/sp1@f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d`. Each adapter pins one
 verifier address, `VERIFIER_HASH()`, runtime code hash, and proof selector.
 Addresses and hashes are published by the release endpoint only after exact
 deployment. A missing or changed verifier makes the competition refundable. A
@@ -35,7 +35,7 @@ verifier, vkey, bytecode, or SP1 correction requires a new protocol version.
 
 Each competition commits to:
 
-- bounty ID, creator, settlement token, and Beta2 risk hash;
+- bounty ID, creator, settlement token, and Beta3 risk hash;
 - solver reward, keeper reward, funding deadline, and proof window;
 - winner mode (`first_proven` or `best_score`), score direction, and threshold;
 - proof system and SP1 program vkey;
@@ -73,7 +73,7 @@ bool passed
 int256 score
 ```
 
-`domain` is `keccak256("agent-bounties/open-competition-v2-beta2/journal")`.
+`domain` is `keccak256("agent-bounties/open-competition-v2-beta3/journal")`.
 The contract ABI-decodes the journal, compares every scoped field with its
 immutable configuration, requires `passed`, and applies the immutable score
 threshold. The selected SP1 adapter then verifies the exact journal bytes and
@@ -214,7 +214,7 @@ are never included in proof-job records or public evidence.
 Any program vkey is valid at the protocol layer. Hosted discovery classifies a
 program as `reviewed`, `custom_unreviewed`, or `disabled`.
 
-Beta2 ships two reviewed candidates:
+Beta3 ships two reviewed candidates:
 
 - `public-vector-metric-v1` scores committed public numeric fixtures.
 - `structured-artifact-metric-v1` evaluates the submitted artifact bytes. It
@@ -230,7 +230,7 @@ custom-unreviewed profiles; direct BYO proofs remain permissionless.
 Structured requirements prove only the committed machine predicates. They do
 not prove uncommitted truth, usefulness, security, or subjective quality.
 Posters must encode every payment condition as an explicit supported predicate.
-A separate `wasm-benchmark-v1` may later add deterministic execution. Beta2
+A separate `wasm-benchmark-v1` may later add deterministic execution. Beta3
 does not describe host-only regression tests as zk-verified.
 
 ## Agent Order Of Operations
@@ -269,7 +269,7 @@ structured-artifact competitions for agent discovery and earning UX. Each pays
 0.10 USDC proof plus 0.01 USDC relay fees. The resulting hosted net prize is
 2.89 USDC if won.
 
-Run `Seed Open Competition V2 discovery bounties` only after public Beta2 is
+Run `Seed Open Competition V2 discovery bounties` only after public Beta3 is
 operational and the protected deployer holds 15.25 USDC plus Base ETH. The
 workflow creates and fully funds all five competitions, waits for a safe-block
 `CompetitionActivatedV2`, reconciles contract custody and both indexers, then

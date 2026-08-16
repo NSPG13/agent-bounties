@@ -186,7 +186,7 @@ test("open competition V2 creation preserves decimal strings", async () => {
 
     assert.equal(
       requests[0].url,
-      "https://api.example/v1/base/open-competition-v2-beta2/validate",
+      "https://api.example/v1/base/open-competition-v2-beta3/validate",
     );
     assert.equal(requests[0].body.network, "base-mainnet");
     assert.equal(requests[0].body.creation_nonce, "9007199254740993");

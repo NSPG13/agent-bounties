@@ -19710,20 +19710,20 @@ mod tests {
         assert!(paths.contains_key("/v1/x402/base/bounties/{bounty_contract}/funding"));
         assert!(paths.contains_key("/v1/x402/base/relays/{relay_id}"));
         for v2 in [
-            "/v1/base/open-competition-v2-beta2/release",
-            "/v1/base/open-competition-v2-beta2/profiles",
-            "/v1/base/open-competition-v2-beta2/structured-artifact-profile",
-            "/v1/base/open-competition-v2-beta2/validate",
-            "/v1/base/open-competition-v2-beta2/creation-preparation",
-            "/v1/base/open-competition-v2-beta2/funding-preparation",
-            "/v1/base/open-competition-v2-beta2/inventory",
-            "/v1/base/open-competition-v2-beta2/events",
-            "/v1/base/open-competition-v2-beta2/proof-quotes",
-            "/v1/base/open-competition-v2-beta2/proof-preparation",
-            "/v1/base/open-competition-v2-beta2/action-preparation",
-            "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}",
-            "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment",
-            "/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization",
+            "/v1/base/open-competition-v2-beta3/release",
+            "/v1/base/open-competition-v2-beta3/profiles",
+            "/v1/base/open-competition-v2-beta3/structured-artifact-profile",
+            "/v1/base/open-competition-v2-beta3/validate",
+            "/v1/base/open-competition-v2-beta3/creation-preparation",
+            "/v1/base/open-competition-v2-beta3/funding-preparation",
+            "/v1/base/open-competition-v2-beta3/inventory",
+            "/v1/base/open-competition-v2-beta3/events",
+            "/v1/base/open-competition-v2-beta3/proof-quotes",
+            "/v1/base/open-competition-v2-beta3/proof-preparation",
+            "/v1/base/open-competition-v2-beta3/action-preparation",
+            "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}",
+            "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment",
+            "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization",
         ] {
             assert!(paths.contains_key(v2), "missing {v2}");
         }

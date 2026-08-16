@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import deploy_open_competition_v2_beta2 as deploy
+import deploy_open_competition_v2_beta3 as deploy
 
 
 def fixture() -> dict:
@@ -30,8 +30,8 @@ def fixture() -> dict:
         for index, name in enumerate(components)
     ]
     value = {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-release-bundle-v1",
-        "protocol_version": "agent-bounties/open-competition-v2-beta2",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-release-bundle-v1",
+        "protocol_version": "agent-bounties/open-competition-v2-beta3",
         "network": "base-mainnet",
         "chain_id": 8453,
         "source_commit": "22" * 20,

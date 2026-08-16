@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that a distinct generated agent wallet completed the Beta2 x402 loop."""
+"""Verify that a distinct generated agent wallet completed the Beta3 x402 loop."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def verify(rehearsal: dict[str, Any], success: dict[str, Any]) -> dict[str, Any]
     )
 
     return {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-fresh-agent-flow-v1",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-fresh-agent-flow-v1",
         "passed": True,
         "network": "base-mainnet",
         "source_commit": success["source_commit"],

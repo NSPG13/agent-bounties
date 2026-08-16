@@ -277,7 +277,7 @@ mod tests {
     fn event(kind: OpenCompetitionV2EventKind, contributor: &str) -> OpenCompetitionV2Event {
         OpenCompetitionV2Event {
             id: Uuid::new_v4(),
-            protocol_version: "agent-bounties/open-competition-v2-beta2".to_string(),
+            protocol_version: "agent-bounties/open-competition-v2-beta3".to_string(),
             log_key: Uuid::new_v4().to_string(),
             tx_hash: format!("0x{}", "05".repeat(32)),
             block_number: 9,

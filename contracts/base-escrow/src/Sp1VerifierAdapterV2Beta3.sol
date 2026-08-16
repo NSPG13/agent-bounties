@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {ISP1VerifierWithHash} from "./ISP1Verifier.sol";
 
-interface ISp1VerifierAdapterV2Beta2 {
+interface ISp1VerifierAdapterV2Beta3 {
     function proofSystem() external view returns (bytes32);
     function verifier() external view returns (address);
     function verifierHash() external view returns (bytes32);
@@ -15,7 +15,7 @@ interface ISp1VerifierAdapterV2Beta2 {
 /// @notice Immutable proof-system adapter pinned to one project-owned SP1
 /// verifier. Both the self-reported circuit hash and deployed runtime bytecode
 /// must remain exact; there is no gateway route, owner, proxy or upgrade path.
-contract Sp1VerifierAdapterV2Beta2 is ISp1VerifierAdapterV2Beta2 {
+contract Sp1VerifierAdapterV2Beta3 is ISp1VerifierAdapterV2Beta3 {
     bytes32 public immutable override proofSystem;
     address public immutable override verifier;
     bytes32 public immutable override verifierHash;

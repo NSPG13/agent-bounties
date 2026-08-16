@@ -1,7 +1,7 @@
 # Open Competition V2 Groth16 Ceremony
 
 This pinned Go tool runs the gnark BN254 Groth16 Phase 1 and circuit-specific
-Phase 2 MPC used by Open Competition V2 Beta2. Each command emits one JSON
+Phase 2 MPC used by Open Competition V2 Beta3. Each command emits one JSON
 record containing exact input and output hashes.
 
 Run each `contribute-*` command in an isolated worker with no network and a
@@ -17,6 +17,6 @@ controlled every entropy source.
 The release orchestrator runs every contribution in a fresh, networkless,
 read-only container and fetches a new drand beacon only after each phase's last
 contribution. Build the runtime from `ops/open-competition-v2-ceremony.Dockerfile`
-and run `scripts/run_open_competition_v2_groth16_ceremony.sh`. The initial Beta2
+and run `scripts/run_open_competition_v2_groth16_ceremony.sh`. The initial Beta3
 ceremony is internally orchestrated and must not be described as independently
 contributed.

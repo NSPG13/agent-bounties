@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay an exact V2 Beta2 mainnet deployment bundle on an isolated Anvil fork."""
+"""Replay an exact V2 Beta3 mainnet deployment bundle on an isolated Anvil fork."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ import open_competition_v2_proof_rehearsal
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_SCHEMA = "agent-bounties/open-competition-v2-beta2-release-bundle-v1"
-OUTPUT_SCHEMA = "agent-bounties/open-competition-v2-beta2-mainnet-fork-replay-v1"
+EXPECTED_SCHEMA = "agent-bounties/open-competition-v2-beta3-release-bundle-v1"
+OUTPUT_SCHEMA = "agent-bounties/open-competition-v2-beta3-mainnet-fork-replay-v1"
 
 
 def selector(signature: str) -> str:
@@ -99,9 +99,9 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
     if bundle.get("network") != "base-mainnet" or bundle.get("chain_id") != 8453:
         raise ValueError("fork replay requires a Base mainnet release bundle")
     if bundle.get("activation", {}).get("mainnet_signing_allowed") is True:
-        raise ValueError("an ungraduated Beta2 bundle must not authorize mainnet signing")
+        raise ValueError("an ungraduated Beta3 bundle must not authorize mainnet signing")
     if bundle.get("deployment_state") != "blocked":
-        raise ValueError("current Beta2 replay expects a fail-closed release bundle")
+        raise ValueError("current Beta3 replay expects a fail-closed release bundle")
 
 
 def replay(

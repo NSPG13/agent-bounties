@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent Bounties Open Competition V2 Beta2 CPU prover
+Description=Agent Bounties Open Competition V2 Beta3 CPU prover
 After=network-online.target
 Wants=network-online.target
 

@@ -1,6 +1,6 @@
-# Beta2 verifier assets
+# Beta3 verifier assets
 
-`open-competition-v2-beta2-verifier-assets.json` is a generated release artifact,
+`open-competition-v2-beta3-verifier-assets.json` is a generated release artifact,
 not a hand-written configuration file. It is absent until the pinned CPU prover:
 
 1. builds the patched Groth16 and PLONK verifier contracts;

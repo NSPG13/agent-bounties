@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the ordered Beta2 Groth16 MPC transcript and emit setup evidence."""
+"""Verify the ordered Beta3 Groth16 MPC transcript and emit setup evidence."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import re
 from typing import Any
 
 
-COMMAND_SCHEMA = "agent-bounties/open-competition-v2-beta2-groth16-mpc-command-v1"
-TRANSCRIPT_SCHEMA = "agent-bounties/open-competition-v2-beta2-groth16-mpc-transcript-v1"
-EVIDENCE_SCHEMA = "agent-bounties/open-competition-v2-beta2-setup-verification-evidence-v1"
+COMMAND_SCHEMA = "agent-bounties/open-competition-v2-beta3-groth16-mpc-command-v1"
+TRANSCRIPT_SCHEMA = "agent-bounties/open-competition-v2-beta3-groth16-mpc-transcript-v1"
+EVIDENCE_SCHEMA = "agent-bounties/open-competition-v2-beta3-setup-verification-evidence-v1"
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Promote only Beta2 activation gates while preserving deployed release identity."""
+"""Promote only Beta3 activation gates while preserving deployed release identity."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import build_open_competition_v2_beta2_release as release
+import build_open_competition_v2_beta3_release as release
 
 
 class PromotionError(RuntimeError):

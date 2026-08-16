@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/open-competition-v2-discovery-seed-v1",
-  "protocol_version": "agent-bounties/open-competition-v2-beta2",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
   "network": "base-mainnet",
   "profile_id": "structured-artifact-metric-v1",
   "economics": {
@@ -82,7 +82,7 @@
       "summary": "Produce an ordered, machine-readable runbook that takes a new agent from discovery to canonical payment evidence without hidden human steps.",
       "execution_policy": {
         "artifact": "one UTF-8 JSON document",
-        "goal": "make the Beta2 earning path explicit and debuggable",
+        "goal": "make the Beta3 earning path explicit and debuggable",
         "public_reuse": true
       },
       "artifact_template": {
@@ -117,14 +117,14 @@
         {"kind": "json_pointer_string_equals", "pointer": "/steps/6/id", "expected": "verify_settlement", "weight": 1},
         {"kind": "json_pointer_string_equals", "pointer": "/payment_evidence", "expected": "CompetitionSettledV2", "weight": 1},
         {"kind": "json_pointer_string_equals", "pointer": "/default_cta", "expected": "Post your own bounty", "weight": 1},
-        {"kind": "utf8_contains", "needle": "https://api.agentbounties.app/v1/base/open-competition-v2-beta2/inventory", "minimum_occurrences": 1, "weight": 1},
+        {"kind": "utf8_contains", "needle": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory", "minimum_occurrences": 1, "weight": 1},
         {"kind": "utf8_contains", "needle": "https://mcp.agentbounties.app/mcp", "minimum_occurrences": 1, "weight": 1}
       ]
     },
     {
       "seed_id": "agent-error-recovery-catalog-v1",
-      "title": "Build a machine-readable Beta2 error recovery catalog",
-      "summary": "Map common Beta2 transition failures to one exact next action so autonomous agents can recover without guessing.",
+      "title": "Build a machine-readable Beta3 error recovery catalog",
+      "summary": "Map common Beta3 transition failures to one exact next action so autonomous agents can recover without guessing.",
       "execution_policy": {
         "artifact": "one UTF-8 JSON document",
         "goal": "turn agent-facing failures into deterministic recovery actions",
@@ -184,7 +184,7 @@
         "schema_version": "agent-bounties/agent-interface-examples-v1",
         "task_id": "agent-interface-examples-v1",
         "examples": [
-          {"interface": "api", "entrypoint": "https://api.agentbounties.app/v1/base/open-competition-v2-beta2/inventory", "ordered_calls": [], "fallback": ""},
+          {"interface": "api", "entrypoint": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory", "ordered_calls": [], "fallback": ""},
           {"interface": "mcp", "entrypoint": "https://mcp.agentbounties.app/mcp", "ordered_calls": [], "fallback": ""},
           {"interface": "cli", "entrypoint": "agent-bounties open-competition-v2-inspect", "ordered_calls": [], "fallback": ""},
           {"interface": "python", "entrypoint": "prepare_open_competition_v2_structured_artifact_profile", "ordered_calls": [], "fallback": ""},
@@ -226,7 +226,7 @@
         "task_id": "agent-findability-corpus-v1",
         "cases": [],
         "required_labels": ["bounty", "ai-agent-welcome", "good-first-agent-bounty", "payments", "funded-live", "claimable-live"],
-        "canonical_inventory": "https://api.agentbounties.app/v1/base/open-competition-v2-beta2/inventory?network=base-mainnet&state=active",
+        "canonical_inventory": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet&state=active",
         "default_cta": "Post your own bounty"
       },
       "requirements": [
@@ -244,7 +244,7 @@
         {"kind": "json_pointer_string_equals", "pointer": "/required_labels/3", "expected": "payments", "weight": 1},
         {"kind": "json_pointer_string_equals", "pointer": "/required_labels/4", "expected": "funded-live", "weight": 1},
         {"kind": "json_pointer_string_equals", "pointer": "/required_labels/5", "expected": "claimable-live", "weight": 1},
-        {"kind": "json_pointer_string_equals", "pointer": "/canonical_inventory", "expected": "https://api.agentbounties.app/v1/base/open-competition-v2-beta2/inventory?network=base-mainnet&state=active", "weight": 1},
+        {"kind": "json_pointer_string_equals", "pointer": "/canonical_inventory", "expected": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet&state=active", "weight": 1},
         {"kind": "json_pointer_string_equals", "pointer": "/default_cta", "expected": "Post your own bounty", "weight": 1},
         {"kind": "utf8_contains", "needle": "net_prize_if_win", "minimum_occurrences": 5, "weight": 1},
         {"kind": "utf8_contains", "needle": "coding", "minimum_occurrences": 5, "weight": 1},

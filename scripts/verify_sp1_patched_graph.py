@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that every Beta2 prover graph is pinned to the patched SP1 fork."""
+"""Verify that every Beta3 prover graph is pinned to the patched SP1 fork."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import tomllib
 
 ADVISORY = "GHSA-vj64-rjf3-w3v7"
 SP1_REPOSITORY = "https://github.com/NSPG13/sp1"
-SP1_COMMIT = "caf43bb80fab6745347fda83bb428cb08a463f8d"
-SP1_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
+SP1_COMMIT = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d"
+SP1_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 PATCHED_PACKAGES = ("p3-challenger",)
 P3_FIELD_VERSION = "0.4.3-succinct"
 P3_FIELD_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
@@ -123,7 +123,7 @@ def verify(root: Path) -> dict[str, object]:
         identity = json.loads((root / relative).read_text(encoding="utf-8"))
         if identity.get("sp1_commit") != SP1_COMMIT:
             raise ValueError(f"{relative} does not pin the patched SP1 commit")
-        if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v4":
+        if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v5":
             raise ValueError(f"{relative} does not pin the patched circuit version")
         if identity.get("rust_version") != HOST_RUST_TOOLCHAIN_VERSION:
             raise ValueError(f"{relative} does not pin the host Rust toolchain")

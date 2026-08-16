@@ -28,8 +28,8 @@ async fn main() {
             serde_json::json!({
                 "schema_version": "agent-bounties/open-competition-v2-prover-capabilities-v1",
                 "profile_id": "structured-artifact-metric-v1",
-                "sp1_version": "6.4.0-agent-bounties-sp1-safe-v4",
-                "sp1_commit": "caf43bb80fab6745347fda83bb428cb08a463f8d",
+                "sp1_version": "6.4.0-agent-bounties-sp1-safe-v5",
+                "sp1_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
                 "gpu_proving_enabled": false,
                 "backends": backends,
                 "proof_systems": ["groth16", "plonk"]

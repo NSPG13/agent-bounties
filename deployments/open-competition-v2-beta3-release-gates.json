@@ -1,7 +1,7 @@
 {
-  "schema_version": "agent-bounties/open-competition-v2-beta2-release-gates-v5",
-  "protocol_version": "agent-bounties/open-competition-v2-beta2",
-  "beta_risk_preimage": "agent-bounties/open-competition-v2-beta2/risk/2026-08-15-segregated-broker-v2",
+  "schema_version": "agent-bounties/open-competition-v2-beta3-release-gates-v5",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
+  "beta_risk_preimage": "agent-bounties/open-competition-v2-beta3/risk/2026-08-15-segregated-broker-v2",
   "gates": {
     "repository_gate_complete": false,
     "patched_sp1_dependency_graph_clean": false,

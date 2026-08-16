@@ -1,14 +1,14 @@
-# Open Competition V2 Beta2 Release
+# Open Competition V2 Beta3 Release
 
-Beta2 is implemented but not deployed. Public creation and hosted proving stay
+Beta3 is implemented but not deployed. Public creation and hosted proving stay
 disabled until the release manifest contains evidence for every launch gate.
 A build, transaction hash, or deployment receipt does not clear a gate.
 
 ## Proof Stack
 
-Beta2 pins the immutable fork
-`NSPG13/sp1@caf43bb80fab6745347fda83bb428cb08a463f8d`, identified as
-`agent-bounties-sp1-safe-v4`. The fork backports an injective Fiat-Shamir
+Beta3 pins the immutable fork
+`NSPG13/sp1@f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d`, identified as
+`agent-bounties-sp1-safe-v5`. The fork backports an injective Fiat-Shamir
 transcript into native proving and recursion, and carries regressions for
 partial-chunk padding, upper squeeze bits, and high digest bits.
 
@@ -21,7 +21,7 @@ upstream package name and version without considering the patched source. The
 exact-source graph gate and transcript attack regressions must pass; any
 registry fallback or additional advisory still blocks the release.
 
-GPU proving and the public SP1 Prover Network are disabled for Beta2. A labeled
+GPU proving and the public SP1 Prover Network are disabled for Beta3. A labeled
 x86-64 Linux runner with at least 256 GiB physical memory consumes the frozen
 trusted-setup bundle, builds project-owned Groth16 and PLONK verifier bytecode,
 then creates one Groth16 and two
@@ -71,7 +71,7 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
    and pinned Slither triage.
 2. Reproduce ELF, vkey, source hash, and golden journal in two isolated Linux
    builders.
-3. Commit the reproduced identity as `reproduced_beta2`; stale Beta1 values may
+3. Commit the reproduced identity as `reproduced_beta3`; stale Beta1 values may
    never be reused.
 4. On the capacity-gated CPU runner, verify the frozen trusted-setup bundle,
    build verifier bytecode, and create three real self-verified proofs.
@@ -100,7 +100,7 @@ builder because Docker bind mounts reject SP1's relative Makefile output path.
     the exact runtime manifest.
 
 The source of truth is
-`deployments/open-competition-v2-beta2-release-gates.json`. Each true gate must
+`deployments/open-competition-v2-beta3-release-gates.json`. Each true gate must
 contain an HTTPS evidence URI, evidence hash, source commit, and repository
 subject hash. The subject commits to every tracked entry except the gate
 manifest itself.
@@ -121,7 +121,7 @@ asset record is permanently marked `mainnet_eligible: false`.
 
 Both `programs/public-vector-metric-v1/release-identity.json` and
 `programs/structured-artifact-metric-v1/release-identity.json` must be
-`reproduced_beta2`: two isolated builders reproduce each pinned ELF and vkey.
+`reproduced_beta3`: two isolated builders reproduce each pinned ELF and vkey.
 Production bundle generation rejects any other state.
 
 ## Commands
@@ -129,20 +129,20 @@ Production bundle generation rejects any other state.
 ```powershell
 python scripts/verify_sp1_patched_graph.py
 $env:PYTHONPATH = "$PWD\scripts"
-python -m unittest scripts.test_build_open_competition_v2_beta2_release `
+python -m unittest scripts.test_build_open_competition_v2_beta3_release `
   scripts.test_build_open_competition_v2_trusted_setup_manifest `
   scripts.test_build_open_competition_v2_verifier_assets -v
 $env:FOUNDRY_INVARIANT_RUNS = "10000"
 $env:FOUNDRY_INVARIANT_DEPTH = "50"
 forge test --root contracts/base-escrow `
-  --match-contract "(OpenCompetitionBountyV2Beta2Test|OpenCompetitionBountyV2Beta2InvariantTest)" `
+  --match-contract "(OpenCompetitionBountyV2Beta3Test|OpenCompetitionBountyV2Beta3InvariantTest)" `
   --fuzz-runs 10000
 ```
 
-The real release runs through `.github/workflows/open-competition-v2-beta2-release.yml`:
+The real release runs through `.github/workflows/open-competition-v2-beta3-release.yml`:
 
 ```bash
-gh workflow run open-competition-v2-beta2-release.yml --ref main \
+gh workflow run open-competition-v2-beta3-release.yml --ref main \
   -f build_release_assets=true \
   -f run_live_sepolia_rehearsal=true \
   -f deploy_mainnet=true \
@@ -151,8 +151,12 @@ gh workflow run open-competition-v2-beta2-release.yml --ref main \
 
 It requires a self-hosted runner with labels `linux`, `x64`, `ram-256gb`, and
 `open-competition-v2-prover`, plus the verified setup bundle at
-`/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted`. Configure protected
+`/mnt/agent-bounties-artifacts/sp1-safe-v5-trusted`. Configure protected
 environments as follows:
+
+The environment names retain their original `beta2` labels so existing
+write-only GitHub secrets remain usable. They are deployment-control labels,
+not protocol or bytecode identifiers.
 
 - `v2-beta2-sepolia`: `BASE_SEPOLIA_RPC_URL`,
   `BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY`, a dedicated
@@ -177,7 +181,7 @@ After downloading a workflow artifact, record each passed gate without editing
 hashes by hand:
 
 ```powershell
-python scripts/record_open_competition_v2_beta2_gate.py `
+python scripts/record_open_competition_v2_beta3_gate.py `
   --gate repository_gate_complete `
   --evidence target/repository-gate.json `
   --uri https://github.com/NSPG13/agent-bounties/actions/runs/RUN_ID
@@ -190,7 +194,7 @@ and HTTPS evidence location.
 
 ## Production Services
 
-`render.yaml` defines four inert-until-configured Beta2 workers:
+`render.yaml` defines four inert-until-configured Beta3 workers:
 
 - the primary safe-block indexer;
 - a read-only shadow indexer using an independent RPC;
@@ -215,8 +219,8 @@ OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
 OPEN_COMPETITION_V2_PROVER_BIND=127.0.0.1
 PORT=9070
 SP1_PROVER=cpu
-SP1_GROTH16_PK_PATH=/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted/groth16/groth16_pk.bin
-SP1_PLONK_PK_PATH=/mnt/agent-bounties-artifacts/sp1-safe-v4-trusted/plonk/plonk_pk.bin
+SP1_GROTH16_PK_PATH=/mnt/agent-bounties-artifacts/sp1-safe-v5-trusted/groth16/groth16_pk.bin
+SP1_PLONK_PK_PATH=/mnt/agent-bounties-artifacts/sp1-safe-v5-trusted/plonk/plonk_pk.bin
 ```
 
 Give the same API key only to the Render broker and point

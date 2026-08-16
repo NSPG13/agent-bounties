@@ -20,7 +20,7 @@ import (
 	cs "github.com/consensys/gnark/constraint/bn254"
 )
 
-const schema = "agent-bounties/open-competition-v2-beta2-groth16-mpc-command-v1"
+const schema = "agent-bounties/open-competition-v2-beta3-groth16-mpc-command-v1"
 const ioBufferSize = 16 << 20
 
 type record struct {

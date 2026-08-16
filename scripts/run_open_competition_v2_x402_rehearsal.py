@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise a real Beta2 x402 purchase, proof job, relay and settlement."""
+"""Exercise a real Beta3 x402 purchase, proof job, relay and settlement."""
 
 from __future__ import annotations
 
@@ -164,7 +164,7 @@ def run_worker(binary: Path, protocol: str) -> str:
 
 def get_job(api: str, job_id: str) -> dict[str, Any]:
     _, value, _ = request_json(
-        "GET", f"{api}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}"
+        "GET", f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}"
     )
     return value["job"]
 
@@ -267,15 +267,15 @@ def main() -> int:
     deadline = time.time() + args.timeout_seconds
 
     if worker is not None:
-        run_worker(worker, "open-competition-v2-beta2")
+        run_worker(worker, "open-competition-v2-beta3")
         run_worker(worker, "open-competition-v2-shadow")
     quote_payload = build_quote_payload(spec, args.network)
     _, quote, _ = request_json(
-        "POST", f"{api}/v1/base/open-competition-v2-beta2/proof-quotes", quote_payload
+        "POST", f"{api}/v1/base/open-competition-v2-beta3/proof-quotes", quote_payload
     )
     job_id = quote["proof_job_id"]
     challenge = quote["payment_required"]
-    payment_url = f"{api}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/payment"
+    payment_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment"
     status, _, headers = request_json("POST", payment_url, expected=(402,))
     require(status == 402 and "payment-required" in headers, "unsigned request did not return 402")
     require(decode_x402_header(headers["payment-required"]) == challenge, "402 challenge drifted")
@@ -302,7 +302,7 @@ def main() -> int:
         refund_evidence = job.get("refund_evidence")
         require(isinstance(refund_evidence, dict), "canonical refund evidence is missing")
         result = {
-            "schema_version": "agent-bounties/open-competition-v2-beta2-x402-refund-rehearsal-v1",
+            "schema_version": "agent-bounties/open-competition-v2-beta3-x402-refund-rehearsal-v1",
             "passed": True,
             "network": args.network,
             "source_commit": rehearsal["source_commit"],
@@ -329,7 +329,7 @@ def main() -> int:
     job = wait_for_state(api, worker, job_id, {"proved"}, deadline)
     require(job.get("proof") and job.get("public_values"), "broker did not persist a bound proof")
     authorization_deadline = min(int(spec["proof_deadline"]), int(time.time()) + 600)
-    relay_url = f"{api}/v1/base/open-competition-v2-beta2/proof-jobs/{job_id}/relay-authorization"
+    relay_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization"
     _, unsigned, _ = request_json(
         "POST",
         relay_url,
@@ -352,7 +352,7 @@ def main() -> int:
             run_worker(worker, "open-competition-v2-broker")
         time.sleep(2)
         if worker is not None:
-            run_worker(worker, "open-competition-v2-beta2")
+            run_worker(worker, "open-competition-v2-beta3")
             run_worker(worker, "open-competition-v2-shadow")
             run_worker(worker, "open-competition-v2-broker")
         job = get_job(api, job_id)
@@ -385,7 +385,7 @@ def main() -> int:
         reclaim = sepolia.receipt_hash(reclaim_receipt)
 
     result = {
-        "schema_version": "agent-bounties/open-competition-v2-beta2-x402-rehearsal-v1",
+        "schema_version": "agent-bounties/open-competition-v2-beta3-x402-rehearsal-v1",
         "passed": True,
         "network": args.network,
         "source_commit": rehearsal["source_commit"],

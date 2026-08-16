@@ -68,6 +68,8 @@ pub const EXTERNAL_INTERFACE_USAGE_MIGRATION: &str =
     include_str!("../../../migrations/0022_external_interface_usage.sql");
 pub const OPEN_COMPETITION_V2_BETA2_MIGRATION: &str =
     include_str!("../../../migrations/0023_open_competition_v2_beta2.sql");
+pub const OPEN_COMPETITION_V2_BETA3_MIGRATION: &str =
+    include_str!("../../../migrations/0024_open_competition_v2_beta3.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1163,6 +1165,7 @@ impl PostgresStore {
                 INTERFACE_USAGE_MIGRATION,
                 EXTERNAL_INTERFACE_USAGE_MIGRATION,
                 OPEN_COMPETITION_V2_BETA2_MIGRATION,
+                OPEN_COMPETITION_V2_BETA3_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -9830,6 +9833,13 @@ mod tests {
                 OPEN_COMPETITION_V2_BETA2_MIGRATION.contains(invariant),
                 "missing Open Competition V2 persistence invariant {invariant}"
             );
+        }
+
+        for protocol in [
+            "agent-bounties/open-competition-v2-beta2",
+            "agent-bounties/open-competition-v2-beta3",
+        ] {
+            assert!(OPEN_COMPETITION_V2_BETA3_MIGRATION.contains(protocol));
         }
     }
 

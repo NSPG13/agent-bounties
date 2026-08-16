@@ -4,8 +4,8 @@ import unittest
 from unittest.mock import patch
 
 
-PATH = Path(__file__).with_name("verify_open_competition_v2_beta2_broker_reserve.py")
-SPEC = importlib.util.spec_from_file_location("verify_open_competition_v2_beta2_broker_reserve", PATH)
+PATH = Path(__file__).with_name("verify_open_competition_v2_beta3_broker_reserve.py")
+SPEC = importlib.util.spec_from_file_location("verify_open_competition_v2_beta3_broker_reserve", PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)

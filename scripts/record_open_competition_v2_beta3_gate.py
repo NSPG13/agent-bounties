@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record one Beta2 release gate against exact immutable evidence."""
+"""Record one Beta3 release gate against exact immutable evidence."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import re
 import subprocess
 from typing import Any
 
-import build_open_competition_v2_beta2_release as release
+import build_open_competition_v2_beta3_release as release
 
 
 OWNER_GATES = {
@@ -68,7 +68,7 @@ def record_gate(
     if gate in OWNER_GATES:
         require(
             owner_risk_hash == expected_risk_hash,
-            "owner approval must acknowledge the exact Beta2 risk hash",
+            "owner approval must acknowledge the exact Beta3 risk hash",
         )
     elif owner_risk_hash is not None:
         raise RuntimeError("owner risk acknowledgement is valid only for owner approval gates")

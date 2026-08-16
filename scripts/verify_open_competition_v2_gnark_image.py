@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the Beta2 gnark image build is local, source-bound and digest-pinned."""
+"""Verify the Beta3 gnark image build is local, source-bound and digest-pinned."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "ops/open-competition-v2-gnark-safe.Dockerfile"
-WORKFLOW = ROOT / ".github/workflows/open-competition-v2-beta2-release.yml"
+WORKFLOW = ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
 CIRCUIT_BUILDER = ROOT / "scripts/build_open_competition_v2_circuits.sh"
 EXPECTED_BASES = (
     "golang:1.26@sha256:26326682769ca980f8f1d3b1f52be2dd1c1d25270e3de3fe0c97d6bb65df3556",
@@ -42,8 +42,8 @@ def verify(
     if any(fragment not in image_source for fragment in required_image_fragments):
         raise ValueError("gnark image omits a compiler or source-identity pin")
     required_workflow_fragments = (
-        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v4:caf43bb80fab6745347fda83bb428cb08a463f8d",
-        "OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v4-trusted",
+        "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
+        "OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted",
         "rm -rf .sp1-safe/crates/prover/build",
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",

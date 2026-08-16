@@ -79,7 +79,7 @@ records = []
 for path in sorted(root.glob("[0-9][0-9]-*.json")):
     records.append(json.loads(path.read_text(encoding="utf-8")))
 value = {
-    "schema_version": "agent-bounties/open-competition-v2-beta2-groth16-mpc-transcript-v1",
+    "schema_version": "agent-bounties/open-competition-v2-beta3-groth16-mpc-transcript-v1",
     "r1cs": pathlib.Path(sys.argv[2]).name,
     "records": records,
     "phase1_beacon": json.loads((root / "phase1-beacon.json").read_text()),

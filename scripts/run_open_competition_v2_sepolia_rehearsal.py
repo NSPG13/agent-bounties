@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rehearse Open Competition V2 Beta2 on live Base Sepolia or mainnet."""
+"""Rehearse Open Competition V2 Beta3 on live Base Sepolia or mainnet."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any
 
 from eth_account import Account
 
-import build_open_competition_v2_beta2_release as release
+import build_open_competition_v2_beta3_release as release
 import open_competition_v2_proof_rehearsal as rehearsal
 from _shared.evm import keccak256, keccak_bytes
 from _shared.rpc import rpc
@@ -58,7 +58,7 @@ def actor_derivation_id(source_commit: str, derivation_salt: str) -> str:
         "actor derivation salt must contain 1 to 200 characters",
     )
     return keccak256(
-        b"agent-bounties/open-competition-v2-beta2/actor-derivation\0"
+        b"agent-bounties/open-competition-v2-beta3/actor-derivation\0"
         + NETWORK.encode()
         + b"\0"
         + bytes.fromhex(source_commit)
@@ -72,7 +72,7 @@ def derived_actor(
 ) -> Any:
     actor_derivation_id(source_commit, derivation_salt)
     material = keccak_bytes(
-        b"agent-bounties/open-competition-v2-beta2/actor\0"
+        b"agent-bounties/open-competition-v2-beta3/actor\0"
         + NETWORK.encode()
         + b"\0"
         + root_key
@@ -225,7 +225,7 @@ def resolve_or_deploy_factory(client: SignedRpc, signer: Any, bundle: dict[str, 
             return candidate, None
 
     require(NETWORK == "base-sepolia", "mainnet rehearsal requires the exact factory to be deployed first")
-    require(pending_nonce == bundle["factory"]["from_nonce"], "deployer nonce moved and no exact prior Beta2 factory was found; rebuild the release bundle")
+    require(pending_nonce == bundle["factory"]["from_nonce"], "deployer nonce moved and no exact prior Beta3 factory was found; rebuild the release bundle")
     observed, size = runtime_hash(client.url, bundle["factory"]["address"])
     require(size == 0, f"predicted factory is occupied by {observed}")
     receipt = client.send(signer, data=bundle["factory"]["deployment_calldata"])
@@ -319,7 +319,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             json.dumps(runtime, indent=2) + "\n", encoding="utf-8"
         )
     result = {
-        "schema_version": f"agent-bounties/open-competition-v2-beta2-{RUN_LABEL}-preparation-v1",
+        "schema_version": f"agent-bounties/open-competition-v2-beta3-{RUN_LABEL}-preparation-v1",
         "passed": True,
         "broadcast": deployment_receipt is not None,
         "factory_deployment_transaction": receipt_hash(deployment_receipt) if deployment_receipt else None,
@@ -563,7 +563,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     require(rehearsal.token_balance(client.url, token, best_address) == 0, "best-score escrow retained USDC")
 
     result = {
-        "schema_version": f"agent-bounties/open-competition-v2-beta2-{RUN_LABEL}-rehearsal-v1",
+        "schema_version": f"agent-bounties/open-competition-v2-beta3-{RUN_LABEL}-rehearsal-v1",
         "passed": True,
         "synthetic": True,
         "source_commit": bundle["source_commit"],
