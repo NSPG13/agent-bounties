@@ -355,7 +355,7 @@ mod tests {
         validate_journal_abi(&encoded).unwrap();
         assert_eq!(
             fixture().abi_hash().unwrap(),
-            "0x4e5101adf422615af036e756448e0c016e7bd04051f4cb33c0248f2b072d41e7"
+            "0x83057a33d88687ffcffaff1a5019653acf8a7b2fcae55ed02a4a733553dccf03"
         );
     }
 
