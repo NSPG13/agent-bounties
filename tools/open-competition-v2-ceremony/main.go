@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 )
 
 const schema = "agent-bounties/open-competition-v2-beta2-groth16-mpc-command-v1"
+const ioBufferSize = 16 << 20
 
 type record struct {
 	Schema         string   `json:"schema_version"`
@@ -323,7 +325,7 @@ func readFrom(path string, value io.ReaderFrom) error {
 		return err
 	}
 	defer file.Close()
-	_, err = value.ReadFrom(file)
+	_, err = value.ReadFrom(bufio.NewReaderSize(file, ioBufferSize))
 	return err
 }
 
@@ -339,8 +341,11 @@ func writeTo(path string, value io.WriterTo) error {
 		return err
 	}
 	defer file.Close()
-	_, err = value.WriteTo(file)
-	return err
+	writer := bufio.NewWriterSize(file, ioBufferSize)
+	if _, err = value.WriteTo(writer); err != nil {
+		return err
+	}
+	return writer.Flush()
 }
 
 func writeToExclusive(path string, value io.WriterTo) error {
@@ -355,8 +360,11 @@ func writeToExclusive(path string, value io.WriterTo) error {
 		return err
 	}
 	defer file.Close()
-	_, err = value.WriteTo(file)
-	return err
+	writer := bufio.NewWriterSize(file, ioBufferSize)
+	if _, err = value.WriteTo(writer); err != nil {
+		return err
+	}
+	return writer.Flush()
 }
 
 type dumpWriter interface {
@@ -375,7 +383,11 @@ func writeDumpExclusive(path string, value dumpWriter) error {
 		return err
 	}
 	defer file.Close()
-	return value.WriteDump(file)
+	writer := bufio.NewWriterSize(file, ioBufferSize)
+	if err := value.WriteDump(writer); err != nil {
+		return err
+	}
+	return writer.Flush()
 }
 
 func writeSolidity(path string, vk groth16.VerifyingKey) error {
