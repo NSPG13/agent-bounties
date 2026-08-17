@@ -57,8 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust
         with:
+          toolchain: "1.88.0"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
@@ -111,7 +112,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.88.0"
       - uses: Swatinem/rust-cache@v2
 
       - name: Verify Postgres test configuration

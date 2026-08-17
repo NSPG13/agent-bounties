@@ -3,6 +3,9 @@ name: Open Competition V2 Beta3 release
 on:
   pull_request:
     paths:
+      - ".github/actions/setup-patched-sp1/**"
+      - ".github/actions/setup-protoc/**"
+      - ".github/actions/setup-rust/**"
       - ".github/workflows/open-competition-v2-beta3-release.yml"
       - "contracts/base-escrow/src/ISP1Verifier.sol"
       - "contracts/base-escrow/src/OpenCompetitionBountyV2Beta3.sol"
@@ -162,11 +165,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+      - uses: ./.github/actions/setup-rust
         with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+          toolchain: "1.96.1"
+      - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
@@ -283,26 +285,17 @@ jobs:
         profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+      - uses: ./.github/actions/setup-rust
         with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+          toolchain: "1.96.1"
+      - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
           ref: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
           path: .sp1-safe
       - name: Install patched cargo-prove
-        run: |
-          set -euo pipefail
-          curl -fsSL https://sp1.succinct.xyz -o /tmp/sp1up-install.sh
-          echo '5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b  /tmp/sp1up-install.sh' | sha256sum -c -
-          bash /tmp/sp1up-install.sh
-          "$HOME/.sp1/bin/sp1up" -v 6.4.0
-          cargo install --locked --force --root "$HOME/.sp1" --path .sp1-safe/crates/cli
-          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'f6a2dff'
+        uses: ./.github/actions/setup-patched-sp1
       - name: Reproduce the metric release
         working-directory: programs/${{ matrix.profile }}
         env:
@@ -377,11 +370,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
+      - uses: ./.github/actions/setup-rust
         with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+          toolchain: "1.96.1"
+      - uses: ./.github/actions/setup-protoc
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
@@ -390,6 +382,7 @@ jobs:
           repository: NSPG13/sp1
           ref: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
           path: .sp1-safe
+      - uses: ./.github/actions/setup-patched-sp1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: open-competition-v2-beta3-static-analysis-${{ github.sha }}
@@ -457,12 +450,6 @@ jobs:
             printf '[profile.default]\nsrc = "src"\nout = "out"\nsolc = "0.8.26"\nevm_version = "cancun"\noptimizer = true\noptimizer_runs = 200\n' > "$root/foundry.toml"
             forge build --root "$root" --force
           done
-          curl -fsSL https://sp1.succinct.xyz -o /tmp/sp1up-install.sh
-          echo '5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b  /tmp/sp1up-install.sh' | sha256sum -c -
-          bash /tmp/sp1up-install.sh
-          "$HOME/.sp1/bin/sp1up" -v 6.4.0
-          cargo install --locked --force --root "$HOME/.sp1" --path .sp1-safe/crates/cli
-          export PATH="$HOME/.sp1/bin:$PATH"
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-public-vector"
           cargo build --locked --release --manifest-path programs/public-vector-metric-v1/Cargo.toml \
             -p public-vector-metric-v1-script

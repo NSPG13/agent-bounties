@@ -1,0 +1,21 @@
+name: Setup pinned protoc
+description: Install the exact Linux x86-64 protoc release used by SP1 builds.
+runs:
+  using: composite
+  steps:
+    - name: Install protoc 28.3
+      shell: bash
+      run: |
+        set -euo pipefail
+        archive="$RUNNER_TEMP/protoc-28.3-linux-x86_64.zip"
+        install_dir="$RUNNER_TEMP/protoc-28.3"
+        curl --fail --location --retry 5 --retry-all-errors \
+          https://github.com/protocolbuffers/protobuf/releases/download/v28.3/protoc-28.3-linux-x86_64.zip \
+          --output "$archive"
+        echo "0ad949f04a6a174da83cdcbdb36dee0a4925272a5b6d83f79a6bf9852076d53f  $archive" \
+          | sha256sum --check --strict
+        rm -rf "$install_dir"
+        mkdir -p "$install_dir"
+        unzip -q "$archive" -d "$install_dir"
+        echo "$install_dir/bin" >> "$GITHUB_PATH"
+        "$install_dir/bin/protoc" --version | grep -Fx "libprotoc 28.3"

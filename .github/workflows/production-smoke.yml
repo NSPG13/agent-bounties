@@ -73,7 +73,9 @@ jobs:
             echo "It runs after deployment by schedule or manual dispatch, not as a pre-deploy branch check."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
 
       - uses: Swatinem/rust-cache@v2
 
