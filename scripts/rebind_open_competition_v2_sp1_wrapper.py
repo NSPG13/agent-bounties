@@ -10,6 +10,7 @@ import re
 
 
 CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
+GENERATED_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v4"
 SYSTEMS = {
     "groth16": ("Groth16Verifier", "SP1VerifierGroth16.sol"),
     "plonk": ("PlonkVerifier", "SP1VerifierPlonk.sol"),
@@ -22,7 +23,7 @@ def rebind(source: str, vkey: bytes, system: str) -> tuple[str, str]:
     verifier_contract, _ = SYSTEMS[system]
     required = (
         f'import {{{verifier_contract}}} from "./{verifier_contract}.sol";',
-        f'return "{CIRCUIT_VERSION}";',
+        f'return "{GENERATED_CIRCUIT_VERSION}";',
         "contract SP1Verifier",
     )
     for fragment in required:
@@ -34,6 +35,11 @@ def rebind(source: str, vkey: bytes, system: str) -> tuple[str, str]:
     )
     if len(pattern.findall(source)) != 1:
         raise ValueError("SP1 wrapper must contain exactly one verifier hash")
+    source = source.replace(
+        f'return "{GENERATED_CIRCUIT_VERSION}";',
+        f'return "{CIRCUIT_VERSION}";',
+        1,
+    )
     verifier_hash = "0x" + hashlib.sha256(vkey).hexdigest()
     return pattern.sub(rf"\g<1>{verifier_hash}\g<2>", source), verifier_hash
 
