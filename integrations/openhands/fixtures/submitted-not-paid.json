@@ -1,0 +1,50 @@
+{
+  "description": "Submission on-chain, no BountySettled: NOT payment -> wait, report $0.00.",
+  "expected_action": "wait",
+  "age_seconds": 60,
+  "bounty": {
+    "bounty_id": "0x4444444444444444444444444444444444444444444444444444444444444444",
+    "bounty_contract": "0xa4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+    "work_state": "submitted",
+    "funded": true,
+    "funding_complete": true,
+    "verifier": {
+      "ready": true,
+      "mode": "sandboxed_regression_v1"
+    },
+    "reward": {
+      "amount": "2000000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "bond": {
+      "amount": "10000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "submission": {
+      "submitted_onchain": true,
+      "submission_hash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "tx_hash": "0x6666666666666666666666666666666666666666666666666666666666666666",
+      "bounty_settled": false
+    },
+    "cash_economics": {
+      "solver_reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "required_external_spend": {
+        "amount": "0",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "gross_cash_margin": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      }
+    }
+  },
+  "next_action": "Wait: poll canonical events for BountySettled. A transaction hash is not payment. Report $0.00 earned until BountySettled is confirmed."
+}

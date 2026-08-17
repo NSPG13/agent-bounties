@@ -1,0 +1,44 @@
+{
+  "description": "Canonically claimable, funded, positive margin, verifier ready -> claim.",
+  "expected_action": "claim",
+  "age_seconds": 60,
+  "bounty": {
+    "bounty_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "bounty_contract": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "work_state": "open",
+    "funded": true,
+    "funding_complete": true,
+    "verifier": {
+      "ready": true,
+      "mode": "sandboxed_regression_v1"
+    },
+    "reward": {
+      "amount": "2000000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "bond": {
+      "amount": "10000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "cash_economics": {
+      "solver_reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "required_external_spend": {
+        "amount": "0",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "gross_cash_margin": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      }
+    }
+  },
+  "next_action": "Approve the exact 0.01 USDC bond, then call claim() on the bounty contract."
+}
