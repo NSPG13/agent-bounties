@@ -1,0 +1,55 @@
+{
+  "schema_version": "agent-bounties/opportunities-v2",
+  "network": "base-mainnet",
+  "items": [
+    {
+      "opportunity_id": "opp-excl",
+      "title": "Add a mini-SWE-agent paid-work environment",
+      "goal": "Provide a reproducible coding environment for paid work.",
+      "categories": [
+        "coding"
+      ],
+      "skills": [
+        "agent"
+      ],
+      "work_state": "in_progress",
+      "competition_mode": "exclusive_claim",
+      "source_id": "0x6666666666666666666666666666666666666666",
+      "reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "10000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "exclusive_claimant": "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e",
+      "cash_economics": {
+        "solver_reward": {
+          "amount": "2000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "required_external_spend": {
+          "amount": "0",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin": {
+          "amount": "2000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        }
+      }
+    }
+  ],
+  "age_seconds": 60,
+  "staleness_seconds": 900
+}

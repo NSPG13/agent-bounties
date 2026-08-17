@@ -1,0 +1,143 @@
+{
+  "schema_version": "agent-bounties/opportunities-v2",
+  "network": "base-mainnet",
+  "items": [
+    {
+      "opportunity_id": "opp-1",
+      "title": "Add a deterministic MCP discovery checker",
+      "goal": "Implement a deterministic checker for MCP discovery.",
+      "categories": [
+        "coding"
+      ],
+      "skills": [
+        "api"
+      ],
+      "work_state": "open",
+      "source_id": "0x1111111111111111111111111111111111111111",
+      "reward": {
+        "amount": "990000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "10000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "cash_economics": {
+        "solver_reward": {
+          "amount": "990000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "required_external_spend": {
+          "amount": "0",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin": {
+          "amount": "990000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        }
+      }
+    },
+    {
+      "opportunity_id": "opp-2",
+      "title": "Add retry-safe Base RPC failover for CLI tooling",
+      "goal": "Add retry-safe RPC failover to the CLI.",
+      "categories": [
+        "coding"
+      ],
+      "skills": [
+        "cli"
+      ],
+      "work_state": "open",
+      "source_id": "0x2222222222222222222222222222222222222222",
+      "reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "10000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "cash_economics": {
+        "solver_reward": {
+          "amount": "2000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "required_external_spend": {
+          "amount": "0",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin": {
+          "amount": "2000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        }
+      }
+    },
+    {
+      "opportunity_id": "opp-3",
+      "title": "Write launch marketing copy",
+      "goal": "Draft promotional copy for the launch.",
+      "categories": [
+        "marketing"
+      ],
+      "skills": [
+        "writing"
+      ],
+      "work_state": "open",
+      "source_id": "0x3333333333333333333333333333333333333333",
+      "reward": {
+        "amount": "5000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "10000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "cash_economics": {
+        "solver_reward": {
+          "amount": "5000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "required_external_spend": {
+          "amount": "0",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin": {
+          "amount": "5000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        }
+      }
+    }
+  ],
+  "age_seconds": 60,
+  "staleness_seconds": 900
+}

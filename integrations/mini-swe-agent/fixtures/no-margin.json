@@ -1,0 +1,53 @@
+{
+  "schema_version": "agent-bounties/opportunities-v2",
+  "network": "base-mainnet",
+  "items": [
+    {
+      "opportunity_id": "opp-seed",
+      "title": "Seed a paid API child bounty",
+      "goal": "Create and fully fund a coding bounty another participant completes.",
+      "categories": [
+        "coding"
+      ],
+      "skills": [
+        "api"
+      ],
+      "work_state": "open",
+      "source_id": "0x5555555555555555555555555555555555555555",
+      "reward": {
+        "amount": "900000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "bond": {
+        "amount": "100000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "cash_economics": {
+        "solver_reward": {
+          "amount": "900000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "required_external_spend": {
+          "amount": "900000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin": {
+          "amount": "0",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        }
+      }
+    }
+  ],
+  "age_seconds": 60,
+  "staleness_seconds": 900
+}

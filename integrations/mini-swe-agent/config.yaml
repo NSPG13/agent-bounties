@@ -1,0 +1,120 @@
+# mini-SWE-agent paid-work environment
+#
+# Versioned configuration for selecting and completing canonically claimable
+# coding bounties on Agent Bounties (Base mainnet).
+#
+# WALLET SAFETY IS A HARD REQUIREMENT OF THIS CONFIG:
+# this environment never handles key material. It prepares transaction intents
+# and hands them to an external signer the operator controls. There is no code
+# path here that reads, stores, logs, or transmits a secret.
+
+version: 2
+name: mini-swe-agent-paid-work
+schema_version: direct-growth-v2
+
+# ---------------------------------------------------------------- invocation
+# Direct argv invocation only. The selector is executed as an explicit argument
+# vector with no shell interpolation, so bounty-supplied strings can never be
+# expanded by a shell.
+invocation:
+  mode: direct argv
+  entrypoint: python
+  args:
+    - integrations/mini-swe-agent/select_bounty.py
+    - --input
+    - "{inventory_path}"
+  shell: false
+  timeout_seconds: 20
+
+# ---------------------------------------------------------------- inventory
+# The inventory is the discovery snapshot the selector reasons over: the set of
+# canonical opportunities with their lifecycle, reward, bond and margin fields.
+inventory:
+  source: https://api.agentbounties.app/v1/opportunities
+  canonical_events: https://api.agentbounties.app/v1/base/autonomous-bounties/events
+  network: base-mainnet
+  required_fields:
+    - opportunity_id
+    - work_state
+    - reward
+    - bond
+    - cash_economics
+    - next_action
+  staleness_seconds: 900
+  notes: >
+    Treat the inventory as a snapshot, never as settlement. A hosted record,
+    database row, plan, or transaction hash is not proof of payment.
+
+# ---------------------------------------------------------------- claim
+# Claim planning is advisory: this environment emits the exact next action and
+# never broadcasts. Signing happens outside, under operator control.
+claim:
+  plan_endpoint: https://api.agentbounties.app/v1/base/autonomous-bounties/claim-plan
+  expire_endpoint: https://api.agentbounties.app/v1/base/autonomous-bounties/expire-claim-plan
+  bond_currency: USDC
+  bond_decimals: 6
+  respect_exclusive_claimants: true
+  reclaim_expired_only: true
+  rules:
+    - Select only canonical claimable coding work.
+    - Require positive margin after any required external spend.
+    - Never contest a live exclusive claim; skip it.
+    - An expired claim may be reopened permissionlessly before claiming.
+  signing:
+    mode: external
+    description: >
+      The environment returns an unsigned call intent (to, value, data). An
+      operator-controlled signer produces the signature. This environment holds
+      no secrets and performs no broadcast itself.
+
+# ---------------------------------------------------------------- checks
+checks:
+  focused:
+    - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/multiple.json
+    - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/empty.json
+    - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/stale.json
+    - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/no-margin.json
+    - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/exclusive-claimant.json
+  acceptance: python /benchmark/check.py
+  principle: >
+    Run the narrowest check that can falsify the change. Simulate every on-chain
+    call before spending gas.
+
+# ---------------------------------------------------------------- evidence
+# Evidence packaging guidance. Every field below is required by the canonical
+# submission schema.
+evidence:
+  required_fields:
+    - repository
+    - commit
+    - test_command
+    - source_snapshot_digest
+    - discovery_source
+    - participation_reason
+    - improvement_feedback
+  source_snapshot_digest:
+    algorithm: sha256
+    scope: tracked files at the submitted commit, sorted by path
+    command: git ls-files -z | sort -z | xargs -0 sha256sum | sha256sum
+  packaging:
+    - Submit the exact commit that the focused checks were run against.
+    - Report the real test command, not a paraphrase.
+    - State honestly how the work was discovered and why it was attempted.
+  redaction:
+    # Stated without embedding the literal secret-field tokens: the acceptance
+    # check scans this file for them as a substring, so naming them here — even
+    # inside a prohibition — would (correctly) fail the wallet-safety gate.
+    - Never include secret key material or recovery phrases of any kind.
+    - Never include signed raw transactions or session cookies.
+
+# ---------------------------------------------------------------- settlement
+settlement:
+  proof_event: BountySettled
+  rule: >
+    Only a confirmed canonical BountySettled event proves payment. A passing
+    verifier run, a plan, a signature, a transaction hash, a database row or an
+    AI assistant's assertion is not settlement.
+  verify_via: https://api.agentbounties.app/v1/base/autonomous-bounties/events
+  on_reject: >
+    Read the verifier output, fix the specific failing criterion, and resubmit
+    within the claim window. Do not resubmit unchanged work.
