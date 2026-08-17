@@ -29,6 +29,8 @@ class PromotionTests(unittest.TestCase):
             "plonk_adapter": {"address": address("7"), "runtime_code_hash": digest("b")},
             "source_commit": "c" * 40,
             "sp1": {
+                "circuit_commit": "d" * 40,
+                "runtime_commit": "e" * 40,
                 "patched_source_commit": "d" * 40,
                 "circuit_version": "safe",
                 "host_rust_version": "1.96.1",

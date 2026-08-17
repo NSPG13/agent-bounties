@@ -102,6 +102,21 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertEqual(MODULE.ELF_HASH, identity["elf_keccak256"])
         self.assertEqual(MODULE.ELF_SHA256, identity["elf_sha256"])
 
+    def test_metric_guest_and_host_builds_remain_separate(self) -> None:
+        helper = (MODULE.ROOT / "scripts/build_open_competition_v2_metric_elf.sh").read_text(
+            encoding="utf-8"
+        )
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cargo prove build --locked", helper)
+        self.assertIn("--remap-path-prefix=$repository=/agent-bounties", helper)
+        self.assertIn('"$strip" --strip-all "$elf"', helper)
+        self.assertIn("build_open_competition_v2_metric_elf.sh", workflow)
+        self.assertIn("OPEN_COMPETITION_V2_METRIC_ELF", workflow)
+        self.assertIn("SP1_SAFE_CIRCUIT_COMMIT", workflow)
+        self.assertIn("SP1_SAFE_RUNTIME_COMMIT", workflow)
+
     def test_current_manifest_fails_closed(self) -> None:
         gates = MODULE.load_gates(
             MODULE.ROOT / "deployments/open-competition-v2-beta3-release-gates.json"

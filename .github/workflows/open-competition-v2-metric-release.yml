@@ -12,6 +12,7 @@ on:
       - "programs/public-vector-metric-v1/**"
       - "programs/structured-artifact-metric-v1/**"
       - "scripts/verify-open-competition-v2-metric-release.py"
+      - "scripts/build_open_competition_v2_metric_elf.sh"
       - "scripts/verify_sp1_patched_graph.py"
 
 permissions:
@@ -54,6 +55,10 @@ jobs:
           python ../../scripts/verify_sp1_patched_graph.py
           {
             cargo prove --version
+            elf_dir="$GITHUB_WORKSPACE/target/metric-elf-${{ matrix.profile }}-${{ matrix.builder }}"
+            bash "$GITHUB_WORKSPACE/scripts/build_open_competition_v2_metric_elf.sh" \
+              "${{ matrix.profile }}" "$elf_dir"
+            export OPEN_COMPETITION_V2_METRIC_ELF="$elf_dir/${{ matrix.profile }}-program"
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"

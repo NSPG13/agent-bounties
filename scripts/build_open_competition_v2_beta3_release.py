@@ -61,6 +61,7 @@ METRIC_PROFILES = (
 PROOF_SYSTEM_GROTH16 = keccak256(b"sp1-groth16")
 PROOF_SYSTEM_PLONK = keccak256(b"sp1-plonk")
 SP1_COMMIT = METRIC_IDENTITY["sp1_commit"]
+SP1_RUNTIME_COMMIT = METRIC_IDENTITY["sp1_runtime_commit"]
 SP1_VERSION = METRIC_IDENTITY["sp1_version"]
 HOST_RUST_VERSION = METRIC_IDENTITY["rust_version"]
 SP1_GUEST_RUST_VERSION = METRIC_IDENTITY["sp1_guest_rust_version"]
@@ -635,6 +636,8 @@ def build_bundle(
         "sp1": {
             "version": SP1_VERSION,
             "commit": SP1_COMMIT,
+            "circuit_commit": SP1_COMMIT,
+            "runtime_commit": SP1_RUNTIME_COMMIT,
             "host_rust_version": HOST_RUST_VERSION,
             "guest_rust_version": SP1_GUEST_RUST_VERSION,
             "patched_source_commit": verifier_assets["sp1_source_commit"],
@@ -765,6 +768,7 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
         "source_commit": bundle["source_commit"],
         "repository_subject_hash": bundle["repository_subject"]["hash"],
         "sp1_source_commit": bundle["sp1"]["patched_source_commit"],
+        "sp1_runtime_commit": bundle["sp1"]["runtime_commit"],
         "sp1_circuit_version": bundle["sp1"]["circuit_version"],
         "sp1_host_rust_version": bundle["sp1"]["host_rust_version"],
         "sp1_guest_rust_version": bundle["sp1"]["guest_rust_version"],

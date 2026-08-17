@@ -24,6 +24,7 @@ JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
 EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (f6a2dff "
 EXPECTED_SP1_COMMIT = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d"
+EXPECTED_SP1_RUNTIME_COMMIT = "1381a5649685324e87ba14630936e6e25f9f2cb1"
 DEFAULT_IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
 DEFAULT_PROFILE_ID = "public-vector-metric-v1"
 DEFAULT_JOURNAL_SCHEMA_HASH = "0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4"
@@ -121,6 +122,10 @@ def main() -> int:
     source_hash_hex = canonical_source_hash(args.root, source_files)
     source_hash = bytes32(source_hash_hex, "source_hash")
     identity = json.loads((args.root / args.identity_path).read_text(encoding="utf-8"))
+    if identity.get("sp1_commit") != EXPECTED_SP1_COMMIT:
+        raise ValueError("metric identity does not pin the reviewed SP1 circuit commit")
+    if identity.get("sp1_runtime_commit") != EXPECTED_SP1_RUNTIME_COMMIT:
+        raise ValueError("metric identity does not pin the corrected SP1 runtime commit")
     expected_identity = {
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
@@ -149,6 +154,7 @@ def main() -> int:
         "profile_id": args.profile_id,
         "sp1_release_line": "6.4.0-agent-bounties-sp1-safe-v5",
         "sp1_commit": EXPECTED_SP1_COMMIT,
+        "sp1_runtime_commit": EXPECTED_SP1_RUNTIME_COMMIT,
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
         "elf_hash": first["elf_keccak256"],
