@@ -1,3 +1,5 @@
 *.sh text eol=lf
 *.sol text eol=lf
+*.patch text eol=lf
+*.go.txt text eol=lf
 benchmarks/** text eol=lf
