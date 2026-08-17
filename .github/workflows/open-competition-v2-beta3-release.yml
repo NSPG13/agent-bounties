@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/actions/setup-patched-sp1/**"
       - ".github/actions/setup-protoc/**"
+      - ".github/actions/setup-rust/**"
       - ".github/workflows/open-competition-v2-beta3-release.yml"
       - "contracts/base-escrow/src/ISP1Verifier.sol"
       - "contracts/base-escrow/src/OpenCompetitionBountyV2Beta3.sol"
@@ -164,7 +165,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
       - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
@@ -282,7 +285,9 @@ jobs:
         profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
       - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
@@ -365,7 +370,9 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
       - uses: ./.github/actions/setup-protoc
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:

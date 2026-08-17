@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/actions/setup-patched-sp1/**"
       - ".github/actions/setup-protoc/**"
+      - ".github/actions/setup-rust/**"
       - ".github/workflows/open-competition-v2-metric-release.yml"
       - "crates/competition-metric-core/**"
       - "programs/public-vector-metric-v1/**"
@@ -31,7 +32,9 @@ jobs:
         profile: [public-vector-metric-v1, structured-artifact-metric-v1]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
       - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
