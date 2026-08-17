@@ -43,6 +43,8 @@ jobs:
           path: .sp1-safe
       - name: Install the patched source-pinned SP1 toolchain
         uses: ./.github/actions/setup-patched-sp1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Build and execute metric guest
         working-directory: programs/${{ matrix.profile }}
         env:
