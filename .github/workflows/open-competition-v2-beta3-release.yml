@@ -163,10 +163,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+      - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
@@ -284,10 +281,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+      - uses: ./.github/actions/setup-protoc
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           repository: NSPG13/sp1
@@ -378,10 +372,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+      - uses: ./.github/actions/setup-protoc
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"

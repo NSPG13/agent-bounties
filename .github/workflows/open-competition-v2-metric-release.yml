@@ -31,10 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: dtolnay/rust-toolchain@858a1ecb106d4516018578006590eb829de1f08e
-      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b
-        with:
-          version: "28.3"
-          repo-token: ${{ github.token }}
+      - uses: ./.github/actions/setup-protoc
       - name: Install the patched source-pinned SP1 toolchain
         shell: bash
         run: |
