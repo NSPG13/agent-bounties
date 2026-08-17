@@ -1,5 +1,5 @@
 name: Setup patched SP1
-description: Install the source-pinned safe-v5 SP1 toolchain without the mutable bootstrap URL.
+description: Install the hash-pinned guest Rust toolchain and source-pinned safe-v5 cargo-prove.
 inputs:
   source-dir:
     description: Checked-out safe-v5 SP1 source directory.
@@ -12,25 +12,36 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install source-pinned SP1 toolchain
+    - name: Install hash-pinned SP1 toolchain
       shell: bash
       run: |
         set -euo pipefail
         source_dir="${{ inputs.source-dir }}"
         expected_commit="${{ inputs.source-commit }}"
+        toolchain_tag="open-competition-v2-beta3-toolchain-v1"
+        toolchain_target="x86_64-unknown-linux-gnu"
+        toolchain_asset="rust-toolchain-succinct-1.94.0-64bit-${toolchain_target}.tar.gz"
+        toolchain_sha256="12c94435d41bfe4e20131bbcce40b35abd32270ad792befc653af4e3fabc192f"
+        toolchain_url="https://github.com/NSPG13/agent-bounties/releases/download/${toolchain_tag}/${toolchain_asset}"
+        toolchain_root="$HOME/.sp1/toolchains/succinct-1.94.0-64bit-${toolchain_target}"
+
         test "$(git -C "$source_dir" rev-parse HEAD)" = "$expected_commit"
         mkdir -p "$HOME/.sp1/bin"
-        install -m 0755 "$source_dir/sp1up/sp1up" "$HOME/.sp1/bin/sp1up"
+        archive="$(mktemp)"
+        trap 'rm -f "$archive"' EXIT
+        curl --fail --location --retry 5 --retry-all-errors \
+          --output "$archive" "$toolchain_url"
+        echo "${toolchain_sha256}  ${archive}" | sha256sum --check --strict
 
-        installed=false
-        for attempt in 1 2 3 4 5; do
-          if "$HOME/.sp1/bin/sp1up" -v 6.4.0; then
-            installed=true
-            break
-          fi
-          sleep "$((attempt * 15))"
-        done
-        test "$installed" = true
+        rustup toolchain remove succinct >/dev/null 2>&1 || true
+        rm -rf "$toolchain_root"
+        mkdir -p "$toolchain_root"
+        tar -xzf "$archive" -C "$toolchain_root"
+        find "$toolchain_root/bin" \
+          "$toolchain_root/lib/rustlib/${toolchain_target}/bin" \
+          -maxdepth 1 -type f -exec chmod 0755 {} +
+        rustup toolchain link succinct "$toolchain_root"
+        rustc +succinct --version --verbose | grep -F 'rustc 1.94.0-dev'
 
         cargo install --locked --force --root "$HOME/.sp1" \
           --path "$source_dir/crates/cli"

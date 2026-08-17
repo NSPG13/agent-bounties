@@ -296,8 +296,6 @@ jobs:
           path: .sp1-safe
       - name: Install patched cargo-prove
         uses: ./.github/actions/setup-patched-sp1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
       - name: Reproduce the metric release
         working-directory: programs/${{ matrix.profile }}
         env:
@@ -385,8 +383,6 @@ jobs:
           ref: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
           path: .sp1-safe
       - uses: ./.github/actions/setup-patched-sp1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: open-competition-v2-beta3-static-analysis-${{ github.sha }}
