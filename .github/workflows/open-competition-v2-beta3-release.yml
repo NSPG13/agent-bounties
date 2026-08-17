@@ -3,6 +3,8 @@ name: Open Competition V2 Beta3 release
 on:
   pull_request:
     paths:
+      - ".github/actions/setup-patched-sp1/**"
+      - ".github/actions/setup-protoc/**"
       - ".github/workflows/open-competition-v2-beta3-release.yml"
       - "contracts/base-escrow/src/ISP1Verifier.sol"
       - "contracts/base-escrow/src/OpenCompetitionBountyV2Beta3.sol"
@@ -288,15 +290,7 @@ jobs:
           ref: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
           path: .sp1-safe
       - name: Install patched cargo-prove
-        run: |
-          set -euo pipefail
-          curl -fsSL https://sp1.succinct.xyz -o /tmp/sp1up-install.sh
-          echo '5f2b976287501d3f5feb62a2a96bbdfd1f5232c9badaf7547ed837c0366f3a7b  /tmp/sp1up-install.sh' | sha256sum -c -
-          bash /tmp/sp1up-install.sh
-          "$HOME/.sp1/bin/sp1up" -v 6.4.0
-          cargo install --locked --force --root "$HOME/.sp1" --path .sp1-safe/crates/cli
-          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
-          "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'f6a2dff'
+        uses: ./.github/actions/setup-patched-sp1
       - name: Reproduce the metric release
         working-directory: programs/${{ matrix.profile }}
         env:

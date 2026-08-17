@@ -1,0 +1,38 @@
+name: Setup patched SP1
+description: Install the source-pinned safe-v5 SP1 toolchain without the mutable bootstrap URL.
+inputs:
+  source-dir:
+    description: Checked-out safe-v5 SP1 source directory.
+    required: false
+    default: .sp1-safe
+  source-commit:
+    description: Exact safe-v5 SP1 source commit.
+    required: false
+    default: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+runs:
+  using: composite
+  steps:
+    - name: Install source-pinned SP1 toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_dir="${{ inputs.source-dir }}"
+        expected_commit="${{ inputs.source-commit }}"
+        test "$(git -C "$source_dir" rev-parse HEAD)" = "$expected_commit"
+        mkdir -p "$HOME/.sp1/bin"
+        install -m 0755 "$source_dir/sp1up/sp1up" "$HOME/.sp1/bin/sp1up"
+
+        installed=false
+        for attempt in 1 2 3 4 5; do
+          if "$HOME/.sp1/bin/sp1up" -v 6.4.0; then
+            installed=true
+            break
+          fi
+          sleep "$((attempt * 15))"
+        done
+        test "$installed" = true
+
+        cargo install --locked --force --root "$HOME/.sp1" \
+          --path "$source_dir/crates/cli"
+        echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+        "$HOME/.sp1/bin/cargo-prove" prove --version | grep -F 'f6a2dff'
