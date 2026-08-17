@@ -7,6 +7,7 @@ import unittest
 
 SCRIPT = Path(__file__).with_name("verify_open_competition_v2_groth16_ceremony.py")
 RUNNER = Path(__file__).with_name("run_open_competition_v2_groth16_ceremony.sh")
+CONTINUATION = Path(__file__).with_name("continue_open_competition_v2_groth16_phase2.sh")
 SPEC = importlib.util.spec_from_file_location("v2_groth16_ceremony", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -29,6 +30,31 @@ class Groth16CeremonyTests(unittest.TestCase):
     def test_container_outputs_use_the_host_runner_identity(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn('--user "$(id -u):$(id -g)"', source)
+
+    def test_phase2_retains_initialization_until_later_beacon(self) -> None:
+        for path in (RUNNER, CONTINUATION):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("container coordinate-phase2", source)
+                self.assertNotIn("container init-phase2", source)
+                self.assertNotIn("container finalize", source)
+                coordinate = source.index("container coordinate-phase2")
+                contribute = source.index("container contribute-phase2")
+                beacon = source.index('fetch_beacon "$output_dir/phase2-beacon.json"')
+                ready = source.index('touch "$output_dir/phase2-finalize.ready"')
+                wait = source.index('wait "$coordinator_pid"', ready)
+                self.assertLess(coordinate, contribute)
+                self.assertLess(contribute, beacon)
+                self.assertLess(beacon, ready)
+                self.assertLess(ready, wait)
+
+    def test_beacons_use_a_round_unavailable_after_the_contribution(self) -> None:
+        for path in (RUNNER, CONTINUATION):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("round_number + 1", source)
+                self.assertIn('https://api.drand.sh/public/$next_round', source)
+                self.assertIn('mv "$candidate" "$destination"', source)
 
     def test_inventory_rejects_ambiguous_or_invalid_entries(self) -> None:
         with self.assertRaisesRegex(ValueError, "ambiguous"):

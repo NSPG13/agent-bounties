@@ -2,26 +2,28 @@
 set -euo pipefail
 
 : "${OPEN_COMPETITION_V2_CEREMONY_IMAGE:?set the digest-pinned ceremony image}"
-command -v python3 >/dev/null 2>&1 || {
-  echo "python3 is required to run the ceremony" >&2
-  exit 127
-}
+: "${OPEN_COMPETITION_V2_R1CS_SHA256:?set the pinned R1CS hash}"
+: "${OPEN_COMPETITION_V2_PHASE1_1_SHA256:?set the pinned first contribution hash}"
+: "${OPEN_COMPETITION_V2_PHASE1_2_SHA256:?set the pinned second contribution hash}"
+: "${OPEN_COMPETITION_V2_PHASE1_COMMONS_SHA256:?set the pinned commons hash}"
+: "${OPEN_COMPETITION_V2_PHASE1_BEACON:?set the pinned Phase 1 beacon}"
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 OUTPUT_DIR R1CS SAFE_V5_REFERENCE_WRAPPER" >&2
+if [[ $# -ne 4 ]]; then
+  echo "usage: $0 OUTPUT_DIR R1CS SAFE_REFERENCE_WRAPPER REPOSITORY" >&2
   exit 2
 fi
-
-output_dir="$(mkdir -p "$1" && cd "$1" && pwd)"
+output_dir="$(cd "$1" && pwd)"
 r1cs="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 reference="$(cd "$(dirname "$3")" && pwd)/$(basename "$3")"
-test -f "$r1cs"
-test -f "$reference"
-if find "$output_dir" -mindepth 1 -print -quit | grep -q .; then
-  echo "ceremony output directory must be empty: $output_dir" >&2
-  exit 2
-fi
-cp --reflink=auto "$r1cs" "$output_dir/groth16_circuit.bin"
+repo="$(cd "$4" && pwd)"
+
+python3 "$repo/scripts/verify_open_competition_v2_groth16_phase1_checkpoint.py" \
+  --root "$output_dir" --r1cs "$r1cs" \
+  --r1cs-sha256 "$OPEN_COMPETITION_V2_R1CS_SHA256" \
+  --phase1-1-sha256 "$OPEN_COMPETITION_V2_PHASE1_1_SHA256" \
+  --phase1-2-sha256 "$OPEN_COMPETITION_V2_PHASE1_2_SHA256" \
+  --commons-sha256 "$OPEN_COMPETITION_V2_PHASE1_COMMONS_SHA256" \
+  --beacon "$OPEN_COMPETITION_V2_PHASE1_BEACON"
 
 container() {
   docker run --rm --network none --read-only \
@@ -30,7 +32,6 @@ container() {
     -v "$r1cs:/inputs/groth16_circuit.bin:ro" \
     "$OPEN_COMPETITION_V2_CEREMONY_IMAGE" "$@"
 }
-
 fetch_beacon() {
   local destination="$1"
   local baseline="$destination.baseline"
@@ -72,19 +73,13 @@ PY
   return 1
 }
 
-container init-phase1 --r1cs /inputs/groth16_circuit.bin --output /data/phase1-init.bin \
-  | tee "$output_dir/01-phase1-init.json"
-for id in 1 2; do
-  previous="phase1-init.bin"
-  if (( id > 1 )); then previous="phase1-$((id - 1)).bin"; fi
-  container contribute-phase1 --input "/data/$previous" --output "/data/phase1-$id.bin" \
-    --contribution-id "$id" | tee "$output_dir/0$((id + 1))-phase1-$id.json"
-done
-phase1_beacon="$(fetch_beacon "$output_dir/phase1-beacon.json")"
-container verify-phase1 --r1cs /inputs/groth16_circuit.bin \
-  --inputs /data/phase1-1.bin,/data/phase1-2.bin \
-  --beacon "$phase1_beacon" --output /data/phase1-commons.bin \
-  | tee "$output_dir/05-phase1-verify.json"
+rm -f "$output_dir"/phase2-*.bin "$output_dir"/0{6,7,8}-phase2-*.json \
+  "$output_dir/phase2-beacon.json" "$output_dir/10-finalize.json" \
+  "$output_dir/groth16_pk.bin" "$output_dir/groth16_vk.bin" \
+  "$output_dir/Groth16Verifier.sol" "$output_dir/SP1VerifierGroth16.sol" \
+  "$output_dir/transcript.json" "$output_dir/verification-evidence.json" \
+  "$output_dir/verifier-hash.txt" "$output_dir/phase2-finalize.ready" \
+  "$output_dir/complete"
 
 coordinator_pid=""
 stop_coordinator() {
@@ -111,10 +106,11 @@ while [[ ! -s "$output_dir/06-phase2-init.json" ]]; do
   sleep 5
 done
 for id in 1 2; do
-  previous="phase2-init.bin"
+  previous=phase2-init.bin
   if (( id > 1 )); then previous="phase2-$((id - 1)).bin"; fi
-  container contribute-phase2 --input "/data/$previous" --output "/data/phase2-$id.bin" \
-    --contribution-id "$id" | tee "$output_dir/0$((id + 6))-phase2-$id.json"
+  container contribute-phase2 --input "/data/$previous" \
+    --output "/data/phase2-$id.bin" --contribution-id "$id" \
+    | tee "$output_dir/0$((id + 6))-phase2-$id.json"
 done
 fetch_beacon "$output_dir/phase2-beacon.json" >/dev/null
 touch "$output_dir/phase2-finalize.ready"
@@ -122,6 +118,7 @@ wait "$coordinator_pid"
 coordinator_pid=""
 trap - EXIT
 
+cd "$repo"
 python3 scripts/rebind_open_competition_v2_sp1_wrapper.py \
   --reference "$reference" --verifying-key "$output_dir/groth16_vk.bin" \
   --proof-system groth16 --output "$output_dir/SP1VerifierGroth16.sol" \
@@ -129,9 +126,7 @@ python3 scripts/rebind_open_competition_v2_sp1_wrapper.py \
 python3 - "$output_dir" "$r1cs" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-records = []
-for path in sorted(root.glob("[0-9][0-9]-*.json")):
-    records.append(json.loads(path.read_text(encoding="utf-8")))
+records = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(root.glob("[0-9][0-9]-*.json"))]
 value = {
     "schema_version": "agent-bounties/open-competition-v2-beta3-groth16-mpc-transcript-v1",
     "r1cs": pathlib.Path(sys.argv[2]).name,
@@ -145,4 +140,6 @@ python3 scripts/verify_open_competition_v2_groth16_ceremony.py \
   --root "$output_dir" --r1cs "$r1cs" \
   --ceremony-uri https://github.com/NSPG13/agent-bounties/issues/888 \
   --output "$output_dir/verification-evidence.json"
+find "$output_dir" -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+  | sort -z | xargs -0 sha256sum > "$output_dir/SHA256SUMS"
 touch "$output_dir/complete"

@@ -15,7 +15,11 @@ COMMAND_SCHEMA = "agent-bounties/open-competition-v2-beta3-groth16-mpc-command-v
 TRANSCRIPT_SCHEMA = "agent-bounties/open-competition-v2-beta3-groth16-mpc-transcript-v1"
 EVIDENCE_SCHEMA = "agent-bounties/open-competition-v2-beta3-setup-verification-evidence-v1"
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def inventory(record: dict[str, Any], field: str) -> dict[str, str]:

@@ -10,6 +10,12 @@ contribution, use a public 32-byte-or-longer beacon that did not exist when the
 last contributor ran. `verify-phase1` and `finalize` verify the complete chains
 before producing the final PK, VK, and Solidity verifier.
 
+The release runner uses `coordinate-phase2` to retain the exact initialization
+evaluations while two separate networkless contributor containers update the
+transcript. It waits for a durable ready marker created only after the second
+contribution and the next numbered drand round, verifies the same ordered chain
+as `finalize`, and seals the key without recomputing initialization.
+
 Never use `groth16.Setup` output as a mainnet release key. Never reuse a
 contributor environment or claim independent participation when one operator
 controlled every entropy source.

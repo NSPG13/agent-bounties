@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
@@ -31,6 +34,47 @@ func TestParseBeaconRequiresCanonicalPublicEntropy(t *testing.T) {
 		if _, _, err := parseBeacon(invalid); err == nil {
 			t.Fatalf("invalid beacon accepted: %q", invalid)
 		}
+	}
+}
+
+func TestDrandBeaconRequiresPositiveRoundAndCanonicalRandomness(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "beacon.json")
+	value := map[string]any{
+		"round": 10, "randomness": string(bytes.Repeat([]byte{'a'}, 64)),
+		"signature": "permitted drand metadata",
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beacon, canonical, err := readDrandBeacon(path)
+	if err != nil || len(beacon) != 32 || canonical != "0x"+value["randomness"].(string) {
+		t.Fatalf("valid drand beacon rejected: %v", err)
+	}
+	value["round"] = 0
+	encoded, _ = json.Marshal(value)
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readDrandBeacon(path); err == nil {
+		t.Fatal("zero drand round accepted")
+	}
+}
+
+func TestWaitForFileIsBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ready")
+	if err := os.WriteFile(path, []byte("ready"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForFile(path, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForFile(filepath.Join(t.TempDir(), "missing"), time.Millisecond); err == nil {
+		t.Fatal("missing ready file did not time out")
 	}
 }
 
@@ -122,18 +166,54 @@ func TestMpcRoundTripAndSp1DumpEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	phase2 := new(mpc.Phase2)
-	phase2.Initialize(typed, &commons)
+	evaluations := phase2.Initialize(typed, &commons)
+	initial2 := new(mpc.Phase2)
+	snapshot(phase2, initial2)
 	phase2.Contribute()
 	first2 := new(mpc.Phase2)
 	snapshot(phase2, first2)
 	phase2.Contribute()
 	second2 := new(mpc.Phase2)
 	snapshot(phase2, second2)
-	pk, vk, err := mpc.VerifyPhase2(
-		typed, &commons, []byte("post-phase2-beacon"), first2, second2,
+	canonicalFirst := new(mpc.Phase2)
+	canonicalSecond := new(mpc.Phase2)
+	snapshot(first2, canonicalFirst)
+	snapshot(second2, canonicalSecond)
+	retainedFirst := new(mpc.Phase2)
+	retainedSecond := new(mpc.Phase2)
+	snapshot(first2, retainedFirst)
+	snapshot(second2, retainedSecond)
+	canonicalPK, canonicalVK, err := mpc.VerifyPhase2(
+		typed, &commons, []byte("post-phase2-beacon"), canonicalFirst, canonicalSecond,
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	pk, vk, err := sealPhase2(
+		&commons, &evaluations, initial2, []byte("post-phase2-beacon"), retainedFirst, retainedSecond,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPKDump := new(bytes.Buffer)
+	retainedPKDump := new(bytes.Buffer)
+	if err := canonicalPK.WriteDump(canonicalPKDump); err != nil {
+		t.Fatal(err)
+	}
+	if err := pk.WriteDump(retainedPKDump); err != nil {
+		t.Fatal(err)
+	}
+	canonicalVKBytes := new(bytes.Buffer)
+	retainedVKBytes := new(bytes.Buffer)
+	if _, err := canonicalVK.WriteTo(canonicalVKBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vk.WriteTo(retainedVKBytes); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(canonicalPKDump.Bytes(), retainedPKDump.Bytes()) ||
+		!bytes.Equal(canonicalVKBytes.Bytes(), retainedVKBytes.Bytes()) {
+		t.Fatal("retained Phase 2 evaluations changed canonical setup output")
 	}
 	dump := new(bytes.Buffer)
 	if err := pk.WriteDump(dump); err != nil {

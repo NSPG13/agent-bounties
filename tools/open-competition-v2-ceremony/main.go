@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
@@ -42,7 +43,7 @@ type digest struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fail(errors.New("usage: ceremony <init-phase1|contribute-phase1|verify-phase1|init-phase2|contribute-phase2|finalize> ..."))
+		fail(errors.New("usage: ceremony <init-phase1|contribute-phase1|verify-phase1|init-phase2|contribute-phase2|coordinate-phase2|finalize> ..."))
 	}
 	command := os.Args[1]
 	var result record
@@ -58,6 +59,8 @@ func main() {
 		result, err = initPhase2(os.Args[2:])
 	case "contribute-phase2":
 		result, err = contributePhase2(os.Args[2:])
+	case "coordinate-phase2":
+		result, err = coordinatePhase2(os.Args[2:])
 	case "finalize":
 		result, err = finalize(os.Args[2:])
 	default:
@@ -71,6 +74,148 @@ func main() {
 		fail(err)
 	}
 	fmt.Println(string(encoded))
+}
+
+func coordinatePhase2(args []string) (record, error) {
+	flags := flag.NewFlagSet("coordinate-phase2", flag.ContinueOnError)
+	r1csPath := flags.String("r1cs", "", "exact Groth16 circuit")
+	commonsPath := flags.String("commons", "", "verified Phase 1 commons")
+	initialPath := flags.String("initial", "", "initial Phase 2 transcript")
+	initialRecordPath := flags.String("initial-record", "", "initial Phase 2 JSON record")
+	inputs := flags.String("inputs", "", "ordered comma-separated Phase 2 contributions")
+	beaconPath := flags.String("beacon-file", "", "post-contribution drand JSON")
+	readyPath := flags.String("ready-file", "", "file created only after contributions and beacon are durable")
+	pkPath := flags.String("pk", "", "output proving key")
+	vkPath := flags.String("vk", "", "output verifying key")
+	solidityPath := flags.String("solidity", "", "output Solidity verifier")
+	timeout := flags.Duration("timeout", 48*time.Hour, "maximum wait for contributions and beacon")
+	if err := flags.Parse(args); err != nil {
+		return record{}, err
+	}
+	if *timeout <= 0 || *timeout > 7*24*time.Hour {
+		return record{}, errors.New("timeout must be positive and no greater than seven days")
+	}
+	paths, err := splitPaths(*inputs)
+	if err != nil {
+		return record{}, err
+	}
+	if len(paths) != 2 {
+		return record{}, errors.New("coordinate-phase2 requires exactly two ordered contributions")
+	}
+	if *readyPath == "" || *beaconPath == "" || *initialRecordPath == "" {
+		return record{}, errors.New("ready-file, beacon-file, and initial-record are required")
+	}
+	r1cs, err := readR1CS(*r1csPath)
+	if err != nil {
+		return record{}, err
+	}
+	commons := new(mpc.SrsCommons)
+	if err := readFrom(*commonsPath, commons); err != nil {
+		return record{}, err
+	}
+	initial := new(mpc.Phase2)
+	evaluations := initial.Initialize(r1cs, commons)
+	if err := writeToExclusive(*initialPath, initial); err != nil {
+		return record{}, err
+	}
+	initialRecord, err := makeRecord(
+		"init-phase2", []string{*r1csPath, *commonsPath}, []string{*initialPath}, 0, 0, "",
+	)
+	if err != nil {
+		return record{}, err
+	}
+	if err := writeJSONExclusive(*initialRecordPath, initialRecord); err != nil {
+		return record{}, err
+	}
+	if err := waitForFile(*readyPath, *timeout); err != nil {
+		return record{}, err
+	}
+	phases := make([]*mpc.Phase2, len(paths))
+	for index, path := range paths {
+		phases[index] = new(mpc.Phase2)
+		if err := readFrom(path, phases[index]); err != nil {
+			return record{}, err
+		}
+	}
+	beaconBytes, canonicalBeacon, err := readDrandBeacon(*beaconPath)
+	if err != nil {
+		return record{}, err
+	}
+	pk, vk, err := sealPhase2(commons, &evaluations, initial, beaconBytes, phases...)
+	if err != nil {
+		return record{}, fmt.Errorf("Phase 2 verification failed: %w", err)
+	}
+	if err := writeDumpExclusive(*pkPath, pk); err != nil {
+		return record{}, err
+	}
+	if err := writeToExclusive(*vkPath, vk); err != nil {
+		return record{}, err
+	}
+	if err := writeSolidity(*solidityPath, vk); err != nil {
+		return record{}, err
+	}
+	return makeRecord(
+		"finalize",
+		append([]string{*r1csPath, *commonsPath}, paths...),
+		[]string{*pkPath, *vkPath, *solidityPath},
+		0,
+		0,
+		canonicalBeacon,
+	)
+}
+
+func sealPhase2(
+	commons *mpc.SrsCommons,
+	evaluations *mpc.Phase2Evaluations,
+	initial *mpc.Phase2,
+	beacon []byte,
+	phases ...*mpc.Phase2,
+) (groth16.ProvingKey, groth16.VerifyingKey, error) {
+	previous := initial
+	for _, phase := range phases {
+		if err := previous.Verify(phase); err != nil {
+			return nil, nil, err
+		}
+		previous = phase
+	}
+	pk, vk := previous.Seal(commons, evaluations, beacon)
+	return pk, vk, nil
+}
+
+func waitForFile(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if info, err := os.Stat(path); err == nil {
+			if !info.IsDir() {
+				return nil
+			}
+			return errors.New("ready-file is a directory")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		time.Sleep(time.Second)
+	}
+	return errors.New("timed out waiting for Phase 2 contributions and beacon")
+}
+
+func readDrandBeacon(path string) ([]byte, string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", err
+	}
+	defer file.Close()
+	var value struct {
+		Round      uint64 `json:"round"`
+		Randomness string `json:"randomness"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
+	if err := decoder.Decode(&value); err != nil {
+		return nil, "", fmt.Errorf("invalid drand beacon: %w", err)
+	}
+	if value.Round == 0 {
+		return nil, "", errors.New("drand beacon round must be positive")
+	}
+	return parseBeacon("0x" + value.Randomness)
 }
 
 func initPhase1(args []string) (record, error) {
@@ -365,6 +510,22 @@ func writeToExclusive(path string, value io.WriterTo) error {
 		return err
 	}
 	return writer.Flush()
+}
+
+func writeJSONExclusive(path string, value any) error {
+	if path == "" {
+		return errors.New("JSON output path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	return encoder.Encode(value)
 }
 
 type dumpWriter interface {
