@@ -18,7 +18,7 @@ rustflags="--remap-path-prefix=$repository=/agent-bounties,--remap-path-prefix=$
 
 (
   cd "$program"
-  cargo prove build --locked --rustflags "$rustflags" --output-directory "$output_directory"
+  cargo prove build --locked --rustflags="$rustflags" --output-directory "$output_directory"
 )
 
 elf="$output_directory/$profile-program"
