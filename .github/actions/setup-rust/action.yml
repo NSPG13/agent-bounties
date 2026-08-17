@@ -24,6 +24,11 @@ runs:
             component_args+=(--component "$component")
           fi
         done
+        if ! command -v rustup >/dev/null 2>&1; then
+          test -x "$HOME/.cargo/bin/rustup"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        fi
         export RUSTUP_PERMIT_COPY_RENAME=1
         rustup toolchain install "$toolchain" --profile minimal --no-self-update \
           "${component_args[@]}"
