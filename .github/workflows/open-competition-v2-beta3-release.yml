@@ -120,6 +120,7 @@ jobs:
             scripts.test_verify_open_competition_v2_fresh_agent_flow \
             scripts.test_verify_open_competition_v2_plonk_setup \
             scripts.test_verify_open_competition_v2_wrap_template \
+            scripts.test_normalize_sp1_verifier_vk_root \
             scripts.test_verify_sp1_patched_graph \
             scripts.test_seed_open_competition_v2_discovery \
             scripts.test_publish_open_competition_v2_seed_issues -v
@@ -432,6 +433,10 @@ jobs:
             test -f "$trusted_root/$system/verification-evidence.json"
             cp -a "$trusted_root/$system" ".sp1-safe/crates/prover/build/$system"
           done
+          python scripts/normalize_sp1_verifier_vk_root.py \
+            .sp1-safe/crates/prover/build/groth16/SP1VerifierGroth16.sol \
+            .sp1-safe/crates/prover/build/plonk/SP1VerifierPlonk.sol \
+            --output target/verifier-vk-root-normalization.json
           mkdir -p target/trusted-setup-evidence/groth16 target/trusted-setup-evidence/plonk
           cp "$trusted_root/trusted-setup.json" target/trusted-setup-evidence/
           for system in groth16 plonk; do
@@ -568,6 +573,7 @@ jobs:
             target/structured-artifact-prover-capabilities.json
             target/gnark-image.json
             target/gnark-cli.sha256
+            target/verifier-vk-root-normalization.json
             target/trusted-setup-evidence/**
           if-no-files-found: error
           retention-days: 90
