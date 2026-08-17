@@ -7,8 +7,8 @@
   "sp1_version": "6.4.0-agent-bounties-sp1-safe-v5",
   "sp1_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
   "sp1_runtime_commit": "1381a5649685324e87ba14630936e6e25f9f2cb1",
-  "program_vkey": "0x0039229c9f4af574d1ad506ba6afbaf6949215c206277eefd4a5dfcc72f35cab",
+  "program_vkey": "0x00fb6d8580d8a7b7c55a0e49c0a662cf04500300ccd7d852c737da81c246fcdf",
   "source_hash": "0xaeb170fc3da0f9fcc6b52927eb7e7dd7fdbef79c6332b893d10e23cb7a014cf5",
-  "elf_keccak256": "0xab48f99a095b23aa6784ba015354f083b30c18e7436027330256da0f4545fc9e",
-  "elf_sha256": "7e64528367e9c03f0171cb0eba344ec94cbaa16198d9c1fe322d94f0b68294f5"
+  "elf_keccak256": "0x3bf75d57b9e43244b6a4929b8f7aec058bb8f09c725b908a3645c23f6d203fc8",
+  "elf_sha256": "4818ee877bf9c2a8ad9ea17d47ea137ff8cbd5907f744690aecacbb55f402595"
 }
