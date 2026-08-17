@@ -4,12 +4,12 @@ use competition_metric_core::{
 };
 use sha2::{Digest, Sha256};
 use sp1_sdk::{
-    include_elf, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1Stdin,
+    Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1Stdin,
 };
 use std::{env, fs, path::PathBuf};
 use tiny_keccak::{Hasher, Keccak};
 
-const ELF: Elf = include_elf!("structured-artifact-metric-v1-program");
+const ELF: Elf = Elf::Static(include_bytes!(env!("OPEN_COMPETITION_V2_METRIC_ELF")));
 
 #[tokio::main]
 async fn main() {
@@ -30,6 +30,8 @@ async fn main() {
                 "profile_id": "structured-artifact-metric-v1",
                 "sp1_version": "6.4.0-agent-bounties-sp1-safe-v5",
                 "sp1_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
+                "sp1_circuit_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
+                "sp1_runtime_commit": "1381a5649685324e87ba14630936e6e25f9f2cb1",
                 "gpu_proving_enabled": false,
                 "backends": backends,
                 "proof_systems": ["groth16", "plonk"]

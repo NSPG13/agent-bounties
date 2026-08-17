@@ -69,7 +69,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SP1_SAFE_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_SAFE_RUNTIME_COMMIT: 1381a5649685324e87ba14630936e6e25f9f2cb1
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
   SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
@@ -178,7 +179,7 @@ jobs:
       - name: Verify patched native and recursion transcript paths
         run: |
           set -euo pipefail
-          test "$(git -C .sp1-safe rev-parse HEAD)" = "$SP1_SAFE_COMMIT"
+          test "$(git -C .sp1-safe rev-parse HEAD)" = "$SP1_SAFE_CIRCUIT_COMMIT"
           test "$(cat .sp1-safe/SP1_CIRCUIT_VERSION)" = "$SP1_SAFE_CIRCUIT_VERSION"
           python scripts/verify_sp1_patched_graph.py | tee sp1-patched-graph.json
           python scripts/verify_open_competition_v2_wrap_template.py .sp1-safe \
@@ -307,6 +308,10 @@ jobs:
           test "$(rustc --version | awk '{print $2}')" = "$expected_rust"
           {
             cargo prove --version
+            elf_dir="$GITHUB_WORKSPACE/target/metric-elf-${{ matrix.profile }}-${{ matrix.builder }}"
+            bash "$GITHUB_WORKSPACE/scripts/build_open_competition_v2_metric_elf.sh" \
+              "${{ matrix.profile }}" "$elf_dir"
+            export OPEN_COMPETITION_V2_METRIC_ELF="$elf_dir/${{ matrix.profile }}-program"
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
@@ -410,11 +415,11 @@ jobs:
           rm -rf .sp1-safe/crates/prover/build
           DOCKER_BUILDKIT=1 docker build --pull=false \
             --file - \
-            --build-arg SP1_SOURCE_COMMIT="$SP1_SAFE_COMMIT" \
+            --build-arg SP1_SOURCE_COMMIT="$SP1_SAFE_CIRCUIT_COMMIT" \
             --build-arg SP1_CIRCUIT_VERSION="$SP1_SAFE_CIRCUIT_VERSION" \
             --tag "$SP1_GNARK_IMAGE" .sp1-safe \
             < ops/open-competition-v2-gnark-safe.Dockerfile
-          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_COMMIT"
+          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_CIRCUIT_COMMIT"
           test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "app.agent-bounties.circuit-version" }}')" = "$SP1_SAFE_CIRCUIT_VERSION"
           docker image inspect "$SP1_GNARK_IMAGE" > target/gnark-image.json
           docker run --rm --entrypoint sha256sum "$SP1_GNARK_IMAGE" /gnark-cli \
@@ -456,17 +461,23 @@ jobs:
             forge build --root "$root" --force
           done
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-public-vector"
+          bash scripts/build_open_competition_v2_metric_elf.sh public-vector-metric-v1 \
+            "$GITHUB_WORKSPACE/target/metric-elf-public-vector"
+          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-public-vector/public-vector-metric-v1-program"
           cargo build --locked --release --manifest-path programs/public-vector-metric-v1/Cargo.toml \
             -p public-vector-metric-v1-script
           install -m 0755 "$CARGO_TARGET_DIR/release/public-vector-metric-v1-script" target/public-vector-metric-v1-script
           target/public-vector-metric-v1-script --capabilities | tee target/prover-capabilities.json
-          python -c 'import json; v=json.load(open("target/prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False'
+          python -c 'import json,os; v=json.load(open("target/prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-structured-artifact"
+          bash scripts/build_open_competition_v2_metric_elf.sh structured-artifact-metric-v1 \
+            "$GITHUB_WORKSPACE/target/metric-elf-structured-artifact"
+          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-structured-artifact/structured-artifact-metric-v1-program"
           cargo build --locked --release --manifest-path programs/structured-artifact-metric-v1/Cargo.toml \
             -p structured-artifact-metric-v1-script
           install -m 0755 "$CARGO_TARGET_DIR/release/structured-artifact-metric-v1-script" target/structured-artifact-metric-v1-script
           target/structured-artifact-metric-v1-script --capabilities | tee target/structured-artifact-prover-capabilities.json
-          python -c 'import json; v=json.load(open("target/structured-artifact-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False'
+          python -c 'import json,os; v=json.load(open("target/structured-artifact-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
       - name: Generate three real proofs and replay the exact mainnet release
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
@@ -482,7 +493,7 @@ jobs:
           plonk_source=.sp1-safe/crates/prover/build/plonk/SP1VerifierPlonk.sol
           GROTH_HASH="$(python -c 'import re,sys; print(re.search(r"return (0x[0-9a-f]{64});", open(sys.argv[1]).read()).group(1))' "$groth_source")"
           PLONK_HASH="$(python -c 'import re,sys; print(re.search(r"return (0x[0-9a-f]{64});", open(sys.argv[1]).read()).group(1))' "$plonk_source")"
-          common=(--sp1-source-commit "$SP1_SAFE_COMMIT" --groth16-artifact target/generated-verifier-groth16/out/SP1VerifierGroth16.sol/SP1Verifier.json --groth16-verifier-hash "$GROTH_HASH" --plonk-artifact target/generated-verifier-plonk/out/SP1VerifierPlonk.sol/SP1Verifier.json --plonk-verifier-hash "$PLONK_HASH")
+          common=(--sp1-source-commit "$SP1_SAFE_CIRCUIT_COMMIT" --groth16-artifact target/generated-verifier-groth16/out/SP1VerifierGroth16.sol/SP1Verifier.json --groth16-verifier-hash "$GROTH_HASH" --plonk-artifact target/generated-verifier-plonk/out/SP1VerifierPlonk.sol/SP1Verifier.json --plonk-verifier-hash "$PLONK_HASH")
           setup=(
             --trusted-setup-manifest "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
             --groth16-constraint-system .sp1-safe/crates/prover/build/groth16/groth16_circuit.bin
