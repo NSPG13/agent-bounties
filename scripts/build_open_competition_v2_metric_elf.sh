@@ -23,4 +23,10 @@ rustflags="--remap-path-prefix=$repository=/agent-bounties,--remap-path-prefix=$
 
 elf="$output_directory/$profile-program"
 test -s "$elf"
+toolchain="$(rustc +succinct --print sysroot)"
+host="$(rustc +succinct -vV | sed -n 's/^host: //p')"
+strip="$toolchain/lib/rustlib/$host/bin/llvm-strip"
+test -x "$strip"
+"$strip" --strip-all "$elf"
+test -s "$elf"
 printf '%s\n' "$elf"
