@@ -482,10 +482,13 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_ARCHIVE_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/public-vector-metric-v1-script
           SP1_PROVER: cpu
         run: |
           set -euo pipefail
+          test -n "$BASE_DEPLOYER_ADDRESS"
+          DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
           export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
           forge build --root contracts/base-escrow --force --ast
@@ -511,7 +514,7 @@ jobs:
             "${setup[@]}" \
             --allow-pending-proof-evidence --output target/verifier-assets.pending.json
           python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.pending.json --allow-pending-proof-evidence \
             --output target/mainnet.pending.json
           python scripts/run_open_competition_v2_mainnet_fork_replay.py --bundle target/mainnet.pending.json \
@@ -529,7 +532,7 @@ jobs:
             --plonk-proof-evidence-2 target/proofs/plonk_best_b.json \
             --output target/verifier-assets.json
           python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.json --output target/mainnet.json
           python scripts/run_open_competition_v2_mainnet_fork_replay.py --bundle target/mainnet.json \
             --rpc-url "$BASE_MAINNET_RPC_URL" --proof-rehearsal \
@@ -563,7 +566,7 @@ jobs:
           record_gate base_mainnet_fork_exact_replay_complete target/mainnet-fork-replay.json
           record_gate critical_and_high_findings_resolved target/prerequisites/patched-source/sp1-patched-graph.json
           python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.json --gates target/release-gates.json \
             --output target/mainnet.presepolia.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -18,7 +18,7 @@ from _shared.rpc import rpc
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
 OUT = CONTRACT_ROOT / "out"
-DEFAULT_DEPLOYER = "0x884834e884d6e93462655a2820140ad03e6747bc"
+DEFAULT_DEPLOYER = "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
 PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta3"
 VERIFIER_ASSETS_PATH = ROOT / "deployments/open-competition-v2-beta3-verifier-assets.json"
 SP1_SAFE_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"

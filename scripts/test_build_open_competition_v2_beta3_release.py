@@ -15,6 +15,32 @@ SPEC.loader.exec_module(MODULE)
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     subject_hash = "0x" + "33" * 32
 
+    def test_release_builder_defaults_to_the_isolated_deployer(self):
+        self.assertEqual(
+            MODULE.DEFAULT_DEPLOYER,
+            "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+        )
+
+    def test_proof_build_pins_every_bundle_to_the_configured_deployer(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        build = workflow.split("  build-release-assets:", 1)[1].split(
+            "  live-sepolia-rehearsal:", 1
+        )[0]
+        self.assertIn("BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}", build)
+        self.assertIn('test -n "$BASE_DEPLOYER_ADDRESS"', build)
+        self.assertEqual(
+            build.count(
+                'build_open_competition_v2_beta3_release.py --network base-mainnet'
+            ),
+            3,
+        )
+        self.assertEqual(
+            build.count('--deployer "$DEPLOYER" --source-commit "$GITHUB_SHA"'),
+            3,
+        )
+
     def test_mainnet_workflow_records_the_exact_x402_gate(self):
         workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
             encoding="utf-8"
