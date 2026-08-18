@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -116,6 +117,26 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertIn("OPEN_COMPETITION_V2_METRIC_ELF", workflow)
         self.assertIn("SP1_SAFE_CIRCUIT_COMMIT", workflow)
         self.assertIn("SP1_SAFE_RUNTIME_COMMIT", workflow)
+
+    def test_workflow_sp1_pins_match_metric_release_identities(self) -> None:
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
+            encoding="utf-8"
+        )
+        identities = [
+            json.loads((MODULE.ROOT / path).read_text(encoding="utf-8"))
+            for path in (
+                "programs/public-vector-metric-v1/release-identity.json",
+                "programs/structured-artifact-metric-v1/release-identity.json",
+            )
+        ]
+        circuit_commits = {identity["sp1_commit"] for identity in identities}
+        runtime_commits = {identity["sp1_runtime_commit"] for identity in identities}
+        self.assertEqual(len(circuit_commits), 1)
+        self.assertEqual(len(runtime_commits), 1)
+        circuit_commit = circuit_commits.pop()
+        runtime_commit = runtime_commits.pop()
+        self.assertIn(f"SP1_SAFE_CIRCUIT_COMMIT: {circuit_commit}", workflow)
+        self.assertIn(f"SP1_SAFE_RUNTIME_COMMIT: {runtime_commit}", workflow)
 
     def test_current_manifest_fails_closed(self) -> None:
         gates = MODULE.load_gates(
