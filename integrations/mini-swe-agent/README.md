@@ -37,6 +37,33 @@ python integrations/mini-swe-agent/select_bounty.py \
 Invocation is **direct argv** — no shell interpolation — so bounty-supplied strings
 can never be expanded by a shell.
 
+## Canonical gates — every unknown is a refusal
+
+Selection requires POSITIVE evidence on all of these. A missing field means "cannot
+verify", which becomes a skip or a refresh — never an implicit yes.
+
+| Gate | Requirement |
+|---|---|
+| canonical source | `network` is Base **and** `discovery_factors` assert `source_type=canonical_base` **and** a 42-char contract |
+| claimability | `work_state` in {open, claimable, ready, ready_to_earn} |
+| funding | `payment_state` escrowed, `payment_committed` true, `funded_amount >= funding_target` |
+| verifier | `verifier.ready` true, or a declared verification method **and** decision authority |
+| terms | `terms_hash`, or an explicit evidence boundary **and** evidence requirements |
+| units | amount + decimals + currency present; one shared currency; USDC only |
+| freshness | missing / unparseable / **future** coverage → `refresh` |
+
+Two ordering rules that are easy to get wrong:
+
+- **A future timestamp is not fresh.** Clamping it to "fresh" would let arbitrarily
+  stale data through, so it is treated as clock skew and forces a refresh.
+- **Expiry is evaluated before occupancy.** Checking `active_claimant` first leaves an
+  expired record permanently blocked; checking `claim_expires_at` first correctly
+  marks it reclaimable and prefixes `expireClaim()` to the next action.
+
+**Malformed money is never coerced to zero.** A reward of `{"amount": "lots"}` raises
+and becomes a `refresh`, because silently reading it as 0 is how dimensionally invalid
+economics get accepted.
+
 ## The five decisions
 
 | Inventory condition | `action` | Meaning |

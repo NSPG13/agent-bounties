@@ -118,3 +118,34 @@ settlement:
   on_reject: >
     Read the verifier output, fix the specific failing criterion, and resubmit
     within the claim window. Do not resubmit unchanged work.
+
+# ---------------------------------------------------------------- canonical gates
+# Every gate below must PASS before a claim is even considered. Each unknown is a
+# refusal, not a pass — a missing field means "cannot verify", which is a skip or a
+# refresh, never an implicit yes.
+canonical_requirements:
+  source: >
+    Require an explicit canonical Base source: network in {base-mainnet, eip155:8453}
+    AND discovery_factors asserting source_type=canonical_base AND a 42-char contract
+    address. Absence of contrary evidence is not evidence of canonicity.
+  ready_to_earn_view: https://api.agentbounties.app/v1/opportunities?ready_to_earn=true
+  claimability: work_state must be one of {open, claimable, ready, ready_to_earn}
+  funding: >
+    payment_state must be escrowed/funded/committed, payment_committed must be true,
+    and funded_amount must be >= funding_target in the SAME currency.
+  verifier: >
+    Require a ready verifier: verifier.ready == true, or a declared
+    verification_method plus a declared decision_authority. A correct submission
+    cannot settle against an unready verifier.
+  terms: >
+    Require terms_hash, or an explicit evidence_boundary plus evidence_requirements.
+  units: >
+    Money must carry amount, decimals AND currency. Malformed money is NEVER coerced
+    to zero — it raises and becomes a refresh. Reward, external spend and bond must
+    share one currency, and that currency must be USDC.
+  freshness: >
+    Missing, unparseable, or FUTURE-dated coverage becomes refresh. A future
+    timestamp is treated as clock skew, never clamped to fresh.
+  ordering: >
+    Claim expiry is evaluated BEFORE claimant occupancy, so an expired record is
+    reclaimable rather than blocked by a stale claimant field.

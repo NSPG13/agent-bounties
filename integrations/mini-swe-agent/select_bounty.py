@@ -6,104 +6,226 @@ Reads an inventory JSON file and emits a single JSON object on stdout carrying a
 
 Actions
 -------
-claim    one canonical, claimable, positive-margin bounty was selected
+claim    one canonical, claimable, funded, verifier-ready, positive-margin bounty
 wait     the inventory is empty; nothing to act on
-refresh  the inventory snapshot is stale and must be re-fetched before acting
-skip     candidates exist but none are actionable (no margin, or exclusively claimed)
+refresh  coverage is missing, stale, or dimensionally invalid — re-fetch before deciding
+skip     candidates exist but none are actionable
 
-WALLET SAFETY: this module never reads, stores, or transmits key material, and it
-never broadcasts a transaction. It emits an unsigned intent for an external,
-operator-controlled signer.
+FAIL-CLOSED DESIGN. Every unknown is a refusal, not a pass:
+  - missing / unparseable / FUTURE freshness    -> refresh (future clocks are NOT fresh)
+  - missing canonical Base source               -> skip
+  - work_state not canonically claimable        -> skip
+  - funding incomplete or payment not escrowed  -> skip
+  - verifier not ready                          -> skip
+  - terms absent or invalid                     -> skip
+  - money missing decimals/currency, or a unit
+    mismatch between reward and spend           -> refresh (never coerce to zero)
+  - claim expiry evaluated BEFORE occupancy, so
+    an expired record is reclaimable, not blocked
+
+WALLET SAFETY: never reads, stores, or transmits key material, and never
+broadcasts. It emits an unsigned intent for an external signer.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import sys
 import time
 from pathlib import Path
 
-# An inventory older than this is not trustworthy for a claim decision: another
-# solver may already hold an exclusive claim that the snapshot cannot show.
 DEFAULT_STALENESS_SECONDS = 900
+# A snapshot timestamped in the future means a broken clock somewhere; treating it
+# as "fresh" would let arbitrarily stale data through.
+MAX_FUTURE_SKEW_SECONDS = 60
 
 CODING_HINTS = (
     "code", "coding", "api", "cli", "mcp", "sdk", "integration", "environment",
     "checker", "failover", "harness", "benchmark", "agent", "tooling", "fix",
-    "implement", "repair", "add", "deterministic", "software",
+    "implement", "repair", "add", "deterministic", "software", "test", "source",
 )
 
-LIVE_CLAIM_STATES = ("in_progress", "submitted", "claimed", "exclusive")
+CANONICAL_NETWORKS = ("base-mainnet", "eip155:8453", "base")
+CLAIMABLE_STATES = ("open", "claimable", "ready", "ready_to_earn")
+OCCUPIED_STATES = ("in_progress", "submitted", "claimed", "exclusive")
+ESCROWED_STATES = ("escrowed", "funded", "committed")
 
 
-def _units(obj):
-    """Decode a {amount, decimals} money object into a float. Missing -> 0.0."""
+class Invalid(Exception):
+    """Raised when a value cannot be trusted. Always becomes refresh/skip."""
+
+
+def money(obj, field):
+    """Strictly decode a {amount, decimals, currency} object.
+
+    Never silently yields 0 for malformed input — that is how dimensionally
+    invalid economics get accepted. Returns (value, currency, decimals).
+    """
+    if obj in (None, {}):
+        raise Invalid(f"{field} is absent")
     if not isinstance(obj, dict):
-        return 0.0
-    amount = obj.get("amount")
-    if amount in (None, ""):
-        return 0.0
+        raise Invalid(f"{field} is not an object")
+    if "amount" not in obj:
+        raise Invalid(f"{field} has no amount")
+    if "decimals" not in obj:
+        raise Invalid(f"{field} has no decimals (dimensionally invalid)")
     try:
-        decimals = int(obj.get("decimals", 6))
-        return int(amount) / (10 ** decimals)
-    except (TypeError, ValueError):
-        return 0.0
+        amount = int(str(obj["amount"]))
+        decimals = int(obj["decimals"])
+    except (TypeError, ValueError) as exc:
+        raise Invalid(f"{field} amount/decimals not integral: {exc}") from exc
+    if decimals < 0 or decimals > 36:
+        raise Invalid(f"{field} decimals out of range: {decimals}")
+    currency = str(obj.get("currency") or "").upper()
+    if not currency:
+        raise Invalid(f"{field} has no currency")
+    return amount / (10 ** decimals), currency, decimals
 
 
-def _snapshot_age(inv):
-    """Age of the snapshot in seconds, or None when no timestamp is present."""
-    ts = inv.get("generated_at") or inv.get("snapshot_at") or inv.get("as_of")
-    if isinstance(ts, (int, float)):
-        return max(0.0, time.time() - float(ts))
-    if isinstance(ts, str) and ts:
-        cleaned = ts.replace("Z", "+00:00")
+def snapshot_age(inv):
+    """Age in seconds. Raises Invalid when absent, unparseable, or in the future."""
+    for key in ("age_seconds", "snapshot_age_seconds"):
+        if key in inv:
+            value = inv[key]
+            if not isinstance(value, (int, float)):
+                raise Invalid(f"{key} is not numeric")
+            if value < -MAX_FUTURE_SKEW_SECONDS:
+                raise Invalid(f"{key} is negative ({value}s): clock skew")
+            return float(max(0.0, value))
+
+    stamp = inv.get("generated_at") or inv.get("snapshot_at") or inv.get("as_of")
+    if stamp in (None, ""):
+        raise Invalid("snapshot carries no freshness field")
+    if isinstance(stamp, (int, float)):
+        age = time.time() - float(stamp)
+    elif isinstance(stamp, str):
         try:
-            import datetime as _dt
+            parsed = _dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise Invalid(f"freshness not ISO-8601: {stamp!r}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+        age = time.time() - parsed.timestamp()
+    else:
+        raise Invalid("freshness field has an unsupported type")
 
-            parsed = _dt.datetime.fromisoformat(cleaned)
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=_dt.timezone.utc)
-            return max(0.0, time.time() - parsed.timestamp())
-        except ValueError:
-            return None
-    age = inv.get("age_seconds") or inv.get("snapshot_age_seconds")
-    if isinstance(age, (int, float)):
-        return float(age)
-    return None
+    # A FUTURE timestamp must not be clamped to "fresh".
+    if age < -MAX_FUTURE_SKEW_SECONDS:
+        raise Invalid(f"snapshot is timestamped {abs(age):.0f}s in the FUTURE")
+    return max(0.0, age)
 
 
-def _is_coding(item):
-    text = f"{item.get('title', '')} {item.get('goal', '')}".lower()
-    cats = " ".join(item.get("categories") or []).lower()
-    skills = " ".join(item.get("skills") or []).lower()
-    blob = f"{text} {cats} {skills}"
+def is_coding(item):
+    blob = " ".join([
+        str(item.get("title", "")), str(item.get("goal", "")),
+        " ".join(item.get("categories") or []), " ".join(item.get("skills") or []),
+    ]).lower()
     return any(hint in blob for hint in CODING_HINTS)
 
 
-def _exclusively_claimed(item):
-    """True when another solver holds a live exclusive claim we must not contest."""
-    if item.get("exclusive_claimant") or item.get("active_claimant"):
-        return True
-    if item.get("claim_expired") is True or item.get("reclaimable") is True:
-        return False
+def canonical_source(item):
+    """Require an explicit canonical Base source, not merely absence of evidence."""
+    network = str(item.get("network") or "").lower()
+    if network not in CANONICAL_NETWORKS:
+        return False, f"network is {network or 'absent'}, not canonical Base"
+    factors = [str(f).lower() for f in (item.get("discovery_factors") or [])]
+    if factors and not any("source_type=canonical_base" in f for f in factors):
+        return False, "discovery_factors do not assert source_type=canonical_base"
+    contract = item.get("source_id") or item.get("bounty_contract") or ""
+    if not (isinstance(contract, str) and contract.startswith("0x") and len(contract) == 42):
+        return False, "no canonical bounty contract address"
+    return True, contract
+
+
+def verifier_ready(item):
+    verifier = item.get("verifier")
+    if isinstance(verifier, dict):
+        if verifier.get("ready") is not True:
+            return False, f"verifier not ready ({verifier.get('reason') or 'unspecified'})"
+        return True, str(verifier.get("mode") or "")
+    mode = item.get("verification_method") or item.get("verification_mode")
+    if not mode:
+        return False, "no verification method declared"
+    if item.get("verifier_ready") is False:
+        return False, "verifier_ready is false"
+    if not str(item.get("decision_authority") or "").strip():
+        return False, "no decision authority declared"
+    return True, str(mode)
+
+
+def funding_ok(item):
+    if item.get("funding_complete") is False or item.get("funded") is False:
+        return False, "funding incomplete"
+    state = str(item.get("payment_state") or "").lower()
+    if state and state not in ESCROWED_STATES:
+        return False, f"payment_state is {state}, not escrowed"
+    if "payment_committed" in item and item["payment_committed"] is not True:
+        return False, "payment not committed"
+    if item.get("funded_amount") is not None and item.get("funding_target") is not None:
+        have, have_cur, _ = money(item["funded_amount"], "funded_amount")
+        want, want_cur, _ = money(item["funding_target"], "funding_target")
+        if have_cur != want_cur:
+            raise Invalid(f"funding currency mismatch: {have_cur} vs {want_cur}")
+        if have < want:
+            return False, f"underfunded: {have} of {want} {want_cur}"
+    funding = item.get("funding")
+    if isinstance(funding, dict) and funding.get("confirmed") and funding.get("required"):
+        have, hc, _ = money(funding["confirmed"], "funding.confirmed")
+        want, wc, _ = money(funding["required"], "funding.required")
+        if hc != wc:
+            raise Invalid(f"funding currency mismatch: {hc} vs {wc}")
+        if have < want:
+            return False, f"underfunded: {have} of {want} {wc}"
+    return True, ""
+
+
+def terms_valid(item):
+    terms = item.get("terms")
+    if isinstance(terms, dict):
+        if not str(terms.get("terms_hash") or "").startswith("0x"):
+            return False, "terms present but terms_hash is not a hash"
+        return True, ""
+    if not str(item.get("evidence_boundary") or "").strip():
+        return False, "no terms and no evidence boundary declared"
+    if not (item.get("evidence_requirements") or {}):
+        return False, "no evidence requirements declared"
+    return True, ""
+
+
+def claim_status(item):
+    """(occupied, reclaimable, note) — expiry is evaluated BEFORE occupancy."""
+    now = time.time()
     expires = item.get("claim_expires_at")
     if isinstance(expires, (int, float)) and expires > 0:
-        return expires > time.time()
-    mode = str(item.get("competition_mode") or "").lower()
+        if expires <= now:
+            return False, True, f"claim lapsed {int(now - expires)}s ago"
+        return True, False, f"claim live for {int(expires - now)}s"
+    if item.get("claim_expired") is True or item.get("reclaimable") is True:
+        return False, True, "record marks the claim expired"
+    if item.get("exclusive_claimant") or item.get("active_claimant"):
+        return True, False, "exclusive claimant present with no expiry data"
     state = str(item.get("work_state") or "").lower()
-    if state in LIVE_CLAIM_STATES and "exclusive" in mode:
-        return True
-    return state in LIVE_CLAIM_STATES
+    if state in OCCUPIED_STATES:
+        return True, False, f"work_state={state}"
+    return False, False, ""
 
 
-def _margin(item):
-    """Cash margin: explicit gross margin when present, else reward - external spend."""
+def margin_of(item):
     econ = item.get("cash_economics") or {}
-    if "gross_cash_margin" in econ:
-        return _units(econ.get("gross_cash_margin"))
-    reward = _units(item.get("reward") or econ.get("solver_reward"))
-    return reward - _units(econ.get("required_external_spend"))
+    if econ.get("gross_cash_margin") is not None:
+        value, currency, _ = money(econ["gross_cash_margin"], "gross_cash_margin")
+        return value, currency
+    reward_obj = item.get("reward") or econ.get("solver_reward")
+    reward, rcur, _ = money(reward_obj, "reward")
+    spend_obj = econ.get("required_external_spend")
+    if spend_obj in (None, {}):
+        return reward, rcur
+    spend, scur, _ = money(spend_obj, "required_external_spend")
+    if scur != rcur:
+        raise Invalid(f"unit mismatch: reward in {rcur}, external spend in {scur}")
+    return reward - spend, rcur
 
 
 def select(inv):
@@ -113,80 +235,144 @@ def select(inv):
         return {
             "action": "wait",
             "reason": "inventory contains no opportunities",
-            "next_action": (
-                "Re-poll https://api.agentbounties.app/v1/opportunities and wait for "
-                "newly funded canonical work before claiming."
-            ),
+            "next_action": ("Re-poll https://api.agentbounties.app/v1/opportunities?ready_to_earn=true "
+                            "and wait for newly funded canonical work before claiming."),
             "selected": None,
         }
 
-    age = _snapshot_age(inv)
-    max_age = float(inv.get("staleness_seconds") or DEFAULT_STALENESS_SECONDS)
-    if age is not None and age > max_age:
+    try:
+        age = snapshot_age(inv)
+    except Invalid as exc:
+        return {
+            "action": "refresh",
+            "reason": f"freshness coverage unusable: {exc}",
+            "next_action": ("Re-fetch https://api.agentbounties.app/v1/opportunities?ready_to_earn=true "
+                            "with a valid generated_at/age_seconds; failing closed because a snapshot "
+                            "of unknown age can hide a live exclusive claim."),
+            "selected": None,
+        }
+
+    max_age = inv.get("staleness_seconds") or DEFAULT_STALENESS_SECONDS
+    try:
+        max_age = float(max_age)
+    except (TypeError, ValueError):
+        max_age = float(DEFAULT_STALENESS_SECONDS)
+    if age > max_age:
         return {
             "action": "refresh",
             "reason": f"inventory snapshot is {int(age)}s old (limit {int(max_age)}s)",
-            "next_action": (
-                "Re-fetch https://api.agentbounties.app/v1/opportunities to obtain a "
-                "fresh snapshot; a stale inventory can hide a live exclusive claim."
-            ),
+            "next_action": ("Re-fetch the canonical ready-to-earn view to obtain a fresh snapshot; "
+                            "a stale inventory can hide a live exclusive claim."),
             "selected": None,
         }
 
-    candidates, skipped = [], []
+    candidates, skipped, invalid = [], [], []
+
     for item in items:
         title = item.get("title") or item.get("opportunity_id") or "(untitled)"
         state = str(item.get("work_state") or "").lower()
 
         if state in ("completed", "settled", "cancelled"):
-            skipped.append((title, "already completed"))
+            skipped.append((title, f"work_state={state}"))
             continue
-        if not _is_coding(item):
+        if not is_coding(item):
             skipped.append((title, "not coding work"))
             continue
-        if _exclusively_claimed(item):
-            skipped.append((title, "exclusive claimant active"))
+
+        ok, detail = canonical_source(item)
+        if not ok:
+            skipped.append((title, detail))
             continue
-        margin = _margin(item)
+        contract = detail
+
+        occupied, reclaimable, note = claim_status(item)
+        if occupied:
+            skipped.append((title, f"exclusive claimant active: {note}"))
+            continue
+        if not reclaimable and state and state not in CLAIMABLE_STATES:
+            skipped.append((title, f"work_state={state} is not canonically claimable"))
+            continue
+
+        try:
+            ok, detail = funding_ok(item)
+            if not ok:
+                skipped.append((title, detail))
+                continue
+            margin, currency = margin_of(item)
+            bond, bond_cur, _ = money(item.get("bond") or {"amount": "0", "decimals": 6, "currency": currency},
+                                      "bond")
+            if bond_cur != currency:
+                raise Invalid(f"bond in {bond_cur} but reward in {currency}")
+            if currency != "USDC":
+                raise Invalid(f"reward currency {currency} is not USDC")
+        except Invalid as exc:
+            invalid.append((title, str(exc)))
+            continue
+
+        ok, detail = verifier_ready(item)
+        if not ok:
+            skipped.append((title, detail))
+            continue
+
+        ok, detail = terms_valid(item)
+        if not ok:
+            skipped.append((title, detail))
+            continue
+
         if margin <= 0:
-            skipped.append((title, f"no positive margin ({margin:.2f})"))
+            skipped.append((title, f"no positive margin ({margin:.6f} {currency})"))
             continue
-        candidates.append((margin, item))
+
+        candidates.append((margin, bond, item, contract, reclaimable, note))
+
+    # A dimensionally invalid record is a data problem, not a business decision:
+    # refresh rather than quietly treating broken money as zero.
+    if invalid and not candidates:
+        detail = "; ".join(f"{t}: {r}" for t, r in invalid[:4])
+        return {
+            "action": "refresh",
+            "reason": f"dimensionally invalid economics: {detail}",
+            "next_action": ("Re-fetch the canonical ready-to-earn view; refusing to claim against "
+                            "records whose amounts, decimals, or currencies cannot be validated."),
+            "selected": None,
+            "invalid": [{"title": t, "reason": r} for t, r in invalid],
+        }
 
     if not candidates:
         detail = "; ".join(f"{t}: {r}" for t, r in skipped[:5]) or "no eligible items"
         return {
             "action": "skip",
             "reason": detail,
-            "next_action": (
-                "Skip this inventory: no canonical claimable coding bounty has positive "
-                "margin and a free claim slot. Re-poll after the next funding round."
-            ),
+            "next_action": ("Skip this inventory: no canonical, funded, verifier-ready coding bounty "
+                            "with positive margin and a free claim slot. Re-poll after the next "
+                            "funding round."),
             "selected": None,
             "skipped": [{"title": t, "reason": r} for t, r in skipped],
         }
 
-    # Highest margin first; lowest bond breaks ties (least capital at risk).
-    candidates.sort(key=lambda pair: (-pair[0], _units(pair[1].get("bond"))))
-    margin, best = candidates[0]
-    contract = best.get("source_id") or best.get("bounty_contract") or ""
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    margin, bond, best, contract, reclaimable, note = candidates[0]
 
+    prefix = ("POST https://api.agentbounties.app/v1/base/autonomous-bounties/expire-claim-plan then "
+              if reclaimable else "")
     return {
         "action": "claim",
-        "reason": f"highest positive margin ({margin:.2f} USDC) with no exclusive claimant",
+        "reason": (f"highest positive margin ({margin:.6f} USDC) on canonical funded work with a ready "
+                   f"verifier and no live claimant" + (f"; {note}" if note else "")),
         "next_action": (
-            "POST https://api.agentbounties.app/v1/base/autonomous-bounties/claim-plan "
-            f'with {{"network":"base-mainnet","bounty_contract":"{contract}",'
-            '"solver":"<PUBLIC_WALLET>"}, then approve the exact bond and call claim(). '
-            "Sign externally; never expose key material."
+            prefix
+            + "POST https://api.agentbounties.app/v1/base/autonomous-bounties/claim-plan with "
+            f'{{"network":"base-mainnet","bounty_contract":"{contract}","solver":"<PUBLIC_WALLET>"}}, '
+            "approve the exact bond, then call claim(). Sign externally; never expose key material."
         ),
         "selected": {
             "opportunity_id": best.get("opportunity_id"),
             "title": best.get("title"),
             "bounty_contract": contract,
-            "reward_usdc": round(_units(best.get("reward")), 6),
-            "bond_usdc": round(_units(best.get("bond")), 6),
+            "reward_usdc": round(margin, 6),
+            "bond_usdc": round(bond, 6),
             "margin_usdc": round(margin, 6),
+            "reclaimable": reclaimable,
         },
         "considered": len(items),
         "eligible": len(candidates),
@@ -200,17 +386,32 @@ def main(argv=None):
 
     path = Path(args.input)
     if not path.is_file():
-        print(json.dumps({"action": "refresh", "reason": f"missing inventory file: {path}",
-                          "next_action": "Fetch a fresh inventory snapshot before selecting.",
-                          "selected": None}))
+        print(json.dumps({
+            "action": "refresh",
+            "reason": f"missing inventory file: {path}",
+            "next_action": "Fetch a fresh canonical ready-to-earn snapshot before selecting.",
+            "selected": None,
+        }))
         return 0
 
     try:
         inv = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        print(json.dumps({"action": "refresh", "reason": f"invalid inventory JSON: {error}",
-                          "next_action": "Re-fetch the inventory; the snapshot is unparseable.",
-                          "selected": None}))
+    except json.JSONDecodeError as exc:
+        print(json.dumps({
+            "action": "refresh",
+            "reason": f"invalid inventory JSON: {exc}",
+            "next_action": "Re-fetch the inventory; the snapshot is unparseable.",
+            "selected": None,
+        }))
+        return 0
+
+    if not isinstance(inv, dict):
+        print(json.dumps({
+            "action": "refresh",
+            "reason": "inventory root is not an object",
+            "next_action": "Re-fetch the canonical ready-to-earn view.",
+            "selected": None,
+        }))
         return 0
 
     print(json.dumps(select(inv), indent=2))

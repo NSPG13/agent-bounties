@@ -1,27 +1,26 @@
 {
   "age_seconds": 60,
   "staleness_seconds": 900,
-  "network": "base-mainnet",
   "items": [
     {
-      "opportunity_id": "opp-excl",
-      "title": "Add a mini-SWE-agent paid-work environment",
+      "opportunity_id": "opp-x",
+      "title": "Add a deterministic MCP discovery checker",
       "goal": "Implement a deterministic checker for MCP discovery.",
       "categories": [
         "coding"
       ],
       "network": "base-mainnet",
-      "work_state": "in_progress",
+      "work_state": "claimable",
       "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "discovery_factors": [
         "source_type=canonical_base",
         "work_state=claimable",
         "payment_state=escrowed"
       ],
-      "payment_state": "escrowed",
-      "payment_committed": true,
+      "payment_state": "pending",
+      "payment_committed": false,
       "funded_amount": {
-        "amount": "2010000",
+        "amount": "500000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
@@ -73,9 +72,7 @@
           "unit": "base_units",
           "decimals": 6
         }
-      },
-      "competition_mode": "exclusive_claim",
-      "exclusive_claimant": "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e"
+      }
     }
   ]
 }

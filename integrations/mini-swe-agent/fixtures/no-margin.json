@@ -1,5 +1,6 @@
 {
-  "schema_version": "agent-bounties/opportunities-v2",
+  "age_seconds": 60,
+  "staleness_seconds": 900,
   "network": "base-mainnet",
   "items": [
     {
@@ -9,11 +10,28 @@
       "categories": [
         "coding"
       ],
-      "skills": [
-        "api"
+      "network": "base-mainnet",
+      "work_state": "claimable",
+      "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "discovery_factors": [
+        "source_type=canonical_base",
+        "work_state=claimable",
+        "payment_state=escrowed"
       ],
-      "work_state": "open",
-      "source_id": "0x5555555555555555555555555555555555555555",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "funded_amount": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
       "reward": {
         "amount": "900000",
         "currency": "USDC",
@@ -25,6 +43,16 @@
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
+      },
+      "verification_method": "signed_quorum",
+      "decision_authority": "The immutable canonical verification mode configured on the contract decides.",
+      "evidence_boundary": "Only a confirmed canonical BountySettled event proves payment.",
+      "evidence_requirements": {
+        "required": [
+          "repository",
+          "commit",
+          "test_command"
+        ]
       },
       "cash_economics": {
         "solver_reward": {
@@ -47,7 +75,5 @@
         }
       }
     }
-  ],
-  "age_seconds": 60,
-  "staleness_seconds": 900
+  ]
 }

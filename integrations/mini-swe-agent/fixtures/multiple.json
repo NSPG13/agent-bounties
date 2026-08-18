@@ -1,5 +1,6 @@
 {
-  "schema_version": "agent-bounties/opportunities-v2",
+  "age_seconds": 60,
+  "staleness_seconds": 900,
   "network": "base-mainnet",
   "items": [
     {
@@ -9,11 +10,28 @@
       "categories": [
         "coding"
       ],
-      "skills": [
-        "api"
+      "network": "base-mainnet",
+      "work_state": "claimable",
+      "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "discovery_factors": [
+        "source_type=canonical_base",
+        "work_state=claimable",
+        "payment_state=escrowed"
       ],
-      "work_state": "open",
-      "source_id": "0x1111111111111111111111111111111111111111",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "funded_amount": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
       "reward": {
         "amount": "990000",
         "currency": "USDC",
@@ -25,6 +43,16 @@
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
+      },
+      "verification_method": "signed_quorum",
+      "decision_authority": "The immutable canonical verification mode configured on the contract decides.",
+      "evidence_boundary": "Only a confirmed canonical BountySettled event proves payment.",
+      "evidence_requirements": {
+        "required": [
+          "repository",
+          "commit",
+          "test_command"
+        ]
       },
       "cash_economics": {
         "solver_reward": {
@@ -50,15 +78,32 @@
     {
       "opportunity_id": "opp-2",
       "title": "Add retry-safe Base RPC failover for CLI tooling",
-      "goal": "Add retry-safe RPC failover to the CLI.",
+      "goal": "Implement a deterministic checker for MCP discovery.",
       "categories": [
         "coding"
       ],
-      "skills": [
-        "cli"
+      "network": "base-mainnet",
+      "work_state": "claimable",
+      "source_id": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "discovery_factors": [
+        "source_type=canonical_base",
+        "work_state=claimable",
+        "payment_state=escrowed"
       ],
-      "work_state": "open",
-      "source_id": "0x2222222222222222222222222222222222222222",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "funded_amount": {
+        "amount": "2010000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "2010000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
       "reward": {
         "amount": "2000000",
         "currency": "USDC",
@@ -70,6 +115,16 @@
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
+      },
+      "verification_method": "signed_quorum",
+      "decision_authority": "The immutable canonical verification mode configured on the contract decides.",
+      "evidence_boundary": "Only a confirmed canonical BountySettled event proves payment.",
+      "evidence_requirements": {
+        "required": [
+          "repository",
+          "commit",
+          "test_command"
+        ]
       },
       "cash_economics": {
         "solver_reward": {
@@ -95,15 +150,13 @@
     {
       "opportunity_id": "opp-3",
       "title": "Write launch marketing copy",
-      "goal": "Draft promotional copy for the launch.",
+      "goal": "Draft promotional copy.",
       "categories": [
         "marketing"
       ],
-      "skills": [
-        "writing"
-      ],
-      "work_state": "open",
-      "source_id": "0x3333333333333333333333333333333333333333",
+      "network": "base-mainnet",
+      "work_state": "claimable",
+      "source_id": "0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
       "reward": {
         "amount": "5000000",
         "currency": "USDC",
@@ -115,29 +168,7 @@
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
-      },
-      "cash_economics": {
-        "solver_reward": {
-          "amount": "5000000",
-          "currency": "USDC",
-          "unit": "base_units",
-          "decimals": 6
-        },
-        "required_external_spend": {
-          "amount": "0",
-          "currency": "USDC",
-          "unit": "base_units",
-          "decimals": 6
-        },
-        "gross_cash_margin": {
-          "amount": "5000000",
-          "currency": "USDC",
-          "unit": "base_units",
-          "decimals": 6
-        }
       }
     }
-  ],
-  "age_seconds": 60,
-  "staleness_seconds": 900
+  ]
 }

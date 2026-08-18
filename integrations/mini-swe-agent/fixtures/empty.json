@@ -1,7 +1,6 @@
 {
-  "schema_version": "agent-bounties/opportunities-v2",
-  "network": "base-mainnet",
-  "items": [],
   "age_seconds": 60,
-  "staleness_seconds": 900
+  "staleness_seconds": 900,
+  "network": "base-mainnet",
+  "items": []
 }
