@@ -19,8 +19,8 @@ class RehearsalRecoveryTests(unittest.TestCase):
         self.assertEqual(Account.from_key(root).address, "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A")
 
     def test_eth_sweep_keeps_a_conservative_gas_reserve(self) -> None:
-        self.assertEqual(recovery.sweepable_eth(100_000, 2), 40_000)
-        self.assertEqual(recovery.sweepable_eth(59_999, 2), 0)
+        self.assertEqual(recovery.sweepable_eth(400_000, 2), 100_000)
+        self.assertEqual(recovery.sweepable_eth(299_999, 2), 0)
 
     def test_additional_actor_scope_is_explicit_and_validated(self) -> None:
         scope = recovery.parse_actor_scope(
