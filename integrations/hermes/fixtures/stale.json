@@ -1,0 +1,12 @@
+{
+  "schema_version": "agent-bounties/hermes-state-fixture-v1",
+  "state": "stale",
+  "description": "GitHub issue still open or labeled, but canonical contract is settled, expired, or no longer verification-ready.",
+  "inventory": {
+    "protocol_status": "active",
+    "github_labels_present": ["bounty", "claimable-live"],
+    "canonical_status": "settled_or_unavailable",
+    "verification_ready": false
+  },
+  "next_action": "Stop. Broad labels are not claimability evidence. Re-query https://api.agentbounties.app/v1/base/autonomous-bounties/feed?claimable_only=true and only act on verification_ready claimable contracts; ignore label:bounty alone."
+}
