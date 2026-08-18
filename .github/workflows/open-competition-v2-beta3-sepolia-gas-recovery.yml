@@ -1,0 +1,77 @@
+name: Open Competition V2 Beta3 Sepolia gas recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-sepolia-gas-recovery
+  cancel-in-progress: false
+
+jobs:
+  restore-deployer-reserve:
+    runs-on: ubuntu-latest
+    environment: v2-beta2-sepolia
+    timeout-minutes: 10
+    env:
+      BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
+      BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
+      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      EXPECTED_DEPLOYER: "0xfd7bE4c69541ab297Aece2A674fC1418B898cc0a"
+      EXPECTED_KEEPER: "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
+      MINIMUM_DEPLOYER_RESERVE_WEI: "500000000000000"
+      RECOVERY_TRANSFER_WEI: "70000000000000"
+      MINIMUM_KEEPER_REMAINDER_WEI: "5000000000000"
+    steps:
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+
+      - name: Restore the isolated deployer reserve
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$BASE_SEPOLIA_RPC_URL"
+          test -n "$BASE_DEPLOYER_ADDRESS"
+          test -n "$BASE_KEEPER_PRIVATE_KEY"
+          test "$(cast chain-id --rpc-url "$BASE_SEPOLIA_RPC_URL")" = "84532"
+
+          deployer="$(printf '%s' "$BASE_DEPLOYER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
+          expected_deployer="$(printf '%s' "$EXPECTED_DEPLOYER" | tr '[:upper:]' '[:lower:]')"
+          keeper="$(cast wallet address --private-key "$BASE_KEEPER_PRIVATE_KEY" | tr '[:upper:]' '[:lower:]')"
+          test "$deployer" = "$expected_deployer"
+          test "$keeper" = "$EXPECTED_KEEPER"
+
+          deployer_before="$(cast balance "$deployer" --rpc-url "$BASE_SEPOLIA_RPC_URL")"
+          keeper_before="$(cast balance "$keeper" --rpc-url "$BASE_SEPOLIA_RPC_URL")"
+          if (( deployer_before >= MINIMUM_DEPLOYER_RESERVE_WEI )); then
+            echo "Deployer reserve already satisfies the release gate." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          required_keeper_balance=$((RECOVERY_TRANSFER_WEI + MINIMUM_KEEPER_REMAINDER_WEI))
+          test "$keeper_before" -ge "$required_keeper_balance"
+          receipt="$(cast send "$deployer" \
+            --value "${RECOVERY_TRANSFER_WEI}wei" \
+            --private-key "$BASE_KEEPER_PRIVATE_KEY" \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --json)"
+          tx_hash="$(jq -r '.transactionHash' <<<"$receipt")"
+          status="$(jq -r '.status' <<<"$receipt")"
+          test "$status" = "0x1"
+          test "$tx_hash" != "null"
+
+          deployer_after="$(cast balance "$deployer" --rpc-url "$BASE_SEPOLIA_RPC_URL")"
+          keeper_after="$(cast balance "$keeper" --rpc-url "$BASE_SEPOLIA_RPC_URL")"
+          test "$deployer_after" -ge "$MINIMUM_DEPLOYER_RESERVE_WEI"
+          test "$keeper_after" -ge "$MINIMUM_KEEPER_REMAINDER_WEI"
+
+          {
+            echo "### Base Sepolia deployer reserve restored"
+            echo
+            echo "- Transaction: \`$tx_hash\`"
+            echo "- Deployer before: \`$deployer_before wei\`"
+            echo "- Deployer after: \`$deployer_after wei\`"
+            echo "- Keeper after: \`$keeper_after wei\`"
+            echo "- Network: \`Base Sepolia (84532)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
