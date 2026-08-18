@@ -37,8 +37,14 @@ import os
 import shlex
 import subprocess
 import sys
+import traceback
 
-ALLOW, BLOCK, ERROR = 0, 2, 1
+# Exit contract, per the official OpenHands hooks docs:
+#   0 = allow (operation proceeds), 2 = block (operation denied).
+# Any OTHER code is treated as an error and the operation still PROCEEDS, so
+# there is deliberately no "error" exit code here -- every refusal path uses
+# BLOCK. See the fail-closed crash handler at the bottom of this file.
+ALLOW, BLOCK = 0, 2
 
 REQUIRED_EVIDENCE = (
     "repository",
@@ -247,4 +253,28 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # FAIL CLOSED on an unexpected crash.
+    #
+    # Per https://docs.openhands.dev/openhands/usage/customization/hooks the exit
+    # contract is: 0 = proceed, 2 = block, "any other code - Error. The operation
+    # proceeds, but the error is logged." An uncaught exception exits 1, which
+    # therefore lets the session END -- the exact fail-open outcome this guard
+    # exists to prevent, and the worst case for a solver holding a posted bond.
+    #
+    # So a crash must deny, not error. The traceback still goes to stderr for
+    # debugging, but the decision on stdout and the exit code both say BLOCK.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException:  # noqa: BLE001 - deliberate catch-all; see above
+        traceback.print_exc(file=sys.stderr)
+        raise SystemExit(
+            emit(
+                "deny",
+                "agent-bounties evidence guard crashed, so claim state could not be "
+                "verified. Failing closed: an unverified session must not end while a "
+                "bond may be posted. Fix the guard, then finish. Earned: $0.00.",
+                BLOCK,
+            )
+        )
