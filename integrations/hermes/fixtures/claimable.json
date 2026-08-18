@@ -1,0 +1,11 @@
+{
+  "fixture": "claimable",
+  "status": "claimable-live",
+  "action": "Claim this bounty by running the inventory check and following the returned next_action",
+  "example": {
+    "title": "Hermes earning integration",
+    "reward": "2.00 USDC",
+    "contract": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+    "chain": "Base"
+  }
+}

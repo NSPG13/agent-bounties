@@ -1,0 +1,10 @@
+{
+  "fixture": "stale",
+  "status": "stale",
+  "action": "Skip this bounty — it has been inactive and may no longer be valid",
+  "example": {
+    "title": "Example stale bounty",
+    "last_activity": "90+ days ago",
+    "note": "Check for updated version or contact maintainer"
+  }
+}
