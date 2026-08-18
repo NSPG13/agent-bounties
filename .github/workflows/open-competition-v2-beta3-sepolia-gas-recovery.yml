@@ -61,8 +61,21 @@ jobs:
           test "$status" = "0x1"
           test "$tx_hash" != "null"
 
-          deployer_after="$(cast balance "$deployer" --rpc-url "$BASE_SEPOLIA_RPC_URL")"
-          keeper_after="$(cast balance "$keeper" --rpc-url "$BASE_SEPOLIA_RPC_URL")"
+          deployer_after=""
+          keeper_after=""
+          for attempt in $(seq 1 30); do
+            deployer_after="$(cast balance "$deployer" --rpc-url "$BASE_SEPOLIA_RPC_URL" 2>/dev/null || true)"
+            keeper_after="$(cast balance "$keeper" --rpc-url "$BASE_SEPOLIA_RPC_URL" 2>/dev/null || true)"
+            if [[ "$deployer_after" =~ ^[0-9]+$ ]] \
+              && [[ "$keeper_after" =~ ^[0-9]+$ ]] \
+              && (( deployer_after >= MINIMUM_DEPLOYER_RESERVE_WEI )) \
+              && (( keeper_after >= MINIMUM_KEEPER_REMAINDER_WEI )); then
+              break
+            fi
+            sleep 2
+          done
+          [[ "$deployer_after" =~ ^[0-9]+$ ]]
+          [[ "$keeper_after" =~ ^[0-9]+$ ]]
           test "$deployer_after" -ge "$MINIMUM_DEPLOYER_RESERVE_WEI"
           test "$keeper_after" -ge "$MINIMUM_KEEPER_REMAINDER_WEI"
 
