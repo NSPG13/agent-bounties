@@ -217,35 +217,55 @@ def resolve_or_deploy_factory(
     signer: Any,
     bundle: dict[str, Any],
     verifier_assets: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     require(bundle.get("network") == NETWORK and bundle.get("chain_id") == CHAIN_ID, f"release bundle is not {NETWORK}")
     require(signer.address.lower() == bundle["deployer"], "signer does not match release bundle deployer")
     pending_nonce = int(rpc(client.url, "eth_getTransactionCount", [signer.address, "pending"]), 16)
 
     candidates = [bundle]
-    for nonce in range(max(0, pending_nonce - 32), pending_nonce):
-        if nonce != bundle["factory"]["from_nonce"]:
+    original_start_nonce = int(bundle["preflight_safe_block"]["deployer_nonce"])
+    for nonce in range(max(0, pending_nonce - 34), pending_nonce + 1):
+        if nonce != original_start_nonce:
             candidates.append(bundle_for_nonce(bundle, nonce, verifier_assets))
     for candidate in candidates:
         observed, size = runtime_hash(client.url, candidate["factory"]["address"])
         if size and observed == candidate["factory"]["runtime_code_hash"]:
-            return candidate, None
+            return candidate, {}
 
     require(NETWORK == "base-sepolia", "mainnet rehearsal requires the exact factory to be deployed first")
-    require(pending_nonce == bundle["factory"]["from_nonce"], "deployer nonce moved and no exact prior Beta3 factory was found; rebuild the release bundle")
-    observed, size = runtime_hash(client.url, bundle["factory"]["address"])
-    require(size == 0, f"predicted factory is occupied by {observed}")
-    receipt = client.send(signer, data=bundle["factory"]["deployment_calldata"])
-    require(
-        str(receipt.get("contractAddress", "")).lower() == bundle["factory"]["address"],
-        "deployed factory address differs from the release bundle",
-    )
-    return bundle, receipt
+    deployable = bundle_for_nonce(bundle, pending_nonce, verifier_assets)
+    transactions = deployable["deployment_transactions"]
+    require(len(transactions) == 3, "Beta3 deployment requires exactly three transactions")
+    for offset, transaction in enumerate(transactions):
+        require(
+            transaction["from_nonce"] == pending_nonce + offset,
+            "Beta3 deployment transaction nonces are not contiguous",
+        )
+        observed, size = runtime_hash(client.url, transaction["predicted_address"])
+        require(size == 0, f"predicted {transaction['component']} address is occupied by {observed}")
+
+    receipts: dict[str, dict[str, Any]] = {}
+    for transaction in transactions:
+        receipt = client.send(signer, data=transaction["data"])
+        require(
+            str(receipt.get("contractAddress", "")).lower()
+            == transaction["predicted_address"],
+            f"deployed {transaction['component']} address differs from the release bundle",
+        )
+        receipts[transaction["component"]] = receipt
+    return deployable, receipts
 
 
 def verify_components(url: str, bundle: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key in ("factory", "groth16_adapter", "plonk_adapter", "implementation"):
+    for key in (
+        "groth16_verifier",
+        "plonk_verifier",
+        "factory",
+        "groth16_adapter",
+        "plonk_adapter",
+        "implementation",
+    ):
         expected = bundle[key]
         observed_hash, observed_bytes = runtime_hash(url, expected["address"])
         require(observed_hash == expected["runtime_code_hash"], f"{key} runtime hash mismatch")
@@ -299,7 +319,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     raw_bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
     verifier_assets = release.load_verifier_assets(args.verifier_assets)
     client = SignedRpc(args.rpc_url)
-    bundle, deployment_receipt = resolve_or_deploy_factory(
+    bundle, deployment_receipts = resolve_or_deploy_factory(
         client, signer, raw_bundle, verifier_assets
     )
     components = verify_components(client.url, bundle)
@@ -331,8 +351,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     result = {
         "schema_version": f"agent-bounties/open-competition-v2-beta3-{RUN_LABEL}-preparation-v1",
         "passed": True,
-        "broadcast": deployment_receipt is not None,
-        "factory_deployment_transaction": receipt_hash(deployment_receipt) if deployment_receipt else None,
+        "broadcast": bool(deployment_receipts),
+        "deployment_transactions": {
+            name: receipt_hash(receipt)
+            for name, receipt in deployment_receipts.items()
+        },
+        "factory_deployment_transaction": (
+            receipt_hash(deployment_receipts["factory"])
+            if "factory" in deployment_receipts
+            else None
+        ),
         "source_commit": bundle["source_commit"],
         "components": components,
         "actors": {
@@ -356,8 +384,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
     signer = Account.from_key(raw_key)
     raw_bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
+    verifier_assets = release.load_verifier_assets(args.verifier_assets)
     client = SignedRpc(args.rpc_url)
-    bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
+    bundle, deployment_receipts = resolve_or_deploy_factory(
+        client, signer, raw_bundle, verifier_assets
+    )
     components = verify_components(client.url, bundle)
 
     signer, solver_a, solver_b = actors_for(raw_key, bundle, args.actor_derivation_salt)
@@ -425,8 +456,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     receipts: dict[str, dict[str, Any]] = {}
-    if deployment_receipt:
-        receipts["factory_deployment"] = deployment_receipt
+    for name, receipt in deployment_receipts.items():
+        receipts[f"deployment_{name}"] = receipt
     for name, actor in (("solver_a", solver_a), ("solver_b", solver_b)):
         if int(rpc(client.url, "eth_getBalance", [actor.address, "latest"]), 16) < args.actor_eth_wei:
             receipts[f"fund_{name}_gas"] = client.send(signer, to=actor.address, value=args.actor_eth_wei)

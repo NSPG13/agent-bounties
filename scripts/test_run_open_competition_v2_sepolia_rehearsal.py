@@ -12,6 +12,94 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SepoliaRehearsalTests(unittest.TestCase):
+    def test_sepolia_rebind_deploys_exact_three_component_sequence(self):
+        deployer = "0x" + "11" * 20
+        predicted = ["0x" + f"{value:040x}" for value in (101, 102, 103)]
+        transactions = [
+            {
+                "component": component,
+                "from_nonce": 9 + offset,
+                "predicted_address": predicted[offset],
+                "data": "0x" + f"{offset + 1:02x}",
+            }
+            for offset, component in enumerate(
+                ("groth16_verifier", "plonk_verifier", "factory")
+            )
+        ]
+        raw_bundle = {
+            "network": "base-sepolia",
+            "chain_id": 84532,
+            "deployer": deployer,
+            "preflight_safe_block": {"deployer_nonce": 4},
+            "factory": {
+                "address": "0x" + "22" * 20,
+                "runtime_code_hash": "0x" + "33" * 32,
+            },
+        }
+
+        def rebuild(_bundle, nonce, _assets):
+            return {
+                **raw_bundle,
+                "preflight_safe_block": {"deployer_nonce": nonce},
+                "factory": {
+                    "address": "0x" + f"{nonce + 500:040x}",
+                    "runtime_code_hash": "0x" + "44" * 32,
+                },
+                "deployment_transactions": transactions,
+            }
+
+        class Client:
+            url = "https://base-sepolia.invalid"
+
+            def __init__(self):
+                self.sent = []
+
+            def send(self, _signer, *, data):
+                offset = len(self.sent)
+                self.sent.append(data)
+                return {
+                    "contractAddress": predicted[offset],
+                    "transactionHash": "0x" + f"{offset + 1:064x}",
+                }
+
+        signer = type("Signer", (), {"address": deployer})()
+        client = Client()
+        with patch.object(MODULE, "rpc", return_value=hex(9)), patch.object(
+            MODULE, "runtime_hash", return_value=("0x" + "00" * 32, 0)
+        ), patch.object(MODULE, "bundle_for_nonce", side_effect=rebuild):
+            resolved, receipts = MODULE.resolve_or_deploy_factory(
+                client, signer, raw_bundle, {"pinned": True}
+            )
+
+        self.assertEqual(resolved["preflight_safe_block"]["deployer_nonce"], 9)
+        self.assertEqual(client.sent, [item["data"] for item in transactions])
+        self.assertEqual(list(receipts), [item["component"] for item in transactions])
+
+    def test_component_verification_includes_external_verifiers(self):
+        keys = (
+            "groth16_verifier",
+            "plonk_verifier",
+            "factory",
+            "groth16_adapter",
+            "plonk_adapter",
+            "implementation",
+        )
+        bundle = {
+            key: {
+                "address": "0x" + f"{index + 1:040x}",
+                "runtime_code_hash": "0x" + f"{index + 1:064x}",
+                "runtime_code_bytes": index + 10,
+            }
+            for index, key in enumerate(keys)
+        }
+
+        def observed(_url, address):
+            item = next(value for value in bundle.values() if value["address"] == address)
+            return item["runtime_code_hash"], item["runtime_code_bytes"]
+
+        with patch.object(MODULE, "runtime_hash", side_effect=observed):
+            self.assertEqual(set(MODULE.verify_components("unused", bundle)), set(keys))
+
     def test_every_release_rehearsal_call_pins_generated_verifier_assets(self):
         workflow = (
             Path(__file__).resolve().parents[1]
