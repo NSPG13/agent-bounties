@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from eth_account import Account
+from eth_utils import to_checksum_address
 
 import build_open_competition_v2_beta3_release as release
 import open_competition_v2_proof_rehearsal as rehearsal
@@ -162,8 +163,9 @@ class SignedRpc:
             "maxPriorityFeePerGas": hex(priority),
         }
         if to is not None:
-            transaction["to"] = to
-            estimate_request["to"] = to
+            destination = to_checksum_address(to)
+            transaction["to"] = destination
+            estimate_request["to"] = destination
         gas = int(rpc(self.url, "eth_estimateGas", [estimate_request]), 16)
         transaction["gas"] = gas * 5 // 4 + 25_000
         signed = actor.sign_transaction(transaction)

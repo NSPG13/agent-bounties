@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +13,37 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SepoliaRehearsalTests(unittest.TestCase):
+    def test_signed_rpc_checksummed_lowercase_contract_destination(self):
+        destination = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+
+        class Actor:
+            address = "0xfd7bE4C69541aB297aEcE2a674fc1418b898cC0a"
+
+            def sign_transaction(self, transaction):
+                self.transaction = transaction
+                return SimpleNamespace(raw_transaction=b"signed")
+
+        def rpc_response(_url, method, _params):
+            return {
+                "eth_chainId": hex(MODULE.CHAIN_ID),
+                "eth_getTransactionCount": "0x0",
+                "eth_getBlockByNumber": {"baseFeePerGas": "0x1"},
+                "eth_maxPriorityFeePerGas": "0x1",
+                "eth_estimateGas": "0x5208",
+                "eth_sendRawTransaction": "0x" + "44" * 32,
+            }[method]
+
+        actor = Actor()
+        with patch.object(MODULE, "rpc", side_effect=rpc_response):
+            client = MODULE.SignedRpc("https://base-sepolia.invalid")
+            with patch.object(client, "wait_receipt", return_value={"status": "0x1"}):
+                client.send(actor, to=destination)
+
+        self.assertEqual(
+            actor.transaction["to"],
+            "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        )
+
     def test_prepared_actor_roles_normalize_creator_to_deployer(self):
         actors = {
             "deployer": "0x" + "11" * 20,
