@@ -1,0 +1,33 @@
+import unittest
+
+from eth_account import Account
+
+import recover_open_competition_v2_rehearsal_funds as recovery
+
+
+class RehearsalRecoveryTests(unittest.TestCase):
+    def test_actor_derivation_is_stable_and_unique(self) -> None:
+        root = bytes.fromhex("11" * 32)
+        actors = recovery.actor_set(
+            root,
+            "4d09d82825c38f2bf93a8ee4375a95b302410c29",
+            "32147289466",
+            [1, 2, 4],
+        )
+        self.assertEqual(len(actors), 6)
+        self.assertEqual(len({actor.address.lower() for actor in actors}), 6)
+        self.assertEqual(Account.from_key(root).address, "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A")
+
+    def test_eth_sweep_keeps_a_conservative_gas_reserve(self) -> None:
+        self.assertEqual(recovery.sweepable_eth(100_000, 2), 40_000)
+        self.assertEqual(recovery.sweepable_eth(59_999, 2), 0)
+
+    def test_transfer_calldata_binds_recipient_and_amount(self) -> None:
+        data = recovery.transfer_data("0x" + "12" * 20, 525_000)
+        self.assertTrue(data.startswith("0xa9059cbb"))
+        self.assertEqual(len(data), 138)
+        self.assertTrue(data.endswith((525_000).to_bytes(32, "big").hex()))
+
+
+if __name__ == "__main__":
+    unittest.main()
