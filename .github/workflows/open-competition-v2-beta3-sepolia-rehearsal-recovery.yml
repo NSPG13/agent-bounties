@@ -38,7 +38,7 @@ jobs:
             --source-commit 4d09d82825c38f2bf93a8ee4375a95b302410c29 \
             --run-id 32147289466 \
             --attempt 1 --attempt 2 --attempt 3 --attempt 4 --attempt 5 --attempt 6 \
-            --additional-actor-scope 5c90f23e6d03157fcd28883874439009419c9938:32136610379:1 \
+            --additional-actor-scope b1ce5c176a3cf6d4e3d4240b0a2fdf1359a3a8c5:32122203861:1 \
             --competition 0x5e87358743dd4dcefc1a71ce9663ccf229ba7559 \
             --required-actor 0xf723d4ac02331707f39bc9416b11ec25a73743f1 \
             --required-actor 0x300775bb9ae722e94280637c4547260f1708afc3 \

@@ -24,14 +24,14 @@ class RehearsalRecoveryTests(unittest.TestCase):
 
     def test_additional_actor_scope_is_explicit_and_validated(self) -> None:
         scope = recovery.parse_actor_scope(
-            "5c90f23e6d03157fcd28883874439009419c9938:32136610379:1"
+            "b1ce5c176a3cf6d4e3d4240b0a2fdf1359a3a8c5:32122203861:1"
         )
         self.assertEqual(
             scope,
-            ("5c90f23e6d03157fcd28883874439009419c9938", "32136610379", 1),
+            ("b1ce5c176a3cf6d4e3d4240b0a2fdf1359a3a8c5", "32122203861", 1),
         )
         with self.assertRaises(recovery.RecoveryError):
-            recovery.parse_actor_scope("main:32136610379:1")
+            recovery.parse_actor_scope("main:32122203861:1")
 
     def test_transfer_calldata_binds_recipient_and_amount(self) -> None:
         data = recovery.transfer_data("0x" + "12" * 20, 525_000)
