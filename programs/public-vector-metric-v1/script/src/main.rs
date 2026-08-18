@@ -27,7 +27,7 @@ async fn main() {
                 "sp1_version": "6.4.0-agent-bounties-sp1-safe-v5",
                 "sp1_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
                 "sp1_circuit_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
-                "sp1_runtime_commit": "1381a5649685324e87ba14630936e6e25f9f2cb1",
+                "sp1_runtime_commit": "c2d292c260333a9e4f166cd1435e8ef4897c8b43",
                 "gpu_proving_enabled": false,
                 "backends": backends,
                 "proof_systems": ["groth16", "plonk"]

@@ -12,7 +12,7 @@ import tomllib
 ADVISORY = "GHSA-vj64-rjf3-w3v7"
 SP1_REPOSITORY = "https://github.com/NSPG13/sp1"
 SP1_COMMIT = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d"
-SP1_RUNTIME_COMMIT = "1381a5649685324e87ba14630936e6e25f9f2cb1"
+SP1_RUNTIME_COMMIT = "c2d292c260333a9e4f166cd1435e8ef4897c8b43"
 SP1_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 PATCHED_PACKAGES = ("p3-challenger",)
 P3_FIELD_VERSION = "0.4.3-succinct"
