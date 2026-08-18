@@ -2295,6 +2295,7 @@ async fn main() -> anyhow::Result<()> {
             post(withdraw_open_competition_bond),
         )
         .merge(open_competition_v2_api::router())
+        .route("/.well-known/agent-card.json", get(agent_card_handler))
         .route(
             "/v1/base/standing-meta-v4/readiness",
             get(get_standing_meta_v4_readiness),
@@ -21564,5 +21565,56 @@ fix-ci-failure
 {funding_mode}
 "#
         )
+    }
+}
+
+
+/// Serves the A2A 1.0 Agent Card at `/.well-known/agent-card.json`.
+///
+/// Implements explicit caching: a deterministic `ETag` (hash of the bundled
+/// card) and a `Cache-Control` header. The agent_card response preserves the
+/// canonical funding and settlement evidence boundary; no off-chain claim is
+/// ever treated as lifecycle evidence.
+async fn agent_card_handler() -> impl IntoResponse {
+    let card_json = include_str!("../../fixtures/a2a-agent-card.json");
+    let digest = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        card_json.hash(&mut h);
+        format!("{:x}", h.finish())
+    };
+    let etag = format!(""{}"", digest);
+    (
+        [
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=300"),
+            ),
+            (
+                header::ETAG,
+                HeaderValue::from_str(&etag)
+                    .unwrap_or_else(|_| HeaderValue::from_static("\"0\"")),
+            ),
+        ],
+        Json(
+            serde_json::from_str::<serde_json::Value>(card_json)
+                .expect("bundled agent card must be valid JSON"),
+        ),
+    )
+}
+
+#[cfg(test)]
+mod agent_card_tests {
+    #[test]
+    fn bundled_agent_card_is_valid_json_and_canonical() {
+        let card = include_str!("../../fixtures/a2a-agent-card.json");
+        let v: serde_json::Value =
+            serde_json::from_str(card).expect("agent card must be valid JSON");
+        assert_eq!(v["name"], "Agent Bounties");
+        let serialized = serde_json::to_string(&v).unwrap().to_lowercase();
+        for required in ["canonical", "claimable", "bountysettled"] {
+            assert!(serialized.contains(required), "missing {required}");
+        }
     }
 }

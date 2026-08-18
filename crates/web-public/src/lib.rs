@@ -4516,3 +4516,15 @@ mod tests {
         bounty
     }
 }
+
+
+/// Serves the A2A 1.0 Agent Card for machine discovery at the canonical
+/// `/.well-known/agent-card.json` path. The card preserves the canonical
+/// funding and settlement evidence boundaries (no off-chain claims are treated
+/// as lifecycle evidence).
+pub const AGENT_CARD_PATH: &str = "/.well-known/agent-card.json";
+
+pub fn agent_card_json() -> serde_json::Value {
+    let raw = include_str!("../../fixtures/a2a-agent-card.json");
+    serde_json::from_str(raw).expect("bundled agent card must be valid JSON")
+}
