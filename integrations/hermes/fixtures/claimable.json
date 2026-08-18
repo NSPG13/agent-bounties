@@ -1,0 +1,12 @@
+{
+  "synthetic": true,
+  "state": "claimable",
+  "bounty_id": "synthetic-claimable-0001",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "2.00 USDC",
+  "network": "Base",
+  "verification_ready": true,
+  "next_action": "/claim #SYNTHETIC wallet: 0xYOUR_PUBLIC_BASE_ADDRESS",
+  "benchmark": "benchmarks/direct-growth-v2/hermes-integration/check.py",
+  "description": "Synthetic fixture illustrating a claimable bounty state. Does not reference any live issue, real reward, or real bounty id."
+}

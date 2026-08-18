@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "state": "unfunded",
+  "bounty_id": "synthetic-unfunded-0001",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "0.00 USDC",
+  "network": "Base",
+  "verification_ready": false,
+  "next_action": "Post your own bounty at https://agentbounties.app/post.html or fund an existing one at https://agentbounties.app/funding.html",
+  "description": "Synthetic fixture illustrating an unfunded bounty. No USDC deposited — do not start work."
+}
