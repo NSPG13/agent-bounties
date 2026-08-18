@@ -313,6 +313,14 @@ def actors_for(
     )
 
 
+def prepared_actor_set(actors: dict[str, str]) -> dict[str, str]:
+    return {
+        "creator": actors["deployer"],
+        "solver_a": actors["solver_a"],
+        "solver_b": actors["solver_b"],
+    }
+
+
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
     raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
     signer = Account.from_key(raw_key)
@@ -415,7 +423,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             funding_window=PREPARED_FUNDING_WINDOW,
         )
     context, fixtures = rehearsal.load_context(bundle, prepared)
-    require(context["actors"] == actors, "prepared proof actor set changed")
+    require(
+        context["actors"] == prepared_actor_set(actors),
+        "prepared proof actor set changed",
+    )
     required_proofs = (
         {"plonk_best_a", "plonk_best_b"}
         if args.x402_replaces_first_proven
