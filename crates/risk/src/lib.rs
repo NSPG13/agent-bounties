@@ -94,6 +94,7 @@ impl Default for DirectBountyEvidenceChecklist {
                 "empty evidence fields are rejected".to_string(),
                 "non-HTTPS repository, pull request, check-run, artifact, or settlement references are rejected".to_string(),
                 "mutable artifact references such as branch names, tags, releases, query refs, encoded lookalikes, or unpinned download URLs are rejected".to_string(),
+                "evidence fields from mismatched repositories or mismatched source commits are rejected".to_string(),
                 "payment evidence without a matching canonical BountySettled event is rejected".to_string(),
             ],
         }
@@ -151,14 +152,56 @@ pub fn validate_direct_bounty_evidence(
         require_https(&mut errors, &format!("check_run_urls[{index}]"), url);
     }
 
-    if !is_hex_sha(&evidence.source_commit, 40) {
+    let is_valid_source_commit = is_hex_sha(&evidence.source_commit, 40);
+    if !is_valid_source_commit {
         errors.push("source_commit must be a full 40-character hexadecimal commit SHA".to_string());
     }
     if !is_hex_sha(&evidence.artifact_sha256, 64) {
         errors.push("artifact_sha256 must be a 64-character hexadecimal SHA-256 digest".to_string());
     }
-    if !is_immutable_artifact_url(&evidence.artifact_url) {
-        errors.push("artifact_url must be immutable by construction (pinned commit blob/raw HTTPS URL)".to_string());
+
+    let repo_canonical = parse_github_repo(&evidence.repository_url);
+    if repo_canonical.is_none() && evidence.repository_url.starts_with("https://") && !evidence.repository_url.trim().is_empty() {
+        errors.push("repository_url must be a valid GitHub repository URL (https://github.com/owner/repo)".to_string());
+    }
+
+    if let Some((owner, repo)) = &repo_canonical {
+        if let Some((pr_owner, pr_repo)) = parse_github_pr_repo(&evidence.pull_request_url) {
+            if pr_owner != *owner || pr_repo != *repo {
+                errors.push("pull_request_url must belong to the same repository as repository_url".to_string());
+            }
+        } else if evidence.pull_request_url.starts_with("https://") && !evidence.pull_request_url.trim().is_empty() {
+            errors.push("pull_request_url must be a valid pull request URL for repository_url".to_string());
+        }
+
+        for (index, cr_url) in evidence.check_run_urls.iter().enumerate() {
+            if let Some((cr_owner, cr_repo)) = parse_github_repo_from_any_url(cr_url) {
+                if cr_owner != *owner || cr_repo != *repo {
+                    errors.push(format!("check_run_urls[{index}] must belong to the same repository as repository_url"));
+                }
+            } else if cr_url.starts_with("https://") && !cr_url.trim().is_empty() {
+                errors.push(format!("check_run_urls[{index}] must belong to the same repository as repository_url"));
+            }
+        }
+    }
+
+    match parse_immutable_artifact_url(&evidence.artifact_url) {
+        Some(artifact) => {
+            if let Some((owner, repo)) = &repo_canonical {
+                if artifact.owner != *owner || artifact.repo != *repo {
+                    errors.push("artifact_url repository must match repository_url".to_string());
+                }
+            }
+            if is_valid_source_commit && !artifact.commit.eq_ignore_ascii_case(&evidence.source_commit) {
+                errors.push("artifact_url commit SHA must match source_commit".to_string());
+            }
+            if artifact.path.trim().is_empty() {
+                errors.push("artifact_url must specify a non-empty file path".to_string());
+            }
+        }
+        None => {
+            errors.push("artifact_url must be immutable by construction (pinned commit blob/raw HTTPS URL with non-empty path)".to_string());
+        }
     }
 
     DirectBountyEvidenceReport {
@@ -379,14 +422,84 @@ fn is_hex_sha(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn is_immutable_artifact_url(url: &str) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedArtifactUrl {
+    owner: String,
+    repo: String,
+    commit: String,
+    path: String,
+}
+
+fn sanitize_repo_name(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    if let Some(stripped) = lower.strip_suffix(".git") {
+        stripped.to_string()
+    } else {
+        lower
+    }
+}
+
+fn parse_github_repo(url: &str) -> Option<(String, String)> {
+    if !url.starts_with("https://github.com/") {
+        return None;
+    }
+    if url.contains('?') || url.contains('#') || url.contains('%') {
+        return None;
+    }
+    let rest = url.strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        Some((parts[0].to_ascii_lowercase(), sanitize_repo_name(parts[1])))
+    } else {
+        None
+    }
+}
+
+fn parse_github_pr_repo(url: &str) -> Option<(String, String)> {
+    if !url.starts_with("https://github.com/") {
+        return None;
+    }
+    if url.contains('?') || url.contains('#') || url.contains('%') {
+        return None;
+    }
+    let rest = url.strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 4
+        && !parts[0].is_empty()
+        && !parts[1].is_empty()
+        && parts[2] == "pull"
+        && parts[3].chars().all(|c| c.is_ascii_digit())
+    {
+        Some((parts[0].to_ascii_lowercase(), sanitize_repo_name(parts[1])))
+    } else {
+        None
+    }
+}
+
+fn parse_github_repo_from_any_url(url: &str) -> Option<(String, String)> {
+    if !url.starts_with("https://github.com/") {
+        return None;
+    }
+    if url.contains('?') || url.contains('#') || url.contains('%') {
+        return None;
+    }
+    let rest = url.strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+        Some((parts[0].to_ascii_lowercase(), sanitize_repo_name(parts[1])))
+    } else {
+        None
+    }
+}
+
+fn parse_immutable_artifact_url(url: &str) -> Option<ParsedArtifactUrl> {
     if !url.starts_with("https://") {
-        return false;
+        return None;
     }
 
     // Reject query parameters, fragments, or percent-encoded lookalikes that could evade branch/tag checks
     if url.contains('?') || url.contains('#') || url.contains('%') {
-        return false;
+        return None;
     }
 
     // Check for GitHub pinned commit SHA (raw or blob)
@@ -400,8 +513,14 @@ fn is_immutable_artifact_url(url: &str) -> bool {
             && (parts[2] == "blob" || parts[2] == "raw")
         {
             let sha = parts[3];
-            if is_hex_sha(sha, 40) {
-                return true;
+            let path = parts[4..].join("/");
+            if is_hex_sha(sha, 40) && !path.trim().is_empty() {
+                return Some(ParsedArtifactUrl {
+                    owner: parts[0].to_ascii_lowercase(),
+                    repo: sanitize_repo_name(parts[1]),
+                    commit: sha.to_ascii_lowercase(),
+                    path,
+                });
             }
         }
     }
@@ -411,13 +530,23 @@ fn is_immutable_artifact_url(url: &str) -> bool {
         let parts: Vec<&str> = rest.split('/').collect();
         if parts.len() >= 4 && !parts[0].is_empty() && !parts[1].is_empty() {
             let sha = parts[2];
-            if is_hex_sha(sha, 40) {
-                return true;
+            let path = parts[3..].join("/");
+            if is_hex_sha(sha, 40) && !path.trim().is_empty() {
+                return Some(ParsedArtifactUrl {
+                    owner: parts[0].to_ascii_lowercase(),
+                    repo: sanitize_repo_name(parts[1]),
+                    commit: sha.to_ascii_lowercase(),
+                    path,
+                });
             }
         }
     }
 
-    false
+    None
+}
+
+fn is_immutable_artifact_url(url: &str) -> bool {
+    parse_immutable_artifact_url(url).is_some()
 }
 
 fn strongest(left: RiskAction, right: RiskAction) -> RiskAction {
@@ -603,5 +732,55 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("check_run_urls must contain at least one")));
+    }
+    #[test]
+    fn direct_bounty_evidence_rejects_cross_binding_mismatches() {
+        let base_evidence = DirectBountyEvidence {
+            repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subdirectory: "crates/risk".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686".to_string(),
+            check_run_urls: vec![
+                "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789".to_string(),
+            ],
+            artifact_url: "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/crates/risk/tests/fixtures/report.json".to_string(),
+            artifact_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            bounty_settled_url: "https://basescan.org/tx/0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        };
+
+        // Mismatched PR repository -> Denied
+        let mut pr_mismatch = base_evidence.clone();
+        pr_mismatch.pull_request_url = "https://github.com/other-org/other-repo/pull/686".to_string();
+        let report = validate_direct_bounty_evidence(&pr_mismatch);
+        assert!(!report.accepted);
+        assert!(report.errors.iter().any(|e| e.contains("pull_request_url must belong to the same repository")));
+
+        // Mismatched artifact repository -> Denied
+        let mut art_repo_mismatch = base_evidence.clone();
+        art_repo_mismatch.artifact_url = "https://raw.githubusercontent.com/other-org/other-repo/0123456789abcdef0123456789abcdef01234567/report.json".to_string();
+        let report = validate_direct_bounty_evidence(&art_repo_mismatch);
+        assert!(!report.accepted);
+        assert!(report.errors.iter().any(|e| e.contains("artifact_url repository must match repository_url")));
+
+        // Mismatched artifact commit SHA -> Denied
+        let mut art_commit_mismatch = base_evidence.clone();
+        art_commit_mismatch.artifact_url = "https://raw.githubusercontent.com/agent-bounties/agent-bounties/fedcba9876543210fedcba9876543210fedcba98/crates/risk/tests/fixtures/report.json".to_string();
+        let report = validate_direct_bounty_evidence(&art_commit_mismatch);
+        assert!(!report.accepted);
+        assert!(report.errors.iter().any(|e| e.contains("artifact_url commit SHA must match source_commit")));
+
+        // Unrelated check-run URL -> Denied
+        let mut check_mismatch = base_evidence.clone();
+        check_mismatch.check_run_urls = vec!["https://github.com/unrelated-org/unrelated-repo/actions/runs/999".to_string()];
+        let report = validate_direct_bounty_evidence(&check_mismatch);
+        assert!(!report.accepted);
+        assert!(report.errors.iter().any(|e| e.contains("check_run_urls[0] must belong to the same repository")));
+
+        // Empty artifact path -> Denied
+        let mut empty_path = base_evidence.clone();
+        empty_path.artifact_url = "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/".to_string();
+        let report = validate_direct_bounty_evidence(&empty_path);
+        assert!(!report.accepted);
+        assert!(report.errors.iter().any(|e| e.contains("artifact_url must specify a non-empty file path") || e.contains("artifact_url must be immutable")));
     }
 }
