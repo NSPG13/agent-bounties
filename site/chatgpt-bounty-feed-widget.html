@@ -728,9 +728,9 @@
             "Start a focused conversation about this bounty and interview me one useful question at a time.",
             "Collect the title, goal, acceptance criteria, relevant context, solver reward, verifier reward, funding choice, deadline, and verification requirements.",
             "If the objective is too broad, propose a logical set of smaller independently reviewable bounties and let me choose the breakdown.",
-            "When those details are complete, write a specific image prompt based on the bounty and generate one unique bounty image using my ChatGPT account.",
-            "Show me that exact image with the complete bounty summary and ask for my explicit approval.",
-            "Only after I approve both, pass the approved image file, its exact generation prompt, and accessible alt text to prepare_bounty_post. Agent Bounties must store that file and must not generate a replacement.",
+            "When those details are complete, show me the complete bounty summary and ask for my explicit approval.",
+            "If you can create and attach a unique bounty image, show me the exact image for approval too.",
+            "Only after I approve, call prepare_bounty_post. Include the approved image file, exact prompt, and accessible alt text together when available; otherwise omit all three optional image fields so the review page uses its deterministic content-derived visual.",
             "Use first-party hosted authorization for any wallet, payment, identity, or signature step.",
             "Never ask me to enter a private key, seed phrase, card number, wallet signature, or payment authorization in ChatGPT.",
           ].join(" ");

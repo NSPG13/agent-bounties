@@ -113,9 +113,9 @@
 
     return `Help me prepare a public Agent Bounties bounty using the context you already have about me and this request.${revision}
 
-If you are ChatGPT and the Agent Bounties MCP connector is available, clarify only details that materially affect the public terms. Then write a specific image prompt from the completed bounty, generate one unique image using my ChatGPT account, show me the exact image and complete terms, and wait for my explicit approval. Only after I approve both, call prepare_bounty_post with that exact image file, the exact prompt, and accessible alt text. Agent Bounties must not generate or substitute the image. The MCP endpoint is ${MCP_URL}.
+If the Agent Bounties MCP connector is available, clarify only details that materially affect the public terms. Show me the complete terms and wait for my explicit approval. Only after I approve, call prepare_bounty_post. If this AI can generate and attach a unique image, you may show it for approval and call the tool with bounty_image, the exact image_prompt, and accessible image_alt_text. Otherwise omit all three image fields; the Agent Bounties review page will render a deterministic content-derived visual. Agent Bounties does not require or use a platform model key. The MCP endpoint is ${MCP_URL}.
 
-If you are not ChatGPT or the connector is unavailable, ask concise clarifying questions and then return ONLY one JSON object in this exact shape so I can bring the prepared terms to ChatGPT for image generation and final handoff:
+If the connector is unavailable, ask concise clarifying questions and then return ONLY one JSON object in this exact shape so I can paste the approved terms directly into the Agent Bounties review flow:
 {
   "title": "concise public title",
   "goal": "specific public outcome",
@@ -128,7 +128,7 @@ If you are not ChatGPT or the connector is unavailable, ask concise clarifying q
   "discovery_source": "AI provider and account used"
 }
 
-Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, each <= 1000; rewards are positive USDC decimals with at most 6 places; task_window_days is 1-30; source_url is HTTPS or null. Do not claim that anything is posted, created, funded, signed, or paid. The final bounty image must be created and approved in my ChatGPT account, and I must explicitly approve the wallet transaction on Agent Bounties.`;
+Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, each <= 1000; rewards are positive USDC decimals with at most 6 places; task_window_days is 1-30; source_url is HTTPS or null. Do not claim that anything is posted, created, funded, signed, or paid. I must explicitly approve the bounty terms and separately approve any wallet transaction on Agent Bounties.`;
   }
 
   function setImportStatus(message, tone = "") {

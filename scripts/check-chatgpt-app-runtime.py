@@ -30,7 +30,8 @@ CHATGPT_TOOLS = {
     "create_share_bundle",
 }
 CORE_COMPATIBILITY_TOOLS = {"list_autonomous_bounties"}
-CORE_TOOLS = CHATGPT_TOOLS | CORE_COMPATIBILITY_TOOLS
+CORE_AGENT_TOOLS = {"inspect_open_competition_v2", "prepare_open_competition_v2"}
+CORE_TOOLS = CHATGPT_TOOLS | CORE_COMPATIBILITY_TOOLS | CORE_AGENT_TOOLS
 FEED_WIDGET_URI = "ui://agent-bounties/live-feed-v4.html"
 MODERN_PROTOCOL_VERSION = "2026-07-28"
 LEGACY_PROTOCOL_VERSION = "2025-06-18"
@@ -287,7 +288,11 @@ def main() -> int:
         require(
             post_descriptor["_meta"]["openai/fileParams"] == ["bounty_image"]
             and "bounty_image"
-            in post_descriptor["inputSchema"]["required"],
+            not in post_descriptor["inputSchema"]["required"]
+            and any(
+                variant.get("type") == "null"
+                for variant in post_descriptor["outputSchema"]["properties"]["image"]["anyOf"]
+            ),
             "ChatGPT file handoff metadata drifted",
         )
 
@@ -434,7 +439,7 @@ def main() -> int:
         f"chatgpt_tools={len(CHATGPT_TOOLS)} "
         f"core_tools={len(CORE_TOOLS)} "
         "profile=full_hosted_execution "
-        "chatgpt_image_handoff=file_param "
+        "chatgpt_image_handoff=optional_file_param "
         "moonpay_handoff=first_party "
         "exclusion_evidence=redacted "
         "legacy_public_review_flag=ignored"

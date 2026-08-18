@@ -78,7 +78,7 @@ New ChatGPT scans advertise exactly these ten non-overlapping tools:
 | `get_bounty_feed` | Reads the unified live bounty projection | read-only, closed-world, idempotent |
 | `render_bounty_feed` | Mounts the branded conversation-first live feed | read-only, closed-world, idempotent |
 | `prepare_moonpay_onramp` | Formats one first-party Base-USDC top-up handoff; creates no checkout or purchase | read-only, closed-world, idempotent |
-| `prepare_bounty_post` | Stores the exact user-approved image generated in the poster's ChatGPT account and prepares the first-party review handoff | non-read-only, open-world, destructive, idempotent |
+| `prepare_bounty_post` | Preserves an optional exact user-approved image and prepares the first-party review handoff | non-read-only, open-world, destructive, idempotent |
 | `prepare_bounty_action` | Creates one opaque, expiring, idempotent first-party lifecycle-review intent | non-read-only, closed-world, non-destructive, idempotent |
 | `get_bounty_action_status` | Reconciles one intent against indexed canonical events | non-read-only, closed-world, non-destructive, idempotent |
 | `compile_objective_with_cloud_agent` | Produces bounded child-bounty drafts | non-read-only, open-world, non-destructive, non-idempotent |
@@ -101,17 +101,17 @@ from breaking while removing an overlapping choice from new ChatGPT
 registrations.
 
 `prepare_bounty_post` declares
-`_meta["openai/fileParams"]=["bounty_image"]`. ChatGPT gathers the terms,
-writes an image prompt from the completed bounty, generates the image with the
-poster's own ChatGPT account, displays that exact image, and obtains explicit
-approval before calling the tool. The tool downloads only the temporary
-OpenAI-hosted file URL, validates a PNG/JPEG/WebP payload of at most 5 MiB,
-stores it by SHA-256, and returns a first-party review URL. The private
-ChatGPT `file_id` is never placed in public terms. Agent Bounties has no
-OpenAI image-generation key in this flow and never generates or substitutes
-the bounty artwork. The review URL renders the completed terms and approved
-image as a read-only card; it does not expose a second composer or editable
-bounty form.
+`_meta["openai/fileParams"]=["bounty_image"]`, but the file parameter is
+optional. When ChatGPT creates an image, it displays the exact image and terms,
+obtains explicit approval, and supplies `bounty_image`, `image_prompt`, and
+`image_alt_text` together. The tool downloads only the temporary OpenAI-hosted
+file URL, validates a PNG/JPEG/WebP payload of at most 5 MiB, and stores it by
+SHA-256. A client without a file-generation path omits all three image fields;
+the first-party review then uses a deterministic content-derived visual. The
+private ChatGPT `file_id` is never placed in public terms. Agent Bounties has
+no OpenAI image-generation key in this flow and never generates or substitutes
+bounty artwork with a model. The review URL renders the completed terms as a
+read-only card; it does not expose a second composer or editable bounty form.
 
 Lower-level funding, wallet, claim, submission, and settlement tools are not
 exposed to the ChatGPT app. The model receives only hosted preparation and
@@ -155,10 +155,10 @@ The full bounty loop follows one pattern:
 
 1. The person selects Post bounty, Comment, Share, or Solve, or asks for the
    same action directly in conversation.
-2. For posting, ChatGPT gathers every missing detail conversationally, creates
-   a unique image in the poster's ChatGPT account from the completed bounty,
-   and shows the exact image with the complete terms.
-3. ChatGPT asks for explicit approval of both the terms and image. For other
+2. For posting, ChatGPT gathers every missing detail conversationally and shows
+   the complete terms. When it can create and attach an image, it also shows
+   that exact image; otherwise the hosted review uses its bounded fallback.
+3. ChatGPT asks for explicit approval of the terms and any supplied image. For other
    lifecycle actions it summarizes the complete proposed action and asks for
    explicit confirmation.
 4. Only after confirmation does ChatGPT call the relevant tool and prepare a

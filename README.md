@@ -172,8 +172,11 @@ account, so Agent Bounties does not need the provider API key. Add
 `https://mcp.agentbounties.app/mcp` as a remote MCP connector and ask the AI to
 call `prepare_bounty_post`. ChatGPT can render the included MCP Apps card;
 other MCP hosts receive the same terms as a Markdown card plus a secure review
-URL. Without a connector, the website copies a strict prompt and validates the
-returned JSON locally before rendering the bounty card.
+URL. An AI that can attach an approved image may pass it with its prompt and
+alt text; other clients omit all three optional image fields and the review
+page uses a deterministic content-derived visual. Without a connector, the
+website copies a strict prompt and validates the returned JSON locally before
+rendering the same reviewable bounty card.
 
 On any existing GitHub issue, comment `/agent-bounty create <amount> USDC` to
 open an idempotent, review-required draft and the existing canonical wallet

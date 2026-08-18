@@ -122,7 +122,7 @@ for (const invalid of [
 }
 
 const prompt = api.promptFor("Build a public climate dashboard");
-for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "generate one unique image using my ChatGPT account", "Do not claim that anything is posted"]) {
+for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "Otherwise omit all three image fields", "Do not claim that anything is posted"]) {
   if (!prompt.includes(marker)) throw new Error(`AI handoff prompt missing: ${marker}`);
 }
 
