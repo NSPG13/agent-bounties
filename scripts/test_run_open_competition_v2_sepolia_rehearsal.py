@@ -12,6 +12,21 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SepoliaRehearsalTests(unittest.TestCase):
+    def test_prepared_actor_roles_normalize_creator_to_deployer(self):
+        actors = {
+            "deployer": "0x" + "11" * 20,
+            "solver_a": "0x" + "22" * 20,
+            "solver_b": "0x" + "33" * 20,
+        }
+        self.assertEqual(
+            MODULE.prepared_actor_set(actors),
+            {
+                "creator": actors["deployer"],
+                "solver_a": actors["solver_a"],
+                "solver_b": actors["solver_b"],
+            },
+        )
+
     def test_sepolia_rebind_deploys_exact_three_component_sequence(self):
         deployer = "0x" + "11" * 20
         predicted = ["0x" + f"{value:040x}" for value in (101, 102, 103)]
