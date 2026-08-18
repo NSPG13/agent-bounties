@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from eth_account import Account
+from eth_utils import to_checksum_address
 
 from _shared.evm import address_word, uint_word
 from _shared.rpc import rpc
@@ -57,6 +58,11 @@ def usdc_balance(url: str, token: str, address: str, block: str) -> int:
     return int(rpc(url, "eth_call", [{"to": token, "data": data}, block]), 16)
 
 
+def signing_address(address: str) -> str:
+    require(ADDRESS.fullmatch(address) is not None, "transaction destination is invalid")
+    return to_checksum_address(address)
+
+
 class SignedRpc:
     def __init__(self, url: str, signer: Any, chain_id: int) -> None:
         self.url = url
@@ -65,6 +71,7 @@ class SignedRpc:
         require(int(rpc(url, "eth_chainId", []), 16) == chain_id, "RPC chain ID mismatch")
 
     def send(self, *, to: str, data: str = "0x", value: int = 0) -> dict[str, Any]:
+        to = signing_address(to)
         nonce = int(rpc(self.url, "eth_getTransactionCount", [self.signer.address, "pending"]), 16)
         block = rpc(self.url, "eth_getBlockByNumber", ["latest", False])
         base_fee = int(block.get("baseFeePerGas", "0x0"), 16)
