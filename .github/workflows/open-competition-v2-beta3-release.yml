@@ -656,6 +656,7 @@ jobs:
             --gates target/release-assets/release-gates.json --output target/sepolia.json
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepare-proof-fixtures target/sepolia-proof-inputs \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --resolved-bundle-output target/sepolia.json \
@@ -668,6 +669,7 @@ jobs:
           done
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepared-proof-dir target/sepolia-proof-inputs \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --proof-evidence-dir target/sepolia-proofs --prepare-x402-canary \
@@ -1169,6 +1171,7 @@ jobs:
             --output target/mainnet-broker-reserve-before.json
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --prepare-proof-fixtures target/mainnet-proof-inputs \
@@ -1181,6 +1184,7 @@ jobs:
           done
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle target/mainnet-canary-bundle.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --prepared-proof-dir target/mainnet-proof-inputs \
