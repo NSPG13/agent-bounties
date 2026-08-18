@@ -30,7 +30,7 @@ invocation:
 # The inventory is the discovery snapshot the selector reasons over: the set of
 # canonical opportunities with their lifecycle, reward, bond and margin fields.
 inventory:
-  source: https://api.agentbounties.app/v1/opportunities
+  source: https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base
   canonical_events: https://api.agentbounties.app/v1/base/autonomous-bounties/events
   network: base-mainnet
   required_fields:
@@ -76,6 +76,7 @@ checks:
     - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/no-margin.json
     - python integrations/mini-swe-agent/select_bounty.py --input integrations/mini-swe-agent/fixtures/exclusive-claimant.json
   acceptance: python /benchmark/check.py
+  selector_tests: python -B integrations/mini-swe-agent/test_select_bounty.py
   principle: >
     Run the narrowest check that can falsify the change. Simulate every on-chain
     call before spending gas.
@@ -128,7 +129,7 @@ canonical_requirements:
     Require an explicit canonical Base source: network in {base-mainnet, eip155:8453}
     AND discovery_factors asserting source_type=canonical_base AND a 42-char contract
     address. Absence of contrary evidence is not evidence of canonicity.
-  ready_to_earn_view: https://api.agentbounties.app/v1/opportunities?ready_to_earn=true
+  ready_to_earn_view: https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base
   claimability: work_state must be one of {open, claimable, ready, ready_to_earn}
   funding: >
     payment_state must be escrowed/funded/committed, payment_committed must be true,

@@ -36,6 +36,21 @@ import sys
 import time
 from pathlib import Path
 
+# The canonical ready-to-earn view. These query parameters are the ones the API
+# actually deserializes (crates/api/src/opportunities.rs::OpportunityQuery:
+# network, view, source_type, work_state, payment_state, limit) and they match
+# docs/posting-a-usable-bounty.md and docs/agent-quickstart.md.
+#
+# An invented parameter such as `?ready_to_earn=true` is NOT rejected by the
+# server -- unknown query keys are simply ignored, so it silently returns the
+# UNFILTERED inventory while looking filtered. That is the exact failure this
+# selector exists to prevent, so the filter is spelled out canonically here and
+# referenced everywhere instead of being retyped per call site.
+READY_TO_EARN_FEED = (
+    "https://api.agentbounties.app/v1/opportunities"
+    "?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
+)
+
 DEFAULT_STALENESS_SECONDS = 900
 # A snapshot timestamped in the future means a broken clock somewhere; treating it
 # as "fresh" would let arbitrarily stale data through.
@@ -235,7 +250,7 @@ def select(inv):
         return {
             "action": "wait",
             "reason": "inventory contains no opportunities",
-            "next_action": ("Re-poll https://api.agentbounties.app/v1/opportunities?ready_to_earn=true "
+            "next_action": (f"Re-poll {READY_TO_EARN_FEED} "
                             "and wait for newly funded canonical work before claiming."),
             "selected": None,
         }
@@ -246,7 +261,7 @@ def select(inv):
         return {
             "action": "refresh",
             "reason": f"freshness coverage unusable: {exc}",
-            "next_action": ("Re-fetch https://api.agentbounties.app/v1/opportunities?ready_to_earn=true "
+            "next_action": (f"Re-fetch {READY_TO_EARN_FEED} "
                             "with a valid generated_at/age_seconds; failing closed because a snapshot "
                             "of unknown age can hide a live exclusive claim."),
             "selected": None,
