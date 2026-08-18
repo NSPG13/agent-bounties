@@ -1,0 +1,52 @@
+name: Open Competition V2 Beta3 Sepolia rehearsal recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-sepolia-rehearsal-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    environment: v2-beta2-sepolia
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Finalize and sweep exact failed-rehearsal actors
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
+          BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
+        run: |
+          set -euo pipefail
+          test -n "$BASE_SEPOLIA_RPC_URL" && test -n "$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
+          test "${BASE_DEPLOYER_ADDRESS,,}" = "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+          python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/test_recover_open_competition_v2_rehearsal_funds.py
+          python scripts/recover_open_competition_v2_rehearsal_funds.py \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --deployer "$BASE_DEPLOYER_ADDRESS" \
+            --source-commit 4d09d82825c38f2bf93a8ee4375a95b302410c29 \
+            --run-id 32147289466 \
+            --attempt 1 --attempt 2 --attempt 3 --attempt 4 --attempt 5 --attempt 6 \
+            --competition 0x5e87358743dd4dcefc1a71ce9663ccf229ba7559 \
+            --required-actor 0xf723d4ac02331707f39bc9416b11ec25a73743f1 \
+            --required-actor 0x300775bb9ae722e94280637c4547260f1708afc3 \
+            --required-actor 0xfe9ba5613c36365fdeed32cbe92b2a644fa0f2a3 \
+            --required-actor 0xdecc449c2af3ec13e348fc920451afa770eee2b5 \
+            --output target/beta3-sepolia-rehearsal-recovery.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-sepolia-rehearsal-recovery-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/beta3-sepolia-rehearsal-recovery.json
+          if-no-files-found: error
+          retention-days: 365
