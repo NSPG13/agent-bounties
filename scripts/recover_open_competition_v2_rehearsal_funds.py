@@ -73,6 +73,16 @@ def actor_set(root_key: bytes, source_commit: str, run_id: str, attempts: list[i
     return actors
 
 
+def parse_actor_scope(value: str) -> tuple[str, str, int]:
+    parts = value.split(":")
+    require(len(parts) == 3, "actor scope must be SOURCE_COMMIT:RUN_ID:ATTEMPT")
+    source_commit, run_id, attempt_text = parts
+    require(re.fullmatch(r"[0-9a-f]{40}", source_commit) is not None, "actor scope source commit is invalid")
+    require(run_id.isdigit() and int(run_id) > 0, "actor scope run ID is invalid")
+    require(attempt_text.isdigit() and int(attempt_text) > 0, "actor scope attempt is invalid")
+    return source_commit, run_id, int(attempt_text)
+
+
 def sweepable_eth(balance: int, maximum_fee_per_gas: int) -> int:
     reserve = 30_000 * maximum_fee_per_gas
     return max(balance - reserve, 0)
@@ -108,7 +118,15 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
     require(deployer.address.lower() == args.deployer.lower(), "protected key does not match the expected deployer")
     require(call_address(args.rpc_url, args.competition, "creator()") == deployer.address.lower(), "competition creator mismatch")
 
-    actors = actor_set(root_key, args.source_commit, args.run_id, args.attempts)
+    actor_scopes = [(args.source_commit, args.run_id, attempt) for attempt in args.attempts]
+    actor_scopes.extend(parse_actor_scope(scope) for scope in args.additional_actor_scope)
+    actors: list[Any] = []
+    seen_actors: set[str] = set()
+    for source_commit, run_id, attempt in actor_scopes:
+        for actor in actor_set(root_key, source_commit, run_id, [attempt]):
+            if actor.address.lower() not in seen_actors:
+                actors.append(actor)
+                seen_actors.add(actor.address.lower())
     actor_addresses = {actor.address.lower() for actor in actors}
     missing = sorted(address.lower() for address in args.required_actor if address.lower() not in actor_addresses)
     require(not missing, f"required rehearsal actors were not derived: {missing}")
@@ -175,6 +193,10 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
         "source_commit": args.source_commit,
         "release_run_id": args.run_id,
         "attempts": args.attempts,
+        "actor_scopes": [
+            {"source_commit": source_commit, "run_id": run_id, "attempt": attempt}
+            for source_commit, run_id, attempt in actor_scopes
+        ],
         "competition": args.competition.lower(),
         "deployer": deployer.address.lower(),
         "derived_actor_addresses": sorted(actor_addresses),
@@ -195,6 +217,7 @@ def main() -> int:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--attempt", dest="attempts", action="append", type=int, required=True)
+    parser.add_argument("--additional-actor-scope", action="append", default=[])
     parser.add_argument("--competition", required=True)
     parser.add_argument("--required-actor", action="append", default=[])
     parser.add_argument("--minimum-usdc", type=int, default=900_000)

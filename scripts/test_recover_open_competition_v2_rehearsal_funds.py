@@ -22,6 +22,17 @@ class RehearsalRecoveryTests(unittest.TestCase):
         self.assertEqual(recovery.sweepable_eth(100_000, 2), 40_000)
         self.assertEqual(recovery.sweepable_eth(59_999, 2), 0)
 
+    def test_additional_actor_scope_is_explicit_and_validated(self) -> None:
+        scope = recovery.parse_actor_scope(
+            "5c90f23e6d03157fcd28883874439009419c9938:32136610379:1"
+        )
+        self.assertEqual(
+            scope,
+            ("5c90f23e6d03157fcd28883874439009419c9938", "32136610379", 1),
+        )
+        with self.assertRaises(recovery.RecoveryError):
+            recovery.parse_actor_scope("main:32136610379:1")
+
     def test_transfer_calldata_binds_recipient_and_amount(self) -> None:
         data = recovery.transfer_data("0x" + "12" * 20, 525_000)
         self.assertTrue(data.startswith("0xa9059cbb"))
