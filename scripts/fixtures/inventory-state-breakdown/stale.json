@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-07-01T00:00:00Z",
+  "items": [
+    {
+      "id": "0xccc1",
+      "source": "canonical",
+      "status": "open",
+      "updated_at": "2026-07-01T00:00:00Z",
+      "verification_available": true
+    },
+    {
+      "id": "0xccc2",
+      "source": "canonical",
+      "status": "claimed",
+      "updated_at": "2026-07-01T00:00:00Z",
+      "verification_available": false
+    }
+  ],
+  "safe_block": 20500000,
+  "schema_version": "agent-bounties/inventory-state-breakdown-v1",
+  "source": "canonical"
+}
