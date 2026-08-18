@@ -27,6 +27,7 @@ NETWORK = "base-sepolia"
 USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 TRANSFER_SELECTOR = "a9059cbb"
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
+ETH_SWEEP_GAS_RESERVE = 150_000
 
 
 class RecoveryError(RuntimeError):
@@ -84,7 +85,7 @@ def parse_actor_scope(value: str) -> tuple[str, str, int]:
 
 
 def sweepable_eth(balance: int, maximum_fee_per_gas: int) -> int:
-    reserve = 30_000 * maximum_fee_per_gas
+    reserve = ETH_SWEEP_GAS_RESERVE * maximum_fee_per_gas
     return max(balance - reserve, 0)
 
 
