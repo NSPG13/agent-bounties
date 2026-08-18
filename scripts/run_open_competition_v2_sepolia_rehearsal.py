@@ -196,7 +196,9 @@ def runtime_hash(url: str, address: str, block: str = "latest") -> tuple[str, in
     return keccak256(code), len(code)
 
 
-def bundle_for_nonce(bundle: dict[str, Any], nonce: int) -> dict[str, Any]:
+def bundle_for_nonce(
+    bundle: dict[str, Any], nonce: int, verifier_assets: dict[str, Any]
+) -> dict[str, Any]:
     preflight = deepcopy(bundle["preflight_safe_block"])
     preflight["deployer_nonce"] = nonce
     return release.build_bundle(
@@ -206,11 +208,16 @@ def bundle_for_nonce(bundle: dict[str, Any], nonce: int) -> dict[str, Any]:
         repository_subject=bundle["repository_subject"]["hash"],
         preflight=preflight,
         gates=deepcopy(bundle["release_gates"]),
-        verifier_assets=release.load_verifier_assets(),
+        verifier_assets=verifier_assets,
     )
 
 
-def resolve_or_deploy_factory(client: SignedRpc, signer: Any, bundle: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def resolve_or_deploy_factory(
+    client: SignedRpc,
+    signer: Any,
+    bundle: dict[str, Any],
+    verifier_assets: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     require(bundle.get("network") == NETWORK and bundle.get("chain_id") == CHAIN_ID, f"release bundle is not {NETWORK}")
     require(signer.address.lower() == bundle["deployer"], "signer does not match release bundle deployer")
     pending_nonce = int(rpc(client.url, "eth_getTransactionCount", [signer.address, "pending"]), 16)
@@ -218,7 +225,7 @@ def resolve_or_deploy_factory(client: SignedRpc, signer: Any, bundle: dict[str, 
     candidates = [bundle]
     for nonce in range(max(0, pending_nonce - 32), pending_nonce):
         if nonce != bundle["factory"]["from_nonce"]:
-            candidates.append(bundle_for_nonce(bundle, nonce))
+            candidates.append(bundle_for_nonce(bundle, nonce, verifier_assets))
     for candidate in candidates:
         observed, size = runtime_hash(client.url, candidate["factory"]["address"])
         if size and observed == candidate["factory"]["runtime_code_hash"]:
@@ -290,8 +297,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
     signer = Account.from_key(raw_key)
     raw_bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
+    verifier_assets = release.load_verifier_assets(args.verifier_assets)
     client = SignedRpc(args.rpc_url)
-    bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
+    bundle, deployment_receipt = resolve_or_deploy_factory(
+        client, signer, raw_bundle, verifier_assets
+    )
     components = verify_components(client.url, bundle)
     signer, solver_a, solver_b = actors_for(raw_key, bundle, args.actor_derivation_salt)
     context = rehearsal.prepare_context(
@@ -611,6 +621,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--network", choices=("base-sepolia", "base-mainnet"), default="base-sepolia")
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--verifier-assets", type=Path, required=True)
     parser.add_argument("--rpc-url")
     parser.add_argument("--private-key-env", default="BASE_KEEPER_PRIVATE_KEY")
     parser.add_argument("--actor-derivation-salt", default="local")

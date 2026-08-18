@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 PATH = Path(__file__).with_name("run_open_competition_v2_sepolia_rehearsal.py")
@@ -11,6 +12,47 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SepoliaRehearsalTests(unittest.TestCase):
+    def test_every_release_rehearsal_call_pins_generated_verifier_assets(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        lines = workflow.splitlines()
+        calls = [
+            index
+            for index, line in enumerate(lines)
+            if "python scripts/run_open_competition_v2_sepolia_rehearsal.py" in line
+        ]
+        self.assertEqual(len(calls), 4)
+        for index in calls:
+            self.assertIn(
+                "--verifier-assets target/release-assets/verifier-assets.json",
+                "\n".join(lines[index : index + 6]),
+            )
+
+    def test_nonce_rebind_uses_explicit_pinned_verifier_assets(self):
+        bundle = {
+            "preflight_safe_block": {"deployer_nonce": 7},
+            "deployer": "0x" + "11" * 20,
+            "source_commit": "22" * 20,
+            "repository_subject": {"hash": "0x" + "33" * 32},
+            "release_gates": {"pinned": True},
+        }
+        verifier_assets = {"proof_systems": {"pinned": True}}
+        rebuilt = {"factory": {"from_nonce": 11}}
+
+        with patch.object(
+            MODULE.release,
+            "load_verifier_assets",
+            side_effect=AssertionError("filesystem fallback"),
+        ), patch.object(MODULE.release, "build_bundle", return_value=rebuilt) as build:
+            self.assertIs(MODULE.bundle_for_nonce(bundle, 9, verifier_assets), rebuilt)
+
+        self.assertEqual(build.call_args.kwargs["preflight"]["deployer_nonce"], 9)
+        self.assertIs(build.call_args.kwargs["verifier_assets"], verifier_assets)
+
     def test_actor_derivation_is_stable_and_scoped(self):
         key = bytes.fromhex("11" * 32)
         commit = "22" * 20
