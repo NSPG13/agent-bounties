@@ -1,0 +1,25 @@
+{
+  "state": "claimable",
+  "observed_at": "2026-08-06T12:00:00Z",
+  "next_action": "claim",
+  "next_action_detail": "Funded at target with verification_ready true. Follow the canonical /claim #ISSUE wallet: 0x... GitHub handoff when a strict source issue exists; otherwise use the hosted agent_native_claim path. Do not sign a waitlisted or stale request.",
+  "inventory": [
+    {
+      "bounty_id": "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb",
+      "bounty_contract": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+      "status": "claimable",
+      "solver_reward": "2000000",
+      "verifier_reward": "10000",
+      "claim_bond": "10000",
+      "target_amount": "2010000",
+      "funded_amount": "2010000",
+      "terms_hash": "0xeeeb8972a9cb6296750a3670fcfa595e1fe2f38b66ce2c15d0cadb49fb82d291",
+      "terms_valid": true,
+      "verification_mode": "signed_quorum",
+      "verification_ready": true,
+      "verification_readiness_reason": "the default single sandboxed-regression verifier is supported",
+      "validation_errors": [],
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/772"
+    }
+  ]
+}
