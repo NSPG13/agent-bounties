@@ -1,28 +1,45 @@
 #!/usr/bin/env python3
-"""Agent Bounties evidence guard — an OpenHands stop hook.
+"""Agent Bounties evidence guard — an OpenHands Stop hook.
 
-Runs when the agent tries to finish. It blocks completion while a claimed bounty
-still lacks the evidence needed to settle, so a session cannot end with the bond
-posted, the work done, and nothing submitted.
+Runs when the agent tries to finish. Blocks completion while a claimed bounty
+still lacks settle-ready evidence, so a session cannot end with the bond posted,
+the work done, and nothing submitted.
 
-Decision protocol (stdout JSON):
-    {"decision": "allow"}                     nothing to block on
-    {"decision": "deny", "reason": "..."}     stop; the reason states one exact next action
+EXIT CONTRACT (per https://docs.openhands.dev/openhands/usage/customization/hooks):
+    exit 0 -> allow. The operation proceeds.
+    exit 2 -> BLOCK. The operation is denied.
+    other  -> non-blocking error.
+JSON on stdout carries the human-readable decision alongside the exit code.
 
-Reads optional state from AGENT_BOUNTIES_STATE (path to JSON) or stdin.
-Fails OPEN on unreadable input: a broken guard must not wedge every session.
+STDIN is the OpenHands event payload, NOT bounty state. Claim state is read from
+an authoritative producer configured by AGENT_BOUNTIES_STATE_CMD (preferred) or
+AGENT_BOUNTIES_STATE (a file path). The session id from the event payload is
+passed through so state is resolved per session.
 
-WALLET SAFETY: this guard never reads, stores or transmits secret key material,
-and never broadcasts a transaction.
+FAIL-CLOSED RULE: if a claim-state source is CONFIGURED but unreadable, malformed,
+or dimensionally invalid, this guard BLOCKS (exit 2). Only the genuinely
+unconfigured case — no state source at all, i.e. a repo not doing bounty work —
+allows completion, and unrelated sessions exit 0.
+
+Local input can never assert payment. A `bounty_settled` boolean in local state is
+treated as UNVERIFIED; paid language requires canonical event identity plus a
+settlement receipt (event id / tx hash / log key) carried in
+`settlement.canonical_event`. Forged local state cannot say paid.
+
+WALLET SAFETY: never reads, stores, logs, or transmits secret key material, and
+never broadcasts a transaction.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 import sys
 
-# Evidence fields the canonical submission schema requires.
+ALLOW, BLOCK, ERROR = 0, 2, 1
+
 REQUIRED_EVIDENCE = (
     "repository",
     "commit",
@@ -33,104 +50,200 @@ REQUIRED_EVIDENCE = (
     "improvement_feedback",
 )
 
+# A canonical settlement receipt must carry a real event identity, not a boolean.
+RECEIPT_FIELDS = ("event_id", "log_key", "tx_hash")
 
-def load_state():
-    """Load session state from env-pointed file or stdin. Never raises."""
+
+def emit(decision: str, reason: str, code: int) -> int:
+    print(json.dumps({"decision": decision, "reason": reason}))
+    return code
+
+
+def read_event() -> dict:
+    """Parse the OpenHands event payload from stdin. Never raises."""
+    if sys.stdin.isatty():
+        return {}
+    try:
+        raw = sys.stdin.read().strip()
+    except OSError:
+        return {}
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def session_id(event: dict) -> str:
+    return str(
+        event.get("session_id")
+        or event.get("sessionId")
+        or os.environ.get("OPENHANDS_SESSION_ID")
+        or ""
+    )
+
+
+def load_claim_state(sid: str):
+    """Resolve authoritative claim state.
+
+    Returns (state_dict, configured, error_message).
+      configured=False -> no source at all; this repo is not doing bounty work.
+      state=None with configured=True -> unreadable/malformed; caller must BLOCK.
+    """
+    cmd = os.environ.get("AGENT_BOUNTIES_STATE_CMD")
+    if cmd:
+        try:
+            argv = shlex.split(cmd)
+            if sid:
+                argv.append(sid)
+            done = subprocess.run(
+                argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=20, check=False,
+            )
+            if done.returncode != 0:
+                return None, True, f"state producer exited {done.returncode}: {done.stderr[-200:]}"
+            return json.loads(done.stdout), True, None
+        except json.JSONDecodeError as exc:
+            return None, True, f"state producer emitted invalid JSON: {exc}"
+        except Exception as exc:  # timeout, missing binary, permissions
+            return None, True, f"state producer failed: {type(exc).__name__}: {exc}"
+
     path = os.environ.get("AGENT_BOUNTIES_STATE")
     if path:
         try:
             with open(path, encoding="utf-8") as handle:
-                return json.load(handle)
-        except (OSError, json.JSONDecodeError):
-            return None
-    if not sys.stdin.isatty():
-        try:
-            raw = sys.stdin.read().strip()
-            return json.loads(raw) if raw else None
-        except (json.JSONDecodeError, OSError):
-            return None
-    return None
+                return json.load(handle), True, None
+        except FileNotFoundError:
+            return None, True, f"configured state file is missing: {path}"
+        except json.JSONDecodeError as exc:
+            return None, True, f"configured state file is malformed: {exc}"
+        except OSError as exc:
+            return None, True, f"configured state file unreadable: {exc}"
+
+    return None, False, None
 
 
-def decide(state):
-    """Return an allow/deny decision with one exact next action on deny."""
+def has_canonical_receipt(state: dict) -> bool:
+    """True only when settlement carries real canonical event identity."""
+    settlement = state.get("settlement")
+    if not isinstance(settlement, dict):
+        return False
+    event = settlement.get("canonical_event")
+    if not isinstance(event, dict):
+        return False
+    if str(event.get("kind", "")).lower() not in ("bountysettled", "bounty_settled"):
+        return False
+    return any(str(event.get(field, "")).strip() for field in RECEIPT_FIELDS)
+
+
+def decide(state, configured, err, sid):
+    # Unconfigured: nothing to protect. Unrelated sessions must exit 0.
+    if not configured:
+        return "allow", "no bounty claim-state source configured for this session", ALLOW
+
+    # Configured but unreadable -> FAIL CLOSED. This was the review's Finding 2.
+    if state is None:
+        return (
+            "deny",
+            f"Claim state is configured but unreadable, so an active claim cannot be ruled out: {err}. "
+            "Next action: fix the state producer (AGENT_BOUNTIES_STATE_CMD/AGENT_BOUNTIES_STATE) "
+            "and re-run. Failing closed to protect a posted bond.",
+            BLOCK,
+        )
+
     if not isinstance(state, dict):
-        # Fail open: no state means no claimed bounty to protect.
-        return {"decision": "allow", "reason": "no bounty state available"}
+        return "deny", "Claim state is not a JSON object; failing closed.", BLOCK
 
-    claim = state.get("claim") or {}
-    if not claim.get("active"):
-        return {"decision": "allow", "reason": "no active claim"}
+    claim = state.get("claim")
+    if claim is None:
+        return (
+            "deny",
+            "Claim state is present but has no 'claim' section, so claim status is unknown. "
+            "Failing closed. Next action: have the state producer emit claim.active explicitly.",
+            BLOCK,
+        )
+    if not isinstance(claim, dict):
+        return "deny", "'claim' must be an object; failing closed.", BLOCK
+
+    active = claim.get("active")
+    if active is None:
+        return (
+            "deny",
+            "claim.active is absent, so an active claim cannot be ruled out. Failing closed.",
+            BLOCK,
+        )
+    if active is not True:
+        return "allow", f"no active claim for session {sid or '(unknown)'}", ALLOW
 
     contract = claim.get("bounty_contract", "<bounty_contract>")
 
-    # 1. Work must actually be tested before it can be submitted.
+    # 1. Work must be tested.
     test = state.get("test") or {}
-    if not test.get("command"):
-        return {
-            "decision": "deny",
-            "reason": (
-                "An active claim exists but no test command was recorded. "
-                "Next action: run the bounty's acceptance check "
-                "(python /benchmark/check.py) and record the exact command."
-            ),
-        }
+    if not str(test.get("command", "")).strip():
+        return (
+            "deny",
+            "An active claim exists but no test command was recorded. Next action: run the "
+            "bounty's acceptance check (python -B /benchmark/check.py) and record the exact command.",
+            BLOCK,
+        )
     if test.get("passed") is not True:
-        return {
-            "decision": "deny",
-            "reason": (
-                f"The acceptance check has not passed (command: {test.get('command')}). "
-                "Next action: fix the failing criterion and re-run that exact command "
-                "before submitting."
-            ),
-        }
+        return (
+            "deny",
+            f"The acceptance check has not passed (command: {test.get('command')}). "
+            "Next action: fix the failing criterion and re-run that exact command.",
+            BLOCK,
+        )
 
-    # 2. Evidence must be complete, or the submission cannot be verified.
+    # 2. Evidence must be complete.
     evidence = state.get("evidence") or {}
-    missing = [field for field in REQUIRED_EVIDENCE if not str(evidence.get(field, "")).strip()]
+    missing = [f for f in REQUIRED_EVIDENCE if not str(evidence.get(f, "")).strip()]
     if missing:
-        return {
-            "decision": "deny",
-            "reason": (
-                f"Evidence is incomplete; missing: {', '.join(missing)}. "
-                "Next action: populate every required evidence field, computing "
-                "source_snapshot_digest with "
-                "`git ls-files -z | sort -z | xargs -0 sha256sum | sha256sum`."
-            ),
-        }
+        return (
+            "deny",
+            f"Evidence is incomplete; missing: {', '.join(missing)}. Next action: populate every "
+            "required field, computing source_snapshot_digest with "
+            "`git ls-files -z | sort -z | xargs -0 sha256sum | sha256sum`.",
+            BLOCK,
+        )
 
-    # 3. The submission must be recorded on-chain.
+    # 3. Submission must be on-chain.
     submission = state.get("submission") or {}
-    if not submission.get("submitted_onchain"):
-        return {
-            "decision": "deny",
-            "reason": (
-                "Work is tested and evidence is complete, but no submission is on-chain. "
-                f"Next action: call submit(bytes32,bytes32) on {contract} with the "
-                "submission and evidence hashes, then publish the evidence."
-            ),
-        }
+    if submission.get("submitted_onchain") is not True:
+        return (
+            "deny",
+            "Work is tested and evidence is complete, but no submission is on-chain. Next action: "
+            f"call submit(bytes32,bytes32) on {contract} with the submission and evidence hashes, "
+            "then publish the evidence.",
+            BLOCK,
+        )
 
-    # 4. Never let the session claim payment without canonical proof.
-    if not submission.get("bounty_settled"):
-        return {
-            "decision": "allow",
-            "reason": (
-                "Submission is on-chain and awaiting the verifier. Payment is NOT "
-                "confirmed: only a canonical BountySettled event proves payment. "
-                "Report $0.00 earned until that event exists."
-            ),
-        }
+    # 4. Paid language requires a canonical receipt — never a local boolean.
+    if has_canonical_receipt(state):
+        return "allow", "canonical BountySettled receipt present; work is paid", ALLOW
 
-    return {"decision": "allow", "reason": "BountySettled confirmed; work is paid"}
+    claims_paid = bool(submission.get("bounty_settled")) or bool(state.get("paid"))
+    note = (
+        " Local state asserts settlement but carries no canonical event receipt; that assertion is "
+        "ignored on purpose, because local input cannot prove payment."
+        if claims_paid else ""
+    )
+    return (
+        "allow",
+        "Submission is on-chain and awaiting the verifier. Payment is NOT confirmed: only a "
+        "canonical BountySettled event proves payment. Report $0.00 earned until that event "
+        "exists." + note,
+        ALLOW,
+    )
 
 
-def main():
-    result = decide(load_state())
-    print(json.dumps(result))
-    # Exit 0 always: the decision travels in the payload, not the exit code, so a
-    # deny is a normal, parseable outcome rather than a crash.
-    return 0
+def main() -> int:
+    event = read_event()
+    sid = session_id(event)
+    state, configured, err = load_claim_state(sid)
+    decision, reason, code = decide(state, configured, err, sid)
+    return emit(decision, reason, code)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 {
   "stop": [
     {
-      "name": "agent-bounties-evidence-guard",
-      "description": "Blocks completion while a claimed Agent Bounties bounty lacks settle-ready evidence.",
-      "command": "python3 .openhands/hooks/agent-bounties-evidence.py",
-      "timeout_seconds": 30
+      "matcher": "*",
+      "hooks": [
+        {
+          "command": ".openhands/hooks/agent-bounties-evidence.py",
+          "timeout": 60
+        }
+      ]
     }
   ]
 }

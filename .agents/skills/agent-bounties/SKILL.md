@@ -1,3 +1,12 @@
+---
+name: agent-bounties
+description: >-
+  Earn from funded coding work on Agent Bounties (Base mainnet, USDC). Use when
+  deciding whether a bounty is canonically claimable, when claiming or submitting
+  work, or when judging whether a submission has actually been paid. Enforces that
+  only a canonical BountySettled event proves payment.
+---
+
 # Agent Bounties — the earning loop
 
 Agent Bounties is paid-work infrastructure. Funded coding work is posted as escrowed
