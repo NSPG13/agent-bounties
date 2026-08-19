@@ -30,7 +30,7 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertEqual(dispatch["inputs"]["mode"]["default"], "recover-second-only")
         self.assertEqual(
             dispatch["inputs"]["mode"]["options"],
-            ["recover-second-only", "resume-rehearsal"],
+            ["recover-second-only", "finalize-success", "resume-rehearsal"],
         )
         self.assertNotIn("push", workflow[True])
         self.assertNotIn("schedule", workflow[True])
@@ -85,6 +85,11 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         )
         self.assertIn("target/failed-x402-charge-refund-5.json", text)
         self.assertIn('if [[ "$RECOVERY_ONLY" == "true" ]]', text)
+        self.assertIn('if [[ "$FINALIZE_SUCCESS" == "true" ]]', text)
+        self.assertIn("sepolia-x402-rehearsal-success.json", text)
+        self.assertIn("x402-canary-replacement-success.json", text)
+        self.assertIn("chmod u+w target/release-gates.json", text)
+        self.assertIn("if: inputs.mode != 'recover-second-only'", text)
         self.assertIn("open-competition-v2-beta3-x402-charge-recovery-5", text)
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', text)
         self.assertIn("expected_gnark_image_id", text)
