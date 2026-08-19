@@ -43,12 +43,15 @@ def verify(
         raise ValueError("gnark image omits a compiler or source-identity pin")
     required_workflow_fragments = (
         "SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
+        "SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5",
         "OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted",
         "rm -rf .sp1-safe/crates/prover/build",
         "--file -",
         "< ops/open-competition-v2-gnark-safe.Dockerfile",
         'docker image inspect "$SP1_GNARK_IMAGE"',
         'sha256sum "$SP1_GNARK_IMAGE" /gnark-cli',
+        'docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"',
+        'docker image inspect "$SP1_GNARK_RUNTIME_IMAGE"',
         "target/gnark-cli.sha256",
         'test -f "$trusted_root/trusted-setup.json"',
         'cp -a "$trusted_root/$system" ".sp1-safe/crates/prover/build/$system"',
@@ -60,8 +63,8 @@ def verify(
         )
     if "bash scripts/build_open_competition_v2_circuits.sh .sp1-safe" in release_source:
         raise ValueError("release workflow reintroduces the unsafe single-party setup route")
-    if "ghcr.io/succinctlabs/sp1-gnark" in release_source:
-        raise ValueError("release workflow must not use the upstream mutable gnark image route")
+    if 'docker pull "$SP1_GNARK_RUNTIME_IMAGE"' in release_source or 'docker push "$SP1_GNARK_RUNTIME_IMAGE"' in release_source:
+        raise ValueError("release workflow must not pull or publish the runtime compatibility alias")
     required_builder_fragments = (
         "minimum_memory_kib=$((250 * 1024 * 1024))",
         "minimum_disk_kib=$((60 * 1024 * 1024))",

@@ -21,6 +21,8 @@ env:
   SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
   SP1_SAFE_RUNTIME_COMMIT: c2d292c260333a9e4f166cd1435e8ef4897c8b43
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
+  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
 
 jobs:
@@ -55,9 +57,12 @@ jobs:
           test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           test -f target/live-sepolia/sepolia-x402-rehearsal.json
           test -f target/live-sepolia/failed-x402-charge-refund.json
+          test -f target/live-sepolia/failed-x402-charge-refund-2.json
           jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
           jq -e '.passed == true and .amount == "110000" and (.refund_transaction | length > 0)' \
             target/live-sepolia/failed-x402-charge-refund.json >/dev/null
+          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312" and (.refund_transaction | length > 0)' \
+            target/live-sepolia/failed-x402-charge-refund-2.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-rehearsal.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
@@ -140,6 +145,13 @@ jobs:
           set -euo pipefail
           test "${#OPEN_COMPETITION_V2_PROVER_API_KEY}" -ge 32
           test -f "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+          expected_gnark_image_id="$(jq -r '.[0].Id' target/mainnet-deployment/release-assets/gnark-image.json)"
+          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{.Id}}')" = "$expected_gnark_image_id"
+          docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{.Id}}')" = "$expected_gnark_image_id"
+          expected_gnark_cli="$(awk 'NR == 1 { print $1 }' target/mainnet-deployment/release-assets/gnark-cli.sha256)"
+          actual_gnark_cli="$(docker run --rm --entrypoint sha256sum "$SP1_GNARK_RUNTIME_IMAGE" /gnark-cli | awk 'NR == 1 { print $1 }')"
+          test "$actual_gnark_cli" = "$expected_gnark_cli"
           sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
           sudo install -m 0755 target/mainnet-deployment/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
@@ -342,6 +354,8 @@ jobs:
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
           test -n "$BASE_KEEPER_ADDRESS" && test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
           test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete" && test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
+          expected_gnark_image_id="$(jq -r '.[0].Id' target/mainnet-deployment/release-assets/gnark-image.json)"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{.Id}}')" = "$expected_gnark_image_id"
           python -m pip install -r scripts/requirements-wallet.txt
           BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
           KEEPER="${BASE_KEEPER_ADDRESS,,}"

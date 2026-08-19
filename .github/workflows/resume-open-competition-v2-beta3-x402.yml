@@ -26,6 +26,8 @@ env:
   SOURCE_ACTOR_DERIVATION_SALT: "32147289466:15:sepolia"
   EXPECTED_SEPOLIA_DEPLOYER: "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
+  SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
 
 jobs:
   resume-sepolia-x402:
@@ -113,6 +115,13 @@ jobs:
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
           test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete"
           test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
+          expected_gnark_image_id="$(jq -r '.[0].Id' target/release-assets/gnark-image.json)"
+          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{.Id}}')" = "$expected_gnark_image_id"
+          docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{.Id}}')" = "$expected_gnark_image_id"
+          expected_gnark_cli="$(awk 'NR == 1 { print $1 }' target/release-assets/gnark-cli.sha256)"
+          actual_gnark_cli="$(docker run --rm --entrypoint sha256sum "$SP1_GNARK_RUNTIME_IMAGE" /gnark-cli | awk 'NR == 1 { print $1 }')"
+          test "$actual_gnark_cli" = "$expected_gnark_cli"
           export BASE_SEPOLIA_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON="$(jq -c . target/sepolia.runtime.json)"
           export OPEN_COMPETITION_V2_FACTORY_CONTRACT="$(jq -r .factory_contract target/sepolia.runtime.json)"
           export OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK="$(jq -r .deployment_block target/sepolia.runtime.json)"
