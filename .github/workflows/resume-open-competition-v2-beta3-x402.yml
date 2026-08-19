@@ -1,0 +1,162 @@
+name: Resume Open Competition V2 Beta3 x402 rehearsal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-sepolia-resume
+  cancel-in-progress: false
+
+env:
+  RELEASE_SOURCE_COMMIT: 4d09d82825c38f2bf93a8ee4375a95b302410c29
+  SOURCE_RUN_ID: "32147289466"
+  SOURCE_RUN_ATTEMPT: "15"
+  SOURCE_ACTOR_DERIVATION_SALT: "32147289466:15:sepolia"
+  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
+
+jobs:
+  resume-sepolia-x402:
+    environment: v2-beta2-sepolia
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agent_bounties
+          POSTGRES_PASSWORD: agent_bounties
+          POSTGRES_DB: agent_bounties_v2_resume
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U agent_bounties -d agent_bounties_v2_resume"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Resume only the preserved funded x402 canary
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
+          BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
+          DATABASE_URL: postgresql://agent_bounties:agent_bounties@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/agent_bounties_v2_resume
+          OPEN_COMPETITION_V2_PROVER_API_KEY: beta3-sepolia-rehearsal-only-api-key
+          SP1_PROVER: cpu
+        run: |
+          set -euo pipefail
+          preserved=/mnt/agent-bounties-artifacts/beta3-attempt15
+          test -f "$preserved/sepolia-rehearsal.json"
+          test -f "$preserved/sepolia.runtime.json"
+          test -x "$preserved/release/api"
+          test -x "$preserved/release/worker"
+          test -x "$preserved/release-assets/public-vector-metric-v1-script"
+          cp -a "$preserved/sepolia-rehearsal.json" target/
+          cp -a "$preserved/sepolia.runtime.json" target/
+          cp -a "$preserved/sepolia-proofs" target/
+          cp -a "$preserved/release" target/
+          cp -a "$preserved/release-assets" target/
+          chmod 0755 target/release/api target/release/worker \
+            target/release-assets/public-vector-metric-v1-script
+          python -m pip install -r scripts/requirements-wallet.txt
+          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          test "$DEPLOYER" = "$(jq -r .deployer target/sepolia.runtime.json)"
+          test "$BROKER" = "$(printf '%s' "$OPEN_COMPETITION_V2_BROKER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
+            '.passed == true and .source_commit == $commit and .x402_canary.active == true' \
+            target/sepolia-rehearsal.json >/dev/null
+          export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
+          export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
+          test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete"
+          test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
+          export BASE_SEPOLIA_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON="$(jq -c . target/sepolia.runtime.json)"
+          export OPEN_COMPETITION_V2_FACTORY_CONTRACT="$(jq -r .factory_contract target/sepolia.runtime.json)"
+          export OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK="$(jq -r .deployment_block target/sepolia.runtime.json)"
+          export OPEN_COMPETITION_V2_INDEXER_NETWORK=base-sepolia
+          export OPEN_COMPETITION_V2_INDEXER_RPC_URL="$BASE_SEPOLIA_RPC_URL"
+          export OPEN_COMPETITION_V2_SHADOW_RPC_URL=https://base-sepolia-rpc.publicnode.com
+          export OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS=2
+          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"
+          export OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS=100000
+          export OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS=100000
+          export OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS=10000
+          export OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS=1800
+          export OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS=1800
+          export OPEN_COMPETITION_V2_PROVER_URL=http://127.0.0.1:9070/v1/prove
+          export OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=600
+          export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=630
+          export OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
+          export OPEN_COMPETITION_V2_PROVER_JOB_DIR="$RUNNER_TEMP/beta3-sepolia-resume-prover-jobs"
+          export X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          export X402_RELAYER_MIN_USDC_BASE_UNITS=100000
+          export X402_RELAYER_MAX_USDC_BASE_UNITS=500000
+          export ENABLE_X402_HOSTED_RELAY=true
+          export PUBLIC_BASE_URL=http://127.0.0.1:8787
+          export OPEN_COMPETITION_V2_PROVER_BINARY="$GITHUB_WORKSPACE/target/release-assets/public-vector-metric-v1-script"
+          export PORT=9070
+          python scripts/open_competition_v2_prover_service.py >target/sepolia-prover.log 2>&1 &
+          prover_pid=$!
+          export PORT=8787
+          target/release/api >target/sepolia-api.log 2>&1 &
+          api_pid=$!
+          cleanup() {
+            kill "$api_pid" "$prover_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8787/health >/dev/null && break
+            if ! kill -0 "$api_pid" 2>/dev/null; then
+              cat target/sepolia-api.log
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:8787/health >/dev/null
+          python scripts/run_open_competition_v2_x402_rehearsal.py \
+            --api http://127.0.0.1:8787 --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --rehearsal target/sepolia-rehearsal.json --worker-binary target/release/worker \
+            --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
+            --output target/sepolia-x402-rehearsal.json
+          cp target/release-assets/release-gates.json target/release-gates.json
+          evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for gate in \
+            base_sepolia_groth16_first_proven_complete \
+            base_sepolia_plonk_best_score_complete \
+            base_sepolia_pooled_funding_complete \
+            base_sepolia_expiry_refunds_complete \
+            base_sepolia_verifier_failure_refunds_complete; do
+            python scripts/record_open_competition_v2_beta3_gate.py \
+              --manifest target/release-gates.json --gate "$gate" \
+              --evidence target/sepolia-rehearsal.json --uri "$evidence_uri" \
+              --source-commit "$RELEASE_SOURCE_COMMIT"
+          done
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate base_sepolia_x402_and_byo_complete \
+            --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-live-sepolia-resumed
+          path: |
+            target/sepolia.runtime.json
+            target/sepolia-rehearsal.json
+            target/sepolia-x402-rehearsal.json
+            target/sepolia-proofs/*.json
+            target/release-gates.json
+            target/release-assets/**
+            target/sepolia-api.log
+            target/sepolia-prover.log
+          if-no-files-found: error
+          retention-days: 90
