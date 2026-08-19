@@ -20,6 +20,10 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
             workflow["env"]["SOURCE_ACTOR_DERIVATION_SALT"],
             "32147289466:15:sepolia",
         )
+        self.assertEqual(
+            workflow["env"]["EXPECTED_SEPOLIA_DEPLOYER"],
+            "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+        )
         self.assertEqual(job["environment"], "v2-beta2-sepolia")
         self.assertIn("workflow_dispatch", workflow[True])
         self.assertNotIn("push", workflow[True])
@@ -28,6 +32,7 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertIn("mkdir -p target", text)
         self.assertIn("run_open_competition_v2_x402_rehearsal.py", text)
         self.assertIn("--source-commit \"$RELEASE_SOURCE_COMMIT\"", text)
+        self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)
         self.assertNotIn("fund_open_competition_v2_beta3_broker.py", text)
         self.assertNotIn("run_open_competition_v2_sepolia_rehearsal.py", text)

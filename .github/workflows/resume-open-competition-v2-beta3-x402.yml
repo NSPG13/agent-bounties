@@ -15,6 +15,7 @@ env:
   SOURCE_RUN_ID: "32147289466"
   SOURCE_RUN_ATTEMPT: "15"
   SOURCE_ACTOR_DERIVATION_SALT: "32147289466:15:sepolia"
+  EXPECTED_SEPOLIA_DEPLOYER: "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
 
 jobs:
@@ -72,7 +73,7 @@ jobs:
           python -m pip install -r scripts/requirements-wallet.txt
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
-          test "$DEPLOYER" = "$(jq -r .deployer target/sepolia.runtime.json)"
+          test "$DEPLOYER" = "$EXPECTED_SEPOLIA_DEPLOYER"
           test "$BROKER" = "$(printf '%s' "$OPEN_COMPETITION_V2_BROKER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit and .x402_canary.active == true' \
