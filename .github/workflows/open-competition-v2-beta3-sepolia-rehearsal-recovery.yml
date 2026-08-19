@@ -40,7 +40,7 @@ jobs:
             --attempt 1 --attempt 2 --attempt 3 --attempt 4 --attempt 5 --attempt 6 --attempt 7 --attempt 8 --attempt 9 --attempt 12 --attempt 14 \
             --additional-actor-scope b1ce5c176a3cf6d4e3d4240b0a2fdf1359a3a8c5:32122203861:1 \
             --competition 0x5e87358743dd4dcefc1a71ce9663ccf229ba7559 \
-            --competition 0x569fc0c653c81dfaca73467a7496c098a620f501 \
+            --expired-competition 0x569fc0c653c81dfaca73467a7496c098a620f501 \
             --funding-competition 0x702b2be0254b7a363d4bfb4e9b72d9424bbe4a8e \
             --funding-competition 0x23cec46243ad1b849086f3af78744bb2654e6800 \
             --required-actor 0xf723d4ac02331707f39bc9416b11ec25a73743f1 \
