@@ -28,6 +28,47 @@ def runtime() -> dict:
 
 
 class Beta3RenderTests(unittest.TestCase):
+    def test_missing_group_link_is_attached_and_verified(self):
+        spec = MODULE.V2_SERVICES[0]
+        service = {"id": "srv-api", "name": spec.name}
+        group = {"id": "evg-beta3", "serviceLinks": []}
+        linked = {
+            **group,
+            "serviceLinks": [
+                {"service": {"id": service["id"], "name": spec.name, "type": "web"}}
+            ],
+        }
+        client = mock.Mock()
+        client.get_env_group.side_effect = [group, linked]
+
+        result = MODULE.ensure_group_link(
+            client, MODULE.V2_GROUP, group, spec, service
+        )
+
+        self.assertEqual(result, linked)
+        client._write_with_retry.assert_called_once_with(
+            "POST", "/env-groups/evg-beta3/services/srv-api", None
+        )
+
+    def test_existing_group_link_is_not_rewritten(self):
+        spec = MODULE.V2_SERVICES[0]
+        service = {"id": "srv-api", "name": spec.name}
+        group = {
+            "id": "evg-beta3",
+            "serviceLinks": [
+                {"service": {"id": service["id"], "name": spec.name, "type": "web"}}
+            ],
+        }
+        client = mock.Mock()
+        client.get_env_group.return_value = group
+
+        result = MODULE.ensure_group_link(
+            client, MODULE.V2_GROUP, group, spec, service
+        )
+
+        self.assertEqual(result, group)
+        client._write_with_retry.assert_not_called()
+
     def test_missing_v2_environment_group_is_created_in_exact_project(self):
         client = mock.Mock()
         client._read_with_retry.return_value = []

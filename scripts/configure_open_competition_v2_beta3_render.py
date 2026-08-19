@@ -202,6 +202,30 @@ def ensure_v2_group(
     return group
 
 
+def ensure_group_link(
+    client: render.RenderClient,
+    group_name: str,
+    group: dict[str, Any],
+    spec: render.ServiceSpec,
+    service: dict[str, Any],
+) -> dict[str, Any]:
+    current = client.get_env_group(group["id"])
+    if not render.env_group_has_service(current, spec, service["id"]):
+        try:
+            client._write_with_retry(
+                "POST", f"/env-groups/{group['id']}/services/{service['id']}", None
+            )
+        except render.RenderHttpError as error:
+            if error.status != 409:
+                raise
+        current = client.get_env_group(group["id"])
+    require(
+        render.env_group_has_service(current, spec, service["id"]),
+        f"Render did not attach {group_name} to {spec.name}",
+    )
+    return current
+
+
 def provision_worker(
     client: render.RenderClient,
     spec: render.ServiceSpec,
@@ -273,21 +297,7 @@ def provision_worker(
         "new Render worker changed project environments",
     )
     for name, group in groups.items():
-        group_id = group["id"]
-        current = client.get_env_group(group_id)
-        if not render.env_group_has_service(current, spec, created["id"]):
-            try:
-                client._write_with_retry(
-                    "POST", f"/env-groups/{group_id}/services/{created['id']}", None
-                )
-            except render.RenderHttpError as error:
-                if error.status != 409:
-                    raise
-            current = client.get_env_group(group_id)
-        require(
-            render.env_group_has_service(current, spec, created["id"]),
-            f"Render did not attach {name} to {spec.name}",
-        )
+        ensure_group_link(client, name, group, spec, created)
     verified = client.resolve_service(spec)
     require(verified.get("ownerId") == owner_id, "provisioned Render worker changed workspaces")
     require(
@@ -359,10 +369,12 @@ def deploy(
 
     for spec in V2_SERVICES:
         service = services[spec.name]
-        require(render.env_group_has_service(base_group, spec, service["id"]), f"{BASE_GROUP} is not linked to {spec.name}")
-        require(render.env_group_has_service(v2_group, spec, service["id"]), f"{V2_GROUP} is not linked to {spec.name}")
+        base_group = ensure_group_link(client, BASE_GROUP, base_group, spec, service)
+        v2_group = ensure_group_link(client, V2_GROUP, v2_group, spec, service)
         if spec.name in RELAYER_SERVICE_NAMES:
-            require(render.env_group_has_service(relayer_group, spec, service["id"]), f"{RELAYER_GROUP} is not linked to {spec.name}")
+            relayer_group = ensure_group_link(
+                client, RELAYER_GROUP, relayer_group, spec, service
+            )
         client.disable_native_auto_deploy(service)
 
     changes = []
