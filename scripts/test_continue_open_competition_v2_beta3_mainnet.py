@@ -67,6 +67,9 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)
         self.assertIn("failed-x402-charge-refund.json", self.text)
         self.assertIn("failed-x402-charge-refund-2.json", self.text)
+        self.assertIn("x402-canary-replacement.json", self.text)
+        self.assertIn(".minimum_broker_sla_seconds == 1800", self.text)
+        self.assertIn(".superseded_recovery.recovered == true", self.text)
         self.assertIn(
             "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312",
             self.text,
