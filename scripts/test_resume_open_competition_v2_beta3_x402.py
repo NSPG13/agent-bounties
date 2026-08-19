@@ -89,6 +89,11 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertIn("sepolia-x402-rehearsal-success.json", text)
         self.assertIn("x402-canary-replacement-success.json", text)
         self.assertIn("chmod u+w target/release-gates.json", text)
+        self.assertNotIn(
+            "target/continuation-control/scripts/record_open_competition_v2_beta3_gate.py",
+            text,
+        )
+        self.assertIn("python scripts/record_open_competition_v2_beta3_gate.py", text)
         self.assertIn("if: inputs.mode != 'recover-second-only'", text)
         self.assertIn("open-competition-v2-beta3-x402-charge-recovery-5", text)
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', text)

@@ -153,12 +153,12 @@ jobs:
               base_sepolia_pooled_funding_complete \
               base_sepolia_expiry_refunds_complete \
               base_sepolia_verifier_failure_refunds_complete; do
-              python target/continuation-control/scripts/record_open_competition_v2_beta3_gate.py \
+              python scripts/record_open_competition_v2_beta3_gate.py \
                 --manifest target/release-gates.json --gate "$gate" \
                 --evidence target/sepolia-rehearsal.json --uri "$evidence_uri" \
                 --source-commit "$RELEASE_SOURCE_COMMIT"
             done
-            python target/continuation-control/scripts/record_open_competition_v2_beta3_gate.py \
+            python scripts/record_open_competition_v2_beta3_gate.py \
               --manifest target/release-gates.json --gate base_sepolia_x402_and_byo_complete \
               --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
               --source-commit "$RELEASE_SOURCE_COMMIT"
@@ -249,12 +249,12 @@ jobs:
             base_sepolia_pooled_funding_complete \
             base_sepolia_expiry_refunds_complete \
             base_sepolia_verifier_failure_refunds_complete; do
-            python target/continuation-control/scripts/record_open_competition_v2_beta3_gate.py \
+            python scripts/record_open_competition_v2_beta3_gate.py \
               --manifest target/release-gates.json --gate "$gate" \
               --evidence target/sepolia-rehearsal.json --uri "$evidence_uri" \
               --source-commit "$RELEASE_SOURCE_COMMIT"
           done
-          python target/continuation-control/scripts/record_open_competition_v2_beta3_gate.py \
+          python scripts/record_open_competition_v2_beta3_gate.py \
             --manifest target/release-gates.json --gate base_sepolia_x402_and_byo_complete \
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$RELEASE_SOURCE_COMMIT"
