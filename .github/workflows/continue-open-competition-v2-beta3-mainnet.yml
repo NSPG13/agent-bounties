@@ -54,7 +54,10 @@ jobs:
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
           test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           test -f target/live-sepolia/sepolia-x402-rehearsal.json
+          test -f target/live-sepolia/failed-x402-charge-refund.json
           jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
+          jq -e '.passed == true and .amount == "110000" and (.refund_transaction | length > 0)' \
+            target/live-sepolia/failed-x402-charge-refund.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-rehearsal.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \

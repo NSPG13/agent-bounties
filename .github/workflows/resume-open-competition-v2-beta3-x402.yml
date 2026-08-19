@@ -75,6 +75,13 @@ jobs:
           BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
           test "$DEPLOYER" = "$EXPECTED_SEPOLIA_DEPLOYER"
           test "$BROKER" = "$(printf '%s' "$OPEN_COMPETITION_V2_BROKER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
+          python scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0xc724bcc7a1ca76c809a556b2b127d18bdaf626b13e90ad442f88bcfb3acb6684 \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund.json
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit and .x402_canary.active == true' \
             target/sepolia-rehearsal.json >/dev/null
@@ -97,8 +104,8 @@ jobs:
           export OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS=1800
           export OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS=1800
           export OPEN_COMPETITION_V2_PROVER_URL=http://127.0.0.1:9070/v1/prove
-          export OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=600
-          export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=630
+          export OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=1200
+          export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=1230
           export OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
           export OPEN_COMPETITION_V2_PROVER_JOB_DIR="$RUNNER_TEMP/beta3-sepolia-resume-prover-jobs"
           export X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
@@ -156,6 +163,7 @@ jobs:
             target/sepolia.runtime.json
             target/sepolia-rehearsal.json
             target/sepolia-x402-rehearsal.json
+            target/failed-x402-charge-refund.json
             target/sepolia-proofs/*.json
             target/release-gates.json
             target/release-assets/**

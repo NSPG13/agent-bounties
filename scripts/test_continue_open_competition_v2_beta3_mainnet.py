@@ -65,6 +65,7 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
     def test_only_successful_frozen_sepolia_evidence_can_continue(self):
         self.assertIn("run-id: ${{ inputs.sepolia_run_id }}", self.text)
         self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)
+        self.assertIn("failed-x402-charge-refund.json", self.text)
         self.assertIn(".settlement_event_id | length > 0", self.text)
         self.assertIn(".source_commit == $commit", self.text)
         self.assertNotIn('--source-commit "$GITHUB_SHA"', self.text)
