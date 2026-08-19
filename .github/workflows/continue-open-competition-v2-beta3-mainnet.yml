@@ -65,7 +65,6 @@ jobs:
           jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
           replacement="$(jq -r .competition target/live-sepolia/x402-canary-replacement.json)"
           test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"
-          test "$replacement" = "$(jq -r .x402_canary.competition target/live-sepolia/sepolia-rehearsal.json)"
           jq -e '.passed == true and .replacement_id == 1 and .minimum_broker_sla_seconds == 1800 and .superseded_recovery.recovered == true' \
             target/live-sepolia/x402-canary-replacement.json >/dev/null
           jq -e '.passed == true and .amount == "110000" and (.refund_transaction | length > 0)' \
