@@ -61,6 +61,25 @@ def transfer_data(recipient: str, amount: int) -> str:
     return "0x" + TRANSFER_SELECTOR + address_word(recipient).hex() + uint_word(amount).hex()
 
 
+def address_call_data(signature: str, address: str) -> str:
+    return "0x" + keccak_bytes(signature.encode())[:4].hex() + address_word(address).hex()
+
+
+def contribution(url: str, competition: str, contributor: str) -> int:
+    value = rpc(
+        url,
+        "eth_call",
+        [
+            {
+                "to": competition,
+                "data": address_call_data("contributions(address)", contributor),
+            },
+            "latest",
+        ],
+    )
+    return int(value, 16)
+
+
 def actor_set(root_key: bytes, source_commit: str, run_id: str, attempts: list[int]) -> list[Any]:
     actors: list[Any] = []
     seen: set[str] = set()
@@ -111,6 +130,10 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
     require(int(rpc(args.rpc_url, "eth_chainId", []), 16) == CHAIN_ID, "recovery RPC is not Base Sepolia")
     require(ADDRESS.fullmatch(args.deployer) is not None, "expected deployer is invalid")
     require(ADDRESS.fullmatch(args.competition) is not None, "competition address is invalid")
+    require(
+        all(ADDRESS.fullmatch(address) is not None for address in args.funding_competition),
+        "funding competition address is invalid",
+    )
     require(re.fullmatch(r"[0-9a-f]{40}", args.source_commit) is not None, "source commit is invalid")
     require(args.attempts and all(attempt > 0 for attempt in args.attempts), "attempts must be positive")
 
@@ -150,6 +173,45 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
     else:
         require(status_before == 2, f"competition has unrecoverable status {status_before}")
 
+    for competition in args.funding_competition:
+        require(
+            call_address(args.rpc_url, competition, "creator()") == deployer.address.lower(),
+            "funding competition creator mismatch",
+        )
+        funding_status = call_word(args.rpc_url, competition, "status()")
+        if funding_status == 0:
+            receipt = client.send(
+                deployer,
+                to=competition,
+                data="0x" + keccak_bytes(b"cancelFunding()")[:4].hex(),
+            )
+            receipts.append(receipt)
+            actions.append(
+                {
+                    "kind": "cancel_funding_competition",
+                    "competition": competition.lower(),
+                    "transaction_hash": receipt["transactionHash"],
+                }
+            )
+        else:
+            require(funding_status == 3, f"funding competition has unrecoverable status {funding_status}")
+        refundable = contribution(args.rpc_url, competition, deployer.address)
+        if refundable:
+            receipt = client.send(
+                deployer,
+                to=competition,
+                data=address_call_data("withdrawRefundFor(address)", deployer.address),
+            )
+            receipts.append(receipt)
+            actions.append(
+                {
+                    "kind": "withdraw_funding_refund",
+                    "competition": competition.lower(),
+                    "amount_base_units": refundable,
+                    "transaction_hash": receipt["transactionHash"],
+                }
+            )
+
     for actor in actors:
         token_balance = usdc_balance(args.rpc_url, actor.address)
         if token_balance:
@@ -181,6 +243,12 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
 
     safe = wait_safe(args.rpc_url, receipts)
     require(call_word(args.rpc_url, args.competition, "status()") == 2, "competition did not settle")
+    for competition in args.funding_competition:
+        require(call_word(args.rpc_url, competition, "status()") == 3, "funding competition did not cancel")
+        require(
+            contribution(args.rpc_url, competition, deployer.address) == 0,
+            "funding competition refund remains unclaimed",
+        )
     deployer_usdc = usdc_balance(args.rpc_url, deployer.address, safe["number"])
     deployer_eth = int(rpc(args.rpc_url, "eth_getBalance", [deployer.address, safe["number"]]), 16)
     require(deployer_usdc >= args.minimum_usdc, "recovered deployer USDC is below the release reserve")
@@ -199,6 +267,7 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
             for source_commit, run_id, attempt in actor_scopes
         ],
         "competition": args.competition.lower(),
+        "funding_competitions": [address.lower() for address in args.funding_competition],
         "deployer": deployer.address.lower(),
         "derived_actor_addresses": sorted(actor_addresses),
         "actions": actions,
@@ -220,8 +289,9 @@ def main() -> int:
     parser.add_argument("--attempt", dest="attempts", action="append", type=int, required=True)
     parser.add_argument("--additional-actor-scope", action="append", default=[])
     parser.add_argument("--competition", required=True)
+    parser.add_argument("--funding-competition", action="append", default=[])
     parser.add_argument("--required-actor", action="append", default=[])
-    parser.add_argument("--minimum-usdc", type=int, default=900_000)
+    parser.add_argument("--minimum-usdc", type=int, default=1_000_000)
     parser.add_argument("--minimum-eth", type=int, default=500_000_000_000_000)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
