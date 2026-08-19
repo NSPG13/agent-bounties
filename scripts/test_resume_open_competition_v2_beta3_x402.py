@@ -26,6 +26,12 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         )
         self.assertEqual(job["environment"], "v2-beta2-sepolia")
         self.assertIn("workflow_dispatch", workflow[True])
+        dispatch = workflow[True]["workflow_dispatch"]
+        self.assertEqual(dispatch["inputs"]["mode"]["default"], "recover-second-only")
+        self.assertEqual(
+            dispatch["inputs"]["mode"]["options"],
+            ["recover-second-only", "resume-rehearsal"],
+        )
         self.assertNotIn("push", workflow[True])
         self.assertNotIn("schedule", workflow[True])
         self.assertIn("/mnt/agent-bounties-artifacts/beta3-attempt15", text)
@@ -48,6 +54,13 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertIn("OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=1200", text)
         self.assertIn("OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=1230", text)
         self.assertIn("target/failed-x402-charge-refund.json", text)
+        self.assertIn(
+            "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312",
+            text,
+        )
+        self.assertIn("target/failed-x402-charge-refund-2.json", text)
+        self.assertIn('if [[ "$RECOVERY_ONLY" == "true" ]]', text)
+        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-2", text)
         self.assertIn("--source-commit \"$RELEASE_SOURCE_COMMIT\"", text)
         self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)
