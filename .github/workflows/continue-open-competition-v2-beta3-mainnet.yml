@@ -59,6 +59,7 @@ jobs:
           test -f target/live-sepolia/x402-canary-replacement.json
           test -f target/live-sepolia/failed-x402-charge-refund.json
           test -f target/live-sepolia/failed-x402-charge-refund-2.json
+          test -f target/live-sepolia/failed-x402-charge-refund-3.json
           jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
           replacement="$(jq -r .competition target/live-sepolia/x402-canary-replacement.json)"
           test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"
@@ -69,6 +70,8 @@ jobs:
             target/live-sepolia/failed-x402-charge-refund.json >/dev/null
           jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312" and (.refund_transaction | length > 0)' \
             target/live-sepolia/failed-x402-charge-refund-2.json >/dev/null
+          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56" and (.refund_transaction | length > 0)' \
+            target/live-sepolia/failed-x402-charge-refund-3.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-rehearsal.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \

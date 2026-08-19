@@ -67,8 +67,13 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
             text,
         )
         self.assertIn("target/failed-x402-charge-refund-2.json", text)
+        self.assertIn(
+            "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56",
+            text,
+        )
+        self.assertIn("target/failed-x402-charge-refund-3.json", text)
         self.assertIn('if [[ "$RECOVERY_ONLY" == "true" ]]', text)
-        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-2", text)
+        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-3", text)
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', text)
         self.assertIn("expected_gnark_image_id", text)
         self.assertIn("expected_gnark_cli", text)

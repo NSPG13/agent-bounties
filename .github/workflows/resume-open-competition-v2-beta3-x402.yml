@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Recover the second failed charge only, or resume after diagnostics pass"
+        description: "Recover all known failed charges only, or resume after diagnostics pass"
         required: true
         default: recover-second-only
         type: choice
@@ -105,6 +105,13 @@ jobs:
             --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
             --broker "$BROKER" --amount 110000 \
             --output target/failed-x402-charge-refund-2.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56 \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-3.json
           if [[ "$RECOVERY_ONLY" == "true" ]]; then
             exit 0
           fi
@@ -209,6 +216,7 @@ jobs:
             target/x402-canary-replacement.json
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
+            target/failed-x402-charge-refund-3.json
             target/sepolia-proofs/*.json
             target/release-gates.json
             target/release-assets/**
@@ -219,9 +227,10 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: inputs.mode == 'recover-second-only'
         with:
-          name: open-competition-v2-beta3-x402-charge-recovery-2
+          name: open-competition-v2-beta3-x402-charge-recovery-3
           path: |
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
+            target/failed-x402-charge-refund-3.json
           if-no-files-found: error
           retention-days: 90
