@@ -49,6 +49,11 @@ class RefreshX402CanaryTests(unittest.TestCase):
             1_787_747_848,
         )
 
+    def test_empty_bytecode_responses_are_not_deployments(self):
+        self.assertFalse(MODULE.has_runtime_code("0x"))
+        self.assertFalse(MODULE.has_runtime_code("0x0"))
+        self.assertTrue(MODULE.has_runtime_code("0x6000"))
+
     def test_rehearsal_preserves_superseded_evidence_and_rebinds_first_proven(self):
         old = {
             "competition": "0x" + "11" * 20,
