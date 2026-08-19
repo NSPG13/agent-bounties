@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-08-19T10:02:00Z",
+  "source_statuses": [
+    {
+      "source_type": "canonical_base",
+      "available": false,
+      "error": "canonical_read_model_unavailable"
+    }
+  ],
+  "items": [],
+  "expected": {
+    "source_available": false,
+    "ready_to_earn": 0,
+    "in_progress": 0,
+    "submitted": 0,
+    "paid": 0,
+    "verification_unavailable": 0
+  }
+}

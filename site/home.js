@@ -535,17 +535,26 @@
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
     const proof = document.querySelector("[data-market-proof]");
-    const items = projection.items || [];
     const readyItems = readyProjection.items || [];
+    const breakdown = projection.inventory_state_breakdown;
+    if (!breakdown
+      || breakdown.schema_version !== "inventory-state-breakdown-v1"
+      || breakdown.source?.source_type !== "canonical_base"
+      || breakdown.generated_at !== projection.generated_at) {
+      throw new Error("Canonical inventory-state breakdown is unavailable.");
+    }
     if (readyProjection.applied_view !== "ready_to_earn"
       || readyProjection.degraded
-      || readyItems.some((item) => !isReadyToEarn(item))) {
+      || readyItems.some((item) => !isReadyToEarn(item))
+      || Number(breakdown.ready_to_earn) !== readyItems.length) {
       throw new Error("Live earning inventory failed its claimability gate.");
     }
     const referenceAt = new Date(metrics.generated_at || claim.generated_at || projection.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
-    const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
-      && (item.work_state === "in_progress" || item.work_state === "submitted"));
+    const inProgressCount = Number(breakdown.in_progress) || 0;
+    const submittedCount = Number(breakdown.submitted) || 0;
+    const paidCount = Number(breakdown.paid) || 0;
+    const verificationUnavailableCount = Number(breakdown.verification_unavailable) || 0;
     const addedThisWeek = readyItems.filter((item) => {
       const created = Date.parse(item.created_at);
       return Number.isFinite(created) && created >= oneWeekAgo;
@@ -566,7 +575,7 @@
     setMetric("ready", readyItems.length);
     setMetricText(
       "[data-adoption-ready-weekly]",
-      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(inProgressItems.length, 0)} in progress`,
+      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(inProgressCount, 0)} claimed/in progress · ${formatMetric(submittedCount, 0)} submitted`,
     );
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
@@ -576,7 +585,7 @@
     renderOpportunityBoard(container, readyItems);
 
     if (heroSummary) {
-      heroSummary.textContent = `${readyItems.length} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC canonical payout · ${settlements} settlement events`;
+      heroSummary.textContent = `${breakdown.ready_to_earn} ready to claim · ${inProgressCount} in progress · ${submittedCount} submitted · ${paidCount} paid`;
     }
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;
@@ -586,8 +595,8 @@
     const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
     if (detail) {
       detail.textContent = unavailable.length
-        ? `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
-        : `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream`;
+        ? `${protocolStatus} · ${breakdown.ready_to_earn} ready · ${inProgressCount} in progress · ${submittedCount} submitted · ${paidCount} paid · ${verificationUnavailableCount} verification unavailable · delayed: ${unavailable.join(", ")}`
+        : `${protocolStatus} · ${breakdown.ready_to_earn} ready · ${inProgressCount} in progress · ${submittedCount} submitted · ${paidCount} paid · ${verificationUnavailableCount} verification unavailable · canonical source ${breakdown.source.available ? "online" : "unavailable"}`;
     }
 
     if (proof && settlements > 0) {
