@@ -115,6 +115,8 @@ jobs:
           if [[ "$RECOVERY_ONLY" == "true" ]]; then
             exit 0
           fi
+          cargo build --manifest-path target/continuation-control/Cargo.toml \
+            --target-dir target/continuation-build --locked --release -p worker
           python target/continuation-control/scripts/refresh_open_competition_v2_x402_canary.py \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --runtime target/sepolia.runtime.json \
@@ -184,7 +186,8 @@ jobs:
           curl --fail --silent http://127.0.0.1:8787/health >/dev/null
           python scripts/run_open_competition_v2_x402_rehearsal.py \
             --api http://127.0.0.1:8787 --rpc-url "$BASE_SEPOLIA_RPC_URL" \
-            --rehearsal target/sepolia-rehearsal.json --worker-binary target/release/worker \
+            --rehearsal target/sepolia-rehearsal.json \
+            --worker-binary target/continuation-build/release/worker \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
             --output target/sepolia-x402-rehearsal.json

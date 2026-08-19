@@ -77,6 +77,8 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', text)
         self.assertIn("expected_gnark_image_id", text)
         self.assertIn("expected_gnark_cli", text)
+        self.assertIn("--manifest-path target/continuation-control/Cargo.toml", text)
+        self.assertIn("--worker-binary target/continuation-build/release/worker", text)
         self.assertIn("--source-commit \"$RELEASE_SOURCE_COMMIT\"", text)
         self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)

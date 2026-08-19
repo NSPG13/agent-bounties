@@ -89,6 +89,13 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("expected_gnark_cli", self.text)
         self.assertNotIn('docker pull "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
 
+    def test_canaries_use_current_control_binaries_with_frozen_release_assets(self):
+        self.assertIn("ref: ${{ github.sha }}", self.text)
+        self.assertIn("path: target/continuation-control", self.text)
+        self.assertIn("--manifest-path target/continuation-control/Cargo.toml", self.text)
+        self.assertIn("target/continuation-build/release/api", self.text)
+        self.assertIn("--worker-binary target/continuation-build/release/worker", self.text)
+
     def test_canaries_and_activation_remain_mandatory(self):
         for evidence in (
             "mainnet-x402-success.json",
