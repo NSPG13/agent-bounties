@@ -4,6 +4,7 @@ from pathlib import Path
 import unittest
 
 from eth_account import Account
+from eth_account.messages import encode_typed_data
 
 
 PATH = Path(__file__).with_name("run_open_competition_v2_x402_rehearsal.py")
@@ -81,6 +82,51 @@ class X402RehearsalTests(unittest.TestCase):
         self.assertEqual(payload["network"], "base-mainnet")
         self.assertEqual(payload["competition_contract"], spec["competition"])
         self.assertTrue(payload["relay"])
+
+    def test_relay_authorization_signs_exact_api_typed_data(self):
+        actor = Account.from_key("0x" + "11" * 32)
+        authorization = {
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
+                ],
+                "SubmitProof": [
+                    {"name": "solver", "type": "address"},
+                    {"name": "solverNonce", "type": "uint256"},
+                    {"name": "publicValuesHash", "type": "bytes32"},
+                    {"name": "proofHash", "type": "bytes32"},
+                    {"name": "authorizationDeadline", "type": "uint256"},
+                ],
+            },
+            "primaryType": "SubmitProof",
+            "domain": {
+                "name": "Agent Bounties Open Competition V2 Beta3",
+                "version": "1",
+                "chainId": 84532,
+                "verifyingContract": "0x" + "22" * 20,
+            },
+            "message": {
+                "solver": actor.address,
+                "solverNonce": "7",
+                "publicValuesHash": "0x" + "33" * 32,
+                "proofHash": "0x" + "44" * 32,
+                "authorizationDeadline": "2000000000",
+            },
+        }
+        signature = MODULE.sign_relay_authorization(actor, authorization)
+        recovered = Account.recover_message(
+            encode_typed_data(full_message=authorization), signature=signature
+        )
+        self.assertEqual(recovered, actor.address)
+        self.assertRegex(signature, r"^0x[0-9a-f]{130}$")
+
+    def test_relay_authorization_rejects_stale_digest_shape(self):
+        actor = Account.from_key("0x" + "11" * 32)
+        with self.assertRaises(MODULE.X402RehearsalError):
+            MODULE.sign_relay_authorization(actor, {"digest": "0x" + "00" * 32})
 
 
 if __name__ == "__main__":

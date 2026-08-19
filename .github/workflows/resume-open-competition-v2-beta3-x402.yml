@@ -112,6 +112,13 @@ jobs:
             --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
             --broker "$BROKER" --amount 110000 \
             --output target/failed-x402-charge-refund-3.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-4.json
           if [[ "$RECOVERY_ONLY" == "true" ]]; then
             exit 0
           fi
@@ -220,6 +227,7 @@ jobs:
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
             target/failed-x402-charge-refund-3.json
+            target/failed-x402-charge-refund-4.json
             target/sepolia-proofs/*.json
             target/release-gates.json
             target/release-assets/**
@@ -230,10 +238,11 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: inputs.mode == 'recover-second-only'
         with:
-          name: open-competition-v2-beta3-x402-charge-recovery-3
+          name: open-competition-v2-beta3-x402-charge-recovery-4
           path: |
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
             target/failed-x402-charge-refund-3.json
+            target/failed-x402-charge-refund-4.json
           if-no-files-found: error
           retention-days: 90

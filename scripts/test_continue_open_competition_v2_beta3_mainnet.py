@@ -68,6 +68,7 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("failed-x402-charge-refund.json", self.text)
         self.assertIn("failed-x402-charge-refund-2.json", self.text)
         self.assertIn("failed-x402-charge-refund-3.json", self.text)
+        self.assertIn("failed-x402-charge-refund-4.json", self.text)
         self.assertIn("x402-canary-replacement.json", self.text)
         self.assertIn(".minimum_broker_sla_seconds == 1800", self.text)
         self.assertIn(".superseded_recovery.recovered == true", self.text)
@@ -77,6 +78,10 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56",
+            self.text,
+        )
+        self.assertIn(
+            "0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a",
             self.text,
         )
         self.assertIn(".settlement_event_id | length > 0", self.text)
