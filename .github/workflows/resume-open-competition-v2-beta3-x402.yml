@@ -52,6 +52,13 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+          clean: false
+      - name: Reset generated output from prior containerized runs
+        run: |
+          if [[ -d target ]]; then
+            sudo chown -R "$(id -u):$(id -g)" target
+            rm -rf target
+          fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ github.sha }}
