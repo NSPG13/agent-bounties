@@ -74,8 +74,16 @@ class SignedRpc:
         require(int(rpc(url, "eth_chainId", []), 16) == 8453, "RPC is not Base mainnet")
 
     def code_hash(self, address: str, block: str = "latest") -> str | None:
-        raw = rpc(self.url, "eth_getCode", [address, block])
-        return None if raw == "0x" else keccak256(bytes.fromhex(raw[2:]))
+        deadline = time.time() + 120
+        last_error: RuntimeError | None = None
+        while time.time() < deadline:
+            try:
+                raw = rpc(self.url, "eth_getCode", [address, block])
+                return None if raw == "0x" else keccak256(bytes.fromhex(raw[2:]))
+            except RuntimeError as error:
+                last_error = error
+                time.sleep(2)
+        raise RuntimeError(f"runtime bytecode lookup failed: {last_error}") from last_error
 
     def pending_nonce(self) -> int:
         return int(
@@ -135,12 +143,19 @@ class SignedRpc:
 
     def wait_safe(self, block_number: int, timeout_seconds: int = 1800) -> dict[str, Any]:
         deadline = time.time() + timeout_seconds
+        last_error: RuntimeError | None = None
         while time.time() < deadline:
-            safe = rpc(self.url, "eth_getBlockByNumber", ["safe", False])
+            try:
+                safe = rpc(self.url, "eth_getBlockByNumber", ["safe", False])
+            except RuntimeError as error:
+                last_error = error
+                time.sleep(5)
+                continue
             if safe and int(safe["number"], 16) >= block_number:
                 return safe
             time.sleep(5)
-        raise RuntimeError("deployment did not reach a Base safe block")
+        detail = f": {last_error}" if last_error is not None else ""
+        raise RuntimeError(f"deployment did not reach a Base safe block{detail}")
 
     def require_safe_code_hashes(
         self, expected_hashes: dict[str, str], block_number: int

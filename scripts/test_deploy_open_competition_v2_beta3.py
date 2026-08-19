@@ -96,6 +96,25 @@ class DeploymentValidationTests(unittest.TestCase):
             [mock.call(address, "0x2a") for address in addresses],
         )
 
+    @mock.patch.object(deploy.time, "sleep")
+    @mock.patch.object(deploy.time, "time", side_effect=[0, 1, 2])
+    @mock.patch.object(
+        deploy,
+        "rpc",
+        side_effect=[RuntimeError("HTTP 408"), {"number": "0x2a"}],
+    )
+    def test_safe_block_polling_recovers_from_transport_error(
+        self, rpc_call: mock.Mock, _time: mock.Mock, sleep: mock.Mock
+    ) -> None:
+        client = object.__new__(deploy.SignedRpc)
+        client.url = "https://rpc.example"
+
+        result = client.wait_safe(41, timeout_seconds=10)
+
+        self.assertEqual(result["number"], "0x2a")
+        self.assertEqual(rpc_call.call_count, 2)
+        sleep.assert_called_once_with(5)
+
 
 if __name__ == "__main__":
     unittest.main()
