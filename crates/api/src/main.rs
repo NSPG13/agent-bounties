@@ -131,10 +131,11 @@ use github_discovery::{
 };
 use hmac::{Hmac, Mac};
 use opportunities::{
-    apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
-    open_competition_opportunities, render_opportunity_feeds, unfunded_opportunity,
-    OpportunityItem, OpportunityProjectionResponse, OpportunityQuery, OpportunitySourceStatus,
-    OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
+    apply_query as apply_opportunity_query, canonical_opportunity, inventory_state_breakdown_v1,
+    legacy_opportunity, open_competition_opportunities, render_opportunity_feeds,
+    unfunded_opportunity, InventorySnapshotMetadata, InventoryStateBreakdownV1, OpportunityItem,
+    OpportunityProjectionResponse, OpportunityQuery, OpportunitySourceStatus, OpportunityView,
+    OPPORTUNITY_PROJECTION_SCHEMA,
 };
 use payments_stripe::{
     apply_checkout_payment_method_configuration, execute_stripe_request, verify_webhook_signature,
@@ -416,6 +417,7 @@ use worker::{
         ,CloudObjectiveSettlementPolicy
         ,CloudUnfundedBountyRequest
         ,CloudDemoSolution
+        ,InventoryStateBreakdownV1
         ,OpportunityProjectionResponse
         ,OpportunityItem
         ,opportunities::OpportunityAmount
@@ -4234,7 +4236,8 @@ async fn build_opportunity_projection(
     query: OpportunityQuery,
 ) -> Result<OpportunityProjectionResponse, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
-    base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let network_descriptor =
+        base_network_descriptor(network).map_err(|_| StatusCode::BAD_REQUEST)?;
     let view =
         OpportunityView::parse(query.view.as_deref()).map_err(|_| StatusCode::BAD_REQUEST)?;
     validate_opportunity_filter(
@@ -4252,6 +4255,13 @@ async fn build_opportunity_projection(
 
     let api = state.public_base_url.trim_end_matches('/');
     let now = Utc::now();
+    let canonical_snapshot_metadata = load_autonomous_inventory_snapshot_metadata(
+        state,
+        network,
+        network_descriptor.chain_id,
+        now,
+    )
+    .await;
     let mut items = Vec::<OpportunityItem>::new();
     let mut source_statuses = Vec::<OpportunitySourceStatus>::new();
 
@@ -4345,9 +4355,23 @@ async fn build_opportunity_projection(
         (Some(error), None) | (None, Some(error)) => Some(error),
         (Some(left), Some(right)) => Some(format!("{left}+{right}")),
     };
+    let inventory_state_breakdown = inventory_state_breakdown_v1(
+        &canonical_items,
+        InventorySnapshotMetadata {
+            generated_at: canonical_snapshot_metadata.generated_at,
+            source_available: canonical_error.is_none()
+                && canonical_snapshot_metadata.source_available,
+            source_error: canonical_error
+                .clone()
+                .or(canonical_snapshot_metadata.source_error),
+        },
+        now,
+    );
+    let canonical_source_available = inventory_state_breakdown.source_available;
+    let canonical_source_error = inventory_state_breakdown.source_error.clone();
     source_statuses.push(OpportunitySourceStatus {
         source_type: "canonical_base".to_string(),
-        available: canonical_error.is_none(),
+        available: canonical_source_available,
         authoritative_urls: vec![
             format!(
                 "{api}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=false"
@@ -4355,7 +4379,7 @@ async fn build_opportunity_projection(
             format!("{api}/v1/base/open-competition-v1/events?network={network}"),
         ],
         item_count: canonical_items.len(),
-        error: canonical_error,
+        error: canonical_source_error,
     });
     items.extend(canonical_items);
 
@@ -4367,9 +4391,52 @@ async fn build_opportunity_projection(
         applied_view: view.map(|view| view.as_str().to_string()),
         degraded: source_statuses.iter().any(|source| !source.available),
         source_statuses,
+        inventory_state_breakdown,
         items,
         evidence_boundary: "This endpoint is a read-only projection. Each listed source remains authoritative for its own records; the projection cannot create funding, claims, verification, settlement, or payment evidence. Only confirmed canonical BountySettled proves autonomous-v1 solver payment.".to_string(),
     })
+}
+
+async fn load_autonomous_inventory_snapshot_metadata(
+    state: &SharedState,
+    network: &str,
+    chain_id: u64,
+    observed_at: DateTime<Utc>,
+) -> InventorySnapshotMetadata {
+    let unavailable = |error: &str| InventorySnapshotMetadata {
+        generated_at: observed_at,
+        source_available: false,
+        source_error: Some(error.to_string()),
+    };
+    let Some(store) = state.store.as_ref() else {
+        return unavailable("autonomous_indexer_store_unavailable");
+    };
+    let Some(factory) = autonomous_factory_for_chain(chain_id) else {
+        return unavailable("autonomous_factory_unavailable");
+    };
+    let heartbeat = match store.get_base_indexer_heartbeat(network, &factory).await {
+        Ok(Some(heartbeat)) => heartbeat,
+        Ok(None) => return unavailable("autonomous_indexer_heartbeat_missing"),
+        Err(_) => return unavailable("autonomous_indexer_heartbeat_unavailable"),
+    };
+    let Some(generated_at) = heartbeat.completed_at else {
+        return unavailable("autonomous_indexer_heartbeat_incomplete");
+    };
+    let status_healthy = heartbeat.status == "success"
+        || (heartbeat.status == "skipped"
+            && heartbeat.skipped_reason.as_deref()
+                == Some("no confirmed blocks are ready to scan"));
+    let cursor_healthy = heartbeat
+        .latest_block
+        .zip(heartbeat.persisted_cursor_block)
+        .is_some_and(|(latest, cursor)| cursor.saturating_add(20) >= latest);
+    let source_available = status_healthy && heartbeat.error_message.is_none() && cursor_healthy;
+    InventorySnapshotMetadata {
+        generated_at,
+        source_available,
+        source_error: (!source_available)
+            .then(|| "autonomous_indexer_heartbeat_unhealthy".to_string()),
+    }
 }
 
 async fn load_public_open_competition_opportunities(

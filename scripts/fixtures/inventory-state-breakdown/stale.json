@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-08-11T01:50:00Z",
+  "observed_at": "2026-08-11T02:00:00Z",
+  "source_available": true,
+  "source_error": null,
+  "items": [
+    {"status": "claimable", "funded": "1000000", "verification_ready": true},
+    {"status": "paid", "funded": "1000000", "verification_ready": true}
+  ],
+  "expected": {
+    "source_available": false,
+    "source_degraded": true,
+    "source_status": "stale",
+    "source_error": "canonical_snapshot_stale",
+    "ready_to_earn": 0,
+    "in_progress": 0,
+    "submitted": 0,
+    "paid": 0,
+    "verification_unavailable": 0
+  }
+}

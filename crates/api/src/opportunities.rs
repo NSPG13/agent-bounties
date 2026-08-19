@@ -14,6 +14,8 @@ use utoipa::ToSchema;
 use web_public::escape_html;
 
 pub const OPPORTUNITY_PROJECTION_SCHEMA: &str = "agent-bounties/opportunity-projection-v1";
+pub const INVENTORY_STATE_BREAKDOWN_SCHEMA: &str = "agent-bounties/inventory-state-breakdown-v1";
+const INVENTORY_SNAPSHOT_MAX_AGE_SECONDS: i64 = 300;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct OpportunityQuery {
@@ -221,6 +223,30 @@ pub struct OpportunitySourceStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct InventoryStateBreakdownV1 {
+    pub schema_version: String,
+    pub generated_at: String,
+    pub observed_at: String,
+    pub source: String,
+    pub source_available: bool,
+    pub source_degraded: bool,
+    pub source_status: String,
+    pub source_error: Option<String>,
+    pub ready_to_earn: usize,
+    pub in_progress: usize,
+    pub submitted: usize,
+    pub paid: usize,
+    pub verification_unavailable: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventorySnapshotMetadata {
+    pub generated_at: DateTime<Utc>,
+    pub source_available: bool,
+    pub source_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct OpportunityProjectionResponse {
     pub schema_version: String,
@@ -229,6 +255,7 @@ pub struct OpportunityProjectionResponse {
     pub applied_view: Option<String>,
     pub degraded: bool,
     pub source_statuses: Vec<OpportunitySourceStatus>,
+    pub inventory_state_breakdown: InventoryStateBreakdownV1,
     pub items: Vec<OpportunityItem>,
     pub evidence_boundary: String,
 }
@@ -1202,6 +1229,77 @@ fn json_u64(value: &Value, field: &str) -> Result<u64, String> {
         .map_err(|_| format!("open-competition event field {field} is out of range"))
 }
 
+/// Derive every lifecycle count from one unfiltered canonical projection.
+///
+/// A missing, degraded, future-dated, or stale source fails closed: the
+/// response retains explicit source status but does not advertise partial
+/// inventory as current.
+pub fn inventory_state_breakdown_v1(
+    items: &[OpportunityItem],
+    metadata: InventorySnapshotMetadata,
+    observed_at: DateTime<Utc>,
+) -> InventoryStateBreakdownV1 {
+    let age_seconds = observed_at
+        .signed_duration_since(metadata.generated_at)
+        .num_seconds();
+    let snapshot_fresh = (0..=INVENTORY_SNAPSHOT_MAX_AGE_SECONDS).contains(&age_seconds);
+    let source_available = metadata.source_available && snapshot_fresh;
+    let source_status = if !metadata.source_available {
+        "degraded"
+    } else if !snapshot_fresh {
+        "stale"
+    } else {
+        "current"
+    };
+    let source_error = if !metadata.source_available {
+        metadata
+            .source_error
+            .or_else(|| Some("canonical_source_unavailable".to_string()))
+    } else if !snapshot_fresh {
+        Some("canonical_snapshot_stale".to_string())
+    } else {
+        None
+    };
+
+    let mut breakdown = InventoryStateBreakdownV1 {
+        schema_version: INVENTORY_STATE_BREAKDOWN_SCHEMA.to_string(),
+        generated_at: metadata.generated_at.to_rfc3339(),
+        observed_at: observed_at.to_rfc3339(),
+        source: "canonical_base".to_string(),
+        source_available,
+        source_degraded: !source_available,
+        source_status: source_status.to_string(),
+        source_error,
+        ready_to_earn: 0,
+        in_progress: 0,
+        submitted: 0,
+        paid: 0,
+        verification_unavailable: 0,
+    };
+    if !source_available {
+        return breakdown;
+    }
+
+    for item in items
+        .iter()
+        .filter(|item| item.source_type == "canonical_base")
+    {
+        if is_ready_to_earn_item(item) {
+            breakdown.ready_to_earn += 1;
+        }
+        match item.work_state.as_str() {
+            "in_progress" => breakdown.in_progress += 1,
+            "submitted" => breakdown.submitted += 1,
+            "completed" if item.payment_state == "paid" => breakdown.paid += 1,
+            _ => {}
+        }
+        if !item.verification_ready && item.work_state != "completed" {
+            breakdown.verification_unavailable += 1;
+        }
+    }
+    breakdown
+}
+
 pub fn apply_query(
     mut items: Vec<OpportunityItem>,
     query: &OpportunityQuery,
@@ -1259,15 +1357,7 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             matches
         }
         OpportunityView::ReadyToEarn => {
-            let matches = item.work_state == "claimable"
-                && item.payment_state == "escrowed"
-                && item.payment_committed
-                && item.verification_ready
-                && (item.source_type != "canonical_base"
-                    || item
-                        .cash_economics
-                        .as_ref()
-                        .is_some_and(|economics| economics.gross_cash_margin_positive));
+            let matches = is_ready_to_earn_item(item);
             if matches {
                 item.discovery_factors.push(
                     "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin".to_string(),
@@ -1276,6 +1366,18 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             matches
         }
     }
+}
+
+fn is_ready_to_earn_item(item: &OpportunityItem) -> bool {
+    item.work_state == "claimable"
+        && item.payment_state == "escrowed"
+        && item.payment_committed
+        && item.verification_ready
+        && (item.source_type != "canonical_base"
+            || item
+                .cash_economics
+                .as_ref()
+                .is_some_and(|economics| economics.gross_cash_margin_positive))
 }
 
 fn taxonomy_view(item: &mut OpportunityItem, view: &str) -> bool {
@@ -1543,6 +1645,36 @@ mod tests {
     };
     use uuid::Uuid;
 
+    #[derive(serde::Deserialize)]
+    struct InventoryFixture {
+        generated_at: String,
+        observed_at: String,
+        source_available: bool,
+        source_error: Option<String>,
+        items: Vec<InventoryFixtureItem>,
+        expected: InventoryFixtureExpected,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct InventoryFixtureItem {
+        status: String,
+        funded: String,
+        verification_ready: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct InventoryFixtureExpected {
+        source_available: bool,
+        source_degraded: bool,
+        source_status: String,
+        source_error: Option<String>,
+        ready_to_earn: usize,
+        in_progress: usize,
+        submitted: usize,
+        paid: usize,
+        verification_unavailable: usize,
+    }
+
     fn trial() -> TrialBounty {
         let created_at = DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap();
         TrialBounty {
@@ -1802,6 +1934,91 @@ mod tests {
     }
 
     #[test]
+    fn inventory_state_breakdown_uses_production_projector_for_all_fixtures() {
+        let fixtures = [
+            (
+                "empty",
+                include_str!("../../../scripts/fixtures/inventory-state-breakdown/empty.json"),
+            ),
+            (
+                "mixed",
+                include_str!("../../../scripts/fixtures/inventory-state-breakdown/mixed.json"),
+            ),
+            (
+                "degraded",
+                include_str!("../../../scripts/fixtures/inventory-state-breakdown/degraded.json"),
+            ),
+            (
+                "stale",
+                include_str!("../../../scripts/fixtures/inventory-state-breakdown/stale.json"),
+            ),
+        ];
+
+        for (name, fixture) in fixtures {
+            let fixture: InventoryFixture = serde_json::from_str(fixture).unwrap();
+            let items = fixture
+                .items
+                .iter()
+                .map(|item| {
+                    canonical_opportunity(
+                        &canonical(&item.status, &item.funded, item.verification_ready),
+                        "base-mainnet",
+                        "https://api.example",
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let generated_at = DateTime::parse_from_rfc3339(&fixture.generated_at)
+                .unwrap()
+                .with_timezone(&Utc);
+            let observed_at = DateTime::parse_from_rfc3339(&fixture.observed_at)
+                .unwrap()
+                .with_timezone(&Utc);
+            let actual = inventory_state_breakdown_v1(
+                &items,
+                InventorySnapshotMetadata {
+                    generated_at,
+                    source_available: fixture.source_available,
+                    source_error: fixture.source_error,
+                },
+                observed_at,
+            );
+            let expected = fixture.expected;
+
+            assert_eq!(
+                actual.schema_version, INVENTORY_STATE_BREAKDOWN_SCHEMA,
+                "{name}"
+            );
+            assert_eq!(actual.source_available, expected.source_available, "{name}");
+            assert_eq!(actual.source_degraded, expected.source_degraded, "{name}");
+            assert_eq!(actual.source_status, expected.source_status, "{name}");
+            assert_eq!(actual.source_error, expected.source_error, "{name}");
+            assert_eq!(actual.ready_to_earn, expected.ready_to_earn, "{name}");
+            assert_eq!(actual.in_progress, expected.in_progress, "{name}");
+            assert_eq!(actual.submitted, expected.submitted, "{name}");
+            assert_eq!(actual.paid, expected.paid, "{name}");
+            assert_eq!(
+                actual.verification_unavailable, expected.verification_unavailable,
+                "{name}"
+            );
+
+            if name == "mixed" {
+                let ready_items = apply_query(
+                    items,
+                    &OpportunityQuery {
+                        view: Some("ready_to_earn".to_string()),
+                        source_type: Some("canonical_base".to_string()),
+                        ..OpportunityQuery::default()
+                    },
+                    Some(OpportunityView::ReadyToEarn),
+                    observed_at,
+                );
+                assert_eq!(actual.ready_to_earn, ready_items.len());
+            }
+        }
+    }
+
+    #[test]
     fn public_open_competition_is_primary_ready_to_earn_mode() {
         let (events, profile) = open_competition_fixture();
         let item = open_competition_opportunities(
@@ -2046,6 +2263,19 @@ mod tests {
             applied_view: None,
             degraded: false,
             source_statuses: Vec::new(),
+            inventory_state_breakdown: inventory_state_breakdown_v1(
+                &[],
+                InventorySnapshotMetadata {
+                    generated_at: DateTime::parse_from_rfc3339("2027-01-15T08:01:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    source_available: true,
+                    source_error: None,
+                },
+                DateTime::parse_from_rfc3339("2027-01-15T08:01:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
         };
@@ -2083,6 +2313,19 @@ mod tests {
             applied_view: None,
             degraded: false,
             source_statuses: Vec::new(),
+            inventory_state_breakdown: inventory_state_breakdown_v1(
+                std::slice::from_ref(&item),
+                InventorySnapshotMetadata {
+                    generated_at: DateTime::parse_from_rfc3339("2027-01-15T08:01:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    source_available: true,
+                    source_error: None,
+                },
+                DateTime::parse_from_rfc3339("2027-01-15T08:01:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
         };
