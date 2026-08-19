@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Recover the second failed charge only, or resume after diagnostics pass"
+        description: "Recover all known failed charges only, or resume after diagnostics pass"
         required: true
         default: recover-second-only
         type: choice
         options:
           - recover-second-only
+          - finalize-success
           - resume-rehearsal
 
 permissions:
@@ -52,6 +53,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+          clean: false
+      - name: Reset generated output from prior containerized runs
+        run: |
+          if [[ -d target ]]; then
+            sudo rm -rf target
+          fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ github.sha }}
@@ -70,6 +77,7 @@ jobs:
           OPEN_COMPETITION_V2_PROVER_API_KEY: beta3-sepolia-rehearsal-only-api-key
           SP1_PROVER: cpu
           RECOVERY_ONLY: ${{ inputs.mode == 'recover-second-only' }}
+          FINALIZE_SUCCESS: ${{ inputs.mode == 'finalize-success' }}
         run: |
           set -euo pipefail
           preserved=/mnt/agent-bounties-artifacts/beta3-attempt15
@@ -105,9 +113,59 @@ jobs:
             --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
             --broker "$BROKER" --amount 110000 \
             --output target/failed-x402-charge-refund-2.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56 \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-3.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-4.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27 \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-5.json
           if [[ "$RECOVERY_ONLY" == "true" ]]; then
             exit 0
           fi
+          if [[ "$FINALIZE_SUCCESS" == "true" ]]; then
+            cp "$preserved/sepolia-x402-rehearsal-success.json" target/sepolia-x402-rehearsal.json
+            cp "$preserved/x402-canary-replacement-success.json" target/x402-canary-replacement.json
+            cp target/release-assets/release-gates.json target/release-gates.json
+            chmod u+w target/release-gates.json
+            jq -e '.passed == true and (.settlement_event_id | length > 0)' \
+              target/sepolia-x402-rehearsal.json >/dev/null
+            replacement="$(jq -r .competition target/x402-canary-replacement.json)"
+            test "$replacement" = "$(jq -r .competition target/sepolia-x402-rehearsal.json)"
+            evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            for gate in \
+              base_sepolia_groth16_first_proven_complete \
+              base_sepolia_plonk_best_score_complete \
+              base_sepolia_pooled_funding_complete \
+              base_sepolia_expiry_refunds_complete \
+              base_sepolia_verifier_failure_refunds_complete; do
+              python scripts/record_open_competition_v2_beta3_gate.py \
+                --manifest target/release-gates.json --gate "$gate" \
+                --evidence target/sepolia-rehearsal.json --uri "$evidence_uri" \
+                --source-commit "$RELEASE_SOURCE_COMMIT"
+            done
+            python scripts/record_open_competition_v2_beta3_gate.py \
+              --manifest target/release-gates.json --gate base_sepolia_x402_and_byo_complete \
+              --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
+              --source-commit "$RELEASE_SOURCE_COMMIT"
+            exit 0
+          fi
+          cargo build --manifest-path target/continuation-control/Cargo.toml \
+            --target-dir target/continuation-build --locked --release -p api -p worker
           python target/continuation-control/scripts/refresh_open_competition_v2_x402_canary.py \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --runtime target/sepolia.runtime.json \
@@ -160,7 +218,7 @@ jobs:
           python scripts/open_competition_v2_prover_service.py >target/sepolia-prover.log 2>&1 &
           prover_pid=$!
           export PORT=8787
-          target/release/api >target/sepolia-api.log 2>&1 &
+          target/continuation-build/release/api >target/sepolia-api.log 2>&1 &
           api_pid=$!
           cleanup() {
             kill "$api_pid" "$prover_pid" 2>/dev/null || true
@@ -175,13 +233,15 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8787/health >/dev/null
-          python scripts/run_open_competition_v2_x402_rehearsal.py \
+          python target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --api http://127.0.0.1:8787 --rpc-url "$BASE_SEPOLIA_RPC_URL" \
-            --rehearsal target/sepolia-rehearsal.json --worker-binary target/release/worker \
+            --rehearsal target/sepolia-rehearsal.json \
+            --worker-binary target/continuation-build/release/worker \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
             --output target/sepolia-x402-rehearsal.json
           cp target/release-assets/release-gates.json target/release-gates.json
+          chmod u+w target/release-gates.json
           evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           for gate in \
             base_sepolia_groth16_first_proven_complete \
@@ -199,7 +259,7 @@ jobs:
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$RELEASE_SOURCE_COMMIT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: inputs.mode == 'resume-rehearsal'
+        if: inputs.mode != 'recover-second-only'
         with:
           name: open-competition-v2-beta3-live-sepolia-resumed
           path: |
@@ -209,6 +269,9 @@ jobs:
             target/x402-canary-replacement.json
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
+            target/failed-x402-charge-refund-3.json
+            target/failed-x402-charge-refund-4.json
+            target/failed-x402-charge-refund-5.json
             target/sepolia-proofs/*.json
             target/release-gates.json
             target/release-assets/**
@@ -219,9 +282,12 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: inputs.mode == 'recover-second-only'
         with:
-          name: open-competition-v2-beta3-x402-charge-recovery-2
+          name: open-competition-v2-beta3-x402-charge-recovery-5
           path: |
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
+            target/failed-x402-charge-refund-3.json
+            target/failed-x402-charge-refund-4.json
+            target/failed-x402-charge-refund-5.json
           if-no-files-found: error
           retention-days: 90

@@ -149,6 +149,21 @@ def sign_payment(
     ).decode()
 
 
+def sign_relay_authorization(actor: Any, authorization: dict[str, Any]) -> str:
+    require(
+        authorization.get("primaryType") == "SubmitProof",
+        "relay authorization has the wrong EIP-712 primary type",
+    )
+    require(
+        isinstance(authorization.get("types"), dict)
+        and isinstance(authorization.get("domain"), dict)
+        and isinstance(authorization.get("message"), dict),
+        "relay authorization is not complete EIP-712 typed data",
+    )
+    signed = actor.sign_message(encode_typed_data(full_message=authorization))
+    return "0x" + bytes(signed.signature).hex()
+
+
 def run_worker(binary: Path, protocol: str) -> str:
     environment = {**os.environ, "BASE_INDEXER_PROTOCOL": protocol, "BASE_INDEXER_ONCE": "true"}
     completed = subprocess.run(
@@ -335,14 +350,15 @@ def main() -> int:
         relay_url,
         {"authorization_deadline": authorization_deadline, "solver_signature": None},
     )
-    digest = unsigned["plan"]["relay_authorization"]["digest"]
-    signature = solver.unsafe_sign_hash(bytes.fromhex(digest.removeprefix("0x"))).signature
+    signature = sign_relay_authorization(
+        solver, unsigned["plan"]["relay_authorization"]
+    )
     _, authorized, _ = request_json(
         "POST",
         relay_url,
         {
             "authorization_deadline": authorization_deadline,
-            "solver_signature": "0x" + bytes(signature).hex(),
+            "solver_signature": signature,
         },
     )
     require(authorized["state"] == "relaying", "solver relay authorization was not accepted")

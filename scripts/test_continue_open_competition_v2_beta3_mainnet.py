@@ -67,11 +67,26 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)
         self.assertIn("failed-x402-charge-refund.json", self.text)
         self.assertIn("failed-x402-charge-refund-2.json", self.text)
+        self.assertIn("failed-x402-charge-refund-3.json", self.text)
+        self.assertIn("failed-x402-charge-refund-4.json", self.text)
+        self.assertIn("failed-x402-charge-refund-5.json", self.text)
         self.assertIn("x402-canary-replacement.json", self.text)
         self.assertIn(".minimum_broker_sla_seconds == 1800", self.text)
         self.assertIn(".superseded_recovery.recovered == true", self.text)
         self.assertIn(
             "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312",
+            self.text,
+        )
+        self.assertIn(
+            "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56",
+            self.text,
+        )
+        self.assertIn(
+            "0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a",
+            self.text,
+        )
+        self.assertIn(
+            "0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27",
             self.text,
         )
         self.assertIn(".settlement_event_id | length > 0", self.text)
@@ -83,6 +98,23 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("expected_gnark_image_id", self.text)
         self.assertIn("expected_gnark_cli", self.text)
         self.assertNotIn('docker pull "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
+
+    def test_canaries_use_current_control_binaries_with_frozen_release_assets(self):
+        self.assertIn("ref: ${{ github.sha }}", self.text)
+        self.assertIn("path: target/continuation-control", self.text)
+        self.assertIn("--manifest-path target/continuation-control/Cargo.toml", self.text)
+        self.assertIn("target/continuation-build/release/api", self.text)
+        self.assertIn("--worker-binary target/continuation-build/release/worker", self.text)
+        self.assertEqual(
+            self.text.count(
+                "target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py"
+            ),
+            2,
+        )
+        self.assertEqual(
+            self.text.count('sudo rm -rf "$GITHUB_WORKSPACE/target"'),
+            2,
+        )
 
     def test_canaries_and_activation_remain_mandatory(self):
         for evidence in (

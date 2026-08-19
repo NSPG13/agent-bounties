@@ -30,7 +30,7 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertEqual(dispatch["inputs"]["mode"]["default"], "recover-second-only")
         self.assertEqual(
             dispatch["inputs"]["mode"]["options"],
-            ["recover-second-only", "resume-rehearsal"],
+            ["recover-second-only", "finalize-success", "resume-rehearsal"],
         )
         self.assertNotIn("push", workflow[True])
         self.assertNotIn("schedule", workflow[True])
@@ -45,8 +45,10 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         ]
         self.assertEqual(len(checkouts), 2)
         self.assertEqual(checkouts[0]["with"]["ref"], "${{ env.RELEASE_SOURCE_COMMIT }}")
+        self.assertFalse(checkouts[0]["with"]["clean"])
         self.assertEqual(checkouts[1]["with"]["ref"], "${{ github.sha }}")
         self.assertEqual(checkouts[1]["with"]["path"], "target/continuation-control")
+        self.assertIn("sudo rm -rf target", text)
         self.assertIn(
             "target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py",
             text,
@@ -67,11 +69,44 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
             text,
         )
         self.assertIn("target/failed-x402-charge-refund-2.json", text)
+        self.assertIn(
+            "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56",
+            text,
+        )
+        self.assertIn("target/failed-x402-charge-refund-3.json", text)
+        self.assertIn(
+            "0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a",
+            text,
+        )
+        self.assertIn("target/failed-x402-charge-refund-4.json", text)
+        self.assertIn(
+            "0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27",
+            text,
+        )
+        self.assertIn("target/failed-x402-charge-refund-5.json", text)
         self.assertIn('if [[ "$RECOVERY_ONLY" == "true" ]]', text)
-        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-2", text)
+        self.assertIn('if [[ "$FINALIZE_SUCCESS" == "true" ]]', text)
+        self.assertIn("sepolia-x402-rehearsal-success.json", text)
+        self.assertIn("x402-canary-replacement-success.json", text)
+        self.assertIn("chmod u+w target/release-gates.json", text)
+        self.assertNotIn(
+            "target/continuation-control/scripts/record_open_competition_v2_beta3_gate.py",
+            text,
+        )
+        self.assertIn("python scripts/record_open_competition_v2_beta3_gate.py", text)
+        self.assertIn("if: inputs.mode != 'recover-second-only'", text)
+        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-5", text)
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', text)
         self.assertIn("expected_gnark_image_id", text)
         self.assertIn("expected_gnark_cli", text)
+        self.assertIn("--manifest-path target/continuation-control/Cargo.toml", text)
+        self.assertIn("--release -p api -p worker", text)
+        self.assertIn("target/continuation-build/release/api", text)
+        self.assertIn("--worker-binary target/continuation-build/release/worker", text)
+        self.assertIn(
+            "target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py",
+            text,
+        )
         self.assertIn("--source-commit \"$RELEASE_SOURCE_COMMIT\"", text)
         self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)

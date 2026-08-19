@@ -988,7 +988,7 @@ pub(crate) async fn pay_proof_job(
     proof_job_payment_response(&job)
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 digest or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 typed data or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
 pub(crate) async fn authorize_proof_job_relay(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,
@@ -1164,7 +1164,7 @@ pub(crate) async fn authorize_proof_job_relay(
         "proof_job_id": job.id,
         "state": job.state,
         "plan": plan,
-        "next_action": "Sign plan.relay_authorization.digest with the solver wallet, then call this endpoint again with solver_signature."
+        "next_action": "Sign the exact plan.relay_authorization EIP-712 typed data with the solver wallet, then call this endpoint again with solver_signature."
     })))
 }
 

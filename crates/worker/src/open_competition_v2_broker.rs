@@ -5,6 +5,7 @@ use chain_base::{
     plan_open_competition_v2_proof, rpc_logs_to_evm_logs, BaseContractLogQuery, BaseRpcUrlConfig,
     BaseTransactionRelayer, ChainBaseError, EvmLog, OpenCompetitionV2BrokerPaymentAuthorization,
     OpenCompetitionV2Event, OpenCompetitionV2EventKind, OpenCompetitionV2ProofSystem,
+    OPEN_COMPETITION_V2_PROTOCOL_VERSION,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use db::{
@@ -15,12 +16,30 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha3::{Digest, Keccak256};
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 use uuid::Uuid;
 
 pub const OPEN_COMPETITION_V2_PROVER_URL_ENV: &str = "OPEN_COMPETITION_V2_PROVER_URL";
 pub const OPEN_COMPETITION_V2_PROVER_API_KEY_ENV: &str = "OPEN_COMPETITION_V2_PROVER_API_KEY";
 pub const OPEN_COMPETITION_V2_RELAYER_PRIVATE_KEY_ENV: &str = "X402_RELAYER_PRIVATE_KEY";
+const BASE_MAINNET_RELEASE_ENV: &str =
+    "BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON";
+const BASE_SEPOLIA_RELEASE_ENV: &str =
+    "BASE_SEPOLIA_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON";
+
+#[derive(Debug, Clone, Deserialize)]
+struct BrokerReleaseIdentity {
+    protocol_version: String,
+    network: String,
+    groth16_verifier_hash: String,
+    plonk_verifier_hash: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProofSelectors {
+    groth16: [u8; 4],
+    plonk: [u8; 4],
+}
 
 #[derive(Clone)]
 pub struct OpenCompetitionV2BrokerConfig {
@@ -29,6 +48,7 @@ pub struct OpenCompetitionV2BrokerConfig {
     pub request_timeout_seconds: u64,
     pub lease_seconds: u32,
     pub refund_window_seconds: i64,
+    proof_selectors: BTreeMap<String, ProofSelectors>,
     client: reqwest::Client,
 }
 
@@ -41,6 +61,10 @@ impl std::fmt::Debug for OpenCompetitionV2BrokerConfig {
             .field("request_timeout_seconds", &self.request_timeout_seconds)
             .field("lease_seconds", &self.lease_seconds)
             .field("refund_window_seconds", &self.refund_window_seconds)
+            .field(
+                "selector_networks",
+                &self.proof_selectors.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -95,6 +119,7 @@ impl OpenCompetitionV2BrokerConfig {
                 "OPEN_COMPETITION_V2_REFUND_WINDOW_SECONDS cannot exceed 1800"
             ));
         }
+        let proof_selectors = release_proof_selectors(&lookup)?;
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(request_timeout_seconds))
@@ -107,9 +132,64 @@ impl OpenCompetitionV2BrokerConfig {
             request_timeout_seconds,
             lease_seconds,
             refund_window_seconds,
+            proof_selectors,
             client,
         })
     }
+
+    fn proof_selector(&self, network: &str, proof_system: &str) -> anyhow::Result<[u8; 4]> {
+        let selectors = self
+            .proof_selectors
+            .get(network)
+            .with_context(|| format!("no Beta3 release selector is configured for {network}"))?;
+        match proof_system {
+            "groth16" | "sp1-groth16" => Ok(selectors.groth16),
+            "plonk" | "sp1-plonk" => Ok(selectors.plonk),
+            _ => Err(anyhow!("unsupported stored proof system")),
+        }
+    }
+}
+
+fn release_proof_selectors<F>(lookup: &F) -> anyhow::Result<BTreeMap<String, ProofSelectors>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut selectors = BTreeMap::new();
+    for (expected_network, variable) in [
+        ("base-mainnet", BASE_MAINNET_RELEASE_ENV),
+        ("base-sepolia", BASE_SEPOLIA_RELEASE_ENV),
+    ] {
+        let Some(raw) = lookup(variable) else {
+            continue;
+        };
+        let release: BrokerReleaseIdentity = serde_json::from_str(&raw)
+            .with_context(|| format!("{variable} is not valid release JSON"))?;
+        if release.protocol_version != OPEN_COMPETITION_V2_PROTOCOL_VERSION
+            || release.network != expected_network
+        {
+            return Err(anyhow!("{variable} has the wrong protocol or network"));
+        }
+        selectors.insert(
+            expected_network.to_string(),
+            ProofSelectors {
+                groth16: verifier_selector(&release.groth16_verifier_hash)
+                    .with_context(|| format!("{variable} has an invalid Groth16 verifier hash"))?,
+                plonk: verifier_selector(&release.plonk_verifier_hash)
+                    .with_context(|| format!("{variable} has an invalid PLONK verifier hash"))?,
+            },
+        );
+    }
+    if selectors.is_empty() {
+        return Err(anyhow!(
+            "a Base mainnet or Sepolia Beta3 release manifest is required"
+        ));
+    }
+    Ok(selectors)
+}
+
+fn verifier_selector(value: &str) -> anyhow::Result<[u8; 4]> {
+    let bytes = bounded_hex(value, 32, 32)?;
+    Ok(bytes[..4].try_into().expect("four-byte slice"))
 }
 
 #[derive(Clone)]
@@ -205,7 +285,7 @@ struct ProverPayloadError {
 
 fn validate_proved_response(
     response: &ProverResponse,
-    proof_system: &str,
+    expected_selector: [u8; 4],
     expected_public_values: &str,
 ) -> Result<ValidatedProverPayload, ProverPayloadError> {
     let invalid = || ProverPayloadError {
@@ -218,7 +298,7 @@ fn validate_proved_response(
         4 * 1024 * 1024,
     )
     .map_err(|_| invalid())?;
-    if !proof_has_expected_selector(proof_system, &proof) {
+    if !proof_has_expected_selector(expected_selector, &proof) {
         return Err(ProverPayloadError {
             code: "proof_system_selector_mismatch",
             message: "Proof bytes did not carry the quote-bound canonical SP1 verifier selector.",
@@ -417,9 +497,23 @@ async fn process_prover_job(
             Ok((job.state, "refund_due".to_string()))
         }
         ProverStatus::Proved => {
+            let expected_selector = match config.proof_selector(&job.network, &job.proof_system) {
+                Ok(selector) => selector,
+                Err(_) => {
+                    *job = mark_refund_due(
+                        store,
+                        config,
+                        job,
+                        "proof_release_selector_unavailable",
+                        "The broker has no release-bound selector for this job.",
+                    )
+                    .await?;
+                    return Ok((job.state, "refund_due".to_string()));
+                }
+            };
             let payload = match validate_proved_response(
                 &response,
-                &job.proof_system,
+                expected_selector,
                 &job.expected_public_values,
             ) {
                 Ok(payload) => payload,
@@ -988,12 +1082,7 @@ fn parse_proof_system(value: &str) -> anyhow::Result<OpenCompetitionV2ProofSyste
     }
 }
 
-fn proof_has_expected_selector(proof_system: &str, proof: &[u8]) -> bool {
-    let expected = match proof_system {
-        "groth16" | "sp1-groth16" => [0x43, 0x88, 0xa2, 0x1c],
-        "plonk" | "sp1-plonk" => [0x5a, 0x09, 0x3a, 0x2f],
-        _ => return false,
-    };
+fn proof_has_expected_selector(expected: [u8; 4], proof: &[u8]) -> bool {
     proof.starts_with(&expected)
 }
 
@@ -1134,6 +1223,16 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    fn broker_release(network: &str) -> String {
+        serde_json::json!({
+            "protocol_version": OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+            "network": network,
+            "groth16_verifier_hash": "0x780d0643126338d5f2ac4520b2dcf0823292e0b82f21610e443da02edb5c2951",
+            "plonk_verifier_hash": "0x7e52d06272ffc34edbfb7c21582ea2496b6a0f779fd8883341642a92846b183c"
+        })
+        .to_string()
+    }
+
     fn proof_job() -> OpenCompetitionV2ProofJob {
         let now = Utc::now();
         let mut public_values = vec![0_u8; 640];
@@ -1207,25 +1306,38 @@ mod tests {
 
     #[test]
     fn broker_config_requires_https_and_bounded_refunds() {
-        let values = HashMap::from([(
-            OPEN_COMPETITION_V2_PROVER_URL_ENV,
-            "https://prover.example/jobs",
-        )]);
-        let config = OpenCompetitionV2BrokerConfig::from_lookup(|key| {
-            values.get(key).map(|value| value.to_string())
-        })
-        .unwrap();
+        let values = HashMap::from([
+            (
+                OPEN_COMPETITION_V2_PROVER_URL_ENV,
+                "https://prover.example/jobs".to_string(),
+            ),
+            (BASE_MAINNET_RELEASE_ENV, broker_release("base-mainnet")),
+        ]);
+        let config =
+            OpenCompetitionV2BrokerConfig::from_lookup(|key| values.get(key).cloned()).unwrap();
         assert_eq!(config.refund_window_seconds, 1_800);
         assert!(config.lease_seconds > config.request_timeout_seconds as u32);
+        assert_eq!(
+            config.proof_selector("base-mainnet", "groth16").unwrap(),
+            [0x78, 0x0d, 0x06, 0x43]
+        );
+        assert_eq!(
+            config.proof_selector("base-mainnet", "plonk").unwrap(),
+            [0x7e, 0x52, 0xd0, 0x62]
+        );
+        assert!(config.proof_selector("base-sepolia", "groth16").is_err());
 
-        let insecure = HashMap::from([(
-            OPEN_COMPETITION_V2_PROVER_URL_ENV,
-            "http://prover.example/jobs",
-        )]);
-        assert!(OpenCompetitionV2BrokerConfig::from_lookup(|key| {
-            insecure.get(key).map(|value| value.to_string())
-        })
-        .is_err());
+        let insecure = HashMap::from([
+            (
+                OPEN_COMPETITION_V2_PROVER_URL_ENV,
+                "http://prover.example/jobs".to_string(),
+            ),
+            (BASE_MAINNET_RELEASE_ENV, broker_release("base-mainnet")),
+        ]);
+        assert!(
+            OpenCompetitionV2BrokerConfig::from_lookup(|key| { insecure.get(key).cloned() })
+                .is_err()
+        );
     }
 
     #[test]
@@ -1238,16 +1350,16 @@ mod tests {
             "0xbef7892d64c4651df16fad4b6d6ed8a97654e5e6e3c3bbdde31b80c440c7b133"
         );
         assert!(proof_has_expected_selector(
-            "groth16",
-            &[0x43, 0x88, 0xa2, 0x1c, 1]
+            [0x78, 0x0d, 0x06, 0x43],
+            &[0x78, 0x0d, 0x06, 0x43, 1]
         ));
         assert!(proof_has_expected_selector(
-            "plonk",
-            &[0x5a, 0x09, 0x3a, 0x2f, 1]
+            [0x7e, 0x52, 0xd0, 0x62],
+            &[0x7e, 0x52, 0xd0, 0x62, 1]
         ));
         assert!(!proof_has_expected_selector(
-            "groth16",
-            &[0x5a, 0x09, 0x3a, 0x2f]
+            [0x78, 0x0d, 0x06, 0x43],
+            &[0x43, 0x88, 0xa2, 0x1c, 1]
         ));
     }
 
@@ -1257,33 +1369,34 @@ mod tests {
         let mut response = ProverResponse {
             status: ProverStatus::Proved,
             provider_job_id: "provider-1".to_string(),
-            proof: Some("0x4388a21c01".to_string()),
+            proof: Some("0x780d064301".to_string()),
             public_values: Some(expected.clone()),
             failure_code: None,
             failure_message: None,
         };
-        let payload = validate_proved_response(&response, "groth16", &expected).unwrap();
-        assert_eq!(payload.proof, [0x43, 0x88, 0xa2, 0x1c, 0x01]);
+        let selector = [0x78, 0x0d, 0x06, 0x43];
+        let payload = validate_proved_response(&response, selector, &expected).unwrap();
+        assert_eq!(payload.proof, [0x78, 0x0d, 0x06, 0x43, 0x01]);
         assert_eq!(payload.public_values.len(), 640);
 
         response.proof = None;
         assert_eq!(
-            validate_proved_response(&response, "groth16", &expected)
+            validate_proved_response(&response, selector, &expected)
                 .unwrap_err()
                 .code,
             "proof_provider_response_invalid"
         );
-        response.proof = Some("0x5a093a2f01".to_string());
+        response.proof = Some("0x4388a21c01".to_string());
         assert_eq!(
-            validate_proved_response(&response, "groth16", &expected)
+            validate_proved_response(&response, selector, &expected)
                 .unwrap_err()
                 .code,
             "proof_system_selector_mismatch"
         );
-        response.proof = Some("0x4388a21c01".to_string());
+        response.proof = Some("0x780d064301".to_string());
         response.public_values = Some(format!("0x{}", "cd".repeat(640)));
         assert_eq!(
-            validate_proved_response(&response, "groth16", &expected)
+            validate_proved_response(&response, selector, &expected)
                 .unwrap_err()
                 .code,
             "proof_journal_mismatch"

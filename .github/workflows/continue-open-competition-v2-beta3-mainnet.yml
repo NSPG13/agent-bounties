@@ -59,6 +59,9 @@ jobs:
           test -f target/live-sepolia/x402-canary-replacement.json
           test -f target/live-sepolia/failed-x402-charge-refund.json
           test -f target/live-sepolia/failed-x402-charge-refund-2.json
+          test -f target/live-sepolia/failed-x402-charge-refund-3.json
+          test -f target/live-sepolia/failed-x402-charge-refund-4.json
+          test -f target/live-sepolia/failed-x402-charge-refund-5.json
           jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
           replacement="$(jq -r .competition target/live-sepolia/x402-canary-replacement.json)"
           test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"
@@ -69,6 +72,12 @@ jobs:
             target/live-sepolia/failed-x402-charge-refund.json >/dev/null
           jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312" and (.refund_transaction | length > 0)' \
             target/live-sepolia/failed-x402-charge-refund-2.json >/dev/null
+          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56" and (.refund_transaction | length > 0)' \
+            target/live-sepolia/failed-x402-charge-refund-3.json >/dev/null
+          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a" and (.refund_transaction | length > 0)' \
+            target/live-sepolia/failed-x402-charge-refund-4.json >/dev/null
+          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27" and (.refund_transaction | length > 0)' \
+            target/live-sepolia/failed-x402-charge-refund-5.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-rehearsal.json >/dev/null
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
@@ -133,8 +142,7 @@ jobs:
       - name: Clear generated files from prior capacity-gated runs
         run: |
           if [ -d "$GITHUB_WORKSPACE/target" ]; then
-            chmod -R u+w "$GITHUB_WORKSPACE/target" || true
-            rm -rf "$GITHUB_WORKSPACE/target"
+            sudo rm -rf "$GITHUB_WORKSPACE/target"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
@@ -323,12 +331,15 @@ jobs:
       - name: Clear generated files from prior capacity-gated runs
         run: |
           if [ -d "$GITHUB_WORKSPACE/target" ]; then
-            chmod -R u+w "$GITHUB_WORKSPACE/target" || true
-            rm -rf "$GITHUB_WORKSPACE/target"
+            sudo rm -rf "$GITHUB_WORKSPACE/target"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ github.sha }}
+          path: target/continuation-control
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
@@ -367,7 +378,8 @@ jobs:
           KEEPER="${BASE_KEEPER_ADDRESS,,}"
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
-          cargo build --locked --release -p api -p worker
+          cargo build --manifest-path target/continuation-control/Cargo.toml \
+            --target-dir target/continuation-build --locked --release -p api -p worker
           bundle=target/mainnet-deployment/mainnet-exact.json
           python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
             --runtime target/production-control-plane/mainnet-broker.runtime.json \
@@ -421,7 +433,7 @@ jobs:
           python scripts/open_competition_v2_failure_prover.py >target/mainnet-failure-prover.log 2>&1 &
           failure_prover_pid=$!
           export PORT=8788
-          target/release/api >target/mainnet-canary-api.log 2>&1 &
+          target/continuation-build/release/api >target/mainnet-canary-api.log 2>&1 &
           canary_api_pid=$!
           cleanup() {
             kill "$canary_api_pid" "$failure_prover_pid" 2>/dev/null || true
@@ -436,16 +448,16 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8788/health >/dev/null
-          python scripts/run_open_competition_v2_x402_rehearsal.py \
+          python target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api http://127.0.0.1:8788 \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
-            --worker-binary target/release/worker --expect-refund \
+            --worker-binary target/continuation-build/release/worker --expect-refund \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --output target/mainnet-x402-refund.json
           cleanup
           trap - EXIT
-          python scripts/run_open_competition_v2_x402_rehearsal.py \
+          python target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api https://api.agentbounties.app \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
