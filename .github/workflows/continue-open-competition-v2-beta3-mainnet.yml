@@ -199,7 +199,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:9070/health | tee target/prover-health.json
           public_health="${OPEN_COMPETITION_V2_PROVER_URL%/v1/prove}/health"
           curl --fail --silent "$public_health" | tee target/prover-public-health.json
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           json.dump({
               "schema_version": "agent-bounties/open-competition-v2-beta3-prover-deployment-v1",
