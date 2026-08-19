@@ -530,22 +530,48 @@
     return marketState.protocolPromise;
   }
 
+  function inventoryStateBreakdown(projection) {
+    const breakdown = projection && projection.inventory_state_breakdown;
+    const countFields = [
+      "ready_to_earn",
+      "in_progress",
+      "submitted",
+      "paid",
+      "verification_unavailable",
+    ];
+    if (!breakdown
+      || breakdown.schema_version !== "agent-bounties/inventory-state-breakdown-v1"
+      || breakdown.source !== "canonical_base"
+      || countFields.some((field) => !Number.isSafeInteger(breakdown[field]) || breakdown[field] < 0)) {
+      throw new Error("Canonical inventory breakdown is unavailable.");
+    }
+    if (!breakdown.source_available || breakdown.source_degraded) {
+      throw new Error(`Canonical inventory source is ${breakdown.source_status || "unavailable"}.`);
+    }
+    if (!Number.isFinite(Date.parse(breakdown.generated_at))) {
+      throw new Error("Canonical inventory timestamp is invalid.");
+    }
+    return breakdown;
+  }
+
   function renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
     const proof = document.querySelector("[data-market-proof]");
-    const items = projection.items || [];
     const readyItems = readyProjection.items || [];
+    const breakdown = inventoryStateBreakdown(readyProjection);
+    const readyCanonicalSource = (readyProjection.source_statuses || [])
+      .find((source) => source.source_type === "canonical_base");
     if (readyProjection.applied_view !== "ready_to_earn"
-      || readyProjection.degraded
+      || !readyCanonicalSource
+      || !readyCanonicalSource.available
       || readyItems.some((item) => !isReadyToEarn(item))) {
       throw new Error("Live earning inventory failed its claimability gate.");
     }
-    const referenceAt = new Date(metrics.generated_at || claim.generated_at || projection.generated_at);
+    const inventoryDrift = breakdown.ready_to_earn !== readyItems.length;
+    const referenceAt = new Date(breakdown.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
-    const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
-      && (item.work_state === "in_progress" || item.work_state === "submitted"));
     const addedThisWeek = readyItems.filter((item) => {
       const created = Date.parse(item.created_at);
       return Number.isFinite(created) && created >= oneWeekAgo;
@@ -562,21 +588,20 @@
         : total;
     }, 0);
     const activeContributors = Number(claim?.canonical_outcomes?.unique_paid_solver_wallets) || 0;
-
-    setMetric("ready", readyItems.length);
+    setMetric("ready", breakdown.ready_to_earn);
     setMetricText(
       "[data-adoption-ready-weekly]",
-      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(inProgressItems.length, 0)} in progress`,
+      `${formatMetric(addedThisWeek, 0)} added this week · ${formatMetric(breakdown.in_progress + breakdown.submitted, 0)} in progress`,
     );
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
     setMetric("paid", activeContributors);
-    setMetricText("[data-board-active]", formatMetric(readyItems.length, 0));
+    setMetricText("[data-board-active]", formatMetric(breakdown.ready_to_earn, 0));
     renderOpportunityBoard(container, readyItems);
 
     if (heroSummary) {
-      heroSummary.textContent = `${readyItems.length} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC canonical payout · ${settlements} settlement events`;
+      heroSummary.textContent = `${breakdown.ready_to_earn} bounties ready to claim · ${formatMetric(transactionVolumeUsdc, 2)} USDC canonical payout · ${settlements} settlement events`;
     }
     const sourceStatuses = projection.source_statuses || [];
     const availableSources = sourceStatuses.filter((source) => source.available).length;
@@ -585,9 +610,14 @@
       .map((source) => source.source_type);
     const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
     if (detail) {
-      detail.textContent = unavailable.length
-        ? `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
-        : `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream`;
+      const counts = `${breakdown.ready_to_earn} ready · ${breakdown.in_progress} in progress · ${breakdown.submitted} submitted · ${breakdown.paid} paid · ${breakdown.verification_unavailable} verification unavailable`;
+      const inventoryWarning = inventoryDrift
+        ? ` · inventory snapshot drift: board ${readyItems.length}, snapshot ${breakdown.ready_to_earn}`
+        : "";
+      const sourceWarning = unavailable.length
+        ? ` · other delayed sources: ${unavailable.join(", ")}`
+        : "";
+      detail.textContent = `${protocolStatus} · ${counts} · ${availableSources}/${sourceStatuses.length} sources online${inventoryWarning}${sourceWarning}`;
     }
 
     if (proof && settlements > 0) {
@@ -597,6 +627,7 @@
       proof.hidden = true;
     }
     marketState.evidenceGeneratedAt = referenceAt;
+    return { inventoryDrift };
   }
 
   async function refreshMarket() {
@@ -633,11 +664,17 @@
       marketState.readyProjection = readyProjection;
       marketState.claim = claim;
       marketState.metrics = metrics;
-      renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics);
+      const renderState = renderMarketSnapshot(
+        protocol,
+        projection,
+        readyProjection,
+        claim,
+        metrics,
+      );
       marketState.lastReceivedAt = Date.now();
       marketState.rendered = true;
       if (firstLiveMarketView) track("market_view");
-      setMarketStatus(projection.degraded ? "delayed" : "live");
+      setMarketStatus(renderState.inventoryDrift ? "delayed" : "live");
     } catch (error) {
       setMarketStatus("delayed");
       marketState.fingerprint = "";
@@ -669,7 +706,7 @@
           refreshMarket();
           return;
         }
-        renderMarketSnapshot(
+        const renderState = renderMarketSnapshot(
           protocol,
           marketState.projection,
           readyProjection,
@@ -678,7 +715,8 @@
         );
         marketState.lastReceivedAt = Date.now();
         marketState.rendered = true;
-        setMarketStatus("live");
+        setMarketStatus(renderState.inventoryDrift ? "delayed" : "live");
+        if (renderState.inventoryDrift) refreshMarket();
         updateMarketClock();
       } catch (_error) {
         marketState.lastReceivedAt = null;
