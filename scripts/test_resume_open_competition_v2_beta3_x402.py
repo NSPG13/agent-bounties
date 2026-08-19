@@ -51,6 +51,14 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
             "target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py",
             text,
         )
+        self.assertIn(
+            "target/continuation-control/scripts/refresh_open_competition_v2_x402_canary.py",
+            text,
+        )
+        self.assertIn("target/x402-canary-replacement.json", text)
+        self.assertIn(".x402_canary.replacement_id == 1", text)
+        self.assertIn(".recovery.recovered == true", text)
+        self.assertIn("--fixture programs/public-vector-metric-v1/fixtures/rehearsal-best-score-a.json", text)
         self.assertIn("OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=1200", text)
         self.assertIn("OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=1230", text)
         self.assertIn("target/failed-x402-charge-refund.json", text)
@@ -68,7 +76,7 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)
         self.assertNotIn("fund_open_competition_v2_beta3_broker.py", text)
-        self.assertNotIn("run_open_competition_v2_sepolia_rehearsal.py", text)
+        self.assertNotIn("python scripts/run_open_competition_v2_sepolia_rehearsal.py", text)
 
 
 if __name__ == "__main__":

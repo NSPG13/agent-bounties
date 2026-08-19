@@ -56,9 +56,15 @@ jobs:
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
           test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           test -f target/live-sepolia/sepolia-x402-rehearsal.json
+          test -f target/live-sepolia/x402-canary-replacement.json
           test -f target/live-sepolia/failed-x402-charge-refund.json
           test -f target/live-sepolia/failed-x402-charge-refund-2.json
           jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
+          replacement="$(jq -r .competition target/live-sepolia/x402-canary-replacement.json)"
+          test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"
+          test "$replacement" = "$(jq -r .x402_canary.competition target/live-sepolia/sepolia-rehearsal.json)"
+          jq -e '.passed == true and .replacement_id == 1 and .minimum_broker_sla_seconds == 1800 and .superseded_recovery.recovered == true' \
+            target/live-sepolia/x402-canary-replacement.json >/dev/null
           jq -e '.passed == true and .amount == "110000" and (.refund_transaction | length > 0)' \
             target/live-sepolia/failed-x402-charge-refund.json >/dev/null
           jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312" and (.refund_transaction | length > 0)' \

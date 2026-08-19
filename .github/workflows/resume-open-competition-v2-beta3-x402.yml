@@ -108,8 +108,17 @@ jobs:
           if [[ "$RECOVERY_ONLY" == "true" ]]; then
             exit 0
           fi
+          python target/continuation-control/scripts/refresh_open_competition_v2_x402_canary.py \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --runtime target/sepolia.runtime.json \
+            --rehearsal target/sepolia-rehearsal.json \
+            --fixture programs/public-vector-metric-v1/fixtures/rehearsal-best-score-a.json \
+            --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
+            --replacement-id 1 \
+            --output target/x402-canary-replacement.json
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
-            '.passed == true and .source_commit == $commit and .x402_canary.active == true' \
+            '.passed == true and .source_commit == $commit and .x402_canary.active == true and .x402_canary.replacement_id == 1 and .superseded_x402_canaries[-1].recovery.recovered == true' \
             target/sepolia-rehearsal.json >/dev/null
           export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
@@ -197,6 +206,7 @@ jobs:
             target/sepolia.runtime.json
             target/sepolia-rehearsal.json
             target/sepolia-x402-rehearsal.json
+            target/x402-canary-replacement.json
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
             target/sepolia-proofs/*.json
