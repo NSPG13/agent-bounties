@@ -69,6 +69,28 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
             ["deploy-mainnet", "deploy-production-control-plane", "mainnet-canaries"],
         )
 
+    def test_render_recovery_uses_current_controller_with_frozen_release(self):
+        for job_name, expected_calls in (
+            ("deploy-production-control-plane", 2),
+            ("activate-public-beta", 1),
+        ):
+            job = self.workflow["jobs"][job_name]
+            checkouts = [
+                step
+                for step in job["steps"]
+                if str(step.get("uses", "")).startswith("actions/checkout@")
+            ]
+            self.assertEqual(checkouts[0]["with"]["ref"], "${{ env.RELEASE_SOURCE_COMMIT }}")
+            self.assertEqual(checkouts[1]["with"]["ref"], "${{ github.sha }}")
+            self.assertEqual(checkouts[1]["with"]["path"], ".release-control")
+            run = "\n".join(str(step.get("run", "")) for step in job["steps"])
+            self.assertEqual(
+                run.count(
+                    "python .release-control/scripts/configure_open_competition_v2_beta3_render.py"
+                ),
+                expected_calls,
+            )
+
     def test_only_successful_frozen_sepolia_evidence_can_continue(self):
         self.assertIn("run-id: ${{ inputs.sepolia_run_id }}", self.text)
         self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)

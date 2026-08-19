@@ -24,7 +24,13 @@ REPOSITORY = "github.com/nspg13/agent-bounties"
 PROTOCOL = "agent-bounties/autonomous-v1"
 BLUEPRINT_PATH = "render.yaml"
 BLUEPRINT_RECOVERABLE_SERVICE_NAMES = frozenset(
-    {"agent-bounties-open-competition-v1-indexer"}
+    {
+        "agent-bounties-open-competition-v1-indexer",
+        "agent-bounties-open-competition-v2-beta3-indexer",
+        "agent-bounties-open-competition-v2-beta3-shadow",
+        "agent-bounties-open-competition-v2-beta3-keeper",
+        "agent-bounties-open-competition-v2-beta3-broker",
+    }
 )
 BLUEPRINT_STATUSES = {"created", "paused", "in_sync", "syncing", "error"}
 ENV_GROUP_SERVICE_TYPES = {
