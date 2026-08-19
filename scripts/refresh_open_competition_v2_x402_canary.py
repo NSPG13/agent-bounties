@@ -58,6 +58,12 @@ def replacement_funding_deadline(old_proof_deadline: int, replacement_id: int) -
     return old_proof_deadline + replacement_id * REPLACEMENT_FUNDING_STEP
 
 
+def has_runtime_code(value: str) -> bool:
+    require(isinstance(value, str) and value.startswith("0x"), "invalid bytecode response")
+    payload = value[2:]
+    return bool(payload) and int(payload, 16) != 0
+
+
 def replace_rehearsal_canary(
     document: dict[str, Any], new_canary: dict[str, Any], evidence: dict[str, Any]
 ) -> dict[str, Any]:
@@ -276,7 +282,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     code = rpc(client.url, "eth_getCode", [competition, "latest"])
-    if int(code, 16) == 0:
+    if not has_runtime_code(code):
         require(
             rehearsal.token_balance(client.url, token, signer.address) >= TARGET_FUNDING,
             "deployer lacks test USDC for the replacement canary",
