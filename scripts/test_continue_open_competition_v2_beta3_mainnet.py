@@ -34,6 +34,13 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
         cls.workflow = yaml.load(cls.text, Loader=UniqueKeyLoader)
 
+    def test_self_hosted_prover_uses_available_python3(self):
+        prover = self.text.split("  deploy-production-prover:", 1)[1].split(
+            "  deploy-production-control-plane:", 1
+        )[0]
+        self.assertIn("python3 - <<'PY'", prover)
+        self.assertNotIn("python - <<'PY'", prover)
+
     def test_release_and_protected_environment_are_pinned(self):
         self.assertEqual(
             self.workflow["env"]["RELEASE_SOURCE_COMMIT"], RELEASE_SOURCE_COMMIT
