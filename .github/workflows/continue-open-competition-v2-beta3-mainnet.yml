@@ -1,0 +1,602 @@
+name: Continue Open Competition V2 Beta3 mainnet release
+
+on:
+  workflow_dispatch:
+    inputs:
+      sepolia_run_id:
+        description: Successful bounded Sepolia continuation run containing the frozen release artifact
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-mainnet-continuation
+  cancel-in-progress: false
+
+env:
+  RELEASE_SOURCE_COMMIT: 4d09d82825c38f2bf93a8ee4375a95b302410c29
+  SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_SAFE_RUNTIME_COMMIT: c2d292c260333a9e4f166cd1435e8ef4897c8b43
+  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
+  OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
+
+jobs:
+  deploy-mainnet:
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-live-sepolia-resumed
+          path: target/live-sepolia
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.sepolia_run_id }}
+      - name: Verify frozen Sepolia evidence and deploy exact mainnet bytecode
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
+          SEPOLIA_RUN_ID: ${{ inputs.sepolia_run_id }}
+        run: |
+          set -euo pipefail
+          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
+          test -f target/live-sepolia/sepolia-x402-rehearsal.json
+          jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
+            '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-rehearsal.json >/dev/null
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
+            '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
+          cp -a target/live-sepolia/release-assets target/release-assets
+          cp target/live-sepolia/release-gates.json target/release-gates.json
+          python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/fund_open_competition_v2_beta3_broker.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --output target/mainnet-broker-seed.json
+          forge build --root contracts/base-escrow --force --ast
+          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
+          export RISK_HASH="$(python -c 'import json; from eth_utils import keccak; value=json.load(open("target/release-gates.json")); print("0x" + keccak(text=value["beta_risk_preimage"]).hex())')"
+          python - <<'PY'
+          import json, os
+          json.dump({
+              "environment": "v2-beta2-mainnet",
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "source_commit": os.environ["RELEASE_SOURCE_COMMIT"],
+              "risk_hash": os.environ["RISK_HASH"],
+              "sepolia_run_id": os.environ["SEPOLIA_RUN_ID"],
+          }, open("target/owner-mainnet-deployment-approval.json", "w"), indent=2)
+          PY
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate owner_mainnet_deployment_approved \
+            --evidence target/owner-mainnet-deployment-approval.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" --owner-risk-hash "$RISK_HASH"
+          python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --verifier-assets target/release-assets/verifier-assets.json \
+            --gates target/release-gates.json --output target/mainnet-exact.json
+          python scripts/deploy_open_competition_v2_beta3.py \
+            --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/mainnet-deployment-evidence.json
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate mainnet_verifiers_factory_deployed \
+            --evidence target/mainnet-deployment-evidence.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-mainnet-deployment-continuation
+          path: |
+            target/mainnet-exact.json
+            target/mainnet-exact.runtime.json
+            target/mainnet-deployment-evidence.json
+            target/mainnet-broker-seed.json
+            target/owner-mainnet-deployment-approval.json
+            target/release-gates.json
+            target/release-assets/**
+          if-no-files-found: error
+          retention-days: 365
+
+  deploy-production-prover:
+    needs: deploy-mainnet
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 30
+    steps:
+      - name: Clear generated files from prior capacity-gated runs
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/target" ]; then
+            chmod -R u+w "$GITHUB_WORKSPACE/target" || true
+            rm -rf "$GITHUB_WORKSPACE/target"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-deployment-continuation
+          path: target/mainnet-deployment
+      - name: Install both reviewed CPU provers as one fail-closed service
+        env:
+          OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
+          OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
+        run: |
+          set -euo pipefail
+          test "${#OPEN_COMPETITION_V2_PROVER_API_KEY}" -ge 32
+          test -f "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+          sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
+          sudo install -m 0755 target/mainnet-deployment/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 target/mainnet-deployment/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/
+          sudo install -m 0644 ops/open-competition-v2-prover.service /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
+          umask 077
+          cat >target/prover.env <<EOF
+          OPEN_COMPETITION_V2_PROVER_API_KEY='$OPEN_COMPETITION_V2_PROVER_API_KEY'
+          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script"}'
+          OPEN_COMPETITION_V2_PROVER_JOB_DIR=/var/lib/agent-bounties-prover/jobs
+          OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
+          OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
+          OPEN_COMPETITION_V2_PROVER_BIND=127.0.0.1
+          PORT=9070
+          SP1_PROVER=cpu
+          SP1_GROTH16_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/groth16
+          SP1_PLONK_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/plonk
+          EOF
+          sudo install -m 0600 target/prover.env /etc/agent-bounties/prover.env
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now agent-bounties-open-competition-v2-prover.service
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:9070/health >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:9070/health | tee target/prover-health.json
+          public_health="${OPEN_COMPETITION_V2_PROVER_URL%/v1/prove}/health"
+          curl --fail --silent "$public_health" | tee target/prover-public-health.json
+          python - <<'PY'
+          import json
+          json.dump({
+              "schema_version": "agent-bounties/open-competition-v2-beta3-prover-deployment-v1",
+              "passed": True,
+              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1"],
+              "backend": "cpu",
+              "gpu_proving_enabled": False,
+          }, open("target/prover-deployment.json", "w"), sort_keys=True)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-production-prover-continuation
+          path: |
+            target/prover-deployment.json
+            target/prover-health.json
+            target/prover-public-health.json
+          if-no-files-found: error
+          retention-days: 365
+
+  deploy-production-control-plane:
+    needs: [deploy-mainnet, deploy-production-prover]
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-deployment-continuation
+          path: target/mainnet-deployment
+      - name: Deploy fail-closed services, reconcile indexers and enable broker canary
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
+          OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_API_KEY" && test -n "$OPEN_COMPETITION_V2_PROVER_API_KEY"
+          test -n "$OPEN_COMPETITION_V2_PROVER_URL" && test -n "$BASE_KEEPER_ADDRESS"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY" && test -n "$BASE_DEPLOYER_ADDRESS"
+          python -m pip install -r scripts/requirements-wallet.txt
+          jq -e '.complete == true' target/mainnet-deployment/mainnet-deployment-evidence.json >/dev/null
+          jq '.runtime_manifest' target/mainnet-deployment/mainnet-deployment-evidence.json >target/mainnet-prebroker.runtime.json
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          KEEPER="${BASE_KEEPER_ADDRESS,,}"
+          DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
+          python scripts/configure_open_competition_v2_beta3_render.py \
+            --runtime target/mainnet-prebroker.runtime.json --revision "$GITHUB_SHA" \
+            --primary-rpc-url "$BASE_MAINNET_RPC_URL" --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
+            --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
+            --output target/render-prebroker.json
+          python scripts/wait_open_competition_v2_beta3_runtime.py \
+            --runtime target/mainnet-prebroker.runtime.json --expect-broker false \
+            --expect-public false --output target/production-indexer-agreement.json
+          cp target/mainnet-deployment/release-gates.json target/release-gates.json
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate production_indexers_agree \
+            --evidence target/production-indexer-agreement.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+          python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
+            --runtime target/mainnet-prebroker.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --broker "$BROKER" --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/production-broker-reserve.json
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate broker_refund_reserve_ready \
+            --evidence target/production-broker-reserve.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+          python scripts/promote_open_competition_v2_beta3_release.py \
+            --bundle target/mainnet-deployment/mainnet-exact.json \
+            --deployment target/mainnet-deployment/mainnet-deployment-evidence.json \
+            --gates target/release-gates.json --output target/mainnet-broker.json \
+            --runtime-output target/mainnet-broker.runtime.json
+          jq -e '.proof_broker_enabled == true and .public_creation_enabled == false' target/mainnet-broker.runtime.json >/dev/null
+          python scripts/configure_open_competition_v2_beta3_render.py \
+            --runtime target/mainnet-broker.runtime.json --revision "$GITHUB_SHA" \
+            --primary-rpc-url "$BASE_MAINNET_RPC_URL" --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
+            --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
+            --output target/render-broker-enabled.json
+          python scripts/wait_open_competition_v2_beta3_runtime.py \
+            --runtime target/mainnet-broker.runtime.json --expect-broker true \
+            --expect-public false --output target/production-broker-runtime.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-production-control-plane-continuation
+          path: |
+            target/mainnet-broker.json
+            target/mainnet-broker.runtime.json
+            target/mainnet-prebroker.runtime.json
+            target/production-indexer-agreement.json
+            target/production-broker-runtime.json
+            target/production-broker-reserve.json
+            target/render-prebroker.json
+            target/render-broker-enabled.json
+            target/release-gates.json
+          if-no-files-found: error
+          retention-days: 365
+
+  mainnet-canaries:
+    needs: [deploy-mainnet, deploy-production-control-plane]
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 360
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agent_bounties
+          POSTGRES_PASSWORD: agent_bounties
+          POSTGRES_DB: agent_bounties_v2_mainnet_canary
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U agent_bounties -d agent_bounties_v2_mainnet_canary"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Clear generated files from prior capacity-gated runs
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/target" ]; then
+            chmod -R u+w "$GITHUB_WORKSPACE/target" || true
+            rm -rf "$GITHUB_WORKSPACE/target"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-deployment-continuation
+          path: target/mainnet-deployment
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-production-control-plane-continuation
+          path: target/production-control-plane
+      - name: Run both mainnet canaries and reconcile at a safe block
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
+          BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
+          DATABASE_URL: postgresql://agent_bounties:agent_bounties@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/agent_bounties_v2_mainnet_canary
+          OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/mainnet-deployment/release-assets/public-vector-metric-v1-script
+          OPEN_COMPETITION_V2_PROVER_API_KEY: beta3-mainnet-refund-canary-only-key
+          SP1_PROVER: cpu
+        run: |
+          set -euo pipefail
+          export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
+          export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
+          export BETA3_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:mainnet"
+          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test -n "$BASE_KEEPER_ADDRESS" && test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete" && test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
+          python -m pip install -r scripts/requirements-wallet.txt
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          KEEPER="${BASE_KEEPER_ADDRESS,,}"
+          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
+          chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
+          cargo build --locked --release -p api -p worker
+          bundle=target/mainnet-deployment/mainnet-exact.json
+          python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
+            --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/mainnet-broker-reserve-before.json
+          python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
+            --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \
+            --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
+            --prepare-proof-fixtures target/mainnet-proof-inputs \
+            --resolved-bundle-output target/mainnet-canary-bundle.json \
+            --output target/mainnet-canary-preparation.json --skip-expiry-refund
+          for proof in plonk_best_a plonk_best_b; do
+            python scripts/generate_open_competition_v2_proof.py --bundle target/mainnet-canary-bundle.json \
+              --prepared-dir target/mainnet-proof-inputs --proof-name "$proof" \
+              --output "target/mainnet-proofs/$proof.json" --log-dir "target/mainnet-proof-logs/$proof"
+          done
+          python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
+            --bundle target/mainnet-canary-bundle.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \
+            --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
+            --prepared-proof-dir target/mainnet-proof-inputs --proof-evidence-dir target/mainnet-proofs \
+            --output target/mainnet-canaries.json --skip-expiry-refund \
+            --prepare-x402-canary --x402-replaces-first-proven
+          export BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON="$(jq -c . target/production-control-plane/mainnet-broker.runtime.json)"
+          export OPEN_COMPETITION_V2_FACTORY_CONTRACT="$(jq -r .factory_contract target/production-control-plane/mainnet-broker.runtime.json)"
+          export OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK="$(jq -r .deployment_block target/production-control-plane/mainnet-broker.runtime.json)"
+          export OPEN_COMPETITION_V2_INDEXER_NETWORK=base-mainnet
+          export OPEN_COMPETITION_V2_INDEXER_RPC_URL="$BASE_MAINNET_RPC_URL"
+          export OPEN_COMPETITION_V2_SHADOW_RPC_URL="$BASE_MAINNET_SHADOW_RPC_URL"
+          export OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS=2
+          export OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY=10000
+          export X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          export OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"
+          export OPEN_COMPETITION_V2_GROTH16_PROOF_FEE_BASE_UNITS=100000
+          export OPEN_COMPETITION_V2_PLONK_PROOF_FEE_BASE_UNITS=100000
+          export OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS=10000
+          export OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS=1800
+          export OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS=1800
+          export OPEN_COMPETITION_V2_PROVER_URL=http://127.0.0.1:9071/v1/prove
+          export OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=30
+          export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=60
+          export X402_RELAYER_MIN_USDC_BASE_UNITS=100000
+          export X402_RELAYER_MAX_USDC_BASE_UNITS=500000
+          export ENABLE_X402_HOSTED_RELAY=true
+          export PUBLIC_BASE_URL=http://127.0.0.1:8788
+          export PORT=9071
+          python scripts/open_competition_v2_failure_prover.py >target/mainnet-failure-prover.log 2>&1 &
+          failure_prover_pid=$!
+          export PORT=8788
+          target/release/api >target/mainnet-canary-api.log 2>&1 &
+          canary_api_pid=$!
+          cleanup() {
+            kill "$canary_api_pid" "$failure_prover_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8788/health >/dev/null && break
+            if ! kill -0 "$canary_api_pid" 2>/dev/null; then
+              cat target/mainnet-canary-api.log
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:8788/health >/dev/null
+          python scripts/run_open_competition_v2_x402_rehearsal.py \
+            --network base-mainnet --api http://127.0.0.1:8788 \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
+            --worker-binary target/release/worker --expect-refund \
+            --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
+            --output target/mainnet-x402-refund.json
+          cleanup
+          trap - EXIT
+          python scripts/run_open_competition_v2_x402_rehearsal.py \
+            --network base-mainnet --api https://api.agentbounties.app \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
+            --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+            --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
+            --output target/mainnet-x402-success.json
+          python scripts/verify_open_competition_v2_fresh_agent_flow.py \
+            --rehearsal target/mainnet-canaries.json --x402-success target/mainnet-x402-success.json \
+            --output target/mainnet-fresh-agent-flow.json
+          python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
+            --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/mainnet-broker-reserve-after.json
+          python - <<'PY'
+          import json
+          canaries = json.load(open("target/mainnet-canaries.json"))
+          success = json.load(open("target/mainnet-x402-success.json"))
+          refund = json.load(open("target/mainnet-x402-refund.json"))
+          assert canaries["plonk_best_score"]["settled"] is True
+          assert success["settlement_event_id"] and refund["refund_transaction"]
+          json.dump({
+              "schema_version": "agent-bounties/open-competition-v2-beta3-mainnet-accounting-v1",
+              "passed": True,
+              "competition_escrow_funded_base_units": 525000,
+              "groth16_solver_reward_base_units": 250000,
+              "plonk_solver_reward_base_units": 250000,
+              "keeper_rewards_base_units": 25000,
+              "x402_success": success,
+              "x402_refund": refund,
+              "plonk": canaries["plonk_best_score"],
+          }, open("target/mainnet-accounting.json", "w"), indent=2)
+          PY
+          cp target/production-control-plane/release-gates.json target/release-gates.json
+          evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python scripts/record_open_competition_v2_beta3_gate.py --manifest target/release-gates.json \
+            --gate broker_refund_reserve_ready --evidence target/mainnet-broker-reserve-after.json \
+            --uri "$evidence_uri" --source-commit "$RELEASE_SOURCE_COMMIT"
+          python scripts/record_open_competition_v2_beta3_gate.py --manifest target/release-gates.json \
+            --gate mainnet_groth16_canary_complete --evidence target/mainnet-x402-success.json \
+            --uri "$evidence_uri" --source-commit "$RELEASE_SOURCE_COMMIT"
+          python scripts/record_open_competition_v2_beta3_gate.py --manifest target/release-gates.json \
+            --gate mainnet_plonk_canary_complete --evidence target/mainnet-canaries.json \
+            --uri "$evidence_uri" --source-commit "$RELEASE_SOURCE_COMMIT"
+          for gate in mainnet_canary_accounting_reconciled x402_success_and_refund_complete; do
+            python scripts/record_open_competition_v2_beta3_gate.py --manifest target/release-gates.json \
+              --gate "$gate" --evidence target/mainnet-accounting.json \
+              --uri "$evidence_uri" --source-commit "$RELEASE_SOURCE_COMMIT"
+          done
+          python scripts/record_open_competition_v2_beta3_gate.py --manifest target/release-gates.json \
+            --gate fresh_agent_wallet_flow_complete --evidence target/mainnet-fresh-agent-flow.json \
+            --uri "$evidence_uri" --source-commit "$RELEASE_SOURCE_COMMIT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-mainnet-canaries-continuation
+          path: |
+            target/mainnet-canary-bundle.json
+            target/mainnet-canary-preparation.json
+            target/mainnet-canaries.json
+            target/mainnet-x402-success.json
+            target/mainnet-x402-refund.json
+            target/mainnet-accounting.json
+            target/mainnet-fresh-agent-flow.json
+            target/mainnet-broker-reserve-before.json
+            target/mainnet-broker-reserve-after.json
+            target/mainnet-proofs/*.json
+            target/release-gates.json
+            target/mainnet-canary-api.log
+            target/mainnet-failure-prover.log
+          if-no-files-found: error
+          retention-days: 365
+
+  activate-public-beta:
+    needs: [deploy-mainnet, deploy-production-control-plane, mainnet-canaries]
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-canaries-continuation
+          path: target/mainnet-canaries
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-production-control-plane-continuation
+          path: target/production-control-plane
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-deployment-continuation
+          path: target/mainnet-deployment
+      - name: Verify interfaces, record owner approval and activate exact public runtime
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
+          OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
+        run: |
+          set -euo pipefail
+          python -m pip install -r scripts/requirements-wallet.txt
+          test -n "$BASE_KEEPER_ADDRESS" && test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          test -n "$BASE_DEPLOYER_ADDRESS"
+          BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
+          KEEPER="${BASE_KEEPER_ADDRESS,,}"
+          DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
+          python scripts/verify_open_competition_v2_beta3_interfaces.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --output target/production-interfaces.json
+          cp target/mainnet-canaries/release-gates.json target/release-gates.json
+          evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
+            --keeper "$KEEPER" --deployer "$DEPLOYER" \
+            --output target/activation-broker-reserve.json
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate broker_refund_reserve_ready \
+            --evidence target/activation-broker-reserve.json --uri "$evidence_uri" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate production_interfaces_agree \
+            --evidence target/production-interfaces.json --uri "$evidence_uri" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+          export RISK_HASH="$(jq -r .beta_risk_hash target/production-control-plane/mainnet-broker.runtime.json)"
+          python - <<'PY'
+          import json, os
+          json.dump({
+              "schema_version": "agent-bounties/open-competition-v2-beta3-owner-activation-approval-v1",
+              "environment": "v2-beta2-mainnet",
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "source_commit": os.environ["RELEASE_SOURCE_COMMIT"],
+              "risk_hash": os.environ["RISK_HASH"],
+              "approval_scope": "enable public Beta3 creation only for the exact release subject",
+          }, open("target/owner-public-beta-activation.json", "w"), indent=2)
+          PY
+          python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate owner_public_beta_activation_approved \
+            --evidence target/owner-public-beta-activation.json --uri "$evidence_uri" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" --owner-risk-hash "$RISK_HASH"
+          python scripts/promote_open_competition_v2_beta3_release.py \
+            --bundle target/mainnet-deployment/mainnet-exact.json \
+            --deployment target/mainnet-deployment/mainnet-deployment-evidence.json \
+            --gates target/release-gates.json --output target/mainnet-public-beta.json \
+            --runtime-output target/mainnet-public-beta.runtime.json
+          jq -e '.public_creation_enabled == true and .proof_broker_enabled == true' target/mainnet-public-beta.runtime.json >/dev/null
+          python scripts/configure_open_competition_v2_beta3_render.py \
+            --runtime target/mainnet-public-beta.runtime.json --revision "$GITHUB_SHA" \
+            --primary-rpc-url "$BASE_MAINNET_RPC_URL" --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
+            --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
+            --output target/render-public-beta.json
+          python scripts/wait_open_competition_v2_beta3_runtime.py \
+            --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
+            --expect-public true --output target/public-beta-activation.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-public-activation-continuation
+          path: |
+            target/mainnet-public-beta.json
+            target/mainnet-public-beta.runtime.json
+            target/owner-public-beta-activation.json
+            target/activation-broker-reserve.json
+            target/production-interfaces.json
+            target/public-beta-activation.json
+            target/render-public-beta.json
+            target/release-gates.json
+          if-no-files-found: error
+          retention-days: 365
