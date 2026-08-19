@@ -32,7 +32,19 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertIn("mkdir -p target", text)
         self.assertIn("run_open_competition_v2_x402_rehearsal.py", text)
         self.assertIn("OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY=10000", text)
-        self.assertIn("recover_open_competition_v2_x402_charge.py", text)
+        checkouts = [
+            step
+            for step in job["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        ]
+        self.assertEqual(len(checkouts), 2)
+        self.assertEqual(checkouts[0]["with"]["ref"], "${{ env.RELEASE_SOURCE_COMMIT }}")
+        self.assertEqual(checkouts[1]["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(checkouts[1]["with"]["path"], "target/continuation-control")
+        self.assertIn(
+            "target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py",
+            text,
+        )
         self.assertIn("OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=1200", text)
         self.assertIn("OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=1230", text)
         self.assertIn("target/failed-x402-charge-refund.json", text)

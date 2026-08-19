@@ -41,6 +41,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ github.sha }}
+          path: target/continuation-control
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
@@ -75,7 +79,7 @@ jobs:
           BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
           test "$DEPLOYER" = "$EXPECTED_SEPOLIA_DEPLOYER"
           test "$BROKER" = "$(printf '%s' "$OPEN_COMPETITION_V2_BROKER_ADDRESS" | tr '[:upper:]' '[:lower:]')"
-          python scripts/recover_open_competition_v2_x402_charge.py \
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
             --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --payment-transaction 0xc724bcc7a1ca76c809a556b2b127d18bdaf626b13e90ad442f88bcfb3acb6684 \
             --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
