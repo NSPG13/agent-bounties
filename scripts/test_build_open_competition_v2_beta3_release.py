@@ -21,6 +21,75 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
         )
 
+    def test_resumes_exact_verifiers_after_interrupted_factory_deployment(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        expected = {
+            MODULE.create_address(deployer, 2): "groth16",
+            MODULE.create_address(deployer, 3): "plonk",
+        }
+
+        start = MODULE.resume_exact_verifier_pair(
+            deployer=deployer,
+            observed_nonce=4,
+            code_hash=lambda address: expected.get(address),
+            groth16_runtime_hash="groth16",
+            plonk_runtime_hash="plonk",
+        )
+
+        self.assertEqual(start, 2)
+
+    def test_does_not_resume_inexact_or_occupied_partial_deployment(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        groth16 = MODULE.create_address(deployer, 2)
+        plonk = MODULE.create_address(deployer, 3)
+        factory = MODULE.create_address(deployer, 4)
+        cases = (
+            {groth16: "wrong", plonk: "plonk"},
+            {groth16: "groth16", plonk: "wrong"},
+            {groth16: "groth16", plonk: "plonk", factory: "occupied"},
+        )
+        for observed in cases:
+            with self.subTest(observed=observed):
+                self.assertEqual(
+                    MODULE.resume_exact_verifier_pair(
+                        deployer=deployer,
+                        observed_nonce=4,
+                        code_hash=lambda address, values=observed: values.get(address),
+                        groth16_runtime_hash="groth16",
+                        plonk_runtime_hash="plonk",
+                    ),
+                    4,
+                )
+
+    def test_release_root_retargets_only_release_files(self):
+        original = (MODULE.ROOT, MODULE.CONTRACT_ROOT, MODULE.OUT)
+        try:
+            release_root = Path("target/frozen-release")
+            MODULE.configure_release_root(release_root)
+            self.assertEqual(MODULE.ROOT, release_root.resolve())
+            self.assertEqual(MODULE.CONTRACT_ROOT, MODULE.ROOT / "contracts/base-escrow")
+            self.assertEqual(MODULE.OUT, MODULE.CONTRACT_ROOT / "out")
+        finally:
+            MODULE.ROOT, MODULE.CONTRACT_ROOT, MODULE.OUT = original
+
+    def test_mainnet_continuation_uses_current_control_on_frozen_release(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml"
+        ).read_text(encoding="utf-8")
+        deploy = workflow.split("  deploy-mainnet:", 1)[1].split(
+            "  deploy-production-prover:", 1
+        )[0]
+        self.assertIn("path: .release-control", deploy)
+        self.assertIn(
+            "python .release-control/scripts/build_open_competition_v2_beta3_release.py",
+            deploy,
+        )
+        self.assertIn('--release-root "$GITHUB_WORKSPACE"', deploy)
+        self.assertIn(
+            "python .release-control/scripts/deploy_open_competition_v2_beta3.py",
+            deploy,
+        )
+
     def test_proof_build_pins_every_bundle_to_the_configured_deployer(self):
         workflow = (
             MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"

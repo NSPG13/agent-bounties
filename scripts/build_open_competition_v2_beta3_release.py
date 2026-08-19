@@ -202,6 +202,13 @@ def source_tree_hash() -> str:
     return "0x" + digest.hexdigest()
 
 
+def configure_release_root(path: Path) -> None:
+    global ROOT, CONTRACT_ROOT, OUT
+    ROOT = path.resolve()
+    CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
+    OUT = CONTRACT_ROOT / "out"
+
+
 def verify_exact_checkout(source_commit: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise ValueError("source commit must be a full lowercase Git commit")
@@ -490,6 +497,59 @@ def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> di
     }
 
 
+def resume_exact_verifier_pair(
+    *,
+    deployer: str,
+    observed_nonce: int,
+    code_hash: Any,
+    groth16_runtime_hash: str,
+    plonk_runtime_hash: str,
+) -> int:
+    """Reuse an exact verifier pair when a prior factory deployment was interrupted."""
+    if observed_nonce < 2:
+        return observed_nonce
+    start_nonce = observed_nonce - 2
+    groth16 = create_address(deployer, start_nonce)
+    plonk = create_address(deployer, start_nonce + 1)
+    factory = create_address(deployer, start_nonce + 2)
+    if (
+        code_hash(groth16) == groth16_runtime_hash
+        and code_hash(plonk) == plonk_runtime_hash
+        and code_hash(factory) is None
+    ):
+        return start_nonce
+    return observed_nonce
+
+
+def apply_partial_deployment_resume(
+    *,
+    preflight: dict[str, Any],
+    rpc_url: str,
+    deployer: str,
+    verifier_assets: dict[str, Any],
+) -> dict[str, Any]:
+    observed_nonce = int(preflight["deployer_nonce"])
+    safe_block = hex(int(preflight["number"]))
+
+    def code_hash(address: str) -> str | None:
+        code = rpc(rpc_url, "eth_getCode", [address, safe_block])
+        return None if code == "0x" else keccak256(bytes.fromhex(code[2:]))
+
+    systems = verifier_assets["proof_systems"]
+    start_nonce = resume_exact_verifier_pair(
+        deployer=deployer,
+        observed_nonce=observed_nonce,
+        code_hash=code_hash,
+        groth16_runtime_hash=systems["groth16"]["runtime_code_hash"],
+        plonk_runtime_hash=systems["plonk"]["runtime_code_hash"],
+    )
+    value = dict(preflight)
+    value["observed_deployer_nonce"] = observed_nonce
+    value["deployer_nonce"] = start_nonce
+    value["resuming_exact_verifiers"] = start_nonce != observed_nonce
+    return value
+
+
 def build_bundle(
     *,
     network_name: str,
@@ -752,6 +812,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-pending-proof-evidence", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runtime-manifest-output", type=Path)
+    parser.add_argument(
+        "--release-root",
+        type=Path,
+        help="Exact frozen release checkout to hash and read compiled artifacts from",
+    )
     return parser.parse_args()
 
 
@@ -812,11 +877,23 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
 
 def main() -> int:
     args = parse_args()
+    if args.release_root is not None:
+        configure_release_root(args.release_root)
     network = NETWORKS[args.network]
     deployer = args.deployer.lower()
     verify_exact_checkout(args.source_commit)
     subject_hash = repository_subject_hash(args.source_commit)
-    preflight = online_preflight(network, args.rpc_url or network["rpc"], deployer)
+    rpc_url = args.rpc_url or network["rpc"]
+    verifier_assets = load_verifier_assets(
+        args.verifier_assets,
+        require_proof_evidence=not args.allow_pending_proof_evidence,
+    )
+    preflight = apply_partial_deployment_resume(
+        preflight=online_preflight(network, rpc_url, deployer),
+        rpc_url=rpc_url,
+        deployer=deployer,
+        verifier_assets=verifier_assets,
+    )
     bundle = build_bundle(
         network_name=args.network,
         deployer=deployer,
@@ -824,10 +901,7 @@ def main() -> int:
         repository_subject=subject_hash,
         preflight=preflight,
         gates=load_gates(args.gates, subject_hash),
-        verifier_assets=load_verifier_assets(
-            args.verifier_assets,
-            require_proof_evidence=not args.allow_pending_proof_evidence,
-        ),
+        verifier_assets=verifier_assets,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")

@@ -34,6 +34,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ github.sha }}
+          path: .release-control
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -105,12 +109,13 @@ jobs:
             --evidence target/owner-mainnet-deployment-approval.json \
             --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --source-commit "$RELEASE_SOURCE_COMMIT" --owner-risk-hash "$RISK_HASH"
-          python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
+          python .release-control/scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
             --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" \
             --source-commit "$RELEASE_SOURCE_COMMIT" \
             --verifier-assets target/release-assets/verifier-assets.json \
-            --gates target/release-gates.json --output target/mainnet-exact.json
-          python scripts/deploy_open_competition_v2_beta3.py \
+            --gates target/release-gates.json --output target/mainnet-exact.json \
+            --release-root "$GITHUB_WORKSPACE"
+          python .release-control/scripts/deploy_open_competition_v2_beta3.py \
             --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
             --output target/mainnet-deployment-evidence.json
           python scripts/record_open_competition_v2_beta3_gate.py \
