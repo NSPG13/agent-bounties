@@ -467,24 +467,33 @@ def activation_state(network_name: str, gates: dict[str, Any]) -> dict[str, bool
 
 
 def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> dict[str, Any]:
-    if rpc(rpc_url, "eth_chainId", []) != network["chain_id_hex"]:
+    def read(method: str, params: list[Any]) -> Any:
+        return rpc(
+            rpc_url,
+            method,
+            params,
+            attempts=5,
+            retry_delay=1,
+        )
+
+    if read("eth_chainId", []) != network["chain_id_hex"]:
         raise RuntimeError("RPC chain ID mismatch")
-    block = rpc(rpc_url, "eth_getBlockByNumber", ["safe", False])
+    block = read("eth_getBlockByNumber", ["safe", False])
     if not block or not block.get("hash"):
         raise RuntimeError("RPC did not return a canonical safe block")
     tag = block["number"]
     dependencies = {"settlement_token": network["usdc"]}
     runtime_hashes: dict[str, str] = {}
     for name, address in dependencies.items():
-        code = rpc(rpc_url, "eth_getCode", [address, tag])
+        code = read("eth_getCode", [address, tag])
         if code == "0x":
             raise RuntimeError(f"{name} bytecode is unavailable at the safe block")
         runtime_hashes[name] = keccak256(bytes.fromhex(code[2:]))
-    eth_balance = int(rpc(rpc_url, "eth_getBalance", [deployer, tag]), 16)
-    nonce = int(rpc(rpc_url, "eth_getTransactionCount", [deployer, tag]), 16)
+    eth_balance = int(read("eth_getBalance", [deployer, tag]), 16)
+    nonce = int(read("eth_getTransactionCount", [deployer, tag]), 16)
     balance_data = "0x70a08231" + address_word(deployer).hex()
     usdc_balance = int(
-        rpc(rpc_url, "eth_call", [{"to": network["usdc"], "data": balance_data}, tag]), 16
+        read("eth_call", [{"to": network["usdc"], "data": balance_data}, tag]), 16
     )
     return {
         "number": int(tag, 16),
@@ -508,16 +517,15 @@ def resume_exact_verifier_pair(
     """Reuse an exact verifier pair when a prior factory deployment was interrupted."""
     if observed_nonce < 2:
         return observed_nonce
-    start_nonce = observed_nonce - 2
-    groth16 = create_address(deployer, start_nonce)
-    plonk = create_address(deployer, start_nonce + 1)
-    factory = create_address(deployer, start_nonce + 2)
-    if (
-        code_hash(groth16) == groth16_runtime_hash
-        and code_hash(plonk) == plonk_runtime_hash
-        and code_hash(factory) is None
-    ):
-        return start_nonce
+    minimum_nonce = max(0, observed_nonce - 16)
+    for start_nonce in range(observed_nonce - 2, minimum_nonce - 1, -1):
+        groth16 = create_address(deployer, start_nonce)
+        plonk = create_address(deployer, start_nonce + 1)
+        if (
+            code_hash(groth16) == groth16_runtime_hash
+            and code_hash(plonk) == plonk_runtime_hash
+        ):
+            return start_nonce
     return observed_nonce
 
 
@@ -532,7 +540,13 @@ def apply_partial_deployment_resume(
     safe_block = hex(int(preflight["number"]))
 
     def code_hash(address: str) -> str | None:
-        code = rpc(rpc_url, "eth_getCode", [address, safe_block])
+        code = rpc(
+            rpc_url,
+            "eth_getCode",
+            [address, safe_block],
+            attempts=5,
+            retry_delay=1,
+        )
         return None if code == "0x" else keccak256(bytes.fromhex(code[2:]))
 
     systems = verifier_assets["proof_systems"]

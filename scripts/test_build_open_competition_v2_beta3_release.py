@@ -38,15 +38,13 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
         self.assertEqual(start, 2)
 
-    def test_does_not_resume_inexact_or_occupied_partial_deployment(self):
+    def test_does_not_resume_inexact_partial_deployment(self):
         deployer = MODULE.DEFAULT_DEPLOYER
         groth16 = MODULE.create_address(deployer, 2)
         plonk = MODULE.create_address(deployer, 3)
-        factory = MODULE.create_address(deployer, 4)
         cases = (
             {groth16: "wrong", plonk: "plonk"},
             {groth16: "groth16", plonk: "wrong"},
-            {groth16: "groth16", plonk: "plonk", factory: "occupied"},
         )
         for observed in cases:
             with self.subTest(observed=observed):
@@ -60,6 +58,25 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
                     ),
                     4,
                 )
+
+    def test_resumes_completed_exact_deployment_for_reconciliation(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        observed = {
+            MODULE.create_address(deployer, 2): "groth16",
+            MODULE.create_address(deployer, 3): "plonk",
+            MODULE.create_address(deployer, 4): "factory",
+        }
+
+        self.assertEqual(
+            MODULE.resume_exact_verifier_pair(
+                deployer=deployer,
+                observed_nonce=5,
+                code_hash=lambda address: observed.get(address),
+                groth16_runtime_hash="groth16",
+                plonk_runtime_hash="plonk",
+            ),
+            2,
+        )
 
     def test_release_root_retargets_only_release_files(self):
         original = (MODULE.ROOT, MODULE.CONTRACT_ROOT, MODULE.OUT)
