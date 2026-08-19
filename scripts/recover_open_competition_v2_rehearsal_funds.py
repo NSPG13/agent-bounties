@@ -28,6 +28,7 @@ USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 TRANSFER_SELECTOR = "a9059cbb"
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 ETH_SWEEP_GAS_RESERVE = 150_000
+ZERO_ADDRESS = "0x" + "00" * 20
 
 
 class RecoveryError(RuntimeError):
@@ -108,6 +109,20 @@ def sweepable_eth(balance: int, maximum_fee_per_gas: int) -> int:
     return max(balance - reserve, 0)
 
 
+def expired_competition_needs_expiry(
+    status: int,
+    proof_deadline: int,
+    block_timestamp: int,
+    leader: str,
+) -> bool:
+    if status == 1:
+        require(block_timestamp > proof_deadline, "competition proof deadline has not passed")
+        require(leader == ZERO_ADDRESS, "expired competition has a qualifying leader")
+        return True
+    require(status == 3, f"expired competition has unrecoverable status {status}")
+    return False
+
+
 def wait_safe(url: str, receipts: list[dict[str, Any]], timeout: int = 1_800) -> dict[str, Any]:
     target = max((int(receipt["blockNumber"], 16) for receipt in receipts), default=0)
     deadline = time.time() + timeout
@@ -133,6 +148,10 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
     require(
         all(ADDRESS.fullmatch(address) is not None for address in args.funding_competition),
         "funding competition address is invalid",
+    )
+    require(
+        all(ADDRESS.fullmatch(address) is not None for address in args.expired_competition),
+        "expired competition address is invalid",
     )
     require(re.fullmatch(r"[0-9a-f]{40}", args.source_commit) is not None, "source commit is invalid")
     require(args.attempts and all(attempt > 0 for attempt in args.attempts), "attempts must be positive")
@@ -172,6 +191,59 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
         actions.append({"kind": "finalize_best_score", "transaction_hash": receipt["transactionHash"]})
     else:
         require(status_before == 2, f"competition has unrecoverable status {status_before}")
+
+    for competition in args.expired_competition:
+        require(
+            call_address(args.rpc_url, competition, "creator()") == deployer.address.lower(),
+            "expired competition creator mismatch",
+        )
+        expired_status = call_word(args.rpc_url, competition, "status()")
+        if expired_status == 1:
+            deadline = call_word(args.rpc_url, competition, "proofDeadline()")
+            latest_timestamp = int(
+                rpc(args.rpc_url, "eth_getBlockByNumber", ["latest", False])["timestamp"],
+                16,
+            )
+            leader = call_address(args.rpc_url, competition, "leader()")
+        else:
+            deadline = 0
+            latest_timestamp = 0
+            leader = ZERO_ADDRESS
+        if expired_competition_needs_expiry(
+            expired_status,
+            deadline,
+            latest_timestamp,
+            leader,
+        ):
+            receipt = client.send(
+                deployer,
+                to=competition,
+                data="0x" + keccak_bytes(b"expireCompetition()")[:4].hex(),
+            )
+            receipts.append(receipt)
+            actions.append(
+                {
+                    "kind": "expire_competition_without_leader",
+                    "competition": competition.lower(),
+                    "transaction_hash": receipt["transactionHash"],
+                }
+            )
+        refundable = contribution(args.rpc_url, competition, deployer.address)
+        if refundable:
+            receipt = client.send(
+                deployer,
+                to=competition,
+                data=address_call_data("withdrawRefundFor(address)", deployer.address),
+            )
+            receipts.append(receipt)
+            actions.append(
+                {
+                    "kind": "withdraw_expired_competition_refund",
+                    "competition": competition.lower(),
+                    "amount_base_units": refundable,
+                    "transaction_hash": receipt["transactionHash"],
+                }
+            )
 
     for competition in args.funding_competition:
         require(
@@ -249,6 +321,13 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
             contribution(args.rpc_url, competition, deployer.address) == 0,
             "funding competition refund remains unclaimed",
         )
+    for competition in args.expired_competition:
+        require(call_word(args.rpc_url, competition, "status()") == 3, "expired competition did not cancel")
+        require(
+            contribution(args.rpc_url, competition, deployer.address) == 0,
+            "expired competition refund remains unclaimed",
+        )
+        require(usdc_balance(args.rpc_url, competition, safe["number"]) == 0, "expired competition still holds USDC")
     deployer_usdc = usdc_balance(args.rpc_url, deployer.address, safe["number"])
     deployer_eth = int(rpc(args.rpc_url, "eth_getBalance", [deployer.address, safe["number"]]), 16)
     require(deployer_usdc >= args.minimum_usdc, "recovered deployer USDC is below the release reserve")
@@ -268,6 +347,7 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
         ],
         "competition": args.competition.lower(),
         "funding_competitions": [address.lower() for address in args.funding_competition],
+        "expired_competitions": [address.lower() for address in args.expired_competition],
         "deployer": deployer.address.lower(),
         "derived_actor_addresses": sorted(actor_addresses),
         "actions": actions,
@@ -290,6 +370,7 @@ def main() -> int:
     parser.add_argument("--additional-actor-scope", action="append", default=[])
     parser.add_argument("--competition", required=True)
     parser.add_argument("--funding-competition", action="append", default=[])
+    parser.add_argument("--expired-competition", action="append", default=[])
     parser.add_argument("--required-actor", action="append", default=[])
     parser.add_argument("--minimum-usdc", type=int, default=1_000_000)
     parser.add_argument("--minimum-eth", type=int, default=500_000_000_000_000)
