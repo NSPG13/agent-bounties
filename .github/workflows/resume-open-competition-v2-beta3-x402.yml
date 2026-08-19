@@ -2,6 +2,15 @@ name: Resume Open Competition V2 Beta3 x402 rehearsal
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Recover the second failed charge only, or resume after diagnostics pass"
+        required: true
+        default: recover-second-only
+        type: choice
+        options:
+          - recover-second-only
+          - resume-rehearsal
 
 permissions:
   contents: read
@@ -58,6 +67,7 @@ jobs:
           DATABASE_URL: postgresql://agent_bounties:agent_bounties@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/agent_bounties_v2_resume
           OPEN_COMPETITION_V2_PROVER_API_KEY: beta3-sepolia-rehearsal-only-api-key
           SP1_PROVER: cpu
+          RECOVERY_ONLY: ${{ inputs.mode == 'recover-second-only' }}
         run: |
           set -euo pipefail
           preserved=/mnt/agent-bounties-artifacts/beta3-attempt15
@@ -86,6 +96,16 @@ jobs:
             --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
             --broker "$BROKER" --amount 110000 \
             --output target/failed-x402-charge-refund.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312 \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-2.json
+          if [[ "$RECOVERY_ONLY" == "true" ]]; then
+            exit 0
+          fi
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.passed == true and .source_commit == $commit and .x402_canary.active == true' \
             target/sepolia-rehearsal.json >/dev/null
@@ -161,6 +181,7 @@ jobs:
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$RELEASE_SOURCE_COMMIT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.mode == 'resume-rehearsal'
         with:
           name: open-competition-v2-beta3-live-sepolia-resumed
           path: |
@@ -168,10 +189,20 @@ jobs:
             target/sepolia-rehearsal.json
             target/sepolia-x402-rehearsal.json
             target/failed-x402-charge-refund.json
+            target/failed-x402-charge-refund-2.json
             target/sepolia-proofs/*.json
             target/release-gates.json
             target/release-assets/**
             target/sepolia-api.log
             target/sepolia-prover.log
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.mode == 'recover-second-only'
+        with:
+          name: open-competition-v2-beta3-x402-charge-recovery-2
+          path: |
+            target/failed-x402-charge-refund.json
+            target/failed-x402-charge-refund-2.json
           if-no-files-found: error
           retention-days: 90
