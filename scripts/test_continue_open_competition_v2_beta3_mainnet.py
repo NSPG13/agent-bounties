@@ -66,9 +66,20 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("run-id: ${{ inputs.sepolia_run_id }}", self.text)
         self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)
         self.assertIn("failed-x402-charge-refund.json", self.text)
+        self.assertIn("failed-x402-charge-refund-2.json", self.text)
+        self.assertIn(
+            "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312",
+            self.text,
+        )
         self.assertIn(".settlement_event_id | length > 0", self.text)
         self.assertIn(".source_commit == $commit", self.text)
         self.assertNotIn('--source-commit "$GITHUB_SHA"', self.text)
+
+    def test_prover_installs_only_the_verified_local_gnark_alias(self):
+        self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
+        self.assertIn("expected_gnark_image_id", self.text)
+        self.assertIn("expected_gnark_cli", self.text)
+        self.assertNotIn('docker pull "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
 
     def test_canaries_and_activation_remain_mandatory(self):
         for evidence in (

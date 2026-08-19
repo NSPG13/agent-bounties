@@ -73,6 +73,7 @@ env:
   SP1_SAFE_RUNTIME_COMMIT: c2d292c260333a9e4f166cd1435e8ef4897c8b43
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
   SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
 
 jobs:
@@ -425,6 +426,9 @@ jobs:
           docker run --rm --entrypoint sha256sum "$SP1_GNARK_IMAGE" /gnark-cli \
             | tee target/gnark-cli.sha256
           grep -Eq '^[0-9a-f]{64}  /gnark-cli$' target/gnark-cli.sha256
+          docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{.Id}}')" = \
+            "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{.Id}}')"
           trusted_root="$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT"
           test -f "$trusted_root/trusted-setup.json"
           rm -rf .sp1-safe/crates/prover/build
