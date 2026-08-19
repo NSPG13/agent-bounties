@@ -20,6 +20,7 @@ import render_deploy_recovery as render
 
 V2_GROUP = "agent-bounties-v2-beta3"
 RELAYER_GROUP = "agent-bounties-x402-relayer"
+BASE_GROUP = "agent-bounties-base"
 V2_SERVICES = (
     render.ServiceSpec("agent-bounties-api", "web_service", "https://api.agentbounties.app/health"),
     render.ServiceSpec("agent-bounties-mcp", "web_service", "https://mcp.agentbounties.app/health"),
@@ -32,6 +33,45 @@ RELAYER_SERVICE_NAMES = {
     "agent-bounties-api",
     "agent-bounties-open-competition-v2-beta3-keeper",
     "agent-bounties-open-competition-v2-beta3-broker",
+}
+WORKER_ENVIRONMENT = {
+    "agent-bounties-open-competition-v2-beta3-indexer": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-beta3",
+        "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
+        "OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS": "15",
+        "OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS": "2",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
+        "BASE_INDEXER_RETRY_INITIAL_SECONDS": "5",
+        "BASE_INDEXER_RETRY_MAX_SECONDS": "120",
+        "BASE_INDEXER_EXIT_AFTER_FAILURES": "8",
+    },
+    "agent-bounties-open-competition-v2-beta3-shadow": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-shadow",
+        "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
+        "OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS": "30",
+    },
+    "agent-bounties-open-competition-v2-beta3-keeper": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-keeper",
+        "OPEN_COMPETITION_V2_KEEPER_NETWORK": "base-mainnet",
+        "OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS": "5",
+    },
+    "agent-bounties-open-competition-v2-beta3-broker": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-broker",
+        "OPEN_COMPETITION_V2_BROKER_POLL_SECONDS": "5",
+    },
 }
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -102,6 +142,13 @@ def runtime_environment(
         "OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS": "10000",
         "OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS": "1800",
         "OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS": "1800",
+        "OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS": "120",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_LAG_BLOCKS": "64",
+        "OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS": "120",
+        "OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS": "180",
+        "OPEN_COMPETITION_V2_REFUND_WINDOW_SECONDS": "1800",
+        "OPEN_COMPETITION_V2_RELAYER_MAX_GAS": "8000000",
+        "OPEN_COMPETITION_V2_RELAYER_MAX_FEE_PER_GAS_WEI": "10000000000",
     }
 
 
@@ -118,6 +165,143 @@ def named_group(client: render.RenderClient, owner_id: str, name: str) -> dict[s
     return client.get_env_group(group["id"])
 
 
+def ensure_v2_group(
+    client: render.RenderClient,
+    owner_id: str,
+    environment_id: str | None,
+) -> dict[str, Any]:
+    query = urllib.parse.urlencode({"name": V2_GROUP, "ownerId": owner_id, "limit": "20"})
+    matches = [
+        group
+        for group in render.unwrap_env_group_entries(
+            client._read_with_retry(f"/env-groups?{query}")
+        )
+        if group.get("name") == V2_GROUP and group.get("ownerId") == owner_id
+    ]
+    require(len(matches) <= 1, f"expected at most one Render environment group named {V2_GROUP}")
+    if not matches:
+        payload: dict[str, Any] = {
+            "name": V2_GROUP,
+            "ownerId": owner_id,
+            "envVars": [],
+            "secretFiles": [],
+            "serviceIds": [],
+        }
+        if environment_id is not None:
+            payload["environmentId"] = environment_id
+        try:
+            client._write_with_retry("POST", "/env-groups", payload)
+        except render.RenderHttpError as error:
+            if error.status != 409:
+                raise
+    group = named_group(client, owner_id, V2_GROUP)
+    require(
+        environment_id is None or group.get("environmentId") == environment_id,
+        f"{V2_GROUP} is in an unexpected project environment",
+    )
+    return group
+
+
+def provision_worker(
+    client: render.RenderClient,
+    spec: render.ServiceSpec,
+    reference: dict[str, Any],
+    groups: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    require(spec.name in WORKER_ENVIRONMENT, f"direct provisioning is not authorized for {spec.name}")
+    require(
+        reference.get("name") == "agent-bounties-api"
+        and reference.get("type") == "web_service"
+        and reference.get("branch") == "main"
+        and render.normalize_repo(reference.get("repo")) == render.REPOSITORY,
+        "Render provisioning reference service is invalid",
+    )
+    owner_id = render.validate_owner_id(reference.get("ownerId"))
+    environment_id = reference.get("environmentId")
+    if environment_id is not None:
+        environment_id = render.validate_environment_id(environment_id)
+    for name, group in groups.items():
+        require(group.get("ownerId") == owner_id, f"{name} is in an unexpected workspace")
+        group_environment = group.get("environmentId")
+        if group_environment is not None:
+            group_environment = render.validate_environment_id(group_environment)
+        if environment_id is None:
+            environment_id = group_environment
+        require(
+            group_environment is None or group_environment == environment_id,
+            f"{name} is in an unexpected project environment",
+        )
+    database_url = render.validate_database_url(
+        client.get_env_var(reference, "DATABASE_URL").get("value")
+    )
+    exact_environment = dict(WORKER_ENVIRONMENT[spec.name])
+    exact_environment["DATABASE_URL"] = database_url
+    payload: dict[str, Any] = {
+        "type": "background_worker",
+        "name": spec.name,
+        "ownerId": owner_id,
+        "repo": "https://github.com/NSPG13/agent-bounties",
+        "branch": "main",
+        "autoDeploy": "no",
+        "envVars": [
+            {"key": key, "value": value} for key, value in exact_environment.items()
+        ],
+        "serviceDetails": {
+            "runtime": "docker",
+            "envSpecificDetails": {
+                "dockerContext": ".",
+                "dockerfilePath": "./Dockerfile",
+            },
+            "plan": "starter",
+            "region": "oregon",
+            "maxShutdownDelaySeconds": 60,
+        },
+    }
+    if environment_id is not None:
+        payload["environmentId"] = environment_id
+    try:
+        created = render.select_service(
+            spec, [client._write_with_retry("POST", "/services", payload)]
+        )
+    except render.RenderHttpError as error:
+        if error.status != 409:
+            raise
+        created = client.resolve_service(spec)
+    require(created.get("ownerId") == owner_id, "new Render worker changed workspaces")
+    require(
+        environment_id is None or created.get("environmentId") == environment_id,
+        "new Render worker changed project environments",
+    )
+    for name, group in groups.items():
+        group_id = group["id"]
+        current = client.get_env_group(group_id)
+        if not render.env_group_has_service(current, spec, created["id"]):
+            try:
+                client._write_with_retry(
+                    "POST", f"/env-groups/{group_id}/services/{created['id']}", None
+                )
+            except render.RenderHttpError as error:
+                if error.status != 409:
+                    raise
+            current = client.get_env_group(group_id)
+        require(
+            render.env_group_has_service(current, spec, created["id"]),
+            f"Render did not attach {name} to {spec.name}",
+        )
+    verified = client.resolve_service(spec)
+    require(verified.get("ownerId") == owner_id, "provisioned Render worker changed workspaces")
+    require(
+        environment_id is None or verified.get("environmentId") == environment_id,
+        "provisioned Render worker changed project environments",
+    )
+    for key, expected in exact_environment.items():
+        require(
+            client.get_env_var(verified, key) == {"key": key, "value": expected},
+            f"provisioned Render worker did not retain {key}",
+        )
+    return verified
+
+
 def resolve_services(client: render.RenderClient) -> dict[str, dict[str, Any]]:
     services: dict[str, dict[str, Any]] = {}
     missing: list[render.ServiceSpec] = []
@@ -126,8 +310,23 @@ def resolve_services(client: render.RenderClient) -> dict[str, dict[str, Any]]:
             services[spec.name] = client.resolve_service(spec)
         except render.RenderServiceMissing:
             missing.append(spec)
-    for spec in missing:
-        services[spec.name] = client.ensure_blueprint_service(spec)
+    if missing:
+        reference = services.get("agent-bounties-api")
+        require(reference is not None, "validated API reference service is unavailable")
+        owner_id = render.validate_owner_id(reference.get("ownerId"))
+        reference_environment = reference.get("environmentId")
+        if reference_environment is not None:
+            reference_environment = render.validate_environment_id(reference_environment)
+        all_groups = {
+            BASE_GROUP: named_group(client, owner_id, BASE_GROUP),
+            V2_GROUP: ensure_v2_group(client, owner_id, reference_environment),
+            RELAYER_GROUP: named_group(client, owner_id, RELAYER_GROUP),
+        }
+        for spec in missing:
+            required = {BASE_GROUP: all_groups[BASE_GROUP], V2_GROUP: all_groups[V2_GROUP]}
+            if spec.name in RELAYER_SERVICE_NAMES:
+                required[RELAYER_GROUP] = all_groups[RELAYER_GROUP]
+            services[spec.name] = provision_worker(client, spec, reference, required)
     if missing:
         services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
     return services
@@ -154,11 +353,13 @@ def deploy(
     owner_ids = {str(service.get("ownerId")) for service in services.values()}
     require(len(owner_ids) == 1, "Beta3 services do not share one Render workspace")
     owner_id = render.validate_owner_id(owner_ids.pop())
+    base_group = named_group(client, owner_id, BASE_GROUP)
     v2_group = named_group(client, owner_id, V2_GROUP)
     relayer_group = named_group(client, owner_id, RELAYER_GROUP)
 
     for spec in V2_SERVICES:
         service = services[spec.name]
+        require(render.env_group_has_service(base_group, spec, service["id"]), f"{BASE_GROUP} is not linked to {spec.name}")
         require(render.env_group_has_service(v2_group, spec, service["id"]), f"{V2_GROUP} is not linked to {spec.name}")
         if spec.name in RELAYER_SERVICE_NAMES:
             require(render.env_group_has_service(relayer_group, spec, service["id"]), f"{RELAYER_GROUP} is not linked to {spec.name}")

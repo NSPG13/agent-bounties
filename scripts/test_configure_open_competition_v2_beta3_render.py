@@ -28,9 +28,43 @@ def runtime() -> dict:
 
 
 class Beta3RenderTests(unittest.TestCase):
+    def test_missing_v2_environment_group_is_created_in_exact_project(self):
+        client = mock.Mock()
+        client._read_with_retry.return_value = []
+        client._write_with_retry.return_value = {"id": "evg-beta3"}
+        group = {
+            "id": "evg-beta3",
+            "name": MODULE.V2_GROUP,
+            "ownerId": "tea-owner",
+            "environmentId": "evm-production",
+            "serviceLinks": [],
+        }
+        with mock.patch.object(MODULE, "named_group", return_value=group):
+            result = MODULE.ensure_v2_group(
+                client, "tea-owner", "evm-production"
+            )
+
+        self.assertEqual(result, group)
+        client._write_with_retry.assert_called_once_with(
+            "POST",
+            "/env-groups",
+            {
+                "name": MODULE.V2_GROUP,
+                "ownerId": "tea-owner",
+                "envVars": [],
+                "secretFiles": [],
+                "serviceIds": [],
+                "environmentId": "evm-production",
+            },
+        )
+
     def test_missing_beta3_service_is_materialized_before_revalidation(self):
         services = {
-            spec.name: {"id": f"srv-{index:020d}", "name": spec.name}
+            spec.name: {
+                "id": f"srv-{index:020d}",
+                "name": spec.name,
+                "ownerId": "tea-owner",
+            }
             for index, spec in enumerate(MODULE.V2_SERVICES, start=1)
         }
         missing_name = "agent-bounties-open-competition-v2-beta3-indexer"
@@ -42,20 +76,102 @@ class Beta3RenderTests(unittest.TestCase):
                 raise MODULE.render.RenderServiceMissing(spec.name)
             return services[spec.name]
 
-        def materialize(spec):
+        def materialize(_client, spec, reference, groups):
             nonlocal recovered
             self.assertEqual(spec.name, missing_name)
+            self.assertEqual(reference["name"], "agent-bounties-api")
+            self.assertEqual(set(groups), {MODULE.BASE_GROUP, MODULE.V2_GROUP})
             recovered = True
             return services[spec.name]
 
         client.resolve_service.side_effect = resolve
-        client.ensure_blueprint_service.side_effect = materialize
-
-        resolved = MODULE.resolve_services(client)
+        group = {
+            "id": "evg-beta3",
+            "ownerId": "tea-owner",
+            "serviceLinks": [],
+        }
+        with mock.patch.object(MODULE, "named_group", return_value=group), mock.patch.object(
+            MODULE, "ensure_v2_group", return_value=group
+        ), mock.patch.object(MODULE, "provision_worker", side_effect=materialize) as provision:
+            resolved = MODULE.resolve_services(client)
 
         self.assertEqual(resolved, services)
-        client.ensure_blueprint_service.assert_called_once()
+        provision.assert_called_once()
+        client.ensure_blueprint_service.assert_not_called()
         self.assertEqual(client.resolve_service.call_count, len(MODULE.V2_SERVICES) * 2)
+
+    def test_direct_worker_provisioning_is_exact_and_attaches_required_groups(self):
+        spec = next(spec for spec in MODULE.V2_SERVICES if spec.name.endswith("-broker"))
+        reference = {
+            "id": "srv-api",
+            "name": "agent-bounties-api",
+            "type": "web_service",
+            "branch": "main",
+            "repo": "https://github.com/NSPG13/agent-bounties",
+            "ownerId": "tea-owner",
+            "environmentId": "evm-production",
+        }
+        created = {
+            "id": "srv-beta3broker",
+            "name": spec.name,
+            "type": "background_worker",
+            "branch": "main",
+            "repo": "https://github.com/NSPG13/agent-bounties",
+            "ownerId": "tea-owner",
+            "environmentId": "evm-production",
+        }
+        groups = {
+            name: {
+                "id": f"evg-{name.rsplit('-', 1)[-1]}",
+                "ownerId": "tea-owner",
+                "environmentId": "evm-production",
+                "serviceLinks": [],
+            }
+            for name in (MODULE.BASE_GROUP, MODULE.V2_GROUP, MODULE.RELAYER_GROUP)
+        }
+        attached: set[str] = set()
+        writes = []
+        client = mock.Mock()
+
+        def get_env_var(service, key):
+            if service is reference:
+                self.assertEqual(key, "DATABASE_URL")
+                return {"key": key, "value": "postgres://worker:secret@db/app"}
+            expected = dict(MODULE.WORKER_ENVIRONMENT[spec.name])
+            expected["DATABASE_URL"] = "postgres://worker:secret@db/app"
+            return {"key": key, "value": expected[key]}
+
+        def write(method, path, payload):
+            writes.append((method, path, payload))
+            if path == "/services":
+                return {"service": created}
+            attached.add(path.split("/")[2])
+            return {}
+
+        def get_group(group_id):
+            source = next(group for group in groups.values() if group["id"] == group_id)
+            links = []
+            if group_id in attached:
+                links.append(
+                    {"service": {"id": created["id"], "name": spec.name, "type": "worker"}}
+                )
+            return {**source, "serviceLinks": links}
+
+        client.get_env_var.side_effect = get_env_var
+        client._write_with_retry.side_effect = write
+        client.get_env_group.side_effect = get_group
+        client.resolve_service.return_value = created
+
+        result = MODULE.provision_worker(client, spec, reference, groups)
+
+        self.assertEqual(result, created)
+        create_payload = writes[0][2]
+        self.assertEqual(create_payload["type"], "background_worker")
+        self.assertEqual(create_payload["name"], spec.name)
+        self.assertEqual(create_payload["environmentId"], "evm-production")
+        self.assertEqual(create_payload["serviceDetails"]["runtime"], "docker")
+        self.assertEqual(len(attached), 3)
+        self.assertNotIn("X402_RELAYER_PRIVATE_KEY", json.dumps(create_payload))
 
     def test_runtime_validation_rejects_non_mainnet_or_pending_deployment(self):
         for network, block in (("base-sepolia", 123), ("base-mainnet", 0)):
@@ -87,6 +203,8 @@ class Beta3RenderTests(unittest.TestCase):
         self.assertEqual(environment["OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK"], "123")
         self.assertNotIn("X402_RELAYER_PRIVATE_KEY", environment)
         self.assertEqual(environment["OPEN_COMPETITION_V2_REFUND_RESERVE_MIN_BASE_UNITS"], "110000")
+        self.assertEqual(environment["OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS"], "120")
+        self.assertEqual(environment["OPEN_COMPETITION_V2_RELAYER_MAX_GAS"], "8000000")
 
     def test_environment_rejects_shared_rpc_and_insecure_prover(self):
         common = dict(
