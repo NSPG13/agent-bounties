@@ -90,6 +90,14 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
             self.text,
         )
         self.assertIn(".settlement_event_id | length > 0", self.text)
+        self.assertIn(
+            'test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"',
+            self.text,
+        )
+        self.assertNotIn(
+            'test "$replacement" = "$(jq -r .x402_canary.competition',
+            self.text,
+        )
         self.assertIn(".source_commit == $commit", self.text)
         self.assertNotIn('--source-commit "$GITHUB_SHA"', self.text)
 
