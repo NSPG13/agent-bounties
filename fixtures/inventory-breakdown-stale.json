@@ -1,0 +1,13 @@
+{
+  "schema": "agent-bounties/inventory-breakdown-v1",
+  "safe_block": 24000000,
+  "generated_at": "2026-08-04T00:00:00Z",
+  "source_available": true,
+  "counts": {
+    "ready_to_earn": 3,
+    "claimed_in_progress": 1,
+    "submitted": 0,
+    "paid": 5,
+    "verification_unavailable": 2
+  }
+}

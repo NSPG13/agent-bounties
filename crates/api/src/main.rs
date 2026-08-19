@@ -469,6 +469,8 @@ use worker::{
         ,SubmitUnfundedBountySolutionRequest
         ,AutonomousBountyInventorySummary
         ,AutonomousBountyInventoryItem
+        ,InventoryBreakdown
+        ,InventoryBreakdownCounts
         ,SolverLeaderboardResponse
         ,SolverLeaderboardPeriodResponse
         ,SolverLeaderboardRanking
@@ -2024,6 +2026,24 @@ impl PlatformCanonicalSourceFreshness {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct InventoryBreakdownCounts {
+    ready_to_earn: u64,
+    claimed_in_progress: u64,
+    submitted: u64,
+    paid: u64,
+    verification_unavailable: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct InventoryBreakdown {
+    schema: String,
+    safe_block: Option<u64>,
+    generated_at: String,
+    source_available: bool,
+    counts: InventoryBreakdownCounts,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct AutonomousVerificationJobsQuery {
     network: Option<String>,
@@ -2535,6 +2555,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/v1/base/autonomous-bounties/feed",
             get(autonomous_bounty_feed),
+        )
+        .route(
+            "/v1/base/autonomous-bounties/inventory-breakdown",
+            get(inventory_breakdown),
         )
         .route(
             "/v1/base/autonomous-bounties/leaderboard",
@@ -14046,6 +14070,72 @@ async fn build_open_competition_inventory_summary(
         verifier_reward_usdc_base_units: sum(|item| &item.verifier_reward_usdc_base_units)?
             .to_string(),
     })
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/autonomous-bounties/inventory-breakdown",
+    params(("network" = Option<String>, Query, description = "Base network; defaults to base-mainnet")),
+    responses((status = 200, body = InventoryBreakdown))
+)]
+async fn inventory_breakdown(
+    State(state): State<SharedState>,
+    Query(query): Query<AutonomousBountyFeedQuery>,
+) -> Result<Json<InventoryBreakdown>, StatusCode> {
+    let network = query.network.as_deref().unwrap_or("base-mainnet");
+    let feed = load_autonomous_bounty_feed(&state, network, false).await?;
+    let generated_at = Utc::now().to_rfc3339();
+
+    let (safe_block, source_available) = match (
+        state.store.as_ref(),
+        state
+            .base_rpc_urls
+            .resolve(network)
+            .ok()
+            .and_then(|(descriptor, _)| autonomous_factory_for_chain(descriptor.chain_id)),
+    ) {
+        (Some(store), Some(factory)) => {
+            match store.get_base_indexer_heartbeat(network, &factory).await {
+                Ok(Some(heartbeat)) => (heartbeat.persisted_cursor_block, true),
+                _ => (None, false),
+            }
+        }
+        _ => (None, false),
+    };
+
+    let mut ready_to_earn: u64 = 0;
+    let mut claimed_in_progress: u64 = 0;
+    let mut submitted: u64 = 0;
+    let mut paid: u64 = 0;
+    let mut verification_unavailable: u64 = 0;
+
+    for item in &feed {
+        if item.status == "claimable" && item.terms_valid && item.verification_ready {
+            ready_to_earn += 1;
+        } else if item.status == "claimed" {
+            claimed_in_progress += 1;
+        } else if item.status == "submitted" {
+            submitted += 1;
+        } else if item.status == "paid" {
+            paid += 1;
+        } else {
+            verification_unavailable += 1;
+        }
+    }
+
+    Ok(Json(InventoryBreakdown {
+        schema: "agent-bounties/inventory-breakdown-v1".to_string(),
+        safe_block,
+        generated_at,
+        source_available,
+        counts: InventoryBreakdownCounts {
+            ready_to_earn,
+            claimed_in_progress,
+            submitted,
+            paid,
+            verification_unavailable,
+        },
+    }))
 }
 
 fn format_usdc_base_units(amount: u128) -> String {

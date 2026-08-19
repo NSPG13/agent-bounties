@@ -12,6 +12,7 @@
     readyProjection: null,
     claim: null,
     metrics: null,
+    breakdown: null,
     protocol: null,
     protocolPromise: null,
     refreshing: false,
@@ -530,7 +531,16 @@
     return marketState.protocolPromise;
   }
 
-  function renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics) {
+  function newestPaidProof(items) {
+    const paid = items
+      .filter((item) => item.source_type === "canonical_base" && item.payment_state === "paid")
+      .slice()
+      .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+    const latest = paid[0];
+    return latest && safePublicUrl((latest.proof_urls || [])[0] || latest.public_url);
+  }
+
+  function renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics, breakdown) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
@@ -585,9 +595,12 @@
       .map((source) => source.source_type);
     const protocolStatus = protocol.status === "active" ? "Base mainnet active" : "Canonical protocol not active";
     if (detail) {
+      const counts = breakdown && breakdown.counts
+        ? ` | ready ${breakdown.counts.ready_to_earn} · claimed ${breakdown.counts.claimed_in_progress} · submitted ${breakdown.counts.submitted} · paid ${breakdown.counts.paid} · unavailable ${breakdown.counts.verification_unavailable}`
+        : "";
       detail.textContent = unavailable.length
-        ? `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}`
-        : `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream`;
+        ? `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · delayed: ${unavailable.join(", ")}${counts}`
+        : `${protocolStatus} · ${readyItems.length} ready to claim · ${availableSources}/${sourceStatuses.length} sources online · server-pushed live stream${counts}`;
     }
 
     if (proof && settlements > 0) {
@@ -609,7 +622,7 @@
     try {
       const protocol = await resolveProtocol();
       const api = protocol.api_base_url.replace(/\/$/, "");
-      const [projectionResponse, readyResponse, claimResponse, metricsResponse] = await Promise.all([
+      const [projectionResponse, readyResponse, claimResponse, metricsResponse, breakdownResponse] = await Promise.all([
         fetch(`${api}/v1/opportunities?network=base-mainnet&limit=300`, { cache: "no-store" }),
         fetch(`${api}/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`, {
           cache: "no-store",
@@ -617,15 +630,17 @@
         }),
         fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=${MARKET_WINDOW_HOURS}`, { cache: "no-store" }),
         fetch(`${api}/v1/metrics/platform?period=lifetime`, { cache: "no-store" }),
+        fetch(`${api}/v1/base/autonomous-bounties/inventory-breakdown?network=base-mainnet`, { cache: "no-store" }),
       ]);
-      if (!projectionResponse.ok || !readyResponse.ok || !claimResponse.ok || !metricsResponse.ok) {
+      if (!projectionResponse.ok || !readyResponse.ok || !claimResponse.ok || !metricsResponse.ok || !breakdownResponse.ok) {
         throw new Error("Live market evidence is unavailable.");
       }
-      const [projection, readyProjection, claim, metrics] = await Promise.all([
+      const [projection, readyProjection, claim, metrics, breakdown] = await Promise.all([
         projectionResponse.json(),
         readyResponse.json(),
         claimResponse.json(),
         metricsResponse.json(),
+        breakdownResponse.json(),
       ]);
       const firstLiveMarketView = !marketState.rendered;
       marketState.protocol = protocol;
@@ -633,7 +648,8 @@
       marketState.readyProjection = readyProjection;
       marketState.claim = claim;
       marketState.metrics = metrics;
-      renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics);
+      marketState.breakdown = breakdown;
+      renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics, breakdown);
       marketState.lastReceivedAt = Date.now();
       marketState.rendered = true;
       if (firstLiveMarketView) track("market_view");
@@ -675,6 +691,7 @@
           readyProjection,
           marketState.claim,
           marketState.metrics,
+          marketState.breakdown,
         );
         marketState.lastReceivedAt = Date.now();
         marketState.rendered = true;
