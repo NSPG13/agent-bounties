@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-08-19T10:01:00Z",
+  "source_statuses": [
+    {
+      "source_type": "canonical_base",
+      "available": true
+    }
+  ],
+  "items": [
+    {
+      "source_type": "canonical_base",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "verification_ready": true,
+      "gross_cash_margin_positive": true
+    },
+    {
+      "source_type": "canonical_base",
+      "work_state": "in_progress",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "verification_ready": true,
+      "gross_cash_margin_positive": true
+    },
+    {
+      "source_type": "canonical_base",
+      "work_state": "submitted",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "verification_ready": true,
+      "gross_cash_margin_positive": true
+    },
+    {
+      "source_type": "canonical_base",
+      "work_state": "completed",
+      "payment_state": "paid",
+      "payment_committed": true,
+      "verification_ready": true,
+      "gross_cash_margin_positive": true
+    },
+    {
+      "source_type": "canonical_base",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "verification_ready": false,
+      "gross_cash_margin_positive": true
+    },
+    {
+      "source_type": "unfunded_offchain",
+      "work_state": "submitted",
+      "payment_state": "none",
+      "payment_committed": false,
+      "verification_ready": false,
+      "gross_cash_margin_positive": false
+    }
+  ],
+  "expected": {
+    "source_available": true,
+    "ready_to_earn": 1,
+    "in_progress": 1,
+    "submitted": 1,
+    "paid": 1,
+    "verification_unavailable": 1
+  }
+}

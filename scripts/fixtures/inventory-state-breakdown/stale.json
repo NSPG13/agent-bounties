@@ -1,0 +1,27 @@
+{
+  "generated_at": "2026-08-18T10:03:00Z",
+  "source_statuses": [
+    {
+      "source_type": "canonical_base",
+      "available": true
+    }
+  ],
+  "items": [
+    {
+      "source_type": "canonical_base",
+      "work_state": "claimable",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "verification_ready": true,
+      "gross_cash_margin_positive": true
+    }
+  ],
+  "expected": {
+    "source_available": true,
+    "ready_to_earn": 1,
+    "in_progress": 0,
+    "submitted": 0,
+    "paid": 0,
+    "verification_unavailable": 0
+  }
+}

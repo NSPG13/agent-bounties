@@ -221,6 +221,27 @@ pub struct OpportunitySourceStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct InventoryStateBreakdownSource {
+    pub source_type: String,
+    pub available: bool,
+    pub authoritative_urls: Vec<String>,
+    pub observed_item_count: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct InventoryStateBreakdown {
+    pub schema_version: String,
+    pub generated_at: String,
+    pub source: InventoryStateBreakdownSource,
+    pub ready_to_earn: usize,
+    pub in_progress: usize,
+    pub submitted: usize,
+    pub paid: usize,
+    pub verification_unavailable: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct OpportunityProjectionResponse {
     pub schema_version: String,
@@ -229,6 +250,7 @@ pub struct OpportunityProjectionResponse {
     pub applied_view: Option<String>,
     pub degraded: bool,
     pub source_statuses: Vec<OpportunitySourceStatus>,
+    pub inventory_state_breakdown: InventoryStateBreakdown,
     pub items: Vec<OpportunityItem>,
     pub evidence_boundary: String,
 }
@@ -1202,6 +1224,72 @@ fn json_u64(value: &Value, field: &str) -> Result<u64, String> {
         .map_err(|_| format!("open-competition event field {field} is out of range"))
 }
 
+pub fn inventory_state_breakdown(
+    items: &[OpportunityItem],
+    source_statuses: &[OpportunitySourceStatus],
+    generated_at: &str,
+) -> InventoryStateBreakdown {
+    let canonical_source = source_statuses
+        .iter()
+        .find(|s| s.source_type == "canonical_base");
+    let canonical_items = items
+        .iter()
+        .filter(|i| i.source_type == "canonical_base")
+        .collect::<Vec<_>>();
+    InventoryStateBreakdown {
+        schema_version: "inventory-state-breakdown-v1".to_string(),
+        generated_at: generated_at.to_string(),
+        source: InventoryStateBreakdownSource {
+            source_type: "canonical_base".to_string(),
+            available: canonical_source.is_some_and(|s| s.available),
+            authoritative_urls: canonical_source
+                .map(|s| s.authoritative_urls.clone())
+                .unwrap_or_default(),
+            observed_item_count: canonical_items.len(),
+            error: canonical_source.and_then(|s| s.error.clone()),
+        },
+        ready_to_earn: canonical_items
+            .iter()
+            .filter(|i| is_ready_to_earn(i))
+            .count(),
+        in_progress: canonical_items
+            .iter()
+            .filter(|i| i.work_state == "in_progress")
+            .count(),
+        submitted: canonical_items
+            .iter()
+            .filter(|i| i.work_state == "submitted")
+            .count(),
+        paid: canonical_items
+            .iter()
+            .filter(|i| i.work_state == "completed" && i.payment_state == "paid")
+            .count(),
+        verification_unavailable: canonical_items
+            .iter()
+            .filter(|i| {
+                i.payment_committed
+                    && matches!(
+                        i.work_state.as_str(),
+                        "claimable" | "in_progress" | "submitted"
+                    )
+                    && !i.verification_ready
+            })
+            .count(),
+    }
+}
+
+fn is_ready_to_earn(item: &OpportunityItem) -> bool {
+    item.work_state == "claimable"
+        && item.payment_state == "escrowed"
+        && item.payment_committed
+        && item.verification_ready
+        && (item.source_type != "canonical_base"
+            || item
+                .cash_economics
+                .as_ref()
+                .is_some_and(|e| e.gross_cash_margin_positive))
+}
+
 pub fn apply_query(
     mut items: Vec<OpportunityItem>,
     query: &OpportunityQuery,
@@ -1259,15 +1347,7 @@ fn apply_view(item: &mut OpportunityItem, view: OpportunityView, now: DateTime<U
             matches
         }
         OpportunityView::ReadyToEarn => {
-            let matches = item.work_state == "claimable"
-                && item.payment_state == "escrowed"
-                && item.payment_committed
-                && item.verification_ready
-                && (item.source_type != "canonical_base"
-                    || item
-                        .cash_economics
-                        .as_ref()
-                        .is_some_and(|economics| economics.gross_cash_margin_positive));
+            let matches = is_ready_to_earn(item);
             if matches {
                 item.discovery_factors.push(
                     "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin".to_string(),
@@ -2036,6 +2116,58 @@ mod tests {
     }
 
     #[test]
+    fn inventory_state_breakdown_is_canonical_and_deterministic() {
+        let ready = canonical_opportunity(
+            &canonical("claimable", "1000000", true),
+            "base-mainnet",
+            "https://api.example",
+        )
+        .unwrap();
+        let mut in_progress = ready.clone();
+        in_progress.work_state = "in_progress".to_string();
+        let mut submitted = ready.clone();
+        submitted.work_state = "submitted".to_string();
+        let mut paid = ready.clone();
+        paid.work_state = "completed".to_string();
+        paid.payment_state = "paid".to_string();
+        let mut unavailable = ready.clone();
+        unavailable.verification_ready = false;
+        let mut noncanonical = ready.clone();
+        noncanonical.source_type = "unfunded_offchain".to_string();
+
+        let status = OpportunitySourceStatus {
+            source_type: "canonical_base".to_string(),
+            available: true,
+            authoritative_urls: vec!["https://api.example/canonical".to_string()],
+            item_count: 5,
+            error: None,
+        };
+        let generated_at = "2026-08-19T10:01:00Z";
+        let breakdown = inventory_state_breakdown(
+            &[
+                ready,
+                in_progress,
+                submitted,
+                paid,
+                unavailable,
+                noncanonical,
+            ],
+            &[status],
+            generated_at,
+        );
+
+        assert_eq!(breakdown.schema_version, "inventory-state-breakdown-v1");
+        assert_eq!(breakdown.generated_at, generated_at);
+        assert!(breakdown.source.available);
+        assert_eq!(breakdown.source.observed_item_count, 5);
+        assert_eq!(breakdown.ready_to_earn, 1);
+        assert_eq!(breakdown.in_progress, 1);
+        assert_eq!(breakdown.submitted, 1);
+        assert_eq!(breakdown.paid, 1);
+        assert_eq!(breakdown.verification_unavailable, 1);
+    }
+
+    #[test]
     fn live_feed_formats_reuse_projection_and_disclose_unfunded_payment_state() {
         let mut item = unfunded_opportunity(&trial(), &[], "https://api.example");
         item.title = "Audit <unsafe> & document".to_string();
@@ -2046,6 +2178,7 @@ mod tests {
             applied_view: None,
             degraded: false,
             source_statuses: Vec::new(),
+            inventory_state_breakdown: inventory_state_breakdown(&[], &[], "2027-01-15T08:01:00Z"),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
         };
@@ -2083,6 +2216,7 @@ mod tests {
             applied_view: None,
             degraded: false,
             source_statuses: Vec::new(),
+            inventory_state_breakdown: inventory_state_breakdown(&[], &[], "2027-01-15T08:01:00Z"),
             items: vec![item],
             evidence_boundary: "Projection only".to_string(),
         };
