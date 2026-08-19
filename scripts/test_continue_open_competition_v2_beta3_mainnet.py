@@ -105,6 +105,13 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("--manifest-path target/continuation-control/Cargo.toml", self.text)
         self.assertIn("target/continuation-build/release/api", self.text)
         self.assertIn("--worker-binary target/continuation-build/release/worker", self.text)
+        self.assertEqual(
+            self.text.count(
+                "target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py"
+            ),
+            2,
+        )
+        self.assertIn('sudo rm -rf "$GITHUB_WORKSPACE/target"', self.text)
 
     def test_canaries_and_activation_remain_mandatory(self):
         for evidence in (

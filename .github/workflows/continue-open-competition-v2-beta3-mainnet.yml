@@ -142,8 +142,7 @@ jobs:
       - name: Clear generated files from prior capacity-gated runs
         run: |
           if [ -d "$GITHUB_WORKSPACE/target" ]; then
-            chmod -R u+w "$GITHUB_WORKSPACE/target" || true
-            rm -rf "$GITHUB_WORKSPACE/target"
+            sudo rm -rf "$GITHUB_WORKSPACE/target"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
@@ -450,7 +449,7 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8788/health >/dev/null
-          python scripts/run_open_competition_v2_x402_rehearsal.py \
+          python target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api http://127.0.0.1:8788 \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
             --worker-binary target/continuation-build/release/worker --expect-refund \
@@ -459,7 +458,7 @@ jobs:
             --output target/mainnet-x402-refund.json
           cleanup
           trap - EXIT
-          python scripts/run_open_competition_v2_x402_rehearsal.py \
+          python target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api https://api.agentbounties.app \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
