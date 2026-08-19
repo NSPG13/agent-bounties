@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 PATH = Path(__file__).with_name("configure_open_competition_v2_beta3_render.py")
@@ -27,6 +28,35 @@ def runtime() -> dict:
 
 
 class Beta3RenderTests(unittest.TestCase):
+    def test_missing_beta3_service_is_materialized_before_revalidation(self):
+        services = {
+            spec.name: {"id": f"srv-{index:020d}", "name": spec.name}
+            for index, spec in enumerate(MODULE.V2_SERVICES, start=1)
+        }
+        missing_name = "agent-bounties-open-competition-v2-beta3-indexer"
+        recovered = False
+        client = mock.Mock()
+
+        def resolve(spec):
+            if spec.name == missing_name and not recovered:
+                raise MODULE.render.RenderServiceMissing(spec.name)
+            return services[spec.name]
+
+        def materialize(spec):
+            nonlocal recovered
+            self.assertEqual(spec.name, missing_name)
+            recovered = True
+            return services[spec.name]
+
+        client.resolve_service.side_effect = resolve
+        client.ensure_blueprint_service.side_effect = materialize
+
+        resolved = MODULE.resolve_services(client)
+
+        self.assertEqual(resolved, services)
+        client.ensure_blueprint_service.assert_called_once()
+        self.assertEqual(client.resolve_service.call_count, len(MODULE.V2_SERVICES) * 2)
+
     def test_runtime_validation_rejects_non_mainnet_or_pending_deployment(self):
         for network, block in (("base-sepolia", 123), ("base-mainnet", 0)):
             value = runtime()

@@ -118,6 +118,21 @@ def named_group(client: render.RenderClient, owner_id: str, name: str) -> dict[s
     return client.get_env_group(group["id"])
 
 
+def resolve_services(client: render.RenderClient) -> dict[str, dict[str, Any]]:
+    services: dict[str, dict[str, Any]] = {}
+    missing: list[render.ServiceSpec] = []
+    for spec in V2_SERVICES:
+        try:
+            services[spec.name] = client.resolve_service(spec)
+        except render.RenderServiceMissing:
+            missing.append(spec)
+    for spec in missing:
+        services[spec.name] = client.ensure_blueprint_service(spec)
+    if missing:
+        services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
+    return services
+
+
 def deploy(
     client: render.RenderClient,
     runtime: dict[str, Any],
@@ -135,7 +150,7 @@ def deploy(
         == environment["OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS"],
         "relayer private key does not match the isolated broker address",
     )
-    services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
+    services = resolve_services(client)
     owner_ids = {str(service.get("ownerId")) for service in services.values()}
     require(len(owner_ids) == 1, "Beta3 services do not share one Render workspace")
     owner_id = render.validate_owner_id(owner_ids.pop())
