@@ -31,6 +31,7 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertIn("/mnt/agent-bounties-artifacts/beta3-attempt15", text)
         self.assertIn("mkdir -p target", text)
         self.assertIn("run_open_competition_v2_x402_rehearsal.py", text)
+        self.assertIn("OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY=10000", text)
         self.assertIn("--source-commit \"$RELEASE_SOURCE_COMMIT\"", text)
         self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)
