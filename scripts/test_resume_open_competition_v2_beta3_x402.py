@@ -79,13 +79,24 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
             text,
         )
         self.assertIn("target/failed-x402-charge-refund-4.json", text)
+        self.assertIn(
+            "0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27",
+            text,
+        )
+        self.assertIn("target/failed-x402-charge-refund-5.json", text)
         self.assertIn('if [[ "$RECOVERY_ONLY" == "true" ]]', text)
-        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-4", text)
+        self.assertIn("open-competition-v2-beta3-x402-charge-recovery-5", text)
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', text)
         self.assertIn("expected_gnark_image_id", text)
         self.assertIn("expected_gnark_cli", text)
         self.assertIn("--manifest-path target/continuation-control/Cargo.toml", text)
+        self.assertIn("--release -p api -p worker", text)
+        self.assertIn("target/continuation-build/release/api", text)
         self.assertIn("--worker-binary target/continuation-build/release/worker", text)
+        self.assertIn(
+            "target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py",
+            text,
+        )
         self.assertIn("--source-commit \"$RELEASE_SOURCE_COMMIT\"", text)
         self.assertNotIn("jq -r .deployer", text)
         self.assertNotIn("deploy_open_competition_v2_beta3.py", text)

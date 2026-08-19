@@ -125,11 +125,18 @@ jobs:
             --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
             --broker "$BROKER" --amount 110000 \
             --output target/failed-x402-charge-refund-4.json
+          python target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27 \
+            --asset 0x036CbD53842c5426634e7929541eC2318f3dCF7e \
+            --payer 0xbb1215ed6f843e0caefe363bbb2b509f4d65b11e \
+            --broker "$BROKER" --amount 110000 \
+            --output target/failed-x402-charge-refund-5.json
           if [[ "$RECOVERY_ONLY" == "true" ]]; then
             exit 0
           fi
           cargo build --manifest-path target/continuation-control/Cargo.toml \
-            --target-dir target/continuation-build --locked --release -p worker
+            --target-dir target/continuation-build --locked --release -p api -p worker
           python target/continuation-control/scripts/refresh_open_competition_v2_x402_canary.py \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --runtime target/sepolia.runtime.json \
@@ -182,7 +189,7 @@ jobs:
           python scripts/open_competition_v2_prover_service.py >target/sepolia-prover.log 2>&1 &
           prover_pid=$!
           export PORT=8787
-          target/release/api >target/sepolia-api.log 2>&1 &
+          target/continuation-build/release/api >target/sepolia-api.log 2>&1 &
           api_pid=$!
           cleanup() {
             kill "$api_pid" "$prover_pid" 2>/dev/null || true
@@ -197,7 +204,7 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:8787/health >/dev/null
-          python scripts/run_open_competition_v2_x402_rehearsal.py \
+          python target/continuation-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --api http://127.0.0.1:8787 --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --rehearsal target/sepolia-rehearsal.json \
             --worker-binary target/continuation-build/release/worker \
@@ -234,6 +241,7 @@ jobs:
             target/failed-x402-charge-refund-2.json
             target/failed-x402-charge-refund-3.json
             target/failed-x402-charge-refund-4.json
+            target/failed-x402-charge-refund-5.json
             target/sepolia-proofs/*.json
             target/release-gates.json
             target/release-assets/**
@@ -244,11 +252,12 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: inputs.mode == 'recover-second-only'
         with:
-          name: open-competition-v2-beta3-x402-charge-recovery-4
+          name: open-competition-v2-beta3-x402-charge-recovery-5
           path: |
             target/failed-x402-charge-refund.json
             target/failed-x402-charge-refund-2.json
             target/failed-x402-charge-refund-3.json
             target/failed-x402-charge-refund-4.json
+            target/failed-x402-charge-refund-5.json
           if-no-files-found: error
           retention-days: 90
