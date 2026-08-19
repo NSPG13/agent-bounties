@@ -61,6 +61,7 @@ jobs:
           test -x "$preserved/release/api"
           test -x "$preserved/release/worker"
           test -x "$preserved/release-assets/public-vector-metric-v1-script"
+          mkdir -p target
           cp -a "$preserved/sepolia-rehearsal.json" target/
           cp -a "$preserved/sepolia.runtime.json" target/
           cp -a "$preserved/sepolia-proofs" target/
