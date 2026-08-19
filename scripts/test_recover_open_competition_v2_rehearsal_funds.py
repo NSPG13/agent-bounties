@@ -39,6 +39,12 @@ class RehearsalRecoveryTests(unittest.TestCase):
         self.assertEqual(len(data), 138)
         self.assertTrue(data.endswith((525_000).to_bytes(32, "big").hex()))
 
+    def test_refund_calldata_binds_the_contributor(self) -> None:
+        contributor = "0x" + "34" * 20
+        data = recovery.address_call_data("withdrawRefundFor(address)", contributor)
+        self.assertEqual(len(data), 74)
+        self.assertTrue(data.endswith("34" * 20))
+
 
 if __name__ == "__main__":
     unittest.main()
