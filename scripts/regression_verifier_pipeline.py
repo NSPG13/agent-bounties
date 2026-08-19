@@ -29,6 +29,9 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PINNED_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/:@-]{0,446}@sha256:[0-9a-f]{64}$")
 DEFAULT_API = "https://api.agentbounties.app"
+MAX_GITHUB_SOURCE_ARCHIVE_BYTES = 256 * 1024 * 1024
+MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES = 128 * 1024 * 1024
+MAX_GITHUB_ARCHIVE_ENTRIES = 100_000
 
 
 class PipelineError(RuntimeError):
@@ -220,11 +223,13 @@ def extract_snapshot(
     seen: set[str] = set()
     total = 0
     files = 0
+    archive_entries = 0
+    selected_entries = 0
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
-        members = bundle.getmembers()
-        if len(members) > max_files * 4 + 100:
-            raise PipelineError("GitHub archive has too many entries")
-        for member in members:
+        for member in bundle:
+            archive_entries += 1
+            if archive_entries > MAX_GITHUB_ARCHIVE_ENTRIES:
+                raise PipelineError("GitHub archive has too many entries")
             path = PurePosixPath(member.name)
             parts = path.parts
             if not parts or path.is_absolute() or any(part in {"", ".", ".."} for part in parts):
@@ -236,6 +241,9 @@ def extract_snapshot(
                 relative = relative[len(prefix) :]
             if not relative:
                 continue
+            selected_entries += 1
+            if selected_entries > max_files * 4 + 100:
+                raise PipelineError("GitHub selected snapshot has too many entries")
             relative_name = "/".join(relative)
             if relative_name in seen:
                 raise PipelineError("GitHub archive contains duplicate paths")
@@ -342,9 +350,15 @@ def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> 
     source_files = int(manifest["max_source_files"])
     benchmark_bytes = int(manifest["max_benchmark_bytes"])
     benchmark_files = int(manifest["max_benchmark_files"])
-    source_archive = download_archive(source_repo, source_commit, min(source_bytes, 256 * 1024 * 1024))
+    source_archive = download_archive(
+        source_repo,
+        source_commit,
+        MAX_GITHUB_SOURCE_ARCHIVE_BYTES,
+    )
     benchmark_archive = download_archive(
-        benchmark_repo, benchmark_commit, min(benchmark_bytes, 128 * 1024 * 1024)
+        benchmark_repo,
+        benchmark_commit,
+        MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES,
     )
     extract_snapshot(
         source_archive,

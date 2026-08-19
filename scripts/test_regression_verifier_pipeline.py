@@ -146,6 +146,47 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             self.assertEqual((root / "test.txt").read_bytes(), b"expected")
             self.assertFalse((root / "source.txt").exists())
 
+    def test_subdirectory_limits_ignore_unrelated_archive_entries(self) -> None:
+        value = archive(
+            [
+                (f"repo-root/unrelated/{index}.txt", b"ignored", "file")
+                for index in range(200)
+            ]
+            + [("repo-root/bench/test.txt", b"expected", "file")]
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pipeline.extract_snapshot(
+                value,
+                root,
+                subdirectory="bench",
+                max_bytes=100,
+                max_files=1,
+            )
+            self.assertEqual((root / "test.txt").read_bytes(), b"expected")
+            self.assertFalse((root / "unrelated").exists())
+
+    def test_subdirectory_entry_guard_applies_after_selection(self) -> None:
+        value = archive(
+            [(f"repo-root/bench/{index}", None, "dir") for index in range(105)]
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                pipeline.PipelineError,
+                "selected snapshot has too many entries",
+            ):
+                pipeline.extract_snapshot(
+                    value,
+                    Path(temporary),
+                    subdirectory="bench",
+                    max_bytes=100,
+                    max_files=1,
+                )
+
+    def test_archive_transport_caps_are_independent_of_snapshot_limits(self) -> None:
+        self.assertEqual(pipeline.MAX_GITHUB_SOURCE_ARCHIVE_BYTES, 256 * 1024 * 1024)
+        self.assertEqual(pipeline.MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES, 128 * 1024 * 1024)
+
     def test_archive_links_traversal_and_size_overrun_fail_closed(self) -> None:
         cases = [
             archive([("root/link", None, "symlink")]),
