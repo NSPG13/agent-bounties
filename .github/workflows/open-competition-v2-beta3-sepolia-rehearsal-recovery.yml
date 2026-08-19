@@ -37,7 +37,7 @@ jobs:
             --deployer "$BASE_DEPLOYER_ADDRESS" \
             --source-commit 4d09d82825c38f2bf93a8ee4375a95b302410c29 \
             --run-id 32147289466 \
-            --attempt 1 --attempt 2 --attempt 3 --attempt 4 --attempt 5 --attempt 6 --attempt 7 --attempt 8 --attempt 9 \
+            --attempt 1 --attempt 2 --attempt 3 --attempt 4 --attempt 5 --attempt 6 --attempt 7 --attempt 8 --attempt 9 --attempt 12 \
             --additional-actor-scope b1ce5c176a3cf6d4e3d4240b0a2fdf1359a3a8c5:32122203861:1 \
             --competition 0x5e87358743dd4dcefc1a71ce9663ccf229ba7559 \
             --funding-competition 0x702b2be0254b7a363d4bfb4e9b72d9424bbe4a8e \
@@ -50,6 +50,8 @@ jobs:
             --required-actor 0xa62a0da47f22e85d688d101ecfc0220f338f5527 \
             --required-actor 0x3a9119736afe7f1d77d591540a3ca18c197f7df5 \
             --required-actor 0xfeddf1b81c5cdef4f749c71e67a19343e3ab3c55 \
+            --required-actor 0x7fe6e588f8ef039d7e5ecb3ecc537145637b4437 \
+            --required-actor 0xc93766c8037783663d0c88e54e1c09db206c41ed \
             --output target/beta3-sepolia-rehearsal-recovery.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
