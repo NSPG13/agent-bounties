@@ -142,6 +142,14 @@ class SignedRpc:
             time.sleep(5)
         raise RuntimeError("deployment did not reach a Base safe block")
 
+    def require_safe_code_hashes(
+        self, expected_hashes: dict[str, str], block_number: int
+    ) -> None:
+        safe = self.wait_safe(block_number)
+        for address, expected_hash in expected_hashes.items():
+            actual = self.code_hash(address, safe["number"])
+            require(actual == expected_hash, f"safe runtime hash mismatch: {address}")
+
 
 def expected_runtime_hashes(bundle: dict[str, Any]) -> dict[str, str]:
     return {
@@ -231,6 +239,24 @@ def deploy(bundle: dict[str, Any], client: SignedRpc, output: Path) -> dict[str,
                 f"existing evidence address differs: {component}",
             )
             continue
+        if component == "factory":
+            dependency_blocks = [
+                int(item["block_number"])
+                for item in evidence["transactions"]
+                if item["component"] in {"groth16_verifier", "plonk_verifier"}
+            ]
+            require(len(dependency_blocks) == 2, "factory verifier evidence is incomplete")
+            client.require_safe_code_hashes(
+                {
+                    bundle["groth16_verifier"]["address"]: bundle["groth16_verifier"][
+                        "runtime_code_hash"
+                    ],
+                    bundle["plonk_verifier"]["address"]: bundle["plonk_verifier"][
+                        "runtime_code_hash"
+                    ],
+                },
+                max(dependency_blocks),
+            )
         if client.code_hash(transaction["predicted_address"]) is not None or client.pending_nonce() > transaction["from_nonce"]:
             record = recovered_component_record(bundle, transaction, client)
         else:
