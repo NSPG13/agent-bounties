@@ -48,8 +48,7 @@ class ResumeBeta3X402WorkflowTests(unittest.TestCase):
         self.assertFalse(checkouts[0]["with"]["clean"])
         self.assertEqual(checkouts[1]["with"]["ref"], "${{ github.sha }}")
         self.assertEqual(checkouts[1]["with"]["path"], "target/continuation-control")
-        self.assertIn("sudo chown -R", text)
-        self.assertIn("rm -rf target", text)
+        self.assertIn("sudo rm -rf target", text)
         self.assertIn(
             "target/continuation-control/scripts/recover_open_competition_v2_x402_charge.py",
             text,
