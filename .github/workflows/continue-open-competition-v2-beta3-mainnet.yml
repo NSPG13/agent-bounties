@@ -331,8 +331,7 @@ jobs:
       - name: Clear generated files from prior capacity-gated runs
         run: |
           if [ -d "$GITHUB_WORKSPACE/target" ]; then
-            chmod -R u+w "$GITHUB_WORKSPACE/target" || true
-            rm -rf "$GITHUB_WORKSPACE/target"
+            sudo rm -rf "$GITHUB_WORKSPACE/target"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:

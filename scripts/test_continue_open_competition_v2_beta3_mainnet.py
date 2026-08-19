@@ -111,7 +111,10 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertIn('sudo rm -rf "$GITHUB_WORKSPACE/target"', self.text)
+        self.assertEqual(
+            self.text.count('sudo rm -rf "$GITHUB_WORKSPACE/target"'),
+            2,
+        )
 
     def test_canaries_and_activation_remain_mandatory(self):
         for evidence in (
