@@ -64,6 +64,15 @@ class RefreshX402CanaryTests(unittest.TestCase):
         self.assertEqual(MODULE.required_top_up(target + 1, target), 0)
         with self.assertRaises(MODULE.CanaryRefreshError):
             MODULE.required_top_up(-1, target)
+        self.assertEqual(MODULE.planned_solver_top_up(0, True), 0)
+        self.assertEqual(MODULE.planned_solver_top_up(0, False), target)
+
+    def test_explicit_solver_nonce_reconstructs_paid_job_without_drift(self):
+        self.assertEqual(MODULE.selected_solver_nonce(1787226676733703323), 1787226676733703323)
+        with self.assertRaises(MODULE.CanaryRefreshError):
+            MODULE.selected_solver_nonce(0)
+        with self.assertRaises(MODULE.CanaryRefreshError):
+            MODULE.selected_solver_nonce(2**128)
 
     def test_rehearsal_preserves_superseded_evidence_and_rebinds_first_proven(self):
         old = {

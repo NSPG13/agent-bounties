@@ -70,6 +70,16 @@ def required_top_up(current: int, target: int) -> int:
     return max(0, target - current)
 
 
+def selected_solver_nonce(explicit: int | None) -> int:
+    nonce = time.time_ns() if explicit is None else explicit
+    require(0 < nonce < 2**128, "solver nonce must fit uint128")
+    return nonce
+
+
+def planned_solver_top_up(current: int, skip: bool) -> int:
+    return 0 if skip else required_top_up(current, TARGET_X402_SERVICE_BALANCE)
+
+
 def replace_rehearsal_canary(
     document: dict[str, Any], new_canary: dict[str, Any], evidence: dict[str, Any]
 ) -> dict[str, Any]:
@@ -282,7 +292,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     competition, bounty_id = rehearsal.predict(
         client.url, factory, signer.address, params_tuple, creation_nonce
     )
-    solver_nonce = time.time_ns()
+    solver_nonce = selected_solver_nonce(args.solver_nonce)
     fixture = rehearsal.fixture_builder.bind(
         template,
         rehearsal.scope(
@@ -319,8 +329,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
         )
     solver_balance_before = rehearsal.token_balance(client.url, token, solver.address)
-    solver_top_up = required_top_up(
-        solver_balance_before, TARGET_X402_SERVICE_BALANCE
+    solver_top_up = planned_solver_top_up(
+        solver_balance_before, args.skip_solver_service_top_up
     )
     if solver_top_up:
         require(
@@ -336,11 +346,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 [solver.address, solver_top_up],
             ),
         )
-    require(
-        rehearsal.token_balance(client.url, token, solver.address)
-        >= TARGET_X402_SERVICE_BALANCE,
-        "generated solver proof-service reserve was not funded",
-    )
+    if not args.skip_solver_service_top_up:
+        require(
+            rehearsal.token_balance(client.url, token, solver.address)
+            >= TARGET_X402_SERVICE_BALANCE,
+            "generated solver proof-service reserve was not funded",
+        )
     proof_deadline = verify_new_canary(
         client.url, token, competition, bounty_id, signer, params_tuple
     )
@@ -408,6 +419,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--private-key-env", default="BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--actor-derivation-salt", required=True)
     parser.add_argument("--replacement-id", type=int, default=1)
+    parser.add_argument("--solver-nonce", type=int)
+    parser.add_argument("--skip-solver-service-top-up", action="store_true")
     parser.add_argument("--safe-timeout", type=int, default=1_800)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
