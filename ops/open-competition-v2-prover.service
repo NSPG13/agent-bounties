@@ -9,6 +9,7 @@ User=agent-bounties-prover
 Group=agent-bounties-prover
 SupplementaryGroups=docker
 EnvironmentFile=/etc/agent-bounties/prover.env
+Environment=TMPDIR=/var/lib/agent-bounties-prover/tmp
 ExecStartPre=/usr/bin/docker image inspect ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
 ExecStart=/usr/bin/python3 /opt/agent-bounties/scripts/open_competition_v2_prover_service.py
 Restart=on-failure

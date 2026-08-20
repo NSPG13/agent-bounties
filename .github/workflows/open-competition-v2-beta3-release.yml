@@ -970,6 +970,7 @@ jobs:
             --output /tmp/open-competition-v2-prover-assets.json
           sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/tmp
           sudo install -m 0755 target/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 target/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/

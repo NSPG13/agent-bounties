@@ -1,7 +1,9 @@
+import os
 import time
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import open_competition_v2_prover_service as service
 
@@ -19,6 +21,15 @@ def request() -> dict:
 
 
 class ProverServiceTests(unittest.TestCase):
+    def test_process_diagnostic_redacts_secrets_and_url_credentials(self) -> None:
+        with patch.dict(os.environ, {"EXAMPLE_SECRET": "do-not-print"}, clear=False):
+            value = service.process_diagnostic(
+                "do-not-print https://user:password@example.test/path"
+            )
+        self.assertNotIn("do-not-print", value)
+        self.assertNotIn("password", value)
+        self.assertIn("[redacted]", value)
+
     def test_request_binds_header_system_and_exact_journal(self) -> None:
         value = request()
         self.assertEqual(service.validate_request(value, "job:one", int(time.time())), value)
