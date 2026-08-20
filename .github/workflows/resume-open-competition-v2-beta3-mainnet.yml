@@ -144,6 +144,7 @@ jobs:
           proof_deadline = int(projection["proof_deadline"])
           if proof_deadline < int(time.time()) + 2_100:
               raise RuntimeError("preserved canary no longer has enough proof SLA; use a replacement canary")
+          recovery_nonce = str(time.time_ns())
           document = {
               "schema_version": "agent-bounties/open-competition-v2-beta3-mainnet-resume-v1",
               "passed": True,
@@ -167,7 +168,7 @@ jobs:
                   "competition": old["competition_contract"],
                   "bounty_id": projection["bounty_id"],
                   "solver": solver_a.address.lower(),
-                  "solver_nonce": "4",
+                  "solver_nonce": recovery_nonce,
                   "artifact_hash": old["artifact_hash"],
                   "proof_system": "groth16",
                   "metric": {
