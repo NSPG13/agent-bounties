@@ -1,0 +1,49 @@
+name: Replenish Open Competition V2 Beta3 broker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-broker-reserve
+  cancel-in-progress: false
+
+jobs:
+  replenish:
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Replenish and reconcile the bounded refund reserve
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
+        run: |
+          set -euo pipefail
+          python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/fund_open_competition_v2_beta3_broker.py \
+            --network base-mainnet \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --target-usdc-base-units 330000 \
+            --target-eth-wei 100000000000000 \
+            --output target/beta3-broker-refund-reserve.json
+          jq -e '
+            .passed == true and
+            .target_usdc_base_units == 330000 and
+            .final_usdc_base_units >= 330000 and
+            .final_eth_wei >= 100000000000000
+          ' target/beta3-broker-refund-reserve.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-competition-v2-beta3-broker-refund-reserve
+          path: target/beta3-broker-refund-reserve.json
+          if-no-files-found: error
+          retention-days: 90
