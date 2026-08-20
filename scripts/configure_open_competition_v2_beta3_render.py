@@ -59,6 +59,7 @@ WORKER_ENVIRONMENT = {
         "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
         "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": str(RPC_LOG_BATCH_SIZE),
         "OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS": "30",
+        "OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS": "250",
     },
     "agent-bounties-open-competition-v2-beta3-keeper": {
         "APP_PACKAGE": "worker",

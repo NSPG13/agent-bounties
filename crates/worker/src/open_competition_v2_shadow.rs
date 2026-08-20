@@ -1,4 +1,7 @@
-use super::{nonempty, OpenCompetitionV2IndexerConfig, AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE};
+use super::{
+    nonempty, parse_u64_env, OpenCompetitionV2IndexerConfig,
+    AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE,
+};
 use anyhow::{anyhow, Context};
 use chain_base::{
     decode_open_competition_v2_logs, fetch_base_contract_logs, fetch_base_multi_contract_logs,
@@ -11,11 +14,14 @@ use db::{OpenCompetitionV2IndexerAgreement, PostgresStore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenCompetitionV2ShadowConfig {
     pub indexer: OpenCompetitionV2IndexerConfig,
     pub shadow_rpc_url: String,
+    pub request_delay_ms: u64,
 }
 
 impl OpenCompetitionV2ShadowConfig {
@@ -36,9 +42,18 @@ impl OpenCompetitionV2ShadowConfig {
                 "the V2 shadow RPC must be independent from the primary indexer RPC"
             ));
         }
+        let request_delay_ms = lookup("OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS")
+            .filter(|value| nonempty(value))
+            .map(|value| {
+                parse_u64_env("OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS", &value)
+            })
+            .transpose()?
+            .unwrap_or(250)
+            .min(5_000);
         Ok(Self {
             indexer,
             shadow_rpc_url,
+            request_delay_ms,
         })
     }
 }
@@ -189,6 +204,7 @@ async fn fetch_shadow_events(
                 .result,
         )?;
         events.extend(decode_open_competition_v2_logs(logs)?);
+        pace_shadow_requests(config).await;
         request_id = request_id.saturating_add(1);
         if end == u64::MAX {
             break;
@@ -223,6 +239,7 @@ async fn fetch_shadow_events(
                     .result,
             )?;
             events.extend(decode_open_competition_v2_logs(logs)?);
+            pace_shadow_requests(config).await;
             request_id = request_id.saturating_add(1);
             if end == u64::MAX {
                 break;
@@ -234,6 +251,12 @@ async fn fetch_shadow_events(
     let mut seen = HashSet::new();
     events.retain(|event| seen.insert(event.log_key.clone()));
     Ok(events)
+}
+
+async fn pace_shadow_requests(config: &OpenCompetitionV2ShadowConfig) {
+    if config.request_delay_ms > 0 {
+        sleep(Duration::from_millis(config.request_delay_ms)).await;
+    }
 }
 
 fn query_end(from_block: u64, to_block: u64, max_blocks: u64) -> u64 {
@@ -280,6 +303,27 @@ mod tests {
             _ => None,
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn shadow_request_delay_is_bounded() {
+        let result = OpenCompetitionV2ShadowConfig::from_lookup(|key| match key {
+            "OPEN_COMPETITION_V2_INDEXER_NETWORK" => Some("base-sepolia".to_string()),
+            "OPEN_COMPETITION_V2_FACTORY_CONTRACT" => {
+                Some("0x1111111111111111111111111111111111111111".to_string())
+            }
+            "OPEN_COMPETITION_V2_INDEXER_RPC_URL" => {
+                Some("https://primary.example".to_string())
+            }
+            "OPEN_COMPETITION_V2_SHADOW_RPC_URL" => {
+                Some("https://shadow.example".to_string())
+            }
+            "OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK" => Some("1".to_string()),
+            "OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS" => Some("9999".to_string()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(result.request_delay_ms, 5_000);
     }
 
     #[test]

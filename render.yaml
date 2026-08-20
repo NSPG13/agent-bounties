@@ -486,6 +486,8 @@ services:
         value: "50"
       - key: OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS
         value: "30"
+      - key: OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS
+        value: "250"
       - fromGroup: agent-bounties-base
       - fromGroup: agent-bounties-v2-beta3
 
