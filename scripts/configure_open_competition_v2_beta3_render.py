@@ -278,6 +278,20 @@ def named_group(client: render.RenderClient, owner_id: str, name: str) -> dict[s
     return client.get_env_group(group["id"])
 
 
+def ensure_base_mainnet_transaction_rpc(
+    client: render.RenderClient, base_group: dict[str, Any], primary_rpc_url: str
+) -> dict[str, Any]:
+    require(primary_rpc_url.startswith("https://"), "Base mainnet transaction RPC must use HTTPS")
+    record = client.ensure_env_group_env_var(
+        base_group, "BASE_MAINNET_RPC_URL", primary_rpc_url
+    )
+    return {
+        "group": BASE_GROUP,
+        "key": "BASE_MAINNET_RPC_URL",
+        "changed": bool(record["changed"]),
+    }
+
+
 def ensure_v2_group(
     client: render.RenderClient,
     owner_id: str,
@@ -490,7 +504,13 @@ def deploy(
             )
         client.disable_native_auto_deploy(service)
 
-    changes = []
+    changes = [
+        ensure_base_mainnet_transaction_rpc(
+            client,
+            base_group,
+            environment["OPEN_COMPETITION_V2_INDEXER_RPC_URL"],
+        )
+    ]
     for key, value in environment.items():
         record = client.ensure_env_group_env_var(v2_group, key, value)
         changes.append({"group": V2_GROUP, "key": key, "changed": bool(record["changed"])})

@@ -28,6 +28,27 @@ def runtime() -> dict:
 
 
 class Beta3RenderTests(unittest.TestCase):
+    def test_transaction_rpc_is_bound_to_the_preflighted_primary(self):
+        client = mock.Mock()
+        client.ensure_env_group_env_var.return_value = {"changed": True}
+        group = {"id": "evg-base"}
+
+        result = MODULE.ensure_base_mainnet_transaction_rpc(
+            client, group, "https://primary.example"
+        )
+
+        client.ensure_env_group_env_var.assert_called_once_with(
+            group, "BASE_MAINNET_RPC_URL", "https://primary.example"
+        )
+        self.assertEqual(
+            result,
+            {
+                "group": MODULE.BASE_GROUP,
+                "key": "BASE_MAINNET_RPC_URL",
+                "changed": True,
+            },
+        )
+
     def test_rpc_preflight_requires_archive_logs_and_common_safe_block(self):
         calls = []
 
