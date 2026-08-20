@@ -6719,6 +6719,7 @@ impl PostgresStore {
               WHERE state IN ('paid', 'proving', 'relaying', 'refund_due')
                 AND (lease_expires_at IS NULL OR lease_expires_at <= now())
               ORDER BY
+                updated_at,
                 CASE state
                   WHEN 'refund_due' THEN 0
                   WHEN 'relaying' THEN 1
