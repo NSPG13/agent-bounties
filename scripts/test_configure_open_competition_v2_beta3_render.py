@@ -51,12 +51,12 @@ class Beta3RenderTests(unittest.TestCase):
 
         self.assertTrue(result["passed"])
         self.assertEqual(result["archive_query_from_block"], 123)
-        self.assertEqual(result["archive_query_to_block"], 1122)
+        self.assertEqual(result["archive_query_to_block"], 172)
         self.assertEqual(result["common_safe_block"], 198)
         log_calls = [call for call in calls if call[1] == "eth_getLogs"]
         self.assertEqual(len(log_calls), 2)
         self.assertEqual(log_calls[0][2][0]["fromBlock"], hex(123))
-        self.assertEqual(log_calls[0][2][0]["toBlock"], hex(1122))
+        self.assertEqual(log_calls[0][2][0]["toBlock"], hex(172))
         self.assertEqual({call[4] for call in calls}, {"primary", "shadow"})
 
     def test_rpc_preflight_rejects_provider_log_errors(self):
@@ -298,7 +298,7 @@ class Beta3RenderTests(unittest.TestCase):
             MODULE.WORKER_ENVIRONMENT[
                 "agent-bounties-open-competition-v2-beta3-indexer"
             ]["OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY"],
-            "1000",
+            "50",
         )
 
     def test_environment_rejects_shared_rpc_and_insecure_prover(self):

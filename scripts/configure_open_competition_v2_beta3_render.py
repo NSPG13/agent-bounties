@@ -23,7 +23,7 @@ import render_deploy_recovery as render
 V2_GROUP = "agent-bounties-v2-beta3"
 RELAYER_GROUP = "agent-bounties-x402-relayer"
 BASE_GROUP = "agent-bounties-base"
-RPC_LOG_BATCH_SIZE = 1_000
+RPC_LOG_BATCH_SIZE = 50
 V2_SERVICES = (
     render.ServiceSpec("agent-bounties-api", "web_service", "https://api.agentbounties.app/health"),
     render.ServiceSpec("agent-bounties-mcp", "web_service", "https://mcp.agentbounties.app/health"),
