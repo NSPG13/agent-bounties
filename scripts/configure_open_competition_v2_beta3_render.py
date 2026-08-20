@@ -23,6 +23,7 @@ import render_deploy_recovery as render
 V2_GROUP = "agent-bounties-v2-beta3"
 RELAYER_GROUP = "agent-bounties-x402-relayer"
 BASE_GROUP = "agent-bounties-base"
+RPC_LOG_BATCH_SIZE = 1_000
 V2_SERVICES = (
     render.ServiceSpec("agent-bounties-api", "web_service", "https://api.agentbounties.app/health"),
     render.ServiceSpec("agent-bounties-mcp", "web_service", "https://mcp.agentbounties.app/health"),
@@ -45,7 +46,7 @@ WORKER_ENVIRONMENT = {
         "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
         "OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS": "15",
         "OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS": "2",
-        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": str(RPC_LOG_BATCH_SIZE),
         "BASE_INDEXER_RETRY_INITIAL_SECONDS": "5",
         "BASE_INDEXER_RETRY_MAX_SECONDS": "120",
         "BASE_INDEXER_EXIT_AFTER_FAILURES": "8",
@@ -56,7 +57,7 @@ WORKER_ENVIRONMENT = {
         "RUST_LOG": "info",
         "BASE_INDEXER_PROTOCOL": "open-competition-v2-shadow",
         "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
-        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": "2000",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": str(RPC_LOG_BATCH_SIZE),
         "OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS": "30",
     },
     "agent-bounties-open-competition-v2-beta3-keeper": {
@@ -92,7 +93,9 @@ def require(condition: bool, message: str) -> None:
         raise Beta3RenderError(message)
 
 
-def rpc_call(url: str, method: str, params: list[Any], request_id: int) -> Any:
+def rpc_call(
+    url: str, method: str, params: list[Any], request_id: int, *, role: str
+) -> Any:
     payload = json.dumps(
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
         separators=(",", ":"),
@@ -110,12 +113,16 @@ def rpc_call(url: str, method: str, params: list[Any], request_id: int) -> Any:
             value = json.loads(response.read())
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
         raise Beta3RenderError(
-            f"{method} RPC preflight failed: {type(error).__name__}"
+            f"{role} {method} RPC preflight failed: {type(error).__name__}"
         ) from None
-    require(isinstance(value, dict), f"{method} RPC response must be an object")
+    require(isinstance(value, dict), f"{role} {method} RPC response must be an object")
     error = value.get("error")
-    require(error is None, f"{method} RPC preflight returned an error")
-    require("result" in value, f"{method} RPC preflight omitted result")
+    if error is not None:
+        code = error.get("code") if isinstance(error, dict) else "unknown"
+        raise Beta3RenderError(
+            f"{role} {method} RPC preflight returned error code={code}"
+        )
+    require("result" in value, f"{role} {method} RPC preflight omitted result")
     return value["result"]
 
 
@@ -123,11 +130,15 @@ def preflight_rpc_pair(
     runtime: dict[str, Any], primary_rpc_url: str, shadow_rpc_url: str
 ) -> dict[str, Any]:
     deployment_block = runtime["deployment_block"]
-    query_end = deployment_block + 1_999
+    query_end = deployment_block + RPC_LOG_BATCH_SIZE - 1
     factory = runtime["factory_contract"].lower()
     safe_blocks: list[dict[str, Any]] = []
-    for offset, url in enumerate((primary_rpc_url, shadow_rpc_url)):
-        chain_id = rpc_call(url, "eth_chainId", [], 910_000 + offset * 10)
+    for offset, (role, url) in enumerate(
+        (("primary", primary_rpc_url), ("shadow", shadow_rpc_url))
+    ):
+        chain_id = rpc_call(
+            url, "eth_chainId", [], 910_000 + offset * 10, role=role
+        )
         require(chain_id == "0x2105", "RPC preflight returned a non-Base-mainnet chain id")
         logs = rpc_call(
             url,
@@ -140,10 +151,15 @@ def preflight_rpc_pair(
                 }
             ],
             910_001 + offset * 10,
+            role=role,
         )
         require(isinstance(logs, list), "RPC preflight logs result must be a list")
         safe = rpc_call(
-            url, "eth_getBlockByNumber", ["safe", False], 910_002 + offset * 10
+            url,
+            "eth_getBlockByNumber",
+            ["safe", False],
+            910_002 + offset * 10,
+            role=role,
         )
         require(isinstance(safe, dict), "RPC preflight safe block must be an object")
         try:
@@ -155,12 +171,15 @@ def preflight_rpc_pair(
 
     common = min(item["number"] for item in safe_blocks)
     common_hashes = []
-    for offset, url in enumerate((primary_rpc_url, shadow_rpc_url)):
+    for offset, (role, url) in enumerate(
+        (("primary", primary_rpc_url), ("shadow", shadow_rpc_url))
+    ):
         block = rpc_call(
             url,
             "eth_getBlockByNumber",
             [hex(common), False],
             910_003 + offset * 10,
+            role=role,
         )
         require(isinstance(block, dict), "RPC preflight common block must be an object")
         common_hashes.append(str(block.get("hash", "")).lower())
