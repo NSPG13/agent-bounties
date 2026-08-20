@@ -186,6 +186,37 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
     def test_archive_transport_caps_are_independent_of_snapshot_limits(self) -> None:
         self.assertEqual(pipeline.MAX_GITHUB_SOURCE_ARCHIVE_BYTES, 256 * 1024 * 1024)
         self.assertEqual(pipeline.MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES, 128 * 1024 * 1024)
+        self.assertEqual(
+            pipeline.MAX_GITHUB_SOURCE_ARCHIVE_UNCOMPRESSED_BYTES,
+            512 * 1024 * 1024,
+        )
+        self.assertEqual(
+            pipeline.MAX_GITHUB_BENCHMARK_ARCHIVE_UNCOMPRESSED_BYTES,
+            256 * 1024 * 1024,
+        )
+
+    def test_unselected_member_cannot_exceed_whole_archive_budget(self) -> None:
+        value = archive(
+            [
+                ("repo-root/unrelated/large.bin", b"0123456789", "file"),
+                ("repo-root/bench/test.txt", b"expected", "file"),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(
+                pipeline.PipelineError,
+                "archive exceeds the uncompressed input limit",
+            ):
+                pipeline.extract_snapshot(
+                    value,
+                    root,
+                    subdirectory="bench",
+                    max_bytes=100,
+                    max_files=1,
+                    max_archive_bytes=9,
+                )
+            self.assertFalse((root / "test.txt").exists())
 
     def test_archive_links_traversal_and_size_overrun_fail_closed(self) -> None:
         cases = [
