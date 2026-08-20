@@ -96,6 +96,41 @@ def standing_meta_report(
     return target
 
 
+def open_competition_v2_report(*, count: int = 5) -> Path:
+    data = json.loads(
+        (FIXTURES / "bounty_inventory_claimable_below.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    data["observed_at"] = datetime.now(timezone.utc).isoformat()
+    data["verified_claimable_bounties"] = []
+    data["open_competition_v2_status"] = "verified"
+    data["verified_open_competition_v2_bounties"] = [
+        {
+            "id": "0x" + f"{index + 1:02x}" * 32,
+            "contract": "0x" + f"{index + 17:02x}" * 20,
+            "solver_reward_minor": 3_000_000,
+            "hosted_net_prize_if_win_minor": 2_890_000,
+            "claim_bond_minor": 0,
+            "currency": "usdc",
+            "status": "claimable",
+            "winner_mode": "first_proven",
+            "proof_system": "groth16",
+            "proof_deadline": int(datetime.now(timezone.utc).timestamp()) + 86_400,
+            "accepted_entries": 0,
+            "evidence": "confirmed_canonical_open_competition_v2",
+            "observed_safe_block": 50_223_549,
+            "source_url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory",
+            "proof_quote_url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/proof-quotes",
+        }
+        for index in range(count)
+    ]
+    target = ROOT / "target" / "tmp" / f"open-competition-v2-{count}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data), encoding="utf-8")
+    return target
+
+
 class BountyInventoryGuardTests(unittest.TestCase):
     def test_rpc_probe_uses_failover_pool_and_redacts_credentials(self) -> None:
         credentialed = "https://user:pass@rpc.example/v2/secret?api_key=hidden"
@@ -123,22 +158,22 @@ class BountyInventoryGuardTests(unittest.TestCase):
             max_retries=2,
         )
 
-    def test_default_standing_meta_floor_requires_five(self) -> None:
+    def test_default_standing_meta_floor_is_one_with_two_item_buffer(self) -> None:
         passing = run_guard(
             "--fixture",
             str(FIXTURES / "bounty_inventory_above.json"),
             "--threshold",
             "5",
             "--claimable-report",
-            str(standing_meta_report(count=5)),
+            str(standing_meta_report(count=1)),
             "--fail-below",
             use_meta_defaults=True,
         )
         self.assertEqual(passing.returncode, 0, passing.stderr + passing.stdout)
         payload = json.loads(passing.stdout.split("--- JSON ---", 1)[1])
-        self.assertEqual(payload["meta_threshold"], 5)
-        self.assertEqual(payload["meta_replenishment_target"], 5)
-        self.assertEqual(payload["verified_meta_claimable_count"], 5)
+        self.assertEqual(payload["meta_threshold"], 1)
+        self.assertEqual(payload["meta_replenishment_target"], 2)
+        self.assertEqual(payload["verified_meta_claimable_count"], 1)
 
         below = run_guard(
             "--fixture",
@@ -146,14 +181,15 @@ class BountyInventoryGuardTests(unittest.TestCase):
             "--threshold",
             "5",
             "--claimable-report",
-            str(standing_meta_report(count=4)),
+            str(standing_meta_report(count=0)),
             "--fail-below",
             use_meta_defaults=True,
         )
-        self.assertEqual(below.returncode, 2, below.stderr + below.stdout)
+        self.assertEqual(below.returncode, 0, below.stderr + below.stdout)
         payload = json.loads(below.stdout.split("--- JSON ---", 1)[1])
-        self.assertEqual(payload["verified_meta_claimable_count"], 4)
+        self.assertEqual(payload["verified_meta_claimable_count"], 0)
         self.assertTrue(payload["meta_below_threshold"])
+        self.assertFalse(payload["below_threshold"])
 
     def test_claimable_report_accepts_utf8_bom(self) -> None:
         bom_report = current_claimable_report(
@@ -214,7 +250,7 @@ class BountyInventoryGuardTests(unittest.TestCase):
         self.assertEqual(payload["meta_replenishment_count"], 1)
         self.assertFalse(payload["below_threshold"])
 
-    def test_general_inventory_cannot_substitute_for_standing_meta_floor(self) -> None:
+    def test_general_inventory_reports_missing_meta_without_failing_liquidity(self) -> None:
         proc = run_guard(
             "--fixture",
             str(FIXTURES / "bounty_inventory_above.json"),
@@ -228,11 +264,29 @@ class BountyInventoryGuardTests(unittest.TestCase):
             str(current_claimable_report("bounty_inventory_claimable_above.json")),
             "--fail-below",
         )
-        self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
         self.assertEqual(payload["verified_claimable_count"], 5)
         self.assertEqual(payload["verified_meta_claimable_count"], 0)
         self.assertTrue(payload["meta_below_threshold"])
+        self.assertFalse(payload["below_threshold"])
+
+    def test_open_competition_v2_satisfies_general_inventory_floor(self) -> None:
+        proc = run_guard(
+            "--fixture",
+            str(FIXTURES / "bounty_inventory_above.json"),
+            "--threshold",
+            "5",
+            "--claimable-report",
+            str(open_competition_v2_report()),
+            "--fail-below",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        payload = json.loads(proc.stdout.split("--- JSON ---", 1)[1])
+        self.assertEqual(payload["verified_claimable_count"], 5)
+        self.assertEqual(payload["verified_open_competition_v2_count"], 5)
+        self.assertTrue(payload["inventory_evidence_valid"])
+        self.assertFalse(payload["below_threshold"])
 
     def test_spoofed_standing_meta_descriptor_invalidates_evidence(self) -> None:
         proc = run_guard(

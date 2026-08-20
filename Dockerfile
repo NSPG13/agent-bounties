@@ -11,6 +11,7 @@ COPY bounties ./bounties
 COPY contracts ./contracts
 COPY fixtures ./fixtures
 COPY migrations ./migrations
+COPY ops ./ops
 COPY schemas ./schemas
 COPY site ./site
 
