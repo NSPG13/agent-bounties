@@ -137,6 +137,24 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         )
         self.assertNotIn("x402_success_and_refund_canaries_complete", workflow)
 
+    def test_mainnet_canaries_rebuild_cleaned_contract_artifacts(self):
+        for workflow_path in (
+            ".github/workflows/open-competition-v2-beta3-release.yml",
+            ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml",
+        ):
+            workflow = (MODULE.ROOT / workflow_path).read_text(encoding="utf-8")
+            canary = workflow.split("  mainnet-canaries:", 1)[1].split(
+                "  activate-public-beta:", 1
+            )[0]
+            self.assertIn(
+                "foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a",
+                canary,
+            )
+            self.assertIn(
+                "forge build --root contracts/base-escrow --force --ast",
+                canary,
+            )
+
     def test_sepolia_rehearsal_uses_an_isolated_broker(self):
         workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
             encoding="utf-8"
