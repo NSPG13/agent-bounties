@@ -106,6 +106,16 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
             self.text.count('--url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL"'),
             3,
         )
+        self.assertEqual(
+            self.text.count(
+                "python .release-control/scripts/promote_open_competition_v2_beta3_release.py"
+            ),
+            2,
+        )
+        self.assertNotIn(
+            "python scripts/promote_open_competition_v2_beta3_release.py",
+            self.text,
+        )
 
     def test_canonical_interfaces_are_proved_on_the_self_hosted_canary_runner(self):
         canaries = self.text.split("  mainnet-canaries:", 1)[1].split(

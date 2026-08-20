@@ -406,6 +406,7 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
+    observed_subject_hashes: set[str] = set()
     if value.get("schema_version") != "agent-bounties/open-competition-v2-beta3-release-gates-v5":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
@@ -432,11 +433,19 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
             raise ValueError(f"release gate evidence has invalid subject hash: {name}")
         if expected_subject_hash is not None and subject_hash != expected_subject_hash:
             raise ValueError(f"release gate evidence targets another repository subject: {name}")
+        observed_subject_hashes.add(subject_hash)
         if not re.fullmatch(r"0x[0-9a-f]{64}", evidence_hash):
             raise ValueError(f"release gate evidence has invalid hash: {name}")
         if not isinstance(uri, str) or not uri.startswith("https://"):
             raise ValueError(f"release gate evidence requires an HTTPS URI: {name}")
     expected_risk = keccak256(value["beta_risk_preimage"].encode())
+    if len(observed_subject_hashes) > 1:
+        raise ValueError("completed release gates target multiple repository subjects")
+    value["subject_hash"] = (
+        expected_subject_hash
+        if expected_subject_hash is not None
+        else next(iter(observed_subject_hashes), None)
+    )
     value["beta_risk_hash"] = expected_risk
     value["prelaunch_complete"] = all(gates[name] for name in PRELAUNCH_GATE_NAMES)
     value["public_beta_launch_complete"] = all(
