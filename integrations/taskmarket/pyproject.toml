@@ -2,3 +2,9 @@
 name = "taskmarket-adapter"
 version = "0.1.0"
 requires-python = ">=3.9"
+
+[project.scripts]
+taskmarket-mcp = "taskmarket_mcp_server:main"
+
+[project.optional-dependencies]
+dev = ["pytest"]
