@@ -56,7 +56,7 @@ jobs:
             --required-actor 0x54a188c7ef1e295b3e0f3fb2d33010b18679687b \
             --required-actor 0x6ab2e7d3f38236411c6d848dcd5cc8710efc359e \
             --output target/beta3-sepolia-rehearsal-recovery.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-sepolia-rehearsal-recovery-${{ github.sha }}-${{ github.run_attempt }}
           path: target/beta3-sepolia-rehearsal-recovery.json

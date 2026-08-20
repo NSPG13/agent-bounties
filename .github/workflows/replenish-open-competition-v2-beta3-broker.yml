@@ -41,7 +41,7 @@ jobs:
             .final_usdc_base_units >= 330000 and
             .final_eth_wei >= 100000000000000
           ' target/beta3-broker-refund-reserve.json >/dev/null
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-broker-refund-reserve
           path: target/beta3-broker-refund-reserve.json

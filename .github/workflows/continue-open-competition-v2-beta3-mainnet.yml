@@ -124,7 +124,7 @@ jobs:
             --evidence target/mainnet-deployment-evidence.json \
             --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --source-commit "$RELEASE_SOURCE_COMMIT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-deployment-continuation
           path: |
@@ -226,7 +226,7 @@ jobs:
               "gpu_proving_enabled": False,
           }, open("target/prover-deployment.json", "w"), sort_keys=True)
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-production-prover-continuation
           path: |
@@ -320,7 +320,7 @@ jobs:
             --url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL" \
             --runtime target/mainnet-broker.runtime.json --expect-broker true \
             --expect-public false --output target/production-broker-runtime.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-production-control-plane-continuation
           path: |
@@ -542,7 +542,7 @@ jobs:
           python scripts/record_open_competition_v2_beta3_gate.py --manifest target/release-gates.json \
             --gate fresh_agent_wallet_flow_complete --evidence target/mainnet-fresh-agent-flow.json \
             --uri "$evidence_uri" --source-commit "$RELEASE_SOURCE_COMMIT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-canaries-continuation
           path: |
@@ -658,7 +658,7 @@ jobs:
             --url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL" \
             --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
             --expect-public true --output target/public-beta-activation.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-public-activation-continuation
           path: |

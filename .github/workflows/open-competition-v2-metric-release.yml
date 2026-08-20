@@ -62,7 +62,7 @@ jobs:
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: metric-evidence-${{ matrix.profile }}-${{ matrix.builder }}
           path: programs/${{ matrix.profile }}/evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl
@@ -109,7 +109,7 @@ jobs:
           python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
       - name: Run adversarial metric corpus
         run: cargo test --locked -p competition-metric-core
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.profile }}-reviewed-release
           path: release/${{ matrix.profile }}.json
