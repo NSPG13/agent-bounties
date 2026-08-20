@@ -971,6 +971,10 @@ pub(crate) async fn pay_proof_job(
         let transaction = match result {
             Ok(transaction) => transaction,
             Err(ProofPaymentBroadcastError::Chain(error)) => {
+                eprintln!(
+                    "open_competition_v2 proof payment relay did not broadcast: job_id={} error={error}",
+                    job.id
+                );
                 if let Some(reason) = retryable_proof_payment_broadcast_error(&error) {
                     return proof_job_payment_retry_response(&job, reason);
                 }
@@ -1357,7 +1361,20 @@ fn retryable_proof_payment_broadcast_error(error: &ChainBaseError) -> Option<&'s
         {
             Some("authorization_not_yet_visible")
         }
+        ChainBaseError::RelayerSimulation(message)
+            if [
+                "authorization is expired",
+                "invalid signature",
+                "authorization is used",
+            ]
+            .iter()
+            .any(|terminal| message.contains(terminal)) =>
+        {
+            None
+        }
+        ChainBaseError::RelayerSimulation(_) => Some("relayer_simulation_retry"),
         ChainBaseError::RelayerProvider(_) => Some("relayer_provider_retry"),
+        ChainBaseError::RelayerGasLimitExceeded { .. } => Some("gas_limit_retry"),
         ChainBaseError::RelayerFeeCapExceeded { .. } => Some("fee_cap_retry"),
         ChainBaseError::RelayerInsufficientBalance { .. } => Some("gas_reserve_retry"),
         _ => None,
@@ -2646,6 +2663,19 @@ mod tests {
                 required: 2,
             }),
             Some("gas_reserve_retry")
+        );
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerSimulation(
+                "execution reverted without decoded reason".to_string(),
+            )),
+            Some("relayer_simulation_retry")
+        );
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerGasLimitExceeded {
+                estimated: 2,
+                maximum: 1,
+            }),
+            Some("gas_limit_retry")
         );
     }
 
