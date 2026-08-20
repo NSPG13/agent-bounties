@@ -300,6 +300,12 @@ class Beta3RenderTests(unittest.TestCase):
             ]["OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY"],
             "50",
         )
+        self.assertEqual(
+            MODULE.WORKER_ENVIRONMENT[
+                "agent-bounties-open-competition-v2-beta3-shadow"
+            ]["OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS"],
+            "250",
+        )
 
     def test_environment_rejects_shared_rpc_and_insecure_prover(self):
         common = dict(
