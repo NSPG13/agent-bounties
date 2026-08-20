@@ -1,6 +1,5 @@
 use super::{
-    nonempty, parse_u64_env, OpenCompetitionV2IndexerConfig,
-    AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE,
+    nonempty, parse_u64_env, OpenCompetitionV2IndexerConfig, AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE,
 };
 use anyhow::{anyhow, Context};
 use chain_base::{
@@ -44,9 +43,7 @@ impl OpenCompetitionV2ShadowConfig {
         }
         let request_delay_ms = lookup("OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS")
             .filter(|value| nonempty(value))
-            .map(|value| {
-                parse_u64_env("OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS", &value)
-            })
+            .map(|value| parse_u64_env("OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS", &value))
             .transpose()?
             .unwrap_or(250)
             .min(5_000);
@@ -312,12 +309,8 @@ mod tests {
             "OPEN_COMPETITION_V2_FACTORY_CONTRACT" => {
                 Some("0x1111111111111111111111111111111111111111".to_string())
             }
-            "OPEN_COMPETITION_V2_INDEXER_RPC_URL" => {
-                Some("https://primary.example".to_string())
-            }
-            "OPEN_COMPETITION_V2_SHADOW_RPC_URL" => {
-                Some("https://shadow.example".to_string())
-            }
+            "OPEN_COMPETITION_V2_INDEXER_RPC_URL" => Some("https://primary.example".to_string()),
+            "OPEN_COMPETITION_V2_SHADOW_RPC_URL" => Some("https://shadow.example".to_string()),
             "OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK" => Some("1".to_string()),
             "OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS" => Some("9999".to_string()),
             _ => None,
