@@ -91,6 +91,41 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
                 expected_calls,
             )
 
+    def test_runtime_readiness_uses_render_origin_and_current_controller(self):
+        self.assertEqual(
+            self.workflow["env"]["OPEN_COMPETITION_V2_RUNTIME_READINESS_URL"],
+            "https://agent-bounties-api.onrender.com/v1/base/open-competition-v2-beta3/release",
+        )
+        self.assertEqual(
+            self.text.count(
+                "python .release-control/scripts/wait_open_competition_v2_beta3_runtime.py"
+            ),
+            3,
+        )
+        self.assertEqual(
+            self.text.count('--url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL"'),
+            3,
+        )
+
+    def test_canonical_interfaces_are_proved_on_the_self_hosted_canary_runner(self):
+        canaries = self.text.split("  mainnet-canaries:", 1)[1].split(
+            "  activate-public-beta:", 1
+        )[0]
+        activation = self.text.split("  activate-public-beta:", 1)[1]
+        self.assertIn(
+            "python scripts/verify_open_competition_v2_beta3_interfaces.py",
+            canaries,
+        )
+        self.assertIn("target/mainnet-canonical-interfaces.json", canaries)
+        self.assertIn(
+            "cp target/mainnet-canaries/mainnet-canonical-interfaces.json target/production-interfaces.json",
+            activation,
+        )
+        self.assertNotIn(
+            "python scripts/verify_open_competition_v2_beta3_interfaces.py",
+            activation,
+        )
+
     def test_only_successful_frozen_sepolia_evidence_can_continue(self):
         self.assertIn("run-id: ${{ inputs.sepolia_run_id }}", self.text)
         self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)

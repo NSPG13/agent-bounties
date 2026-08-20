@@ -24,6 +24,7 @@ env:
   SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
   SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
+  OPEN_COMPETITION_V2_RUNTIME_READINESS_URL: https://agent-bounties-api.onrender.com/v1/base/open-competition-v2-beta3/release
 
 jobs:
   deploy-mainnet:
@@ -267,7 +268,8 @@ jobs:
             --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
             --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
             --output target/render-prebroker.json
-          python scripts/wait_open_competition_v2_beta3_runtime.py \
+          python .release-control/scripts/wait_open_competition_v2_beta3_runtime.py \
+            --url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL" \
             --runtime target/mainnet-prebroker.runtime.json --expect-broker false \
             --expect-public false --output target/production-indexer-agreement.json
           cp target/mainnet-deployment/release-gates.json target/release-gates.json
@@ -297,7 +299,8 @@ jobs:
             --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
             --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
             --output target/render-broker-enabled.json
-          python scripts/wait_open_competition_v2_beta3_runtime.py \
+          python .release-control/scripts/wait_open_competition_v2_beta3_runtime.py \
+            --url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL" \
             --runtime target/mainnet-broker.runtime.json --expect-broker true \
             --expect-public false --output target/production-broker-runtime.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -471,6 +474,9 @@ jobs:
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --output target/mainnet-x402-success.json
+          python scripts/verify_open_competition_v2_beta3_interfaces.py \
+            --runtime target/production-control-plane/mainnet-broker.runtime.json \
+            --output target/mainnet-canonical-interfaces.json
           python scripts/verify_open_competition_v2_fresh_agent_flow.py \
             --rehearsal target/mainnet-canaries.json --x402-success target/mainnet-x402-success.json \
             --output target/mainnet-fresh-agent-flow.json
@@ -527,6 +533,7 @@ jobs:
             target/mainnet-x402-success.json
             target/mainnet-x402-refund.json
             target/mainnet-accounting.json
+            target/mainnet-canonical-interfaces.json
             target/mainnet-fresh-agent-flow.json
             target/mainnet-broker-reserve-before.json
             target/mainnet-broker-reserve-after.json
@@ -584,9 +591,7 @@ jobs:
           BROKER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"]).address.lower())')"
           KEEPER="${BASE_KEEPER_ADDRESS,,}"
           DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
-          python scripts/verify_open_competition_v2_beta3_interfaces.py \
-            --runtime target/production-control-plane/mainnet-broker.runtime.json \
-            --output target/production-interfaces.json
+          cp target/mainnet-canaries/mainnet-canonical-interfaces.json target/production-interfaces.json
           cp target/mainnet-canaries/release-gates.json target/release-gates.json
           evidence_uri="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
@@ -630,7 +635,8 @@ jobs:
             --prover-url "$OPEN_COMPETITION_V2_PROVER_URL" --broker-address "$BROKER" \
             --keeper-address "$KEEPER" --deployer-address "$DEPLOYER" \
             --output target/render-public-beta.json
-          python scripts/wait_open_competition_v2_beta3_runtime.py \
+          python .release-control/scripts/wait_open_competition_v2_beta3_runtime.py \
+            --url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL" \
             --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
             --expect-public true --output target/public-beta-activation.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
