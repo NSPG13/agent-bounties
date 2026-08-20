@@ -23,6 +23,7 @@ class ProductionProverRepairWorkflowTests(unittest.TestCase):
     def test_service_pins_local_image_and_required_group(self) -> None:
         text = (ROOT / "ops/open-competition-v2-prover.service").read_text(encoding="utf-8")
         self.assertIn("SupplementaryGroups=docker", text)
+        self.assertIn("Environment=TMPDIR=/var/lib/agent-bounties-prover/tmp", text)
         self.assertIn(
             "ExecStartPre=/usr/bin/docker image inspect ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5",
             text,

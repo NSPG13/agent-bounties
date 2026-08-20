@@ -44,6 +44,10 @@ jobs:
             --install-root /opt/agent-bounties/circuits \
             --circuit-version "$SP1_SAFE_CIRCUIT_VERSION" \
             --output /tmp/open-competition-v2-prover-assets.json
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 \
+            /var/lib/agent-bounties-prover/tmp
+          sudo install -m 0755 scripts/open_competition_v2_prover_service.py \
+            /opt/agent-bounties/scripts/open_competition_v2_prover_service.py
           sudo install -m 0644 ops/open-competition-v2-prover.service \
             /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
           sudo SP1_GNARK_RUNTIME_IMAGE="$SP1_GNARK_RUNTIME_IMAGE" python3 - <<'PY'
@@ -91,6 +95,18 @@ jobs:
           jq -e '.passed == true and .public_values_match == true and .money_moved == false' \
             target/production-prover-rehearsal.json >/dev/null
 
+      - name: Collect sanitized prover diagnostics
+        if: failure()
+        run: |
+          sudo journalctl \
+            -u agent-bounties-open-competition-v2-prover.service \
+            --since "20 minutes ago" \
+            --no-pager \
+            -o cat \
+            | grep -E '"event":"prover_(subprocess|internal)_failed"' \
+            | tail -200 \
+            > target/prover-service-failure.log || true
+
       - name: Upload repair evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -100,5 +116,6 @@ jobs:
             target/prover-assets.json
             target/prover-health.json
             target/production-prover-rehearsal.json
+            target/prover-service-failure.log
           if-no-files-found: error
           retention-days: 365
