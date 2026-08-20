@@ -28,6 +28,48 @@ def runtime() -> dict:
 
 
 class Beta3RenderTests(unittest.TestCase):
+    def test_rpc_preflight_requires_archive_logs_and_common_safe_block(self):
+        calls = []
+
+        def rpc(url, method, params, request_id):
+            calls.append((url, method, params, request_id))
+            if method == "eth_chainId":
+                return "0x2105"
+            if method == "eth_getLogs":
+                return []
+            if params[0] == "safe":
+                number = 200 if "primary" in url else 198
+                return {"number": hex(number), "hash": "0x" + "aa" * 32}
+            return {"number": params[0], "hash": "0x" + "bb" * 32}
+
+        value = runtime()
+        value["deployment_block"] = 123
+        with mock.patch.object(MODULE, "rpc_call", side_effect=rpc):
+            result = MODULE.preflight_rpc_pair(
+                value, "https://primary.example", "https://shadow.example"
+            )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["archive_query_from_block"], 123)
+        self.assertEqual(result["archive_query_to_block"], 2122)
+        self.assertEqual(result["common_safe_block"], 198)
+        log_calls = [call for call in calls if call[1] == "eth_getLogs"]
+        self.assertEqual(len(log_calls), 2)
+        self.assertEqual(log_calls[0][2][0]["fromBlock"], hex(123))
+        self.assertEqual(log_calls[0][2][0]["toBlock"], hex(2122))
+
+    def test_rpc_preflight_rejects_provider_log_errors(self):
+        value = runtime()
+        with mock.patch.object(
+            MODULE,
+            "rpc_call",
+            side_effect=["0x2105", MODULE.Beta3RenderError("eth_getLogs RPC preflight returned an error")],
+        ):
+            with self.assertRaisesRegex(MODULE.Beta3RenderError, "eth_getLogs"):
+                MODULE.preflight_rpc_pair(
+                    value, "https://primary.example", "https://shadow.example"
+                )
+
     def test_missing_group_link_is_attached_and_verified(self):
         spec = MODULE.V2_SERVICES[0]
         service = {"id": "srv-api", "name": spec.name}
