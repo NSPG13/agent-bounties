@@ -264,6 +264,12 @@ def reconcile_payment(
     return payment
 
 
+def resumed_payment(job: dict[str, Any]) -> dict[str, Any]:
+    evidence = job.get("payment_evidence")
+    require(isinstance(evidence, dict), "resumed proof job lacks canonical payment evidence")
+    return {"payment_evidence": evidence}
+
+
 def wait_for_state(
     api: str,
     worker: Path | None,
@@ -360,8 +366,7 @@ def main() -> int:
         job_id = args.proof_job_id
         resumed = get_job(api, job_id)
         validate_resumable_job(resumed, spec, args.network)
-        payment_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment"
-        payment = reconcile_payment(payment_url, deadline)
+        payment = resumed_payment(resumed)
     else:
         quote_payload = build_quote_payload(spec, args.network)
         _, quote, _ = request_json(

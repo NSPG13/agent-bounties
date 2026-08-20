@@ -62,6 +62,13 @@ class X402RehearsalTests(unittest.TestCase):
         self.assertIsNone(request.call_args_list[1].kwargs.get("headers"))
         self.assertIsNone(request.call_args_list[2].kwargs.get("headers"))
 
+    def test_resumed_job_payment_evidence_needs_no_payment_endpoint_call(self):
+        job = {"payment_evidence": {"transaction_hash": "0x" + "11" * 32}}
+        payment = MODULE.resumed_payment(job)
+        self.assertIs(payment["payment_evidence"], job["payment_evidence"])
+        with self.assertRaises(MODULE.X402RehearsalError):
+            MODULE.resumed_payment({})
+
     def test_payment_header_is_standard_exact_eip3009(self):
         actor = Account.from_key("0x" + "11" * 32)
         challenge = {
