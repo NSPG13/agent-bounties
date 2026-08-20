@@ -86,6 +86,24 @@
       .includes(item.competition_mode);
   }
 
+  function isBytes32(value) {
+    return /^0x[0-9a-f]{64}$/i.test(String(value || ""));
+  }
+
+  function hasReadyEvidence(item) {
+    const evidence = item.evidence_requirements || {};
+    if (evidence.protocol_version === "agent-bounties/open-competition-v2-beta3") {
+      return item.source_status === "active"
+        && ["first_proven", "best_score"].includes(item.competition_mode)
+        && item.next_action?.action === "quote_open_competition_v2_proof"
+        && isBytes32(evidence.execution_policy_hash)
+        && isBytes32(evidence.verification_policy_hash)
+        && isBytes32(evidence.settlement_policy_hash)
+        && isBytes32(evidence.program_vkey);
+    }
+    return item.source_status === "claimable" && isBytes32(item.terms_hash);
+  }
+
   function actionHref(item) {
     if (["first_proven", "best_score"].includes(item.competition_mode)) {
       return safePublicUrl(item.source_url) || safePublicUrl(item.public_url);
@@ -345,12 +363,11 @@
 
   function isReadyToEarn(item) {
     return item.source_type === "canonical_base"
-      && item.source_status === "claimable"
       && item.work_state === "claimable"
       && item.payment_state === "escrowed"
       && item.payment_committed === true
       && item.verification_ready === true
-      && Boolean(item.terms_hash)
+      && hasReadyEvidence(item)
       && amountValue(item.funded_amount) >= amountValue(item.funding_target)
       && amountValue(item.reward) > 0;
   }
