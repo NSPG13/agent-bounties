@@ -287,7 +287,7 @@ jobs:
             --evidence target/production-broker-reserve.json \
             --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --source-commit "$RELEASE_SOURCE_COMMIT"
-          python scripts/promote_open_competition_v2_beta3_release.py \
+          python .release-control/scripts/promote_open_competition_v2_beta3_release.py \
             --bundle target/mainnet-deployment/mainnet-exact.json \
             --deployment target/mainnet-deployment/mainnet-deployment-evidence.json \
             --gates target/release-gates.json --output target/mainnet-broker.json \
@@ -623,7 +623,7 @@ jobs:
             --manifest target/release-gates.json --gate owner_public_beta_activation_approved \
             --evidence target/owner-public-beta-activation.json --uri "$evidence_uri" \
             --source-commit "$RELEASE_SOURCE_COMMIT" --owner-risk-hash "$RISK_HASH"
-          python scripts/promote_open_competition_v2_beta3_release.py \
+          python .release-control/scripts/promote_open_competition_v2_beta3_release.py \
             --bundle target/mainnet-deployment/mainnet-exact.json \
             --deployment target/mainnet-deployment/mainnet-deployment-evidence.json \
             --gates target/release-gates.json --output target/mainnet-public-beta.json \

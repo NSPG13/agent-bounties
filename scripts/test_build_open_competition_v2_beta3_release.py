@@ -317,6 +317,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             value["evidence"][name] = evidence
         path.write_text(__import__("json").dumps(value), encoding="utf-8")
         gates = MODULE.load_gates(path, self.subject_hash)
+        self.assertEqual(gates["subject_hash"], self.subject_hash)
         self.assertTrue(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
         self.assertFalse(gates["graduation_complete"])
