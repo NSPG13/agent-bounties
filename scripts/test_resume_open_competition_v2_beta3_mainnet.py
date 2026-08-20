@@ -19,15 +19,19 @@ class MainnetResumeWorkflowTests(unittest.TestCase):
         ):
             self.assertRegex(text, rf'(?m)^  {re.escape(key)}: "0x[0-9a-f]+"$')
 
-    def test_resume_is_protected_and_reuses_canonical_funded_competition(self):
+    def test_resume_is_protected_and_replaces_the_terminal_canary(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(text.count("environment: v2-beta2-mainnet"), 2)
         self.assertIn('SOURCE_RUN_ID: "32346174505"', text)
         self.assertIn("open-competition-v2-beta3-mainnet-deployment-continuation", text)
         self.assertIn("open-competition-v2-beta3-production-control-plane-continuation", text)
-        self.assertIn("EXISTING_X402_JOB_ID", text)
+        self.assertIn("CANARY_TEMPLATE_JOB_ID", text)
+        self.assertNotIn("RESUME_X402_JOB_ID", text)
+        self.assertNotIn("--proof-job-id", text)
         self.assertIn("recovery_nonce = str(time.time_ns())", text)
         self.assertIn('"solver_nonce": recovery_nonce', text)
+        self.assertIn('sleep "$((proof_deadline - now + 2))"', text)
+        self.assertIn("--replacement-id 2", text)
         self.assertNotRegex(text, r'"solver_nonce": "\d+"')
         self.assertNotIn("createCompetition(", text)
         self.assertNotIn("approve(address", text)
