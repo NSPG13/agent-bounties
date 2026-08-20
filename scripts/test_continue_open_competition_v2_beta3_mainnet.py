@@ -178,6 +178,22 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
     def test_prover_installs_only_the_verified_local_gnark_alias(self):
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
         self.assertIn("expected_gnark_image_id", self.text)
+        self.assertIn(
+            ".release-control/scripts/install_open_competition_v2_prover_assets.py",
+            self.text,
+        )
+        self.assertIn(
+            "SP1_GROTH16_CIRCUIT_PATH=/opt/agent-bounties/circuits/groth16",
+            self.text,
+        )
+        self.assertIn(
+            "SP1_PLONK_CIRCUIT_PATH=/opt/agent-bounties/circuits/plonk",
+            self.text,
+        )
+        self.assertNotIn(
+            "SP1_GROTH16_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/groth16",
+            self.text,
+        )
         self.assertIn("expected_gnark_cli", self.text)
         self.assertNotIn('docker pull "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
 
