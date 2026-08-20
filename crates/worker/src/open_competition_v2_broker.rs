@@ -965,15 +965,17 @@ async fn find_canonical_refund(
             settlement_token,
             chunk_start,
             Some(chunk_end),
-            vec![
-                authorization_topic.clone(),
-                broker_topic.clone(),
-                nonce_topic.clone(),
-            ],
+            vec![authorization_topic.clone()],
         )?;
         let logs =
             rpc_logs_to_evm_logs(fetch_base_contract_logs(rpc_url, &query, 82).await?.result)?;
-        if let Some(tx_hash) = logs.first().map(|log| log.tx_hash.clone()) {
+        if let Some(tx_hash) = logs
+            .iter()
+            .find(|log| {
+                exact_authorization_used(log, settlement_token, &broker_topic, &nonce_topic)
+            })
+            .map(|log| log.tx_hash.clone())
+        {
             break tx_hash;
         }
         if chunk_end == safe.number {
@@ -1035,16 +1037,11 @@ async fn canonical_refund_from_transaction(
     let has_transfer = logs
         .iter()
         .any(|log| exact_usdc_transfer(log, settlement_token, broker, payer, amount, tx_hash));
-    let authorization_topic = event_topic("AuthorizationUsed(address,bytes32)");
     let broker_topic = address_topic(broker)?;
     let nonce_topic = normalize_word(refund_nonce)?;
-    let has_authorization = logs.iter().any(|log| {
-        log.address.eq_ignore_ascii_case(settlement_token)
-            && log.topics.len() == 3
-            && log.topics[0].eq_ignore_ascii_case(&authorization_topic)
-            && log.topics[1].eq_ignore_ascii_case(&broker_topic)
-            && log.topics[2].eq_ignore_ascii_case(&nonce_topic)
-    });
+    let has_authorization = logs
+        .iter()
+        .any(|log| exact_authorization_used(log, settlement_token, &broker_topic, &nonce_topic));
     if !has_transfer || !has_authorization {
         return Err(anyhow!(
             "refund transaction did not contain the exact authorization and transfer"
@@ -1251,6 +1248,19 @@ fn env_positive_u128(key: &str, default: u128) -> anyhow::Result<u128> {
     Ok(value)
 }
 
+fn exact_authorization_used(
+    log: &EvmLog,
+    token: &str,
+    authorizer_topic: &str,
+    nonce_topic: &str,
+) -> bool {
+    log.address.eq_ignore_ascii_case(token)
+        && log.topics.len() == 3
+        && log.topics[0].eq_ignore_ascii_case(&event_topic("AuthorizationUsed(address,bytes32)"))
+        && log.topics[1].eq_ignore_ascii_case(authorizer_topic)
+        && log.topics[2].eq_ignore_ascii_case(nonce_topic)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1398,8 +1408,11 @@ mod tests {
 
     #[test]
     fn refund_discovery_scans_only_authorization_events() {
+        let token = format!("0x{}", "11".repeat(20));
+        let broker = format!("0x{}", "22".repeat(20));
+        let nonce = format!("0x{}", "33".repeat(32));
         let query = BaseContractLogQuery::new(
-            format!("0x{}", "11".repeat(20)),
+            token.clone(),
             100,
             Some(200),
             vec![event_topic("AuthorizationUsed(address,bytes32)")],
@@ -1412,6 +1425,33 @@ mod tests {
             request.params[0].topics[0][0],
             event_topic("AuthorizationUsed(address,bytes32)")
         );
+        let exact = EvmLog {
+            address: token.clone(),
+            topics: vec![
+                event_topic("AuthorizationUsed(address,bytes32)"),
+                address_topic(&broker).unwrap(),
+                nonce.clone(),
+            ],
+            data: "0x".to_string(),
+            tx_hash: format!("0x{}", "44".repeat(32)),
+            block_number: 101,
+            log_index: 0,
+            occurred_at: None,
+        };
+        assert!(exact_authorization_used(
+            &exact,
+            &token,
+            &address_topic(&broker).unwrap(),
+            &nonce,
+        ));
+        let mut unrelated = exact.clone();
+        unrelated.topics[1] = address_topic(&format!("0x{}", "55".repeat(20))).unwrap();
+        assert!(!exact_authorization_used(
+            &unrelated,
+            &token,
+            &address_topic(&broker).unwrap(),
+            &nonce,
+        ));
     }
 
     #[test]
