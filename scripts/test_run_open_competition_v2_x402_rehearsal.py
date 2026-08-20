@@ -16,6 +16,56 @@ SPEC.loader.exec_module(MODULE)
 
 
 class X402RehearsalTests(unittest.TestCase):
+    def test_fresh_quote_waits_for_active_canonical_projection(self):
+        competition = "0x" + "11" * 20
+        active = {
+            "competitions": [
+                {
+                    "record": {
+                        "projection": {
+                            "competition": competition,
+                            "state": "active",
+                        }
+                    }
+                }
+            ]
+        }
+        with patch.object(
+            MODULE,
+            "request_json",
+            side_effect=[(200, {"competitions": []}, {}), (200, active, {})],
+        ) as request:
+            with patch.object(MODULE.time, "sleep") as sleep:
+                MODULE.wait_for_active_competition(
+                    "https://api.example.test", "base-mainnet", competition, float("inf")
+                )
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(3)
+
+    def test_fresh_quote_rejects_terminal_projection(self):
+        competition = "0x" + "11" * 20
+        inventory = {
+            "competitions": [
+                {
+                    "record": {
+                        "projection": {
+                            "competition": competition,
+                            "state": "expired",
+                        }
+                    }
+                }
+            ]
+        }
+        with patch.object(
+            MODULE, "request_json", return_value=(200, inventory, {})
+        ):
+            with self.assertRaisesRegex(
+                MODULE.X402RehearsalError, "became expired"
+            ):
+                MODULE.wait_for_active_competition(
+                    "https://api.example.test", "base-mainnet", competition, float("inf")
+                )
+
     def test_resumable_job_requires_exact_paid_scope(self):
         spec = {
             "competition": "0x" + "11" * 20,
