@@ -8953,7 +8953,10 @@ fn validate_open_competition_v2_proof_transition(
             "confirmed proof job requires canonical settlement event".to_string(),
         ));
     }
-    if next == OpenCompetitionV2ProofJobState::RefundDue && update.refund_due_at.is_none() {
+    if next == OpenCompetitionV2ProofJobState::RefundDue
+        && expected != OpenCompetitionV2ProofJobState::RefundDue
+        && update.refund_due_at.is_none()
+    {
         return Err(DbError::OpenCompetitionV2Conflict(
             "refund_due proof job requires a refund deadline".to_string(),
         ));
@@ -9366,6 +9369,22 @@ mod tests {
         };
         validate_open_competition_v2_proof_transition(State::Paid, State::RefundDue, &refund_due)
             .unwrap();
+        assert!(validate_open_competition_v2_proof_transition(
+            State::Paid,
+            State::RefundDue,
+            &OpenCompetitionV2ProofJobUpdate::default(),
+        )
+        .is_err());
+        let refund_broadcast = OpenCompetitionV2ProofJobUpdate {
+            refund_tx_hash: Some(format!("0x{}", "33".repeat(32))),
+            ..Default::default()
+        };
+        validate_open_competition_v2_proof_transition(
+            State::RefundDue,
+            State::RefundDue,
+            &refund_broadcast,
+        )
+        .unwrap();
         let refunded = OpenCompetitionV2ProofJobUpdate {
             refund_evidence: Some(
                 serde_json::json!({"transaction_hash": format!("0x{}", "44".repeat(32))}),
