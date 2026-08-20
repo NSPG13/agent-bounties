@@ -31,8 +31,8 @@ class Beta3RenderTests(unittest.TestCase):
     def test_rpc_preflight_requires_archive_logs_and_common_safe_block(self):
         calls = []
 
-        def rpc(url, method, params, request_id):
-            calls.append((url, method, params, request_id))
+        def rpc(url, method, params, request_id, *, role):
+            calls.append((url, method, params, request_id, role))
             if method == "eth_chainId":
                 return "0x2105"
             if method == "eth_getLogs":
@@ -51,19 +51,25 @@ class Beta3RenderTests(unittest.TestCase):
 
         self.assertTrue(result["passed"])
         self.assertEqual(result["archive_query_from_block"], 123)
-        self.assertEqual(result["archive_query_to_block"], 2122)
+        self.assertEqual(result["archive_query_to_block"], 1122)
         self.assertEqual(result["common_safe_block"], 198)
         log_calls = [call for call in calls if call[1] == "eth_getLogs"]
         self.assertEqual(len(log_calls), 2)
         self.assertEqual(log_calls[0][2][0]["fromBlock"], hex(123))
-        self.assertEqual(log_calls[0][2][0]["toBlock"], hex(2122))
+        self.assertEqual(log_calls[0][2][0]["toBlock"], hex(1122))
+        self.assertEqual({call[4] for call in calls}, {"primary", "shadow"})
 
     def test_rpc_preflight_rejects_provider_log_errors(self):
         value = runtime()
         with mock.patch.object(
             MODULE,
             "rpc_call",
-            side_effect=["0x2105", MODULE.Beta3RenderError("eth_getLogs RPC preflight returned an error")],
+            side_effect=[
+                "0x2105",
+                MODULE.Beta3RenderError(
+                    "primary eth_getLogs RPC preflight returned error code=-32005"
+                ),
+            ],
         ):
             with self.assertRaisesRegex(MODULE.Beta3RenderError, "eth_getLogs"):
                 MODULE.preflight_rpc_pair(
@@ -288,6 +294,12 @@ class Beta3RenderTests(unittest.TestCase):
         self.assertEqual(environment["OPEN_COMPETITION_V2_REFUND_RESERVE_MIN_BASE_UNITS"], "110000")
         self.assertEqual(environment["OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS"], "120")
         self.assertEqual(environment["OPEN_COMPETITION_V2_RELAYER_MAX_GAS"], "8000000")
+        self.assertEqual(
+            MODULE.WORKER_ENVIRONMENT[
+                "agent-bounties-open-competition-v2-beta3-indexer"
+            ]["OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY"],
+            "1000",
+        )
 
     def test_environment_rejects_shared_rpc_and_insecure_prover(self):
         common = dict(
