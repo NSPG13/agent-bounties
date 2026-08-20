@@ -17,6 +17,8 @@ env:
   SOURCE_ACTOR_DERIVATION_SALT: "32346174505:1:mainnet"
   OPEN_COMPETITION_V2_RUNTIME_READINESS_URL: https://agent-bounties-api.onrender.com/v1/base/open-competition-v2-beta3/release
   EXISTING_X402_JOB_ID: 155ef022-8ef3-4453-825c-316d309d9ecf
+  RESUME_X402_JOB_ID: bccd0e3e-73d0-41ac-8bbd-0a806ea45194
+  RESUME_X402_SOLVER_NONCE: "1787226676733703323"
   PLONK_COMPETITION: "0x3e052b933628b960d61654a68fca23d869d8989f"
   PLONK_SETTLEMENT_TRANSACTION: "0x830e856ddbade328a0715e47e3aaa36f6363c6be71c18bd20f0baaab75aed4f3"
   FORCED_REFUND_PAYMENT_TRANSACTION: "0xdb833590333b36c69ee7e7d873a94f87d519278321df13f155253473e4a0a7c2"
@@ -142,7 +144,7 @@ jobs:
           )
           program = old["program_input"]
           proof_deadline = int(projection["proof_deadline"])
-          recovery_nonce = str(time.time_ns())
+          recovery_nonce = os.environ["RESUME_X402_SOLVER_NONCE"]
           document = {
               "schema_version": "agent-bounties/open-competition-v2-beta3-mainnet-resume-v1",
               "passed": True,
@@ -191,6 +193,8 @@ jobs:
               --fixture programs/public-vector-metric-v1/fixtures/rehearsal-best-score-a.json \
               --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
               --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
+              --solver-nonce "$RESUME_X402_SOLVER_NONCE" \
+              --skip-solver-service-top-up \
               --replacement-id 1 --output target/mainnet-x402-canary-replacement.json
           fi
           python .release-control/scripts/run_open_competition_v2_x402_rehearsal.py \
@@ -198,6 +202,7 @@ jobs:
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canary-resume.json \
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
+            --proof-job-id "$RESUME_X402_JOB_ID" \
             --timeout-seconds 5400 --output target/mainnet-x402-success.json
           python .release-control/scripts/verify_open_competition_v2_beta3_mainnet_recovery.py \
             --api https://api.agentbounties.app --rpc-url "$BASE_MAINNET_RPC_URL" \

@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from eth_account import Account
 from eth_account.messages import encode_typed_data
@@ -15,6 +16,52 @@ SPEC.loader.exec_module(MODULE)
 
 
 class X402RehearsalTests(unittest.TestCase):
+    def test_resumable_job_requires_exact_paid_scope(self):
+        spec = {
+            "competition": "0x" + "11" * 20,
+            "solver": "0x" + "22" * 20,
+            "solver_nonce": "7",
+            "artifact_hash": "0x" + "33" * 32,
+            "proof_system": "groth16",
+            "metric": {
+                "mode": "maximize_exact_matches",
+                "threshold": "1",
+                "vectors": [{"expected": 1, "observed": 1, "weight": 1}],
+            },
+        }
+        job = {
+            "network": "base-mainnet",
+            "competition_contract": spec["competition"],
+            "solver": spec["solver"],
+            "solver_nonce": spec["solver_nonce"],
+            "artifact_hash": spec["artifact_hash"],
+            "proof_system": spec["proof_system"],
+            "requested_relay": True,
+            "state": "paid",
+            "payment_evidence": {"transaction_hash": "0x" + "44" * 32},
+            "expected_public_values": "0x01",
+            "program_input": spec["metric"],
+        }
+        MODULE.validate_resumable_job(job, spec, "base-mainnet")
+        job["solver_nonce"] = "8"
+        with self.assertRaisesRegex(MODULE.X402RehearsalError, "solver_nonce"):
+            MODULE.validate_resumable_job(job, spec, "base-mainnet")
+
+    def test_payment_reconciliation_recovers_ambiguous_503_without_signature(self):
+        evidence = {"payment_evidence": {"transaction_hash": "0x" + "11" * 32}}
+        responses = [
+            (503, {}, {}),
+            (202, {"state": "paid"}, {}),
+            (200, evidence, {}),
+        ]
+        with patch.object(MODULE, "request_json", side_effect=responses) as request:
+            with patch.object(MODULE.time, "sleep"):
+                result = MODULE.reconcile_payment("https://example.test/payment", float("inf"))
+        self.assertEqual(result, evidence)
+        self.assertEqual(request.call_count, 3)
+        self.assertIsNone(request.call_args_list[1].kwargs.get("headers"))
+        self.assertIsNone(request.call_args_list[2].kwargs.get("headers"))
+
     def test_payment_header_is_standard_exact_eip3009(self):
         actor = Account.from_key("0x" + "11" * 32)
         challenge = {
