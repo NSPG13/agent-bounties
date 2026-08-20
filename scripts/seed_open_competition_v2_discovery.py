@@ -66,7 +66,7 @@ def validate_manifest(value: dict[str, Any]) -> dict[str, int]:
     minimum_net = int(economics.get("minimum_net_prize_base_units", 0))
     net = solver - proof - relay
     require(solver == 3_000_000, "seed solver reward must be exactly 3 USDC")
-    require(keeper == 50_000 and keeper <= solver // 20, "seed keeper reward is invalid")
+    require(keeper == 40_000 and keeper <= solver // 20, "seed keeper reward is invalid")
     require(proof == 100_000 and relay == 10_000, "seed hosted cost assumptions drifted")
     require(net >= minimum_net and net > 2_000_000, "seed net prize must exceed 2 USDC")
     require(value.get("winner_mode") == "first_proven", "seed winner mode must be first_proven")
