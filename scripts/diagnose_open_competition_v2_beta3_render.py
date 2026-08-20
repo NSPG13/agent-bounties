@@ -14,7 +14,12 @@ from typing import Any
 import render_deploy_recovery as render
 
 
-WORKERS = (
+SERVICES = (
+    render.ServiceSpec(
+        "agent-bounties-api",
+        "web_service",
+        "https://agent-bounties-api.onrender.com/health",
+    ),
     render.ServiceSpec(
         "agent-bounties-open-competition-v2-beta3-indexer",
         "background_worker",
@@ -45,8 +50,8 @@ def collect(
 ) -> dict[str, Any]:
     end = now.astimezone(timezone.utc)
     start = end - timedelta(hours=1)
-    workers = []
-    for spec in WORKERS:
+    services = []
+    for spec in SERVICES:
         service = client.resolve_service(spec)
         service_id = service.get("id")
         owner_id = service.get("ownerId")
@@ -65,7 +70,7 @@ def collect(
         }
         query = urllib.parse.urlencode(parameters, doseq=True)
         summary = render.summarize_build_logs(client._read_with_retry(f"/logs?{query}"))
-        workers.append(
+        services.append(
             {
                 "name": spec.name,
                 "service_id": service_id,
@@ -75,7 +80,7 @@ def collect(
     return {
         "schema_version": "agent-bounties/open-competition-v2-beta3-render-diagnostic-v1",
         "observed_at": end.isoformat().replace("+00:00", "Z"),
-        "workers": workers,
+        "services": services,
         "read_only": True,
         "secrets_redacted": True,
         "evidence_boundary": (

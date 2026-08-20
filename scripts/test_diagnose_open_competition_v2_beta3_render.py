@@ -49,9 +49,9 @@ class Beta3RenderDiagnosticTests(unittest.TestCase):
 
         self.assertTrue(result["read_only"])
         self.assertTrue(result["secrets_redacted"])
-        self.assertEqual(len(result["workers"]), 4)
-        self.assertEqual(len(client.paths), 4)
-        for path, worker in zip(client.paths, result["workers"]):
+        self.assertEqual(len(result["services"]), 5)
+        self.assertEqual(len(client.paths), 5)
+        for path, worker in zip(client.paths, result["services"]):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
             self.assertEqual(query["ownerId"], ["tea-workspace"])
             self.assertEqual(query["resource"], [worker["service_id"]])
