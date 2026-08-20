@@ -81,7 +81,33 @@
     return `Payment escrowed · ${formatAmount(item.reward)} reward`;
   }
 
+  function isOpenCompetition(item) {
+    return ["first_valid_submission", "first_proven", "best_score"]
+      .includes(item.competition_mode);
+  }
+
+  function isBytes32(value) {
+    return /^0x[0-9a-f]{64}$/i.test(String(value || ""));
+  }
+
+  function hasReadyEvidence(item) {
+    const evidence = item.evidence_requirements || {};
+    if (evidence.protocol_version === "agent-bounties/open-competition-v2-beta3") {
+      return item.source_status === "active"
+        && ["first_proven", "best_score"].includes(item.competition_mode)
+        && item.next_action?.action === "quote_open_competition_v2_proof"
+        && isBytes32(evidence.execution_policy_hash)
+        && isBytes32(evidence.verification_policy_hash)
+        && isBytes32(evidence.settlement_policy_hash)
+        && isBytes32(evidence.program_vkey);
+    }
+    return item.source_status === "claimable" && isBytes32(item.terms_hash);
+  }
+
   function actionHref(item) {
+    if (["first_proven", "best_score"].includes(item.competition_mode)) {
+      return safePublicUrl(item.source_url) || safePublicUrl(item.public_url);
+    }
     if (item.competition_mode === "first_valid_submission" && item.source_type === "canonical_base") {
       const profile = item.verifier_profile_id
         ? `&verifierProfileId=${encodeURIComponent(item.verifier_profile_id)}`
@@ -98,6 +124,10 @@
   }
 
   function actionLabel(item) {
+    if (["first_proven", "best_score"].includes(item.competition_mode)
+      && item.work_state === "claimable") {
+      return "Open earning instructions";
+    }
     if (item.competition_mode === "first_valid_submission" && item.work_state === "claimable") {
       return "Enter competition";
     }
@@ -146,7 +176,7 @@
 
     const method = document.createElement("p");
     method.className = "fine opportunity-method";
-    const openCompetition = item.competition_mode === "first_valid_submission";
+    const openCompetition = isOpenCompetition(item);
     const competitionMode = openCompetition ? "Open competition" : "Exclusive claim";
     method.textContent = `${competitionMode} · ${item.verification_method} · next: ${item.next_action.action}`;
 
@@ -158,12 +188,14 @@
       const entryBond = item.entry_bond ? formatAmount(item.entry_bond) : formatAmount(item.bond);
       const entryCount = Number(item.entry_count || 0);
       const maxEntries = Number(item.max_entries || 0);
-      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "bounded entry capacity";
+      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "unlimited entries";
       const deadline = item.competition_ends_at
         ? new Date(Number(item.competition_ends_at) * 1000).toLocaleString()
         : "published competition deadline";
       const profile = item.verifier_profile_name || item.verifier_profile_id || "approved deterministic verifier";
-      competition.textContent = `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
+      competition.textContent = ["first_proven", "best_score"].includes(item.competition_mode)
+        ? `${item.competition_mode === "best_score" ? "Best qualifying proof wins" : "First qualifying proof wins"} · no entry bond · ${capacity} · proof deadline ${deadline} · ${profile}. Winning is not guaranteed.`
+        : `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
       article.append(competition);
     }
 
@@ -331,12 +363,11 @@
 
   function isReadyToEarn(item) {
     return item.source_type === "canonical_base"
-      && item.source_status === "claimable"
       && item.work_state === "claimable"
       && item.payment_state === "escrowed"
       && item.payment_committed === true
       && item.verification_ready === true
-      && Boolean(item.terms_hash)
+      && hasReadyEvidence(item)
       && amountValue(item.funded_amount) >= amountValue(item.funding_target)
       && amountValue(item.reward) > 0;
   }

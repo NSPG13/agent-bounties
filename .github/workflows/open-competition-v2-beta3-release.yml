@@ -73,6 +73,7 @@ env:
   SP1_SAFE_RUNTIME_COMMIT: c2d292c260333a9e4f166cd1435e8ef4897c8b43
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
   SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
 
 jobs:
@@ -425,6 +426,9 @@ jobs:
           docker run --rm --entrypoint sha256sum "$SP1_GNARK_IMAGE" /gnark-cli \
             | tee target/gnark-cli.sha256
           grep -Eq '^[0-9a-f]{64}  /gnark-cli$' target/gnark-cli.sha256
+          docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{.Id}}')" = \
+            "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{.Id}}')"
           trusted_root="$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT"
           test -f "$trusted_root/trusted-setup.json"
           rm -rf .sp1-safe/crates/prover/build
@@ -959,8 +963,17 @@ jobs:
           set -euo pipefail
           test "${#OPEN_COMPETITION_V2_PROVER_API_KEY}" -ge 32
           test -f "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/circuits
+          sudo python3 scripts/install_open_competition_v2_prover_assets.py \
+            --trusted-root "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT" \
+            --install-root /var/lib/agent-bounties-prover/circuits \
+            --circuit-version "$SP1_SAFE_CIRCUIT_VERSION" \
+            --output /tmp/open-competition-v2-prover-assets.json
+          sudo chown -R agent-bounties-prover:agent-bounties-prover /var/lib/agent-bounties-prover/circuits
+          sudo chmod -R u=rwX,go= /var/lib/agent-bounties-prover/circuits
           sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/tmp
           sudo install -m 0755 target/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 target/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/
@@ -975,8 +988,9 @@ jobs:
           OPEN_COMPETITION_V2_PROVER_BIND=127.0.0.1
           PORT=9070
           SP1_PROVER=cpu
-          SP1_GROTH16_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/groth16
-          SP1_PLONK_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/plonk
+          SP1_GNARK_IMAGE=$SP1_GNARK_RUNTIME_IMAGE
+          SP1_GROTH16_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/groth16
+          SP1_PLONK_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/plonk
           EOF
           sudo install -m 0600 target/prover.env /etc/agent-bounties/prover.env
           sudo systemctl daemon-reload
@@ -986,6 +1000,8 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:9070/health | tee target/prover-health.json
+          sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 \
+            /tmp/open-competition-v2-prover-assets.json target/prover-assets.json
           public_health="${OPEN_COMPETITION_V2_PROVER_URL%/v1/prove}/health"
           curl --fail --silent "$public_health" | tee target/prover-public-health.json
           python - <<'PY'
@@ -1006,6 +1022,7 @@ jobs:
             target/prover-deployment.json
             target/prover-health.json
             target/prover-public-health.json
+            target/prover-assets.json
           if-no-files-found: error
           retention-days: 365
 
@@ -1126,6 +1143,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
@@ -1165,6 +1183,7 @@ jobs:
           KEEPER="${BASE_KEEPER_ADDRESS,,}"
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
+          forge build --root contracts/base-escrow --force --ast
           cargo build --locked --release -p api -p worker
           bundle=target/mainnet-deployment/mainnet-exact.json
           python scripts/verify_open_competition_v2_beta3_broker_reserve.py \

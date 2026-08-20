@@ -39,6 +39,38 @@ class RehearsalRecoveryTests(unittest.TestCase):
         self.assertEqual(len(data), 138)
         self.assertTrue(data.endswith((525_000).to_bytes(32, "big").hex()))
 
+    def test_refund_calldata_binds_the_contributor(self) -> None:
+        contributor = "0x" + "34" * 20
+        data = recovery.address_call_data("withdrawRefundFor(address)", contributor)
+        self.assertEqual(len(data), 74)
+        self.assertTrue(data.endswith("34" * 20))
+
+    def test_expired_active_competition_without_leader_requires_expiry(self) -> None:
+        self.assertTrue(
+            recovery.expired_competition_needs_expiry(
+                status=1,
+                proof_deadline=100,
+                block_timestamp=101,
+                leader=recovery.ZERO_ADDRESS,
+            )
+        )
+
+    def test_cancelled_expired_competition_is_idempotent(self) -> None:
+        self.assertFalse(
+            recovery.expired_competition_needs_expiry(
+                status=3,
+                proof_deadline=0,
+                block_timestamp=0,
+                leader=recovery.ZERO_ADDRESS,
+            )
+        )
+
+    def test_expired_recovery_rejects_leader_and_early_deadline(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "deadline has not passed"):
+            recovery.expired_competition_needs_expiry(1, 100, 100, recovery.ZERO_ADDRESS)
+        with self.assertRaisesRegex(recovery.RecoveryError, "qualifying leader"):
+            recovery.expired_competition_needs_expiry(1, 100, 101, "0x" + "12" * 20)
+
 
 if __name__ == "__main__":
     unittest.main()

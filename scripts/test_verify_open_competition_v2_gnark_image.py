@@ -47,6 +47,15 @@ class GnarkImageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "single-party setup"):
                 MODULE.verify(MODULE.DOCKERFILE, path, MODULE.CIRCUIT_BUILDER)
 
+    def test_release_rejects_runtime_alias_pull(self) -> None:
+        source = MODULE.WORKFLOW.read_text(encoding="utf-8")
+        source += '\ndocker pull "$SP1_GNARK_RUNTIME_IMAGE"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "release.yml"
+            path.write_text(source, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must not pull"):
+                MODULE.verify(MODULE.DOCKERFILE, path, MODULE.CIRCUIT_BUILDER)
+
 
 if __name__ == "__main__":
     unittest.main()

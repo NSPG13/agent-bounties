@@ -395,11 +395,62 @@ def claim_recovery_descriptor(
 
 def open_competition_wrong_mode_plan(meta: Mapping[str, object]) -> Dict[str, object]:
     body = str(meta.get("issue_body") or "")
-    match = re.search(
+    beta3_match = re.search(
+        r"<!--\s*beta3-seed:[^:>]+:(0x[0-9a-fA-F]{40})\s*-->",
+        body,
+    )
+    v1_match = re.search(
         r"(?:bountyContract=|agent-bounties/open-competition-v1:)(0x[0-9a-fA-F]{40})",
         body,
     )
-    contract = match.group(1).lower() if match else None
+    if beta3_match:
+        contract = beta3_match.group(1).lower()
+        inventory_url = (
+            f"{DEFAULT_API_BASE_URL}/v1/base/open-competition-v2-beta3/inventory"
+            "?network=base-mainnet&state=active"
+        )
+        proof_quote_url = (
+            f"{DEFAULT_API_BASE_URL}/v1/base/open-competition-v2-beta3/proof-quotes"
+        )
+        details = "\n".join(
+            [
+                f"Issue: {meta['url']}",
+                "Error: wrong_competition_mode",
+                "Protocol: agent-bounties/open-competition-v2-beta3",
+                "Competition mode: proof_competition",
+                "Correct action: quote_proof",
+                f"Competition contract: {contract}",
+                f"Canonical inventory: {inventory_url}",
+                f"Proof quote endpoint: {proof_quote_url}",
+                "MCP endpoint: https://mcp.agentbounties.app/mcp",
+                "",
+                "This competition has no exclusive claim, claim bond, or reservation. Produce the exact artifact required by the issue, request a five-minute solver-bound proof quote, pay the returned x402 challenge once, and authorize relay only after the proof is ready.",
+                "Only a confirmed canonical CompetitionSettledV2 event proves payment.",
+            ]
+        )
+        return {
+            "ready": False,
+            "signal": {
+                "decision": "WrongCompetitionMode",
+                "error_code": "wrong_competition_mode",
+                "protocol_version": "agent-bounties/open-competition-v2-beta3",
+                "competition_mode": "proof_competition",
+                "correct_action": "quote_proof",
+                "competition_url": str(meta["url"]),
+                "inventory_url": inventory_url,
+                "proof_quote_url": proof_quote_url,
+                "bounty_contract": contract,
+                "settlement_authority": False,
+            },
+            "check": {
+                "conclusion": "ActionRequired",
+                "title": "Prove work for this Open Competition",
+                "summary": "Use quote_proof; an exclusive claim and bond are not available.",
+                "text": details,
+            },
+        }
+
+    contract = v1_match.group(1).lower() if v1_match else None
     query = {
         "network": "base-mainnet",
         "utm_source": "github",
@@ -805,6 +856,12 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
                 "Add `wallet: 0xYOUR_PUBLIC_BASE_ADDRESS` to a new `/claim` comment; never post "
                 "a private key or seed phrase."
             )
+    elif decision == "WrongCompetitionMode":
+        status_line = (
+            "This competition has no exclusive claim or reservation. The command did not "
+            "sign a transaction, spend funds, or reserve work; follow the exact competition "
+            "action below."
+        )
     elif ready:
         status_line = "This claim is a temporary coordination signal only; it never authorizes bounty acceptance, escrow release, or payout."
     else:
@@ -1181,6 +1238,46 @@ def run_self_test() -> int:
             raise UserError(
                 f"self-test legacy canonical claim route missing: {required_text}"
             )
+
+    beta3_contract = "0x0618b169c3c878a0386b5da7b54713f60baa1ec2"
+    beta3_meta = {
+        **canonical_meta,
+        "labels": ["bounty", "open-competition", "ready-to-earn"],
+        "comment_body": (
+            "/claim #1059 wallet: 0x2222222222222222222222222222222222222222"
+        ),
+        "issue_body": (
+            "<!-- beta3-seed:agent-discovery-surface-map-v1:"
+            f"{beta3_contract} -->\n## Funded Open Competition V2"
+        ),
+    }
+    beta3_plan = apply_canonical_claim_state(
+        {},
+        beta3_meta,
+        json.loads(json.dumps(legacy_form_plan)),
+    )
+    beta3_comment = render_comment(beta3_meta, beta3_plan)
+    for required_text in [
+        "wrong_competition_mode",
+        "agent-bounties/open-competition-v2-beta3",
+        "Correct action: quote_proof",
+        beta3_contract,
+        "/v1/base/open-competition-v2-beta3/inventory",
+        "/v1/base/open-competition-v2-beta3/proof-quotes",
+        "no exclusive claim or reservation",
+        "CompetitionSettledV2",
+        "discovery_source",
+    ]:
+        if required_text not in beta3_comment:
+            raise UserError(f"self-test Beta3 wrong-mode route missing: {required_text}")
+    for forbidden_text in [
+        "Machine claim request",
+        "claimable_only=true",
+        "BountyClaimed owns",
+        "post a bond",
+    ]:
+        if forbidden_text in beta3_comment:
+            raise UserError(f"self-test Beta3 wrong-mode route exposed: {forbidden_text}")
 
     missing_fixture = {
         "full_feed": [alternative_record],

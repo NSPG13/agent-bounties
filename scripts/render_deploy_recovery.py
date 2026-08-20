@@ -285,6 +285,14 @@ BUILD_FAILURE_PATTERNS = {
     "pipeline_quota": ("build pipeline minutes", "build spend limit"),
     "resource_limit": ("no space left", "out of memory", "signal: 9", "killed"),
     "rust_toolchain": ("requires rustc", "rustc version", "rust version"),
+    "runtime_refund_authorization_event_missing": (
+        "refund authorization is used but its exact bounded event is unavailable",
+    ),
+    "runtime_refund_authorization": ("refund authorization",),
+    "runtime_relayer_provider": ("relayer provider error",),
+    "runtime_relayer_simulation": ("relay simulation rejected",),
+    "runtime_refund_balance": ("insufficient balance", "insufficient funds"),
+    "runtime_proof_job_replay": ("conflicting open competition v2 canonical replay",),
 }
 
 
@@ -309,7 +317,7 @@ def summarize_build_logs(payload: object) -> dict[str, Any]:
             if not line:
                 continue
             if re.search(
-                r"(?i)(authorization|bearer|password|private|secret|token|api[_ -]?key|database_url)",
+                r"(?i)(bearer|password|private|secret|token|api[_ -]?key|database_url)",
                 line,
             ):
                 line = "[sensitive build diagnostic redacted]"

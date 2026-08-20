@@ -69,6 +69,35 @@ def request_json(
     return status, value, response_headers
 
 
+def wait_for_active_competition(
+    api: str, network: str, competition: str, deadline: float
+) -> None:
+    inventory_url = (
+        f"{api}/v1/base/open-competition-v2-beta3/inventory?network={network}"
+    )
+    while time.time() < deadline:
+        _, inventory, _ = request_json("GET", inventory_url)
+        projection = next(
+            (
+                item.get("record", {}).get("projection", {})
+                for item in inventory.get("competitions", [])
+                if item.get("record", {})
+                .get("projection", {})
+                .get("competition", "")
+                .lower()
+                == competition.lower()
+            ),
+            None,
+        )
+        if projection is None:
+            time.sleep(3)
+            continue
+        state = projection.get("state")
+        require(state == "active", f"competition became {state} before proof quote")
+        return
+    raise X402RehearsalError("competition did not become active in hosted inventory")
+
+
 def decode_x402_header(value: str) -> dict[str, Any]:
     try:
         decoded = base64.b64decode(value, validate=True)
@@ -149,6 +178,21 @@ def sign_payment(
     ).decode()
 
 
+def sign_relay_authorization(actor: Any, authorization: dict[str, Any]) -> str:
+    require(
+        authorization.get("primaryType") == "SubmitProof",
+        "relay authorization has the wrong EIP-712 primary type",
+    )
+    require(
+        isinstance(authorization.get("types"), dict)
+        and isinstance(authorization.get("domain"), dict)
+        and isinstance(authorization.get("message"), dict),
+        "relay authorization is not complete EIP-712 typed data",
+    )
+    signed = actor.sign_message(encode_typed_data(full_message=authorization))
+    return "0x" + bytes(signed.signature).hex()
+
+
 def run_worker(binary: Path, protocol: str) -> str:
     environment = {**os.environ, "BASE_INDEXER_PROTOCOL": protocol, "BASE_INDEXER_ONCE": "true"}
     completed = subprocess.run(
@@ -179,6 +223,80 @@ def build_quote_payload(spec: dict[str, Any], network: str) -> dict[str, Any]:
         "relay": True,
         "metric": spec["metric"],
     }
+
+
+def validate_resumable_job(
+    job: dict[str, Any], spec: dict[str, Any], network: str
+) -> None:
+    expected = {
+        "network": network,
+        "competition_contract": str(spec["competition"]).lower(),
+        "solver": str(spec["solver"]).lower(),
+        "solver_nonce": str(spec["solver_nonce"]),
+        "artifact_hash": str(spec["artifact_hash"]).lower(),
+        "proof_system": str(spec["proof_system"]),
+    }
+    for field, value in expected.items():
+        actual = job.get(field)
+        if field in {"competition_contract", "solver", "artifact_hash"}:
+            actual = str(actual).lower()
+        elif field == "solver_nonce":
+            actual = str(actual)
+        require(actual == value, f"resumed proof job {field} differs from the canary")
+    require(job.get("requested_relay") is True, "resumed proof job did not request relay")
+    require(
+        job.get("state") in {"paid", "proving", "proved", "relaying", "submitted", "confirmed"},
+        f"proof job is not resumable from {job.get('state')}",
+    )
+    require(
+        isinstance(job.get("payment_evidence"), dict),
+        "resumed proof job lacks canonical payment evidence",
+    )
+    program = job.get("program_input")
+    metric = spec.get("metric")
+    require(isinstance(program, dict) and isinstance(metric, dict), "metric binding is missing")
+    require(program.get("mode") == metric.get("mode"), "resumed proof job metric mode differs")
+    require(
+        str(program.get("threshold")) == str(metric.get("threshold")),
+        "resumed proof job threshold differs",
+    )
+    require(program.get("vectors") == metric.get("vectors"), "resumed proof job vectors differ")
+    require(
+        isinstance(job.get("expected_public_values"), str)
+        and str(job["expected_public_values"]).startswith("0x"),
+        "resumed proof job lacks its bound public values",
+    )
+    if spec.get("expected_public_values") is not None:
+        require(
+            str(job["expected_public_values"]).lower()
+            == str(spec["expected_public_values"]).lower(),
+            "resumed proof job public values differ from the canary",
+        )
+
+
+def reconcile_payment(
+    payment_url: str,
+    deadline: float,
+    *,
+    payment_signature: str | None = None,
+) -> dict[str, Any]:
+    headers = {"PAYMENT-SIGNATURE": payment_signature} if payment_signature else None
+    status, payment, _ = request_json(
+        "POST", payment_url, headers=headers, expected=(200, 202, 503)
+    )
+    while status in {202, 503} and time.time() < deadline:
+        time.sleep(2)
+        status, payment, _ = request_json(
+            "POST", payment_url, expected=(200, 202, 503)
+        )
+    require(status == 200, "x402 payment did not reconcile canonically")
+    return payment
+
+
+def resumed_payment(job: dict[str, Any]) -> dict[str, Any]:
+    evidence = job.get("payment_evidence")
+    require(isinstance(evidence, dict), "resumed proof job lacks canonical payment evidence")
+    return {"payment_evidence": evidence}
 
 
 def wait_for_state(
@@ -226,6 +344,7 @@ def main() -> int:
     parser.add_argument("--worker-binary", type=Path)
     parser.add_argument("--hosted-workers", action="store_true")
     parser.add_argument("--expect-refund", action="store_true")
+    parser.add_argument("--proof-job-id")
     parser.add_argument("--private-key-env", default="BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--actor-derivation-salt", default="local")
     parser.add_argument("--output", type=Path, required=True)
@@ -263,36 +382,39 @@ def main() -> int:
     worker = args.worker_binary.resolve() if args.worker_binary else None
     require(worker is None or worker.is_file(), "worker binary is unavailable")
     require(not (args.hosted_workers and args.expect_refund), "refund canary requires an isolated worker")
+    require(not (args.proof_job_id and args.expect_refund), "refund canary cannot resume a paid job")
     api = args.api.rstrip("/")
     deadline = time.time() + args.timeout_seconds
 
     if worker is not None:
         run_worker(worker, "open-competition-v2-beta3")
         run_worker(worker, "open-competition-v2-shadow")
-    quote_payload = build_quote_payload(spec, args.network)
-    _, quote, _ = request_json(
-        "POST", f"{api}/v1/base/open-competition-v2-beta3/proof-quotes", quote_payload
-    )
-    job_id = quote["proof_job_id"]
-    challenge = quote["payment_required"]
-    payment_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment"
-    status, _, headers = request_json("POST", payment_url, expected=(402,))
-    require(status == 402 and "payment-required" in headers, "unsigned request did not return 402")
-    require(decode_x402_header(headers["payment-required"]) == challenge, "402 challenge drifted")
-    payment_signature = sign_payment(
-        solver, challenge, chain_id=chain_id, network=eip155
-    )
     payment_started = time.time()
-    status, payment, _ = request_json(
-        "POST",
-        payment_url,
-        headers={"PAYMENT-SIGNATURE": payment_signature},
-        expected=(200, 202),
-    )
-    while status == 202 and time.time() < deadline:
-        time.sleep(2)
-        status, payment, _ = request_json("POST", payment_url, expected=(200, 202))
-    require(status == 200, "x402 payment did not reconcile canonically")
+    quote_id = None
+    if args.proof_job_id:
+        job_id = args.proof_job_id
+        resumed = get_job(api, job_id)
+        validate_resumable_job(resumed, spec, args.network)
+        payment = resumed_payment(resumed)
+    else:
+        wait_for_active_competition(api, args.network, spec["competition"], deadline)
+        quote_payload = build_quote_payload(spec, args.network)
+        _, quote, _ = request_json(
+            "POST", f"{api}/v1/base/open-competition-v2-beta3/proof-quotes", quote_payload
+        )
+        job_id = quote["proof_job_id"]
+        quote_id = quote["quote"]["quote_id"]
+        challenge = quote["payment_required"]
+        payment_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment"
+        status, _, headers = request_json("POST", payment_url, expected=(402,))
+        require(status == 402 and "payment-required" in headers, "unsigned request did not return 402")
+        require(decode_x402_header(headers["payment-required"]) == challenge, "402 challenge drifted")
+        payment_signature = sign_payment(
+            solver, challenge, chain_id=chain_id, network=eip155
+        )
+        payment = reconcile_payment(
+            payment_url, deadline, payment_signature=payment_signature
+        )
     payment_evidence = payment.get("payment_evidence")
     require(isinstance(payment_evidence, dict), "canonical x402 payment evidence is missing")
 
@@ -311,7 +433,7 @@ def main() -> int:
             "actor_derivation_id": derivation_id,
             "generated_agent_wallet": True,
             "manual_state_corrections": 0,
-            "quote_id": quote["quote"]["quote_id"],
+            "quote_id": quote_id,
             "proof_job_id": job_id,
             "standard_exact": True,
             "payment_transaction": payment_evidence["transaction_hash"],
@@ -326,26 +448,30 @@ def main() -> int:
         print(json.dumps({"passed": True, "proof_job_id": job_id, "output": str(args.output)}))
         return 0
 
-    job = wait_for_state(api, worker, job_id, {"proved"}, deadline)
-    require(job.get("proof") and job.get("public_values"), "broker did not persist a bound proof")
-    authorization_deadline = min(int(spec["proof_deadline"]), int(time.time()) + 600)
-    relay_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization"
-    _, unsigned, _ = request_json(
-        "POST",
-        relay_url,
-        {"authorization_deadline": authorization_deadline, "solver_signature": None},
+    job = wait_for_state(
+        api, worker, job_id, {"proved", "relaying", "submitted", "confirmed"}, deadline
     )
-    digest = unsigned["plan"]["relay_authorization"]["digest"]
-    signature = solver.unsafe_sign_hash(bytes.fromhex(digest.removeprefix("0x"))).signature
-    _, authorized, _ = request_json(
-        "POST",
-        relay_url,
-        {
-            "authorization_deadline": authorization_deadline,
-            "solver_signature": "0x" + bytes(signature).hex(),
-        },
-    )
-    require(authorized["state"] == "relaying", "solver relay authorization was not accepted")
+    if job["state"] == "proved":
+        require(job.get("proof") and job.get("public_values"), "broker did not persist a bound proof")
+        authorization_deadline = min(int(spec["proof_deadline"]), int(time.time()) + 600)
+        relay_url = f"{api}/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization"
+        _, unsigned, _ = request_json(
+            "POST",
+            relay_url,
+            {"authorization_deadline": authorization_deadline, "solver_signature": None},
+        )
+        signature = sign_relay_authorization(
+            solver, unsigned["plan"]["relay_authorization"]
+        )
+        _, authorized, _ = request_json(
+            "POST",
+            relay_url,
+            {
+                "authorization_deadline": authorization_deadline,
+                "solver_signature": signature,
+            },
+        )
+        require(authorized["state"] == "relaying", "solver relay authorization was not accepted")
 
     while time.time() < deadline:
         if worker is not None:
@@ -394,7 +520,7 @@ def main() -> int:
         "actor_derivation_id": derivation_id,
         "generated_agent_wallet": True,
         "manual_state_corrections": 0,
-        "quote_id": quote["quote"]["quote_id"],
+        "quote_id": quote_id,
         "proof_job_id": job_id,
         "standard_exact": True,
         "eip3009": True,

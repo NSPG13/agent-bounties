@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import unittest
 
+from eth_account import Account
+from eth_utils import to_checksum_address
+
 
 PATH = Path(__file__).with_name("seed_open_competition_v2_discovery.py")
 SPEC = importlib.util.spec_from_file_location("seed_open_competition_v2_discovery", PATH)
@@ -19,8 +22,8 @@ class DiscoverySeedTests(unittest.TestCase):
 
     def test_exact_seed_has_five_profitable_fully_funded_competitions(self):
         economics = MODULE.validate_manifest(self.manifest())
-        self.assertEqual(economics["funding_per_competition"], 3_050_000)
-        self.assertEqual(economics["total_funding"], 15_250_000)
+        self.assertEqual(economics["funding_per_competition"], 3_040_000)
+        self.assertEqual(economics["total_funding"], 15_200_000)
         self.assertEqual(economics["net_prize"], 2_890_000)
 
     def test_seed_rejects_inventory_or_economic_drift(self):
@@ -91,6 +94,51 @@ class DiscoverySeedTests(unittest.TestCase):
             profile_document=profile,
         )
         self.assertNotEqual(first["creation_nonce"], third["creation_nonce"])
+
+    def test_base_usdc_target_is_signable_after_checksum_normalization(self):
+        signer = Account.create("agent-bounties-beta3-seed-test")
+        target = to_checksum_address(MODULE.USDC)
+        signed = signer.sign_transaction(
+            {
+                "chainId": MODULE.CHAIN_ID,
+                "to": target,
+                "nonce": 0,
+                "value": 0,
+                "data": "0x",
+                "gas": 21_000,
+                "maxFeePerGas": 2_000_000,
+                "maxPriorityFeePerGas": 1_000_000,
+                "type": 2,
+            }
+        )
+        self.assertGreater(len(signed.raw_transaction), 0)
+
+    def test_all_approvals_are_sequenced_before_any_creation(self):
+        factory = "0x" + "aa" * 20
+        approval_a = {"to": MODULE.USDC, "data": "0x01"}
+        approval_b = {"to": MODULE.USDC, "data": "0x02"}
+        create_a = {"to": factory, "data": "0x03"}
+        create_b = {"to": factory, "data": "0x04"}
+        prepared = [
+            {
+                "task": {"seed_id": "a"},
+                "plan": {"wallet_calls": [approval_a, create_a]},
+                "exists": False,
+            },
+            {
+                "task": {"seed_id": "existing"},
+                "plan": {"wallet_calls": [approval_a, create_a]},
+                "exists": True,
+            },
+            {
+                "task": {"seed_id": "b"},
+                "plan": {"wallet_calls": [approval_b, create_b]},
+                "exists": False,
+            },
+        ]
+        approvals, creations = MODULE.wallet_call_phases(prepared, factory)
+        self.assertEqual(approvals, [approval_a, approval_b])
+        self.assertEqual(creations, [create_a, create_b])
 
 
 if __name__ == "__main__":

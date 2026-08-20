@@ -202,6 +202,13 @@ def source_tree_hash() -> str:
     return "0x" + digest.hexdigest()
 
 
+def configure_release_root(path: Path) -> None:
+    global ROOT, CONTRACT_ROOT, OUT
+    ROOT = path.resolve()
+    CONTRACT_ROOT = ROOT / "contracts" / "base-escrow"
+    OUT = CONTRACT_ROOT / "out"
+
+
 def verify_exact_checkout(source_commit: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise ValueError("source commit must be a full lowercase Git commit")
@@ -399,6 +406,7 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
     value = json.loads(path.read_text(encoding="utf-8"))
     gates = value.get("gates")
     evidence = value.get("evidence")
+    observed_subject_hashes: set[str] = set()
     if value.get("schema_version") != "agent-bounties/open-competition-v2-beta3-release-gates-v5":
         raise ValueError("release gate schema mismatch")
     if not isinstance(gates, dict) or set(gates) != set(REQUIRED_GATE_NAMES):
@@ -425,11 +433,19 @@ def load_gates(path: Path, expected_subject_hash: str | None = None) -> dict[str
             raise ValueError(f"release gate evidence has invalid subject hash: {name}")
         if expected_subject_hash is not None and subject_hash != expected_subject_hash:
             raise ValueError(f"release gate evidence targets another repository subject: {name}")
+        observed_subject_hashes.add(subject_hash)
         if not re.fullmatch(r"0x[0-9a-f]{64}", evidence_hash):
             raise ValueError(f"release gate evidence has invalid hash: {name}")
         if not isinstance(uri, str) or not uri.startswith("https://"):
             raise ValueError(f"release gate evidence requires an HTTPS URI: {name}")
     expected_risk = keccak256(value["beta_risk_preimage"].encode())
+    if len(observed_subject_hashes) > 1:
+        raise ValueError("completed release gates target multiple repository subjects")
+    value["subject_hash"] = (
+        expected_subject_hash
+        if expected_subject_hash is not None
+        else next(iter(observed_subject_hashes), None)
+    )
     value["beta_risk_hash"] = expected_risk
     value["prelaunch_complete"] = all(gates[name] for name in PRELAUNCH_GATE_NAMES)
     value["public_beta_launch_complete"] = all(
@@ -460,24 +476,33 @@ def activation_state(network_name: str, gates: dict[str, Any]) -> dict[str, bool
 
 
 def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> dict[str, Any]:
-    if rpc(rpc_url, "eth_chainId", []) != network["chain_id_hex"]:
+    def read(method: str, params: list[Any]) -> Any:
+        return rpc(
+            rpc_url,
+            method,
+            params,
+            attempts=5,
+            retry_delay=1,
+        )
+
+    if read("eth_chainId", []) != network["chain_id_hex"]:
         raise RuntimeError("RPC chain ID mismatch")
-    block = rpc(rpc_url, "eth_getBlockByNumber", ["safe", False])
+    block = read("eth_getBlockByNumber", ["safe", False])
     if not block or not block.get("hash"):
         raise RuntimeError("RPC did not return a canonical safe block")
     tag = block["number"]
     dependencies = {"settlement_token": network["usdc"]}
     runtime_hashes: dict[str, str] = {}
     for name, address in dependencies.items():
-        code = rpc(rpc_url, "eth_getCode", [address, tag])
+        code = read("eth_getCode", [address, tag])
         if code == "0x":
             raise RuntimeError(f"{name} bytecode is unavailable at the safe block")
         runtime_hashes[name] = keccak256(bytes.fromhex(code[2:]))
-    eth_balance = int(rpc(rpc_url, "eth_getBalance", [deployer, tag]), 16)
-    nonce = int(rpc(rpc_url, "eth_getTransactionCount", [deployer, tag]), 16)
+    eth_balance = int(read("eth_getBalance", [deployer, tag]), 16)
+    nonce = int(read("eth_getTransactionCount", [deployer, tag]), 16)
     balance_data = "0x70a08231" + address_word(deployer).hex()
     usdc_balance = int(
-        rpc(rpc_url, "eth_call", [{"to": network["usdc"], "data": balance_data}, tag]), 16
+        read("eth_call", [{"to": network["usdc"], "data": balance_data}, tag]), 16
     )
     return {
         "number": int(tag, 16),
@@ -488,6 +513,64 @@ def online_preflight(network: dict[str, Any], rpc_url: str, deployer: str) -> di
         "deployer_usdc_base_units": usdc_balance,
         "dependency_runtime_hashes": runtime_hashes,
     }
+
+
+def resume_exact_verifier_pair(
+    *,
+    deployer: str,
+    observed_nonce: int,
+    code_hash: Any,
+    groth16_runtime_hash: str,
+    plonk_runtime_hash: str,
+) -> int:
+    """Reuse an exact verifier pair when a prior factory deployment was interrupted."""
+    if observed_nonce < 2:
+        return observed_nonce
+    minimum_nonce = max(0, observed_nonce - 16)
+    for start_nonce in range(observed_nonce - 2, minimum_nonce - 1, -1):
+        groth16 = create_address(deployer, start_nonce)
+        plonk = create_address(deployer, start_nonce + 1)
+        if (
+            code_hash(groth16) == groth16_runtime_hash
+            and code_hash(plonk) == plonk_runtime_hash
+        ):
+            return start_nonce
+    return observed_nonce
+
+
+def apply_partial_deployment_resume(
+    *,
+    preflight: dict[str, Any],
+    rpc_url: str,
+    deployer: str,
+    verifier_assets: dict[str, Any],
+) -> dict[str, Any]:
+    observed_nonce = int(preflight["deployer_nonce"])
+    safe_block = hex(int(preflight["number"]))
+
+    def code_hash(address: str) -> str | None:
+        code = rpc(
+            rpc_url,
+            "eth_getCode",
+            [address, safe_block],
+            attempts=5,
+            retry_delay=1,
+        )
+        return None if code == "0x" else keccak256(bytes.fromhex(code[2:]))
+
+    systems = verifier_assets["proof_systems"]
+    start_nonce = resume_exact_verifier_pair(
+        deployer=deployer,
+        observed_nonce=observed_nonce,
+        code_hash=code_hash,
+        groth16_runtime_hash=systems["groth16"]["runtime_code_hash"],
+        plonk_runtime_hash=systems["plonk"]["runtime_code_hash"],
+    )
+    value = dict(preflight)
+    value["observed_deployer_nonce"] = observed_nonce
+    value["deployer_nonce"] = start_nonce
+    value["resuming_exact_verifiers"] = start_nonce != observed_nonce
+    return value
 
 
 def build_bundle(
@@ -752,6 +835,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-pending-proof-evidence", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--runtime-manifest-output", type=Path)
+    parser.add_argument(
+        "--release-root",
+        type=Path,
+        help="Exact frozen release checkout to hash and read compiled artifacts from",
+    )
     return parser.parse_args()
 
 
@@ -812,11 +900,23 @@ def runtime_manifest(bundle: dict[str, Any], deployment_block: int = 0) -> dict[
 
 def main() -> int:
     args = parse_args()
+    if args.release_root is not None:
+        configure_release_root(args.release_root)
     network = NETWORKS[args.network]
     deployer = args.deployer.lower()
     verify_exact_checkout(args.source_commit)
     subject_hash = repository_subject_hash(args.source_commit)
-    preflight = online_preflight(network, args.rpc_url or network["rpc"], deployer)
+    rpc_url = args.rpc_url or network["rpc"]
+    verifier_assets = load_verifier_assets(
+        args.verifier_assets,
+        require_proof_evidence=not args.allow_pending_proof_evidence,
+    )
+    preflight = apply_partial_deployment_resume(
+        preflight=online_preflight(network, rpc_url, deployer),
+        rpc_url=rpc_url,
+        deployer=deployer,
+        verifier_assets=verifier_assets,
+    )
     bundle = build_bundle(
         network_name=args.network,
         deployer=deployer,
@@ -824,10 +924,7 @@ def main() -> int:
         repository_subject=subject_hash,
         preflight=preflight,
         gates=load_gates(args.gates, subject_hash),
-        verifier_assets=load_verifier_assets(
-            args.verifier_assets,
-            require_proof_evidence=not args.allow_pending_proof_evidence,
-        ),
+        verifier_assets=verifier_assets,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")

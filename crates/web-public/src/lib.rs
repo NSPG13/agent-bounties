@@ -178,6 +178,17 @@ pub struct DiscoveryEndpoints {
     pub open_competition_reveal_preparation: String,
     pub open_competition_status: String,
     pub open_competition_bond_withdrawal_preparation: String,
+    pub open_competition_v2_release: String,
+    pub open_competition_v2_profiles: String,
+    pub open_competition_v2_validation: String,
+    pub open_competition_v2_creation_preparation: String,
+    pub open_competition_v2_funding_preparation: String,
+    pub open_competition_v2_inventory: String,
+    pub open_competition_v2_events: String,
+    pub open_competition_v2_proof_quotes: String,
+    pub open_competition_v2_proof_preparation: String,
+    pub open_competition_v2_action_preparation: String,
+    pub open_competition_v2_proof_job: String,
     pub objective_collection: String,
     pub objective_creation_plan: String,
     pub objective_action_plan: String,
@@ -793,6 +804,39 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         open_competition_bond_withdrawal_preparation: format!(
             "{api}/v1/base/open-competition-v1/bond-withdrawal-preparation"
         ),
+        open_competition_v2_release: format!(
+            "{api}/v1/base/open-competition-v2-beta3/release?network=base-mainnet"
+        ),
+        open_competition_v2_profiles: format!(
+            "{api}/v1/base/open-competition-v2-beta3/profiles?network=base-mainnet"
+        ),
+        open_competition_v2_validation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/validate"
+        ),
+        open_competition_v2_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/creation-preparation"
+        ),
+        open_competition_v2_funding_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/funding-preparation"
+        ),
+        open_competition_v2_inventory: format!(
+            "{api}/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet"
+        ),
+        open_competition_v2_events: format!(
+            "{api}/v1/base/open-competition-v2-beta3/events?network=base-mainnet"
+        ),
+        open_competition_v2_proof_quotes: format!(
+            "{api}/v1/base/open-competition-v2-beta3/proof-quotes"
+        ),
+        open_competition_v2_proof_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/proof-preparation"
+        ),
+        open_competition_v2_action_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/action-preparation"
+        ),
+        open_competition_v2_proof_job: format!(
+            "{api}/v1/base/open-competition-v2-beta3/proof-jobs/{{job_id}}"
+        ),
         objective_collection: format!("{api}/v1/objectives"),
         objective_creation_plan: format!("{api}/v1/objectives/creation-plans"),
         objective_action_plan: format!("{api}/v1/objectives/{{objective_id}}/action-plans"),
@@ -836,6 +880,12 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 "deployment_state": "source_only_not_ready_to_earn",
                 "entry_action": "enter competition",
                 "winner_rule": "lowest confirmed passing reveal sequence"
+            }, {
+                "version": "agent-bounties/open-competition-v2-beta3",
+                "scope": "permissionless deterministic digital work with immutable metric programs",
+                "deployment_state": "read the release endpoint for the canonical activation state",
+                "entry_action": "submit a bound SP1 proof directly or through the x402 proof broker",
+                "winner_rule": "first-proven or best-score as fixed at creation"
             }],
         }),
         endpoints: endpoints.clone(),
@@ -873,6 +923,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "inspect_open_competition_v2",
+            "prepare_open_competition_v2",
             "prepare_agent_to_earn",
             "get_standing_meta_v4_readiness",
             "prepare_standing_meta_v4_claim",
@@ -3746,6 +3798,8 @@ mod tests {
             "relay_autonomous_action_via_github_comment",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "inspect_open_competition_v2",
+            "prepare_open_competition_v2",
             "prepare_agent_to_earn",
             "list_autonomous_bounty_events",
             "plan_objective_creation",
@@ -3762,6 +3816,19 @@ mod tests {
             .agent_tools
             .iter()
             .all(|item| !item.starts_with("plan_base_")));
+        assert!(manifest
+            .endpoints
+            .open_competition_v2_release
+            .contains("open-competition-v2-beta3/release"));
+        assert!(manifest
+            .endpoints
+            .open_competition_v2_inventory
+            .contains("open-competition-v2-beta3/inventory"));
+        assert!(manifest.protocol["additive_modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|mode| mode["version"] == "agent-bounties/open-competition-v2-beta3"));
         assert!(manifest
             .verification_modes
             .iter()

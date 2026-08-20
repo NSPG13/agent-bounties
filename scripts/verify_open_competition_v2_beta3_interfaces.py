@@ -39,15 +39,33 @@ def contains_beta3(value: Any) -> bool:
     return False
 
 
+def unwrap_mcp_release(response: dict[str, Any]) -> dict[str, Any]:
+    """Return the proxied HTTP body from a standard MCP tool result."""
+    content = response.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        raise InterfaceError("MCP release proxy returned an invalid tool envelope")
+    item = content[0]
+    if not isinstance(item, dict) or item.get("type") != "json":
+        raise InterfaceError("MCP release proxy returned a non-JSON tool result")
+    payload = item.get("json")
+    if not isinstance(payload, dict) or payload.get("http_status") != 200:
+        raise InterfaceError("MCP release proxy did not return HTTP 200")
+    body = payload.get("body")
+    if not isinstance(body, dict):
+        raise InterfaceError("MCP release proxy omitted its HTTP body")
+    return body
+
+
 def verify(api: str, mcp: str, expected: dict[str, Any]) -> dict[str, Any]:
     api = api.rstrip("/")
     mcp = mcp.rstrip("/")
     api_release = request_json("GET", f"{api}/v1/base/open-competition-v2-beta3/release?network=base-mainnet")
-    mcp_release = request_json(
+    mcp_result = request_json(
         "POST",
         f"{mcp}/tools/inspect_open_competition_v2",
         {"operation": "release", "network": "base-mainnet"},
     )
+    mcp_release = unwrap_mcp_release(mcp_result)
     if not runtime_wait.exact_runtime(api_release, expected, True, False):
         raise InterfaceError("API release or indexer agreement differs from expected Beta3 runtime")
     if not runtime_wait.exact_runtime(mcp_release, expected, True, False):

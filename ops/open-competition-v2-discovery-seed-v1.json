@@ -5,7 +5,7 @@
   "profile_id": "structured-artifact-metric-v1",
   "economics": {
     "solver_reward_base_units": 3000000,
-    "keeper_reward_base_units": 50000,
+    "keeper_reward_base_units": 40000,
     "hosted_proof_fee_base_units": 100000,
     "hosted_relay_fee_base_units": 10000,
     "minimum_net_prize_base_units": 2000001
