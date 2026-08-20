@@ -517,6 +517,8 @@ pub(crate) async fn inventory(
         .map(|record| {
             let estimated_net = estimated_hosted_net_prize(&record.projection);
             let proof_fee = configured_proof_fee(&record.projection);
+            let relay_fee =
+                configured_u128_optional("OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS");
             let risk = if !matches!(
                 record.projection.state,
                 chain_base::OpenCompetitionV2ProjectedState::Active
@@ -534,10 +536,11 @@ pub(crate) async fn inventory(
                 "earning_estimate": {
                     "gross_prize": record.projection.solver_reward.to_string(),
                     "hosted_proof_fee_quote": proof_fee.map(|value| value.to_string()),
+                    "hosted_relay_fee_quote": relay_fee.map(|value| value.to_string()),
                     "hosted_net_prize_if_win": estimated_net.map(|value| value.to_string()),
                     "profitable_if_win": estimated_net.map(|value| value > 0),
                     "competition_risk": risk,
-                    "relay_fee_excluded": true,
+                    "relay_fee_excluded": false,
                     "warning": "A positive net prize is conditional on winning and is never guaranteed profit. Request a solver-bound five-minute quote before paying."
                 }
             })
