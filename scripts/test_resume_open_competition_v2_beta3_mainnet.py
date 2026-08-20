@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -7,6 +8,17 @@ WORKFLOW = ROOT / ".github/workflows/resume-open-competition-v2-beta3-mainnet.ym
 
 
 class MainnetResumeWorkflowTests(unittest.TestCase):
+    def test_github_yaml_parser_keeps_hex_constants_as_strings(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        for key in (
+            "PLONK_COMPETITION",
+            "PLONK_SETTLEMENT_TRANSACTION",
+            "FORCED_REFUND_PAYMENT_TRANSACTION",
+            "FORCED_REFUND_TRANSACTION",
+            "BASE_USDC",
+        ):
+            self.assertRegex(text, rf'(?m)^  {re.escape(key)}: "0x[0-9a-f]+"$')
+
     def test_resume_is_protected_and_reuses_canonical_funded_competition(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(text.count("environment: v2-beta2-mainnet"), 2)
