@@ -18,6 +18,7 @@ from _shared.rpc import rpc
 
 
 TARGET_FUNDING = 262_500
+TARGET_X402_SERVICE_BALANCE = 110_000
 PROOF_WINDOW = 7_200
 MINIMUM_SLA = 1_800
 DEADLINE_MARGIN = 300
@@ -62,6 +63,11 @@ def has_runtime_code(value: str) -> bool:
     require(isinstance(value, str) and value.startswith("0x"), "invalid bytecode response")
     payload = value[2:]
     return bool(payload) and int(payload, 16) != 0
+
+
+def required_top_up(current: int, target: int) -> int:
+    require(current >= 0 and target >= 0, "token balances cannot be negative")
+    return max(0, target - current)
 
 
 def replace_rehearsal_canary(
@@ -305,6 +311,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 [params_tuple, TARGET_FUNDING, creation_nonce, rehearsal.b32(bundle["risk"]["hash"])],
             ),
         )
+    solver_balance_before = rehearsal.token_balance(client.url, token, solver.address)
+    solver_top_up = required_top_up(
+        solver_balance_before, TARGET_X402_SERVICE_BALANCE
+    )
+    if solver_top_up:
+        require(
+            rehearsal.token_balance(client.url, token, signer.address) >= solver_top_up,
+            "deployer lacks USDC for the generated solver proof-service reserve",
+        )
+        receipts["fund_solver_x402_service"] = client.send(
+            signer,
+            to=token,
+            data=rehearsal.function_data(
+                "transfer(address,uint256)",
+                ["address", "uint256"],
+                [solver.address, solver_top_up],
+            ),
+        )
+    require(
+        rehearsal.token_balance(client.url, token, solver.address)
+        >= TARGET_X402_SERVICE_BALANCE,
+        "generated solver proof-service reserve was not funded",
+    )
     proof_deadline = verify_new_canary(
         client.url, token, competition, bounty_id, signer, params_tuple
     )
@@ -337,6 +366,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "competition": competition,
         "bounty_id": bounty_id,
         "solver": solver.address.lower(),
+        "solver_x402_service_balance_before": str(solver_balance_before),
+        "solver_x402_service_top_up": str(solver_top_up),
+        "solver_x402_service_balance_after": str(
+            rehearsal.token_balance(client.url, token, solver.address)
+        ),
         "proof_deadline": proof_deadline,
         "minimum_broker_sla_seconds": MINIMUM_SLA,
         "superseded_recovery": recovery,

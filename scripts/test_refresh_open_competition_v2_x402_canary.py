@@ -56,6 +56,15 @@ class RefreshX402CanaryTests(unittest.TestCase):
         self.assertFalse(MODULE.has_runtime_code("0x0"))
         self.assertTrue(MODULE.has_runtime_code("0x6000"))
 
+    def test_solver_service_top_up_is_exact_and_idempotent(self):
+        target = MODULE.TARGET_X402_SERVICE_BALANCE
+        self.assertEqual(MODULE.required_top_up(0, target), target)
+        self.assertEqual(MODULE.required_top_up(10_000, target), 100_000)
+        self.assertEqual(MODULE.required_top_up(target, target), 0)
+        self.assertEqual(MODULE.required_top_up(target + 1, target), 0)
+        with self.assertRaises(MODULE.CanaryRefreshError):
+            MODULE.required_top_up(-1, target)
+
     def test_rehearsal_preserves_superseded_evidence_and_rebinds_first_proven(self):
         old = {
             "competition": "0x" + "11" * 20,
