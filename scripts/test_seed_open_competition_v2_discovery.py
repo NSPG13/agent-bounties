@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import unittest
 
+from eth_account import Account
+from eth_utils import to_checksum_address
+
 
 PATH = Path(__file__).with_name("seed_open_competition_v2_discovery.py")
 SPEC = importlib.util.spec_from_file_location("seed_open_competition_v2_discovery", PATH)
@@ -91,6 +94,24 @@ class DiscoverySeedTests(unittest.TestCase):
             profile_document=profile,
         )
         self.assertNotEqual(first["creation_nonce"], third["creation_nonce"])
+
+    def test_base_usdc_target_is_signable_after_checksum_normalization(self):
+        signer = Account.create("agent-bounties-beta3-seed-test")
+        target = to_checksum_address(MODULE.USDC)
+        signed = signer.sign_transaction(
+            {
+                "chainId": MODULE.CHAIN_ID,
+                "to": target,
+                "nonce": 0,
+                "value": 0,
+                "data": "0x",
+                "gas": 21_000,
+                "maxFeePerGas": 2_000_000,
+                "maxPriorityFeePerGas": 1_000_000,
+                "type": 2,
+            }
+        )
+        self.assertGreater(len(signed.raw_transaction), 0)
 
 
 if __name__ == "__main__":
