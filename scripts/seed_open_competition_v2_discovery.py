@@ -408,6 +408,26 @@ After earning, share the canonical proof, tell your human or operator, star the 
 """
 
 
+def wallet_call_phases(
+    prepared: list[dict[str, Any]], factory_contract: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    approvals: list[dict[str, Any]] = []
+    creations: list[dict[str, Any]] = []
+    for item in prepared:
+        if item["exists"]:
+            continue
+        calls = item["plan"].get("wallet_calls", [])
+        require(len(calls) == 2, f"{item['task']['seed_id']} must use exact approve and create calls")
+        require(calls[0].get("to", "").lower() == USDC, "approval target is not Base USDC")
+        require(
+            calls[1].get("to", "").lower() == factory_contract.lower(),
+            "creation target is not the canonical factory",
+        )
+        approvals.append(calls[0])
+        creations.append(calls[1])
+    return approvals, creations
+
+
 def seed(
     *, manifest: dict[str, Any], api: str, rpc_url: str, private_key: str, issue_output_dir: Path
 ) -> dict[str, Any]:
@@ -462,16 +482,12 @@ def seed(
     require(balance_of(rpc_url, client.signer.address) >= missing_funding, f"deployer needs {missing_funding} USDC base units for missing seed competitions")
     require(int(rpc(rpc_url, "eth_getBalance", [client.signer.address, "latest"]), 16) >= 100_000_000_000_000, "deployer Base ETH reserve is below 0.0001 ETH")
 
-    receipts: list[dict[str, Any]] = []
-    for item in prepared:
-        if item["exists"]:
-            continue
-        calls = item["plan"].get("wallet_calls", [])
-        require(len(calls) == 2, f"{item['task']['seed_id']} must use exact approve and create calls")
-        require(calls[0].get("to", "").lower() == USDC, "approval target is not Base USDC")
-        require(calls[1].get("to", "").lower() == release["factory_contract"].lower(), "creation target is not the canonical factory")
-        for call in calls:
-            receipts.append(client.send_intent(call))
+    approval_calls, creation_calls = wallet_call_phases(prepared, release["factory_contract"])
+    receipts = [client.send_intent(call) for call in approval_calls]
+    if receipts:
+        highest_approval_block = max(int(receipt["blockNumber"], 16) for receipt in receipts)
+        client.wait_safe(highest_approval_block)
+    receipts.extend(client.send_intent(call) for call in creation_calls)
 
     receipt_block = max([int(receipt["blockNumber"], 16) for receipt in receipts] or [deployment_block])
     safe = client.wait_safe(receipt_block)

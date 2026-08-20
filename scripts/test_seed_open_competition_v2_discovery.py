@@ -113,6 +113,33 @@ class DiscoverySeedTests(unittest.TestCase):
         )
         self.assertGreater(len(signed.raw_transaction), 0)
 
+    def test_all_approvals_are_sequenced_before_any_creation(self):
+        factory = "0x" + "aa" * 20
+        approval_a = {"to": MODULE.USDC, "data": "0x01"}
+        approval_b = {"to": MODULE.USDC, "data": "0x02"}
+        create_a = {"to": factory, "data": "0x03"}
+        create_b = {"to": factory, "data": "0x04"}
+        prepared = [
+            {
+                "task": {"seed_id": "a"},
+                "plan": {"wallet_calls": [approval_a, create_a]},
+                "exists": False,
+            },
+            {
+                "task": {"seed_id": "existing"},
+                "plan": {"wallet_calls": [approval_a, create_a]},
+                "exists": True,
+            },
+            {
+                "task": {"seed_id": "b"},
+                "plan": {"wallet_calls": [approval_b, create_b]},
+                "exists": False,
+            },
+        ]
+        approvals, creations = MODULE.wallet_call_phases(prepared, factory)
+        self.assertEqual(approvals, [approval_a, approval_b])
+        self.assertEqual(creations, [create_a, create_b])
+
 
 if __name__ == "__main__":
     unittest.main()
