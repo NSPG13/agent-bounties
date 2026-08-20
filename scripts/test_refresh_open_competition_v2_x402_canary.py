@@ -29,6 +29,8 @@ class RefreshX402CanaryTests(unittest.TestCase):
         bundle = MODULE.runtime_bundle(runtime)
         self.assertIs(bundle["metric_profile"], profile)
         self.assertEqual(bundle["factory"]["address"], runtime["factory_contract"])
+        self.assertEqual(bundle["chain_id"], 84532)
+        self.assertEqual(MODULE.runtime_bundle(runtime, 8453)["chain_id"], 8453)
 
     def test_runtime_bundle_rejects_disabled_profile(self):
         runtime = {

@@ -34,7 +34,7 @@ def require(condition: bool, message: str) -> None:
         raise CanaryRefreshError(message)
 
 
-def runtime_bundle(runtime: dict[str, Any]) -> dict[str, Any]:
+def runtime_bundle(runtime: dict[str, Any], chain_id: int | None = None) -> dict[str, Any]:
     profiles = runtime.get("metric_programs")
     require(isinstance(profiles, list), "runtime metric programs are missing")
     profile = next(
@@ -44,7 +44,7 @@ def runtime_bundle(runtime: dict[str, Any]) -> dict[str, Any]:
     require(isinstance(profile, dict), "reviewed public-vector metric profile is missing")
     require(profile.get("classification") == "reviewed", "public-vector metric profile is not reviewed")
     return {
-        "chain_id": 84532,
+        "chain_id": chain_id if chain_id is not None else int(runtime.get("chain_id", 84532)),
         "source_commit": runtime["source_commit"],
         "settlement_token": runtime["settlement_token"],
         "factory": {"address": runtime["factory_contract"]},
@@ -225,11 +225,12 @@ def verify_new_canary(
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     require(args.rpc_url.startswith("https://"), "replacement RPC must use HTTPS")
-    sepolia.configure_network(argparse.Namespace(network="base-sepolia", rpc_url=args.rpc_url))
+    chain_id = 8453 if args.network == "base-mainnet" else 84532
+    sepolia.configure_network(argparse.Namespace(network=args.network, rpc_url=args.rpc_url))
     runtime = json.loads(args.runtime.read_text(encoding="utf-8"))
     document = json.loads(args.rehearsal.read_text(encoding="utf-8"))
-    bundle = runtime_bundle(runtime)
-    require(runtime.get("network") == "base-sepolia", "runtime is not Base Sepolia")
+    bundle = runtime_bundle(runtime, chain_id)
+    require(runtime.get("network") == args.network, "runtime network differs from the requested network")
     require(document.get("passed") is True, "preserved rehearsal did not pass")
     require(document.get("source_commit") == runtime.get("source_commit"), "release source mismatch")
 
@@ -249,7 +250,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     recovery = recover_superseded(client, signer, token, old, receipts)
 
     template = json.loads(args.fixture.read_text(encoding="utf-8"))
-    label = f"sepolia-x402-first-replacement-{args.replacement_id}"
+    network_label = "mainnet" if args.network == "base-mainnet" else "sepolia"
+    label = f"{network_label}-x402-first-replacement-{args.replacement_id}"
     params = list(
         rehearsal.params(
             client.url,
@@ -285,7 +287,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not has_runtime_code(code):
         require(
             rehearsal.token_balance(client.url, token, signer.address) >= TARGET_FUNDING,
-            "deployer lacks test USDC for the replacement canary",
+            "deployer lacks USDC for the replacement canary",
         )
         receipts["approve_replacement"] = client.send(
             signer,
@@ -328,8 +330,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     evidence = {
         "schema_version": "agent-bounties/open-competition-v2-beta3-x402-canary-replacement-v1",
         "passed": True,
-        "network": "base-sepolia",
-        "chain_id": 84532,
+        "network": args.network,
+        "chain_id": chain_id,
         "source_commit": bundle["source_commit"],
         "replacement_id": args.replacement_id,
         "competition": competition,
@@ -340,7 +342,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "superseded_recovery": recovery,
         "transactions": {name: transaction_record(value) for name, value in receipts.items()},
         "safe_block": safe,
-        "evidence_boundary": "Synthetic Base Sepolia canary replacement only; no mainnet value moved.",
+        "evidence_boundary": (
+            "Synthetic Base mainnet canary replacement; canonical Base USDC moved only through the isolated release contracts."
+            if args.network == "base-mainnet"
+            else "Synthetic Base Sepolia canary replacement only; no mainnet value moved."
+        ),
     }
     replace_rehearsal_canary(document, new_canary, evidence)
     atomic_json(args.rehearsal, document)
@@ -350,6 +356,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--network", choices=("base-sepolia", "base-mainnet"), default="base-sepolia"
+    )
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--rehearsal", type=Path, required=True)
