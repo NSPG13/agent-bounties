@@ -1130,6 +1130,7 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
@@ -1169,6 +1170,7 @@ jobs:
           KEEPER="${BASE_KEEPER_ADDRESS,,}"
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
+          forge build --root contracts/base-escrow --force --ast
           cargo build --locked --release -p api -p worker
           bundle=target/mainnet-deployment/mainnet-exact.json
           python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
