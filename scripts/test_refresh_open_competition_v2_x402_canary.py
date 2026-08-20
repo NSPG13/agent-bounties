@@ -88,6 +88,11 @@ class RefreshX402CanaryTests(unittest.TestCase):
         self.assertEqual(document["groth16_first_proven"]["competition"], new["competition"])
         self.assertTrue(document["groth16_first_proven"]["settlement_deferred_to_x402"])
 
+    def test_generated_solver_nonce_fits_the_protocol_uint128(self):
+        nonce = MODULE.time.time_ns()
+        self.assertGreater(nonce, 0)
+        self.assertLess(nonce, 2**128)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -282,10 +282,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     competition, bounty_id = rehearsal.predict(
         client.url, factory, signer.address, params_tuple, creation_nonce
     )
+    solver_nonce = time.time_ns()
     fixture = rehearsal.fixture_builder.bind(
         template,
         rehearsal.scope(
-            bundle, params_tuple, competition, bounty_id, solver.address, 3, "groth16"
+            bundle,
+            params_tuple,
+            competition,
+            bounty_id,
+            solver.address,
+            solver_nonce,
+            "groth16",
         ),
     )
 
@@ -346,7 +353,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }
     )
     new_canary = sepolia.x402_canary_spec(
-        fixture, competition, bounty_id, solver.address, 3
+        fixture, competition, bounty_id, solver.address, solver_nonce
     )
     new_canary.update(
         {
@@ -366,6 +373,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "competition": competition,
         "bounty_id": bounty_id,
         "solver": solver.address.lower(),
+        "solver_nonce": str(solver_nonce),
         "solver_x402_service_balance_before": str(solver_balance_before),
         "solver_x402_service_top_up": str(solver_top_up),
         "solver_x402_service_balance_after": str(
