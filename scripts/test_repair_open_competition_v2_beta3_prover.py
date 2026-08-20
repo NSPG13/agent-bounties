@@ -25,9 +25,23 @@ class ProductionProverRepairWorkflowTests(unittest.TestCase):
         self.assertIn("SupplementaryGroups=docker", text)
         self.assertIn("Environment=TMPDIR=/var/lib/agent-bounties-prover/tmp", text)
         self.assertIn(
+            "ExecStartPre=/usr/bin/test -f /var/lib/agent-bounties-prover/circuits/groth16/agent-bounties-sp1-safe-v5/.complete",
+            text,
+        )
+        self.assertIn(
             "ExecStartPre=/usr/bin/docker image inspect ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5",
             text,
         )
+
+    def test_repair_uses_private_writable_verified_circuit_cache(self) -> None:
+        text = (
+            ROOT / ".github/workflows/repair-open-competition-v2-beta3-prover.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "--install-root /var/lib/agent-bounties-prover/circuits", text
+        )
+        self.assertIn("sudo chmod -R u=rwX,go=", text)
+        self.assertNotIn("--install-root /opt/agent-bounties/circuits", text)
 
 
 if __name__ == "__main__":

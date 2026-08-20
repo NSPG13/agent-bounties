@@ -39,11 +39,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 \
+            /var/lib/agent-bounties-prover/circuits
           sudo python3 scripts/install_open_competition_v2_prover_assets.py \
             --trusted-root "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT" \
-            --install-root /opt/agent-bounties/circuits \
+            --install-root /var/lib/agent-bounties-prover/circuits \
             --circuit-version "$SP1_SAFE_CIRCUIT_VERSION" \
             --output /tmp/open-competition-v2-prover-assets.json
+          sudo chown -R agent-bounties-prover:agent-bounties-prover \
+            /var/lib/agent-bounties-prover/circuits
+          sudo chmod -R u=rwX,go= /var/lib/agent-bounties-prover/circuits
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 \
             /var/lib/agent-bounties-prover/tmp
           sudo install -m 0755 scripts/open_competition_v2_prover_service.py \
@@ -57,8 +62,8 @@ jobs:
           path = Path("/etc/agent-bounties/prover.env")
           updates = {
               "SP1_GNARK_IMAGE": os.environ["SP1_GNARK_RUNTIME_IMAGE"],
-              "SP1_GROTH16_CIRCUIT_PATH": "/opt/agent-bounties/circuits/groth16",
-              "SP1_PLONK_CIRCUIT_PATH": "/opt/agent-bounties/circuits/plonk",
+              "SP1_GROTH16_CIRCUIT_PATH": "/var/lib/agent-bounties-prover/circuits/groth16",
+              "SP1_PLONK_CIRCUIT_PATH": "/var/lib/agent-bounties-prover/circuits/plonk",
           }
           kept = []
           for line in path.read_text(encoding="utf-8").splitlines():

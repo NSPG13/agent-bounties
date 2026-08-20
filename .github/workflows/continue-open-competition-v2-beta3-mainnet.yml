@@ -175,11 +175,14 @@ jobs:
           expected_gnark_cli="$(awk 'NR == 1 { print $1 }' target/mainnet-deployment/release-assets/gnark-cli.sha256)"
           actual_gnark_cli="$(docker run --rm --entrypoint sha256sum "$SP1_GNARK_RUNTIME_IMAGE" /gnark-cli | awk 'NR == 1 { print $1 }')"
           test "$actual_gnark_cli" = "$expected_gnark_cli"
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/circuits
           sudo python3 .release-control/scripts/install_open_competition_v2_prover_assets.py \
             --trusted-root "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT" \
-            --install-root /opt/agent-bounties/circuits \
+            --install-root /var/lib/agent-bounties-prover/circuits \
             --circuit-version "$SP1_SAFE_CIRCUIT_VERSION" \
             --output /tmp/open-competition-v2-prover-assets.json
+          sudo chown -R agent-bounties-prover:agent-bounties-prover /var/lib/agent-bounties-prover/circuits
+          sudo chmod -R u=rwX,go= /var/lib/agent-bounties-prover/circuits
           sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/tmp
@@ -198,8 +201,8 @@ jobs:
           PORT=9070
           SP1_PROVER=cpu
           SP1_GNARK_IMAGE=$SP1_GNARK_RUNTIME_IMAGE
-          SP1_GROTH16_CIRCUIT_PATH=/opt/agent-bounties/circuits/groth16
-          SP1_PLONK_CIRCUIT_PATH=/opt/agent-bounties/circuits/plonk
+          SP1_GROTH16_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/groth16
+          SP1_PLONK_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/plonk
           EOF
           sudo install -m 0600 target/prover.env /etc/agent-bounties/prover.env
           sudo systemctl daemon-reload

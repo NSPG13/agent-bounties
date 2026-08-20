@@ -183,11 +183,11 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
             self.text,
         )
         self.assertIn(
-            "SP1_GROTH16_CIRCUIT_PATH=/opt/agent-bounties/circuits/groth16",
+            "SP1_GROTH16_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/groth16",
             self.text,
         )
         self.assertIn(
-            "SP1_PLONK_CIRCUIT_PATH=/opt/agent-bounties/circuits/plonk",
+            "SP1_PLONK_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/plonk",
             self.text,
         )
         self.assertNotIn(
