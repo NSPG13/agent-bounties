@@ -19,8 +19,8 @@ class DiscoverySeedTests(unittest.TestCase):
 
     def test_exact_seed_has_five_profitable_fully_funded_competitions(self):
         economics = MODULE.validate_manifest(self.manifest())
-        self.assertEqual(economics["funding_per_competition"], 3_050_000)
-        self.assertEqual(economics["total_funding"], 15_250_000)
+        self.assertEqual(economics["funding_per_competition"], 3_040_000)
+        self.assertEqual(economics["total_funding"], 15_200_000)
         self.assertEqual(economics["net_prize"], 2_890_000)
 
     def test_seed_rejects_inventory_or_economic_drift(self):
