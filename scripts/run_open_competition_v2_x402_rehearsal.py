@@ -69,6 +69,35 @@ def request_json(
     return status, value, response_headers
 
 
+def wait_for_active_competition(
+    api: str, network: str, competition: str, deadline: float
+) -> None:
+    inventory_url = (
+        f"{api}/v1/base/open-competition-v2-beta3/inventory?network={network}"
+    )
+    while time.time() < deadline:
+        _, inventory, _ = request_json("GET", inventory_url)
+        projection = next(
+            (
+                item.get("record", {}).get("projection", {})
+                for item in inventory.get("competitions", [])
+                if item.get("record", {})
+                .get("projection", {})
+                .get("competition", "")
+                .lower()
+                == competition.lower()
+            ),
+            None,
+        )
+        if projection is None:
+            time.sleep(3)
+            continue
+        state = projection.get("state")
+        require(state == "active", f"competition became {state} before proof quote")
+        return
+    raise X402RehearsalError("competition did not become active in hosted inventory")
+
+
 def decode_x402_header(value: str) -> dict[str, Any]:
     try:
         decoded = base64.b64decode(value, validate=True)
@@ -368,6 +397,7 @@ def main() -> int:
         validate_resumable_job(resumed, spec, args.network)
         payment = resumed_payment(resumed)
     else:
+        wait_for_active_competition(api, args.network, spec["competition"], deadline)
         quote_payload = build_quote_payload(spec, args.network)
         _, quote, _ = request_json(
             "POST", f"{api}/v1/base/open-competition-v2-beta3/proof-quotes", quote_payload
