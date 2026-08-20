@@ -943,10 +943,7 @@ async fn find_canonical_refund(
         settlement_token,
         from_block,
         Some(safe.number),
-        vec![
-            event_topic("Transfer(address,address,uint256)"),
-            event_topic("AuthorizationUsed(address,bytes32)"),
-        ],
+        vec![event_topic("AuthorizationUsed(address,bytes32)")],
     )?;
     let logs = rpc_logs_to_evm_logs(fetch_base_contract_logs(rpc_url, &query, 82).await?.result)?;
     let authorization_topic = event_topic("AuthorizationUsed(address,bytes32)");
@@ -1361,6 +1358,24 @@ mod tests {
             [0x78, 0x0d, 0x06, 0x43],
             &[0x43, 0x88, 0xa2, 0x1c, 1]
         ));
+    }
+
+    #[test]
+    fn refund_discovery_scans_only_authorization_events() {
+        let query = BaseContractLogQuery::new(
+            format!("0x{}", "11".repeat(20)),
+            100,
+            Some(200),
+            vec![event_topic("AuthorizationUsed(address,bytes32)")],
+        )
+        .unwrap();
+        let request = query.rpc_request(82);
+        assert_eq!(request.params[0].topics.len(), 1);
+        assert_eq!(request.params[0].topics[0].len(), 1);
+        assert_eq!(
+            request.params[0].topics[0][0],
+            event_topic("AuthorizationUsed(address,bytes32)")
+        );
     }
 
     #[test]
