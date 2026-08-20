@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from eth_account import Account
-from eth_utils import keccak
+from eth_utils import keccak, to_checksum_address
 
 from _shared.evm import address_word
 from _shared.rpc import rpc
@@ -162,10 +162,11 @@ class SignedRpc:
 
     def send_intent(self, intent: dict[str, Any]) -> dict[str, Any]:
         require(intent.get("from", "").lower() == self.signer.address.lower(), "wallet call sender mismatch")
-        to = intent.get("to", "")
+        target = intent.get("to", "")
         data = intent.get("data", "")
         value = int(intent.get("value_wei", 0))
-        require(ADDRESS.fullmatch(to) is not None, "wallet call target is invalid")
+        require(ADDRESS.fullmatch(target) is not None, "wallet call target is invalid")
+        to = to_checksum_address(target)
         require(isinstance(data, str) and data.startswith("0x") and len(data) % 2 == 0, "wallet call data is invalid")
         nonce = int(rpc(self.url, "eth_getTransactionCount", [self.signer.address, "pending"]), 16)
         latest = rpc(self.url, "eth_getBlockByNumber", ["latest", False])
