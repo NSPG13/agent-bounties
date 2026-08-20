@@ -14,9 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
 use sha3::{Digest, Keccak256};
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 use verifier_sdk::RegressionSandboxPolicy;
