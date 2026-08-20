@@ -26,7 +26,9 @@ class MainnetResumeWorkflowTests(unittest.TestCase):
         self.assertIn("open-competition-v2-beta3-mainnet-deployment-continuation", text)
         self.assertIn("open-competition-v2-beta3-production-control-plane-continuation", text)
         self.assertIn("EXISTING_X402_JOB_ID", text)
-        self.assertIn('"solver_nonce": "4"', text)
+        self.assertIn("recovery_nonce = str(time.time_ns())", text)
+        self.assertIn('"solver_nonce": recovery_nonce', text)
+        self.assertNotRegex(text, r'"solver_nonce": "\d+"')
         self.assertNotIn("createCompetition(", text)
         self.assertNotIn("approve(address", text)
 
