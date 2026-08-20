@@ -10,7 +10,9 @@ import json
 import os
 from pathlib import Path
 import re
+import urllib.error
 import urllib.parse
+import urllib.request
 from typing import Any
 
 from eth_account import Account
@@ -88,6 +90,97 @@ def utc_now() -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise Beta3RenderError(message)
+
+
+def rpc_call(url: str, method: str, params: list[Any], request_id: int) -> Any:
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+        separators=(",", ":"),
+    ).encode()
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "content-type": "application/json",
+            "user-agent": "agent-bounties-beta3-rpc-preflight/1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            value = json.loads(response.read())
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        raise Beta3RenderError(
+            f"{method} RPC preflight failed: {type(error).__name__}"
+        ) from None
+    require(isinstance(value, dict), f"{method} RPC response must be an object")
+    error = value.get("error")
+    require(error is None, f"{method} RPC preflight returned an error")
+    require("result" in value, f"{method} RPC preflight omitted result")
+    return value["result"]
+
+
+def preflight_rpc_pair(
+    runtime: dict[str, Any], primary_rpc_url: str, shadow_rpc_url: str
+) -> dict[str, Any]:
+    deployment_block = runtime["deployment_block"]
+    query_end = deployment_block + 1_999
+    factory = runtime["factory_contract"].lower()
+    safe_blocks: list[dict[str, Any]] = []
+    for offset, url in enumerate((primary_rpc_url, shadow_rpc_url)):
+        chain_id = rpc_call(url, "eth_chainId", [], 910_000 + offset * 10)
+        require(chain_id == "0x2105", "RPC preflight returned a non-Base-mainnet chain id")
+        logs = rpc_call(
+            url,
+            "eth_getLogs",
+            [
+                {
+                    "address": factory,
+                    "fromBlock": hex(deployment_block),
+                    "toBlock": hex(query_end),
+                }
+            ],
+            910_001 + offset * 10,
+        )
+        require(isinstance(logs, list), "RPC preflight logs result must be a list")
+        safe = rpc_call(
+            url, "eth_getBlockByNumber", ["safe", False], 910_002 + offset * 10
+        )
+        require(isinstance(safe, dict), "RPC preflight safe block must be an object")
+        try:
+            number = int(str(safe["number"]), 16)
+        except (KeyError, TypeError, ValueError):
+            raise Beta3RenderError("RPC preflight safe block number is invalid") from None
+        require(number >= deployment_block, "RPC safe head predates the Beta3 deployment")
+        safe_blocks.append({"number": number, "hash": str(safe.get("hash", "")).lower()})
+
+    common = min(item["number"] for item in safe_blocks)
+    common_hashes = []
+    for offset, url in enumerate((primary_rpc_url, shadow_rpc_url)):
+        block = rpc_call(
+            url,
+            "eth_getBlockByNumber",
+            [hex(common), False],
+            910_003 + offset * 10,
+        )
+        require(isinstance(block, dict), "RPC preflight common block must be an object")
+        common_hashes.append(str(block.get("hash", "")).lower())
+    require(
+        len(set(common_hashes)) == 1 and HASH.fullmatch(common_hashes[0]) is not None,
+        "primary and shadow RPCs disagree on the common safe block",
+    )
+    max_lag = max(item["number"] - common for item in safe_blocks)
+    require(max_lag <= 64, "primary and shadow RPC safe heads differ by more than 64 blocks")
+    return {
+        "passed": True,
+        "chain_id": 8453,
+        "factory_contract": factory,
+        "archive_query_from_block": deployment_block,
+        "archive_query_to_block": query_end,
+        "common_safe_block": common,
+        "common_safe_block_hash": common_hashes[0],
+        "max_safe_head_lag_blocks": max_lag,
+        "endpoints_redacted": True,
+    }
 
 
 def validated_runtime(path: Path) -> dict[str, Any]:
@@ -457,6 +550,9 @@ def main() -> int:
         deployer_address=args.deployer_address,
         refund_reserve_min_base_units=args.refund_reserve_min_base_units,
     )
+    rpc_preflight = preflight_rpc_pair(
+        runtime, args.primary_rpc_url, args.shadow_rpc_url
+    )
     client = render.RenderClient(os.environ.get("RENDER_API_KEY", ""))
     evidence = deploy(
         client,
@@ -467,6 +563,7 @@ def main() -> int:
         timeout_seconds=args.timeout_seconds,
         poll_seconds=args.poll_seconds,
     )
+    evidence["rpc_preflight"] = rpc_preflight
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"passed": True, "output": str(args.output)}))

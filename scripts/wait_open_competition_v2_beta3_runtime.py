@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 from typing import Any
 
@@ -55,10 +55,18 @@ def exact_runtime(response: dict[str, Any], expected: dict[str, Any], broker: bo
 
 
 def fetch(url: str) -> dict[str, Any]:
-    separator = "&" if "?" in url else "?"
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["network"] = "base-mainnet"
+    target = urlunsplit(parsed._replace(query=urlencode(query)))
     request = Request(
-        f"{url}{separator}{urlencode({'network': 'base-mainnet', '_probe': time.time_ns()})}",
-        headers={"accept": "application/json", "cache-control": "no-store"},
+        target,
+        headers={
+            "accept": "application/json",
+            "cache-control": "no-store",
+            "pragma": "no-cache",
+            "user-agent": "agent-bounties-beta3-readiness/1",
+        },
     )
     with urlopen(request, timeout=20) as response:
         return json.loads(response.read())
@@ -67,15 +75,25 @@ def fetch(url: str) -> dict[str, Any]:
 def wait(url: str, expected: dict[str, Any], broker: bool, public: bool, timeout: float, poll: float) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     last: dict[str, Any] | None = None
+    last_error = "none"
     while time.monotonic() < deadline:
         try:
             last = fetch(url)
             if exact_runtime(last, expected, broker, public):
                 return last
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
-            pass
+            last_error = "runtime_mismatch"
+        except HTTPError as error:
+            last_error = f"http_status={error.code}"
+        except URLError as error:
+            last_error = f"url_error={type(error.reason).__name__}"
+        except TimeoutError:
+            last_error = "timeout"
+        except json.JSONDecodeError:
+            last_error = "invalid_json"
         time.sleep(poll)
-    raise RuntimeWaitError(f"hosted runtime did not reconcile before timeout; last={last}")
+    raise RuntimeWaitError(
+        f"hosted runtime did not reconcile before timeout; last_error={last_error}; last={last}"
+    )
 
 
 def main() -> int:
