@@ -69,6 +69,7 @@ class InventoryReport:
     meta_replenishment_target: int
     open_bounty_count: int
     verified_claimable_count: int
+    verified_open_competition_v2_count: int
     verified_meta_claimable_count: int
     missing_count: int
     meta_missing_count: int
@@ -93,6 +94,7 @@ class InventoryReport:
             f"- Repository: `{self.repository}`",
             f"- Open actionable `bounty` issues (candidate supply): **{self.open_bounty_count}**",
             f"- Verified canonical claimable bounties: **{self.verified_claimable_count}**",
+            f"- Verified Open Competition V2 entries: **{self.verified_open_competition_v2_count}**",
             f"- Claimable threshold: **{self.threshold}**",
             f"- Missing claimable bounties: **{self.missing_count}**",
             f"- Verified standing meta-bounties: **{self.verified_meta_claimable_count}**",
@@ -152,14 +154,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--meta-threshold",
         type=int,
-        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "5")),
-        help="Hard floor for funded, claimable standing meta-bounties (default 5)",
+        default=int(os.environ.get("META_BOUNTY_INVENTORY_THRESHOLD", "1")),
+        help="Hard floor for funded, claimable standing meta-bounties (default 1)",
     )
     p.add_argument(
         "--meta-replenishment-target",
         type=int,
-        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "5")),
-        help="Target for funded, claimable standing meta-bounties (default 5)",
+        default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "2")),
+        help="Target for funded, claimable standing meta-bounties (default 2)",
     )
     p.add_argument(
         "--claimable-report",
@@ -377,6 +379,64 @@ def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bo
     return verified, True, protocol_status
 
 
+def verified_open_competition_v2_entries(
+    report: object,
+) -> tuple[list[dict[str, Any]], bool]:
+    if not isinstance(report, dict):
+        return [], False
+    if "open_competition_v2_status" not in report:
+        return [], True
+    if report.get("open_competition_v2_status") != "verified":
+        return [], False
+    items = report.get("verified_open_competition_v2_bounties")
+    if not isinstance(items, list):
+        return [], False
+    ids: set[str] = set()
+    contracts: set[str] = set()
+    verified: list[dict[str, Any]] = []
+    now = int(datetime.now(timezone.utc).timestamp())
+    for item in items:
+        if not isinstance(item, dict):
+            return [], False
+        bounty_id = str(item.get("id") or "").lower()
+        contract = str(item.get("contract") or "").lower()
+        reward = item.get("solver_reward_minor")
+        net = item.get("hosted_net_prize_if_win_minor")
+        deadline = item.get("proof_deadline")
+        safe_block = item.get("observed_safe_block")
+        valid = (
+            BYTES32.fullmatch(bounty_id)
+            and ADDRESS.fullmatch(contract)
+            and bounty_id not in ids
+            and contract not in contracts
+            and item.get("status") == "claimable"
+            and item.get("evidence")
+            == "confirmed_canonical_open_competition_v2"
+            and item.get("currency") == "usdc"
+            and isinstance(reward, int)
+            and not isinstance(reward, bool)
+            and reward > 0
+            and isinstance(net, int)
+            and not isinstance(net, bool)
+            and net > 0
+            and item.get("claim_bond_minor") == 0
+            and isinstance(deadline, int)
+            and not isinstance(deadline, bool)
+            and deadline > now
+            and isinstance(safe_block, int)
+            and not isinstance(safe_block, bool)
+            and safe_block > 0
+            and _credential_free_https(item.get("source_url"))
+            and _credential_free_https(item.get("proof_quote_url"))
+        )
+        if not valid:
+            return [], False
+        ids.add(bounty_id)
+        contracts.add(contract)
+        verified.append(item)
+    return verified, True
+
+
 def standing_meta_entries(
     claimable: list[dict[str, Any]],
     *,
@@ -488,6 +548,9 @@ def build_report(
     urls = [issue_url(i, repository) for i in actionable]
     issue_count = len(actionable)
     claimable, evidence_valid, protocol_status = verified_claimable_entries(claimable_report)
+    open_competition_v2, v2_evidence_valid = verified_open_competition_v2_entries(
+        claimable_report
+    )
     direct_block = (
         claimable_report.get("direct_chain_observed_block")
         if isinstance(claimable_report, dict)
@@ -497,19 +560,26 @@ def build_report(
     meta_claimable, meta_evidence_valid = standing_meta_entries(
         claimable, direct_block=direct_block
     )
-    evidence_valid = evidence_valid and meta_evidence_valid
-    claimable_count = len(claimable)
+    evidence_valid = evidence_valid and meta_evidence_valid and v2_evidence_valid
+    combined_claimable = claimable + open_competition_v2
+    claimable_count = len(combined_claimable)
     meta_claimable_count = len(meta_claimable)
     missing = max(0, threshold - claimable_count)
     meta_missing = max(0, meta_threshold - meta_claimable_count)
     meta_replenishment = max(0, meta_replenishment_target - meta_claimable_count)
     meta_below = not evidence_valid or meta_claimable_count < meta_threshold
-    below = not evidence_valid or claimable_count < threshold or meta_below
+    below = not evidence_valid or claimable_count < threshold
     if not evidence_valid:
         action = (
             "Restore a fresh, active protocol and canonical inventory feed before "
             "counting liquidity. Candidate issues cannot substitute for missing or "
             "invalid on-chain evidence."
+        )
+    elif claimable_count < threshold:
+        action = (
+            f"Activate, fund, and canonically index at least {missing} more earning-ready "
+            f"bounty contract(s). Open GitHub issues are candidate supply and do not "
+            f"satisfy this liquidity threshold."
         )
     elif meta_below:
         action = (
@@ -517,12 +587,6 @@ def build_report(
             "standing meta-bounty contract(s). Each must use the exact canonical "
             "child-loop verifier and pay only after a different wallet completes "
             "the solver-created child bounty and receives canonical settlement."
-        )
-    elif claimable_count < threshold:
-        action = (
-            f"Activate, fund, and canonically index at least {missing} more claimable "
-            f"bounty contract(s). Open GitHub issues are candidate supply and do not "
-            f"satisfy this liquidity threshold."
         )
     elif meta_replenishment:
         action = (
@@ -549,6 +613,7 @@ def build_report(
         meta_replenishment_target=meta_replenishment_target,
         open_bounty_count=issue_count,
         verified_claimable_count=claimable_count,
+        verified_open_competition_v2_count=len(open_competition_v2),
         verified_meta_claimable_count=meta_claimable_count,
         missing_count=missing,
         meta_missing_count=meta_missing,
@@ -557,7 +622,7 @@ def build_report(
         meta_below_threshold=meta_below,
         meta_replenishment_required=meta_replenishment > 0,
         issue_urls=urls,
-        claimable_bounty_ids=[str(item["id"]) for item in claimable],
+        claimable_bounty_ids=[str(item["id"]) for item in combined_claimable],
         meta_claimable_bounty_ids=[str(item["id"]) for item in meta_claimable],
         excluded_count=excluded,
         protocol_status=protocol_status,

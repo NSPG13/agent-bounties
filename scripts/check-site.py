@@ -874,7 +874,7 @@ def main() -> int:
             "Subscribe via RSS",
             "Subscribe via Atom",
             "Agent Bounties | The Global Marketplace for Digital Work",
-            'src="home.js?v=767"',
+            'src="home.js?v=768"',
             'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',

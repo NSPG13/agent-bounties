@@ -1,10 +1,13 @@
 use app::BountyStatusResponse;
 use chain_base::{
     standing_meta_v2_parent_context, AutonomousBountyFeedItem, OpenCompetitionDeploymentState,
-    OpenCompetitionEvent, OpenCompetitionEventKind, OpenCompetitionVerifierProfile,
+    OpenCompetitionEvent, OpenCompetitionEventKind, OpenCompetitionV2Event,
+    OpenCompetitionV2EventKind, OpenCompetitionV2MetricProgramRelease,
+    OpenCompetitionV2ProgramClassification, OpenCompetitionV2ProjectedState,
+    OpenCompetitionV2Release, OpenCompetitionVerifierProfile,
 };
 use chrono::{DateTime, Utc};
-use db::{TrialBounty, UnfundedBountySolution};
+use db::{OpenCompetitionV2StoredProjection, TrialBounty, UnfundedBountySolution};
 use domain::{BountyStatus, DiscoveryOpportunitySnapshot, DiscoveryRewardFilter, PrivacyLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,6 +17,26 @@ use utoipa::ToSchema;
 use web_public::escape_html;
 
 pub const OPPORTUNITY_PROJECTION_SCHEMA: &str = "agent-bounties/opportunity-projection-v1";
+const OPEN_COMPETITION_V2_METADATA_JSON: &str =
+    include_str!("../../../ops/open-competition-v2-public-metadata-v1.json");
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenCompetitionV2PublicMetadataRegistry {
+    schema_version: String,
+    network: String,
+    factory_contract: String,
+    competitions: Vec<OpenCompetitionV2PublicMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OpenCompetitionV2PublicMetadata {
+    seed_id: String,
+    bounty_id: String,
+    competition: String,
+    title: String,
+    summary: String,
+    source_url: String,
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct OpportunityQuery {
@@ -874,6 +897,365 @@ pub fn canonical_opportunity(
     })
 }
 
+fn reviewed_v2_profile<'a>(
+    release: &'a OpenCompetitionV2Release,
+    record: &OpenCompetitionV2StoredProjection,
+) -> Option<&'a OpenCompetitionV2MetricProgramRelease> {
+    let projection = &record.projection;
+    let matches = |actual: &Option<String>, expected: &str| {
+        actual
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+    };
+    release.metric_programs.iter().find(|profile| {
+        profile.classification == OpenCompetitionV2ProgramClassification::Reviewed
+            && matches(&projection.program_vkey, &profile.program_vkey)
+            && matches(&projection.source_hash, &profile.source_hash)
+            && matches(&projection.elf_hash, &profile.elf_hash)
+            && matches(
+                &projection.journal_schema_hash,
+                &profile.journal_schema_hash,
+            )
+            && matches(
+                &projection.metric_program_hash,
+                &profile.metric_program_hash,
+            )
+            && profile.review_evidence_hash.starts_with("0x")
+            && profile.review_evidence_hash.len() == 66
+            && profile
+                .review_evidence_hash
+                .as_bytes()
+                .iter()
+                .skip(2)
+                .any(|byte| *byte != b'0')
+    })
+}
+
+fn v2_public_metadata(
+    release: &OpenCompetitionV2Release,
+) -> Result<BTreeMap<String, OpenCompetitionV2PublicMetadata>, String> {
+    let registry: OpenCompetitionV2PublicMetadataRegistry =
+        serde_json::from_str(OPEN_COMPETITION_V2_METADATA_JSON)
+            .map_err(|error| format!("invalid Open Competition V2 metadata: {error}"))?;
+    if registry.schema_version != "agent-bounties/open-competition-v2-public-metadata-v1"
+        || registry.network != release.network
+        || !registry
+            .factory_contract
+            .eq_ignore_ascii_case(&release.factory_contract)
+    {
+        return Err("Open Competition V2 public metadata identity mismatch".to_string());
+    }
+    let mut indexed = BTreeMap::new();
+    for item in registry.competitions {
+        if item.seed_id.trim().is_empty()
+            || item.title.trim().is_empty()
+            || item.summary.trim().is_empty()
+            || !item
+                .source_url
+                .starts_with("https://github.com/NSPG13/agent-bounties/issues/")
+            || item.bounty_id.len() != 66
+            || item.competition.len() != 42
+        {
+            return Err("Open Competition V2 public metadata entry is malformed".to_string());
+        }
+        let key = item.competition.to_ascii_lowercase();
+        if indexed.insert(key, item).is_some() {
+            return Err("Open Competition V2 public metadata contains a duplicate".to_string());
+        }
+    }
+    Ok(indexed)
+}
+
+pub fn open_competition_v2_opportunities(
+    records: &[OpenCompetitionV2StoredProjection],
+    events: &[OpenCompetitionV2Event],
+    release: &OpenCompetitionV2Release,
+    network: &str,
+    api_base_url: &str,
+    proof_fee: u128,
+    relay_fee: u128,
+    now: DateTime<Utc>,
+) -> Result<Vec<OpportunityItem>, String> {
+    if release.protocol_version != "agent-bounties/open-competition-v2-beta3"
+        || release.network != network
+        || !release.public_creation_enabled
+    {
+        return Ok(Vec::new());
+    }
+    let api = api_base_url.trim_end_matches('/');
+    let metadata = v2_public_metadata(release)?;
+    let external_spend = proof_fee
+        .checked_add(relay_fee)
+        .ok_or_else(|| "Open Competition V2 hosted costs overflow".to_string())?;
+    let mut opportunities = Vec::new();
+
+    for record in records {
+        if record.network != network
+            || !record
+                .factory_contract
+                .eq_ignore_ascii_case(&release.factory_contract)
+        {
+            return Err("Open Competition V2 projection identity mismatch".to_string());
+        }
+        let projection = &record.projection;
+        if projection.state == OpenCompetitionV2ProjectedState::Cancelled
+            || projection.state == OpenCompetitionV2ProjectedState::Announced
+        {
+            continue;
+        }
+        let target = projection
+            .solver_reward
+            .checked_add(projection.keeper_reward)
+            .ok_or_else(|| format!("competition {} economics overflow", projection.bounty_id))?;
+        if projection.solver_reward == 0
+            || projection.competition.len() != 42
+            || projection.bounty_id.len() != 66
+        {
+            return Err(format!(
+                "competition {} has malformed identity or economics",
+                projection.bounty_id
+            ));
+        }
+        let relevant_events = events
+            .iter()
+            .filter(|event| {
+                event.bounty_id.eq_ignore_ascii_case(&projection.bounty_id)
+                    && event
+                        .contract_address
+                        .eq_ignore_ascii_case(&projection.competition)
+                    && event.block_number <= record.safe_block_number
+            })
+            .collect::<Vec<_>>();
+        let created_at = relevant_events
+            .first()
+            .ok_or_else(|| {
+                format!(
+                    "competition {} has no canonical events",
+                    projection.bounty_id
+                )
+            })?
+            .occurred_at;
+        let updated_at = relevant_events
+            .last()
+            .map(|event| event.occurred_at)
+            .unwrap_or(created_at);
+        let has_settlement = relevant_events
+            .iter()
+            .any(|event| event.kind == OpenCompetitionV2EventKind::CompetitionSettled);
+        let profile = reviewed_v2_profile(release, record);
+        let proof_deadline = projection.proof_deadline;
+        let funding_deadline = projection.funding_deadline;
+        let (source_status, work_state, payment_state, payment_committed, verification_ready) =
+            match projection.state {
+                OpenCompetitionV2ProjectedState::Funding => {
+                    if projection.funded_amount >= target
+                        || funding_deadline
+                            .is_none_or(|deadline| deadline <= now.timestamp() as u64)
+                    {
+                        continue;
+                    }
+                    ("funding", "open", "seeking_funding", false, false)
+                }
+                OpenCompetitionV2ProjectedState::Active => {
+                    if projection.funded_amount != target
+                        || proof_deadline.is_none_or(|deadline| deadline <= now.timestamp() as u64)
+                    {
+                        continue;
+                    }
+                    ("active", "claimable", "escrowed", true, profile.is_some())
+                }
+                OpenCompetitionV2ProjectedState::Settled => {
+                    if projection.winner.is_none()
+                        || projection.funded_amount != 0
+                        || !has_settlement
+                    {
+                        return Err(format!(
+                            "competition {} lacks canonical settlement evidence",
+                            projection.bounty_id
+                        ));
+                    }
+                    ("settled", "completed", "paid", true, true)
+                }
+                OpenCompetitionV2ProjectedState::Announced
+                | OpenCompetitionV2ProjectedState::Cancelled => continue,
+            };
+        let known = metadata
+            .get(&projection.competition.to_ascii_lowercase())
+            .filter(|item| item.bounty_id.eq_ignore_ascii_case(&projection.bounty_id));
+        let title = known.map_or_else(
+            || format!("Open Competition {}", &projection.bounty_id[..12]),
+            |item| item.title.clone(),
+        );
+        let goal = known.map(|item| item.summary.clone());
+        let source_url = known.map(|item| item.source_url.clone());
+        let public_url = source_url.clone().unwrap_or_else(|| {
+            format!("{api}/v1/base/open-competition-v2-beta3/inventory?network={network}")
+        });
+        let winner_mode = projection
+            .winner_mode
+            .clone()
+            .ok_or_else(|| format!("competition {} has no winner mode", projection.bounty_id))?;
+        let net = projection.solver_reward.saturating_sub(external_spend);
+        let evidence_requirements = json!({
+            "protocol_version": release.protocol_version,
+            "program_profile": profile.map(|item| item.profile_id.clone()),
+            "program_vkey": projection.program_vkey,
+            "execution_policy_hash": projection.execution_policy_hash,
+            "verification_policy_hash": projection.verification_policy_hash,
+            "settlement_policy_hash": projection.settlement_policy_hash,
+            "seed_id": known.map(|item| item.seed_id.clone()),
+            "payment_evidence": "CompetitionSettledV2"
+        });
+        let (categories, skills, keyword_matches) = web_public::discovery_taxonomy_with_matches(
+            &title,
+            goal.as_deref(),
+            &evidence_requirements,
+        );
+        let opportunity_id = format!("open-competition-v2:{network}:{}", projection.competition);
+        let embeds = opportunity_embed_links(api, &opportunity_id, Some(network));
+        let image = fallback_opportunity_image(&embeds, &title);
+        let deadline_value = if source_status == "funding" {
+            funding_deadline
+        } else {
+            proof_deadline
+        };
+        let deadline = deadline_value
+            .and_then(|value| i64::try_from(value).ok())
+            .and_then(|value| DateTime::<Utc>::from_timestamp(value, 0))
+            .map(|value| value.to_rfc3339());
+        let next_action = match source_status {
+            "funding" => OpportunityNextAction {
+                action: "fund_open_competition_v2".to_string(),
+                method: "POST".to_string(),
+                url: format!(
+                    "{api}/v1/base/open-competition-v2-beta3/funding-preparation"
+                ),
+                body_template: Some(json!({
+                    "network": network,
+                    "competition_contract": projection.competition,
+                    "contributor": "0xYOUR_BASE_WALLET",
+                    "amount": "USDC_BASE_UNITS",
+                    "acknowledged_risk_hash": release.beta_risk_hash
+                })),
+                instructions: "Fund the exact contract, then wait for safe-block CompetitionActivatedV2.".to_string(),
+            },
+            "active" => OpportunityNextAction {
+                action: "quote_open_competition_v2_proof".to_string(),
+                method: "POST".to_string(),
+                url: format!("{api}/v1/base/open-competition-v2-beta3/proof-quotes"),
+                body_template: Some(json!({
+                    "network": network,
+                    "competition_contract": projection.competition,
+                    "solver": "0xYOUR_BASE_WALLET",
+                    "solver_nonce": "0xFRESH_BYTES32",
+                    "artifact": "EXACT_ARTIFACT_AND_METRIC_INPUT"
+                })),
+                instructions: "Read the source terms, build the exact artifact, request a five-minute solver-bound quote, pay once, then authorize the exact relay.".to_string(),
+            },
+            _ => OpportunityNextAction {
+                action: "inspect_open_competition_v2_settlement".to_string(),
+                method: "GET".to_string(),
+                url: format!(
+                    "{api}/v1/base/open-competition-v2-beta3/events?network={network}&bounty_id={}",
+                    projection.bounty_id
+                ),
+                body_template: None,
+                instructions: "Confirm the safe-block CompetitionSettledV2 event and its solver before using paid language.".to_string(),
+            },
+        };
+        let proof_urls = has_settlement
+            .then(|| {
+                format!(
+                    "{api}/v1/base/open-competition-v2-beta3/events?network={network}&bounty_id={}",
+                    projection.bounty_id
+                )
+            })
+            .into_iter()
+            .collect();
+        opportunities.push(OpportunityItem {
+            opportunity_id: opportunity_id.clone(),
+            source_type: "canonical_base".to_string(),
+            source_id: projection.competition.clone(),
+            source_status: source_status.to_string(),
+            title,
+            goal,
+            categories,
+            skills,
+            public_url,
+            source_url,
+            work_state: work_state.to_string(),
+            payment_state: payment_state.to_string(),
+            payment_committed,
+            competition_mode: winner_mode,
+            network: Some(network.to_string()),
+            verifier_profile_id: profile.map(|item| item.profile_id.clone()),
+            verifier_profile_name: profile.map(|item| item.profile_id.clone()),
+            entry_count: u8::try_from(projection.accepted_entries).ok(),
+            max_entries: None,
+            competition_ends_at: proof_deadline,
+            standing_meta_bounty: false,
+            cash_economics: Some(OpportunityCashEconomics {
+                solver_reward: OpportunityAmount::usdc_base_units(
+                    projection.solver_reward.to_string(),
+                ),
+                refundable_claim_bond: OpportunityAmount::usdc_base_units("0"),
+                required_external_spend: OpportunityAmount::usdc_base_units(
+                    external_spend.to_string(),
+                ),
+                gross_cash_margin: OpportunityAmount::usdc_base_units(net.to_string()),
+                gross_cash_margin_positive: net > 0,
+                scope_disclaimer: "Gross cash margin is solver reward minus the configured hosted proof and relay fees. It excludes gas, taxes, losing risk and other execution costs; winning is not guaranteed.".to_string(),
+            }),
+            standing_meta_v4: None,
+            decision_authority: format!(
+                "The immutable SP1 {} verifier and policy hashes on {} decide qualification.",
+                projection.proof_system.as_deref().unwrap_or("proof"),
+                projection.competition
+            ),
+            payment_authority: format!(
+                "The immutable competition contract {} controls escrow; only its safe-block CompetitionSettledV2 event proves solver payment.",
+                projection.competition
+            ),
+            reward: OpportunityAmount::usdc_base_units(projection.solver_reward.to_string()),
+            completion_bonus: Some(OpportunityAmount::usdc_base_units(
+                projection.keeper_reward.to_string(),
+            )),
+            funded_amount: OpportunityAmount::usdc_base_units(
+                projection.funded_amount.to_string(),
+            ),
+            funding_target: OpportunityAmount::usdc_base_units(target.to_string()),
+            bond: OpportunityAmount::usdc_base_units("0"),
+            deadline,
+            deadline_kind: Some(if source_status == "funding" {
+                "funding_deadline".to_string()
+            } else {
+                "proof_deadline".to_string()
+            }),
+            verification_method: format!(
+                "sp1_{}",
+                projection.proof_system.as_deref().unwrap_or("unknown")
+            ),
+            verification_ready,
+            evidence_requirements,
+            terms_hash: None,
+            proof_urls,
+            next_action,
+            embeds,
+            image,
+            discovery_factors: base_factors(
+                "canonical_base",
+                work_state,
+                payment_state,
+                &keyword_matches,
+            ),
+            created_at: created_at.to_rfc3339(),
+            updated_at: updated_at.to_rfc3339(),
+            evidence_boundary: "Safe-block Beta3 projections prove current competition state and escrow. Qualification is not payment; only CompetitionSettledV2 proves solver payment.".to_string(),
+        });
+    }
+    Ok(opportunities)
+}
+
 pub fn open_competition_opportunities(
     events: &[OpenCompetitionEvent],
     profile: &OpenCompetitionVerifierProfile,
@@ -1292,6 +1674,12 @@ fn opportunity_order(
     right: &OpportunityItem,
     now: DateTime<Utc>,
 ) -> Ordering {
+    let is_open_competition = |mode: &str| {
+        matches!(
+            mode,
+            "first_valid_submission" | "first_proven" | "best_score"
+        )
+    };
     let left_ready =
         left.work_state == "claimable" && left.payment_committed && left.verification_ready;
     let right_ready =
@@ -1299,8 +1687,8 @@ fn opportunity_order(
     right_ready
         .cmp(&left_ready)
         .then_with(|| {
-            (right.competition_mode == "first_valid_submission")
-                .cmp(&(left.competition_mode == "first_valid_submission"))
+            is_open_competition(&right.competition_mode)
+                .cmp(&is_open_competition(&left.competition_mode))
         })
         .then_with(|| {
             deadline_distance_seconds(left, now)
@@ -1536,7 +1924,8 @@ mod tests {
     use chain_base::{
         build_autonomous_bounty_terms_record, built_in_open_competition_verifier_catalog,
         AutonomousBountyEvent, AutonomousBountyEventKind, OpenCompetitionEvent,
-        OpenCompetitionEventKind, BASE_MAINNET_STANDING_META_V2_VERIFIER,
+        OpenCompetitionEventKind, OpenCompetitionV2Projection,
+        BASE_MAINNET_STANDING_META_V2_VERIFIER,
     };
     use domain::{
         AutonomousBountyTermsDocument, AutonomousBountyTermsRecord, BountyImageReference,
@@ -1559,6 +1948,177 @@ mod tests {
             created_at,
             expires_at: created_at + chrono::Duration::days(7),
         }
+    }
+
+    fn beta3_release_and_record() -> (OpenCompetitionV2Release, OpenCompetitionV2StoredProjection) {
+        let hash = |digit: char| format!("0x{}", digit.to_string().repeat(64));
+        let address = |digit: char| format!("0x{}", digit.to_string().repeat(40));
+        let program = OpenCompetitionV2MetricProgramRelease {
+            profile_id: "public-vector-metric-v1".to_string(),
+            classification: OpenCompetitionV2ProgramClassification::Reviewed,
+            program_vkey: hash('1'),
+            source_hash: hash('2'),
+            elf_hash: hash('3'),
+            journal_schema_hash: hash('4'),
+            metric_program_hash: hash('5'),
+            review_evidence_hash: hash('6'),
+        };
+        let release = OpenCompetitionV2Release {
+            protocol_version: "agent-bounties/open-competition-v2-beta3".to_string(),
+            network: "base-mainnet".to_string(),
+            source_commit: hash('a'),
+            repository_subject_hash: hash('b'),
+            sp1_source_commit: hash('c'),
+            sp1_circuit_version: "agent-bounties-sp1-safe-v1".to_string(),
+            factory_contract: "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4".to_string(),
+            factory_runtime_code_hash: hash('d'),
+            implementation_contract: address('2'),
+            implementation_runtime_code_hash: hash('e'),
+            settlement_token: address('3'),
+            groth16_verifier: address('4'),
+            groth16_verifier_hash: hash('7'),
+            groth16_verifier_runtime_code_hash: hash('8'),
+            groth16_adapter: address('5'),
+            groth16_adapter_runtime_code_hash: hash('9'),
+            plonk_verifier: address('6'),
+            plonk_verifier_hash: hash('a'),
+            plonk_verifier_runtime_code_hash: hash('b'),
+            plonk_adapter: address('7'),
+            plonk_adapter_runtime_code_hash: hash('c'),
+            deployment_block: 90,
+            release_hash: hash('d'),
+            beta_risk_hash: hash('e'),
+            public_creation_enabled: true,
+            proof_broker_enabled: true,
+            metric_programs: vec![program.clone()],
+        };
+        let projection = OpenCompetitionV2Projection {
+            bounty_id: "0xe5a73bf7669a2c3fa66ae38a47383bfa8f05448ba54e07a9af1a4013deb30f19"
+                .to_string(),
+            competition: "0x0618b169c3c878a0386b5da7b54713f60baa1ec2".to_string(),
+            creator: address('8'),
+            state: OpenCompetitionV2ProjectedState::Active,
+            solver_reward: 3_000_000,
+            keeper_reward: 40_000,
+            funding_deadline: Some(1_800_010_000),
+            proof_window_seconds: Some(86_400),
+            winner_mode: Some("first_proven".to_string()),
+            proof_system: Some("groth16".to_string()),
+            program_vkey: Some(program.program_vkey),
+            source_hash: Some(program.source_hash),
+            elf_hash: Some(program.elf_hash),
+            journal_schema_hash: Some(program.journal_schema_hash),
+            metric_program_hash: Some(program.metric_program_hash),
+            funded_amount: 3_040_000,
+            proof_deadline: Some(1_800_086_400),
+            last_block: 99,
+            ..OpenCompetitionV2Projection::default()
+        };
+        let record = OpenCompetitionV2StoredProjection {
+            network: "base-mainnet".to_string(),
+            factory_contract: release.factory_contract.clone(),
+            projection,
+            safe_block_number: 100,
+            safe_block_hash: hash('f'),
+        };
+        (release, record)
+    }
+
+    fn beta3_event(
+        record: &OpenCompetitionV2StoredProjection,
+        kind: OpenCompetitionV2EventKind,
+        block_number: u64,
+    ) -> OpenCompetitionV2Event {
+        OpenCompetitionV2Event {
+            id: Uuid::new_v4(),
+            protocol_version: "agent-bounties/open-competition-v2-beta3".to_string(),
+            log_key: format!("{block_number}:0"),
+            tx_hash: format!("0x{:064x}", block_number),
+            block_number,
+            log_index: 0,
+            contract_address: record.projection.competition.clone(),
+            bounty_id: record.projection.bounty_id.clone(),
+            kind,
+            data: json!({}),
+            occurred_at: DateTime::<Utc>::from_timestamp(1_800_000_000 + block_number as i64, 0)
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn beta3_projection_is_profitable_and_requires_canonical_settlement_evidence() {
+        let (release, record) = beta3_release_and_record();
+        let mut events = vec![beta3_event(
+            &record,
+            OpenCompetitionV2EventKind::CanonicalCompetitionCreated,
+            90,
+        )];
+        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+        let active = open_competition_v2_opportunities(
+            std::slice::from_ref(&record),
+            &events,
+            &release,
+            "base-mainnet",
+            "https://api.example",
+            100_000,
+            10_000,
+            now,
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(
+            active.title,
+            "Map the shortest discovery path for eight AI-agent channels"
+        );
+        assert_eq!(active.work_state, "claimable");
+        assert_eq!(active.payment_state, "escrowed");
+        assert_eq!(active.competition_mode, "first_proven");
+        assert_eq!(active.max_entries, None);
+        assert_eq!(active.next_action.action, "quote_open_competition_v2_proof");
+        assert_eq!(
+            active.cash_economics.unwrap().gross_cash_margin.amount,
+            "2890000"
+        );
+
+        let mut settled = record.clone();
+        settled.projection.state = OpenCompetitionV2ProjectedState::Settled;
+        settled.projection.winner = Some(address_for_test('9'));
+        settled.projection.funded_amount = 0;
+        assert!(open_competition_v2_opportunities(
+            std::slice::from_ref(&settled),
+            &events,
+            &release,
+            "base-mainnet",
+            "https://api.example",
+            100_000,
+            10_000,
+            now,
+        )
+        .is_err());
+
+        events.push(beta3_event(
+            &settled,
+            OpenCompetitionV2EventKind::CompetitionSettled,
+            100,
+        ));
+        let paid = open_competition_v2_opportunities(
+            &[settled],
+            &events,
+            &release,
+            "base-mainnet",
+            "https://api.example",
+            100_000,
+            10_000,
+            now,
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(paid.payment_state, "paid");
+        assert_eq!(paid.proof_urls.len(), 1);
+    }
+
+    fn address_for_test(digit: char) -> String {
+        format!("0x{}", digit.to_string().repeat(40))
     }
 
     fn canonical(status: &str, funded: &str, verification_ready: bool) -> AutonomousBountyFeedItem {

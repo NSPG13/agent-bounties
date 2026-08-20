@@ -132,9 +132,9 @@ use github_discovery::{
 use hmac::{Hmac, Mac};
 use opportunities::{
     apply_query as apply_opportunity_query, canonical_opportunity, legacy_opportunity,
-    open_competition_opportunities, render_opportunity_feeds, unfunded_opportunity,
-    OpportunityItem, OpportunityProjectionResponse, OpportunityQuery, OpportunitySourceStatus,
-    OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
+    open_competition_opportunities, open_competition_v2_opportunities, render_opportunity_feeds,
+    unfunded_opportunity, OpportunityItem, OpportunityProjectionResponse, OpportunityQuery,
+    OpportunitySourceStatus, OpportunityView, OPPORTUNITY_PROJECTION_SCHEMA,
 };
 use payments_stripe::{
     apply_checkout_payment_method_configuration, execute_stripe_request, verify_webhook_signature,
@@ -4340,11 +4340,24 @@ async fn build_opportunity_projection(
             ),
         };
     canonical_items.extend(open_competition_items);
-    let canonical_error = match (autonomous_error, open_competition_error) {
-        (None, None) => None,
-        (Some(error), None) | (None, Some(error)) => Some(error),
-        (Some(left), Some(right)) => Some(format!("{left}+{right}")),
-    };
+    let (open_competition_v2_items, open_competition_v2_error) =
+        match load_public_open_competition_v2_opportunities(state, network, api, now).await {
+            Ok(items) => (items, None),
+            Err(_) => (
+                Vec::new(),
+                Some("open_competition_v2_read_model_unavailable".to_string()),
+            ),
+        };
+    canonical_items.extend(open_competition_v2_items);
+    let canonical_errors = [
+        autonomous_error,
+        open_competition_error,
+        open_competition_v2_error,
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let canonical_error = (!canonical_errors.is_empty()).then(|| canonical_errors.join("+"));
     source_statuses.push(OpportunitySourceStatus {
         source_type: "canonical_base".to_string(),
         available: canonical_error.is_none(),
@@ -4353,6 +4366,7 @@ async fn build_opportunity_projection(
                 "{api}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=false"
             ),
             format!("{api}/v1/base/open-competition-v1/events?network={network}"),
+            format!("{api}/v1/base/open-competition-v2-beta3/inventory?network={network}"),
         ],
         item_count: canonical_items.len(),
         error: canonical_error,
@@ -4368,8 +4382,73 @@ async fn build_opportunity_projection(
         degraded: source_statuses.iter().any(|source| !source.available),
         source_statuses,
         items,
-        evidence_boundary: "This endpoint is a read-only projection. Each listed source remains authoritative for its own records; the projection cannot create funding, claims, verification, settlement, or payment evidence. Only confirmed canonical BountySettled proves autonomous-v1 solver payment.".to_string(),
+        evidence_boundary: "This endpoint is a read-only projection. Each listed source remains authoritative for its own records; the projection cannot create funding, claims, verification, settlement, or payment evidence. Only confirmed canonical BountySettled proves autonomous-v1 solver payment, and only confirmed canonical CompetitionSettledV2 proves Open Competition V2 solver payment.".to_string(),
     })
+}
+
+async fn load_public_open_competition_v2_opportunities(
+    state: &SharedState,
+    network: &str,
+    api_base_url: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<OpportunityItem>, StatusCode> {
+    let release = match open_competition_v2_api::release_from_environment(network) {
+        Ok(release) => release,
+        Err(_) => return Ok(Vec::new()),
+    };
+    if !release.public_creation_enabled {
+        return Ok(Vec::new());
+    }
+    let agreement = open_competition_v2_api::current_indexer_agreement(state, network, &release)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let store = state
+        .store
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let mut records = store
+        .list_open_competition_v2_projections(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    records.retain(|record| record.projection.last_block <= agreement.common_safe_block);
+    let mut events = store
+        .list_open_competition_v2_events(network, &release.factory_contract)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    events.retain(|event| event.block_number <= agreement.common_safe_block);
+    let proof_fee_name = |proof_system: &str| {
+        format!(
+            "OPEN_COMPETITION_V2_{}_PROOF_FEE_BASE_UNITS",
+            proof_system.to_ascii_uppercase()
+        )
+    };
+    let proof_fees = records
+        .iter()
+        .filter_map(|record| record.projection.proof_system.as_deref())
+        .map(proof_fee_name)
+        .map(|name| {
+            env::var(name)
+                .ok()
+                .and_then(|value| value.parse::<u128>().ok())
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let proof_fee = proof_fees.into_iter().max().unwrap_or_default();
+    let relay_fee = env::var("OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS")
+        .ok()
+        .and_then(|value| value.parse::<u128>().ok())
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    open_competition_v2_opportunities(
+        &records,
+        &events,
+        &release,
+        network,
+        api_base_url,
+        proof_fee,
+        relay_fee,
+        now,
+    )
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
 
 async fn load_public_open_competition_opportunities(

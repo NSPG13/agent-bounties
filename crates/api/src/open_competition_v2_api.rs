@@ -2056,7 +2056,7 @@ fn build_creation_plan(
     .map_err(|error| bad_request("prepare_creation", "invalid_profile", error.to_string()))
 }
 
-fn release_from_environment(
+pub(crate) fn release_from_environment(
     network: &str,
 ) -> Result<OpenCompetitionV2Release, (StatusCode, Json<Value>)> {
     let prefix = match network {
@@ -2104,7 +2104,7 @@ fn release_from_environment(
     Ok(release)
 }
 
-async fn current_indexer_agreement(
+pub(crate) async fn current_indexer_agreement(
     state: &SharedState,
     network: &str,
     release: &OpenCompetitionV2Release,
@@ -2241,7 +2241,10 @@ fn estimated_hosted_net_prize(
 ) -> Option<u128> {
     projection
         .solver_reward
-        .checked_sub(configured_proof_fee(projection)?)
+        .checked_sub(configured_proof_fee(projection)?)?
+        .checked_sub(configured_u128_optional(
+            "OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS",
+        )?)
 }
 
 fn settlement_token(network: &str) -> Result<&'static str, (StatusCode, Json<Value>)> {

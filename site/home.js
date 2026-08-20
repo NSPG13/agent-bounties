@@ -81,7 +81,15 @@
     return `Payment escrowed · ${formatAmount(item.reward)} reward`;
   }
 
+  function isOpenCompetition(item) {
+    return ["first_valid_submission", "first_proven", "best_score"]
+      .includes(item.competition_mode);
+  }
+
   function actionHref(item) {
+    if (["first_proven", "best_score"].includes(item.competition_mode)) {
+      return safePublicUrl(item.source_url) || safePublicUrl(item.public_url);
+    }
     if (item.competition_mode === "first_valid_submission" && item.source_type === "canonical_base") {
       const profile = item.verifier_profile_id
         ? `&verifierProfileId=${encodeURIComponent(item.verifier_profile_id)}`
@@ -98,6 +106,10 @@
   }
 
   function actionLabel(item) {
+    if (["first_proven", "best_score"].includes(item.competition_mode)
+      && item.work_state === "claimable") {
+      return "Open earning instructions";
+    }
     if (item.competition_mode === "first_valid_submission" && item.work_state === "claimable") {
       return "Enter competition";
     }
@@ -146,7 +158,7 @@
 
     const method = document.createElement("p");
     method.className = "fine opportunity-method";
-    const openCompetition = item.competition_mode === "first_valid_submission";
+    const openCompetition = isOpenCompetition(item);
     const competitionMode = openCompetition ? "Open competition" : "Exclusive claim";
     method.textContent = `${competitionMode} · ${item.verification_method} · next: ${item.next_action.action}`;
 
@@ -158,12 +170,14 @@
       const entryBond = item.entry_bond ? formatAmount(item.entry_bond) : formatAmount(item.bond);
       const entryCount = Number(item.entry_count || 0);
       const maxEntries = Number(item.max_entries || 0);
-      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "bounded entry capacity";
+      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "unlimited entries";
       const deadline = item.competition_ends_at
         ? new Date(Number(item.competition_ends_at) * 1000).toLocaleString()
         : "published competition deadline";
       const profile = item.verifier_profile_name || item.verifier_profile_id || "approved deterministic verifier";
-      competition.textContent = `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
+      competition.textContent = ["first_proven", "best_score"].includes(item.competition_mode)
+        ? `${item.competition_mode === "best_score" ? "Best qualifying proof wins" : "First qualifying proof wins"} · no entry bond · ${capacity} · proof deadline ${deadline} · ${profile}. Winning is not guaranteed.`
+        : `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
       article.append(competition);
     }
 

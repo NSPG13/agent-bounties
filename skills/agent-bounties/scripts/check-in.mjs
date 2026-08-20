@@ -1205,6 +1205,128 @@ function normalizedFundingCandidate(item) {
   };
 }
 
+function reviewedV2Program(release, projection) {
+  const equals = (actual, expected) => (
+    typeof actual === "string"
+    && typeof expected === "string"
+    && actual.toLowerCase() === expected.toLowerCase()
+  );
+  return (Array.isArray(release?.metric_programs) ? release.metric_programs : []).find(
+    (profile) => profile?.classification === "reviewed"
+      && equals(projection?.program_vkey, profile.program_vkey)
+      && equals(projection?.source_hash, profile.source_hash)
+      && equals(projection?.elf_hash, profile.elf_hash)
+      && equals(projection?.journal_schema_hash, profile.journal_schema_hash)
+      && equals(projection?.metric_program_hash, profile.metric_program_hash)
+      && HASH.test(profile.review_evidence_hash || "")
+      && !/^0x0{64}$/i.test(profile.review_evidence_hash),
+  );
+}
+
+export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryResponse, apiBaseUrl) {
+  if (!releaseResponse && !inventoryResponse) {
+    return { status: "not_checked", verified: [], warning: null };
+  }
+  try {
+    if (releaseResponse?.status !== 200 || inventoryResponse?.status !== 200) {
+      throw new Error("Beta3 release or inventory endpoint is unavailable");
+    }
+    const document = releaseResponse.body;
+    const release = document?.release;
+    const agreement = document?.indexer_agreement;
+    const inventory = inventoryResponse.body;
+    if (
+      document?.activation_state !== "public_beta"
+      || release?.protocol_version !== "agent-bounties/open-competition-v2-beta3"
+      || release?.network !== "base-mainnet"
+      || release?.public_creation_enabled !== true
+      || release?.proof_broker_enabled !== true
+      || !ADDRESS.test(release?.factory_contract || "")
+      || agreement?.agrees !== true
+      || !Number.isSafeInteger(agreement?.common_safe_block)
+      || agreement.common_safe_block <= 0
+      || inventory?.schema_version !== "agent-bounties/open-competition-v2-inventory-v1"
+      || inventory?.protocol_version !== release.protocol_version
+      || inventory?.network !== release.network
+      || String(inventory?.factory_contract || "").toLowerCase()
+        !== release.factory_contract.toLowerCase()
+      || !Array.isArray(inventory?.competitions)
+    ) {
+      throw new Error("Beta3 release and inventory identity do not agree");
+    }
+    const observedAt = Date.parse(agreement.observed_at || "");
+    if (!Number.isFinite(observedAt) || Math.abs(Date.now() - observedAt) > 10 * 60 * 1000) {
+      throw new Error("Beta3 indexer agreement is stale");
+    }
+    const ids = new Set();
+    const contracts = new Set();
+    const verified = [];
+    for (const item of inventory.competitions) {
+      const record = item?.record;
+      const projection = record?.projection;
+      if (projection?.state !== "active") continue;
+      const bountyId = String(projection?.bounty_id || "").toLowerCase();
+      const contract = String(projection?.competition || "").toLowerCase();
+      const solverReward = integerOf(projection?.solver_reward);
+      const keeperReward = integerOf(projection?.keeper_reward);
+      const funded = integerOf(projection?.funded_amount);
+      const proofDeadline = integerOf(projection?.proof_deadline);
+      const lastBlock = integerOf(projection?.last_block);
+      const safeBlock = integerOf(record?.safe_block_number);
+      const hostedNet = integerOf(item?.earning_estimate?.hosted_net_prize_if_win);
+      if (
+        !HASH.test(bountyId)
+        || !ADDRESS.test(contract)
+        || ids.has(bountyId)
+        || contracts.has(contract)
+        || solverReward === null
+        || solverReward <= 0
+        || keeperReward === null
+        || funded !== solverReward + keeperReward
+        || proofDeadline === null
+        || proofDeadline <= Math.floor(Date.now() / 1000)
+        || lastBlock === null
+        || lastBlock > agreement.common_safe_block
+        || safeBlock === null
+        || safeBlock < lastBlock
+        || hostedNet === null
+        || hostedNet <= 0
+        || !reviewedV2Program(release, projection)
+      ) {
+        throw new Error(`Beta3 competition ${bountyId || contract} failed earning checks`);
+      }
+      ids.add(bountyId);
+      contracts.add(contract);
+      verified.push({
+        id: bountyId,
+        contract,
+        title: `Open Competition ${bountyId.slice(0, 12)}`,
+        solver_reward_minor: solverReward,
+        hosted_net_prize_if_win_minor: hostedNet,
+        claim_bond_minor: 0,
+        currency: "usdc",
+        status: "claimable",
+        winner_mode: projection.winner_mode,
+        proof_system: projection.proof_system,
+        proof_deadline: proofDeadline,
+        accepted_entries: integerOf(projection.accepted_entries) || 0,
+        evidence: "confirmed_canonical_open_competition_v2",
+        observed_safe_block: agreement.common_safe_block,
+        source_url: `${apiBaseUrl}/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet&state=active`,
+        proof_quote_url: `${apiBaseUrl}/v1/base/open-competition-v2-beta3/proof-quotes`,
+      });
+    }
+    return { status: "verified", verified, warning: null };
+  } catch (error) {
+    return {
+      status: "verification_failed",
+      verified: [],
+      warning: "open_competition_v2_inventory_verification_failed",
+      error: String(error?.message || error),
+    };
+  }
+}
+
 export async function collectInventory({
   apiBaseUrl,
   protocolUrl = DEFAULT_PROTOCOL_URL,
@@ -1217,7 +1339,14 @@ export async function collectInventory({
   const api = normalizeApiBaseUrl(apiBaseUrl || DEFAULT_API_BASE_URL);
   const solver = normalizeSolverWallet(solverWallet);
   const protocolEndpoint = normalizePublicUrl(protocolUrl, "Protocol URL");
-  const [health, protocolResponse, feedResponse, jobsResponse] = await Promise.all([
+  const [
+    health,
+    protocolResponse,
+    feedResponse,
+    jobsResponse,
+    v2ReleaseResponse,
+    v2InventoryResponse,
+  ] = await Promise.all([
     fixture ? fixture.health : request(`${api}/health`, false),
     fixture ? fixture.protocol : request(protocolEndpoint, true),
     fixture
@@ -1226,6 +1355,12 @@ export async function collectInventory({
     fixture
       ? fixture.verification_jobs
       : request(`${api}/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet`, true),
+    fixture
+      ? fixture.open_competition_v2_release
+      : request(`${api}/v1/base/open-competition-v2-beta3/release?network=base-mainnet`, true),
+    fixture
+      ? fixture.open_competition_v2_inventory
+      : request(`${api}/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet&state=active`, true),
   ]);
 
   const protocol = protocolResponse?.status === 200 ? protocolResponse.body : null;
@@ -1284,13 +1419,17 @@ export async function collectInventory({
   const hostedProtocolActive = activeProtocol(protocol);
   const directProtocolActive = activeProtocol(direct.protocol);
   const effectiveProtocol = hostedProtocolActive ? protocol : (directProtocolActive ? direct.protocol : null);
+  const v2 = verifyOpenCompetitionV2Inventory(v2ReleaseResponse, v2InventoryResponse, api);
   const warnings = [];
   if (!healthOk) warnings.push("hosted_api_health_not_confirmed");
   if (feedResponse?.status !== 200) warnings.push("autonomous_feed_unavailable");
   if (!effectiveProtocol) warnings.push("autonomous_protocol_not_active");
   if (direct.warning) warnings.push(direct.warning);
   if (standingMetaAttestation?.warning) warnings.push(standingMetaAttestation.warning);
-  if (!verified.length) warnings.push("no_verified_funded_bounty_is_claimable");
+  if (v2.warning) warnings.push(v2.warning);
+  if (!verified.length && !v2.verified.length) {
+    warnings.push("no_verified_funded_bounty_is_claimable");
+  }
 
   for (const item of verified) {
     item.claim_handoff = buildClaimHandoff(item, solver, api);
@@ -1310,12 +1449,26 @@ export async function collectInventory({
     direct_chain_status: direct.status,
     direct_chain_observed_block: direct.observed_block,
     verified_claimable_bounties: verified,
+    open_competition_v2_status: v2.status,
+    verified_open_competition_v2_bounties: v2.verified,
     excluded_claimable_candidates: excluded,
     funding_candidates: fundingCandidates,
     live_verification_jobs:
       jobsResponse?.status === 200 ? itemsFrom(jobsResponse.body) : [],
-    recommended_action: verified.length ? "claim_verified_bounty" : "post_own_bounty",
-    next_action: nextActionFor(verified),
+    recommended_action: verified.length
+      ? "claim_verified_bounty"
+      : (v2.verified.length ? "enter_open_competition_v2" : "post_own_bounty"),
+    next_action: verified.length ? nextActionFor(verified) : (
+      v2.verified.length
+        ? {
+          action: "quote_open_competition_v2_proof",
+          ready: true,
+          competition: v2.verified[0].contract,
+          url: v2.verified[0].proof_quote_url,
+          instruction: "Read the public task terms, build the exact artifact, then request a solver-bound five-minute proof quote.",
+        }
+        : nextActionFor([])
+    ),
     links: {
       post_own_bounty: "https://agentbounties.app/post.html",
       fund_bounty: "https://agentbounties.app/funding.html",
@@ -1324,7 +1477,7 @@ export async function collectInventory({
     },
     warnings,
     evidence_boundary:
-      "Only an active exact-code factory plus matching terms, economics, funding, and canonical registration at a Base safe block, or the equivalent indexed canonical events, is earnable inventory. Only confirmed canonical BountySettled proves payout.",
+      "Only an active exact-code factory plus matching terms, economics, funding, verification and canonical safe-block events is earnable inventory. Only BountySettled proves autonomous-v1 payment; only CompetitionSettledV2 proves Open Competition V2 payment.",
   };
 }
 
