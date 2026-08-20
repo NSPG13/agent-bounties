@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Context};
 use chain_base::{
-    fetch_base_contract_logs, fetch_safe_block_identity, fetch_transaction_receipt,
-    open_competition_v2_broker_refund_digest, plan_open_competition_v2_broker_payment,
-    plan_open_competition_v2_proof, rpc_logs_to_evm_logs, BaseContractLogQuery, BaseRpcUrlConfig,
-    BaseTransactionRelayer, ChainBaseError, EvmLog, OpenCompetitionV2BrokerPaymentAuthorization,
-    OpenCompetitionV2Event, OpenCompetitionV2EventKind, OpenCompetitionV2ProofSystem,
-    OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+    fetch_base_contract_logs, fetch_contract_bool_at, fetch_safe_block_identity,
+    fetch_transaction_receipt, open_competition_v2_broker_refund_digest,
+    plan_open_competition_v2_broker_payment, plan_open_competition_v2_proof, rpc_logs_to_evm_logs,
+    BaseContractLogQuery, BaseRpcUrlConfig, BaseTransactionRelayer, ChainBaseError, EvmLog,
+    OpenCompetitionV2BrokerPaymentAuthorization, OpenCompetitionV2Event,
+    OpenCompetitionV2EventKind, OpenCompetitionV2ProofSystem, OPEN_COMPETITION_V2_PROTOCOL_VERSION,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use db::{
@@ -26,6 +26,7 @@ const BASE_MAINNET_RELEASE_ENV: &str =
     "BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON";
 const BASE_SEPOLIA_RELEASE_ENV: &str =
     "BASE_SEPOLIA_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON";
+const REFUND_LOG_CHUNK_SIZE: u64 = 1_000;
 
 #[derive(Debug, Clone, Deserialize)]
 struct BrokerReleaseIdentity {
@@ -935,29 +936,52 @@ async fn find_canonical_refund(
         .await;
     }
 
+    let authorization_call = authorization_state_call_data(broker, refund_nonce)?;
+    if !fetch_contract_bool_at(
+        rpc_url,
+        settlement_token,
+        &authorization_call,
+        safe.number,
+        84,
+    )
+    .await?
+    {
+        return Ok(None);
+    }
+
     let from_block = job
         .payment_block_number
         .unwrap_or(safe.number)
         .min(safe.number);
-    let query = BaseContractLogQuery::new(
-        settlement_token,
-        from_block,
-        Some(safe.number),
-        vec![event_topic("AuthorizationUsed(address,bytes32)")],
-    )?;
-    let logs = rpc_logs_to_evm_logs(fetch_base_contract_logs(rpc_url, &query, 82).await?.result)?;
     let authorization_topic = event_topic("AuthorizationUsed(address,bytes32)");
     let broker_topic = address_topic(broker)?;
     let nonce_topic = normalize_word(refund_nonce)?;
-    let tx_hash = logs.iter().find_map(|log| {
-        (log.topics.len() == 3
-            && log.topics[0].eq_ignore_ascii_case(&authorization_topic)
-            && log.topics[1].eq_ignore_ascii_case(&broker_topic)
-            && log.topics[2].eq_ignore_ascii_case(&nonce_topic))
-        .then(|| log.tx_hash.clone())
-    });
-    let Some(tx_hash) = tx_hash else {
-        return Ok(None);
+    let mut chunk_start = from_block;
+    let tx_hash = loop {
+        let chunk_end = chunk_start
+            .saturating_add(REFUND_LOG_CHUNK_SIZE - 1)
+            .min(safe.number);
+        let query = BaseContractLogQuery::new(
+            settlement_token,
+            chunk_start,
+            Some(chunk_end),
+            vec![
+                authorization_topic.clone(),
+                broker_topic.clone(),
+                nonce_topic.clone(),
+            ],
+        )?;
+        let logs =
+            rpc_logs_to_evm_logs(fetch_base_contract_logs(rpc_url, &query, 82).await?.result)?;
+        if let Some(tx_hash) = logs.first().map(|log| log.tx_hash.clone()) {
+            break tx_hash;
+        }
+        if chunk_end == safe.number {
+            return Err(anyhow!(
+                "refund authorization is used but its exact bounded event is unavailable"
+            ));
+        }
+        chunk_start = chunk_end + 1;
     };
     canonical_refund_from_transaction(
         rpc_url,
@@ -970,6 +994,18 @@ async fn find_canonical_refund(
         &safe,
     )
     .await
+}
+
+fn authorization_state_call_data(authorizer: &str, nonce: &str) -> anyhow::Result<String> {
+    let selector = Keccak256::digest(b"authorizationState(address,bytes32)");
+    let authorizer = address_topic(authorizer)?;
+    let nonce = normalize_word(nonce)?;
+    Ok(format!(
+        "0x{}{}{}",
+        hex::encode(&selector[..4]),
+        &authorizer[2..],
+        &nonce[2..]
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1466,6 +1502,19 @@ mod tests {
         let mut another = job.clone();
         another.network = "base-mainnet".to_string();
         assert_ne!(nonce, refund_nonce(&another));
+    }
+
+    #[test]
+    fn refund_authorization_state_call_binds_broker_and_nonce() {
+        let broker = format!("0x{}", "11".repeat(20));
+        let nonce = format!("0x{}", "22".repeat(32));
+        let call = authorization_state_call_data(&broker, &nonce).unwrap();
+        assert_eq!(call.len(), 2 + 8 + 64 + 64);
+        assert_eq!(
+            &call[10..74],
+            &format!("{}{}", "00".repeat(12), "11".repeat(20))
+        );
+        assert_eq!(&call[74..], &"22".repeat(32));
     }
 
     #[test]
