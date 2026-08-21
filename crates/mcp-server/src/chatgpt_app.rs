@@ -4584,6 +4584,62 @@ mod tests {
         assert!(names.contains(&"list_autonomous_bounties"));
     }
 
+    fn normalized_public_catalog_contract(mut descriptors: Vec<Value>) -> Value {
+        descriptors.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+        for descriptor in &mut descriptors {
+            descriptor["securitySchemes"] = json!("deployment-configured");
+            descriptor["_meta"]["securitySchemes"] = json!("deployment-configured");
+        }
+        Value::Array(descriptors)
+    }
+
+    #[tokio::test]
+    async fn published_mcp_catalogs_match_the_reviewed_contract() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/public-mcp-contract-v1.json"))
+                .expect("public MCP contract fixture is valid JSON");
+        assert_eq!(
+            fixture["schema_version"],
+            "agent-bounties/public-mcp-contract-v1"
+        );
+
+        for (profile, key) in [
+            (McpCatalogProfile::Chatgpt, "chatgpt"),
+            (McpCatalogProfile::Core, "core"),
+        ] {
+            let contract = normalized_public_catalog_contract(mcp_tools_for_catalog(profile).await);
+            let names = contract
+                .as_array()
+                .expect("normalized catalog is an array")
+                .iter()
+                .map(|descriptor| descriptor["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            let expected = &fixture["catalogs"][key];
+            assert_eq!(
+                names.len(),
+                expected["tool_count"].as_u64().unwrap() as usize
+            );
+            assert_eq!(
+                names,
+                expected["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|name| name.as_str().unwrap())
+                    .collect::<Vec<_>>()
+            );
+
+            let digest = app::hash_artifact(&serde_json::to_string(&contract).unwrap());
+            assert_eq!(
+                digest,
+                expected["normalized_descriptors_sha256"]
+                    .as_str()
+                    .unwrap(),
+                "{key} public MCP descriptor contract drifted; update the fixture and public documentation only for an intentional reviewed change"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn chatgpt_catalog_is_exactly_ten_while_core_eras_keep_compatibility() {
         let (_, modern_request) = modern_request("tools/list", json!({}), None);

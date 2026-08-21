@@ -112,6 +112,22 @@ The server advertises only tools and resources. It does not advertise Tasks,
 subscriptions, prompts, or other optional extensions that it does not
 implement.
 
+## Published catalog stability
+
+The ten-tool ChatGPT catalog and thirteen-tool core catalog are versioned
+public contracts. Their tool names, model instructions, input and output
+schemas, and safety annotations are pinned by
+`crates/mcp-server/fixtures/public-mcp-contract-v1.json`. An intentional change
+must update that fixture and the affected public onboarding documentation in
+the same reviewed PR. Additive specialist capabilities should remain in the
+advanced HTTP `/tools` catalog unless they are necessary for the short default
+MCP path.
+
+Deployment-configured security schemes are normalized out of the descriptor
+digest because enabling the optional analytics-exclusion OAuth scope must not
+rewrite the product contract. Tests separately require anonymous access to
+remain available.
+
 ## Origin configuration
 
 Requests without an `Origin` are allowed for normal server-to-server MCP
