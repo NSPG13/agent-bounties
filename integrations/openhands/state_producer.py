@@ -54,23 +54,41 @@ no identity -- exits non-zero with a diagnostic on stderr and NOTHING on stdout.
 The hook treats a non-zero producer as "claim state is unreadable" and blocks the
 stop. Never exit 0 with a guess.
 
-TRUST BOUNDARY, STATED HONESTLY
--------------------------------
-The binding file is operator-owned by *provenance*, not by cryptography. This
-program enforces what it actually can: the binding must be configured out-of-band
-by the operator, must not live inside the session-writable directory, and on
-POSIX must not be group- or world-writable. It does not and cannot prove that a
-sufficiently privileged process inside the sandbox never touched it. What it does
-guarantee is that nothing the *documented session workflow* writes -- the
-workfile -- can change claim identity or manufacture payment.
+TRUST BOUNDARY
+--------------
+Claim identity comes from an Ed25519-SIGNED operator binding, verified against a
+public key pinned out-of-band in `AGENT_BOUNTIES_OPERATOR_PUBKEY`. The private
+key never enters the sandbox.
+
+This is an enforced boundary, not a convention. An earlier version relied on the
+binding merely living outside the session directory and not being group- or
+world-writable, and review correctly rejected that: a same-OS-user session can
+rewrite any file that user owns, and on Windows there was no ownership check at
+all. A signature is different in kind. The session may edit the file freely; it
+simply cannot produce a valid signature over the edit.
+
+Three distinct forgeries are refused, and each needs its own check:
+  EDIT     change any field -> the signature no longer covers the body.
+  ERASE    delete the signature envelope -> unsigned bindings are refused.
+  REPLACE  re-sign with a key the session generated itself -> the signature
+           verifies, so verification alone is insufficient; the embedded public
+           key must equal the PINNED one.
+
+The location and permission checks are retained purely as a cheap
+misconfiguration warning. They are explicitly not the boundary.
 
 WALLET SAFETY: reads no key material, signs nothing, broadcasts nothing. The
-solver address is a public identifier supplied by the operator.
+operator key authenticates a claim BINDING; it is not a wallet key and
+authorizes no transfer. The solver address is a public identifier supplied by
+the operator.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hmac
 import json
 import os
 import re
@@ -80,6 +98,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# Verification is local to this integration and standard-library only, so the
+# authority boundary does not depend on a package install succeeding inside the
+# agent sandbox. See integrations/openhands/ed25519_verify.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ed25519_verify import canonical_payload  # noqa: E402
+from ed25519_verify import verify as ed25519_verify  # noqa: E402
 
 DEFAULT_API = "https://api.agentbounties.app"
 EVENTS_PATH = "/v1/base/autonomous-bounties/events"
@@ -143,8 +169,17 @@ def _safe_session(session: str) -> str:
     return safe
 
 
-def _assert_operator_owned(binding_path: str) -> None:
-    """Refuse a binding that sits in, or is writable from, the session's own area."""
+def _assert_not_session_writable(binding_path: str) -> None:
+    """A DEFENCE IN DEPTH check, not the authority boundary.
+
+    Location and mode bits are hygiene: they catch an operator who accidentally
+    dropped the binding into the session's own scratch directory. They do NOT
+    establish ownership, because a same-OS-user session can write any file that
+    user owns, and Windows has no equivalent POSIX mode bits at all. That was
+    the review's second blocker, and the real fix is the Ed25519 signature
+    checked in `_verify_operator_signature` below. This function stays because
+    a cheap misconfiguration check is still worth having; it is not relied on.
+    """
     binding_real = os.path.realpath(binding_path)
     session_dir = os.environ.get("AGENT_BOUNTIES_SESSION_DIR")
     if session_dir:
@@ -166,6 +201,89 @@ def _assert_operator_owned(binding_path: str) -> None:
             )
 
 
+def _verify_operator_signature(binding: dict) -> str:
+    """THE authority boundary. Returns the pinned operator key fingerprint.
+
+    Review, correctly: a path outside the session directory is insufficient,
+    because a same-user session can rewrite an owner-writable file and on
+    Windows no ownership check happens at all. Provenance by convention is not
+    an enforceable boundary.
+
+    A signature is enforceable. The session may rewrite the binding freely, but
+    it cannot produce a valid Ed25519 signature over the rewritten body without
+    the operator's private key, and that key never enters the sandbox. Only the
+    PUBLIC key does, pinned out-of-band in AGENT_BOUNTIES_OPERATOR_PUBKEY.
+
+    Three separate forgeries are refused here, and each needs its own check:
+      * EDIT     -- change a field: the signature no longer covers the body.
+      * ERASE    -- drop the signature envelope: unsigned bindings are refused.
+      * REPLACE  -- re-sign with the session's OWN freshly generated key: the
+                    signature verifies, so verification alone is not enough.
+                    The embedded public key must EQUAL the pinned one.
+
+    The pinned key comes from the environment rather than from the binding for
+    the same reason: a document cannot authenticate itself.
+    """
+    pinned_raw = os.environ.get("AGENT_BOUNTIES_OPERATOR_PUBKEY", "").strip()
+    if not pinned_raw:
+        raise Unresolvable(
+            "AGENT_BOUNTIES_OPERATOR_PUBKEY is not set, so the session binding cannot "
+            "be authenticated against a pinned operator key. A binding file alone is "
+            "not an authority boundary: a same-user session can rewrite it. Generate "
+            "a key with `python -B integrations/openhands/sign_binding.py keygen` "
+            "OUTSIDE the sandbox and pin the printed public key."
+        )
+    try:
+        pinned = base64.b64decode(pinned_raw, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise Unresolvable(
+            f"AGENT_BOUNTIES_OPERATOR_PUBKEY is not valid base64: {exc}") from exc
+    if len(pinned) != 32:
+        raise Unresolvable(
+            f"AGENT_BOUNTIES_OPERATOR_PUBKEY decodes to {len(pinned)} bytes, "
+            "not a 32-byte Ed25519 public key"
+        )
+
+    envelope = binding.get("signature")
+    if not isinstance(envelope, dict):
+        raise Unresolvable(
+            "session binding carries no signature envelope; an unsigned binding cannot "
+            "establish claim identity, because the session process can write it. "
+            "Sign it with integrations/openhands/sign_binding.py."
+        )
+    if str(envelope.get("alg", "")).strip().lower() != "ed25519":
+        raise Unresolvable(
+            f"session binding signature alg is {envelope.get('alg')!r}, not 'ed25519'")
+
+    try:
+        embedded = base64.b64decode(str(envelope.get("public_key_b64", "")), validate=True)
+        signature = base64.b64decode(str(envelope.get("signature_b64", "")), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise Unresolvable(f"session binding signature is not valid base64: {exc}") from exc
+
+    # REPLACE defence. Compare in constant time; the comparison is against a
+    # public value, but constant-time comparison here costs nothing and removes
+    # a whole class of "is my check leaking" questions.
+    if not hmac.compare_digest(embedded, pinned):
+        raise Unresolvable(
+            "session binding is signed by "
+            f"{base64.b64encode(embedded).decode() or '(nothing)'}, not by the pinned "
+            f"operator key {pinned_raw}; a session that re-signs the binding with its "
+            "own key does not become the operator"
+        )
+
+    # EDIT defence. The payload is the whole document minus the signature, so
+    # any mutated field invalidates it -- no field list to fall behind.
+    payload = canonical_payload(binding)
+    if not ed25519_verify(pinned, payload, signature):
+        raise Unresolvable(
+            "session binding signature does not verify against the pinned operator "
+            "key; the binding has been modified since it was signed, or it was signed "
+            "over different bytes. Re-sign it with sign_binding.py, or investigate."
+        )
+    return base64.b64encode(pinned).decode()
+
+
 def load_binding(session: str) -> dict:
     """Resolve this session's operator-declared claim identity.
 
@@ -178,10 +296,15 @@ def load_binding(session: str) -> dict:
             "AGENT_BOUNTIES_BINDING_FILE is not set, so this session's claim identity "
             "cannot be established from operator-owned configuration"
         )
-    _assert_operator_owned(path)
+    _assert_not_session_writable(path)
     binding = _read_json(path, "session binding")
     if not isinstance(binding, dict):
         raise Unresolvable("session binding must be a JSON object")
+    # AUTHENTICATE BEFORE READING ANYTHING. Every field below -- network, the
+    # session table, bounty id, contract, solver, round -- is only meaningful
+    # once the document is proved to be the operator's. Reading first and
+    # verifying later would already have let unsigned content shape the answer.
+    operator_key = _verify_operator_signature(binding)
     if binding.get("schema_version") != BINDING_SCHEMA:
         raise Unresolvable(
             f"session binding schema_version must be {BINDING_SCHEMA!r}, "
@@ -211,7 +334,7 @@ def load_binding(session: str) -> dict:
         raise Unresolvable(f"session binding entry for {safe!r} must be an object")
 
     if str(entry.get("claim", "")).strip().lower() == "none":
-        return {"claim": None, "network": network}
+        return {"claim": None, "network": network, "operator_key": operator_key}
 
     bounty_id = str(entry.get("bounty_id", "")).strip()
     if not BOUNTY_ID_RE.match(bounty_id):
@@ -247,6 +370,7 @@ def load_binding(session: str) -> dict:
             "round": round_raw,
         },
         "network": network,
+        "operator_key": operator_key,
     }
 
 
@@ -481,7 +605,10 @@ def build_state(session: str) -> dict:
             "claim": {"active": False},
             "network": binding["network"],
             "provenance": "operator_binding",
-            "source": "operator session binding declares no claim for this session",
+            "operator_key": binding["operator_key"],
+            "source": ("operator session binding, Ed25519-signed by pinned key "
+                       f"{binding['operator_key'][:16]}..., declares no claim for "
+                       "this session"),
         }
 
     work = load_work_facts(session)
@@ -499,11 +626,13 @@ def build_state(session: str) -> dict:
         },
         "network": claim["network"],
         "provenance": provenance,
+        "operator_key": binding["operator_key"],
         "test": work.get("test") or {},
         "evidence": work.get("evidence") or {},
         "submission": work.get("submission") or {"submitted_onchain": False},
         "source": (
-            "identity from the operator session binding; claim/settlement from canonical "
+            "identity from the Ed25519-signed operator session binding (pinned key "
+            f"{binding['operator_key'][:16]}...); claim/settlement from canonical "
             f"Base events ({provenance}); work facts from the session workfile"
         ),
     }

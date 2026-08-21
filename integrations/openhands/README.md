@@ -69,15 +69,25 @@ this is defence in depth rather than one line.
 ```bash
 # JSON-array form is unambiguous and recommended, especially on Windows:
 export AGENT_BOUNTIES_STATE_CMD='["python3", "-B", "integrations/openhands/state_producer.py"]'
-export AGENT_BOUNTIES_BINDING_FILE="$HOME/.agent-bounties/binding.json"   # operator-owned
+export AGENT_BOUNTIES_BINDING_FILE="$HOME/.agent-bounties/binding.json"   # Ed25519-signed
+export AGENT_BOUNTIES_OPERATOR_PUBKEY="<base64 operator public key>"      # required
 export AGENT_BOUNTIES_SESSION_DIR="$HOME/.agent-bounties/sessions"        # <session-id>.json
 ```
 
+### One-time: create an operator key, OUTSIDE the sandbox
+
+```bash
+python3 -B integrations/openhands/sign_binding.py keygen \
+    --out ~/.agent-bounties/operator.key
+```
+
+It prints the public key to pin as `AGENT_BOUNTIES_OPERATOR_PUBKEY`. **Keep the
+private seed off any machine the agent session can read** — that separation is
+the entire authority boundary.
+
 ### The operator binding (claim identity)
 
-Written by the operator, **not** by the agent session. It must live outside
-`AGENT_BOUNTIES_SESSION_DIR` and, on POSIX, must not be group- or world-writable;
-the producer refuses it otherwise.
+Written and **signed** by the operator, never by the agent session:
 
 ```json
 {
@@ -91,20 +101,60 @@ the producer refuses it otherwise.
       "round": 2
     },
     "def-456": { "claim": "none" }
+  },
+  "signature": {
+    "alg": "ed25519",
+    "public_key_b64": "…",
+    "signature_b64": "…"
   }
 }
+```
+
+Sign it (and **re-sign after every edit** — a stale signature is an invalid one):
+
+```bash
+python3 -B integrations/openhands/sign_binding.py sign \
+    --key ~/.agent-bounties/operator.key --binding ~/.agent-bounties/binding.json
 ```
 
 A session that is **not listed** fails closed: an unknown session is not assumed
 idle. Declare `"claim": "none"` for sessions doing unrelated work.
 
-> **Trust boundary, stated honestly.** The binding is operator-owned by
-> *provenance*, not by cryptography. The producer enforces what it actually can —
-> configured out-of-band, outside the session-writable directory, not
-> group/world-writable — and does not pretend to prove that a sufficiently
-> privileged process inside the sandbox never touched it. What it *does* guarantee
-> is that nothing the documented session workflow writes can change claim identity
-> or manufacture payment.
+> **Trust boundary.** Claim identity is authenticated by an Ed25519 signature
+> verified against a public key pinned out-of-band in
+> `AGENT_BOUNTIES_OPERATOR_PUBKEY`. The private key never enters the sandbox.
+>
+> This is an *enforced* boundary, not a convention. An earlier version relied on
+> the binding simply living outside the session directory and not being group- or
+> world-writable, which is not a boundary at all: a same-OS-user session can
+> rewrite any file that user owns, and Windows has no equivalent mode bits. The
+> session may still edit the file freely — it just cannot produce a valid
+> signature over the edit.
+>
+> Three distinct forgeries are refused, and each needs its own check:
+>
+> | Attack | Refused because |
+> |---|---|
+> | **EDIT** a field | the signature no longer covers the body |
+> | **ERASE** the signature | unsigned bindings are refused outright |
+> | **REPLACE**, re-signed with the session's own key | the signature verifies, so verification alone is insufficient — the embedded key must **equal the pinned one** |
+>
+> The signature covers the whole document minus the `signature` envelope, so no
+> field can quietly fall outside its coverage. Location and permission checks are
+> retained only as a cheap misconfiguration warning; they are explicitly not the
+> boundary.
+>
+> `scripts/check-openhands-integration.py` proves this by running each attack
+> with the **session's own identity** against an outside-path, owner-writable
+> binding — asserting first that the write genuinely succeeds, and then that the
+> decision does not move.
+
+**No extra packages are needed in the sandbox.** Verification uses the standard
+library alone (`integrations/openhands/ed25519_verify.py`, pinned to the RFC 8032
+section 7.1 test vectors and cross-checked against PyCryptodome by the checker),
+so the boundary cannot silently degrade because an install failed. Only the
+operator-side *signing* tool needs PyCryptodome, already pinned by
+`scripts/requirements-attest.txt`.
 
 ### The session workfile (local work facts)
 
@@ -129,7 +179,8 @@ guard.
 | Variable | Meaning |
 |---|---|
 | `AGENT_BOUNTIES_STATE_CMD` | producer argv — a JSON array, or a shell-style string |
-| `AGENT_BOUNTIES_BINDING_FILE` | **required** operator-owned claim identity |
+| `AGENT_BOUNTIES_BINDING_FILE` | **required** Ed25519-signed operator claim identity |
+| `AGENT_BOUNTIES_OPERATOR_PUBKEY` | **required** base64 Ed25519 public key the binding must be signed by |
 | `AGENT_BOUNTIES_SESSION_DIR` | directory of `<session-id>.json` work facts |
 | `AGENT_BOUNTIES_SESSION_FILE` | exact workfile path, instead of `_DIR` + session id |
 | `AGENT_BOUNTIES_API` | override the API base (default `https://api.agentbounties.app`) |

@@ -29,6 +29,7 @@ Run: python -B scripts/check-openhands-integration.py
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shlex
@@ -378,6 +379,93 @@ check("  and reason flags the rejected assertion",
 # ---------------------------------------------------------------------------
 print("\n=== END TO END: a real Stop event drives the shipped state producer ===")
 
+# ---------------------------------------------------------------------------
+# Operator signing keys for the test bindings.
+#
+# The private half is generated here, in the CHECKER process, and never written
+# to a path the simulated session can read -- mirroring the real deployment,
+# where the operator signs outside the sandbox and only the public key is
+# pinned into the session environment.
+# ---------------------------------------------------------------------------
+sys.path.insert(0, str(ROOT / "integrations/openhands"))
+from ed25519_verify import canonical_payload  # noqa: E402
+from ed25519_verify import verify as ed25519_verify  # noqa: E402
+from ed25519_verify import _verify_pure, _verify_pycryptodome  # noqa: E402
+
+
+class Operator:
+    """An Ed25519 signing identity for the fixtures."""
+
+    def __init__(self):
+        from Crypto.PublicKey import ECC
+        self._ECC = ECC
+        self._key = ECC.generate(curve="Ed25519")
+        self.public = self._key.public_key().export_key(format="raw")
+        self.public_b64 = base64.b64encode(self.public).decode()
+
+    def sign(self, payload: bytes) -> bytes:
+        from Crypto.Signature import eddsa
+        return eddsa.new(self._key, "rfc8032").sign(payload)
+
+    def envelope(self, body: dict) -> dict:
+        return {
+            "alg": "ed25519",
+            "public_key_b64": self.public_b64,
+            "signature_b64": base64.b64encode(
+                self.sign(canonical_payload(body))).decode(),
+        }
+
+
+try:
+    OPERATOR = Operator()          # the pinned, legitimate operator
+    ROGUE = Operator()             # a key the SESSION could generate for itself
+    SIGNING_AVAILABLE = True
+except ImportError:
+    OPERATOR = ROGUE = None
+    SIGNING_AVAILABLE = False
+
+check("test signing key material is available (PyCryptodome, "
+      "scripts/requirements-attest.txt)", SIGNING_AVAILABLE,
+      "install with: pip install -r scripts/requirements-attest.txt")
+if not SIGNING_AVAILABLE:
+    print("\nCannot exercise the signed-binding boundary without a signer.")
+    raise SystemExit(1)
+
+print("\n=== the bundled Ed25519 verifier matches RFC 8032 ===")
+# The Stop hook must work with the standard library alone, so the integration
+# ships a pure-Python RFC 8032 verifier as a fallback. A homemade crypto
+# primitive is only acceptable if it is pinned to the official vectors AND
+# cross-checked against a real library, so do both. If these ever disagree, the
+# authority boundary is not what it claims to be.
+RFC8032_VECTORS = [
+    # (public key, message, signature) from RFC 8032 section 7.1
+    ("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "",
+     "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590"
+     "a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"),
+    ("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "72",
+     "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e"
+     "15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"),
+    ("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", "af82",
+     "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d"
+     "16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a"),
+]
+for index, (pk_hex, msg_hex, sig_hex) in enumerate(RFC8032_VECTORS, start=1):
+    pk, msg, sig = (bytes.fromhex(pk_hex), bytes.fromhex(msg_hex),
+                    bytes.fromhex(sig_hex))
+    check(f"RFC 8032 vector {index}: pure verifier accepts", _verify_pure(pk, msg, sig) is True)
+    check(f"RFC 8032 vector {index}: library verifier agrees",
+          _verify_pycryptodome(pk, msg, sig) is True)
+    tampered = bytearray(sig)
+    tampered[0] ^= 0x01
+    check(f"RFC 8032 vector {index}: pure verifier REJECTS a flipped bit",
+          _verify_pure(pk, msg, bytes(tampered)) is False)
+    check(f"RFC 8032 vector {index}: pure verifier REJECTS a different message",
+          _verify_pure(pk, msg + b"x", sig) is False)
+# A verifier that accepts everything would pass the positive vectors above.
+check("the pure verifier rejects an all-zero signature (not vacuously permissive)",
+      _verify_pure(bytes.fromhex(RFC8032_VECTORS[0][0]), b"", bytes(64)) is False)
+
+
 WORLD = tmpdir()
 SESSIONS = WORLD / "sessions"
 SESSIONS.mkdir()
@@ -385,13 +473,18 @@ BINDING = WORLD / "binding.json"   # deliberately OUTSIDE the session-writable d
 
 
 def write_binding(path: Path, sessions: dict, network: str = NETWORK,
-                  schema: str = "agent-bounties/openhands-session-binding/v1") -> Path:
-    path.write_text(json.dumps({
+                  schema: str = "agent-bounties/openhands-session-binding/v1",
+                  signer=None, sign: bool = True) -> Path:
+    """Write a binding and, by default, sign it with the pinned operator key."""
+    body = {
         "schema_version": schema,
         "network": network,
         "solver": SOLVER,
         "sessions": sessions,
-    }), encoding="utf-8")
+    }
+    if sign:
+        body["signature"] = (signer or OPERATOR).envelope(body)
+    path.write_text(json.dumps(body), encoding="utf-8")
     if not IS_WINDOWS:
         path.chmod(0o600)
     return path
@@ -406,7 +499,23 @@ write_binding(BINDING, {
 SNAPSHOT = WORLD / "events.json"
 SNAPSHOT.write_text(json.dumps([CLAIM_EVENT]), encoding="utf-8")
 
-PRODUCER_CMD = f"{shlex.quote(sys.executable)} -B {shlex.quote(str(PRODUCER))}"
+# ONE PORTABLE ARGV REPRESENTATION, END TO END.
+#
+# The previous version built this with shlex.quote(), which emits POSIX SINGLE
+# quotes. parse_state_cmd's Windows branch splits in non-POSIX mode and strips
+# only DOUBLE quotes, so on Windows the interpreter path arrived still wrapped
+# in literal single quotes and the producer raised FileNotFoundError -- nine
+# assertions failed on the platform the suite claims to support.
+#
+# The documented JSON-array form has no quoting rules to disagree about: it is
+# argv verbatim on every platform. It is therefore what the checker registers,
+# what the README documents, and what the shell-string branch is measured
+# against for equivalence further down.
+def state_cmd(*argv: str) -> str:
+    return json.dumps(list(argv))
+
+
+PRODUCER_CMD = state_cmd(sys.executable, "-B", str(PRODUCER))
 
 
 def base_env(session: str) -> dict:
@@ -418,6 +527,7 @@ def base_env(session: str) -> dict:
         "OPENHANDS_SESSION_ID": session,
         "AGENT_BOUNTIES_STATE_CMD": PRODUCER_CMD,
         "AGENT_BOUNTIES_BINDING_FILE": str(BINDING),
+        "AGENT_BOUNTIES_OPERATOR_PUBKEY": OPERATOR.public_b64,
         "AGENT_BOUNTIES_SESSION_DIR": str(SESSIONS),
         "AGENT_BOUNTIES_EVENTS_FILE": str(SNAPSHOT),
         "AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT": "1",
@@ -461,12 +571,13 @@ check("no operator binding configured -> exit 2 (identity cannot be established)
 
 rc, body, err = run_registered(
     "sess-bounty",
-    {"AGENT_BOUNTIES_STATE_CMD": f"{shlex.quote(sys.executable)} -c \"import sys; sys.exit(3)\""})
+    {"AGENT_BOUNTIES_STATE_CMD": state_cmd(sys.executable, "-c",
+                                           "import sys; sys.exit(3)")})
 check("state producer exiting non-zero -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
 rc, body, err = run_registered(
     "sess-bounty",
-    {"AGENT_BOUNTIES_STATE_CMD": f"{shlex.quote(sys.executable)} -c \"print('not json')\""})
+    {"AGENT_BOUNTIES_STATE_CMD": state_cmd(sys.executable, "-c", "print('not json')")})
 check("state producer emitting non-JSON -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
 rc, body, err = run_registered(
@@ -552,18 +663,284 @@ for (label, _), (rc, body, err) in zip(BAD_BINDINGS, in_parallel(
          for _, path in BAD_BINDINGS])):
     check(label, rc == 2, f"exit={rc} stderr={err[-200:]}")
 
+# ---------------------------------------------------------------------------
+# THE AUTHORITY BOUNDARY, run with the SESSION's own identity.
+# ---------------------------------------------------------------------------
+print("\n=== a session process CANNOT forge, erase, or replace its binding ===")
+# This is the review's second blocker. Previously the binding was "operator-
+# owned" only by convention -- it merely sat outside the session directory and
+# was not group/world-writable -- so the very same OS user running the session
+# could rewrite it and change or erase the claim identity. On Windows there was
+# no ownership check at all.
+#
+# So do exactly what the review asked: run AS the session (same process, same
+# OS user, full write access to the file), mutate an outside-path owner-writable
+# binding, and prove the mutation cannot alter the decision. Every case below
+# succeeds at WRITING the file -- that is the point -- and still fails to move
+# the guard, because the operator's private key is not in this sandbox.
+
+SESSION_TARGET = WORLD / "session-attacked-binding.json"
+write_binding(SESSION_TARGET, {
+    "sess-bounty": {"bounty_id": BOUNTY_ID, "bounty_contract": CONTRACT, "round": ROUND},
+})
+# Pin the local work facts explicitly so the baseline is deterministic and does
+# not depend on whatever an earlier section left in the workfile.
+workfile.write_text(json.dumps({
+    "test": PASSED, "evidence": FULL_EVIDENCE,
+    "submission": {"submitted_onchain": True},
+}), encoding="utf-8")
+
+# Establish the baseline: with the correct signature the binding is fully
+# ACCEPTED, identity resolves, and the guard reaches a decision on the merits
+# (exit 0, awaiting the verifier, $0.00). Every attack below must turn this
+# exit 0 into exit 2. Without this baseline a guard that blocked unconditionally
+# would pass every assertion in this section.
+rc, body, err = run_registered("sess-bounty",
+                               {"AGENT_BOUNTIES_BINDING_FILE": str(SESSION_TARGET)})
+baseline_reason = body.get("reason", "")
+check("ATTACK BASELINE: the correctly signed binding is ACCEPTED (exit 0, merits reached)",
+      rc == 0 and "$0.00" in baseline_reason,
+      f"exit={rc} reason={baseline_reason[:250]} stderr={err[-200:]}")
+check("  and the accepted baseline still does not claim payment",
+      "work is paid" not in baseline_reason.lower(), baseline_reason[:200])
+
+# The session really can write this file. If it could not, the whole exercise
+# would be theatre.
+check("the session process really can write the binding "
+      "(so the boundary is not just file permissions)",
+      os.access(SESSION_TARGET, os.W_OK), f"{SESSION_TARGET} is not writable here")
+
+signed_body = json.loads(SESSION_TARGET.read_text())
+
+
+def attack(label: str, document, expect_reason: str = "") -> None:
+    """Overwrite the binding as the session would, then re-run the guard."""
+    SESSION_TARGET.write_text(json.dumps(document) if document is not None else "",
+                              encoding="utf-8")
+    rc, body, err = run_registered("sess-bounty",
+                                   {"AGENT_BOUNTIES_BINDING_FILE": str(SESSION_TARGET)})
+    blob = (body.get("reason", "") + err).lower()
+    check(label, rc == 2, f"exit={rc} reason={body.get('reason', '')[:200]}")
+    if expect_reason:
+        check(f"  {label}: refused for the right reason",
+              expect_reason in blob, f"reason={blob[:300]}")
+
+
+# EDIT: point the claim at a different bounty the session would rather work on.
+attack("EDIT the bounty_id under a valid signature -> exit 2",
+       {**signed_body, "sessions": {
+           "sess-bounty": {"bounty_id": "0x" + "99" * 32,
+                           "bounty_contract": CONTRACT, "round": ROUND}}},
+       "does not verify")
+# EDIT: the subtlest one -- flip the session to "no claim" to switch the guard off.
+attack("EDIT the session to \"claim\": \"none\" to disable the guard -> exit 2",
+       {**signed_body, "sessions": {"sess-bounty": {"claim": "none"}}},
+       "does not verify")
+# EDIT: swap in the attacker's own solver address.
+attack("EDIT the solver address -> exit 2",
+       {**signed_body, "solver": "0x" + "44" * 20}, "does not verify")
+# ERASE: drop the signature envelope entirely.
+attack("ERASE the signature envelope -> exit 2",
+       {k: v for k, v in signed_body.items() if k != "signature"},
+       "no signature envelope")
+# REPLACE: re-sign the mutated document with a key the SESSION generated. The
+# signature is perfectly valid -- it is simply not the operator's. This is why
+# verification alone is insufficient and the key must be PINNED.
+rogue_body = {
+    "schema_version": "agent-bounties/openhands-session-binding/v1",
+    "network": NETWORK,
+    "solver": SOLVER,
+    "sessions": {"sess-bounty": {"claim": "none"}},
+}
+rogue_body["signature"] = ROGUE.envelope(rogue_body)
+check("  (the rogue document is internally VALID, so only key pinning can catch it)",
+      ed25519_verify(ROGUE.public, canonical_payload(rogue_body),
+                     base64.b64decode(rogue_body["signature"]["signature_b64"])),
+      "the rogue signature should verify against the rogue key")
+attack("REPLACE the binding, re-signed with the session's OWN key -> exit 2",
+       rogue_body, "not by the pinned operator key")
+# Truncate to nothing.
+attack("TRUNCATE the binding to empty -> exit 2", None)
+
+# Restore, and prove the boundary is not simply "always block": the legitimate
+# signed document is accepted again afterwards. Without this, a guard that
+# rejected everything unconditionally would pass every assertion above.
+SESSION_TARGET.write_text(json.dumps(signed_body), encoding="utf-8")
+rc, body, err = run_registered("sess-bounty",
+                               {"AGENT_BOUNTIES_BINDING_FILE": str(SESSION_TARGET)})
+check("restoring the operator-signed binding is accepted again "
+      "(the guard is not merely always-deny)",
+      rc == 0 and "$0.00" in body.get("reason", ""),
+      f"exit={rc} reason={body.get('reason', '')[:250]} stderr={err[-200:]}")
+
+# And an unsigned binding cannot be used at all, even at the right path with
+# perfect permissions -- the old "outside the session dir + 0600" story.
+unsigned = write_binding(WORLD / "unsigned.json", {
+    "sess-bounty": {"bounty_id": BOUNTY_ID, "bounty_contract": CONTRACT, "round": ROUND},
+}, sign=False)
+rc, body, err = run_registered("sess-bounty",
+                               {"AGENT_BOUNTIES_BINDING_FILE": str(unsigned)})
+check("an UNSIGNED binding outside the session dir with mode 0600 -> exit 2",
+      rc == 2, f"exit={rc}")
+
+# Without a pinned key there is no boundary to enforce, so refuse to proceed
+# rather than silently degrading to the old provenance-by-location behaviour.
+rc, body, err = run_registered("sess-bounty", drop=("AGENT_BOUNTIES_OPERATOR_PUBKEY",))
+check("no pinned operator public key -> exit 2 (no silent downgrade)", rc == 2,
+      f"exit={rc}")
+rc, body, err = run_registered("sess-bounty",
+                               {"AGENT_BOUNTIES_OPERATOR_PUBKEY": "not-base64!!"})
+check("a malformed pinned operator key -> exit 2", rc == 2, f"exit={rc}")
+rc, body, err = run_registered(
+    "sess-bounty", {"AGENT_BOUNTIES_OPERATOR_PUBKEY": base64.b64encode(b"short").decode()})
+check("a pinned key of the wrong length -> exit 2", rc == 2, f"exit={rc}")
+rc, body, err = run_registered("sess-bounty",
+                               {"AGENT_BOUNTIES_OPERATOR_PUBKEY": ROGUE.public_b64})
+check("pinning a DIFFERENT key than the signer -> exit 2", rc == 2, f"exit={rc}")
+
+# The signing tool must round-trip with the shipped verifier: a signature the
+# operator tool produces has to be one the guard accepts, or the documented
+# workflow is broken.
+print("\n=== the operator signing tool round-trips with the shipped verifier ===")
+SIGN_TOOL = ROOT / "integrations/openhands/sign_binding.py"
+check("integrations/openhands/sign_binding.py ships", SIGN_TOOL.is_file())
+keydir = tmpdir()
+keyfile = keydir / "operator.key"
+gen = subprocess.run([sys.executable, "-B", str(SIGN_TOOL), "keygen", "--out", str(keyfile)],
+                     text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                     timeout=90, check=False)
+check("keygen produces an operator key", gen.returncode == 0 and keyfile.is_file(),
+      f"exit={gen.returncode} stderr={gen.stderr[-300:]}")
+if keyfile.is_file():
+    tool_binding = keydir / "binding.json"
+    tool_binding.write_text(json.dumps({
+        "schema_version": "agent-bounties/openhands-session-binding/v1",
+        "network": NETWORK, "solver": SOLVER,
+        "sessions": {"sess-bounty": {"bounty_id": BOUNTY_ID,
+                                     "bounty_contract": CONTRACT, "round": ROUND}},
+    }), encoding="utf-8")
+    signed = subprocess.run(
+        [sys.executable, "-B", str(SIGN_TOOL), "sign", "--key", str(keyfile),
+         "--binding", str(tool_binding)],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, check=False)
+    check("sign succeeds", signed.returncode == 0, f"stderr={signed.stderr[-300:]}")
+    tool_pub = json.loads(keyfile.read_text())["public_key_b64"]
+    rc, body, err = run_registered("sess-bounty", {
+        "AGENT_BOUNTIES_BINDING_FILE": str(tool_binding),
+        "AGENT_BOUNTIES_OPERATOR_PUBKEY": tool_pub})
+    check("  a tool-signed binding is ACCEPTED by the shipped verifier",
+          rc == 0 and "$0.00" in body.get("reason", ""),
+          f"exit={rc} reason={body.get('reason', '')[:250]} stderr={err[-200:]}")
+    # ... and tampering with it afterwards is caught.
+    tampered_doc = json.loads(tool_binding.read_text())
+    tampered_doc["sessions"]["sess-bounty"]["round"] = ROUND + 1
+    tool_binding.write_text(json.dumps(tampered_doc), encoding="utf-8")
+    rc, body, err = run_registered("sess-bounty", {
+        "AGENT_BOUNTIES_BINDING_FILE": str(tool_binding),
+        "AGENT_BOUNTIES_OPERATOR_PUBKEY": tool_pub})
+    check("  editing a tool-signed binding afterwards -> exit 2", rc == 2, f"exit={rc}")
+    check("  the private seed never leaves the operator key file",
+          json.loads(keyfile.read_text()).get("private_seed_b64")
+          not in tool_binding.read_text(),
+          "the private seed must never appear in a binding document")
+
+
 print("\n=== AGENT_BOUNTIES_STATE_CMD parses portably (Windows paths included) ===")
-# A JSON array is the unambiguous argv form. POSIX-mode shlex would eat the
-# backslashes in an unquoted Windows path, so the guard must accept this shape.
-# The property under test is equivalence: the array form must reach the producer
-# and yield the same decision as the equivalent shell-string form.
-string_rc, string_body, _ = run_registered("sess-bounty")
-rc, body, err = run_registered("sess-bounty", {
-    "AGENT_BOUNTIES_STATE_CMD": json.dumps([sys.executable, "-B", str(PRODUCER)])})
-check("JSON-array state command yields the same decision as the string form",
-      (rc, body.get("decision")) == (string_rc, string_body.get("decision")),
-      f"array=({rc}, {body.get('decision')}) string=({string_rc}, "
-      f"{string_body.get('decision')}) stderr={err[-200:]}")
+# REGRESSION PIN for the review's first blocker. The suite used to register a
+# shlex.quote()'d shell string, whose POSIX single quotes the Windows branch of
+# parse_state_cmd does not strip -- so the command the suite actually shipped
+# raised FileNotFoundError on Windows and nine assertions failed there while
+# every one of them passed on Linux.
+#
+# The fix is one portable representation (the documented JSON array). This
+# asserts the property that makes it portable: the argv the checker registers
+# must parse to the SAME tokens under BOTH branches of parse_state_cmd,
+# including the Windows branch, on whatever platform the suite is running.
+both = subprocess.run(
+    [sys.executable, "-B", "-c",
+     "import importlib.util,json,os,sys;"
+     "spec=importlib.util.spec_from_file_location('g',sys.argv[1]);"
+     "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+     "posix=m.parse_state_cmd(sys.argv[2]);"
+     "os.name='nt';"
+     "windows=m.parse_state_cmd(sys.argv[2]);"
+     "print(json.dumps({'posix':posix,'windows':windows}))",
+     str(GUARD), PRODUCER_CMD],
+    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+try:
+    parsed = json.loads(both.stdout)
+except json.JSONDecodeError:
+    parsed = {}
+want_argv = [sys.executable, "-B", str(PRODUCER)]
+check("the REGISTERED state command parses identically on POSIX and Windows",
+      parsed.get("posix") == parsed.get("windows") == want_argv,
+      f"posix={parsed.get('posix')} windows={parsed.get('windows')} "
+      f"want={want_argv} stderr={both.stderr[-200:]}")
+# And prove that assertion is load-bearing, deterministically on ANY platform.
+#
+# Using sys.executable here would be useless: shlex.quote() is a no-op for a
+# path containing no shell-unsafe characters, so on a typical POSIX checkout the
+# "broken" legacy form and the fixed form are byte-identical and the pin would
+# pass for the wrong reason. A real Windows interpreter path contains
+# backslashes, which shlex.quote DOES wrap in single quotes and the Windows
+# splitter (which strips only double quotes) then leaves attached -- producing
+# the literal FileNotFoundError the review hit. Use that path explicitly.
+WINDOWS_PYTHON = r"C:\Python311\python.exe"
+WINDOWS_PRODUCER = r"C:\repo\integrations\openhands\state_producer.py"
+legacy = subprocess.run(
+    [sys.executable, "-B", "-c",
+     "import importlib.util,json,os,sys;"
+     "spec=importlib.util.spec_from_file_location('g',sys.argv[1]);"
+     "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+     "os.name='nt';"
+     "print(json.dumps(m.parse_state_cmd(sys.argv[2])))",
+     str(GUARD),
+     f"{shlex.quote(WINDOWS_PYTHON)} -B {shlex.quote(WINDOWS_PRODUCER)}"],
+    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+try:
+    legacy_tokens = json.loads(legacy.stdout)
+except json.JSONDecodeError:
+    legacy_tokens = []
+check("  the OLD shlex.quote form leaves stray quotes on a Windows path "
+      "(this is the bug that was shipped)",
+      bool(legacy_tokens) and legacy_tokens[0] != WINDOWS_PYTHON,
+      f"legacy tokens={legacy_tokens}; if token 0 is already the clean path, "
+      f"this pin is vacuous")
+# The JSON array carries the same Windows argv through both branches untouched.
+array_probe = subprocess.run(
+    [sys.executable, "-B", "-c",
+     "import importlib.util,json,os,sys;"
+     "spec=importlib.util.spec_from_file_location('g',sys.argv[1]);"
+     "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);"
+     "posix=m.parse_state_cmd(sys.argv[2]);"
+     "os.name='nt';"
+     "print(json.dumps({'posix':posix,'windows':m.parse_state_cmd(sys.argv[2])}))",
+     str(GUARD), state_cmd(WINDOWS_PYTHON, "-B", WINDOWS_PRODUCER)],
+    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+try:
+    array_parsed = json.loads(array_probe.stdout)
+except json.JSONDecodeError:
+    array_parsed = {}
+want_windows = [WINDOWS_PYTHON, "-B", WINDOWS_PRODUCER]
+check("  the JSON-array form carries a Windows argv intact through BOTH branches",
+      array_parsed.get("posix") == array_parsed.get("windows") == want_windows,
+      f"posix={array_parsed.get('posix')} windows={array_parsed.get('windows')} "
+      f"want={want_windows} stderr={array_probe.stderr[-200:]}")
+
+# Equivalence: a plain shell string must reach the producer and reach the same
+# decision as the array form. Use a path with no spaces or backslashes so the
+# string form is unambiguous under either splitter -- the point here is that the
+# two REPRESENTATIONS agree, not that shell quoting is solved.
+array_rc, array_body, _ = run_registered("sess-bounty")
+plain = f"{sys.executable} -B {PRODUCER}"
+if " " in plain:
+    print("  SKIP  shell-string equivalence (interpreter or repo path contains a space)")
+else:
+    rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": plain})
+    check("shell-string state command yields the same decision as the JSON-array form",
+          (rc, body.get("decision")) == (array_rc, array_body.get("decision")),
+          f"string=({rc}, {body.get('decision')}) array=({array_rc}, "
+          f"{array_body.get('decision')}) stderr={err[-200:]}")
 rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": json.dumps(
     {"cmd": "nope"})})
 check("non-array JSON state command -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
