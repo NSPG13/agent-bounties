@@ -48,6 +48,7 @@ const elements = new Map([
   ["[data-created-address]", element()],
   ["[data-created-link]", element({ href: "" })],
   ["[data-created-events]", element({ href: "" })],
+  ["[data-created-feedback]", element({ href: "" })],
   ["[data-created-competition]", element({ hidden: true })],
 ]);
 
@@ -146,6 +147,9 @@ const context = {
   const output = elements.get("[data-create-output]").textContent;
   if (!output.startsWith("Canonical creation, funding")) {
     throw new Error(`creation did not reach canonical confirmation: ${output}`);
+  }
+  if (!elements.get("[data-created-feedback]").href.includes("stage=posting")) {
+    throw new Error("canonical posting receipt did not include the feedback handoff");
   }
   console.log("Open Competition creation preserves the form across async legal consent");
 })().catch((error) => {
