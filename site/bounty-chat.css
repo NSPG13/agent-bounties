@@ -85,7 +85,9 @@ body.chat-app-page {
 }
 
 .chat-app-title {
+  margin: 0;
   color: #dbe1da;
+  line-height: 1;
   font-size: 13px;
   font-weight: 700;
 }

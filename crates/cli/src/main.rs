@@ -4344,8 +4344,12 @@ async fn production_smoke_check(
     }
     let mcp_llms = production_get_text(&client, &format!("{mcp}/llms.txt")).await?;
     require(
-        mcp_llms.contains("MCP tools") && mcp_llms.contains("list_autonomous_bounties"),
-        "MCP llms.txt must orient agents to autonomous tools",
+        mcp_llms.contains("## Remote MCP default")
+            && mcp_llms.contains("call `tools/list`")
+            && mcp_llms.contains("prepare_bounty_action")
+            && mcp_llms.contains("get_bounty_action_status")
+            && mcp_llms.contains("list_autonomous_bounties"),
+        "MCP llms.txt must distinguish remote MCP from advanced autonomous tools",
     )?;
 
     let mcp_tools_url =
@@ -5897,7 +5901,7 @@ fn load_mcp_tools(contract_root: &Path) -> Result<BTreeSet<String>> {
     let names = registry["tools"]
         .as_array()
         .context("MCP tool registry tools must be an array")?;
-    let tools = names
+    let mut tools = names
         .iter()
         .map(|name| {
             name.as_str()
@@ -5908,6 +5912,28 @@ fn load_mcp_tools(contract_root: &Path) -> Result<BTreeSet<String>> {
     if tools.len() != names.len() {
         bail!("MCP tool registry contains duplicate names");
     }
+    // The fixture is the advanced HTTP catalog. The hosted Streamable HTTP
+    // endpoint also exposes this smaller app-native catalog, so documentation
+    // may truthfully name tools from either public surface.
+    tools.extend(
+        [
+            "get_bounty_feed",
+            "render_bounty_feed",
+            "prepare_moonpay_onramp",
+            "prepare_bounty_post",
+            "prepare_bounty_action",
+            "get_bounty_action_status",
+            "compile_objective_with_cloud_agent",
+            "list_bounty_comments",
+            "add_bounty_comment",
+            "create_share_bundle",
+            "list_autonomous_bounties",
+            "inspect_open_competition_v2",
+            "prepare_open_competition_v2",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
     Ok(tools)
 }
 

@@ -2875,6 +2875,7 @@ dependencies = [
  "bounty-router",
  "chain-base",
  "chrono",
+ "competition-metric-core",
  "db",
  "domain",
  "eval-harness",

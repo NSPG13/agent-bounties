@@ -1,0 +1,41 @@
+{
+  "schema_version": "agent-bounties/public-mcp-contract-v1",
+  "change_policy": "Changes to a published catalog name, instruction, schema, output, or safety annotation require an explicit fixture update and matching public documentation in the same reviewed change.",
+  "catalogs": {
+    "chatgpt": {
+      "tool_count": 10,
+      "tools": [
+        "add_bounty_comment",
+        "compile_objective_with_cloud_agent",
+        "create_share_bundle",
+        "get_bounty_action_status",
+        "get_bounty_feed",
+        "list_bounty_comments",
+        "prepare_bounty_action",
+        "prepare_bounty_post",
+        "prepare_moonpay_onramp",
+        "render_bounty_feed"
+      ],
+      "normalized_descriptors_sha256": "1370a128d41f30c280639892d422b6cbad371e3171007ade04e3a2cbb58fdf58"
+    },
+    "core": {
+      "tool_count": 13,
+      "tools": [
+        "add_bounty_comment",
+        "compile_objective_with_cloud_agent",
+        "create_share_bundle",
+        "get_bounty_action_status",
+        "get_bounty_feed",
+        "inspect_open_competition_v2",
+        "list_autonomous_bounties",
+        "list_bounty_comments",
+        "prepare_bounty_action",
+        "prepare_bounty_post",
+        "prepare_moonpay_onramp",
+        "prepare_open_competition_v2",
+        "render_bounty_feed"
+      ],
+      "normalized_descriptors_sha256": "5d5e3084d2d8a99e5cbeedeeebb2f887db9fe1da9c43272189e85528c94cab12"
+    }
+  }
+}

@@ -22,7 +22,7 @@ python scripts/check-mcp-protocol-eras.py \
 | Legacy `initialize` handshake | Negotiates a supported legacy version and preserves legacy result shapes |
 | Modern `initialize` or `ping` | `404` with JSON-RPC `-32601`; those methods are not in the modern core |
 | Modern `GET /mcp` or `DELETE /mcp` | `405`; modern Streamable HTTP uses one `POST` per request |
-| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Eleven-tool core catalog, including the cached-client compatibility tool `list_autonomous_bounties` |
+| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Thirteen-tool core catalog: the ten app tools, cached-client compatibility tool `list_autonomous_bounties`, and the two Open Competition V2 tools |
 | Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Ten-tool app catalog; the only bounty-discovery entry point is **get_bounty_feed** |
 | Discovery from an exact ChatGPT browser `Origin` | Ten-tool app catalog as a browser-client fallback |
 | `tools/call` for `list_autonomous_bounties` from a cached ChatGPT registration | Accepted and dispatched even though the alias is absent from new ChatGPT discovery |
@@ -112,6 +112,32 @@ The server advertises only tools and resources. It does not advertise Tasks,
 subscriptions, prompts, or other optional extensions that it does not
 implement.
 
+## Published catalog stability
+
+The ten-tool ChatGPT catalog and thirteen-tool core catalog are versioned
+public contracts. Their tool names, model instructions, input and output
+schemas, and safety annotations are pinned by
+`crates/mcp-server/fixtures/public-mcp-contract-v1.json`. An intentional change
+must update that fixture and the affected public onboarding documentation in
+the same reviewed PR. Additive specialist capabilities should remain in the
+advanced HTTP `/tools` catalog unless they are necessary for the short default
+MCP path.
+
+For the core catalog's V2 extension, begin with
+`inspect_open_competition_v2(operation=guide)`. The guide supplies the complete
+post, hosted-proof, BYO-proof, and finish/refund order; the mutation tool's
+conditional schema supplies exact arguments for each operation. Treat
+`prepare_open_competition_v2` as side-effecting: quoting creates hosted state,
+an approved payment signature may transfer Base USDC, and an approved relay
+signature may submit a proof. Its local `prepare_policies` operation derives
+canonical policy commitments and a retry-safe creation nonce without creating
+or funding a competition.
+
+Deployment-configured security schemes are normalized out of the descriptor
+digest because enabling the optional analytics-exclusion OAuth scope must not
+rewrite the product contract. Tests separately require anonymous access to
+remain available.
+
 ## Origin configuration
 
 Requests without an `Origin` are allowed for normal server-to-server MCP
@@ -130,7 +156,7 @@ exact ChatGPT browser origins provide the same metadata-only fallback. These
 self-declared signals never authenticate a caller or grant wallet, payment,
 publishing, analytics-exclusion, or operator authority. Release must stop
 before registration changes if a real ChatGPT metadata scan sees the
-eleven-tool core catalog.
+thirteen-tool core catalog.
 
 ## Verification
 
@@ -144,7 +170,7 @@ python scripts/check-mcp-protocol-eras.py --endpoint http://127.0.0.1:8080/mcp -
 The runtime check calls modern `server/discover`, both modern catalog profiles,
 a resource, and a tool, plus legacy `initialize` and both legacy catalog
 profiles through the real HTTP endpoint. It requires ten tools for the exact
-`openai-mcp` client-info name, eleven tools for an ordinary core client, and a
+`openai-mcp` client-info name, thirteen tools for an ordinary core client, and a
 successful cached-client dispatch attempt for `list_autonomous_bounties`.
 
 The deployed production smoke performs modern discovery and legacy initialize

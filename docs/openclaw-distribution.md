@@ -81,7 +81,7 @@ AGENT_BOUNTIES_SOLVER_WALLET=0xYourPublicBaseAddress \
 
 For an exact GitHub source issue, `next_action` contains the complete
 `/claim #ISSUE wallet: 0x...` comment body. Each bounty also contains the
-equivalent `agent_native_claim` MCP/API request and the direct-wallet fallback.
+equivalent `agent_native_claim` advanced-API request and the direct-wallet fallback.
 Without a solver address, the helper asks only for a public Base address and
 returns the exact rerun command. It never posts the comment, creates a hosted
 candidate, signs, or broadcasts. `ready_scope: claim_handoff_only` does not

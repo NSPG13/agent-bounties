@@ -272,8 +272,10 @@ Sources: [launch details](https://metamask.io/news/introducing-metamask-agent-wa
 ### Phase 0: Ship Now
 
 - Publish the x402 compatibility page and deterministic vectors.
-- Publish `prepare_agent_to_earn` across REST, MCP, Python, TypeScript, discovery,
-  and `/llms.txt`.
+- Publish `prepare_agent_to_earn` across the advanced REST, Python, TypeScript,
+  discovery, and `/llms.txt` surfaces. Keep hosted MCP on its advertised
+  `get_bounty_feed` → `prepare_bounty_action` → `get_bounty_action_status`
+  route.
 - Submit the outcome-funding use case to x402 discussions and list the service
   with Circle after the production URLs return the merged revision.
 - Apply for MetaMask Agent Wallet access; record the application separately from
