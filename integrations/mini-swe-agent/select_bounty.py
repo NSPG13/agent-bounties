@@ -224,8 +224,24 @@ def validate_envelope(inv):
     if not isinstance(inv.get("items"), list):
         raise Invalid("items is absent or not an array")
 
-    # Coverage: the canonical source's declared item_count must match the number
-    # of canonical items actually delivered. A truncated page is not "no work".
+    # Coverage. `item_count` is recorded when the source is READ, before any
+    # view/query filtering, and `items` is what survives that filter:
+    #
+    #   main.rs:4357  item_count: canonical_items.len()   <-- pre-filter
+    #   main.rs:4360  items.extend(canonical_items);
+    #   main.rs:4362  let items = apply_opportunity_query(items, &query, view, now);
+    #
+    # `apply_query` retains on source_type/work_state/payment_state, then drops
+    # everything the view rejects (ReadyToEarn keeps only claimable + escrowed +
+    # payment_committed + verification_ready + positive gross cash margin), then
+    # truncates to `limit`. So on a healthy production response delivered is
+    # normally FEWER than declared -- 9 canonical bounties on chain, 3 of them
+    # ready to earn -- and demanding equality would refuse all real inventory.
+    #
+    # The sound invariant is the one direction that cannot happen legitimately:
+    # a filter can only ever remove items, so delivering MORE canonical items
+    # than the source reported reading is an incoherent response, and coverage
+    # claims about it cannot be trusted.
     declared = canonical.get("item_count")
     if not isinstance(declared, int) or isinstance(declared, bool) or declared < 0:
         raise Invalid(f"canonical item_count is {declared!r}, not a count")
@@ -233,10 +249,11 @@ def validate_envelope(inv):
         1 for it in inv["items"]
         if isinstance(it, dict) and it.get("source_type") == CANONICAL_SOURCE_TYPE
     )
-    if delivered != declared:
+    if delivered > declared:
         raise Invalid(
-            f"canonical coverage incomplete: item_count={declared} but "
-            f"{delivered} canonical item(s) delivered"
+            f"canonical coverage incoherent: item_count={declared} but "
+            f"{delivered} canonical item(s) delivered; a view filter can only "
+            "remove items, never add them"
         )
 
     if not str(inv.get("evidence_boundary") or "").strip():

@@ -67,7 +67,7 @@ validates the full envelope first, against the exact upstream definition in
 | `applied_view` | exactly `ready_to_earn` | it is `Option<String>`; **null means the filter was never applied**, so the payload is unfiltered inventory |
 | `degraded` | exactly `false` | the server is declaring the projection partial |
 | `source_statuses` | non-empty; every source `available` with no `error` | one broken source makes coverage incomplete |
-| canonical `item_count` | equals the canonical items actually delivered | catches a truncated page |
+| canonical `item_count` | is never *below* the canonical items delivered | `item_count` is recorded pre-filter (`main.rs:4357`) and `items` is post-filter (`main.rs:4362`), so a healthy `ready_to_earn` response normally delivers **fewer** than declared. Only the reverse — more delivered than read — is incoherent |
 | `generated_at`, `evidence_boundary` | present | freshness and boundary must be knowable |
 
 **`source_type` is authoritative for canonicity.** A Base network plus any

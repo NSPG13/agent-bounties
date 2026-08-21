@@ -79,8 +79,8 @@ EXPECTATIONS = {
         "refresh", "a source reporting an error makes coverage incomplete"),
     "adversarial-envelope-source-unavailable.json": (
         "refresh", "an unavailable canonical source cannot back a claim decision"),
-    "adversarial-envelope-truncated-coverage.json": (
-        "refresh", "item_count above delivered items means the page was truncated"),
+    "adversarial-envelope-incoherent-coverage.json": (
+        "refresh", "more canonical items delivered than read is incoherent"),
     "adversarial-envelope-no-source-statuses.json": (
         "refresh", "without source_statuses, coverage is entirely unknown"),
     "adversarial-item-spoofed-canonicity.json": (
@@ -186,6 +186,38 @@ if expired.is_file():
     )
 
 print()
+print("=== a view-filtered subset is normal, not a coverage fault ===")
+# Regression pin. `item_count` is recorded when the source is READ
+# (main.rs:4357, pre-filter); `items` is what survives `apply_opportunity_query`
+# (main.rs:4362). Under view=ready_to_earn the delivered canonical count is
+# normally SMALLER than the declared one. An earlier version of this checker
+# demanded equality, which would have refused every real production response
+# while every fixture still passed -- the fixtures happened to encode
+# declared == delivered. This case fails if that equality rule ever returns.
+subset = FIXTURES / "view-filtered-subset.json"
+if not subset.is_file():
+    check(False, "view-filtered-subset.json exists")
+else:
+    payload = json.loads(subset.read_text())
+    declared = next(
+        s["item_count"] for s in payload["source_statuses"]
+        if s["source_type"] == "canonical_base"
+    )
+    delivered = sum(
+        1 for i in payload["items"] if i.get("source_type") == "canonical_base"
+    )
+    # Guard against the fixture drifting into a vacuous shape: if declared ever
+    # equals delivered, this case would pass under the buggy rule too.
+    check(delivered < declared,
+          f"fixture actually exercises a filtered subset (declared={declared} > "
+          f"delivered={delivered})")
+    result = run(subset)
+    check(result.get("action") == "claim",
+          "a healthy pre-filter item_count above the delivered count still selects work")
+    check(result.get("selected") is not None,
+          "view-filtered subset selects a bounty")
+
+print()
 print("=== an untrustworthy response is never reported as 'no work' ===")
 # This is the regression the review caught: `wait` means "the canonical feed is
 # healthy and there is genuinely nothing funded". It must be unreachable when
@@ -194,7 +226,7 @@ for name in (
     "adversarial-empty-with-broken-source.json",
     "adversarial-empty-degraded.json",
     "adversarial-empty-stale.json",
-    "adversarial-envelope-truncated-coverage.json",
+    "adversarial-envelope-incoherent-coverage.json",
 ):
     path = FIXTURES / name
     if not path.is_file():
