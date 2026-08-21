@@ -19,6 +19,8 @@ REQUIRED_FILES = [
     "metrics.html",
     "metrics.css",
     "metrics.js",
+    "marketplace-refill-confirmation.html",
+    "marketplace-refill-confirmation.js",
     "generated/github-participation.json",
     "competition.html",
     "competition.css",
@@ -104,6 +106,7 @@ PUBLIC_INDEXABLE_PAGES = {
 INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
     "chatgpt-post-widget.html",
+    "marketplace-refill-confirmation.html",
     "operator.html",
     "onramp.html",
     "recovery.html",
