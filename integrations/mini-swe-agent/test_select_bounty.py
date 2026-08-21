@@ -14,9 +14,12 @@ missing or unverifiable.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -25,7 +28,26 @@ SELECTOR = HERE / "select_bounty.py"
 FIXTURES = HERE / "fixtures"
 CONFIG = HERE / "config.yaml"
 
+config_src = CONFIG.read_text(encoding="utf-8")
+
+# Import the selector once, up front. Several assertions below need the runtime
+# constants (the feed URL is built by concatenation, so a text scan cannot see
+# it; the item contract is a dict). Scanning source text instead would let a
+# renamed or deleted constant pass silently.
+spec = importlib.util.spec_from_file_location("select_bounty", SELECTOR)
+if spec is None or spec.loader is None:
+    raise SystemExit(f"cannot import selector module from {SELECTOR}")
+selector_mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(selector_mod)
+
 # fixture -> (expected action, why refusing matters)
+#
+# TWO DISTINCT REFUSALS, and mixing them up is the bug this suite exists to
+# catch:
+#   skip    -> the record is a VALID OpportunityItem that does not qualify.
+#   refresh -> the record BREACHES the OpportunityItem contract, so nothing can
+#              be concluded about it. A missing required field must land here,
+#              never in `skip` and certainly never in `claim`.
 EXPECTATIONS = {
     # original five
     "multiple.json": ("claim", "the one fully canonical, funded, verifier-ready record"),
@@ -84,9 +106,11 @@ EXPECTATIONS = {
     "adversarial-envelope-no-source-statuses.json": (
         "refresh", "without source_statuses, coverage is entirely unknown"),
     "adversarial-item-spoofed-canonicity.json": (
-        # skip, not refresh: the ENVELOPE here is internally consistent (it
-        # declares 0 canonical items and delivers 0), so this is an item-level
-        # rejection, not a coverage fault. The refusal must still be absolute.
+        # skip, not refresh: the record is a COMPLETE, well-formed
+        # OpportunityItem -- Base network, real 20-byte address,
+        # discovery_factors even asserting canonical_base -- and only
+        # source_type, the authoritative marker, disagrees. That is a merits
+        # refusal, not a data fault. The refusal must still be absolute.
         "skip", "network + 0x address is not canonicity; source_type is authoritative"),
     # the headline regression: an empty list must NOT be reported as "no work"
     # when the response itself is untrustworthy.
@@ -96,6 +120,41 @@ EXPECTATIONS = {
         "refresh", "an empty list from a degraded projection is a fault, not 'no work'"),
     "adversarial-empty-stale.json": (
         "refresh", "an empty list from a stale snapshot is a fault, not 'no work'"),
+
+    # ------------------------------------------------------------------
+    # ITEM-LEVEL production contract (OpportunityItem). The review found the
+    # selector still returned `claim` when verification_ready was false, when
+    # the escrow fields were DELETED, when the contract address was "0x" + 40
+    # non-hex characters, and when the bond was removed. One case each.
+    # ------------------------------------------------------------------
+    # (a) well-formed but disqualifying -> skip
+    "adversarial-item-not-escrowed.json": (
+        "skip", "payment_state must be exactly 'escrowed'; the reward is not in escrow"),
+    "adversarial-item-payment-uncommitted.json": (
+        "skip", "payment_committed=false means the escrow is not committed"),
+    "adversarial-item-zero-bond.json": (
+        "skip", "a canonical claim always costs a positive bond; zero understates it"),
+    "adversarial-item-work-state-open.json": (
+        "skip", "'open' is upstream's catch-all for not-yet-claimable, incl. unfunded"),
+    # (b) contract breaches -> refresh, never a permissive default
+    "adversarial-item-no-verification-ready.json": (
+        "refresh", "a DELETED required field must not be safer than a false one"),
+    "adversarial-item-verification-ready-not-boolean.json": (
+        "refresh", "the string 'true' is not the boolean the schema requires"),
+    "adversarial-item-no-escrow-fields.json": (
+        "refresh", "deleting payment_state/committed/funded/target proves nothing"),
+    "adversarial-item-no-bond.json": (
+        "refresh", "an absent bond cannot be reported as a zero bond"),
+    "adversarial-item-bad-contract-address.json": (
+        "refresh", "'0x' + 40 non-hex characters is not a 20-byte address"),
+    "adversarial-item-short-contract-address.json": (
+        "refresh", "a truncated address is not a 20-byte address"),
+    "adversarial-item-amount-no-unit.json": (
+        "refresh", "an OpportunityAmount without `unit` is dimensionally incomplete"),
+    "adversarial-item-contradictory-economics.json": (
+        "refresh", "a precomputed margin that contradicts its own components"),
+    "adversarial-item-funding-decimal-mismatch.json": (
+        "refresh", "comparing 6dp funding against an 18dp target is meaningless"),
 }
 
 # The parameters the API actually deserializes. See
@@ -261,8 +320,134 @@ check(float(selected.get("margin_usdc") or 0) > 0,
       "selection still requires a positive margin")
 
 print()
+print("=== DIRECT PROBES: mutate one field of a known-good record ===")
+# These are the probes the maintainer review ran by hand against the previous
+# head, where each of them still returned `claim`. Unlike the fixture table
+# these are generated in-process from the exact record that DOES claim, so a
+# passing probe cannot be an artefact of some second difference in a hand-
+# written file. Each probe changes exactly one thing.
+GOOD = json.loads((FIXTURES / "multiple.json").read_text())
+GOOD_ITEM = next(i for i in GOOD["items"]
+                 if i["opportunity_id"].endswith("0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"))
+
+PROBE_DIR = Path(tempfile.mkdtemp(prefix="mini-swe-probes-"))
+
+
+def probe(label: str, expected: set, **changes) -> None:
+    """Run the selector over a single-item envelope with `changes` applied."""
+    record = json.loads(json.dumps(GOOD_ITEM))
+    for key, value in changes.items():
+        if value is _DELETE:
+            record.pop(key, None)
+        else:
+            record[key] = value
+    payload = json.loads(json.dumps(GOOD))
+    payload["items"] = [record]
+    payload["source_statuses"][0]["item_count"] = 1
+    path = PROBE_DIR / f"probe-{abs(hash(label)):x}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = run(path)
+    action = result.get("action")
+    check(action in expected, f"{label} -> {'/'.join(sorted(expected))} (got {action!r})")
+    check(result.get("selected") is None, f"  {label} selects nothing")
+
+
+_DELETE = object()
+
+# Sanity: the unmutated record really does claim, so every refusal below is
+# caused by the mutation and nothing else. Without this the probes could all
+# "pass" simply because the baseline never claimed.
+baseline = json.loads(json.dumps(GOOD))
+baseline["items"] = [GOOD_ITEM]
+baseline["source_statuses"][0]["item_count"] = 1
+_baseline_path = PROBE_DIR / "baseline.json"
+_baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+_baseline = run(_baseline_path)
+check(_baseline.get("action") == "claim",
+      f"PROBE BASELINE: the unmutated record claims (got {_baseline.get('action')!r})")
+
+REFUSE = {"skip", "refresh"}
+# The four the review reproduced on the previous head.
+probe("verification_ready=false", REFUSE, verification_ready=False)
+probe("escrow fields DELETED", {"refresh"},
+      payment_state=_DELETE, payment_committed=_DELETE,
+      funded_amount=_DELETE, funding_target=_DELETE)
+probe("contract is 0x + 40 NON-HEX chars", {"refresh"}, source_id="0x" + "z" * 40)
+probe("bond DELETED", {"refresh"}, bond=_DELETE)
+# And the rest of the required contract, one field at a time.
+for _field in sorted(("opportunity_id", "source_type", "source_id", "title",
+                      "work_state", "payment_state", "payment_committed",
+                      "decision_authority", "verification_method",
+                      "verification_ready", "reward", "funded_amount",
+                      "funding_target", "bond", "discovery_factors",
+                      "evidence_boundary")):
+    probe(f"required field {_field!r} DELETED", {"refresh"}, **{_field: _DELETE})
+
+probe("payment_state='seeking_funding'", {"skip"}, payment_state="seeking_funding")
+probe("payment_committed=false", {"skip"}, payment_committed=False)
+probe("payment_committed='true' (string)", {"refresh"}, payment_committed="true")
+probe("funded_amount < funding_target", {"skip"},
+      funded_amount={"amount": "1", "currency": "USDC", "unit": "base_units",
+                     "decimals": 6})
+probe("bond is zero", {"skip"},
+      bond={"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6})
+probe("bond in a different currency", {"refresh"},
+      bond={"amount": "10000", "currency": "DAI", "unit": "base_units", "decimals": 6})
+probe("reward amount is a float", {"refresh"},
+      reward={"amount": 2.0, "currency": "USDC", "unit": "base_units", "decimals": 6})
+probe("work_state='open'", {"skip"}, work_state="open")
+probe("work_state='completed'", {"skip"}, work_state="completed")
+probe("source_type='github_discovery'", {"skip"}, source_type="github_discovery")
+probe("terms_hash is not a 32-byte hash", {"skip"}, terms_hash="0xdeadbeef")
+
+print()
+print("=== a malformed record poisons the WHOLE response, not just itself ===")
+# One item in a genuine response is built by the same constructor as every
+# other, so a single contract breach means the payload is not what it claims to
+# be. Ranking the plausible-looking remainder would be trusting an attacker to
+# have corrupted only the unimportant parts.
+poisoned = json.loads(json.dumps(GOOD))
+poisoned["items"][0].pop("bond", None)      # break the LOW-margin record only
+_poison_path = PROBE_DIR / "poisoned.json"
+_poison_path.write_text(json.dumps(poisoned), encoding="utf-8")
+_poisoned = run(_poison_path)
+check(_poisoned.get("action") == "refresh",
+      f"one malformed item makes the whole response refresh (got {_poisoned.get('action')!r})")
+check(_poisoned.get("selected") is None,
+      "and no 'still fine' sibling record is selected from a poisoned payload")
+
+print()
+print("=== the shipped fixtures really are contract-complete ===")
+# The previous fixtures had drifted: several omitted verification_ready,
+# payment_state, payment_committed, funded_amount, funding_target or bond
+# entirely, so they could not have exercised the item contract at all. Every
+# fixture is now generated from one canonical shape by fixtures/_build.py, and
+# only the deliberately-malformed cases may breach the contract.
+selector_required = getattr(selector_mod, "REQUIRED_ITEM_FIELDS", None)
+check(isinstance(selector_required, dict) and len(selector_required) >= 16,
+      "selector exports the REQUIRED_ITEM_FIELDS contract")
+INTENTIONALLY_MALFORMED = {
+    name for name, (action, _) in EXPECTATIONS.items()
+    if action == "refresh" and name.startswith("adversarial-item-")
+} | {"adversarial-malformed-money.json", "adversarial-unit-mismatch.json"}
+
+for name, (expected, _why) in sorted(EXPECTATIONS.items()):
+    if name in INTENTIONALLY_MALFORMED:
+        continue
+    path = FIXTURES / name
+    if not path.is_file():
+        continue
+    for record in json.loads(path.read_text()).get("items") or []:
+        absent = [f for f in (selector_required or {}) if f not in record]
+        check(not absent,
+              f"{name} item {record.get('opportunity_id', '?')} is contract-complete "
+              f"(missing={absent})")
+
+builder = FIXTURES / "_build.py"
+check(builder.is_file(), "fixtures/_build.py regenerates every fixture deterministically")
+
+print()
 print("=== canonical ready-to-earn feed uses only real query parameters ===")
-config_src = CONFIG.read_text(encoding="utf-8")
 
 check(
     "ready_to_earn=true" not in config_src,
@@ -271,13 +456,6 @@ check(
 
 # Assert on the actual runtime constant rather than scanning source text: the
 # constant is built by string concatenation, so a naive text scan cannot see it.
-import importlib.util  # noqa: E402  (local to this focused assertion block)
-
-spec = importlib.util.spec_from_file_location("select_bounty", SELECTOR)
-if spec is None or spec.loader is None:
-    raise SystemExit(f"cannot import selector module from {SELECTOR}")
-selector_mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(selector_mod)
 feed = getattr(selector_mod, "READY_TO_EARN_FEED", None)
 check(bool(isinstance(feed, str) and feed), "selector exports a READY_TO_EARN_FEED constant")
 
@@ -294,8 +472,6 @@ if isinstance(feed, str) and feed:
     validate_feed_url(feed, "READY_TO_EARN_FEED")
 
 # Every literal opportunities URL in the YAML config must carry the full filter.
-import re  # noqa: E402
-
 for url in sorted(set(re.findall(
     r"https://api\.agentbounties\.app/v1/opportunities[^\s\"',)]*", config_src
 ))):

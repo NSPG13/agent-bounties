@@ -21,8 +21,8 @@
   "items": [
     {
       "opportunity_id": "canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "source_type": "third_party_registry",
-      "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "source_type": "canonical_base",
+      "source_id": "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
       "source_status": "claimable",
       "title": "Add a deterministic MCP discovery checker",
       "goal": "Implement a deterministic checker for MCP discovery.",
@@ -34,7 +34,7 @@
         "rust"
       ],
       "public_url": "https://agentbounties.app/bounties/canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "network": "ethereum-mainnet",
+      "network": "base-mainnet",
       "work_state": "claimable",
       "payment_state": "escrowed",
       "payment_committed": true,
@@ -112,7 +112,10 @@
         "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk."
       },
       "discovery_factors": [
-        "source_type=third_party_registry"
+        "source_type=canonical_base",
+        "work_state=claimable",
+        "payment_state=escrowed",
+        "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin"
       ],
       "created_at": "2026-08-20T00:00:00+00:00",
       "updated_at": "2026-08-21T05:55:00+00:00",

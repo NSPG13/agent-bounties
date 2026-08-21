@@ -125,28 +125,61 @@ settlement:
 # refusal, not a pass — a missing field means "cannot verify", which is a skip or a
 # refresh, never an implicit yes.
 canonical_requirements:
+  item_contract: >
+    Validate EVERY candidate against the current OpportunityItem schema BEFORE
+    ranking it. opportunity_id, source_type, source_id, title, work_state,
+    payment_state, payment_committed, decision_authority, verification_method,
+    verification_ready, reward, funded_amount, funding_target, bond,
+    discovery_factors and evidence_boundary are all non-optional upstream, so a
+    missing or wrongly-typed one is a DATA FAULT (refresh), never a permissive
+    default and never a quiet skip. Deleting a field must never make a record
+    more claimable than setting it to a bad value.
   source: >
-    Require an explicit canonical Base source: network in {base-mainnet, eip155:8453}
-    AND discovery_factors asserting source_type=canonical_base AND a 42-char contract
-    address. Absence of contrary evidence is not evidence of canonicity.
+    Require an explicit canonical Base source: source_type must be exactly
+    canonical_base AND network in {base-mainnet, eip155:8453} AND
+    discovery_factors asserting source_type=canonical_base AND a 20-byte
+    hexadecimal contract address (0x + 40 HEX digits — "0x" plus 40 arbitrary
+    characters is not an address). Absence of contrary evidence is not evidence
+    of canonicity.
   ready_to_earn_view: https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base
-  claimability: work_state must be one of {open, claimable, ready, ready_to_earn}
+  claimability: >
+    work_state must be exactly `claimable`. Upstream emits `claimable` only when
+    the bounty is also fully funded, verification-ready and free of validation
+    errors; `open` is its catch-all for everything NOT yet claimable, including
+    unfunded, so `open` must be skipped. The one exception is a record whose
+    claim has demonstrably lapsed, which is reclaimable.
   funding: >
-    payment_state must be escrowed/funded/committed, payment_committed must be true,
-    and funded_amount must be >= funding_target in the SAME currency.
+    payment_state must be exactly `escrowed`, payment_committed must be exactly
+    true, and funded_amount must be >= a POSITIVE funding_target in the same
+    currency, unit and decimal scale.
   verifier: >
-    Require a ready verifier: verifier.ready == true, or a declared
-    verification_method plus a declared decision_authority. A correct submission
-    cannot settle against an unready verifier.
+    verification_ready (the API's real field name — not `verifier_ready`, which
+    no response carries) must be exactly true, alongside a declared
+    verification_method and decision_authority. A correct submission cannot
+    settle against an unready verifier. An optional nested `verifier` block may
+    only veto; it can never overrule verification_ready.
+  bond: >
+    A positive protocol bond is required. The bond is posted from the agent's
+    own wallet, so a zero or absent bond either is not a real canonical bounty
+    or understates what the claim will actually cost.
   terms: >
-    Require terms_hash, or an explicit evidence_boundary plus evidence_requirements.
+    Require a 32-byte terms_hash, or an explicit evidence_boundary plus
+    evidence_requirements.
   units: >
-    Money must carry amount, decimals AND currency. Malformed money is NEVER coerced
-    to zero — it raises and becomes a refresh. Reward, external spend and bond must
-    share one currency, and that currency must be USDC.
+    Money must be a complete OpportunityAmount: amount, currency, unit AND
+    decimals. Malformed money is NEVER coerced to zero — it raises and becomes a
+    refresh. Reward, external spend and bond must share one currency, unit and
+    decimal scale, and that currency must be USDC. A precomputed
+    gross_cash_margin that contradicts solver_reward minus
+    required_external_spend is self-contradictory and becomes a refresh.
   freshness: >
     Missing, unparseable, or FUTURE-dated coverage becomes refresh. A future
     timestamp is treated as clock skew, never clamped to fresh.
   ordering: >
     Claim expiry is evaluated BEFORE claimant occupancy, so an expired record is
     reclaimable rather than blocked by a stale claimant field.
+  blast_radius: >
+    One malformed item invalidates the WHOLE response. Every item in a genuine
+    projection comes from the same upstream constructor, so a single contract
+    breach means the payload is not what it claims to be, and no sibling record
+    may be ranked from it.

@@ -12,7 +12,7 @@
         "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
       ],
       "item_count": 3,
-      "error": "indexer lag: canonical head 412 blocks behind"
+      "error": "base rpc timeout after 3 attempts"
     }
   ],
   "evidence_boundary": "Projection only. Listing is not funding, claim, verification, or settlement; only a confirmed canonical BountySettled event proves payment.",
@@ -20,40 +20,52 @@
   "staleness_seconds": 900,
   "items": [
     {
-      "opportunity_id": "opp-1",
+      "opportunity_id": "canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "source_type": "canonical_base",
+      "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "source_status": "claimable",
       "title": "Add a deterministic MCP discovery checker",
       "goal": "Implement a deterministic checker for MCP discovery.",
       "categories": [
         "coding"
       ],
+      "skills": [
+        "python",
+        "rust"
+      ],
+      "public_url": "https://agentbounties.app/bounties/canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "network": "base-mainnet",
       "work_state": "claimable",
-      "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-      "discovery_factors": [
-        "source_type=canonical_base",
-        "work_state=claimable",
-        "payment_state=escrowed"
-      ],
       "payment_state": "escrowed",
       "payment_committed": true,
-      "funded_amount": {
-        "amount": "1000000",
-        "currency": "USDC",
-        "unit": "base_units",
-        "decimals": 6
-      },
-      "funding_target": {
-        "amount": "1000000",
-        "currency": "USDC",
-        "unit": "base_units",
-        "decimals": 6
-      },
+      "competition_mode": "exclusive_claim",
+      "standing_meta_bounty": false,
+      "decision_authority": "The immutable canonical verification mode/module configured on 0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 decides the submission result.",
+      "payment_authority": "The exact canonical bounty contract 0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 controls escrow; only its confirmed BountySettled event proves payment.",
       "reward": {
         "amount": "990000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
       },
+      "completion_bonus": {
+        "amount": "0",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funded_amount": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "1000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
       "bond": {
         "amount": "10000",
         "currency": "USDC",
@@ -61,8 +73,7 @@
         "decimals": 6
       },
       "verification_method": "signed_quorum",
-      "decision_authority": "The immutable canonical verification mode configured on the contract decides.",
-      "evidence_boundary": "Only a confirmed canonical BountySettled event proves payment.",
+      "verification_ready": true,
       "evidence_requirements": {
         "required": [
           "repository",
@@ -70,9 +81,17 @@
           "test_command"
         ]
       },
+      "terms_hash": "0xabababababababababababababababababababababababababababababababab",
+      "proof_urls": [],
       "cash_economics": {
         "solver_reward": {
           "amount": "990000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "refundable_claim_bond": {
+          "amount": "10000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
@@ -88,27 +107,55 @@
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
-        }
+        },
+        "gross_cash_margin_positive": true,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk."
       },
-      "source_type": "canonical_base"
-    },
-    {
-      "opportunity_id": "opp-2",
-      "title": "Add retry-safe Base RPC failover for CLI tooling",
-      "goal": "Implement a deterministic checker for MCP discovery.",
-      "categories": [
-        "coding"
-      ],
-      "network": "base-mainnet",
-      "work_state": "claimable",
-      "source_id": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
       "discovery_factors": [
         "source_type=canonical_base",
         "work_state=claimable",
-        "payment_state=escrowed"
+        "payment_state=escrowed",
+        "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin"
       ],
+      "created_at": "2026-08-20T00:00:00+00:00",
+      "updated_at": "2026-08-21T05:55:00+00:00",
+      "evidence_boundary": "Canonical lifecycle and payment language require confirmed factory/bounty events. Payment is `paid` only after confirmed BountySettled; a plan, signature, transaction hash, hosted row, or AI analysis is not payment evidence."
+    },
+    {
+      "opportunity_id": "canonical:base-mainnet:0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "source_type": "canonical_base",
+      "source_id": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "source_status": "claimable",
+      "title": "Add retry-safe Base RPC failover for CLI tooling",
+      "goal": "Implement deterministic RPC failover for the CLI.",
+      "categories": [
+        "coding"
+      ],
+      "skills": [
+        "python",
+        "rust"
+      ],
+      "public_url": "https://agentbounties.app/bounties/canonical:base-mainnet:0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "network": "base-mainnet",
+      "work_state": "claimable",
       "payment_state": "escrowed",
       "payment_committed": true,
+      "competition_mode": "exclusive_claim",
+      "standing_meta_bounty": false,
+      "decision_authority": "The immutable canonical verification mode/module configured on 0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2 decides the submission result.",
+      "payment_authority": "The exact canonical bounty contract 0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2 controls escrow; only its confirmed BountySettled event proves payment.",
+      "reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "completion_bonus": {
+        "amount": "0",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
       "funded_amount": {
         "amount": "2010000",
         "currency": "USDC",
@@ -121,12 +168,6 @@
         "unit": "base_units",
         "decimals": 6
       },
-      "reward": {
-        "amount": "2000000",
-        "currency": "USDC",
-        "unit": "base_units",
-        "decimals": 6
-      },
       "bond": {
         "amount": "10000",
         "currency": "USDC",
@@ -134,8 +175,7 @@
         "decimals": 6
       },
       "verification_method": "signed_quorum",
-      "decision_authority": "The immutable canonical verification mode configured on the contract decides.",
-      "evidence_boundary": "Only a confirmed canonical BountySettled event proves payment.",
+      "verification_ready": true,
       "evidence_requirements": {
         "required": [
           "repository",
@@ -143,9 +183,17 @@
           "test_command"
         ]
       },
+      "terms_hash": "0xabababababababababababababababababababababababababababababababab",
+      "proof_urls": [],
       "cash_economics": {
         "solver_reward": {
           "amount": "2000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "refundable_claim_bond": {
+          "amount": "10000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
@@ -161,22 +209,62 @@
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
-        }
+        },
+        "gross_cash_margin_positive": true,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk."
       },
-      "source_type": "canonical_base"
+      "discovery_factors": [
+        "source_type=canonical_base",
+        "work_state=claimable",
+        "payment_state=escrowed",
+        "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin"
+      ],
+      "created_at": "2026-08-20T00:00:00+00:00",
+      "updated_at": "2026-08-21T05:55:00+00:00",
+      "evidence_boundary": "Canonical lifecycle and payment language require confirmed factory/bounty events. Payment is `paid` only after confirmed BountySettled; a plan, signature, transaction hash, hosted row, or AI analysis is not payment evidence."
     },
     {
-      "opportunity_id": "opp-3",
+      "opportunity_id": "canonical:base-mainnet:0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "source_type": "canonical_base",
+      "source_id": "0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "source_status": "claimable",
       "title": "Write launch marketing copy",
-      "goal": "Draft promotional copy.",
+      "goal": "Draft promotional copy for the launch announcement.",
       "categories": [
         "marketing"
       ],
+      "skills": [
+        "copywriting"
+      ],
+      "public_url": "https://agentbounties.app/bounties/canonical:base-mainnet:0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
       "network": "base-mainnet",
       "work_state": "claimable",
-      "source_id": "0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "payment_state": "escrowed",
+      "payment_committed": true,
+      "competition_mode": "exclusive_claim",
+      "standing_meta_bounty": false,
+      "decision_authority": "The immutable canonical verification mode/module configured on 0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 decides the submission result.",
+      "payment_authority": "The exact canonical bounty contract 0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 controls escrow; only its confirmed BountySettled event proves payment.",
       "reward": {
         "amount": "5000000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "completion_bonus": {
+        "amount": "0",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funded_amount": {
+        "amount": "5010000",
+        "currency": "USDC",
+        "unit": "base_units",
+        "decimals": 6
+      },
+      "funding_target": {
+        "amount": "5010000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
@@ -187,12 +275,54 @@
         "unit": "base_units",
         "decimals": 6
       },
-      "source_type": "canonical_base",
+      "verification_method": "signed_quorum",
+      "verification_ready": true,
+      "evidence_requirements": {
+        "required": [
+          "repository",
+          "commit",
+          "test_command"
+        ]
+      },
+      "terms_hash": "0xabababababababababababababababababababababababababababababababab",
+      "proof_urls": [],
+      "cash_economics": {
+        "solver_reward": {
+          "amount": "5000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "refundable_claim_bond": {
+          "amount": "10000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "required_external_spend": {
+          "amount": "0",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin": {
+          "amount": "5000000",
+          "currency": "USDC",
+          "unit": "base_units",
+          "decimals": 6
+        },
+        "gross_cash_margin_positive": true,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk."
+      },
       "discovery_factors": [
         "source_type=canonical_base",
         "work_state=claimable",
-        "payment_state=unknown"
-      ]
+        "payment_state=escrowed",
+        "view:ready_to_earn;factors=claimable+escrowed+verification_ready+positive_gross_cash_margin"
+      ],
+      "created_at": "2026-08-20T00:00:00+00:00",
+      "updated_at": "2026-08-21T05:55:00+00:00",
+      "evidence_boundary": "Canonical lifecycle and payment language require confirmed factory/bounty events. Payment is `paid` only after confirmed BountySettled; a plan, signature, transaction hash, hosted row, or AI analysis is not payment evidence."
     }
   ]
 }

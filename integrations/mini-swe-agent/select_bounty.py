@@ -11,15 +11,32 @@ wait     the inventory is empty; nothing to act on
 refresh  coverage is missing, stale, or dimensionally invalid — re-fetch before deciding
 skip     candidates exist but none are actionable
 
-FAIL-CLOSED DESIGN. Every unknown is a refusal, not a pass:
+FAIL-CLOSED DESIGN. Every unknown is a refusal, not a pass. Two distinct
+refusals, and the difference is deliberate:
+
+  refresh = the DATA is broken. A required `OpportunityItem` field is missing or
+            has the wrong type, money is dimensionally invalid, the envelope
+            breaches its contract, or the snapshot's age is unknowable. Nothing
+            can be concluded, so re-fetch. A malformed record is NEVER given a
+            permissive default.
+  skip    = the data is well formed and says "not for you". The record is
+            genuinely not canonical, not claimable, not escrowed, not
+            verifier-ready, or has no positive margin.
+
   - missing / unparseable / FUTURE freshness    -> refresh (future clocks are NOT fresh)
-  - missing canonical Base source               -> skip
-  - work_state not canonically claimable        -> skip
-  - funding incomplete or payment not escrowed  -> skip
-  - verifier not ready                          -> skip
+  - any required OpportunityItem field missing
+    or of the wrong type                        -> refresh
+  - contract address not 0x + 40 HEX digits     -> refresh
+  - money missing amount/decimals/currency/unit,
+    or a unit mismatch between reward and spend -> refresh (never coerce to zero)
+  - self-contradictory economics                -> refresh
+  - source_type is not exactly canonical_base   -> skip
+  - work_state is not exactly `claimable`       -> skip
+  - payment_state is not exactly `escrowed`, or
+    payment_committed is not exactly true       -> skip
+  - funded_amount < funding_target              -> skip
+  - verification_ready is not exactly true      -> skip
   - terms absent or invalid                     -> skip
-  - money missing decimals/currency, or a unit
-    mismatch between reward and spend           -> refresh (never coerce to zero)
   - claim expiry evaluated BEFORE occupancy, so
     an expired record is reclaimable, not blocked
 
@@ -32,6 +49,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -84,9 +102,25 @@ CODING_HINTS = (
 )
 
 CANONICAL_NETWORKS = ("base-mainnet", "eip155:8453", "base")
-CLAIMABLE_STATES = ("open", "claimable", "ready", "ready_to_earn")
+
+# `work_state` is produced by web_public::canonical_opportunity_state and is one
+# of exactly: claimable | in_progress | submitted | completed | open. Only
+# `claimable` is earnable -- and note that upstream only emits it when the
+# bounty is ALSO fully funded, verification-ready and free of validation errors.
+# "open" is the catch-all for everything that is not yet claimable (including
+# unfunded), so accepting it, as an earlier version did, was wrong.
+CLAIMABLE_WORK_STATE = "claimable"
 OCCUPIED_STATES = ("in_progress", "submitted", "claimed", "exclusive")
-ESCROWED_STATES = ("escrowed", "funded", "committed")
+TERMINAL_STATES = ("completed", "settled", "cancelled", "paid")
+
+# `payment_state` is one of: paid | escrowed | seeking_funding. Only `escrowed`
+# means the reward is in escrow and not yet paid out. This is the exact value
+# the upstream ReadyToEarn view itself requires (opportunities.rs:1263).
+ESCROWED_PAYMENT_STATE = "escrowed"
+
+# A 20-byte address. `startswith("0x") and len == 42` is NOT this: "0x" plus 40
+# arbitrary characters passes that and is not an address.
+ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
 class Invalid(Exception):
@@ -94,7 +128,12 @@ class Invalid(Exception):
 
 
 def money(obj, field):
-    """Strictly decode a {amount, decimals, currency} object.
+    """Strictly decode an upstream `OpportunityAmount`.
+
+    The production struct is
+        { amount: String, currency: String, unit: String, decimals: u8 }
+    (crates/api/src/opportunities.rs::OpportunityAmount) and EVERY field is
+    non-optional, so a missing one is malformed data, not a default.
 
     Never silently yields 0 for malformed input — that is how dimensionally
     invalid economics get accepted. Returns (value, currency, decimals).
@@ -103,21 +142,28 @@ def money(obj, field):
         raise Invalid(f"{field} is absent")
     if not isinstance(obj, dict):
         raise Invalid(f"{field} is not an object")
-    if "amount" not in obj:
-        raise Invalid(f"{field} has no amount")
-    if "decimals" not in obj:
-        raise Invalid(f"{field} has no decimals (dimensionally invalid)")
+    for key in ("amount", "currency", "unit", "decimals"):
+        if key not in obj:
+            raise Invalid(f"{field} has no {key} (not an OpportunityAmount)")
+    # `amount` is a String upstream precisely because a u128 of base units does
+    # not survive a JSON number. A float here means precision was already lost.
+    if isinstance(obj["amount"], float) or isinstance(obj["amount"], bool):
+        raise Invalid(f"{field} amount is {obj['amount']!r}, not an integral string")
     try:
         amount = int(str(obj["amount"]))
-        decimals = int(obj["decimals"])
     except (TypeError, ValueError) as exc:
-        raise Invalid(f"{field} amount/decimals not integral: {exc}") from exc
+        raise Invalid(f"{field} amount is not integral: {exc}") from exc
+    if not isinstance(obj["decimals"], int) or isinstance(obj["decimals"], bool):
+        raise Invalid(f"{field} decimals is {obj['decimals']!r}, not an integer")
+    decimals = obj["decimals"]
     if decimals < 0 or decimals > 36:
         raise Invalid(f"{field} decimals out of range: {decimals}")
     currency = str(obj.get("currency") or "").upper()
     if not currency:
         raise Invalid(f"{field} has no currency")
-    return amount / (10 ** decimals), currency, decimals
+    if not str(obj.get("unit") or "").strip():
+        raise Invalid(f"{field} has no unit")
+    return amount, currency, decimals, str(obj["unit"])
 
 
 def snapshot_age(inv):
@@ -260,11 +306,124 @@ def validate_envelope(inv):
         raise Invalid("response declares no evidence_boundary")
 
 
+# ---------------------------------------------------------------------------
+# The `OpportunityItem` production contract.
+#
+# These are the exact non-Option fields of crates/api/src/opportunities.rs::
+# OpportunityItem. They are ALWAYS present on a genuine response, so a missing
+# one means the payload is not a real projection item and nothing about it can
+# be concluded -- including "it is probably fine".
+#
+# Validating them is the difference between "this record does not qualify" and
+# "I cannot tell what this record is". The earlier version conflated the two by
+# giving absent fields permissive defaults (`if state and state not in ...`,
+# `if "payment_committed" in item and ...`), so DELETING a field made a record
+# MORE likely to be claimed than setting it to a bad value. That is fail-open,
+# and it is exactly what a compromised projection would exploit.
+# ---------------------------------------------------------------------------
+REQUIRED_ITEM_FIELDS = {
+    "opportunity_id": str,
+    "source_type": str,
+    "source_id": str,
+    "title": str,
+    "work_state": str,
+    "payment_state": str,
+    "payment_committed": bool,
+    "decision_authority": str,
+    "verification_method": str,
+    "verification_ready": bool,
+    "reward": dict,
+    "funded_amount": dict,
+    "funding_target": dict,
+    "bond": dict,
+    "discovery_factors": list,
+    "evidence_boundary": str,
+}
+
+
+class Malformed(Invalid):
+    """The record breaches the OpportunityItem contract: refresh, never skip."""
+
+
+def validate_item_schema(item):
+    """Check one candidate against the current `OpportunityItem` contract.
+
+    Raises Malformed on any breach. A malformed record can never be ranked, and
+    the caller turns it into a visible `refresh` rather than a quiet `skip`,
+    because "the API sent me something that is not an OpportunityItem" is an
+    integration fault the operator needs to see.
+    """
+    if not isinstance(item, dict):
+        raise Malformed("item is not an object")
+
+    for field, expected in REQUIRED_ITEM_FIELDS.items():
+        if field not in item:
+            raise Malformed(f"required field {field!r} is absent")
+        value = item[field]
+        # bool is a subclass of int; str/list/dict need an exact-ish check.
+        if expected is bool:
+            if not isinstance(value, bool):
+                raise Malformed(f"{field} is {value!r}, not a boolean")
+        elif not isinstance(value, expected):
+            raise Malformed(
+                f"{field} is {type(value).__name__}, not {expected.__name__}"
+            )
+
+    # `source_id` is the canonical bounty CONTRACT (opportunities.rs:813,
+    # `source_id: item.bounty_contract.clone()`), so it must be a real 20-byte
+    # address. "0x" + 40 non-hex characters is not one.
+    contract = item["source_id"]
+    if not ADDRESS_RE.match(contract):
+        raise Malformed(
+            f"source_id {contract!r} is not a 20-byte hexadecimal contract address"
+        )
+
+    # Every amount must be a well-formed OpportunityAmount. `money` raises
+    # Invalid; re-raise as Malformed so a broken amount is a data fault.
+    amounts = {}
+    for field in ("reward", "funded_amount", "funding_target", "bond"):
+        try:
+            amounts[field] = money(item[field], field)
+        except Invalid as exc:
+            raise Malformed(str(exc)) from exc
+
+    # Dimensional coherence: escrow maths across two different currencies or two
+    # different decimal scales is meaningless, so refuse to perform it.
+    _, funded_cur, funded_dec, funded_unit = amounts["funded_amount"]
+    _, target_cur, target_dec, target_unit = amounts["funding_target"]
+    if (funded_cur, funded_dec, funded_unit) != (target_cur, target_dec, target_unit):
+        raise Malformed(
+            f"funded_amount is {funded_cur}/{funded_dec}dp/{funded_unit} but "
+            f"funding_target is {target_cur}/{target_dec}dp/{target_unit}"
+        )
+    _, reward_cur, reward_dec, reward_unit = amounts["reward"]
+    _, bond_cur, bond_dec, bond_unit = amounts["bond"]
+    if (bond_cur, bond_dec, bond_unit) != (reward_cur, reward_dec, reward_unit):
+        raise Malformed(
+            f"bond is {bond_cur}/{bond_dec}dp/{bond_unit} but reward is "
+            f"{reward_cur}/{reward_dec}dp/{reward_unit}"
+        )
+
+    # cash_economics is Option<...> upstream, but when present every inner
+    # amount is non-optional, so a partial one is malformed rather than absent.
+    econ = item.get("cash_economics")
+    if econ is not None:
+        if not isinstance(econ, dict):
+            raise Malformed("cash_economics is present but is not an object")
+        for field in ("solver_reward", "required_external_spend", "gross_cash_margin"):
+            if field in econ:
+                try:
+                    money(econ[field], f"cash_economics.{field}")
+                except Invalid as exc:
+                    raise Malformed(str(exc)) from exc
+    return amounts
+
+
 def canonical_source(item):
     """Require an explicit canonical Base source, not merely absence of evidence."""
     # source_type is non-optional in OpportunityItem and is the authoritative
     # marker. A Base network plus a 42-char 0x string is NOT canonicity.
-    source_type = item.get("source_type")
+    source_type = item["source_type"]
     if source_type != CANONICAL_SOURCE_TYPE:
         return False, f"source_type is {source_type!r}, not {CANONICAL_SOURCE_TYPE!r}"
     network = str(item.get("network") or "").lower()
@@ -273,64 +432,65 @@ def canonical_source(item):
     # discovery_factors is Vec<String> (never null upstream) and the canonical
     # builder always pushes source_type=canonical_base. Absence is suspicious,
     # so require the assertion rather than skipping the check when empty.
-    factors = [str(f).lower() for f in (item.get("discovery_factors") or [])]
+    factors = [str(f).lower() for f in item["discovery_factors"]]
     if not any(f"source_type={CANONICAL_SOURCE_TYPE}" in f for f in factors):
         return False, "discovery_factors do not assert source_type=canonical_base"
-    contract = item.get("source_id") or item.get("bounty_contract") or ""
-    if not (isinstance(contract, str) and contract.startswith("0x") and len(contract) == 42):
-        return False, "no canonical bounty contract address"
-    return True, contract
+    return True, item["source_id"]
 
 
 def verifier_ready(item):
-    verifier = item.get("verifier")
-    if isinstance(verifier, dict):
-        if verifier.get("ready") is not True:
-            return False, f"verifier not ready ({verifier.get('reason') or 'unspecified'})"
-        return True, str(verifier.get("mode") or "")
-    mode = item.get("verification_method") or item.get("verification_mode")
-    if not mode:
-        return False, "no verification method declared"
-    if item.get("verifier_ready") is False:
-        return False, "verifier_ready is false"
-    if not str(item.get("decision_authority") or "").strip():
+    """`verification_ready` is the API's field name, and it is REQUIRED.
+
+    An earlier version checked a non-schema key `verifier_ready`, which no real
+    response ever carries, so the check could never fire on production data.
+    The real field is `verification_ready: bool` (opportunities.rs:202) and it
+    is the same flag the upstream ReadyToEarn view itself gates on. It must be
+    exactly True; the schema validator has already proved it is a boolean.
+    """
+    if item["verification_ready"] is not True:
+        return False, "verification_ready is false: a correct submission cannot settle"
+    if not item["verification_method"].strip():
+        return False, "no verification_method declared"
+    if not item["decision_authority"].strip():
         return False, "no decision authority declared"
-    return True, str(mode)
+    # A nested advisory `verifier` block, when a deployment adds one, may only
+    # ever narrow the decision -- it can veto, never overrule verification_ready.
+    verifier = item.get("verifier")
+    if isinstance(verifier, dict) and verifier.get("ready") is False:
+        return False, f"verifier vetoed ({verifier.get('reason') or 'unspecified'})"
+    return True, item["verification_method"]
 
 
-def funding_ok(item):
-    if item.get("funding_complete") is False or item.get("funded") is False:
-        return False, "funding incomplete"
-    state = str(item.get("payment_state") or "").lower()
-    if state and state not in ESCROWED_STATES:
-        return False, f"payment_state is {state}, not escrowed"
-    if "payment_committed" in item and item["payment_committed"] is not True:
-        return False, "payment not committed"
-    if item.get("funded_amount") is not None and item.get("funding_target") is not None:
-        have, have_cur, _ = money(item["funded_amount"], "funded_amount")
-        want, want_cur, _ = money(item["funding_target"], "funding_target")
-        if have_cur != want_cur:
-            raise Invalid(f"funding currency mismatch: {have_cur} vs {want_cur}")
-        if have < want:
-            return False, f"underfunded: {have} of {want} {want_cur}"
-    funding = item.get("funding")
-    if isinstance(funding, dict) and funding.get("confirmed") and funding.get("required"):
-        have, hc, _ = money(funding["confirmed"], "funding.confirmed")
-        want, wc, _ = money(funding["required"], "funding.required")
-        if hc != wc:
-            raise Invalid(f"funding currency mismatch: {hc} vs {wc}")
-        if have < want:
-            return False, f"underfunded: {have} of {want} {wc}"
+def funding_ok(item, amounts):
+    """Require explicit escrow. Every field here was proved present by the schema."""
+    state = item["payment_state"].lower()
+    if state != ESCROWED_PAYMENT_STATE:
+        return False, f"payment_state is {state!r}, not {ESCROWED_PAYMENT_STATE!r}"
+    if item["payment_committed"] is not True:
+        return False, "payment_committed is false: the reward is not committed"
+    have = amounts["funded_amount"][0]
+    want = amounts["funding_target"][0]
+    if want <= 0:
+        return False, f"funding_target is {want} base units: nothing is actually funded"
+    if have < want:
+        return False, f"underfunded: {have} of {want} base units"
     return True, ""
 
 
 def terms_valid(item):
+    """Require content-addressed terms, or an explicit evidence contract."""
+    terms_hash = item.get("terms_hash")
+    if terms_hash is not None:
+        if not (isinstance(terms_hash, str) and terms_hash.startswith("0x")
+                and len(terms_hash) == 66):
+            return False, f"terms_hash {terms_hash!r} is not a 32-byte hash"
+        return True, ""
     terms = item.get("terms")
     if isinstance(terms, dict):
         if not str(terms.get("terms_hash") or "").startswith("0x"):
             return False, "terms present but terms_hash is not a hash"
         return True, ""
-    if not str(item.get("evidence_boundary") or "").strip():
+    if not item["evidence_boundary"].strip():
         return False, "no terms and no evidence boundary declared"
     if not (item.get("evidence_requirements") or {}):
         return False, "no evidence requirements declared"
@@ -341,7 +501,7 @@ def claim_status(item):
     """(occupied, reclaimable, note) — expiry is evaluated BEFORE occupancy."""
     now = time.time()
     expires = item.get("claim_expires_at")
-    if isinstance(expires, (int, float)) and expires > 0:
+    if isinstance(expires, (int, float)) and not isinstance(expires, bool) and expires > 0:
         if expires <= now:
             return False, True, f"claim lapsed {int(now - expires)}s ago"
         return True, False, f"claim live for {int(expires - now)}s"
@@ -349,26 +509,60 @@ def claim_status(item):
         return False, True, "record marks the claim expired"
     if item.get("exclusive_claimant") or item.get("active_claimant"):
         return True, False, "exclusive claimant present with no expiry data"
-    state = str(item.get("work_state") or "").lower()
+    state = item["work_state"].lower()
     if state in OCCUPIED_STATES:
         return True, False, f"work_state={state}"
     return False, False, ""
 
 
-def margin_of(item):
+def margin_of(item, amounts):
+    """Gross cash margin in base units, cross-checked against the components.
+
+    Upstream computes `gross_cash_margin = solver_reward - required_external_spend`
+    (opportunities.rs:793-800). Trusting the server's precomputed figure alone
+    would let a compromised projection advertise a fat margin on a record whose
+    own components say otherwise, so when both are present they must AGREE.
+    """
     econ = item.get("cash_economics") or {}
+    reward_amount, reward_cur, reward_dec, reward_unit = amounts["reward"]
+
+    declared = None
     if econ.get("gross_cash_margin") is not None:
-        value, currency, _ = money(econ["gross_cash_margin"], "gross_cash_margin")
-        return value, currency
-    reward_obj = item.get("reward") or econ.get("solver_reward")
-    reward, rcur, _ = money(reward_obj, "reward")
+        value, currency, decimals, unit = money(econ["gross_cash_margin"],
+                                                "gross_cash_margin")
+        if (currency, decimals, unit) != (reward_cur, reward_dec, reward_unit):
+            raise Invalid(
+                f"gross_cash_margin is {currency}/{decimals}dp/{unit} but reward is "
+                f"{reward_cur}/{reward_dec}dp/{reward_unit}"
+            )
+        declared = value
+
+    computed = None
+    solver_obj = econ.get("solver_reward")
+    base = reward_amount
+    if solver_obj is not None:
+        base, scur, sdec, sunit = money(solver_obj, "solver_reward")
+        if (scur, sdec, sunit) != (reward_cur, reward_dec, reward_unit):
+            raise Invalid(f"solver_reward is {scur}/{sdec}dp/{sunit}, reward is "
+                          f"{reward_cur}/{reward_dec}dp/{reward_unit}")
     spend_obj = econ.get("required_external_spend")
-    if spend_obj in (None, {}):
-        return reward, rcur
-    spend, scur, _ = money(spend_obj, "required_external_spend")
-    if scur != rcur:
-        raise Invalid(f"unit mismatch: reward in {rcur}, external spend in {scur}")
-    return reward - spend, rcur
+    if spend_obj is not None:
+        spend, scur, sdec, sunit = money(spend_obj, "required_external_spend")
+        if (scur, sdec, sunit) != (reward_cur, reward_dec, reward_unit):
+            raise Invalid(
+                f"unit mismatch: reward in {reward_cur}/{reward_dec}dp/{reward_unit}, "
+                f"external spend in {scur}/{sdec}dp/{sunit}"
+            )
+        computed = base - spend
+
+    if declared is not None and computed is not None and declared != computed:
+        raise Invalid(
+            f"cash_economics is self-contradictory: gross_cash_margin={declared} "
+            f"but solver_reward - required_external_spend = {computed}"
+        )
+    value = declared if declared is not None else (
+        computed if computed is not None else reward_amount)
+    return value / (10 ** reward_dec), reward_cur, reward_dec
 
 
 def select(inv):
@@ -433,13 +627,28 @@ def select(inv):
             "selected": None,
         }
 
-    candidates, skipped, invalid = [], [], []
+    candidates, skipped, malformed = [], [], []
 
-    for item in items:
-        title = item.get("title") or item.get("opportunity_id") or "(untitled)"
-        state = str(item.get("work_state") or "").lower()
+    for raw in items:
+        title = "(untitled)"
+        if isinstance(raw, dict):
+            title = raw.get("title") or raw.get("opportunity_id") or "(untitled)"
 
-        if state in ("completed", "settled", "cancelled"):
+        # SCHEMA FIRST. Nothing about a record may be read as a business signal
+        # until it is proved to BE an OpportunityItem. A missing required field
+        # is a data fault (refresh), never a permissive default, and never a
+        # quiet skip -- the earlier ordering let a record with `verification_ready`,
+        # `payment_state`, `payment_committed`, `funded_amount`, `funding_target`
+        # and `bond` all DELETED reach `claim`.
+        try:
+            amounts = validate_item_schema(raw)
+        except Malformed as exc:
+            malformed.append((title, str(exc)))
+            continue
+        item = raw
+        state = item["work_state"].lower()
+
+        if state in TERMINAL_STATES:
             skipped.append((title, f"work_state={state}"))
             continue
         if not is_coding(item):
@@ -456,24 +665,34 @@ def select(inv):
         if occupied:
             skipped.append((title, f"exclusive claimant active: {note}"))
             continue
-        if not reclaimable and state and state not in CLAIMABLE_STATES:
-            skipped.append((title, f"work_state={state} is not canonically claimable"))
+        # `claimable` is the ONLY earnable work_state upstream emits, and it
+        # already implies fully funded + verification-ready + no validation
+        # errors. A reclaimable record is the one exception: its own state is
+        # stale precisely because the previous claim lapsed.
+        if not reclaimable and state != CLAIMABLE_WORK_STATE:
+            skipped.append((title, f"work_state={state!r} is not "
+                                   f"{CLAIMABLE_WORK_STATE!r}"))
             continue
 
         try:
-            ok, detail = funding_ok(item)
+            ok, detail = funding_ok(item, amounts)
             if not ok:
                 skipped.append((title, detail))
                 continue
-            margin, currency = margin_of(item)
-            bond, bond_cur, _ = money(item.get("bond") or {"amount": "0", "decimals": 6, "currency": currency},
-                                      "bond")
-            if bond_cur != currency:
-                raise Invalid(f"bond in {bond_cur} but reward in {currency}")
+            margin, currency, _ = margin_of(item, amounts)
+            bond_units, bond_cur, bond_dec, _ = amounts["bond"]
+            bond = bond_units / (10 ** bond_dec)
             if currency != "USDC":
                 raise Invalid(f"reward currency {currency} is not USDC")
+            # The solver bond is posted from the agent's own wallet. A record
+            # advertising a zero bond is either not a real canonical bounty or
+            # is understating what the claim will actually cost.
+            if bond_units <= 0:
+                skipped.append((title, f"bond is {bond_units} base units; a canonical "
+                                       "claim always requires a positive bond"))
+                continue
         except Invalid as exc:
-            invalid.append((title, str(exc)))
+            malformed.append((title, str(exc)))
             continue
 
         ok, detail = verifier_ready(item)
@@ -492,17 +711,30 @@ def select(inv):
 
         candidates.append((margin, bond, item, contract, reclaimable, note))
 
-    # A dimensionally invalid record is a data problem, not a business decision:
-    # refresh rather than quietly treating broken money as zero.
-    if invalid and not candidates:
-        detail = "; ".join(f"{t}: {r}" for t, r in invalid[:4])
+    # A record that breaches the OpportunityItem contract is a DATA fault, not a
+    # business decision, and it is reported even when other records look fine.
+    #
+    # This is deliberately dominant. Every item in a genuine response is built by
+    # one upstream constructor, so a single malformed record means the payload is
+    # not what it claims to be -- truncated, rewritten in transit, or served by
+    # something that is not the canonical API. Ranking the "good-looking" rest of
+    # such a payload would be trusting an attacker to have corrupted only the
+    # parts that do not matter.
+    if malformed:
+        detail = "; ".join(f"{t}: {r}" for t, r in malformed[:4])
         return {
             "action": "refresh",
-            "reason": f"dimensionally invalid economics: {detail}",
-            "next_action": ("Re-fetch the canonical ready-to-earn view; refusing to claim against "
-                            "records whose amounts, decimals, or currencies cannot be validated."),
+            "reason": f"response contains records that are not valid OpportunityItems: {detail}",
+            "next_action": (
+                f"Re-fetch {READY_TO_EARN_FEED} and require every item to satisfy the "
+                "OpportunityItem contract (source_type, source_id as a 20-byte hex "
+                "address, work_state, payment_state, payment_committed, "
+                "verification_ready, and well-formed reward/funded_amount/"
+                "funding_target/bond amounts). Refusing to rank any record from a "
+                "payload that contains a malformed one."
+            ),
             "selected": None,
-            "invalid": [{"title": t, "reason": r} for t, r in invalid],
+            "malformed": [{"title": t, "reason": r} for t, r in malformed],
         }
 
     if not candidates:

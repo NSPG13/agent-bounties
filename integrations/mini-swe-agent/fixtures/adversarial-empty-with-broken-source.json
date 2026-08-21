@@ -12,7 +12,7 @@
         "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
       ],
       "item_count": 0,
-      "error": "canonical Base source unreachable"
+      "error": "indexer unreachable"
     }
   ],
   "evidence_boundary": "Projection only. Listing is not funding, claim, verification, or settlement; only a confirmed canonical BountySettled event proves payment.",
