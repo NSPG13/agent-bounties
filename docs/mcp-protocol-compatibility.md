@@ -123,6 +123,16 @@ the same reviewed PR. Additive specialist capabilities should remain in the
 advanced HTTP `/tools` catalog unless they are necessary for the short default
 MCP path.
 
+For the core catalog's V2 extension, begin with
+`inspect_open_competition_v2(operation=guide)`. The guide supplies the complete
+post, hosted-proof, BYO-proof, and finish/refund order; the mutation tool's
+conditional schema supplies exact arguments for each operation. Treat
+`prepare_open_competition_v2` as side-effecting: quoting creates hosted state,
+an approved payment signature may transfer Base USDC, and an approved relay
+signature may submit a proof. Its local `prepare_policies` operation derives
+canonical policy commitments and a retry-safe creation nonce without creating
+or funding a competition.
+
 Deployment-configured security schemes are normalized out of the descriptor
 digest because enabling the optional analytics-exclusion OAuth scope must not
 rewrite the product contract. Tests separately require anonymous access to

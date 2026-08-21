@@ -1317,7 +1317,7 @@ fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
         "publish_autonomous_submission_evidence" => (false, true, true, true),
         "add_bounty_comment" => (false, true, true, false),
         "inspect_open_competition_v2" => (true, false, false, true),
-        "prepare_open_competition_v2" => (true, false, true, true),
+        "prepare_open_competition_v2" => (false, true, true, false),
         _ => (true, false, false, true),
     }
 }
@@ -3655,9 +3655,18 @@ fn open_competition_v2_output_schema() -> Value {
             "schema_version": {"type": "string"},
             "status": {"type": "string"},
             "state": {"type": "string"},
+            "activation_state": {"type": "string"},
             "error_code": {"type": "string"},
             "next_action": {"type": "string"},
-            "evidence_boundary": {"type": "string"}
+            "evidence_boundary": {"type": "string"},
+            "flows": {"type": "object"},
+            "profile_support": {"type": "object"},
+            "operations": {"type": "array", "items": {"type": "string"}},
+            "execution_policy_hash": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
+            "settlement_policy_hash": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
+            "creation_nonce": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
+            "side_effects": {"type": "object"},
+            "safety": {"type": "array", "items": {"type": "string"}}
         },
         "additionalProperties": true
     })
@@ -3954,8 +3963,8 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
         "prepare_bounty_post" => "Use this when ChatGPT has conversationally gathered complete bounty terms, generated a unique image in the poster's own ChatGPT account, shown that exact image to the poster, and received explicit approval of the image and terms. Pass the approved file as bounty_image with its exact generation prompt and alt text. Agent Bounties stores that file and prepares a reviewable wallet handoff; it does not generate an image, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
-        "inspect_open_competition_v2" => "Use this when an agent needs V2 profiles, inventory, events, or proof-job state. Read them in that order; only indexed canonical events prove lifecycle state, and only CompetitionSettledV2 proves solver payment.",
-        "prepare_open_competition_v2" => "Use this when an agent is ready for one V2 transition. Run in order: prepare profile, validate, create, fund, quote, pay, prepare proof, authorize relay, then finalize or refund. Poll a 202 response; submit only exact returned calls.",
+        "inspect_open_competition_v2" => "New users start with operation=guide. Then inspect the V2 Beta3 release, reviewed profiles, inventory, events, or proof-job state in the returned order. Treat only CompetitionSettledV2 as payment evidence.",
+        "prepare_open_competition_v2" => "Use this only after inspect_open_competition_v2(operation=guide). Match arguments to the selected operation's exact schema. Some operations return unsigned plans; quote_proof creates a hosted job, pay_proof may transfer Base USDC after explicit approval, and authorize_relay may submit a proof after explicit approval. Follow next_action and treat only CompetitionSettledV2 as payment evidence.",
         _ => fallback,
     }
 }
@@ -4582,6 +4591,251 @@ mod tests {
         assert_eq!(result["cacheScope"], "public");
         assert!(result["_meta"][MCP_SERVER_INFO_META].is_object());
         assert!(names.contains(&"list_autonomous_bounties"));
+    }
+
+    #[test]
+    fn open_competition_v2_inspection_publishes_exact_operation_schemas() {
+        let schema = OpenCompetitionV2InspectArgs::input_schema();
+        let branches = schema["oneOf"].as_array().unwrap();
+        let operations = branches
+            .iter()
+            .map(|branch| branch["properties"]["operation"]["const"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operations,
+            [
+                "guide",
+                "release",
+                "profiles",
+                "inventory",
+                "events",
+                "proof_job"
+            ]
+        );
+        for branch in branches {
+            assert_eq!(branch["additionalProperties"], false);
+        }
+        let proof_job = branches
+            .iter()
+            .find(|branch| branch["properties"]["operation"]["const"] == "proof_job")
+            .unwrap();
+        assert_eq!(proof_job["properties"]["job_id"]["format"], "uuid");
+        assert!(proof_job["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("job_id")));
+        let events = branches
+            .iter()
+            .find(|branch| branch["properties"]["operation"]["const"] == "events")
+            .unwrap();
+        assert_eq!(
+            events["properties"]["bounty_id"]["pattern"],
+            "^0x[0-9a-fA-F]{64}$"
+        );
+    }
+
+    #[test]
+    fn open_competition_v2_mutations_publish_exact_operation_schemas() {
+        let schema = OpenCompetitionV2MutationArgs::input_schema();
+        let expected = [
+            "prepare_profile",
+            "prepare_policies",
+            "validate",
+            "create",
+            "fund",
+            "quote_proof",
+            "pay_proof",
+            "prepare_proof",
+            "authorize_relay",
+            "prepare_action",
+        ];
+        assert_eq!(schema["properties"]["operation"]["enum"], json!(expected));
+        assert_eq!(schema["allOf"].as_array().unwrap().len(), expected.len());
+        for operation in expected {
+            let rule = schema["allOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|rule| rule["if"]["properties"]["operation"]["const"] == operation)
+                .unwrap_or_else(|| panic!("missing conditional schema for {operation}"));
+            assert_eq!(
+                rule["then"]["properties"]["arguments"]["$ref"],
+                format!("#/$defs/{operation}")
+            );
+            if operation != "prepare_profile" {
+                assert_eq!(schema["$defs"][operation]["additionalProperties"], false);
+            }
+        }
+        assert_eq!(
+            schema["$defs"]["prepare_profile"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            schema["$defs"]["prepare_profile"]["oneOf"][0]["properties"]["profile_id"]["const"],
+            "structured-artifact-metric-v1"
+        );
+        assert_eq!(
+            schema["$defs"]["prepare_profile"]["oneOf"][1]["properties"]["profile_id"]["const"],
+            "public-vector-metric-v1"
+        );
+        assert_eq!(
+            schema["$defs"]["prepare_action"]["properties"]["action"]["enum"],
+            json!([
+                "finalize_best_score",
+                "cancel_funding",
+                "expire_competition",
+                "cancel_unavailable_verifier",
+                "withdraw_refund_for"
+            ])
+        );
+        assert!(
+            schema["$defs"]["pay_proof"]["properties"]["payment_signature"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("explicit approval")
+        );
+        assert!(
+            schema["$defs"]["authorize_relay"]["properties"]["solver_signature"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("explicit approval")
+        );
+    }
+
+    #[tokio::test]
+    async fn open_competition_v2_guide_covers_complete_safe_role_flows() {
+        let response = inspect_open_competition_v2(
+            State(public_tool_test_state()),
+            Json(OpenCompetitionV2InspectArgs {
+                operation: "guide".to_string(),
+                network: None,
+                state: None,
+                bounty_id: None,
+                job_id: None,
+            }),
+        )
+        .await
+        .0;
+        let guide = response.pointer("/content/0/json").unwrap();
+        assert_eq!(
+            guide["schema_version"],
+            "agent-bounties/open-competition-v2-mcp-guide-v1"
+        );
+        assert_eq!(guide["flows"]["post"].as_array().unwrap().len(), 8);
+        assert_eq!(guide["flows"]["earn_hosted"].as_array().unwrap().len(), 6);
+        assert_eq!(
+            guide["flows"]["earn_byo_proof"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(guide["operations"].as_array().unwrap().len(), 10);
+        let encoded = serde_json::to_string(guide).unwrap();
+        for required in [
+            "activation_state=public_beta",
+            "quote_proof",
+            "pay_proof",
+            "payment_pending",
+            "authorize_relay",
+            "prepare_proof",
+            "prepare_action",
+            "prepare_policies",
+            "structured-artifact-metric-v1",
+            "public-vector-metric-v1",
+            "CompetitionSettledV2",
+            "private key",
+        ] {
+            assert!(encoded.contains(required), "guide omitted {required}");
+        }
+    }
+
+    #[tokio::test]
+    async fn open_competition_v2_prepares_public_vector_policy_exactly() {
+        let response = prepare_open_competition_v2(
+            State(public_tool_test_state()),
+            Json(OpenCompetitionV2MutationArgs {
+                operation: "prepare_profile".to_string(),
+                arguments: json!({
+                    "profile_id": "public-vector-metric-v1",
+                    "network": "base-sepolia",
+                    "mode": "minimize_absolute_error",
+                    "threshold": "4",
+                    "vectors": [
+                        {"expected": 2, "weight": 3},
+                        {"expected": 5, "weight": 2}
+                    ]
+                }),
+            }),
+        )
+        .await
+        .0;
+        let profile = response.pointer("/content/0/json").unwrap();
+        assert_eq!(
+            profile["schema_version"],
+            "agent-bounties/open-competition-v2-public-vector-profile-v1"
+        );
+        assert_eq!(
+            profile["verification_policy_hash"],
+            "0xc1e5661ee1066b8bf3699a878abf6f42d6ea175a2e80297e859e75b4ded7e2ff"
+        );
+        assert_eq!(profile["score_direction"], "lower_is_better");
+        assert_eq!(profile["score_threshold"], "4");
+    }
+
+    #[tokio::test]
+    async fn open_competition_v2_prepares_creation_commitments_exactly() {
+        let response = prepare_open_competition_v2(
+            State(public_tool_test_state()),
+            Json(OpenCompetitionV2MutationArgs {
+                operation: "prepare_policies".to_string(),
+                arguments: json!({
+                    "execution_policy": {"z": 2, "a": 1},
+                    "settlement_policy": {
+                        "winner_mode": "first_proven",
+                        "payment_evidence": "CompetitionSettledV2"
+                    },
+                    "creation_nonce_seed": "creator-0xabc-task-42"
+                }),
+            }),
+        )
+        .await
+        .0;
+        let commitments = response.pointer("/content/0/json").unwrap();
+        assert_eq!(
+            commitments["execution_policy_hash"],
+            "0x987da4b00590a3ba6bd86b025d9690e8c237fc0082c2265b7cef327408f71873"
+        );
+        assert_eq!(
+            commitments["settlement_policy_hash"],
+            "0xb887721b560948c99801f075508a0ab6131aac0f227ff4593cc8f82d2d87e7f3"
+        );
+        assert_eq!(
+            commitments["creation_nonce"],
+            "0x2b5e810153724cd493cec8a5c3e2280afedc99a54d78c5928be010837d69e133"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_competition_v2_mutation_annotations_match_real_side_effects() {
+        let tools = mcp_tools_for_catalog(McpCatalogProfile::Core).await;
+        let descriptor = tools
+            .iter()
+            .find(|tool| tool["name"] == "prepare_open_competition_v2")
+            .unwrap();
+        assert_eq!(
+            descriptor["annotations"],
+            json!({
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "openWorldHint": true,
+                "idempotentHint": false
+            })
+        );
+        assert!(descriptor["description"]
+            .as_str()
+            .unwrap()
+            .contains("may transfer Base USDC"));
     }
 
     fn normalized_public_catalog_contract(mut descriptors: Vec<Value>) -> Value {

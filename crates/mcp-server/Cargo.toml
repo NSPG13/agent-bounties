@@ -14,6 +14,7 @@ base64.workspace = true
 bounty-router = { path = "../bounty-router" }
 chain-base = { path = "../chain-base" }
 chrono.workspace = true
+competition-metric-core = { path = "../competition-metric-core" }
 db = { path = "../db" }
 domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }

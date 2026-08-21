@@ -34,6 +34,10 @@ use chain_base::{
     StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
+use competition_metric_core::{
+    verification_policy_hash, JournalScopeV2, PublicVectorCase, PublicVectorMode,
+    PublicVectorProgramInput,
+};
 use db::{ObservedInterface, ObservedProtocolEra, PostgresStore};
 use domain::{
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
@@ -381,6 +385,30 @@ tool_args! {
         }),
         &["goal", "context", "budget_minor", "currency", "privacy"],
     );
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionV2PublicVectorProfileBody {
+    network: Option<String>,
+    mode: PublicVectorMode,
+    threshold: String,
+    vectors: Vec<OpenCompetitionV2PublicVectorPolicyCase>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionV2PublicVectorPolicyCase {
+    expected: i64,
+    weight: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenCompetitionV2PolicyBody {
+    execution_policy: Value,
+    settlement_policy: Value,
+    creation_nonce_seed: String,
 }
 
 tool_args! {
@@ -872,16 +900,7 @@ tool_args! {
         bounty_id: Option<String>,
         job_id: Option<String>,
     }
-    schema object_tool_schema(
-        json!({
-            "operation": enum_property(&["release", "profiles", "inventory", "events", "proof_job"], "Read one exact V2 Beta3 surface."),
-            "network": nullable_enum_property(&["base-mainnet", "base-sepolia"], "Defaults to base-mainnet."),
-            "state": nullable_enum_property(&["announced", "funding", "active", "settled", "cancelled"], "Inventory-only state filter."),
-            "bounty_id": nullable_string_property("Events-only bytes32 bounty filter."),
-            "job_id": nullable_string_property("Proof-job UUID; required for proof_job.")
-        }),
-        &["operation"],
-    );
+    schema open_competition_v2_inspect_schema();
 }
 
 tool_args! {
@@ -889,13 +908,7 @@ tool_args! {
         operation: String,
         arguments: Value,
     }
-    schema object_tool_schema(
-        json!({
-            "operation": enum_property(&["prepare_profile", "validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"], "Execute one ordered V2 Beta3 transition."),
-            "arguments": { "type": "object", "description": "Exact API request. prepare_profile derives immutable structured-artifact fields. pay_proof requires proof_job_id and optionally payment_signature. authorize_relay requires proof_job_id.", "additionalProperties": true }
-        }),
-        &["operation", "arguments"],
-    );
+    schema open_competition_v2_mutation_schema();
 }
 
 tool_args! {
@@ -3363,12 +3376,12 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "inspect_open_competition_v2",
-            "Read V2 in order: release, profiles, active inventory, events, then proof-job state. Only CompetitionSettledV2 proves solver payment.",
+            "New users start with operation=guide. Then read release, profiles, active inventory, events, and proof-job state in the returned order. Only CompetitionSettledV2 proves solver payment.",
             OpenCompetitionV2InspectArgs::input_schema(),
         ),
         tool(
             "prepare_open_competition_v2",
-            "Execute one V2 step in order: prepare profile, validate, create, fund, quote proof, pay proof, prepare proof, authorize relay, prepare action. Submit only returned exact calls.",
+            "After inspect_open_competition_v2(operation=guide), execute one typed V2 step. prepare_policies derives retry-safe creation commitments locally. Some operations only return unsigned plans; quote_proof creates a hosted job, pay_proof may transfer Base USDC after explicit approval, and authorize_relay may submit a proof after explicit approval. Follow next_action and treat only CompetitionSettledV2 as solver payment.",
             OpenCompetitionV2MutationArgs::input_schema(),
         ),
         tool(
@@ -3723,6 +3736,353 @@ fn object_tool_schema(properties: Value, required: &[&str]) -> Value {
         "properties": properties,
         "required": required,
         "additionalProperties": false
+    })
+}
+
+fn open_competition_v2_inspect_schema() -> Value {
+    let network = json!({
+        "type": ["string", "null"],
+        "enum": ["base-mainnet", "base-sepolia", null],
+        "description": "Defaults to base-mainnet."
+    });
+    let operation_schema = |operation: &str, properties: Value, fields: &[&str]| {
+        let mut properties = properties.as_object().cloned().unwrap_or_default();
+        properties.insert("operation".to_string(), json!({"const": operation}));
+        let mut required = vec!["operation"];
+        required.extend_from_slice(fields);
+        object_tool_schema(Value::Object(properties), &required)
+    };
+    json!({
+        "type": "object",
+        "description": "Start with guide, then use only the fields accepted by the selected read operation.",
+        "properties": {
+            "operation": {"type": "string", "enum": ["guide", "release", "profiles", "inventory", "events", "proof_job"]},
+            "network": {"type": ["string", "null"], "enum": ["base-mainnet", "base-sepolia", null]},
+            "state": {"type": ["string", "null"], "enum": ["announced", "funding", "active", "settled", "cancelled", null]},
+            "bounty_id": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]{64}$"},
+            "job_id": {"type": ["string", "null"], "format": "uuid"}
+        },
+        "required": [],
+        "additionalProperties": false,
+        "oneOf": [
+            operation_schema("guide", json!({"network": network.clone()}), &[]),
+            operation_schema("release", json!({"network": network.clone()}), &[]),
+            operation_schema("profiles", json!({"network": network.clone()}), &[]),
+            operation_schema("inventory", json!({
+                "network": network.clone(),
+                "state": {
+                    "type": ["string", "null"],
+                    "enum": ["announced", "funding", "active", "settled", "cancelled", null]
+                }
+            }), &[]),
+            operation_schema("events", json!({
+                "network": network,
+                "bounty_id": {
+                    "type": ["string", "null"],
+                    "pattern": "^0x[0-9a-fA-F]{64}$"
+                }
+            }), &[]),
+            operation_schema("proof_job", json!({
+                "job_id": {"type": "string", "format": "uuid"}
+            }), &["job_id"])
+        ]
+    })
+}
+
+fn open_competition_v2_mutation_schema() -> Value {
+    let network = json!({
+        "type": ["string", "null"],
+        "enum": ["base-mainnet", "base-sepolia", null],
+        "description": "Defaults to base-mainnet."
+    });
+    let address = json!({
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
+    });
+    let bytes32 = json!({
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{64}$"
+    });
+    let described_bytes32 = |description: &str| {
+        json!({
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": description
+        })
+    };
+    let unsigned_decimal = json!({
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "description": "Unsigned base-unit decimal string; USDC uses 6 decimals."
+    });
+    let signed_decimal = json!({
+        "type": "string",
+        "pattern": "^-?(0|[1-9][0-9]*)$",
+        "description": "Signed integer decimal string."
+    });
+    let nonempty_hex = json!({
+        "type": "string",
+        "pattern": "^0x(?:[0-9a-fA-F]{2})+$"
+    });
+    let artifact_requirement = json!({
+        "oneOf": [
+            object_tool_schema(json!({
+                "kind": {"const": "utf8_contains"},
+                "needle": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "minimum_occurrences": {"type": "integer", "minimum": 1},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "needle", "minimum_occurrences", "weight"]),
+            object_tool_schema(json!({
+                "kind": {"const": "utf8_excludes"},
+                "needle": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "needle", "weight"]),
+            object_tool_schema(json!({
+                "kind": {"const": "maximum_bytes"},
+                "maximum": {"type": "integer", "minimum": 1, "maximum": 1048576},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "maximum", "weight"]),
+            object_tool_schema(json!({
+                "kind": {"const": "json_valid"},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "weight"]),
+            object_tool_schema(json!({
+                "kind": {"const": "json_pointer_exists"},
+                "pointer": {"type": "string"},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "pointer", "weight"]),
+            object_tool_schema(json!({
+                "kind": {"const": "json_pointer_string_equals"},
+                "pointer": {"type": "string"},
+                "expected": {"type": "string"},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "pointer", "expected", "weight"]),
+            object_tool_schema(json!({
+                "kind": {"const": "json_array_minimum_length"},
+                "pointer": {"type": "string"},
+                "minimum": {"type": "integer", "minimum": 0},
+                "weight": {"type": "integer", "minimum": 1}
+            }), &["kind", "pointer", "minimum", "weight"])
+        ]
+    });
+    let requirements = json!({
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 256,
+        "items": artifact_requirement
+    });
+    let creation_params = object_tool_schema(
+        json!({
+            "solver_reward": unsigned_decimal.clone(),
+            "keeper_reward": unsigned_decimal.clone(),
+            "funding_deadline": {"type": "integer", "minimum": 1, "description": "UTC Unix timestamp after which incomplete funding can be cancelled."},
+            "proof_window_seconds": {"type": "integer", "minimum": 1, "description": "Proof-entry window after canonical activation."},
+            "winner_mode": {"type": "string", "enum": ["first_proven", "best_score"]},
+            "score_direction": {"type": "string", "enum": ["higher_is_better", "lower_is_better"]},
+            "score_threshold": signed_decimal,
+            "proof_system": {"type": "string", "enum": ["groth16", "plonk"]},
+            "program_vkey": described_bytes32("Copy from the selected reviewed profiles entry."),
+            "source_hash": described_bytes32("Copy from the selected reviewed profiles entry."),
+            "elf_hash": described_bytes32("Copy from the selected reviewed profiles entry."),
+            "journal_schema_hash": described_bytes32("Copy from the selected reviewed profiles entry."),
+            "metric_program_hash": described_bytes32("Copy from the selected reviewed profiles entry."),
+            "execution_policy_hash": described_bytes32("Copy from prepare_policies."),
+            "verification_policy_hash": described_bytes32("Copy from prepare_profile."),
+            "settlement_policy_hash": described_bytes32("Copy from prepare_policies."),
+            "beta_risk_hash": described_bytes32("Copy from the live release beta_risk_hash.")
+        }),
+        &[
+            "solver_reward",
+            "keeper_reward",
+            "funding_deadline",
+            "proof_window_seconds",
+            "winner_mode",
+            "score_direction",
+            "score_threshold",
+            "proof_system",
+            "program_vkey",
+            "source_hash",
+            "elf_hash",
+            "journal_schema_hash",
+            "metric_program_hash",
+            "execution_policy_hash",
+            "verification_policy_hash",
+            "settlement_policy_hash",
+            "beta_risk_hash",
+        ],
+    );
+    let creation = object_tool_schema(
+        json!({
+            "network": network.clone(),
+            "creator": address.clone(),
+            "creation_nonce": described_bytes32("Copy from prepare_policies; reuse only when retrying the same intended competition."),
+            "acknowledged_risk_hash": described_bytes32("Copy the live release beta_risk_hash to acknowledge the exact public-beta risk bundle."),
+            "initial_funding": {"type": "string", "pattern": "^(0|[1-9][0-9]*)$", "description": "Initial Base USDC contribution in 6-decimal base units; remaining funding can be pooled later."},
+            "params": creation_params
+        }),
+        &[
+            "creator",
+            "creation_nonce",
+            "acknowledged_risk_hash",
+            "initial_funding",
+            "params",
+        ],
+    );
+    let public_vector_metric = object_tool_schema(
+        json!({
+            "mode": {"type": "string", "enum": ["all_equal", "maximize_exact_matches", "minimize_absolute_error"]},
+            "threshold": signed_decimal.clone(),
+            "vectors": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10000,
+                "items": object_tool_schema(json!({
+                    "expected": {"type": "integer"},
+                    "observed": {"type": "integer"},
+                    "weight": {"type": "integer", "minimum": 1}
+                }), &["expected", "observed", "weight"])
+            }
+        }),
+        &["mode", "threshold", "vectors"],
+    );
+    let structured_artifact_metric = object_tool_schema(
+        json!({
+            "profile_id": {"const": "structured-artifact-metric-v1"},
+            "threshold": unsigned_decimal.clone(),
+            "artifact_utf8": {"type": "string", "minLength": 1, "maxLength": 1048576},
+            "requirements": requirements.clone()
+        }),
+        &["profile_id", "threshold", "artifact_utf8", "requirements"],
+    );
+    let structured_artifact_profile = object_tool_schema(
+        json!({
+            "profile_id": {"const": "structured-artifact-metric-v1"},
+            "network": network.clone(),
+            "threshold": unsigned_decimal.clone(),
+            "requirements": requirements
+        }),
+        &["threshold", "requirements"],
+    );
+    let public_vector_profile = object_tool_schema(
+        json!({
+            "profile_id": {"const": "public-vector-metric-v1"},
+            "network": network.clone(),
+            "mode": {"type": "string", "enum": ["all_equal", "maximize_exact_matches", "minimize_absolute_error"]},
+            "threshold": signed_decimal.clone(),
+            "vectors": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10000,
+                "items": object_tool_schema(json!({
+                    "expected": {"type": "integer", "minimum": -9223372036854775808_i64, "maximum": 9223372036854775807_i64},
+                    "weight": {"type": "integer", "minimum": 1, "maximum": 4294967295_u64}
+                }), &["expected", "weight"])
+            }
+        }),
+        &["profile_id", "mode", "threshold", "vectors"],
+    );
+    let definitions = json!({
+        "prepare_profile": {
+            "description": "Derive immutable fields for either reviewed built-in profile. profile_id is optional only for the legacy structured-artifact request shape.",
+            "oneOf": [structured_artifact_profile, public_vector_profile]
+        },
+        "prepare_policies": object_tool_schema(json!({
+            "execution_policy": {"type": "object", "minProperties": 1, "description": "Complete public execution-policy JSON to commit."},
+            "settlement_policy": {"type": "object", "minProperties": 1, "description": "Complete public settlement-policy JSON to commit."},
+            "creation_nonce_seed": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Stable unique public seed for this intended competition. Reuse it only when retrying the same creation."}
+        }), &["execution_policy", "settlement_policy", "creation_nonce_seed"]),
+        "validate": creation.clone(),
+        "create": creation,
+        "fund": object_tool_schema(json!({
+            "network": network.clone(),
+            "contributor": address.clone(),
+            "competition_contract": address.clone(),
+            "amount": unsigned_decimal.clone(),
+            "acknowledged_risk_hash": bytes32.clone()
+        }), &["contributor", "competition_contract", "amount", "acknowledged_risk_hash"]),
+        "quote_proof": object_tool_schema(json!({
+            "network": network.clone(),
+            "competition_contract": address.clone(),
+            "solver": address.clone(),
+            "solver_nonce": unsigned_decimal.clone(),
+            "artifact_hash": bytes32.clone(),
+            "relay": {"type": "boolean"},
+            "metric": {"oneOf": [public_vector_metric, structured_artifact_metric]}
+        }), &["competition_contract", "solver", "solver_nonce", "artifact_hash", "relay", "metric"]),
+        "pay_proof": object_tool_schema(json!({
+            "proof_job_id": {"type": "string", "format": "uuid"},
+            "payment_signature": {"type": ["string", "null"], "minLength": 1, "description": "Omit on the first call to receive the exact x402 challenge; include only after explicit approval and signing."}
+        }), &["proof_job_id"]),
+        "prepare_proof": object_tool_schema(json!({
+            "network": network.clone(),
+            "competition_contract": address.clone(),
+            "solver": address.clone(),
+            "solver_nonce": unsigned_decimal,
+            "proof_system": {"type": "string", "enum": ["groth16", "plonk"]},
+            "public_values": nonempty_hex.clone(),
+            "proof": nonempty_hex.clone(),
+            "authorization_deadline": {"type": "integer", "minimum": 1},
+            "solver_signature": {"type": ["string", "null"], "pattern": "^0x(?:[0-9a-fA-F]{2})+$"}
+        }), &["competition_contract", "solver", "solver_nonce", "proof_system", "public_values", "proof", "authorization_deadline"]),
+        "authorize_relay": object_tool_schema(json!({
+            "proof_job_id": {"type": "string", "format": "uuid"},
+            "authorization_deadline": {"type": "integer", "minimum": 1},
+            "solver_signature": {"type": ["string", "null"], "pattern": "^0x(?:[0-9a-fA-F]{2})+$", "description": "Omit to receive exact EIP-712 typed data; include only after explicit approval and signing."}
+        }), &["proof_job_id", "authorization_deadline"]),
+        "prepare_action": object_tool_schema(json!({
+            "network": network,
+            "competition_contract": address.clone(),
+            "caller": {"oneOf": [address.clone(), {"type": "null"}]},
+            "action": {"type": "string", "enum": ["finalize_best_score", "cancel_funding", "expire_competition", "cancel_unavailable_verifier", "withdraw_refund_for"]},
+            "contributor": {"oneOf": [address, {"type": "null"}], "description": "Required only for withdraw_refund_for; refunds always go to this contributor."}
+        }), &["competition_contract", "action"])
+    });
+    let operations = [
+        "prepare_profile",
+        "prepare_policies",
+        "validate",
+        "create",
+        "fund",
+        "quote_proof",
+        "pay_proof",
+        "prepare_proof",
+        "authorize_relay",
+        "prepare_action",
+    ];
+    let operation_rules = operations
+        .iter()
+        .map(|operation| {
+            json!({
+                "if": {
+                    "properties": {"operation": {"const": operation}},
+                    "required": ["operation"]
+                },
+                "then": {
+                    "properties": {
+                        "arguments": {"$ref": format!("#/$defs/{operation}")}
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "type": "object",
+        "description": "Start with inspect_open_competition_v2(operation=guide). Match arguments to the selected operation exactly.",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": operations,
+                "description": "Execute one ordered V2 Beta3 transition."
+            },
+            "arguments": {
+                "type": "object",
+                "description": "Operation-specific body selected by the conditional schema. Never add guessed fields."
+            }
+        },
+        "required": ["operation", "arguments"],
+        "additionalProperties": false,
+        "allOf": operation_rules,
+        "$defs": definitions
     })
 }
 
@@ -5534,10 +5894,74 @@ async fn get_open_competition_entrant_relay(
     .await
 }
 
+fn open_competition_v2_mcp_guide() -> Value {
+    json!({
+        "schema_version": "agent-bounties/open-competition-v2-mcp-guide-v1",
+        "protocol_version": "agent-bounties/open-competition-v2-beta3",
+        "default_network": "base-mainnet",
+        "start": {
+            "tool": "inspect_open_competition_v2",
+            "arguments": {"operation": "release", "network": "base-mainnet"},
+            "continue_only_if": "activation_state=public_beta and indexer_agreement.agrees=true"
+        },
+        "flows": {
+            "post": [
+                {"step": 1, "tool": "inspect_open_competition_v2", "operation": "release", "purpose": "Confirm the current release and activation state."},
+                {"step": 2, "tool": "inspect_open_competition_v2", "operation": "profiles", "purpose": "Choose only a reviewed metric profile."},
+                {"step": 3, "tool": "prepare_open_competition_v2", "operation": "prepare_profile", "purpose": "Derive immutable fields for structured-artifact or public-vector work. Use profile_id to select the exact schema; legacy structured-artifact requests may omit it."},
+                {"step": 4, "tool": "prepare_open_competition_v2", "operation": "prepare_policies", "purpose": "Derive the exact execution-policy hash, settlement-policy hash, and retry-safe creation nonce from complete public policy JSON and one stable unique seed."},
+                {"step": 5, "tool": "prepare_open_competition_v2", "operation": "validate", "purpose": "Validate the complete creation body before any signature."},
+                {"step": 6, "tool": "prepare_open_competition_v2", "operation": "create", "purpose": "Receive exact unsigned wallet calls; execute them only after explicit approval."},
+                {"step": 7, "tool": "prepare_open_competition_v2", "operation": "fund", "purpose": "Prepare any remaining pooled funding; wait for canonical activation."},
+                {"step": 8, "tool": "inspect_open_competition_v2", "operation": "inventory", "purpose": "Advertise only after the safe-block state is active."}
+            ],
+            "earn_hosted": [
+                {"step": 1, "tool": "inspect_open_competition_v2", "operation": "inventory", "arguments": {"state": "active"}, "purpose": "Select by immutable criteria, deadline, winner mode, and net prize if won."},
+                {"step": 2, "tool": "prepare_open_competition_v2", "operation": "quote_proof", "purpose": "Create one solver- and artifact-bound hosted proof job; do not duplicate a live quote."},
+                {"step": 3, "tool": "prepare_open_competition_v2", "operation": "pay_proof", "purpose": "First omit payment_signature, then obtain explicit approval, sign the exact x402 challenge, and call once with that signature."},
+                {"step": 4, "tool": "inspect_open_competition_v2", "operation": "proof_job", "purpose": "Poll the same proof_job_id; never repay payment_pending, paid, proving, proved, relaying, or confirmed."},
+                {"step": 5, "tool": "prepare_open_competition_v2", "operation": "authorize_relay", "purpose": "After proved, first omit solver_signature, then obtain explicit approval, sign the exact EIP-712 data, and call once with that signature."},
+                {"step": 6, "tool": "inspect_open_competition_v2", "operation": "events", "purpose": "Confirm safe-block CompetitionSettledV2 before reporting solver payment."}
+            ],
+            "earn_byo_proof": [
+                {"step": 1, "tool": "inspect_open_competition_v2", "operation": "inventory", "arguments": {"state": "active"}},
+                {"step": 2, "tool": "prepare_open_competition_v2", "operation": "prepare_proof", "purpose": "Receive a direct call or exact relay authorization for already-generated proof bytes."},
+                {"step": 3, "instruction": "Execute only the returned exact call after explicit approval, then inspect events."}
+            ],
+            "finish_or_refund": [
+                {"tool": "prepare_open_competition_v2", "operation": "prepare_action", "actions": ["finalize_best_score", "cancel_funding", "expire_competition", "cancel_unavailable_verifier", "withdraw_refund_for"]},
+                {"instruction": "Execute the returned unsigned wallet call only after explicit approval and confirm its named safe-block event."}
+            ]
+        },
+        "operations": ["prepare_profile", "prepare_policies", "validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"],
+        "profile_support": {
+            "structured-artifact-metric-v1": "prepare_profile accepts threshold and deterministic artifact requirements.",
+            "public-vector-metric-v1": "prepare_profile accepts mode, threshold, and expected/weight policy vectors; quote_proof later adds each observed value. Copy the matching reviewed profile fields from profiles into validate."
+        },
+        "side_effects": {
+            "quote_proof": "Creates one hosted proof-job record.",
+            "pay_proof": "With payment_signature, may submit an approved Base USDC payment.",
+            "authorize_relay": "With solver_signature, may queue the approved proof relay.",
+            "other_operations": "Return deterministic calculations or unsigned wallet calls; executing a returned call is a separate user-approved action."
+        },
+        "safety": [
+            "Never request or transmit a private key or recovery phrase.",
+            "Ask immediately before a wallet signature, payment signature, or solver relay signature.",
+            "Do not infer state from a plan, signature, proof, database row, or transaction hash.",
+            "Only a safe-block CompetitionSettledV2 event proves solver payment."
+        ],
+        "documentation": "https://github.com/NSPG13/agent-bounties/blob/main/docs/open-competition-v2-beta3.md",
+        "next_action": "Call inspect_open_competition_v2 with operation=release on base-mainnet."
+    })
+}
+
 async fn inspect_open_competition_v2(
     State(_state): State<SharedState>,
     Json(args): Json<OpenCompetitionV2InspectArgs>,
 ) -> Json<serde_json::Value> {
+    if args.operation == "guide" {
+        return mcp_json(open_competition_v2_mcp_guide());
+    }
     let api = public_base_url_from_env();
     let root = format!(
         "{}/v1/base/open-competition-v2-beta3",
@@ -5588,6 +6012,32 @@ async fn prepare_open_competition_v2(
     Json(args): Json<OpenCompetitionV2MutationArgs>,
 ) -> Json<serde_json::Value> {
     let mut arguments = args.arguments;
+    if args.operation == "prepare_policies" {
+        return prepare_open_competition_v2_policies(arguments);
+    }
+    if args.operation == "prepare_profile" {
+        let profile_id = arguments
+            .get("profile_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if profile_id.as_deref() == Some("public-vector-metric-v1") {
+            let Some(object) = arguments.as_object_mut() else {
+                return mcp_error("prepare_profile arguments must be an object");
+            };
+            object.remove("profile_id");
+            return prepare_open_competition_v2_public_vector_profile(arguments);
+        }
+        if profile_id.as_deref() == Some("structured-artifact-metric-v1") {
+            arguments
+                .as_object_mut()
+                .expect("schema requires prepare_profile arguments to be an object")
+                .remove("profile_id");
+        } else if profile_id.is_some() {
+            return mcp_error(
+                "prepare_profile profile_id must be structured-artifact-metric-v1 or public-vector-metric-v1",
+            );
+        }
+    }
     if args.operation == "pay_proof" {
         let Some(object) = arguments.as_object_mut() else {
             return mcp_error("pay_proof arguments must be an object");
@@ -5654,6 +6104,137 @@ async fn prepare_open_competition_v2(
         90,
     )
     .await
+}
+
+fn prepare_open_competition_v2_policies(arguments: Value) -> Json<serde_json::Value> {
+    let body: OpenCompetitionV2PolicyBody = match serde_json::from_value(arguments) {
+        Ok(body) => body,
+        Err(error) => return mcp_error(format!("invalid V2 policies: {error}")),
+    };
+    if !body
+        .execution_policy
+        .as_object()
+        .is_some_and(|policy| !policy.is_empty())
+        || !body
+            .settlement_policy
+            .as_object()
+            .is_some_and(|policy| !policy.is_empty())
+    {
+        return mcp_error("execution_policy and settlement_policy must be non-empty objects");
+    }
+    let seed = body.creation_nonce_seed.trim();
+    if seed.is_empty() || seed.len() > 256 {
+        return mcp_error("creation_nonce_seed must contain 1..256 UTF-8 bytes");
+    }
+    let execution_policy_hash = match chain_base::keccak256_canonical_json(&body.execution_policy) {
+        Ok(hash) => hash,
+        Err(error) => {
+            return mcp_error(format!("execution policy is not canonicalizable: {error}"))
+        }
+    };
+    let settlement_policy_hash = match chain_base::keccak256_canonical_json(&body.settlement_policy)
+    {
+        Ok(hash) => hash,
+        Err(error) => {
+            return mcp_error(format!("settlement policy is not canonicalizable: {error}"))
+        }
+    };
+    let creation_nonce = match chain_base::keccak256_canonical_json(&json!({
+        "schema_version": "agent-bounties/open-competition-v2-creation-nonce-v1",
+        "seed": seed
+    })) {
+        Ok(hash) => hash,
+        Err(error) => return mcp_error(format!("creation nonce is not canonicalizable: {error}")),
+    };
+    mcp_json(json!({
+        "schema_version": "agent-bounties/open-competition-v2-policy-commitments-v1",
+        "execution_policy": body.execution_policy,
+        "execution_policy_hash": execution_policy_hash,
+        "settlement_policy": body.settlement_policy,
+        "settlement_policy_hash": settlement_policy_hash,
+        "creation_nonce": creation_nonce,
+        "next_action": "Copy these exact hashes and nonce into validate. Reuse the same seed only for an idempotent retry of this intended competition.",
+        "evidence_boundary": "Deterministic policy commitments and a nonce are not creation, funding, qualification, settlement, or payment evidence."
+    }))
+}
+
+fn prepare_open_competition_v2_public_vector_profile(arguments: Value) -> Json<serde_json::Value> {
+    let body: OpenCompetitionV2PublicVectorProfileBody = match serde_json::from_value(arguments) {
+        Ok(body) => body,
+        Err(error) => return mcp_error(format!("invalid public-vector profile: {error}")),
+    };
+    let network = body.network.unwrap_or_else(|| "base-mainnet".to_string());
+    if !matches!(network.as_str(), "base-mainnet" | "base-sepolia") {
+        return mcp_error("network must be base-mainnet or base-sepolia");
+    }
+    let threshold = match body.threshold.parse::<i128>() {
+        Ok(threshold) => threshold,
+        Err(_) => return mcp_error("threshold must be an i128 decimal string"),
+    };
+    if body.mode != PublicVectorMode::AllEqual && threshold < 0 {
+        return mcp_error("threshold cannot be negative for this public-vector mode");
+    }
+    if body.vectors.is_empty() || body.vectors.len() > 10_000 {
+        return mcp_error("vectors must contain 1..10000 cases");
+    }
+    if body.vectors.iter().any(|case| case.weight == 0) {
+        return mcp_error("every public-vector weight must be positive");
+    }
+    let vectors = body
+        .vectors
+        .iter()
+        .map(|case| PublicVectorCase {
+            expected: case.expected,
+            observed: case.expected,
+            weight: case.weight,
+        })
+        .collect::<Vec<_>>();
+    let input = PublicVectorProgramInput {
+        scope: JournalScopeV2 {
+            chain_id: 0,
+            competition: [0; 20],
+            bounty_id: [0; 32],
+            solver: [0; 20],
+            solver_nonce: 0,
+            proof_system: [0; 32],
+            program_vkey: [0; 32],
+            source_hash: [0; 32],
+            elf_hash: [0; 32],
+            execution_policy_hash: [0; 32],
+            settlement_policy_hash: [0; 32],
+            beta_risk_hash: [0; 32],
+        },
+        mode: body.mode,
+        threshold,
+        vectors,
+    };
+    let policy_hash = verification_policy_hash(&input);
+    let policy_hash = policy_hash
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mode = match body.mode {
+        PublicVectorMode::AllEqual => "all_equal",
+        PublicVectorMode::MaximizeExactMatches => "maximize_exact_matches",
+        PublicVectorMode::MinimizeAbsoluteError => "minimize_absolute_error",
+    };
+    let score_direction = match body.mode {
+        PublicVectorMode::AllEqual | PublicVectorMode::MaximizeExactMatches => "higher_is_better",
+        PublicVectorMode::MinimizeAbsoluteError => "lower_is_better",
+    };
+    mcp_json(json!({
+        "schema_version": "agent-bounties/open-competition-v2-public-vector-profile-v1",
+        "protocol_version": "agent-bounties/open-competition-v2-beta3",
+        "network": network,
+        "profile_id": "public-vector-metric-v1",
+        "mode": mode,
+        "verification_policy_hash": format!("0x{policy_hash}"),
+        "score_threshold": threshold.to_string(),
+        "score_direction": score_direction,
+        "vectors": body.vectors,
+        "next_action": "From the latest profiles response, copy the exact reviewed public-vector profile fields plus this threshold, direction, and verification policy hash into validate; stop if that profile is not reviewed.",
+        "evidence_boundary": "This deterministic profile calculation is not profile review, creation, funding, qualification, settlement, or payment evidence."
+    }))
 }
 
 async fn proxy_open_competition_v2_payment(

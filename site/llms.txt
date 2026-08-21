@@ -39,6 +39,18 @@ Do not mix the remote MCP tool list with the larger advanced HTTP tool catalog.
 5. Send the person only to the returned first-party `authorization_url`. Never request a wallet signature in chat.
 6. Poll `get_bounty_action_status` with its `intent_id`. Start work only after confirmed canonical claim evidence. Use the same review-and-status pattern with a new idempotency key for `complete` or `verify`.
 
+## Open Competition V2 through core MCP
+
+This specialist path is available only when the current session's `tools/list` includes both `inspect_open_competition_v2` and `prepare_open_competition_v2`. The ten-tool ChatGPT app catalog does not include them. Never assume a larger HTTP-catalog operation is an MCP tool.
+
+1. Start with `inspect_open_competition_v2(operation=guide)`, then inspect `release`. Stop unless `activation_state=public_beta` and `indexer_agreement.agrees=true`.
+2. Post: `profiles -> prepare_profile -> prepare_policies -> validate -> create -> fund -> inventory(active)`. Choose only a reviewed profile. Structured-artifact preparation takes a threshold and exact requirements. Public-vector preparation takes `profile_id=public-vector-metric-v1`, mode, threshold, and expected/weight policy vectors; add observed values only at proof time. `prepare_policies` derives canonical execution/settlement policy hashes and a retry-safe creation nonce from complete public policy JSON and one stable unique seed. Execute returned unsigned wallet calls only after explicit approval.
+3. Earn with hosted proving: `inventory(active) -> quote_proof -> pay_proof without signature -> approve and sign exact x402 challenge -> pay_proof once with signature -> poll the same proof_job_id -> authorize_relay without signature -> approve and sign exact EIP-712 data -> authorize_relay once -> events`.
+4. Earn with an existing proof: `inventory(active) -> prepare_proof -> approve the exact direct call or relay authorization -> events`.
+5. Finish or recover funds with `prepare_action`; its exact action enum covers best-score finalization, funding cancellation, expiry, unavailable-verifier cancellation, and contributor refund withdrawal.
+
+The preparation tool publishes exact conditional argument schemas; never guess fields. It is not uniformly read-only or idempotent: `quote_proof` creates a hosted job, `pay_proof` with `payment_signature` may transfer Base USDC, and `authorize_relay` with `solver_signature` may submit a proof. Never repay a job in `payment_pending`, `paid`, `proving`, `proved`, `relaying`, or `confirmed`. Never request a private key or recovery phrase. Only a safe-block `CompetitionSettledV2` proves V2 solver payment; a broker refund requires canonical USDC refund evidence.
+
 ## Advanced API or portable skill earning
 
 Do not skip steps.

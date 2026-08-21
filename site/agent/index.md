@@ -53,6 +53,7 @@ node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBase
 - Post from the user's AI: `prepare_bounty_post` → present the card and `post_url` → human reviews → sign exact calls → confirm `CanonicalBountyCreated`, `FundingAdded`, and `BountyBecameClaimable`. For explicit service-side drafting, use `draft_bounty_with_cloud_agent` through the advanced HTTP API.
 - Earn through remote MCP: `get_bounty_feed` → `prepare_bounty_action(action=solve)` → first-party review → `get_bounty_action_status` → complete → verify → confirm settlement.
 - Fund through remote MCP: read the canonical target → `prepare_bounty_action(action=fund)` → first-party review → poll status until confirmed `FundingAdded`.
+- Open Competition V2 through core MCP: only when `tools/list` includes both V2 tools, start with `inspect_open_competition_v2(operation=guide)` and follow its returned post, hosted-proof, BYO-proof, or finish/refund flow. The ten-tool ChatGPT app catalog does not expose this specialist path. Only safe-block `CompetitionSettledV2` proves V2 solver payment.
 - Advanced API or portable skill: follow the published OpenAPI or installed skill exactly; do not assume advanced HTTP tool names exist in remote MCP.
 - Cancel before claim: direct creator uses `plan_autonomous_cancel` then `plan_autonomous_refund_withdrawal`; a `BoundedAgentWalletV2` owner uses `plan_bounded_wallet_cancel_refund` once and confirms `RefundWithdrawn`.
 

@@ -273,7 +273,9 @@ def main() -> int:
             "prepare_bounty_action(action=solve)",
             "get_bounty_action_status(intent_id)",
             "advanced HTTP catalog is not the MCP tool list",
-            "Only <code>BountySettled</code> proves bounty payment",
+            "Only <code>BountySettled</code> proves autonomous-v1 payment",
+            "inspect_open_competition_v2(operation=guide)",
+            "CompetitionSettledV2",
         ],
     )
     if re.search(r'<meta\s+name="robots"[^>]*noindex', agent_page, re.IGNORECASE):
@@ -297,6 +299,8 @@ def main() -> int:
             "get_bounty_action_status",
             "not guaranteed MCP tools",
             "Only a confirmed canonical `BountySettled` event proves bounty payment",
+            "inspect_open_competition_v2(operation=guide)",
+            "CompetitionSettledV2",
         ],
     )
 
@@ -1131,6 +1135,39 @@ def main() -> int:
             "Ordinary Gemini chats",
             "plan_autonomous_cancel",
             "A claimed bounty cannot be cancelled",
+            "## Open Competition V2 through core MCP",
+            "inspect_open_competition_v2(operation=guide)",
+            "The ten-tool ChatGPT app catalog does not include them",
+            "public-vector-metric-v1",
+            "prepare_policies",
+            "payment_pending",
+            "CompetitionSettledV2",
+        ],
+    )
+
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    release_guide = (repo_root / "docs" / "open-competition-v2-beta3-release.md").read_text(
+        encoding="utf-8"
+    )
+    for path, text in (("README.md", readme), ("open-competition-v2-beta3-release.md", release_guide)):
+        if "implemented but not deployed" in text.lower():
+            fail(f"{path} still claims the deployed V2 release is not deployed")
+    require_phrases(
+        "README.md V2 status",
+        readme,
+        [
+            "deployed on Base mainnet as an opt-in public beta",
+            "inspect_open_competition_v2(operation=guide)",
+            "runtime release endpoint",
+        ],
+    )
+    require_phrases(
+        "V2 release runtime boundary",
+        release_guide,
+        [
+            "activation_state=public_beta",
+            "indexer_agreement.agrees=true",
+            "runtime state, not a permanent promise",
         ],
     )
 
@@ -1144,6 +1181,13 @@ def main() -> int:
         fail(f"static discovery manifest has schema-unknown keys: {sorted(manifest_keys - schema_properties)}")
     if schema_required - manifest_keys:
         fail(f"static discovery manifest misses required keys: {sorted(schema_required - manifest_keys)}")
+    endpoint_required = set(discovery_schema["properties"]["endpoints"].get("required", []))
+    endpoint_keys = set(discovery.get("endpoints", {}))
+    if endpoint_required - endpoint_keys:
+        fail(
+            "static discovery manifest misses required endpoints: "
+            f"{sorted(endpoint_required - endpoint_keys)}"
+        )
     if discovery.get("schema") != "https://agentbounties.org/schemas/discovery-manifest.v2.json":
         fail("static discovery manifest must use v2")
     if discovery.get("open_source") is not True:

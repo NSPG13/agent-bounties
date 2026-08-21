@@ -238,6 +238,110 @@ def main() -> int:
             {tool["name"] for tool in legacy_core_tools} == CORE_TOOLS,
             "legacy core tool catalog drifted",
         )
+        v2_operations = [
+            "prepare_profile",
+            "prepare_policies",
+            "validate",
+            "create",
+            "fund",
+            "quote_proof",
+            "pay_proof",
+            "prepare_proof",
+            "authorize_relay",
+            "prepare_action",
+        ]
+        v2_descriptor = next(
+            tool for tool in core_tools if tool["name"] == "prepare_open_competition_v2"
+        )
+        v2_inspect_descriptor = next(
+            tool for tool in core_tools if tool["name"] == "inspect_open_competition_v2"
+        )
+        require(
+            [
+                branch["properties"]["operation"]["const"]
+                for branch in v2_inspect_descriptor["inputSchema"]["oneOf"]
+            ]
+            == ["guide", "release", "profiles", "inventory", "events", "proof_job"]
+            and all(
+                branch["additionalProperties"] is False
+                for branch in v2_inspect_descriptor["inputSchema"]["oneOf"]
+            ),
+            "V2 MCP inspection operations lost exact schemas",
+        )
+        require(
+            v2_descriptor["inputSchema"]["properties"]["operation"]["enum"]
+            == v2_operations
+            and set(v2_descriptor["inputSchema"]["$defs"]) == set(v2_operations),
+            "V2 MCP operations lost exact argument schemas",
+        )
+        require(
+            v2_descriptor["annotations"]
+            == {
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "openWorldHint": True,
+                "idempotentHint": False,
+            }
+            and "may transfer Base USDC" in v2_descriptor["description"],
+            "V2 MCP side effects are understated",
+        )
+        v2_guide_call = rpc(
+            "tools/call",
+            {
+                "name": "inspect_open_competition_v2",
+                "arguments": {"operation": "guide", "network": "base-mainnet"},
+            },
+        )
+        v2_guide = v2_guide_call["structuredContent"]
+        v2_guide_text = json.dumps(v2_guide)
+        require(
+            v2_guide["schema_version"]
+            == "agent-bounties/open-competition-v2-mcp-guide-v1"
+            and set(v2_guide["flows"])
+            == {"post", "earn_hosted", "earn_byo_proof", "finish_or_refund"}
+            and v2_guide["operations"] == v2_operations,
+            "V2 MCP guide lost a complete role flow",
+        )
+        require(
+            all(
+                marker in v2_guide_text
+                for marker in (
+                    "activation_state=public_beta",
+                    "payment_pending",
+                    "structured-artifact-metric-v1",
+                    "public-vector-metric-v1",
+                    "CompetitionSettledV2",
+                    "private key",
+                )
+            ),
+            "V2 MCP guide lost an activation, replay, payment, or secret boundary",
+        )
+        v2_policy_call = rpc(
+            "tools/call",
+            {
+                "name": "prepare_open_competition_v2",
+                "arguments": {
+                    "operation": "prepare_policies",
+                    "arguments": {
+                        "execution_policy": {"z": 2, "a": 1},
+                        "settlement_policy": {
+                            "winner_mode": "first_proven",
+                            "payment_evidence": "CompetitionSettledV2",
+                        },
+                        "creation_nonce_seed": "creator-0xabc-task-42",
+                    },
+                },
+            },
+        )["structuredContent"]
+        require(
+            v2_policy_call["execution_policy_hash"]
+            == "0x987da4b00590a3ba6bd86b025d9690e8c237fc0082c2265b7cef327408f71873"
+            and v2_policy_call["settlement_policy_hash"]
+            == "0xb887721b560948c99801f075508a0ab6131aac0f227ff4593cc8f82d2d87e7f3"
+            and v2_policy_call["creation_nonce"]
+            == "0x2b5e810153724cd493cec8a5c3e2280afedc99a54d78c5928be010837d69e133",
+            "V2 MCP policy and creation commitments drifted",
+        )
 
         tools = rpc("tools/list", chatgpt=True)["tools"]
         tool_names = {tool["name"] for tool in tools}
@@ -437,6 +541,7 @@ def main() -> int:
         "profile=full_hosted_execution "
         "chatgpt_image_handoff=file_param "
         "moonpay_handoff=first_party "
+        "v2_core_guide=complete "
         "exclusion_evidence=redacted "
         "legacy_public_review_flag=ignored"
     )

@@ -246,9 +246,15 @@ does not describe host-only regression tests as zk-verified.
 Post a deterministic competition:
 
 1. Read `profiles`; stop if the selected profile is not `reviewed`.
-2. Call `prepare_profile` with the threshold and every artifact requirement.
-3. Copy the returned immutable fields into `validate`, then `create`.
-4. Sign the exact creation call, then `fund` until the canonical state is
+2. Call `prepare_profile`. For `structured-artifact-metric-v1`, provide the
+   threshold and every artifact requirement. For `public-vector-metric-v1`,
+   provide its profile ID, mode, threshold, and every expected value/weight;
+   observed values belong only in the later proof quote.
+3. Call `prepare_policies` with complete public execution and settlement
+   policy JSON plus one stable unique seed. It derives their canonical Keccak
+   hashes and a retry-safe creation nonce.
+4. Copy the returned immutable fields into `validate`, then `create`.
+5. Sign the exact creation call, then `fund` until the canonical state is
    `active`.
 
 Earn from an active competition:

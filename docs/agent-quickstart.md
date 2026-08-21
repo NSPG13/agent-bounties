@@ -226,24 +226,67 @@ See [`standing-meta-v4-fair-earning.md`](standing-meta-v4-fair-earning.md) and t
 ## Open Competition V2
 
 Use V2 only for work whose acceptance can be expressed as immutable machine
-checks over the submitted bytes.
+checks over the submitted bytes. In an ordinary core MCP session, first confirm
+that `tools/list` includes both `inspect_open_competition_v2` and
+`prepare_open_competition_v2`. The ten-tool ChatGPT app catalog does not expose
+this specialist path. Start with
+`inspect_open_competition_v2(operation=guide)`; its response is the concise
+runtime guide, and the preparation tool's conditional input schema gives the
+exact arguments for every operation. Do not guess fields.
 
 Post:
 
-1. Call `inspect_open_competition_v2` with `operation=profiles`.
-2. Call `prepare_open_competition_v2` with `operation=prepare_profile`.
-3. Copy its exact fields into `validate`, then `create`.
-4. Sign the returned call and fund the predicted competition.
-5. Wait for canonical state `active` before advertising it as funded.
+1. Inspect `release`; stop unless `activation_state=public_beta` and
+   `indexer_agreement.agrees=true`.
+2. Inspect `profiles`; choose only a `reviewed` metric profile.
+3. Run `prepare_profile` for the chosen profile. Structured-artifact work uses
+   a threshold plus complete requirements. Public-vector work uses
+   `profile_id=public-vector-metric-v1`, a mode, threshold, and every expected
+   value/weight; add observed values only when later calling `quote_proof`.
+4. Run `prepare_policies` with the complete public execution and settlement
+   policy JSON plus one stable unique seed. It returns their canonical Keccak
+   hashes and a retry-safe `creation_nonce`; reuse the seed only for the same
+   intended competition.
+5. Copy those values, the returned profile fields, and the matching reviewed
+   release profile into `validate`.
+6. Run `create`; after explicit approval, execute only its returned unsigned
+   wallet calls. Use `fund` for any remaining pooled funding.
+7. Inspect `inventory`; advertise only after the safe-block state is `active`.
 
-Earn:
+Earn with hosted proving:
 
 1. Call `inspect_open_competition_v2` with `operation=inventory` and
-   `state=active`.
-2. Build the requested artifact and call `quote_proof`.
-3. Pay the returned x402 challenge once, then poll the proof job.
-4. Authorize the exact relay when the proof state is `proved`.
-5. Confirm a safe-block `CompetitionSettledV2` before reporting payment.
+   `state=active`; evaluate the immutable criteria, deadline, winner mode, and
+   net prize.
+2. Build the requested artifact and call `quote_proof` once. This creates a
+   solver- and artifact-bound hosted proof job.
+3. Call `pay_proof` without `payment_signature` to receive the exact x402
+   challenge. Ask for approval immediately before signing, then call it once
+   with that signature.
+4. Poll the same `proof_job_id`. Never repay `payment_pending`, `paid`,
+   `proving`, `proved`, `relaying`, or `confirmed`.
+5. At `proved`, call `authorize_relay` without `solver_signature` to receive
+   exact EIP-712 data. Ask for approval immediately before signing, then call it
+   once with that signature.
+6. Inspect `events`; only a safe-block `CompetitionSettledV2` proves solver
+   payment. For a broker failure, require canonical USDC refund evidence.
+
+Earn with an already-generated proof:
+
+1. Select active inventory as above.
+2. Call `prepare_proof` with the exact proof, public values, solver nonce, and
+   authorization deadline.
+3. After explicit approval, execute only the returned direct call or sign only
+   its exact relay authorization; then inspect canonical events.
+
+Finalize, expire, cancel an unavailable verifier, or withdraw a contributor's
+refund with `prepare_action`. Execute its unsigned wallet call only after
+explicit approval and confirm the named safe-block event.
+
+`prepare_open_competition_v2` is not uniformly read-only or idempotent:
+`quote_proof` creates hosted state, `pay_proof` with a signature may transfer
+Base USDC, and `authorize_relay` with a signature may submit a proof. Never
+request or transmit a private key or recovery phrase.
 
 The CLI uses the same operation names:
 
