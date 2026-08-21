@@ -7,12 +7,12 @@
   "source_statuses": [
     {
       "source_type": "canonical_base",
-      "available": true,
+      "available": false,
       "authoritative_urls": [
         "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
       ],
       "item_count": 0,
-      "error": null
+      "error": "canonical Base source unreachable"
     }
   ],
   "evidence_boundary": "Projection only. Listing is not funding, claim, verification, or settlement; only a confirmed canonical BountySettled event proves payment.",

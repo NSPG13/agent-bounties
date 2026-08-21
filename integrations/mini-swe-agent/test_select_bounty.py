@@ -66,6 +66,36 @@ EXPECTATIONS = {
         "claim",
         "expiry is evaluated before occupancy, so this is reclaimable",
     ),
+    # response-level production contract (OpportunityProjectionResponse)
+    "adversarial-envelope-bad-schema.json": (
+        "refresh", "an unknown schema_version cannot be interpreted safely"),
+    "adversarial-envelope-wrong-network.json": (
+        "refresh", "a non-Base projection is not canonical inventory"),
+    "adversarial-envelope-wrong-view.json": (
+        "refresh", "applied_view=null means the ready-to-earn filter was never applied"),
+    "adversarial-envelope-degraded.json": (
+        "refresh", "degraded=true means the projection is knowingly partial"),
+    "adversarial-envelope-source-error.json": (
+        "refresh", "a source reporting an error makes coverage incomplete"),
+    "adversarial-envelope-source-unavailable.json": (
+        "refresh", "an unavailable canonical source cannot back a claim decision"),
+    "adversarial-envelope-truncated-coverage.json": (
+        "refresh", "item_count above delivered items means the page was truncated"),
+    "adversarial-envelope-no-source-statuses.json": (
+        "refresh", "without source_statuses, coverage is entirely unknown"),
+    "adversarial-item-spoofed-canonicity.json": (
+        # skip, not refresh: the ENVELOPE here is internally consistent (it
+        # declares 0 canonical items and delivers 0), so this is an item-level
+        # rejection, not a coverage fault. The refusal must still be absolute.
+        "skip", "network + 0x address is not canonicity; source_type is authoritative"),
+    # the headline regression: an empty list must NOT be reported as "no work"
+    # when the response itself is untrustworthy.
+    "adversarial-empty-with-broken-source.json": (
+        "refresh", "an empty list from a broken source is a fault, not 'no work'"),
+    "adversarial-empty-degraded.json": (
+        "refresh", "an empty list from a degraded projection is a fault, not 'no work'"),
+    "adversarial-empty-stale.json": (
+        "refresh", "an empty list from a stale snapshot is a fault, not 'no work'"),
 }
 
 # The parameters the API actually deserializes. See
@@ -154,6 +184,49 @@ if expired.is_file():
         "expire-claim" in str(result.get("next_action", "")).lower(),
         "next_action reopens the expired claim before claiming",
     )
+
+print()
+print("=== an untrustworthy response is never reported as 'no work' ===")
+# This is the regression the review caught: `wait` means "the canonical feed is
+# healthy and there is genuinely nothing funded". It must be unreachable when
+# the projection is degraded, stale, truncated, or backed by a broken source.
+for name in (
+    "adversarial-empty-with-broken-source.json",
+    "adversarial-empty-degraded.json",
+    "adversarial-empty-stale.json",
+    "adversarial-envelope-truncated-coverage.json",
+):
+    path = FIXTURES / name
+    if not path.is_file():
+        check(False, f"{name} exists")
+        continue
+    result = run(path)
+    check(result.get("action") != "wait", f"{name} does not report a false 'no work'")
+    check(result.get("action") == "refresh", f"{name} fails visibly with refresh")
+    check(result.get("selected") is None, f"{name} selects nothing")
+
+print()
+print("=== every envelope breach fails closed before items are read ===")
+for name in EXPECTATIONS:
+    if not name.startswith(("adversarial-envelope-", "adversarial-empty-",
+                            "adversarial-item-")):
+        continue
+    path = FIXTURES / name
+    if not path.is_file():
+        continue
+    check(run(path).get("action") != "claim", f"{name} never claims")
+
+print()
+print("=== an exact canonical response still selects correctly ===")
+# Guard against over-tightening: the strict envelope must not break the happy
+# path. multiple.json carries a complete, exact, non-degraded envelope.
+good = run(FIXTURES / "multiple.json")
+check(good.get("action") == "claim", "exact canonical projection still claims")
+selected = good.get("selected") or {}
+check(str(selected.get("bounty_contract", "")).startswith("0x"),
+      "selection still resolves a canonical bounty contract")
+check(float(selected.get("margin_usdc") or 0) > 0,
+      "selection still requires a positive margin")
 
 print()
 print("=== canonical ready-to-earn feed uses only real query parameters ===")

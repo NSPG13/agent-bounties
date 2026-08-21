@@ -1,5 +1,6 @@
 {
   "schema_version": "agent-bounties/opportunity-projection-v1",
+  "generated_at": "2026-08-21T06:00:00Z",
   "network": "base-mainnet",
   "applied_view": "ready_to_earn",
   "degraded": false,
@@ -10,15 +11,16 @@
       "authoritative_urls": [
         "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
       ],
-      "item_count": 1,
+      "item_count": 0,
       "error": null
     }
   ],
   "evidence_boundary": "Projection only. Listing is not funding, claim, verification, or settlement; only a confirmed canonical BountySettled event proves payment.",
+  "age_seconds": 60,
   "staleness_seconds": 900,
   "items": [
     {
-      "opportunity_id": "opp-x",
+      "opportunity_id": "opp-1",
       "title": "Add a deterministic MCP discovery checker",
       "goal": "Implement a deterministic checker for MCP discovery.",
       "categories": [
@@ -28,26 +30,24 @@
       "work_state": "claimable",
       "source_id": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "discovery_factors": [
-        "source_type=canonical_base",
-        "work_state=claimable",
-        "payment_state=escrowed"
+        "source_type=third_party_registry"
       ],
       "payment_state": "escrowed",
       "payment_committed": true,
       "funded_amount": {
-        "amount": "2010000",
+        "amount": "1000000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
       },
       "funding_target": {
-        "amount": "2010000",
+        "amount": "1000000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
       },
       "reward": {
-        "amount": "2000000",
+        "amount": "990000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
@@ -70,7 +70,7 @@
       },
       "cash_economics": {
         "solver_reward": {
-          "amount": "2000000",
+          "amount": "990000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
@@ -82,13 +82,12 @@
           "decimals": 6
         },
         "gross_cash_margin": {
-          "amount": "2000000",
+          "amount": "990000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
         }
-      },
-      "source_type": "canonical_base"
+      }
     }
   ]
 }

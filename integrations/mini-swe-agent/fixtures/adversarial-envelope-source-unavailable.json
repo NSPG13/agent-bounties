@@ -7,7 +7,7 @@
   "source_statuses": [
     {
       "source_type": "canonical_base",
-      "available": true,
+      "available": false,
       "authoritative_urls": [
         "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
       ],

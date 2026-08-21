@@ -16,7 +16,7 @@
     }
   ],
   "evidence_boundary": "Projection only. Listing is not funding, claim, verification, or settlement; only a confirmed canonical BountySettled event proves payment.",
-  "age_seconds": 60,
+  "age_seconds": 86400,
   "staleness_seconds": 900,
   "items": []
 }

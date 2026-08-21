@@ -1,5 +1,5 @@
 {
-  "schema_version": "agent-bounties/opportunity-projection-v1",
+  "schema_version": "agent-bounties/opportunity-projection-v99",
   "generated_at": "2026-08-21T06:00:00Z",
   "network": "base-mainnet",
   "applied_view": "ready_to_earn",

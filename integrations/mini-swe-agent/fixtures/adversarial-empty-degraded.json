@@ -3,7 +3,7 @@
   "generated_at": "2026-08-21T06:00:00Z",
   "network": "base-mainnet",
   "applied_view": "ready_to_earn",
-  "degraded": false,
+  "degraded": true,
   "source_statuses": [
     {
       "source_type": "canonical_base",

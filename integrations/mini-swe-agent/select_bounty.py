@@ -51,6 +51,27 @@ READY_TO_EARN_FEED = (
     "?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
 )
 
+# The response-level production contract. These are NOT invented: they are the
+# exact fields of `OpportunityProjectionResponse` and `OpportunitySourceStatus`
+# in crates/api/src/opportunities.rs, and the schema string is the upstream
+# constant `OPPORTUNITY_PROJECTION_SCHEMA`.
+#
+#   pub struct OpportunityProjectionResponse {
+#       schema_version: String, generated_at: String, network: String,
+#       applied_view: Option<String>, degraded: bool,
+#       source_statuses: Vec<OpportunitySourceStatus>,
+#       items: Vec<OpportunityItem>, evidence_boundary: String }
+#   pub struct OpportunitySourceStatus {
+#       source_type: String, available: bool, authoritative_urls: Vec<String>,
+#       item_count: usize, error: Option<String> }
+#
+# Validating only the items array lets a partial, degraded, wrong-view or
+# non-canonical response be treated as safe inventory -- and lets a broken
+# source be reported as "no work".
+PROJECTION_SCHEMA = "agent-bounties/opportunity-projection-v1"
+CANONICAL_SOURCE_TYPE = "canonical_base"
+READY_TO_EARN_VIEW = "ready_to_earn"
+
 DEFAULT_STALENESS_SECONDS = 900
 # A snapshot timestamped in the future means a broken clock somewhere; treating it
 # as "fresh" would let arbitrarily stale data through.
@@ -140,13 +161,103 @@ def is_coding(item):
     return any(hint in blob for hint in CODING_HINTS)
 
 
+def validate_envelope(inv):
+    """Validate the whole OpportunityProjectionResponse before reading items.
+
+    Raises Invalid on any breach. Called BEFORE the items array is inspected so
+    that a degraded, wrong-view, non-canonical or partially-covered response can
+    never be mistaken for trustworthy inventory -- including the case where the
+    list is empty, which would otherwise be reported as a calm "no work".
+    """
+    if not isinstance(inv, dict):
+        raise Invalid("response root is not an object")
+
+    schema = inv.get("schema_version")
+    if schema != PROJECTION_SCHEMA:
+        raise Invalid(f"schema_version is {schema!r}, expected {PROJECTION_SCHEMA!r}")
+
+    # generated_at is non-optional upstream; without it freshness is unknowable.
+    stamp = inv.get("generated_at")
+    if not (isinstance(stamp, str) and stamp.strip()):
+        raise Invalid("generated_at is absent or not a string")
+
+    network = str(inv.get("network") or "").lower()
+    if network not in CANONICAL_NETWORKS:
+        raise Invalid(f"response network is {network or 'absent'}, not canonical Base")
+
+    # applied_view is Option<String>: null means the server did NOT apply the
+    # ready-to-earn filter, so the payload is unfiltered inventory.
+    view = inv.get("applied_view")
+    if view != READY_TO_EARN_VIEW:
+        raise Invalid(
+            f"applied_view is {view!r}, not {READY_TO_EARN_VIEW!r}: "
+            "the ready-to-earn filter was not applied"
+        )
+
+    degraded = inv.get("degraded")
+    if degraded is not False:
+        raise Invalid(f"degraded is {degraded!r}, not exactly false")
+
+    statuses = inv.get("source_statuses")
+    if not isinstance(statuses, list) or not statuses:
+        raise Invalid("source_statuses is absent or empty: coverage is unknown")
+
+    canonical = None
+    for status in statuses:
+        if not isinstance(status, dict):
+            raise Invalid("source_statuses contains a non-object entry")
+        if status.get("source_type") == CANONICAL_SOURCE_TYPE:
+            canonical = status
+        # Any source reporting an error means the projection is incomplete,
+        # even if the canonical source itself looks healthy.
+        if status.get("error") not in (None, ""):
+            raise Invalid(
+                f"source {status.get('source_type')!r} reports error "
+                f"{status.get('error')!r}: coverage incomplete"
+            )
+        if status.get("available") is not True:
+            raise Invalid(f"source {status.get('source_type')!r} is not available")
+
+    if canonical is None:
+        raise Invalid(f"no {CANONICAL_SOURCE_TYPE!r} entry in source_statuses")
+
+    if not isinstance(inv.get("items"), list):
+        raise Invalid("items is absent or not an array")
+
+    # Coverage: the canonical source's declared item_count must match the number
+    # of canonical items actually delivered. A truncated page is not "no work".
+    declared = canonical.get("item_count")
+    if not isinstance(declared, int) or isinstance(declared, bool) or declared < 0:
+        raise Invalid(f"canonical item_count is {declared!r}, not a count")
+    delivered = sum(
+        1 for it in inv["items"]
+        if isinstance(it, dict) and it.get("source_type") == CANONICAL_SOURCE_TYPE
+    )
+    if delivered != declared:
+        raise Invalid(
+            f"canonical coverage incomplete: item_count={declared} but "
+            f"{delivered} canonical item(s) delivered"
+        )
+
+    if not str(inv.get("evidence_boundary") or "").strip():
+        raise Invalid("response declares no evidence_boundary")
+
+
 def canonical_source(item):
     """Require an explicit canonical Base source, not merely absence of evidence."""
+    # source_type is non-optional in OpportunityItem and is the authoritative
+    # marker. A Base network plus a 42-char 0x string is NOT canonicity.
+    source_type = item.get("source_type")
+    if source_type != CANONICAL_SOURCE_TYPE:
+        return False, f"source_type is {source_type!r}, not {CANONICAL_SOURCE_TYPE!r}"
     network = str(item.get("network") or "").lower()
     if network not in CANONICAL_NETWORKS:
         return False, f"network is {network or 'absent'}, not canonical Base"
+    # discovery_factors is Vec<String> (never null upstream) and the canonical
+    # builder always pushes source_type=canonical_base. Absence is suspicious,
+    # so require the assertion rather than skipping the check when empty.
     factors = [str(f).lower() for f in (item.get("discovery_factors") or [])]
-    if factors and not any("source_type=canonical_base" in f for f in factors):
+    if not any(f"source_type={CANONICAL_SOURCE_TYPE}" in f for f in factors):
         return False, "discovery_factors do not assert source_type=canonical_base"
     contract = item.get("source_id") or item.get("bounty_contract") or ""
     if not (isinstance(contract, str) and contract.startswith("0x") and len(contract) == 42):
@@ -244,14 +355,24 @@ def margin_of(item):
 
 
 def select(inv):
-    items = inv.get("items") or inv.get("opportunities") or inv.get("bounties") or []
-
-    if not items:
+    # ORDER MATTERS. The envelope is validated first, then freshness, and only
+    # then the items array. Previously an empty `items` returned `wait` before
+    # any coverage check, so a stale/degraded/wrong-view response with a broken
+    # canonical source was silently reported as "no work" -- the most dangerous
+    # possible false negative for an agent whose job is to find paid work.
+    try:
+        validate_envelope(inv)
+    except Invalid as exc:
         return {
-            "action": "wait",
-            "reason": "inventory contains no opportunities",
-            "next_action": (f"Re-poll {READY_TO_EARN_FEED} "
-                            "and wait for newly funded canonical work before claiming."),
+            "action": "refresh",
+            "reason": f"projection response failed the production contract: {exc}",
+            "next_action": (
+                f"Re-fetch {READY_TO_EARN_FEED} and require a complete "
+                "OpportunityProjectionResponse (schema_version, Base network, "
+                "applied_view=ready_to_earn, degraded=false, available canonical "
+                "source with matching item_count). Refusing to read items from a "
+                "response that does not meet the contract."
+            ),
             "selected": None,
         }
 
@@ -278,6 +399,20 @@ def select(inv):
             "reason": f"inventory snapshot is {int(age)}s old (limit {int(max_age)}s)",
             "next_action": ("Re-fetch the canonical ready-to-earn view to obtain a fresh snapshot; "
                             "a stale inventory can hide a live exclusive claim."),
+            "selected": None,
+        }
+
+    items = inv.get("items") or []
+
+    # Only now -- envelope verified complete and snapshot verified fresh -- is an
+    # empty list genuinely "no funded work right now" rather than a hidden fault.
+    if not items:
+        return {
+            "action": "wait",
+            "reason": ("inventory contains no opportunities (verified against a complete, "
+                       "fresh, non-degraded canonical projection)"),
+            "next_action": (f"Re-poll {READY_TO_EARN_FEED} "
+                            "and wait for newly funded canonical work before claiming."),
             "selected": None,
         }
 

@@ -44,13 +44,35 @@ verify", which becomes a skip or a refresh — never an implicit yes.
 
 | Gate | Requirement |
 |---|---|
-| canonical source | `network` is Base **and** `discovery_factors` assert `source_type=canonical_base` **and** a 42-char contract |
+| **response contract** | the whole `OpportunityProjectionResponse` is validated **before** any item is read (see below) |
+| canonical source | item `source_type == "canonical_base"` **and** `network` is Base **and** `discovery_factors` assert `source_type=canonical_base` **and** a 42-char contract |
 | claimability | `work_state` in {open, claimable, ready, ready_to_earn} |
 | funding | `payment_state` escrowed, `payment_committed` true, `funded_amount >= funding_target` |
 | verifier | `verifier.ready` true, or a declared verification method **and** decision authority |
 | terms | `terms_hash`, or an explicit evidence boundary **and** evidence requirements |
 | units | amount + decimals + currency present; one shared currency; USDC only |
 | freshness | missing / unparseable / **future** coverage → `refresh` |
+
+### The response-level contract
+
+Item-level checks are not enough: a partial, stale, wrong-view or non-canonical
+*response* can carry perfectly well-formed items. The selector therefore
+validates the full envelope first, against the exact upstream definition in
+`crates/api/src/opportunities.rs`:
+
+| Field | Requirement | Why |
+|---|---|---|
+| `schema_version` | exactly `agent-bounties/opportunity-projection-v1` | an unknown schema cannot be interpreted |
+| `network` | canonical Base | a non-Base projection is not this market |
+| `applied_view` | exactly `ready_to_earn` | it is `Option<String>`; **null means the filter was never applied**, so the payload is unfiltered inventory |
+| `degraded` | exactly `false` | the server is declaring the projection partial |
+| `source_statuses` | non-empty; every source `available` with no `error` | one broken source makes coverage incomplete |
+| canonical `item_count` | equals the canonical items actually delivered | catches a truncated page |
+| `generated_at`, `evidence_boundary` | present | freshness and boundary must be knowable |
+
+**`source_type` is authoritative for canonicity.** A Base network plus any
+42-character `0x` string is *not* proof: an item without
+`source_type == "canonical_base"` is refused even when everything else looks right.
 
 Two ordering rules that are easy to get wrong:
 
@@ -64,13 +86,20 @@ Two ordering rules that are easy to get wrong:
 and becomes a `refresh`, because silently reading it as 0 is how dimensionally invalid
 economics get accepted.
 
+**An empty list is not automatically "no work".** `wait` is only reachable after
+the envelope is verified complete *and* the snapshot verified fresh. An empty
+`items` array from a degraded, stale, or broken-source response returns `refresh` —
+reporting "nothing available" when the feed is actually faulty is the worst
+possible failure for an agent whose job is finding funded work.
+
 ## The five decisions
 
 | Inventory condition | `action` | Meaning |
 |---|---|---|
 | several eligible items | `claim` | highest positive margin, no exclusive claimant |
-| no items | `wait` | nothing funded to act on |
+| no items, envelope verified healthy | `wait` | nothing funded to act on |
 | snapshot older than `staleness_seconds` | `refresh` | stale data can hide a live claim |
+| envelope breach (degraded, wrong view, incomplete coverage) | `refresh` | the response cannot be trusted as inventory |
 | margin ≤ 0 after external spend | `skip` | a treadmill, not a profit |
 | another solver holds a live claim | `skip` | exclusive claimants are respected |
 
