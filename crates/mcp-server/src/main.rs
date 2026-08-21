@@ -8067,7 +8067,12 @@ mod tests {
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("agent-bounties/autonomous-v1"));
         assert!(text.contains("Do not skip steps"));
-        assert!(text.contains("Use these MCP tools in order"));
+        assert!(text.contains("## Remote MCP default"));
+        assert!(text.contains("call `tools/list`"));
+        assert!(text.contains("Use only tools returned by that MCP session"));
+        assert!(text.contains("prepare_bounty_action"));
+        assert!(text.contains("get_bounty_action_status"));
+        assert!(text.contains("Advanced HTTP tool catalog"));
         assert!(text.contains("get_solver_leaderboard"));
         assert!(text.contains("list_autonomous_bounties"));
         assert!(text.contains("agent_native_claim"));
