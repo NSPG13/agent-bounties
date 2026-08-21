@@ -961,6 +961,7 @@ test("Beta3 inventory requires current safe-block agreement and positive hosted 
         protocol_version: "agent-bounties/open-competition-v2-beta3",
         network: "base-mainnet",
         factory_contract: "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+        release_hash: hash("a"),
         public_creation_enabled: true,
         proof_broker_enabled: true,
         metric_programs: [program],
@@ -1006,6 +1007,8 @@ test("Beta3 inventory requires current safe-block agreement and positive hosted 
     "https://api.example.test",
   );
   assert.equal(verified.status, "verified");
+  assert.equal(verified.observedSafeBlock, 100);
+  assert.equal(verified.releaseHash, hash("a"));
   assert.equal(verified.verified.length, 1);
   assert.equal(verified.verified[0].hosted_net_prize_if_win_minor, 2_890_000);
 

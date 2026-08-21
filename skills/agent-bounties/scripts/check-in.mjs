@@ -1225,7 +1225,10 @@ function reviewedV2Program(release, projection) {
 
 export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryResponse, apiBaseUrl) {
   if (!releaseResponse && !inventoryResponse) {
-    return { status: "not_checked", verified: [], warning: null };
+    return {
+      status: "not_checked", verified: [], warning: null,
+      observedSafeBlock: null, releaseHash: null, factoryContract: null,
+    };
   }
   try {
     if (releaseResponse?.status !== 200 || inventoryResponse?.status !== 200) {
@@ -1242,6 +1245,7 @@ export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryRespo
       || release?.public_creation_enabled !== true
       || release?.proof_broker_enabled !== true
       || !ADDRESS.test(release?.factory_contract || "")
+      || !HASH.test(release?.release_hash || "")
       || agreement?.agrees !== true
       || !Number.isSafeInteger(agreement?.common_safe_block)
       || agreement.common_safe_block <= 0
@@ -1316,13 +1320,23 @@ export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryRespo
         proof_quote_url: `${apiBaseUrl}/v1/base/open-competition-v2-beta3/proof-quotes`,
       });
     }
-    return { status: "verified", verified, warning: null };
+    return {
+      status: "verified",
+      verified,
+      warning: null,
+      observedSafeBlock: agreement.common_safe_block,
+      releaseHash: release.release_hash.toLowerCase(),
+      factoryContract: release.factory_contract.toLowerCase(),
+    };
   } catch (error) {
     return {
       status: "verification_failed",
       verified: [],
       warning: "open_competition_v2_inventory_verification_failed",
       error: String(error?.message || error),
+      observedSafeBlock: null,
+      releaseHash: null,
+      factoryContract: null,
     };
   }
 }
@@ -1450,6 +1464,9 @@ export async function collectInventory({
     direct_chain_observed_block: direct.observed_block,
     verified_claimable_bounties: verified,
     open_competition_v2_status: v2.status,
+    open_competition_v2_observed_safe_block: v2.observedSafeBlock,
+    open_competition_v2_release_hash: v2.releaseHash,
+    open_competition_v2_factory_contract: v2.factoryContract,
     verified_open_competition_v2_bounties: v2.verified,
     excluded_claimable_candidates: excluded,
     funding_candidates: fundingCandidates,

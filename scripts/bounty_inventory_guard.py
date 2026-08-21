@@ -70,6 +70,16 @@ class InventoryReport:
     open_bounty_count: int
     verified_claimable_count: int
     verified_open_competition_v2_count: int
+    private_v2_floor: int
+    private_v2_target: int
+    private_v2_missing_to_floor: int
+    private_v2_missing_to_target: int
+    private_v2_below_floor: bool
+    private_v2_replenishment_required: bool
+    private_v2_observed_safe_block: int | None
+    private_v2_release_hash: str | None
+    private_v2_factory_contract: str | None
+    private_inventory_observed_at: str | None
     verified_meta_claimable_count: int
     missing_count: int
     meta_missing_count: int
@@ -86,22 +96,59 @@ class InventoryReport:
     suggested_next_action: str
     disclaimer: str
 
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return the unified marketplace view without mechanism segmentation."""
+        private_fields = {
+            "verified_open_competition_v2_count",
+            "private_v2_floor",
+            "private_v2_target",
+            "private_v2_missing_to_floor",
+            "private_v2_missing_to_target",
+            "private_v2_below_floor",
+            "private_v2_replenishment_required",
+            "private_v2_observed_safe_block",
+            "private_v2_release_hash",
+            "private_v2_factory_contract",
+            "private_inventory_observed_at",
+            "meta_threshold",
+            "meta_replenishment_target",
+            "verified_meta_claimable_count",
+            "meta_missing_count",
+            "meta_replenishment_count",
+            "meta_below_threshold",
+            "meta_replenishment_required",
+            "meta_claimable_bounty_ids",
+            "claimable_bounty_ids",
+            "claimable_evidence_source",
+            "claimable_report_observed_at",
+        }
+        public = {
+            key: value
+            for key, value in asdict(self).items()
+            if key not in private_fields
+        }
+        public["active_funded_opportunities"] = public.pop(
+            "verified_claimable_count"
+        )
+        public["minimum_active_funded_opportunities"] = public.pop("threshold")
+        public["missing_to_public_floor"] = public.pop("missing_count")
+        public["below_public_floor"] = public.pop("below_threshold")
+        return public
+
     def to_markdown(self) -> str:
-        status = "BELOW THRESHOLD" if self.below_threshold else "OK"
+        status = (
+            "BELOW LIQUIDITY POLICY"
+            if self.below_threshold or self.private_v2_below_floor
+            else "OK"
+        )
         lines = [
             f"# Bounty inventory guard - {status}",
             "",
             f"- Repository: `{self.repository}`",
             f"- Open actionable `bounty` issues (candidate supply): **{self.open_bounty_count}**",
-            f"- Verified canonical claimable bounties: **{self.verified_claimable_count}**",
-            f"- Verified Open Competition V2 entries: **{self.verified_open_competition_v2_count}**",
-            f"- Claimable threshold: **{self.threshold}**",
-            f"- Missing claimable bounties: **{self.missing_count}**",
-            f"- Verified standing meta-bounties: **{self.verified_meta_claimable_count}**",
-            f"- Standing meta-bounty floor: **{self.meta_threshold}**",
-            f"- Standing meta-bounty replenishment target: **{self.meta_replenishment_target}**",
-            f"- Missing from hard meta floor: **{self.meta_missing_count}**",
-            f"- Missing from meta replenishment target: **{self.meta_replenishment_count}**",
+            f"- Active funded opportunities: **{self.verified_claimable_count}**",
+            f"- Public liquidity floor: **{self.threshold}**",
+            f"- Missing from public floor: **{self.missing_count}**",
             f"- Excluded (non-actionable labels): **{self.excluded_count}**",
             f"- Protocol status: `{self.protocol_status}`",
             f"- Inventory evidence valid: **{str(self.inventory_evidence_valid).lower()}**",
@@ -110,16 +157,6 @@ class InventoryReport:
         ]
         if self.issue_urls:
             lines.extend(f"- {url}" for url in self.issue_urls)
-        else:
-            lines.append("- _(none)_")
-        lines.extend(["", "## Verified claimable bounty IDs"])
-        if self.claimable_bounty_ids:
-            lines.extend(f"- `{bounty_id}`" for bounty_id in self.claimable_bounty_ids)
-        else:
-            lines.append("- _(none)_")
-        lines.extend(["", "## Verified standing meta-bounty IDs"])
-        if self.meta_claimable_bounty_ids:
-            lines.extend(f"- `{bounty_id}`" for bounty_id in self.meta_claimable_bounty_ids)
         else:
             lines.append("- _(none)_")
         lines.extend(
@@ -158,6 +195,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Hard floor for funded, claimable standing meta-bounties (default 1)",
     )
     p.add_argument(
+        "--private-v2-floor",
+        type=int,
+        default=int(os.environ.get("PRIVATE_V2_INVENTORY_FLOOR", "5")),
+        help="Private operational floor for qualifying V2 inventory (default 5)",
+    )
+    p.add_argument(
+        "--private-v2-target",
+        type=int,
+        default=int(os.environ.get("PRIVATE_V2_INVENTORY_TARGET", "10")),
+        help="Private operational replenishment target for qualifying V2 inventory (default 10)",
+    )
+    p.add_argument(
         "--meta-replenishment-target",
         type=int,
         default=int(os.environ.get("META_BOUNTY_REPLENISHMENT_TARGET", "2")),
@@ -186,6 +235,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Write Markdown report to this path",
+    )
+    p.add_argument(
+        "--private-json-out",
+        type=Path,
+        default=None,
+        help="Write the mechanism-specific operational report; never publish this artifact",
     )
     p.add_argument(
         "--fail-below",
@@ -381,11 +436,13 @@ def verified_claimable_entries(report: object) -> tuple[list[dict[str, Any]], bo
 
 def verified_open_competition_v2_entries(
     report: object,
+    *,
+    required: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     if not isinstance(report, dict):
         return [], False
     if "open_competition_v2_status" not in report:
-        return [], True
+        return [], not required
     if report.get("open_competition_v2_status") != "verified":
         return [], False
     items = report.get("verified_open_competition_v2_bounties")
@@ -534,6 +591,8 @@ def build_report(
     meta_replenishment_target: int,
     issues: list[dict[str, Any]],
     claimable_report: object = None,
+    private_v2_floor: int = 0,
+    private_v2_target: int = 0,
 ) -> InventoryReport:
     actionable: list[dict[str, Any]] = []
     excluded = 0
@@ -549,7 +608,8 @@ def build_report(
     issue_count = len(actionable)
     claimable, evidence_valid, protocol_status = verified_claimable_entries(claimable_report)
     open_competition_v2, v2_evidence_valid = verified_open_competition_v2_entries(
-        claimable_report
+        claimable_report,
+        required=private_v2_floor > 0 or private_v2_target > 0,
     )
     direct_block = (
         claimable_report.get("direct_chain_observed_block")
@@ -567,13 +627,40 @@ def build_report(
     missing = max(0, threshold - claimable_count)
     meta_missing = max(0, meta_threshold - meta_claimable_count)
     meta_replenishment = max(0, meta_replenishment_target - meta_claimable_count)
+    private_v2_count = len(open_competition_v2)
+    private_v2_safe_block = (
+        claimable_report.get("open_competition_v2_observed_safe_block")
+        if isinstance(claimable_report, dict)
+        else None
+    )
+    private_v2_release_hash = (
+        str(claimable_report.get("open_competition_v2_release_hash") or "").lower()
+        if isinstance(claimable_report, dict)
+        else ""
+    )
+    private_v2_factory_contract = (
+        str(claimable_report.get("open_competition_v2_factory_contract") or "").lower()
+        if isinstance(claimable_report, dict)
+        else ""
+    )
+    if private_v2_floor > 0 or private_v2_target > 0:
+        v2_evidence_valid = v2_evidence_valid and (
+            isinstance(private_v2_safe_block, int)
+            and not isinstance(private_v2_safe_block, bool)
+            and private_v2_safe_block > 0
+            and bool(BYTES32.fullmatch(private_v2_release_hash))
+            and bool(ADDRESS.fullmatch(private_v2_factory_contract))
+        )
+    private_v2_missing_to_floor = max(0, private_v2_floor - private_v2_count)
+    private_v2_missing_to_target = max(0, private_v2_target - private_v2_count)
+    private_v2_below_floor = not v2_evidence_valid or private_v2_missing_to_floor > 0
     meta_below = not evidence_valid or meta_claimable_count < meta_threshold
     below = not evidence_valid or claimable_count < threshold
-    if not evidence_valid:
+    if not evidence_valid or private_v2_below_floor:
         action = (
-            "Restore a fresh, active protocol and canonical inventory feed before "
-            "counting liquidity. Candidate issues cannot substitute for missing or "
-            "invalid on-chain evidence."
+            "Restore fresh canonical evidence and the reviewed earning-ready "
+            "inventory buffer before reporting liquidity healthy. Candidate issues "
+            "cannot substitute for funded on-chain opportunities."
         )
     elif claimable_count < threshold:
         action = (
@@ -614,6 +701,22 @@ def build_report(
         open_bounty_count=issue_count,
         verified_claimable_count=claimable_count,
         verified_open_competition_v2_count=len(open_competition_v2),
+        private_v2_floor=private_v2_floor,
+        private_v2_target=private_v2_target,
+        private_v2_missing_to_floor=private_v2_missing_to_floor,
+        private_v2_missing_to_target=private_v2_missing_to_target,
+        private_v2_below_floor=private_v2_below_floor,
+        private_v2_replenishment_required=(
+            v2_evidence_valid and private_v2_missing_to_target > 0
+        ),
+        private_v2_observed_safe_block=private_v2_safe_block,
+        private_v2_release_hash=private_v2_release_hash or None,
+        private_v2_factory_contract=private_v2_factory_contract or None,
+        private_inventory_observed_at=(
+            str(claimable_report.get("observed_at"))
+            if isinstance(claimable_report, dict) and claimable_report.get("observed_at")
+            else None
+        ),
         verified_meta_claimable_count=meta_claimable_count,
         missing_count=missing,
         meta_missing_count=meta_missing,
@@ -655,6 +758,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("meta-threshold must be >= 0")
     if args.meta_replenishment_target < args.meta_threshold:
         raise SystemExit("meta-replenishment-target must be >= meta-threshold")
+    if args.private_v2_floor < 0:
+        raise SystemExit("private-v2-floor must be >= 0")
+    if args.private_v2_target < args.private_v2_floor:
+        raise SystemExit("private-v2-target must be >= private-v2-floor")
 
     rpc_probe: dict[str, Any] | None = None
     if args.probe_rpc or (args.rpc_url and not args.fixture):
@@ -679,8 +786,11 @@ def main(argv: list[str] | None = None) -> int:
         args.meta_replenishment_target,
         issues,
         load_claimable_report(args.claimable_report),
+        args.private_v2_floor,
+        args.private_v2_target,
     )
-    payload = asdict(report)
+    private_payload = asdict(report)
+    payload = report.to_public_dict()
     if rpc_probe is not None:
         payload["base_rpc_probe"] = rpc_probe
     md = report.to_markdown()
@@ -695,8 +805,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.md_out:
         args.md_out.parent.mkdir(parents=True, exist_ok=True)
         args.md_out.write_text(md, encoding="utf-8")
+    if args.private_json_out:
+        args.private_json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.private_json_out.write_text(
+            json.dumps(private_payload, indent=2) + "\n", encoding="utf-8"
+        )
 
-    if args.fail_below and report.below_threshold:
+    if args.fail_below and (report.below_threshold or report.private_v2_below_floor):
         return 2
     return 0
 

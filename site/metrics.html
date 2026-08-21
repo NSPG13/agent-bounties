@@ -90,12 +90,12 @@
           <div><p class="metrics-kicker">Canonical payout ledger · public proof</p><h2 id="payout-audit-title">Verify every payout</h2></div>
           <div class="audit-verdict" aria-live="polite">
             <span class="source-state" data-audit-status data-status="loading">loading</span>
-            <p data-audit-copy>Loading both canonical event streams and recomputing the selected period.</p>
+            <p data-audit-copy>Loading the canonical marketplace event streams and recomputing the selected period.</p>
           </div>
         </div>
         <div class="audit-totals" aria-label="Payout audit reconciliation">
-          <article><span>Event sum</span><strong data-audit-total>—</strong><small>solver + verifier + completion bonus</small></article>
-          <article><span>Settlement events</span><strong data-audit-settlements>—</strong><small>confirmed <code>BountySettled</code> records</small></article>
+          <article><span>Event sum</span><strong data-audit-total>—</strong><small>solver + verifier or keeper + completion bonus</small></article>
+          <article><span>Settlement events</span><strong data-audit-settlements>—</strong><small>confirmed canonical settlement records</small></article>
           <article><span>All payout events</span><strong data-audit-payout-events>—</strong><small>settlements plus paid rejections</small></article>
         </div>
         <div class="audit-table-shell" tabindex="0" role="region" aria-label="Scrollable canonical payout event ledger">
@@ -183,16 +183,26 @@
           <p>Current availability is separate from historical payout and conversion cohorts.</p>
         </div>
         <dl class="inventory-ledger">
-          <div><dt>Ready to earn</dt><dd data-inventory-ready>—</dd></div>
-          <div><dt>Exclusive claim</dt><dd data-inventory-autonomous>—</dd></div>
-          <div><dt>Open competitions</dt><dd data-inventory-competitions>—</dd></div>
-          <div><dt>Verification ready</dt><dd data-inventory-verification>—</dd></div>
-          <div><dt>Standing meta-bounties</dt><dd data-inventory-standing>—</dd></div>
+          <div><dt>Active funded opportunities</dt><dd data-inventory-ready>—</dd></div>
           <div><dt>Currently funded</dt><dd data-inventory-funded>—</dd></div>
           <div><dt>Solver rewards</dt><dd data-inventory-solvers>—</dd></div>
           <div><dt>Verifier rewards</dt><dd data-inventory-verifiers>—</dd></div>
         </dl>
         <p class="inventory-status" data-inventory-status>Inventory is loading.</p>
+      </section>
+
+      <section class="inventory-section" aria-labelledby="demand-growth-title">
+        <div class="section-heading">
+          <div><p class="metrics-kicker">North star · rolling windows</p><h2 id="demand-growth-title">Marketplace demand growth</h2></div>
+          <p>GMV is confirmed canonical settlement volume. Wallet cohorts are directional participation, not unique people.</p>
+        </div>
+        <dl class="inventory-ledger">
+          <div><dt>28-day GMV</dt><dd data-gmv-28d>—</dd></div>
+          <div><dt>Externally funded GMV share</dt><dd data-non-operator-gmv-share>—</dd></div>
+          <div><dt>New poster/funder wallets</dt><dd data-new-poster-funder-wallets>—</dd></div>
+          <div><dt>Repeat poster/funder rate</dt><dd data-repeat-poster-funder-rate>—</dd></div>
+        </dl>
+        <p class="inventory-status" data-demand-growth-status>Demand-growth evidence is loading.</p>
       </section>
 
       <section class="comparison-section" aria-labelledby="comparison-title">
@@ -236,6 +246,7 @@
         <div class="definition-list">
           <details open><summary>What is an external active identity?</summary><p>One namespaced GitHub login, Base wallet, or normalized self-reported comment author with a qualifying action in the period. Namespaces are not merged, so this is participation—not verified unique people.</p></details>
           <details><summary>What counts as payout volume?</summary><p>Solver reward, verifier reward, and timeout completion bonus from every confirmed, block-time-verified <code>BountySettled</code> event across both live protocols, plus verifier pay from confirmed rejected-submission events. Recovery reservations affect future earning safety, never immutable payout history.</p></details>
+          <details><summary>What counts as GMV?</summary><p>Only confirmed canonical settlement events. Funding plans, approvals, deposits, transaction broadcasts, advisory verdicts, and rejected-submission verifier payments do not count as GMV.</p></details>
           <details><summary>What is a mature claimed round?</summary><p>An exclusive-claim <code>(network, bounty_id, round)</code> whose deadline has passed or that already has a terminal canonical event. Immature claims are shown separately. Open Competition has no exclusive claim and stays outside this cohort.</p></details>
           <details><summary>How are repository users counted?</summary><p>GitHub reports unique cloners and unique visitors for a rolling 14-day window. Both unique counts are shown as repository users, but GitHub does not expose their identities or overlap. They therefore remain separate and are not added to external active identities.</p></details>
           <details><summary>What is deliberately excluded?</summary><p>Bots, maintainers in the public policy, browser visitors, stars, repository traffic from active platform identity totals, returned claim bonds, refunds, funding intentions, unconfirmed transactions, leaderboard prizes, and private operational analytics.</p></details>

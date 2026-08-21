@@ -94,9 +94,9 @@ use db::{
     NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
     NewX402RelayAttempt, ObservedInterface, ObservedProtocolEra, OpenCompetitionEntrantRelay,
     OpenCompetitionEntrantRelayStatus, OpportunityComment as DbOpportunityComment,
-    OpportunityLifecycleStats, PlatformMetricsStats, PostgresStore, SiteAnalyticsStats,
-    SocialMentionIngestion, TrialBounty, UnfundedBountySolution, WebhookSubscription,
-    X402RelayAttempt, X402RelayStatus,
+    OpportunityLifecycleStats, PlatformDemandGrowthStats, PlatformMetricsStats, PostgresStore,
+    SiteAnalyticsStats, SocialMentionIngestion, TrialBounty, UnfundedBountySolution,
+    WebhookSubscription, X402RelayAttempt, X402RelayStatus,
 };
 use domain::{
     leaderboard_period, rank_solver_completions, Agent, AgentEligibilityDecision,
@@ -432,6 +432,8 @@ use worker::{
         ,OpportunityCommentsResponse
         ,OpportunityCommentResponse
         ,CreateOpportunityCommentRequest
+        ,OpportunityFeedbackRequest
+        ,OpportunityFeedbackResponse
         ,ChatgptActionKind
         ,CreateChatgptActionIntentRequest
         ,ObserveChatgptActionTransactionRequest
@@ -463,6 +465,7 @@ use worker::{
         ,PlatformPayoutMetricsResponse
         ,PlatformClaimCohortResponse
         ,PlatformInventoryResponse
+        ,PlatformDemandGrowthResponse
         ,PlatformDailyResponse
         ,PlatformCoverageResponse
         ,UnfundedBountyResponse
@@ -1628,15 +1631,24 @@ struct PlatformClaimCohortResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 struct PlatformInventoryResponse {
     status: String,
-    ready_to_earn_opportunities: Option<usize>,
-    autonomous_claimable_bounties: Option<usize>,
-    open_competitions_ready_to_earn: Option<usize>,
-    verification_ready_bounties: Option<usize>,
-    standing_meta_bounties: Option<usize>,
-    funded: Option<PlatformAmountResponse>,
-    solver_rewards: Option<PlatformAmountResponse>,
-    verifier_rewards: Option<PlatformAmountResponse>,
+    active_funded_opportunities: Option<usize>,
+    available_funding_usdc: Option<String>,
+    available_solver_rewards_usdc: Option<String>,
+    available_verifier_rewards_usdc: Option<String>,
     generated_at: Option<String>,
+    definition: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+struct PlatformDemandGrowthResponse {
+    gmv_usdc_7d: PlatformAmountResponse,
+    gmv_usdc_28d: PlatformAmountResponse,
+    lifetime_canonical_gmv_usdc: PlatformAmountResponse,
+    lifetime_canonical_payouts_usdc: PlatformAmountResponse,
+    new_poster_funder_wallets_28d: u64,
+    repeat_poster_funder_rate_28d: Option<f64>,
+    non_operator_funded_gmv_share_28d: Option<f64>,
+    funding_attribution_complete_28d: bool,
     definition: String,
 }
 
@@ -1651,9 +1663,7 @@ struct PlatformDailyResponse {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 struct PlatformCoverageResponse {
     status: String,
-    autonomous_indexer_fresh: bool,
-    open_competition_indexer_fresh: bool,
-    open_competition_v2_indexer_fresh: bool,
+    marketplace_indexers_fresh: bool,
     verified_canonical_events: u64,
     awaiting_block_time_events: u64,
     opportunity_comments: u64,
@@ -1675,6 +1685,7 @@ struct PlatformMetricsResponse {
     marketplace_payout_volume: PlatformPayoutMetricsResponse,
     mature_claim_to_settlement: PlatformClaimCohortResponse,
     current_inventory: PlatformInventoryResponse,
+    demand_growth: PlatformDemandGrowthResponse,
     daily: Vec<PlatformDailyResponse>,
     platform_revenue: PlatformAmountResponse,
     monetization_status: String,
@@ -3405,7 +3416,46 @@ struct OpportunityCommentResponse {
     opportunity_id: String,
     author: String,
     body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    feedback: Option<OpportunityFeedbackResponse>,
     created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+struct OpportunityFeedbackRequest {
+    stage: String,
+    #[serde(default)]
+    discovery_source: Option<String>,
+    #[serde(default)]
+    participation_reason: Option<String>,
+    #[serde(default)]
+    friction: Option<String>,
+    #[serde(default)]
+    recommendation: Option<String>,
+    #[serde(default)]
+    evidence_reference: Option<String>,
+    #[serde(default)]
+    wallet: Option<String>,
+    #[serde(default)]
+    wallet_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+struct OpportunityFeedbackResponse {
+    stage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    discovery_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    participation_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    friction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recommendation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_reference: Option<String>,
+    evidence_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_evidence_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -3423,6 +3473,8 @@ struct CreateOpportunityCommentRequest {
     id: Uuid,
     author: String,
     body: String,
+    #[serde(default)]
+    feedback: Option<OpportunityFeedbackRequest>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -3485,6 +3537,15 @@ async fn create_opportunity_comment(
     let opportunity_id = normalize_opportunity_comment_id(&opportunity_id)?;
     let author = bounded_public_text(&request.author, 60)?;
     let body = bounded_public_text(&request.body, 500)?;
+    let feedback = request
+        .feedback
+        .as_ref()
+        .map(normalize_opportunity_feedback)
+        .transpose()?;
+    let feedback = feedback
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
     let store = state
         .store
         .as_ref()
@@ -3495,6 +3556,7 @@ async fn create_opportunity_comment(
             opportunity_id: opportunity_id.clone(),
             author,
             body,
+            feedback,
         })
         .await
         .map_err(|error| match error {
@@ -3524,6 +3586,101 @@ fn normalize_opportunity_comment_id(value: &str) -> Result<String, StatusCode> {
     Ok(value.to_string())
 }
 
+fn optional_bounded_public_text(
+    value: &Option<String>,
+    max_chars: usize,
+) -> Result<Option<String>, StatusCode> {
+    value
+        .as_deref()
+        .map(|value| bounded_public_text(value, max_chars))
+        .transpose()
+}
+
+fn normalize_opportunity_feedback(
+    feedback: &OpportunityFeedbackRequest,
+) -> Result<OpportunityFeedbackRequest, StatusCode> {
+    const STAGES: &[&str] = &[
+        "discovery",
+        "posting",
+        "funding",
+        "activation",
+        "participation",
+        "wrong_mode",
+        "quote",
+        "payment_pending",
+        "proof_submission",
+        "settlement",
+        "cancellation",
+        "refund",
+    ];
+    let stage = feedback.stage.trim().to_ascii_lowercase();
+    if !STAGES.contains(&stage.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let discovery_source = optional_bounded_public_text(&feedback.discovery_source, 120)?;
+    let participation_reason = optional_bounded_public_text(&feedback.participation_reason, 500)?;
+    let friction = optional_bounded_public_text(&feedback.friction, 500)?;
+    let recommendation = optional_bounded_public_text(&feedback.recommendation, 500)?;
+    let evidence_reference = optional_bounded_public_text(&feedback.evidence_reference, 500)?;
+    if discovery_source.is_none()
+        && participation_reason.is_none()
+        && friction.is_none()
+        && recommendation.is_none()
+        && evidence_reference.is_none()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let wallet_pair = match (&feedback.wallet, &feedback.wallet_signature) {
+        (None, None) => (None, None),
+        (Some(wallet), Some(signature)) => {
+            let wallet = normalize_evm_address(wallet)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .to_ascii_lowercase();
+            let encoded = signature
+                .strip_prefix("0x")
+                .or_else(|| signature.strip_prefix("0X"))
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            if encoded.len() != 130 || !encoded.bytes().all(|value| value.is_ascii_hexdigit()) {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            (
+                Some(wallet),
+                Some(format!("0x{}", encoded.to_ascii_lowercase())),
+            )
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    Ok(OpportunityFeedbackRequest {
+        stage,
+        discovery_source,
+        participation_reason,
+        friction,
+        recommendation,
+        evidence_reference,
+        wallet: wallet_pair.0,
+        wallet_signature: wallet_pair.1,
+    })
+}
+
+fn public_opportunity_feedback(
+    value: Option<serde_json::Value>,
+) -> Option<OpportunityFeedbackResponse> {
+    let feedback: OpportunityFeedbackRequest = serde_json::from_value(value?).ok()?;
+    Some(OpportunityFeedbackResponse {
+        stage: feedback.stage,
+        discovery_source: feedback.discovery_source,
+        participation_reason: feedback.participation_reason,
+        friction: feedback.friction,
+        recommendation: feedback.recommendation,
+        evidence_reference: feedback.evidence_reference,
+        evidence_status: "self_reported".to_string(),
+        wallet_evidence_status: feedback
+            .wallet
+            .zip(feedback.wallet_signature)
+            .map(|_| "supplied_unverified".to_string()),
+    })
+}
+
 fn opportunity_comments_response(
     opportunity_id: String,
     comments: Vec<DbOpportunityComment>,
@@ -3537,15 +3694,16 @@ fn opportunity_comments_response(
             opportunity_id: comment.opportunity_id,
             author: comment.author,
             body: comment.body,
+            feedback: public_opportunity_feedback(comment.feedback),
             created_at: comment.created_at.to_rfc3339(),
         })
         .collect::<Vec<_>>();
     OpportunityCommentsResponse {
-        schema_version: "agent-bounties/opportunity-comments-v1".to_string(),
+        schema_version: "agent-bounties/opportunity-comments-v2".to_string(),
         opportunity_id,
         comment_count: comments.len(),
         comments,
-        evidence_boundary: "Comments are public conversation context only. They do not prove funding, claimability, verification, settlement, or payment.".to_string(),
+        evidence_boundary: "Comments and structured feedback are self-reported public context. Wallet material is redacted and remains unverified unless separately correlated with canonical participation. Neither a wallet nor a browser identifier is a unique person, and feedback does not prove funding, claimability, verification, settlement, or payment.".to_string(),
         share_after: true,
     }
 }
@@ -5199,39 +5357,42 @@ fn platform_inventory_response(
     match (autonomous, competition) {
         (Some(autonomous), Some(competition)) => Ok(PlatformInventoryResponse {
             status: "ready".to_string(),
-            ready_to_earn_opportunities: Some(
+            active_funded_opportunities: Some(
                 autonomous
                     .claimable_bounty_count
                     .checked_add(competition.ready_to_earn_count)
                     .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
             ),
-            autonomous_claimable_bounties: Some(autonomous.claimable_bounty_count),
-            open_competitions_ready_to_earn: Some(competition.ready_to_earn_count),
-            verification_ready_bounties: Some(
-                autonomous
-                    .verification_ready_bounty_count
-                    .checked_add(competition.ready_to_earn_count)
-                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
-            ),
-            standing_meta_bounties: Some(autonomous.standing_meta_bounty_count),
-            funded: Some(platform_amount(add_platform_base_units(
-                &autonomous.funded_usdc_base_units,
-                &competition.funded_usdc_base_units,
-            )?)?),
-            solver_rewards: Some(platform_amount(add_platform_base_units(
-                &autonomous.solver_reward_usdc_base_units,
-                &competition.solver_reward_usdc_base_units,
-            )?)?),
-            verifier_rewards: Some(platform_amount(add_platform_base_units(
-                &autonomous.verifier_reward_usdc_base_units,
-                &competition.verifier_reward_usdc_base_units,
-            )?)?),
+            available_funding_usdc: Some(exact_usdc(
+                add_platform_base_units(
+                    &autonomous.funded_usdc_base_units,
+                    &competition.funded_usdc_base_units,
+                )?
+                .parse::<u128>()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            )),
+            available_solver_rewards_usdc: Some(exact_usdc(
+                add_platform_base_units(
+                    &autonomous.solver_reward_usdc_base_units,
+                    &competition.solver_reward_usdc_base_units,
+                )?
+                .parse::<u128>()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            )),
+            available_verifier_rewards_usdc: Some(exact_usdc(
+                add_platform_base_units(
+                    &autonomous.verifier_reward_usdc_base_units,
+                    &competition.verifier_reward_usdc_base_units,
+                )?
+                .parse::<u128>()
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+            )),
             generated_at: Some(if autonomous.generated_at <= competition.generated_at {
                 autonomous.generated_at
             } else {
                 competition.generated_at
             }),
-            definition: "Current ready-to-earn inventory combines the canonical exclusive-claim feed with active Open Competition entries. It is a point-in-time projection and is not added to historical payout or conversion cohorts.".to_string(),
+            definition: "Current funded opportunities are reported as one marketplace total. The point-in-time projection is not added to historical payout or conversion cohorts.".to_string(),
         }),
         (autonomous, competition) => Ok(PlatformInventoryResponse {
             status: if autonomous.is_some() || competition.is_some() {
@@ -5240,20 +5401,12 @@ fn platform_inventory_response(
                 "unavailable"
             }
             .to_string(),
-            ready_to_earn_opportunities: None,
-            autonomous_claimable_bounties: autonomous
-                .as_ref()
-                .map(|summary| summary.claimable_bounty_count),
-            open_competitions_ready_to_earn: competition
-                .as_ref()
-                .map(|summary| summary.ready_to_earn_count),
-            verification_ready_bounties: None,
-            standing_meta_bounties: None,
-            funded: None,
-            solver_rewards: None,
-            verifier_rewards: None,
+            active_funded_opportunities: None,
+            available_funding_usdc: None,
+            available_solver_rewards_usdc: None,
+            available_verifier_rewards_usdc: None,
             generated_at: None,
-            definition: "One or both canonical inventory protocols could not be read. Historical metrics remain available, observed protocol counts stay separated, and combined inventory values are not silently replaced with a lower total or zero.".to_string(),
+            definition: "One or more canonical inventory sources could not be read. Historical metrics remain available, and unified inventory is not silently replaced with a lower total or zero.".to_string(),
         }),
     }
 }
@@ -5272,6 +5425,7 @@ fn add_platform_base_units(left: &str, right: &str) -> Result<String, StatusCode
 
 fn platform_metrics_response(
     stats: PlatformMetricsStats,
+    growth: PlatformDemandGrowthStats,
     window: PlatformMetricWindow,
     policy: PublicMetricsPolicy,
     autonomous_inventory: Option<AutonomousBountyInventorySummary>,
@@ -5290,6 +5444,39 @@ fn platform_metrics_response(
         "partial"
     };
     let inventory = platform_inventory_response(autonomous_inventory, competition_inventory)?;
+    let lifetime_canonical_payouts =
+        platform_amount(stats.payouts.lifetime_total_base_units.clone())?;
+    let total_gmv_28d = growth
+        .gmv_28d_base_units
+        .parse::<f64>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let attributed_gmv_28d = growth
+        .attributed_gmv_28d_base_units
+        .parse::<f64>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let non_operator_gmv_28d = growth
+        .non_operator_attributed_gmv_28d_base_units
+        .parse::<f64>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !total_gmv_28d.is_finite()
+        || !attributed_gmv_28d.is_finite()
+        || !non_operator_gmv_28d.is_finite()
+        || total_gmv_28d < 0.0
+        || attributed_gmv_28d < 0.0
+        || non_operator_gmv_28d < 0.0
+        || attributed_gmv_28d > total_gmv_28d
+        || non_operator_gmv_28d > attributed_gmv_28d
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let funding_attribution_complete_28d = (attributed_gmv_28d - total_gmv_28d).abs() < 0.5;
+    let non_operator_funded_gmv_share_28d = (funding_attribution_complete_28d
+        && total_gmv_28d > 0.0)
+        .then_some(non_operator_gmv_28d / total_gmv_28d);
+    let repeat_poster_funder_rate_28d = (growth.active_poster_funder_wallets_28d > 0).then(|| {
+        growth.repeat_poster_funder_wallets_28d as f64
+            / growth.active_poster_funder_wallets_28d as f64
+    });
     let mut definitions = BTreeMap::new();
     definitions.insert(
         "external_active_identities".to_string(),
@@ -5309,7 +5496,7 @@ fn platform_metrics_response(
     );
 
     Ok(PlatformMetricsResponse {
-        schema_version: "agent-bounties/platform-metrics-v1".to_string(),
+        schema_version: "agent-bounties/platform-metrics-v3".to_string(),
         network: "base-mainnet".to_string(),
         generated_at: stats.generated_at.to_rfc3339(),
         window: PlatformMetricsWindowResponse {
@@ -5372,6 +5559,17 @@ fn platform_metrics_response(
             definition: definitions["mature_claim_to_settlement"].clone(),
         },
         current_inventory: inventory,
+        demand_growth: PlatformDemandGrowthResponse {
+            gmv_usdc_7d: platform_amount(growth.gmv_7d_base_units)?,
+            gmv_usdc_28d: platform_amount(growth.gmv_28d_base_units)?,
+            lifetime_canonical_gmv_usdc: platform_amount(growth.lifetime_gmv_base_units)?,
+            lifetime_canonical_payouts_usdc: lifetime_canonical_payouts,
+            new_poster_funder_wallets_28d: growth.new_poster_funder_wallets_28d,
+            repeat_poster_funder_rate_28d,
+            non_operator_funded_gmv_share_28d,
+            funding_attribution_complete_28d,
+            definition: "GMV counts confirmed canonical settlement events only. New and repeat poster/funder figures use non-operator wallets, not unique people. Non-operator-funded GMV is prorated by canonical FundingAdded amounts and withheld when any settled GMV lacks complete funding attribution.".to_string(),
+        },
         daily: stats
             .daily
             .into_iter()
@@ -5388,9 +5586,7 @@ fn platform_metrics_response(
         monetization_status: "monetization not active".to_string(),
         coverage: PlatformCoverageResponse {
             status: coverage_status.to_string(),
-            autonomous_indexer_fresh: source_freshness.autonomous,
-            open_competition_indexer_fresh: source_freshness.open_competition,
-            open_competition_v2_indexer_fresh: source_freshness.open_competition_v2,
+            marketplace_indexers_fresh: source_freshness.complete(),
             verified_canonical_events: stats.coverage.verified_canonical_events,
             awaiting_block_time_events: stats.coverage.awaiting_block_time_events,
             opportunity_comments: stats.coverage.opportunity_comments,
@@ -5524,6 +5720,16 @@ async fn platform_metrics(
         )
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let growth = store
+        .platform_demand_growth_stats(
+            "base-mainnet",
+            window.ended_at,
+            window.launch_at,
+            &policy.maintainer_wallets,
+            &excluded_contracts,
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let source_freshness = platform_canonical_source_freshness(&state, stats.generated_at).await;
     let autonomous_inventory = if source_freshness.autonomous {
         match load_verified_autonomous_bounty_feed(&state, "base-mainnet", true).await {
@@ -5542,6 +5748,7 @@ async fn platform_metrics(
     };
     let response = platform_metrics_response(
         stats,
+        growth,
         window,
         policy,
         autonomous_inventory,
@@ -19500,6 +19707,64 @@ mod tests {
     }
 
     #[test]
+    fn opportunity_feedback_is_bounded_and_wallet_material_is_redacted() {
+        let request = OpportunityFeedbackRequest {
+            stage: " Funding ".to_string(),
+            discovery_source: Some("MCP scanner".to_string()),
+            participation_reason: None,
+            friction: Some("The canonical activation condition was unclear.".to_string()),
+            recommendation: Some("Show a safe-block activation receipt.".to_string()),
+            evidence_reference: Some("canonical:base-mainnet:0xabc".to_string()),
+            wallet: Some("0x1111111111111111111111111111111111111111".to_string()),
+            wallet_signature: Some(format!("0x{}", "22".repeat(65))),
+        };
+        let normalized = normalize_opportunity_feedback(&request).unwrap();
+        assert_eq!(normalized.stage, "funding");
+        let public =
+            public_opportunity_feedback(Some(serde_json::to_value(normalized).unwrap())).unwrap();
+        assert_eq!(public.evidence_status, "self_reported");
+        assert_eq!(
+            public.wallet_evidence_status.as_deref(),
+            Some("supplied_unverified")
+        );
+        let serialized = serde_json::to_string(&public).unwrap();
+        assert!(!serialized.contains("0x1111111111111111111111111111111111111111"));
+        assert!(!serialized.contains(&"22".repeat(65)));
+    }
+
+    #[test]
+    fn opportunity_feedback_rejects_invalid_stage_empty_direction_and_partial_wallet_proof() {
+        let base = OpportunityFeedbackRequest {
+            stage: "posting".to_string(),
+            discovery_source: None,
+            participation_reason: None,
+            friction: Some("Funding sequence took too many steps.".to_string()),
+            recommendation: None,
+            evidence_reference: None,
+            wallet: None,
+            wallet_signature: None,
+        };
+        let mut invalid_stage = base.clone();
+        invalid_stage.stage = "traffic".to_string();
+        assert_eq!(
+            normalize_opportunity_feedback(&invalid_stage),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let mut empty = base.clone();
+        empty.friction = None;
+        assert_eq!(
+            normalize_opportunity_feedback(&empty),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let mut partial_wallet = base;
+        partial_wallet.wallet = Some("0x1111111111111111111111111111111111111111".to_string());
+        assert_eq!(
+            normalize_opportunity_feedback(&partial_wallet),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
     fn platform_metric_windows_use_exact_launch_and_first_month_boundaries() {
         let ended_at = parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap();
         let seven_days = platform_metric_window(Some("7d"), ended_at).unwrap();
@@ -19527,6 +19792,19 @@ mod tests {
             platform_metric_window(Some("30d"), ended_at),
             Err(StatusCode::BAD_REQUEST)
         );
+    }
+
+    fn test_platform_demand_growth_stats() -> PlatformDemandGrowthStats {
+        PlatformDemandGrowthStats {
+            gmv_7d_base_units: "1000000".to_string(),
+            gmv_28d_base_units: "1200000".to_string(),
+            lifetime_gmv_base_units: "1200000".to_string(),
+            new_poster_funder_wallets_28d: 2,
+            active_poster_funder_wallets_28d: 4,
+            repeat_poster_funder_wallets_28d: 1,
+            non_operator_attributed_gmv_28d_base_units: "600000".to_string(),
+            attributed_gmv_28d_base_units: "1200000".to_string(),
+        }
     }
 
     #[test]
@@ -19587,6 +19865,7 @@ mod tests {
         policy.maintainer_wallets = vec!["0x1111111111111111111111111111111111111111".to_string()];
         let response = platform_metrics_response(
             stats,
+            test_platform_demand_growth_stats(),
             platform_metric_window(Some("7d"), generated_at).unwrap(),
             policy,
             None,
@@ -19600,6 +19879,10 @@ mod tests {
         .unwrap();
         let json = serde_json::to_string(&response).unwrap();
 
+        assert_eq!(
+            response.schema_version,
+            "agent-bounties/platform-metrics-v3"
+        );
         assert_eq!(response.marketplace_payout_volume.selected.usdc, "1.250000");
         assert_eq!(
             response.marketplace_payout_volume.selected_keeper_pay.usdc,
@@ -19619,10 +19902,25 @@ mod tests {
             1
         );
         assert_eq!(response.current_inventory.status, "unavailable");
+        assert_eq!(response.demand_growth.gmv_usdc_7d.usdc, "1.000000");
+        assert_eq!(
+            response.demand_growth.repeat_poster_funder_rate_28d,
+            Some(0.25)
+        );
+        assert_eq!(
+            response.demand_growth.non_operator_funded_gmv_share_28d,
+            Some(0.5)
+        );
         assert_eq!(response.coverage.status, "partial");
+        assert!(response.coverage.marketplace_indexers_fresh);
         assert!(!response.coverage.github_included);
         assert!(!json.contains("private-maintainer-login"));
         assert!(!json.contains("0x1111111111111111111111111111111111111111"));
+        assert!(!json.contains("open_competition_v2_indexer_fresh"));
+        assert!(!json.contains("open_competition_indexer_fresh"));
+        assert!(!json.contains("autonomous_indexer_fresh"));
+        assert!(!json.contains("standing_meta"));
+        assert!(!json.contains("verified_open_competition_v2"));
     }
 
     #[test]
@@ -19655,17 +19953,21 @@ mod tests {
             platform_inventory_response(Some(autonomous.clone()), Some(competition)).unwrap();
 
         assert_eq!(combined.status, "ready");
-        assert_eq!(combined.ready_to_earn_opportunities, Some(3));
-        assert_eq!(combined.autonomous_claimable_bounties, Some(2));
-        assert_eq!(combined.open_competitions_ready_to_earn, Some(1));
-        assert_eq!(combined.funded.unwrap().usdc, "4.200000");
+        assert_eq!(combined.active_funded_opportunities, Some(3));
+        assert_eq!(combined.available_funding_usdc.as_deref(), Some("4.200000"));
+        assert_eq!(
+            combined.available_solver_rewards_usdc.as_deref(),
+            Some("3.400000")
+        );
+        let combined_json = serde_json::to_string(&combined).unwrap();
+        assert!(!combined_json.contains("autonomous_claimable_bounties"));
+        assert!(!combined_json.contains("open_competitions_ready_to_earn"));
+        assert!(!combined_json.contains("standing_meta_bounties"));
 
         let partial = platform_inventory_response(Some(autonomous), None).unwrap();
         assert_eq!(partial.status, "partial");
-        assert_eq!(partial.autonomous_claimable_bounties, Some(2));
-        assert_eq!(partial.open_competitions_ready_to_earn, None);
-        assert_eq!(partial.ready_to_earn_opportunities, None);
-        assert!(partial.funded.is_none());
+        assert_eq!(partial.active_funded_opportunities, None);
+        assert!(partial.available_funding_usdc.is_none());
     }
 
     #[test]
@@ -19716,6 +20018,16 @@ mod tests {
                         latest_verified_event_at: None,
                         latest_comment_at: None,
                     },
+                },
+                PlatformDemandGrowthStats {
+                    gmv_7d_base_units: "0".to_string(),
+                    gmv_28d_base_units: "0".to_string(),
+                    lifetime_gmv_base_units: "0".to_string(),
+                    new_poster_funder_wallets_28d: 0,
+                    active_poster_funder_wallets_28d: 0,
+                    repeat_poster_funder_wallets_28d: 0,
+                    non_operator_attributed_gmv_28d_base_units: "0".to_string(),
+                    attributed_gmv_28d_base_units: "0".to_string(),
                 },
                 platform_metric_window(
                     Some("7d"),
@@ -19787,6 +20099,12 @@ mod tests {
         assert!(paths.contains_key("/v1/github/bounty-discovery-v1"));
         assert!(paths.contains_key("/v1/opportunities/stream"));
         assert!(paths.contains_key("/v1/opportunities/{opportunity_id}/comments"));
+        assert!(value["components"]["schemas"]
+            .get("OpportunityFeedbackRequest")
+            .is_some());
+        assert!(value["components"]["schemas"]
+            .get("PlatformDemandGrowthResponse")
+            .is_some());
         assert!(paths.contains_key("/v1/opportunities/feed.rss"));
         assert!(paths.contains_key("/v1/opportunities/feed.atom"));
         assert!(paths.contains_key("/v1/opportunities/feed.json"));

@@ -10,6 +10,7 @@
   const PLATFORM_URL = "https://api.agentbounties.app/v1/metrics/platform";
   const AUTONOMOUS_EVENTS_URL = "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet";
   const COMPETITION_EVENTS_URL = "https://api.agentbounties.app/v1/base/open-competition-v1/events?network=base-mainnet";
+  const COMPETITION_V2_EVENTS_URL = "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/events?network=base-mainnet";
   const BASESCAN_TX_URL = "https://basescan.org/tx/";
   const GITHUB_URL = "generated/github-participation.json";
   const ACQUISITION_URL = "https://api.agentbounties.app/v1/analytics/site";
@@ -140,7 +141,7 @@
     return Number.isSafeInteger(amount) && amount > 0 ? amount : 0;
   }
 
-  function canonicalPayoutRows(autonomousResponse, competitionResponse, window) {
+  function canonicalPayoutRows(autonomousResponse, competitionResponse, competitionV2Response, window) {
     const startedAt = Date.parse(window?.started_at || "");
     const endedAt = Date.parse(window?.ended_at || "");
     if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return [];
@@ -150,6 +151,9 @@
         protocolKey: "autonomous-v1",
         events: Array.isArray(autonomousResponse) ? autonomousResponse : [],
         eventUrl: AUTONOMOUS_EVENTS_URL,
+        settledKind: "bounty_settled",
+        settledSecondaryAmount: "verifier_reward",
+        settledSecondaryRole: "verifier",
         rejectedKind: "submission_rejected",
         rejectedAmount: "verifier_reward",
       },
@@ -158,28 +162,45 @@
         protocolKey: "open-competition-v1",
         events: Array.isArray(competitionResponse?.events) ? competitionResponse.events : [],
         eventUrl: COMPETITION_EVENTS_URL,
+        settledKind: "bounty_settled",
+        settledSecondaryAmount: "verifier_reward",
+        settledSecondaryRole: "verifier",
         rejectedKind: "competition_submission_rejected",
         rejectedAmount: "bond_paid_to_verifier",
+      },
+      {
+        protocol: "Open competition",
+        protocolKey: "open-competition-v2",
+        events: Array.isArray(competitionV2Response?.events) ? competitionV2Response.events : [],
+        eventUrl: COMPETITION_V2_EVENTS_URL,
+        settledKind: "competition_settled",
+        settledSecondaryAmount: "keeper_reward",
+        settledSecondaryRole: "keeper",
+        rejectedKind: null,
+        rejectedAmount: null,
       },
     ];
     const rows = [];
     sources.forEach((source) => {
       source.events.forEach((event) => {
         const occurredAt = Date.parse(event?.occurred_at || "");
-        const settled = event?.kind === "bounty_settled";
+        const settled = event?.kind === source.settledKind;
         const rejected = event?.kind === source.rejectedKind;
         if ((!settled && !rejected) || !Number.isFinite(occurredAt)
           || occurredAt < startedAt || occurredAt >= endedAt) return;
         const solver = settled ? nonNegativeBaseUnits(event.data?.solver_reward) : 0;
-        const verifier = settled
-          ? nonNegativeBaseUnits(event.data?.verifier_reward)
+        const secondary = settled
+          ? nonNegativeBaseUnits(event.data?.[source.settledSecondaryAmount])
           : nonNegativeBaseUnits(event.data?.[source.rejectedAmount]);
+        const verifier = source.settledSecondaryRole === "keeper" ? 0 : secondary;
+        const keeper = source.settledSecondaryRole === "keeper" ? secondary : 0;
         const bonus = settled ? nonNegativeBaseUnits(event.data?.timeout_bond_bonus) : 0;
         rows.push({
           protocol: source.protocol,
           protocol_key: source.protocolKey,
           kind: event.kind,
           event_label: settled ? "Settlement" : "Rejected submission payout",
+          is_settlement: settled,
           contract_address: String(event.contract_address || ""),
           bounty_id: String(event.bounty_id || ""),
           round: event.data?.round ?? event.data?.submission_sequence ?? null,
@@ -189,8 +210,9 @@
           occurred_at: String(event.occurred_at || ""),
           solver_base_units: solver,
           verifier_base_units: verifier,
+          keeper_base_units: keeper,
           bonus_base_units: bonus,
-          total_base_units: solver + verifier + bonus,
+          total_base_units: solver + verifier + keeper + bonus,
           api_url: `${source.eventUrl}&bounty_id=${encodeURIComponent(String(event.bounty_id || ""))}`,
           explorer_url: `${BASESCAN_TX_URL}${encodeURIComponent(String(event.tx_hash || ""))}#eventlog`,
         });
@@ -204,9 +226,10 @@
   function payoutAuditSummary(rows) {
     return (Array.isArray(rows) ? rows : []).reduce((summary, row) => {
       summary.payout_events += 1;
-      summary.settlement_events += row.kind === "bounty_settled" ? 1 : 0;
+      summary.settlement_events += row.is_settlement ? 1 : 0;
       summary.solver_base_units += nonNegativeBaseUnits(row.solver_base_units);
       summary.verifier_base_units += nonNegativeBaseUnits(row.verifier_base_units);
+      summary.keeper_base_units += nonNegativeBaseUnits(row.keeper_base_units);
       summary.bonus_base_units += nonNegativeBaseUnits(row.bonus_base_units);
       summary.total_base_units += nonNegativeBaseUnits(row.total_base_units);
       return summary;
@@ -215,6 +238,7 @@
       settlement_events: 0,
       solver_base_units: 0,
       verifier_base_units: 0,
+      keeper_base_units: 0,
       bonus_base_units: 0,
       total_base_units: 0,
     });
@@ -398,6 +422,7 @@
       platform: null,
       autonomousEvents: null,
       competitionEvents: null,
+      competitionV2Events: null,
       github: null,
       acquisition: null,
       errors: {},
@@ -425,12 +450,13 @@
     }
 
     function payoutAuditSnapshot(platform) {
-      if (!platform || !state.autonomousEvents || !state.competitionEvents) {
+      if (!platform || !state.autonomousEvents || !state.competitionEvents || !state.competitionV2Events) {
         return { status: "unavailable", rows: [], summary: payoutAuditSummary([]), generated_at: null };
       }
       const rows = canonicalPayoutRows(
         state.autonomousEvents,
         state.competitionEvents,
+        state.competitionV2Events,
         platform.window,
       );
       const summary = payoutAuditSummary(rows);
@@ -675,6 +701,7 @@
       const payout = platform?.marketplace_payout_volume;
       const cohort = platform?.mature_claim_to_settlement;
       const inventory = platform?.current_inventory;
+      const demandGrowth = platform?.demand_growth;
       const acquisitionStatus = sourceStatus(
         state.acquisition ? { generated_at: state.acquisition.generated_at, status: "ready" } : null,
         now,
@@ -729,15 +756,36 @@
       renderPayoutAudit(audit);
 
       const inventoryReady = inventory?.status === "ready";
-      setText("[data-inventory-ready]", inventoryReady ? formatInteger(inventory.ready_to_earn_opportunities) : "—");
-      setText("[data-inventory-autonomous]", inventoryReady ? formatInteger(inventory.autonomous_claimable_bounties) : "—");
-      setText("[data-inventory-competitions]", inventoryReady ? formatInteger(inventory.open_competitions_ready_to_earn) : "—");
-      setText("[data-inventory-verification]", inventoryReady ? formatInteger(inventory.verification_ready_bounties) : "—");
-      setText("[data-inventory-standing]", inventoryReady ? formatInteger(inventory.standing_meta_bounties) : "—");
-      setText("[data-inventory-funded]", inventoryReady ? amount(inventory.funded) : "—");
-      setText("[data-inventory-solvers]", inventoryReady ? amount(inventory.solver_rewards) : "—");
-      setText("[data-inventory-verifiers]", inventoryReady ? amount(inventory.verifier_rewards) : "—");
-      setText("[data-inventory-status]", inventoryReady ? `Both canonical inventory protocols checked at ${new Date(inventory.generated_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.` : "Inventory is partial or unavailable; historical values remain visible and combined inventory is not replaced with a lower total or zero.");
+      setText("[data-inventory-ready]", inventoryReady ? formatInteger(inventory.active_funded_opportunities) : "—");
+      setText("[data-inventory-funded]", inventoryReady ? formatUsdc(inventory.available_funding_usdc) : "—");
+      setText("[data-inventory-solvers]", inventoryReady ? formatUsdc(inventory.available_solver_rewards_usdc) : "—");
+      setText("[data-inventory-verifiers]", inventoryReady ? formatUsdc(inventory.available_verifier_rewards_usdc) : "—");
+      setText("[data-inventory-status]", inventoryReady ? `All required canonical inventory sources checked at ${new Date(inventory.generated_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.` : "Inventory is partial or unavailable; historical values remain visible and the unified total is not replaced with a lower value or zero.");
+      setText("[data-gmv-28d]", demandGrowth ? amount(demandGrowth.gmv_usdc_28d) : "—");
+      setText(
+        "[data-non-operator-gmv-share]",
+        demandGrowth?.non_operator_funded_gmv_share_28d == null
+          ? "—"
+          : formatPercent(demandGrowth.non_operator_funded_gmv_share_28d),
+      );
+      setText(
+        "[data-new-poster-funder-wallets]",
+        demandGrowth ? formatInteger(demandGrowth.new_poster_funder_wallets_28d) : "—",
+      );
+      setText(
+        "[data-repeat-poster-funder-rate]",
+        demandGrowth?.repeat_poster_funder_rate_28d == null
+          ? "—"
+          : formatPercent(demandGrowth.repeat_poster_funder_rate_28d),
+      );
+      setText(
+        "[data-demand-growth-status]",
+        !demandGrowth
+          ? "Demand-growth evidence is unavailable."
+          : demandGrowth.funding_attribution_complete_28d
+            ? "GMV uses confirmed canonical settlements; funding share uses canonically attributed contribution amounts."
+            : "GMV is available, but the externally funded share is withheld because funding attribution is incomplete.",
+      );
 
       setText("[data-first-month-identities]", platform ? `${formatInteger(merged.first_month_identities)}${activeSuffix}` : "—");
       setText("[data-lifetime-identities]", platform ? `${formatInteger(merged.lifetime_identities)}${activeSuffix}` : "—");
@@ -791,10 +839,11 @@
     }
 
     async function refreshPlatform() {
-      const [platformResult, autonomousResult, competitionResult] = await Promise.allSettled([
+      const [platformResult, autonomousResult, competitionResult, competitionV2Result] = await Promise.allSettled([
         requestJson(`${PLATFORM_URL}?period=${encodeURIComponent(state.period)}`),
         requestJson(AUTONOMOUS_EVENTS_URL),
         requestJson(COMPETITION_EVENTS_URL),
+        requestJson(COMPETITION_V2_EVENTS_URL),
       ]);
       if (platformResult.status === "fulfilled") {
         state.platform = platformResult.value;
@@ -816,6 +865,13 @@
       } else {
         state.competitionEvents = null;
         state.errors.competitionEvents = competitionResult.reason;
+      }
+      if (competitionV2Result.status === "fulfilled") {
+        state.competitionV2Events = competitionV2Result.value;
+        delete state.errors.competitionV2Events;
+      } else {
+        state.competitionV2Events = null;
+        state.errors.competitionV2Events = competitionV2Result.reason;
       }
       render();
     }

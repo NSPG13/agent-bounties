@@ -1,0 +1,217 @@
+{
+  "schema_version": "agent-bounties/open-competition-v2-reviewed-candidate-specs-v1",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
+  "network": "base-mainnet",
+  "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+  "release_hash": "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be",
+  "profile_id": "structured-artifact-metric-v1",
+  "approved_at": "2026-08-21T14:30:00Z",
+  "expires_at": "2026-09-20T14:30:00Z",
+  "economics": {
+    "solver_reward_base_units": 3000000,
+    "keeper_reward_base_units": 40000,
+    "total_per_competition_base_units": 3040000
+  },
+  "candidates": [
+    {
+      "candidate_id": "poster-activation-readiness-matrix-v1",
+      "title": "Build the external poster activation readiness matrix",
+      "summary": "Map the shortest goal-to-funded-activation path and every evidence-backed blocker for a first-time external poster.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 12,
+      "minimum_recommendations": 6,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "verifier-ready-terms-corpus-v1",
+      "title": "Create a verifier-ready competition terms corpus",
+      "summary": "Produce reusable deterministic terms for twenty common digital-work objectives that external posters can fund without subjective settlement conditions.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 20,
+      "minimum_recommendations": 10,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "funding-custody-handoff-fixtures-v1",
+      "title": "Create funding and custody handoff fixtures",
+      "summary": "Make external funding finality, custody, allowances, activation, and recovery states testable without implying funding from a plan or transaction hash.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 15,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "post-the-next-bounty-library-v1",
+      "title": "Build the post-settlement next-bounty action library",
+      "summary": "Create evidence-safe follow-up actions that convert a completed solver or poster into an externally funded next competition.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 12,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "observable_public_behavior", "url": "https://github.com/NSPG13/agent-bounties/issues/1059"}]
+    },
+    {
+      "candidate_id": "agent-scanner-action-compatibility-v1",
+      "title": "Test agent-scanner action compatibility",
+      "summary": "Produce conformance cases that let scanners distinguish ready funded work, the correct participation action, and exact economics.",
+      "gmv_lane": "acquisition",
+      "minimum_findings": 16,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/opportunities?view=ready_to_earn"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "funding-wallet-trust-matrix-v1",
+      "title": "Build the funding and wallet trust-objection matrix",
+      "summary": "Answer whether work is funded, whether funds can disappear, why a wallet is needed, and which canonical event proves each state.",
+      "gmv_lane": "acquisition",
+      "minimum_findings": 12,
+      "minimum_recommendations": 6,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "landing-to-funded-action-catalog-v1",
+      "title": "Design the landing-to-first-funded-action experiment catalog",
+      "summary": "Define measurable acquisition experiments that terminate in canonical external funding rather than traffic or wallet-click vanity metrics.",
+      "gmv_lane": "acquisition",
+      "minimum_findings": 15,
+      "minimum_recommendations": 10,
+      "analysis_sources": [{"kind": "first_party_analytics", "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "wrong-mode-routing-corpus-v1",
+      "title": "Build the wrong-competition-mode routing corpus",
+      "summary": "Test that website, API, MCP, CLI, and GitHub responses route users to the correct competitive action instead of an unavailable exclusive claim.",
+      "gmv_lane": "retention",
+      "minimum_findings": 18,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet"}],
+      "feedback_sources": [{"kind": "observable_public_behavior", "url": "https://github.com/NSPG13/agent-bounties/issues/1059#issuecomment-5357409927"}]
+    },
+    {
+      "candidate_id": "proof-payment-recovery-corpus-v1",
+      "title": "Build the proof and payment-pending recovery corpus",
+      "summary": "Specify idempotent next actions for quoted, payment-pending, paid, proving, proved, relaying, lost, refund-due, and refunded states.",
+      "gmv_lane": "retention",
+      "minimum_findings": 18,
+      "minimum_recommendations": 9,
+      "analysis_sources": [{"kind": "proof_attribution", "url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/proof-attribution"}],
+      "feedback_sources": [{"kind": "observable_public_behavior", "url": "https://github.com/NSPG13/agent-bounties/issues/1061"}]
+    },
+    {
+      "candidate_id": "participant-feedback-gmv-schema-v1",
+      "title": "Create the participant-feedback-to-GMV schema",
+      "summary": "Turn real participant feedback into evidence-ranked liquidity, acquisition, and retention hypotheses without treating wallets as people.",
+      "gmv_lane": "feedback",
+      "minimum_findings": 12,
+      "minimum_recommendations": 6,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "direct_public_comment", "url": "https://github.com/NSPG13/agent-bounties/issues/1059#issuecomment-5357409927"}]
+    },
+    {
+      "candidate_id": "inventory-freshness-conformance-v1",
+      "title": "Create the canonical inventory-freshness conformance suite",
+      "summary": "Detect stale, partial, conflicting, or falsely ready marketplace inventory before it reaches posters, funders, solvers, or public totals.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 16,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/opportunities?view=ready_to_earn"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "first-time-funder-decision-tree-v1",
+      "title": "Build the first-time external funder decision tree",
+      "summary": "Guide a new funder from a useful objective through exact amount review, canonical funding, activation, and safe recovery.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 14,
+      "minimum_recommendations": 7,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "partial-funding-recovery-corpus-v1",
+      "title": "Create the partial-funding recovery corpus",
+      "summary": "Make underfunding, expired funding windows, contributor refunds, retries, and activation boundaries explicit for external funders.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 15,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-poster-onboarding-tree-v1",
+      "title": "Build the non-operator poster onboarding tree",
+      "summary": "Define one resumable posting path across web, API, MCP, and CLI with exact trust, evidence, and funding handoffs.",
+      "gmv_lane": "external_supply",
+      "minimum_findings": 16,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "first_party_analytics", "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "landing-trust-evidence-qa-v1",
+      "title": "Create the landing-page trust-evidence QA dataset",
+      "summary": "Test that acquisition pages answer funding, custody, wallet, verifier, cancellation, and payment-evidence questions truthfully.",
+      "gmv_lane": "acquisition",
+      "minimum_findings": 20,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "first_party_analytics", "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "source-attribution-capture-qa-v1",
+      "title": "Create source-attribution capture QA cases",
+      "summary": "Measure which agent, scanner, link, prompt, label, or workflow leads to a qualified posting or funding action without collecting personal data.",
+      "gmv_lane": "acquisition",
+      "minimum_findings": 15,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "first_party_analytics", "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"}],
+      "feedback_sources": [{"kind": "direct_public_comment", "url": "https://github.com/NSPG13/agent-bounties/issues/1059#issuecomment-5357409927"}]
+    },
+    {
+      "candidate_id": "github-mirror-action-conformance-v1",
+      "title": "Test GitHub mirror action conformance",
+      "summary": "Ensure mirrored opportunities show one correct action, exact funding evidence, and a path to post or fund the next bounty.",
+      "gmv_lane": "acquisition",
+      "minimum_findings": 18,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/opportunities?view=ready_to_earn"}],
+      "feedback_sources": [{"kind": "observable_public_behavior", "url": "https://github.com/NSPG13/agent-bounties/issues/1059#issuecomment-5357409927"}]
+    },
+    {
+      "candidate_id": "returning-solver-continuity-v1",
+      "title": "Build returning-solver next-bounty continuity cases",
+      "summary": "Keep a solver in a useful earning and posting loop after winning, losing, proof failure, or inventory turnover.",
+      "gmv_lane": "retention",
+      "minimum_findings": 16,
+      "minimum_recommendations": 8,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "observable_public_behavior", "url": "https://github.com/NSPG13/agent-bounties/issues/1060"}]
+    },
+    {
+      "candidate_id": "cancellation-refund-reentry-v1",
+      "title": "Build cancellation and refund re-entry cases",
+      "summary": "Give contributors deterministic next actions after cancellation or refund and route them back to an active or newly funded opportunity.",
+      "gmv_lane": "retention",
+      "minimum_findings": 14,
+      "minimum_recommendations": 7,
+      "analysis_sources": [{"kind": "canonical_inventory", "url": "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "feedback-experiment-traceability-v1",
+      "title": "Create feedback-quality and experiment-traceability cases",
+      "summary": "Bind each retained growth experiment to real feedback, quantitative evidence, a GMV pathway, a review date, and an explicit stop decision.",
+      "gmv_lane": "feedback",
+      "minimum_findings": 12,
+      "minimum_recommendations": 6,
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "direct_public_comment", "url": "https://github.com/NSPG13/agent-bounties/issues/1059#issuecomment-5357409927"}]
+    }
+  ]
+}

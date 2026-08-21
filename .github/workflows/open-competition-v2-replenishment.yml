@@ -1,0 +1,183 @@
+name: Private marketplace liquidity replenishment
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/open-competition-v2-replenishment.yml"
+      - "ops/open-competition-v2-gmv-candidate-pool-v1.json"
+      - "ops/open-competition-v2-replenishment-ledger-v1.example.json"
+      - "scripts/bounty_inventory_guard.py"
+      - "scripts/plan_open_competition_v2_replenishment.py"
+      - "scripts/materialize_open_competition_v2_replenishment.py"
+      - "scripts/test_bounty_inventory_guard.py"
+      - "scripts/test_plan_open_competition_v2_replenishment.py"
+      - "scripts/test_materialize_open_competition_v2_replenishment.py"
+      - "scripts/test_open_competition_v2_replenishment_workflow.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-marketplace-liquidity-replenishment
+  cancel-in-progress: false
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Test private guard, deterministic planning, and materialization
+        run: |
+          python -m unittest \
+            scripts.test_bounty_inventory_guard \
+            scripts.test_plan_open_competition_v2_replenishment \
+            scripts.test_materialize_open_competition_v2_replenishment \
+            scripts.test_open_competition_v2_replenishment_workflow \
+            -v
+
+  plan-or-execute:
+    if: github.event_name != 'pull_request' && vars.V2_REPLENISHMENT_ENABLED == 'true'
+    needs: contract-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: open-competition-v2-replenishment
+    env:
+      PRIVATE_V2_INVENTORY_FLOOR: "5"
+      PRIVATE_V2_INVENTORY_TARGET: "10"
+      V2_REPLENISHMENT_ENABLED: ${{ vars.V2_REPLENISHMENT_ENABLED }}
+      V2_REPLENISHMENT_EXECUTE: ${{ vars.V2_REPLENISHMENT_EXECUTE }}
+      V2_REPLENISHMENT_SIGNER_URL: ${{ secrets.V2_REPLENISHMENT_SIGNER_URL }}
+      V2_REPLENISHMENT_SIGNER_TOKEN: ${{ secrets.V2_REPLENISHMENT_SIGNER_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6.3.0
+        with:
+          node-version: "22"
+
+      - name: Obtain canonical inventory evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          node skills/agent-bounties/scripts/check-in.mjs > "$RUNNER_TEMP/check-in.json"
+          python scripts/bounty_inventory_guard.py \
+            --claimable-report "$RUNNER_TEMP/check-in.json" \
+            --json-out "$RUNNER_TEMP/unified-public-inventory.json" \
+            --private-json-out "$RUNNER_TEMP/private-inventory.json" \
+            > "$RUNNER_TEMP/inventory-guard.stdout"
+
+      - name: Fetch private ranking and durable signer ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${V2_REPLENISHMENT_SIGNER_URL:-}" || -z "${V2_REPLENISHMENT_SIGNER_TOKEN:-}" ]]; then
+            echo "::error title=Liquidity replenishment blocked::The isolated signer state service is not configured. No spending was attempted."
+            exit 2
+          fi
+          case "$V2_REPLENISHMENT_SIGNER_URL" in
+            https://*) ;;
+            *) echo "::error title=Liquidity replenishment blocked::The isolated signer URL must use HTTPS."; exit 2 ;;
+          esac
+          SIGNER_BASE="${V2_REPLENISHMENT_SIGNER_URL%/}"
+          curl --silent --show-error --fail-with-body \
+            --header "Authorization: Bearer ${V2_REPLENISHMENT_SIGNER_TOKEN}" \
+            --header "Accept: application/json" \
+            "$SIGNER_BASE/v1/replenishment/state" \
+            > "$RUNNER_TEMP/signer-state.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          value = json.loads((root / "signer-state.json").read_text())
+          ranking = value.get("private_ranking")
+          ledger = value.get("execution_ledger")
+          if not isinstance(ranking, dict) or not isinstance(ledger, dict):
+              raise SystemExit("signer state omitted the private ranking or durable ledger")
+          (root / "private-ranking.json").write_text(json.dumps(ranking))
+          (root / "execution-ledger.json").write_text(json.dumps(ledger))
+          PY
+
+      - name: Build fail-closed replenishment plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          DECISION_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          python scripts/plan_open_competition_v2_replenishment.py \
+            --inventory-private "$RUNNER_TEMP/private-inventory.json" \
+            --candidate-specs ops/open-competition-v2-gmv-candidate-pool-v1.json \
+            --private-ranking "$RUNNER_TEMP/private-ranking.json" \
+            --execution-ledger "$RUNNER_TEMP/execution-ledger.json" \
+            --now "$DECISION_TIME" \
+            --json-out "$RUNNER_TEMP/replenishment-plan.json" \
+            > "$RUNNER_TEMP/planner.stdout"
+          STATUS="$(python -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "replenishment-plan.json")))["status"])')"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [[ "$STATUS" == "blocked" ]]; then
+            echo "::error title=Liquidity replenishment blocked::Private evidence or policy validation failed. No spending was attempted."
+            exit 2
+          fi
+
+      - name: Materialize reviewed exact terms
+        if: steps.plan.outputs.status == 'ready'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/materialize_open_competition_v2_replenishment.py \
+            --plan "$RUNNER_TEMP/replenishment-plan.json" \
+            --json-out "$RUNNER_TEMP/replenishment-request.json" \
+            > "$RUNNER_TEMP/materializer.stdout"
+
+      - name: Execute through the isolated bounded signer
+        if: steps.plan.outputs.status == 'ready' && env.V2_REPLENISHMENT_EXECUTE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIGNER_BASE="${V2_REPLENISHMENT_SIGNER_URL%/}"
+          curl --silent --show-error --fail-with-body \
+            --request POST \
+            --header "Authorization: Bearer ${V2_REPLENISHMENT_SIGNER_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/replenishment-request.json" \
+            "$SIGNER_BASE/v1/replenishment/execute" \
+            > "$RUNNER_TEMP/signer-response.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          response = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "signer-response.json").read_text()
+          )
+          if response.get("status") not in {"accepted", "resuming", "canonically_activated"}:
+              raise SystemExit("isolated signer did not acknowledge the idempotent request")
+          PY
+
+      - name: Record generic operational result
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Unified marketplace liquidity operation"
+            echo
+            echo "- canonical evidence checked: ${{ steps.plan.outcome == 'success' }}"
+            echo "- private plan status: ${{ steps.plan.outputs.status || 'blocked' }}"
+            if [[ "${{ steps.plan.outputs.status }}" == "ready" && "${V2_REPLENISHMENT_EXECUTE:-}" != "true" ]]; then
+              echo "- execution: disabled dry run; no spending attempted"
+            elif [[ "${{ steps.plan.outputs.status }}" == "ready" ]]; then
+              echo "- execution: submitted to isolated signer; canonical activation remains required"
+            else
+              echo "- execution: not required or blocked; no spending claim"
+            fi
+            echo "- public reporting remains unified across marketplace mechanisms"
+          } >> "$GITHUB_STEP_SUMMARY"
