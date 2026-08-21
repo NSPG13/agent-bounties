@@ -581,6 +581,7 @@ pub struct PlatformPayoutStats {
     pub lifetime_total_base_units: String,
     pub selected_solver_base_units: String,
     pub selected_verifier_base_units: String,
+    pub selected_keeper_base_units: String,
     pub selected_bonus_base_units: String,
     pub selected_settled_rounds: u64,
     pub previous_settled_rounds: u64,
@@ -2048,6 +2049,30 @@ impl PostgresStore {
                   'competition_submission_rejected', 'commitment_expired',
                   'bounty_settled', 'entry_bond_withdrawn', 'refund_withdrawn'
                 )
+            ), competition_v2_actors AS (
+              SELECT event.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_competition_created'
+                         THEN event.data->>'creator'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn')
+                         THEN event.data->>'contributor'
+                       ELSE event.data->>'solver'
+                     END) AS identity,
+                     CASE
+                       WHEN event.kind = 'canonical_competition_created' THEN 'poster'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn') THEN 'funder'
+                       ELSE 'solver'
+                     END AS role
+              FROM open_competition_v2_events AS event
+              WHERE event.network = $1
+                AND event.occurred_at >= $5
+                AND event.occurred_at < $3
+                AND NOT lower(event.contract_address) = ANY($9)
+                AND event.kind IN (
+                  'canonical_competition_created', 'funding_added',
+                  'entry_qualified', 'competition_settled', 'refund_withdrawn'
+                )
             ), verifier_actors AS (
               SELECT payout.occurred_at,
                      'base_wallet'::text AS namespace,
@@ -2114,6 +2139,11 @@ impl PostgresStore {
               UNION ALL
               SELECT occurred_at, namespace, identity, role
               FROM competition_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND NOT identity = ANY($7)
+              UNION ALL
+              SELECT occurred_at, namespace, identity, role
+              FROM competition_v2_actors
               WHERE identity ~ '^0x[0-9a-f]{40}$'
                 AND NOT identity = ANY($7)
               UNION ALL
@@ -2196,6 +2226,7 @@ impl PostgresStore {
                        THEN COALESCE((data->>'solver_reward')::numeric, 0)
                        ELSE 0 END AS solver_amount,
                      COALESCE((data->>'verifier_reward')::numeric, 0) AS verifier_amount,
+                     0::numeric AS keeper_amount,
                      CASE WHEN kind = 'bounty_settled'
                        THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0)
                        ELSE 0 END AS bonus_amount
@@ -2214,6 +2245,7 @@ impl PostgresStore {
                        THEN COALESCE((data->>'verifier_reward')::numeric, 0)
                        ELSE COALESCE((data->>'bond_paid_to_verifier')::numeric, 0)
                      END AS verifier_amount,
+                     0::numeric AS keeper_amount,
                      CASE WHEN kind = 'bounty_settled'
                        THEN COALESCE((data->>'timeout_bond_bonus')::numeric, 0)
                        ELSE 0 END AS bonus_amount
@@ -2223,8 +2255,20 @@ impl PostgresStore {
                 AND occurred_at >= $5
                 AND occurred_at < $3
                 AND kind IN ('bounty_settled', 'competition_submission_rejected')
+              UNION ALL
+              SELECT occurred_at, TRUE AS settled,
+                     COALESCE((data->>'solver_reward')::numeric, 0) AS solver_amount,
+                     0::numeric AS verifier_amount,
+                     COALESCE((data->>'keeper_reward')::numeric, 0) AS keeper_amount,
+                     0::numeric AS bonus_amount
+              FROM open_competition_v2_events
+              WHERE network = $1
+                AND occurred_at >= $5
+                AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($7)
+                AND kind = 'competition_settled'
             ), normalized AS (
-              SELECT *, solver_amount + verifier_amount + bonus_amount AS total_amount
+              SELECT *, solver_amount + verifier_amount + keeper_amount + bonus_amount AS total_amount
               FROM payouts
             )
             SELECT
@@ -2244,6 +2288,9 @@ impl PostgresStore {
               COALESCE(SUM(verifier_amount) FILTER (
                 WHERE occurred_at >= $2 AND occurred_at < $3
               ), 0)::text AS selected_verifier,
+              COALESCE(SUM(keeper_amount) FILTER (
+                WHERE occurred_at >= $2 AND occurred_at < $3
+              ), 0)::text AS selected_keeper,
               COALESCE(SUM(bonus_amount) FILTER (
                 WHERE occurred_at >= $2 AND occurred_at < $3
               ), 0)::text AS selected_bonus,
@@ -2266,6 +2313,7 @@ impl PostgresStore {
         .bind(previous_started_at)
         .bind(launch_at)
         .bind(first_month_ended_at)
+        .bind(excluded_bounty_contracts)
         .fetch_one(&self.pool)
         .await?;
 
@@ -2365,6 +2413,24 @@ impl PostgresStore {
                   'competition_submission_rejected', 'commitment_expired',
                   'bounty_settled', 'entry_bond_withdrawn', 'refund_withdrawn'
                 )
+            ), competition_v2_actors AS (
+              SELECT event.occurred_at,
+                     'base_wallet'::text AS namespace,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_competition_created'
+                         THEN event.data->>'creator'
+                       WHEN event.kind IN ('funding_added', 'refund_withdrawn')
+                         THEN event.data->>'contributor'
+                       ELSE event.data->>'solver'
+                     END) AS identity
+              FROM open_competition_v2_events AS event
+              WHERE event.network = $1
+                AND event.occurred_at >= $2 AND event.occurred_at < $3
+                AND NOT lower(event.contract_address) = ANY($6)
+                AND event.kind IN (
+                  'canonical_competition_created', 'funding_added',
+                  'entry_qualified', 'competition_settled', 'refund_withdrawn'
+                )
             ), verifier_actors AS (
               SELECT payout.occurred_at,
                      'base_wallet'::text AS namespace,
@@ -2425,6 +2491,9 @@ impl PostgresStore {
               SELECT occurred_at, namespace, identity FROM competition_actors
               WHERE identity ~ '^0x[0-9a-f]{40}$' AND NOT identity = ANY($4)
               UNION ALL
+              SELECT occurred_at, namespace, identity FROM competition_v2_actors
+              WHERE identity ~ '^0x[0-9a-f]{40}$' AND NOT identity = ANY($4)
+              UNION ALL
               SELECT occurred_at, namespace, identity FROM verifier_actors
               WHERE identity ~ '^0x[0-9a-f]{40}$'
                 AND identity <> '0x0000000000000000000000000000000000000000'
@@ -2465,6 +2534,15 @@ impl PostgresStore {
                 AND block_time_verified = TRUE
                 AND occurred_at >= $2 AND occurred_at < $3
                 AND kind IN ('bounty_settled', 'competition_submission_rejected')
+              UNION ALL
+              SELECT occurred_at, TRUE AS settled,
+                     COALESCE((data->>'solver_reward')::numeric, 0)
+                     + COALESCE((data->>'keeper_reward')::numeric, 0) AS total_amount
+              FROM open_competition_v2_events
+              WHERE network = $1
+                AND occurred_at >= $2 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($6)
+                AND kind = 'competition_settled'
             ), days AS (
               SELECT generate_series(
                 date_trunc('day', $2::timestamptz),
@@ -2510,6 +2588,11 @@ impl PostgresStore {
               FROM open_competition_events
               WHERE network = $1
                 AND occurred_at >= $2
+              UNION ALL
+              SELECT TRUE AS block_time_verified, occurred_at
+              FROM open_competition_v2_events
+              WHERE network = $1
+                AND occurred_at >= $2
             )
             SELECT
               COUNT(*) FILTER (WHERE block_time_verified = TRUE) AS verified_events,
@@ -2552,6 +2635,7 @@ impl PostgresStore {
                 lifetime_total_base_units: payout_row.try_get("lifetime_total")?,
                 selected_solver_base_units: payout_row.try_get("selected_solver")?,
                 selected_verifier_base_units: payout_row.try_get("selected_verifier")?,
+                selected_keeper_base_units: payout_row.try_get("selected_keeper")?,
                 selected_bonus_base_units: payout_row.try_get("selected_bonus")?,
                 selected_settled_rounds: u64_from_i64(payout_row.try_get("selected_settled")?)?,
                 previous_settled_rounds: u64_from_i64(payout_row.try_get("previous_settled")?)?,
@@ -6701,6 +6785,27 @@ impl PostgresStore {
         row.map(open_competition_v2_proof_job_from_row).transpose()
     }
 
+    pub async fn list_open_competition_v2_proof_jobs_for_contract(
+        &self,
+        network: &str,
+        competition_contract: &str,
+    ) -> DbResult<Vec<OpenCompetitionV2ProofJob>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM open_competition_v2_proof_jobs
+            WHERE network = $1 AND competition_contract = $2
+            ORDER BY created_at, id
+            "#,
+        )
+        .bind(network)
+        .bind(normalize_key_address(competition_contract))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(open_competition_v2_proof_job_from_row)
+            .collect()
+    }
+
     pub async fn lease_next_open_competition_v2_proof_job(
         &self,
         lease_token: Uuid,
@@ -10365,6 +10470,50 @@ mod tests {
             }
         }
 
+        async fn add_competition_v2_settlement(
+            store: &PostgresStore,
+            network: &str,
+            factory_contract: &str,
+            block_number: u64,
+            contract_address: &str,
+            bounty_id: &str,
+            solver: &str,
+            occurred_at: DateTime<Utc>,
+        ) {
+            let block_hash = format!("0x{:064x}", block_number + 1);
+            store
+                .upsert_open_competition_v2_event(
+                    network,
+                    factory_contract,
+                    &OpenCompetitionV2Event {
+                        id: Uuid::new_v4(),
+                        protocol_version: chain_base::OPEN_COMPETITION_V2_PROTOCOL_VERSION
+                            .to_string(),
+                        log_key: format!("v2:{network}:{block_number}:0"),
+                        tx_hash: format!("0x{block_number:064x}"),
+                        block_number,
+                        log_index: 0,
+                        contract_address: contract_address.to_string(),
+                        bounty_id: bounty_id.to_string(),
+                        kind: OpenCompetitionV2EventKind::CompetitionSettled,
+                        data: serde_json::json!({
+                            "solver": solver,
+                            "solver_reward": 3_000_000,
+                            "keeper": "0x6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f",
+                            "keeper_reward": 40_000
+                        }),
+                        occurred_at,
+                    },
+                    &OpenCompetitionV2SafeContext {
+                        block_hash: block_hash.clone(),
+                        safe_block_number: block_number + 10,
+                        safe_block_hash: format!("0x{:064x}", block_number + 10),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
@@ -10414,6 +10563,30 @@ mod tests {
             true,
         )
         .await;
+
+        for (offset, solver) in [
+            "0x6868686868686868686868686868686868686868",
+            "0x7979797979797979797979797979797979797979",
+            "0x6868686868686868686868686868686868686868",
+            "0x6868686868686868686868686868686868686868",
+            "0x6868686868686868686868686868686868686868",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            block += 1;
+            add_competition_v2_settlement(
+                &store,
+                &network,
+                competition_factory,
+                block,
+                &format!("0x{:040x}", 0x600_u64 + offset as u64),
+                &format!("beta3-{offset}"),
+                solver,
+                at("2099-01-14T05:00:00Z") + chrono::Duration::minutes(offset as i64),
+            )
+            .await;
+        }
 
         block += 1;
         add_competition_event(
@@ -10838,23 +11011,24 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(stats.identities.selected, 11);
+        assert_eq!(stats.identities.selected, 13);
         assert_eq!(stats.identities.previous, 1);
-        assert_eq!(stats.identities.lifetime, 11);
+        assert_eq!(stats.identities.lifetime, 13);
         assert_eq!(stats.identities.posters, 1);
         assert_eq!(stats.identities.funders, 3);
-        assert_eq!(stats.identities.solvers, 6);
+        assert_eq!(stats.identities.solvers, 8);
         assert_eq!(stats.identities.verifiers, 1);
         assert_eq!(stats.identities.commenters, 1);
-        assert_eq!(stats.identities.marketplace_wallets, 10);
+        assert_eq!(stats.identities.marketplace_wallets, 12);
         assert_eq!(stats.identities.opportunity_comment_authors, 1);
         // Recovery reservations protect future earning and verification work; they
         // must not erase block-time-verified payouts from immutable history.
-        assert_eq!(stats.payouts.selected_total_base_units, "159725000");
-        assert_eq!(stats.payouts.selected_solver_base_units, "143000000");
+        assert_eq!(stats.payouts.selected_total_base_units, "174925000");
+        assert_eq!(stats.payouts.selected_solver_base_units, "158000000");
         assert_eq!(stats.payouts.selected_verifier_base_units, "16600000");
+        assert_eq!(stats.payouts.selected_keeper_base_units, "200000");
         assert_eq!(stats.payouts.selected_bonus_base_units, "125000");
-        assert_eq!(stats.payouts.selected_settled_rounds, 4);
+        assert_eq!(stats.payouts.selected_settled_rounds, 9);
         assert_eq!(stats.claim_cohort.settled, 1);
         assert_eq!(stats.claim_cohort.mature, 3);
         assert_eq!(stats.claim_cohort.immature, 1);
@@ -10865,9 +11039,14 @@ mod tests {
                 .iter()
                 .map(|day| day.payout_base_units.parse::<u128>().unwrap())
                 .sum::<u128>(),
-            159_725_000
+            174_925_000
         );
 
+        sqlx::query("DELETE FROM open_competition_v2_events WHERE network = $1")
+            .bind(&network)
+            .execute(&store.pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM open_competition_events WHERE network = $1")
             .bind(&network)
             .execute(&store.pool)

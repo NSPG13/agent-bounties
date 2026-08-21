@@ -27,12 +27,14 @@ from typing import Any, Callable, Mapping
 USER_AGENT = "agent-bounties-github-discovery/1"
 PROJECTION_SCHEMA = "agent-bounties/github-bounty-discovery-v1"
 POLICY_SCHEMA = "agent-bounties/github-bounty-discovery-policy-v1"
-SUPPORTED_PROTOCOLS = frozenset(
+CORE_DISCOVERY_PROTOCOLS = frozenset(
     {
         "agent-bounties/autonomous-v1",
         "agent-bounties/open-competition-v1",
     }
 )
+BETA3_PROTOCOL = "agent-bounties/open-competition-v2-beta3"
+SUPPORTED_PROTOCOLS = frozenset({*CORE_DISCOVERY_PROTOCOLS, BETA3_PROTOCOL})
 LIFECYCLE_STATES = frozenset(
     {
         "funding_needed",
@@ -104,7 +106,7 @@ LABEL_DEFINITIONS = {
 BOUNDARIES = (
     "GitHub is a discovery mirror, not a funding, verification, or settlement authority.",
     "A missing record never authorizes label removal or issue closure.",
-    "Only confirmed canonical BountySettled settlement_evidence proves payment.",
+    "Only confirmed canonical BountySettled or CompetitionSettledV2 evidence proves payment.",
 )
 
 
@@ -376,7 +378,7 @@ def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -
         if not isinstance(action, dict):
             raise LabelReconciliationError(f"next action is malformed: {identity}")
         require_public_https_url(action.get("url"), f"{identity}.next_action.url")
-        if protocol == "agent-bounties/open-competition-v1" and mode != "first_valid_submission":
+        if protocol in {"agent-bounties/open-competition-v1", BETA3_PROTOCOL} and mode != "first_valid_submission":
             raise LabelReconciliationError(f"Open Competition mode mismatch: {identity}")
         if protocol == "agent-bounties/autonomous-v1" and mode != "exclusive_claim":
             raise LabelReconciliationError(f"autonomous-v1 mode mismatch: {identity}")
@@ -421,7 +423,8 @@ def validate_settlement(item: Mapping[str, Any]) -> Mapping[str, Any]:
     evidence = item.get("settlement_evidence")
     if not isinstance(evidence, dict):
         raise LabelReconciliationError(f"settled record lacks evidence: {identity}")
-    if evidence.get("event_name") != "BountySettled" or evidence.get("confirmed_canonical") is not True:
+    event_name = evidence.get("event_name")
+    if event_name not in {"BountySettled", "CompetitionSettledV2"} or evidence.get("confirmed_canonical") is not True:
         raise LabelReconciliationError(f"settlement is not canonical: {identity}")
     if (
         str(evidence.get("bounty_contract") or "").lower()
@@ -431,6 +434,21 @@ def validate_settlement(item: Mapping[str, Any]) -> Mapping[str, Any]:
     ):
         raise LabelReconciliationError(f"settlement identity is malformed: {identity}")
     solver_reward = require_unsigned(evidence.get("solver_reward"), "settlement.solver_reward")
+    if event_name == "CompetitionSettledV2":
+        keeper_reward = require_unsigned(evidence.get("keeper_reward"), "settlement.keeper_reward")
+        if (
+            str(item.get("protocol_version")) != BETA3_PROTOCOL
+            or not ADDRESS.fullmatch(str(evidence.get("keeper_wallet") or "").lower())
+            or solver_reward != require_unsigned(
+                item.get("reward_usdc_base_units"), "reward_usdc_base_units"
+            )
+            or keeper_reward != require_unsigned(
+                item.get("verifier_reward_usdc_base_units"),
+                "verifier_reward_usdc_base_units",
+            )
+        ):
+            raise LabelReconciliationError(f"CompetitionSettledV2 payout is inconsistent: {identity}")
+        return evidence
     returned_bond = require_unsigned(evidence.get("returned_bond"), "settlement.returned_bond")
     bonus = require_unsigned(evidence.get("completion_bonus"), "settlement.completion_bonus")
     payout = require_unsigned(evidence.get("solver_payout"), "settlement.solver_payout")
@@ -451,6 +469,305 @@ def fetch_projection(request: HttpRequest, api_base_url: str, network: str) -> d
     if result.status != 200 or not isinstance(result.body, dict):
         raise LabelReconciliationError(f"discovery projection returned HTTP {result.status}")
     return result.body
+
+
+def fetch_json_object(request: HttpRequest, url: str, label: str) -> dict[str, Any]:
+    result = request_with_retry(request, "GET", url)
+    if result.status != 200 or not isinstance(result.body, dict):
+        raise LabelReconciliationError(f"{label} returned HTTP {result.status}")
+    return result.body
+
+
+def opportunity_amount(opportunity: Mapping[str, Any], field: str) -> int:
+    amount = opportunity.get(field)
+    if not isinstance(amount, dict):
+        raise LabelReconciliationError(f"Beta3 opportunity lacks {field}")
+    if amount.get("currency") != "USDC" or amount.get("unit") != "base_units":
+        raise LabelReconciliationError(f"Beta3 opportunity has invalid {field} units")
+    return require_unsigned(amount.get("amount"), f"Beta3 opportunity {field}")
+
+
+def beta3_settlement_evidence(
+    opportunity: Mapping[str, Any],
+    competition: Mapping[str, Any],
+    events: list[dict[str, Any]],
+    safe_block: int,
+) -> dict[str, Any] | None:
+    state = str(competition.get("state") or "")
+    settled = [
+        event
+        for event in events
+        if event.get("kind") == "competition_settled"
+        and require_unsigned(event.get("block_number"), "Beta3 event block_number") <= safe_block
+    ]
+    if state != "settled":
+        if settled:
+            raise LabelReconciliationError("non-settled Beta3 competition exposes settlement")
+        return None
+    if len(settled) != 1:
+        raise LabelReconciliationError("settled Beta3 competition lacks one canonical settlement")
+    event = settled[0]
+    data = event.get("data")
+    if not isinstance(data, dict):
+        raise LabelReconciliationError("Beta3 settlement data is malformed")
+    contract = str(competition.get("competition") or "").lower()
+    bounty_id = str(competition.get("bounty_id") or "").lower()
+    solver = str(data.get("solver") or "").lower()
+    keeper = str(data.get("keeper") or "").lower()
+    solver_reward = require_unsigned(data.get("solver_reward"), "Beta3 solver_reward")
+    keeper_reward = require_unsigned(data.get("keeper_reward"), "Beta3 keeper_reward")
+    if (
+        str(event.get("contract_address") or "").lower() != contract
+        or str(event.get("bounty_id") or "").lower() != bounty_id
+        or solver != str(competition.get("winner") or "").lower()
+        or solver_reward != opportunity_amount(opportunity, "reward")
+        or solver_reward != require_unsigned(competition.get("solver_reward"), "solver_reward")
+        or keeper_reward != opportunity_amount(opportunity, "completion_bonus")
+        or keeper_reward != require_unsigned(competition.get("keeper_reward"), "keeper_reward")
+        or not ADDRESS.fullmatch(solver)
+        or not ADDRESS.fullmatch(keeper)
+        or not TX_HASH.fullmatch(str(event.get("tx_hash") or "").lower())
+    ):
+        raise LabelReconciliationError("Beta3 settlement does not match canonical inventory")
+    return {
+        "event_name": "CompetitionSettledV2",
+        "bounty_id": bounty_id,
+        "bounty_contract": contract,
+        "transaction_hash": str(event["tx_hash"]).lower(),
+        "block_number": require_unsigned(event.get("block_number"), "settlement block_number"),
+        "log_index": require_unsigned(event.get("log_index"), "settlement log_index"),
+        "solver_wallet": solver,
+        "solver_reward": str(solver_reward),
+        "keeper_wallet": keeper,
+        "keeper_reward": str(keeper_reward),
+        "confirmed_canonical": True,
+    }
+
+
+def beta3_lifecycle(state: str, verification_ready: bool) -> str:
+    if state == "settled":
+        return "settled"
+    if state == "cancelled":
+        return "cancelled"
+    if state == "expired":
+        return "expired"
+    if state == "funding":
+        return "funding_needed"
+    if state == "active" and verification_ready:
+        return "ready_to_earn"
+    return "unavailable"
+
+
+def beta3_discovery_competition_mode(winner_mode: object) -> str:
+    if winner_mode != "first_proven":
+        raise LabelReconciliationError(
+            "GitHub discovery cannot represent this Beta3 winner mode safely"
+        )
+    return "first_valid_submission"
+
+
+def augment_projection_with_beta3(
+    request: HttpRequest,
+    api_base_url: str,
+    network: str,
+    repository: str,
+    projection: Mapping[str, Any],
+) -> dict[str, Any]:
+    query = urllib.parse.urlencode({"network": network})
+    metrics = fetch_json_object(
+        request,
+        f"{api_base_url}/v1/metrics/platform?period=7d",
+        "platform metrics",
+    )
+    coverage = metrics.get("coverage")
+    beta3_fresh = (
+        coverage.get(
+            "open_competition_v2_indexer_fresh",
+            coverage.get("open_competition_indexer_fresh"),
+        )
+        if isinstance(coverage, dict)
+        else False
+    )
+    if (
+        not isinstance(coverage, dict)
+        or beta3_fresh is not True
+        or require_unsigned(coverage.get("awaiting_block_time_events"), "awaiting_block_time_events")
+        != 0
+    ):
+        raise LabelReconciliationError("Beta3 canonical indexer is degraded")
+    inventory = fetch_json_object(
+        request,
+        f"{api_base_url}/v1/base/open-competition-v2-beta3/inventory?{query}",
+        "Beta3 inventory",
+    )
+    event_feed = fetch_json_object(
+        request,
+        f"{api_base_url}/v1/base/open-competition-v2-beta3/events?{query}",
+        "Beta3 events",
+    )
+    opportunities = fetch_json_object(
+        request,
+        f"{api_base_url}/v1/opportunities?{urllib.parse.urlencode({'network': network, 'source_type': 'canonical_base', 'limit': 300})}",
+        "opportunity inventory",
+    )
+    if (
+        inventory.get("network") != network
+        or inventory.get("protocol_version") != BETA3_PROTOCOL
+        or event_feed.get("network") != network
+        or event_feed.get("protocol_version") != BETA3_PROTOCOL
+    ):
+        raise LabelReconciliationError("Beta3 canonical views disagree on protocol or network")
+    competitions = inventory.get("competitions")
+    events = event_feed.get("events")
+    opportunity_items = opportunities.get("items")
+    if (
+        not isinstance(competitions, list)
+        or not isinstance(events, list)
+        or not isinstance(opportunity_items, list)
+        or not all(isinstance(value, dict) for value in competitions + events + opportunity_items)
+    ):
+        raise LabelReconciliationError("Beta3 canonical views are malformed")
+    records: dict[str, tuple[dict[str, Any], int, str]] = {}
+    factories: set[str] = set()
+    for wrapped in competitions:
+        record = wrapped.get("record")
+        canonical = record.get("projection") if isinstance(record, dict) else None
+        if not isinstance(record, dict) or not isinstance(canonical, dict):
+            raise LabelReconciliationError("Beta3 inventory record is malformed")
+        contract = str(canonical.get("competition") or "").lower()
+        factory = str(record.get("factory_contract") or "").lower()
+        safe_number = require_unsigned(record.get("safe_block_number"), "Beta3 safe block")
+        safe_hash = str(record.get("safe_block_hash") or "").lower()
+        if (
+            not ADDRESS.fullmatch(contract)
+            or contract in records
+            or not ADDRESS.fullmatch(factory)
+            or not TX_HASH.fullmatch(safe_hash)
+            or record.get("network") != network
+        ):
+            raise LabelReconciliationError("Beta3 inventory identity is malformed or duplicated")
+        records[contract] = (canonical, safe_number, safe_hash)
+        factories.add(factory)
+    if len(factories) != 1:
+        raise LabelReconciliationError("Beta3 inventory does not have one factory")
+    selected = []
+    chain_id = require_unsigned(projection.get("chain_id"), "projection.chain_id")
+    for opportunity in opportunity_items:
+        requirements = opportunity.get("evidence_requirements")
+        if not isinstance(requirements, dict) or requirements.get("protocol_version") != BETA3_PROTOCOL:
+            continue
+        if parse_same_repository_issue(opportunity.get("source_url"), repository) is None:
+            continue
+        contract = str(opportunity.get("source_id") or "").lower()
+        record = records.get(contract)
+        if record is None:
+            raise LabelReconciliationError("public Beta3 opportunity is absent from canonical inventory")
+        canonical, safe_number, _ = record
+        bounty_id = str(canonical.get("bounty_id") or "").lower()
+        relevant = [
+            event
+            for event in events
+            if str(event.get("contract_address") or "").lower() == contract
+            and str(event.get("bounty_id") or "").lower() == bounty_id
+            and require_unsigned(event.get("block_number"), "Beta3 event block_number")
+            <= safe_number
+        ]
+        if not relevant:
+            raise LabelReconciliationError("public Beta3 opportunity lacks canonical events")
+        state = str(canonical.get("state") or "")
+        verification_ready = opportunity.get("verification_ready") is True
+        lifecycle = beta3_lifecycle(state, verification_ready)
+        competition_mode = beta3_discovery_competition_mode(
+            opportunity.get("winner_mode") or canonical.get("winner_mode")
+        )
+        target = opportunity_amount(opportunity, "funding_target")
+        settlement = beta3_settlement_evidence(opportunity, canonical, relevant, safe_number)
+        created_block = min(
+            require_unsigned(event.get("block_number"), "Beta3 event block_number")
+            for event in relevant
+        )
+        next_action = opportunity.get("next_action")
+        if not isinstance(next_action, dict):
+            raise LabelReconciliationError("public Beta3 opportunity lacks a next action")
+        selected.append(
+            {
+                "discovery_id": f"eip155:{chain_id}:{BETA3_PROTOCOL}:{contract}",
+                "network": network,
+                "chain_id": chain_id,
+                "protocol_version": BETA3_PROTOCOL,
+                "source_id": contract,
+                "visibility": "public",
+                "bounty_id": bounty_id,
+                "bounty_contract": contract,
+                "created_at": opportunity.get("created_at"),
+                "created_block": created_block,
+                "updated_at": opportunity.get("updated_at"),
+                "title": opportunity.get("title"),
+                "summary": opportunity.get("goal") or "",
+                "categories": opportunity.get("categories") or [],
+                "skills": opportunity.get("skills") or [],
+                "difficulty": None,
+                "public_url": opportunity.get("public_url"),
+                "source_url": opportunity.get("source_url"),
+                "competition_mode": competition_mode,
+                "lifecycle_state": lifecycle,
+                "funded": lifecycle in {"ready_to_earn", "settled"},
+                "verification_ready": verification_ready,
+                "ready_to_earn": lifecycle == "ready_to_earn",
+                "reward_usdc_base_units": str(opportunity_amount(opportunity, "reward")),
+                "verifier_reward_usdc_base_units": str(
+                    opportunity_amount(opportunity, "completion_bonus")
+                ),
+                "bond_usdc_base_units": str(opportunity_amount(opportunity, "bond")),
+                "funded_usdc_base_units": str(
+                    target
+                    if lifecycle == "settled"
+                    else opportunity_amount(opportunity, "funded_amount")
+                ),
+                "funding_target_usdc_base_units": str(target),
+                "deadline": opportunity.get("deadline"),
+                "deadline_kind": opportunity.get("deadline_kind"),
+                "entry_count": require_unsigned(opportunity.get("entry_count"), "entry_count"),
+                "max_entries": None,
+                "verifier": {
+                    "profile_id": opportunity.get("verifier_profile_id"),
+                    "display_name": opportunity.get("verifier_profile_name"),
+                    "method": opportunity.get("verification_method"),
+                    "ready": verification_ready,
+                },
+                "next_action": {
+                    "kind": next_action.get("action"),
+                    "label": "Inspect settlement" if lifecycle == "settled" else "Enter competition",
+                    "method": next_action.get("method"),
+                    "url": next_action.get("url"),
+                    "instructions": next_action.get("instructions"),
+                },
+                "recovery_action_available": False,
+                "identity_warning": "One wallet does not prove one independent person.",
+                "settlement_evidence": settlement,
+                "evidence_boundary": "Only CompetitionSettledV2 proves solver payment.",
+            }
+        )
+    result = dict(projection)
+    existing_items = result.get("items")
+    existing_sources = result.get("source_statuses")
+    if not isinstance(existing_items, list) or not isinstance(existing_sources, list):
+        raise LabelReconciliationError("core discovery projection is malformed")
+    result["items"] = [*existing_items, *selected]
+    result["source_statuses"] = [
+        *existing_sources,
+        {
+            "source_type": "open_competition_v2",
+            "protocol_version": BETA3_PROTOCOL,
+            "factory_contract": next(iter(factories)),
+            "available": True,
+            "fresh": True,
+            "item_count": len(selected),
+            "persisted_cursor_block": max((safe for _, safe, _ in records.values()), default=0),
+            "error": None,
+        },
+    ]
+    return result
 
 
 # The claim-comment workflow still consumes the autonomous-v1 full and earning
@@ -805,6 +1122,11 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
                 "First valid confirmed reveal wins. Each wallet may enter once; an entry does not prove one independent person. Save the local commitment recovery envelope because the API never stores its plaintext salt.",
             ]
         )
+    payment_event = (
+        "CompetitionSettledV2"
+        if item.get("protocol_version") == BETA3_PROTOCOL
+        else "BountySettled"
+    )
     lines.extend(
         [
             "",
@@ -820,7 +1142,7 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "> GitHub mirrors canonical public state and cannot fund, claim, verify, settle, or prove payment. Only a confirmed canonical `BountySettled` receipt below proves solver payment.",
+            f"> GitHub mirrors canonical public state and cannot fund, claim, verify, settle, or prove payment. Only a confirmed canonical `{payment_event}` receipt below proves solver payment.",
             MANAGED_END,
         ]
     )
@@ -901,25 +1223,44 @@ def build_settlement_receipt(item: Mapping[str, Any]) -> SettlementReceipt:
     fingerprint = hashlib.sha256(
         json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    body = "\n".join(
+    lines = [
+        SETTLEMENT_RECEIPT_MARKER,
+        "## Canonical payout confirmed",
+        "",
+        f"- Bounty ID: `{evidence['bounty_id']}`",
+        f"- Contract: `{evidence['bounty_contract']}`",
+        f"- Settlement: [`{tx_hash}`]({settlement_transaction_url(str(item['network']), tx_hash)})",
+        f"- Solver wallet: `{evidence['solver_wallet']}`",
+        f"- Solver reward: **{format_usdc(evidence['solver_reward'])} USDC**",
+    ]
+    if evidence["event_name"] == "CompetitionSettledV2":
+        attribution_query = urllib.parse.urlencode(
+            {"network": item["network"], "competition_contract": evidence["bounty_contract"]}
+        )
+        lines.extend(
+            [
+                f"- Keeper wallet: `{evidence['keeper_wallet']}`",
+                f"- Keeper reward: **{format_usdc(evidence['keeper_reward'])} USDC**",
+                f"- Hosted proof and relay attribution: [inspect evidence](https://api.agentbounties.app/v1/base/open-competition-v2-beta3/proof-attribution?{attribution_query})",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"- Returned bond: **{format_usdc(evidence['returned_bond'])} USDC**",
+                f"- Completion bonus: **{format_usdc(evidence['completion_bonus'])} USDC**",
+                f"- Total solver transfer: **{format_usdc(evidence['solver_payout'])} USDC**",
+                f"- Verifier reward: **{format_usdc(evidence['verifier_reward'])} USDC**",
+            ]
+        )
+    lines.extend(
         [
-            SETTLEMENT_RECEIPT_MARKER,
-            "## Canonical payout confirmed",
-            "",
-            f"- Bounty ID: `{evidence['bounty_id']}`",
-            f"- Contract: `{evidence['bounty_contract']}`",
-            f"- Settlement: [`{tx_hash}`]({settlement_transaction_url(str(item['network']), tx_hash)})",
-            f"- Solver wallet: `{evidence['solver_wallet']}`",
-            f"- Solver reward: **{format_usdc(evidence['solver_reward'])} USDC**",
-            f"- Returned bond: **{format_usdc(evidence['returned_bond'])} USDC**",
-            f"- Completion bonus: **{format_usdc(evidence['completion_bonus'])} USDC**",
-            f"- Total solver transfer: **{format_usdc(evidence['solver_payout'])} USDC**",
-            f"- Verifier reward: **{format_usdc(evidence['verifier_reward'])} USDC**",
             f"- Receipt fingerprint: `{fingerprint}`",
             "",
-            "Only this confirmed canonical `BountySettled` event proves solver payment. This GitHub comment reports the event; it did not authorize or execute settlement.",
+            f"Only this confirmed canonical `{evidence['event_name']}` event proves solver payment. This GitHub comment reports the event; it did not authorize or execute settlement.",
         ]
     )
+    body = "\n".join(lines)
     return SettlementReceipt(fingerprint=fingerprint, body=body)
 
 
@@ -1346,6 +1687,9 @@ def main(argv: list[str] | None = None, request: HttpRequest = default_http_requ
         projection, issues, comments_by_issue = load_fixture(args.fixture)
     else:
         projection = fetch_projection(request, api_base_url, args.network)
+        projection = augment_projection_with_beta3(
+            request, api_base_url, args.network, repository, projection
+        )
         items = validate_projection(projection, args.network, policy)
         issues = fetch_github_issues(request, repository, token or None)
         issues = fetch_linked_source_issues(request, repository, token or None, items, issues)
