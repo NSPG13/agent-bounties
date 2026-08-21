@@ -152,12 +152,41 @@ def envelopeless_gateway_http_error(
     return http_error_with_json(url, status, {"error": error}, reason)
 
 
+LIVE_CODE15_MESSAGE = (
+    "You reached Public endpoint rate limit, please upgrade to paid plan"
+)
+LIVE_CODE15_ERROR: dict[str, object] = {
+    "code": 15,
+    "message": LIVE_CODE15_MESSAGE,
+}
+
+
+def jsonrpc_error_response(
+    error: dict[str, object],
+    *,
+    response_id: object = 1,
+) -> Response:
+    return Response(
+        json.dumps(
+            {"jsonrpc": "2.0", "id": response_id, "error": error}
+        ).encode("utf-8")
+    )
+
+
+def envelopeless_http_200(error: dict[str, object]) -> Response:
+    return Response(json.dumps({"error": error}).encode("utf-8"))
+
+
+def http_200_json(body: dict[str, object]) -> Response:
+    return Response(json.dumps(body).encode("utf-8"))
+
+
 class RpcTest(unittest.TestCase):
     def test_single_endpoint_result_and_rpc_error_contracts(self) -> None:
         cases = (
             (b'{"result":"0x2105"}', "0x2105", None),
             (
-                b'{"error":{"code":-1,"message":"bad"}}',
+                b'{"jsonrpc":"2.0","id":7,"error":{"code":-1,"message":"bad"}}',
                 None,
                 'RPC eth_chainId failed: {"code": -1, "message": "bad"}',
             ),
@@ -228,8 +257,8 @@ class RpcTest(unittest.TestCase):
     def test_chain_rpc_error_never_calls_a_second_endpoint(self) -> None:
         with patch(
             "_shared.rpc.urlopen",
-            return_value=Response(
-                b'{"error":{"code":-32000,"message":"execution reverted"}}'
+            return_value=jsonrpc_error_response(
+                {"code": -32000, "message": "execution reverted"}
             ),
         ) as opened, self.assertRaisesRegex(RpcError, "execution reverted"):
             select_working_base_rpc(
@@ -245,8 +274,8 @@ class RpcTest(unittest.TestCase):
             calls += 1
             if request_method(request) == "eth_chainId":
                 return Response(b'{"result":"0x2105"}')
-            return Response(
-                b'{"error":{"code":-32000,"message":"execution reverted"}}'
+            return jsonrpc_error_response(
+                {"code": -32000, "message": "execution reverted"}
             )
 
         with patch(
@@ -1293,8 +1322,8 @@ class RpcTest(unittest.TestCase):
                 raise HTTPError(SECRET_ENDPOINT, 501, "not implemented", {}, None)
             if method == "eth_chainId":
                 return Response(b'{"result":"0x2105"}')
-            return Response(
-                b'{"error":{"code":-32000,"message":"execution reverted"}}'
+            return jsonrpc_error_response(
+                {"code": -32000, "message": "execution reverted"}
             )
 
         with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
@@ -1355,6 +1384,485 @@ class RpcTest(unittest.TestCase):
             if isinstance(filename, str):
                 for fragment in SECRET_FRAGMENTS:
                     self.assertNotIn(fragment, filename)
+
+    def _assert_body_free_retryable_transport(self, exc: BaseException) -> None:
+        surface = exception_chain_text(exc)
+        self.assertIn("RPC response was invalid", surface)
+        for fragment in (
+            LIVE_CODE15_MESSAGE,
+            "paid plan",
+            "rate limit",
+            '"code": 15',
+            '"code":15',
+            "execution reverted",
+            '"data"',
+            '"extra"',
+            *SECRET_FRAGMENTS,
+        ):
+            self.assertNotIn(fragment, surface)
+        self.assertTrue(
+            any(
+                isinstance(node, TransportError) and node.retryable
+                for node in walk_exception_chain(exc)
+            )
+        )
+        for node in walk_exception_chain(exc):
+            self.assertNotIsInstance(node, RpcError)
+            self.assertNotIsInstance(node, HTTPError)
+
+    def test_http_200_envelopeless_code15_retries_then_recovers(self) -> None:
+        first = envelopeless_http_200(LIVE_CODE15_ERROR)
+        with patch("_shared.rpc.urlopen", side_effect=[first]) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaises(RuntimeError) as raised:
+            rpc(SECRET_ENDPOINT, "eth_chainId", [], attempts=1, retry_delay=0)
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+        self.assertTrue(first.closed)
+        self._assert_body_free_retryable_transport(raised.exception)
+
+        first = envelopeless_http_200(LIVE_CODE15_ERROR)
+        responses = [first, Response(b'{"result":"0x14a34"}')]
+        with patch("_shared.rpc.urlopen", side_effect=responses) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept:
+            self.assertEqual(
+                rpc(SECRET_ENDPOINT, "eth_chainId", [], retry_delay=0.25),
+                "0x14a34",
+            )
+        self.assertEqual(opened.call_count, 2)
+        slept.assert_called_once_with(0.25)
+        self.assertTrue(first.closed)
+
+    def test_http_200_envelopeless_code15_fails_over_chain_probe(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if url == SECRET_ENDPOINT:
+                return envelopeless_http_200(LIVE_CODE15_ERROR)
+            return Response(b'{"result":"0x2105"}')
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept:
+            selected = select_working_base_rpc(
+                endpoints=(SECRET_ENDPOINT, "https://second.local"),
+                max_retries=1,
+            )
+        self.assertEqual(selected, "https://second.local")
+        self.assertEqual(
+            seen,
+            [
+                (SECRET_ENDPOINT, "eth_chainId"),
+                ("https://second.local", "eth_chainId"),
+            ],
+        )
+        self.assertEqual(opened.call_count, 2)
+        slept.assert_not_called()
+
+        seen.clear()
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            result = rpc_failover(
+                "eth_chainId",
+                [],
+                endpoints=(SECRET_ENDPOINT, "https://second.local"),
+                max_retries=1,
+            )
+        self.assertEqual(result, hex(BASE_CHAIN_ID))
+        self.assertEqual(
+            seen,
+            [
+                (SECRET_ENDPOINT, "eth_chainId"),
+                ("https://second.local", "eth_chainId"),
+            ],
+        )
+
+    def test_http_200_envelopeless_code15_fails_over_target_method(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if method == "eth_chainId":
+                return Response(b'{"result":"0x2105"}')
+            if url == SECRET_ENDPOINT:
+                return envelopeless_http_200(LIVE_CODE15_ERROR)
+            return Response(b'{"result":"0xabc"}')
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response), patch(
+            "_shared.rpc.time.sleep"
+        ):
+            result = rpc_failover(
+                "eth_blockNumber",
+                [],
+                endpoints=(SECRET_ENDPOINT, "https://second.local"),
+                max_retries=1,
+            )
+        self.assertEqual(result, "0xabc")
+        self.assertEqual(
+            seen,
+            [
+                (SECRET_ENDPOINT, "eth_chainId"),
+                (SECRET_ENDPOINT, "eth_blockNumber"),
+                ("https://second.local", "eth_chainId"),
+                ("https://second.local", "eth_blockNumber"),
+            ],
+        )
+
+    def test_http_200_malformed_and_falsey_errors_retry_then_recover(self) -> None:
+        valid_error = {"code": -32000, "message": "execution reverted"}
+        cases: tuple[dict[str, object], ...] = (
+            {"error": LIVE_CODE15_ERROR},
+            {"id": 1, "error": valid_error},
+            {"jsonrpc": "1.0", "id": 1, "error": valid_error},
+            {"jsonrpc": "2", "id": 1, "error": valid_error},
+            {"jsonrpc": 2.0, "id": 1, "error": valid_error},
+            {"jsonrpc": "2.0", "error": valid_error},
+            {"jsonrpc": "2.0", "id": 999, "error": valid_error},
+            {"jsonrpc": "2.0", "id": "1", "error": valid_error},
+            {"jsonrpc": "2.0", "id": True, "error": valid_error},
+            {"jsonrpc": "2.0", "id": 1.0, "error": valid_error},
+            {"jsonrpc": "2.0", "id": None, "error": valid_error},
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": 15, "message": LIVE_CODE15_MESSAGE},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": True, "message": "bad"},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32000.0, "message": "bad"},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": "-32000", "message": "bad"},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32000, "message": 7},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32000, "message": None},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": None,
+                "error": valid_error,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": "0x2105",
+                "error": valid_error,
+            },
+            {"error": None},
+            {"error": {}},
+            {"error": False},
+            {"error": 0},
+            {"error": ""},
+            {"error": []},
+            {"jsonrpc": "2.0", "id": 1, "error": None},
+            {"jsonrpc": "2.0", "id": 1, "error": {}},
+            {"jsonrpc": "2.0", "id": 1, "error": False},
+            {"jsonrpc": "2.0", "id": 1, "error": []},
+        )
+        for envelope in cases:
+            with self.subTest(envelope=envelope):
+                first = http_200_json(envelope)
+                with patch(
+                    "_shared.rpc.urlopen",
+                    side_effect=[first, Response(b'{"result":"0x14a34"}')],
+                ) as opened, patch("_shared.rpc.time.sleep") as slept:
+                    result = rpc(SECRET_ENDPOINT, "eth_chainId", [], retry_delay=0)
+                self.assertEqual(result, "0x14a34")
+                self.assertEqual(opened.call_count, 2)
+                slept.assert_called_once_with(0)
+                self.assertTrue(first.closed)
+
+    def test_http_200_matching_jsonrpc_error_never_retries(self) -> None:
+        cases = (
+            ({"code": -32000, "message": "execution reverted"}, 1, "eth_call"),
+            ({"code": -1, "message": "bad"}, 7, "eth_chainId"),
+            (
+                {
+                    "code": 15,
+                    "message": LIVE_CODE15_MESSAGE,
+                    "data": {"credential": "rpc-error-data-secret-marker"},
+                    "extra": "rpc-error-data-secret-marker",
+                },
+                1,
+                "eth_chainId",
+            ),
+        )
+        for error, request_id, method in cases:
+            with self.subTest(request_id=request_id, method=method, code=error["code"]):
+                first = jsonrpc_error_response(error, response_id=request_id)
+                with patch("_shared.rpc.urlopen", return_value=first) as opened, patch(
+                    "_shared.rpc.time.sleep"
+                ) as slept, self.assertRaises(RpcError) as raised:
+                    rpc(
+                        SECRET_ENDPOINT,
+                        method,
+                        [],
+                        request_id,
+                        attempts=3,
+                        retry_delay=0,
+                    )
+                self.assertEqual(opened.call_count, 1)
+                slept.assert_not_called()
+                self.assertTrue(first.closed)
+                payload = json.loads(str(raised.exception).split("failed: ", 1)[1])
+                self.assertEqual(
+                    payload,
+                    {"code": error["code"], "message": error["message"]},
+                )
+                surface = exception_chain_text(raised.exception)
+                self.assertNotIn('"data"', surface)
+                self.assertNotIn('"extra"', surface)
+                self.assertNotIn("rpc-error-data-secret-marker", surface)
+                for fragment in SECRET_FRAGMENTS:
+                    self.assertNotIn(fragment, surface)
+                for node in walk_exception_chain(raised.exception):
+                    self.assertNotIsInstance(node, HTTPError)
+                    self.assertNotIsInstance(node, TransportError)
+
+        string_error = jsonrpc_error_response(
+            {"code": -32000, "message": "string id error"},
+            response_id="request-1",
+        )
+        with patch("_shared.rpc.urlopen", return_value=string_error) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaisesRegex(RpcError, "string id error"):
+            rpc(
+                SECRET_ENDPOINT,
+                "eth_call",
+                [],
+                "request-1",  # type: ignore[arg-type]
+                attempts=3,
+                retry_delay=0,
+            )
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+
+        for code, message in ((-32700, "Parse error"), (-32600, "Invalid Request")):
+            with self.subTest(null_id_code=code):
+                first = jsonrpc_error_response(
+                    {"code": code, "message": message},
+                    response_id=None,
+                )
+                with patch(
+                    "_shared.rpc.urlopen", return_value=first
+                ) as opened, patch("_shared.rpc.time.sleep") as slept, self.assertRaises(
+                    RpcError
+                ) as raised:
+                    rpc(SECRET_ENDPOINT, "eth_call", [], attempts=3, retry_delay=0)
+                self.assertEqual(opened.call_count, 1)
+                slept.assert_not_called()
+                payload = json.loads(str(raised.exception).split("failed: ", 1)[1])
+                self.assertEqual(payload, {"code": code, "message": message})
+                for node in walk_exception_chain(raised.exception):
+                    self.assertNotIsInstance(node, HTTPError)
+                    self.assertNotIsInstance(node, TransportError)
+
+    def test_http_200_matching_jsonrpc_error_never_fails_over(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        def open_response(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            if method == "eth_chainId":
+                return Response(b'{"result":"0x2105"}')
+            return jsonrpc_error_response(
+                {
+                    "code": -32000,
+                    "message": "execution reverted",
+                    "data": {"endpoint": SECRET_ENDPOINT},
+                    "extra": "rpc-error-data-secret-marker",
+                }
+            )
+
+        with patch("_shared.rpc.urlopen", side_effect=open_response) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaises(RpcError) as raised:
+            rpc_failover(
+                "eth_call",
+                [],
+                endpoints=(SECRET_ENDPOINT, "https://second.local"),
+                max_retries=3,
+            )
+        self.assertEqual(
+            seen,
+            [(SECRET_ENDPOINT, "eth_chainId"), (SECRET_ENDPOINT, "eth_call")],
+        )
+        self.assertEqual(opened.call_count, 2)
+        slept.assert_not_called()
+        payload = json.loads(str(raised.exception).split("failed: ", 1)[1])
+        self.assertEqual(
+            payload, {"code": -32000, "message": "execution reverted"}
+        )
+        surface = exception_chain_text(raised.exception)
+        self.assertNotIn('"data"', surface)
+        self.assertNotIn('"extra"', surface)
+        self.assertNotIn("rpc-error-data-secret-marker", surface)
+        for fragment in SECRET_FRAGMENTS:
+            self.assertNotIn(fragment, surface)
+        for node in walk_exception_chain(raised.exception):
+            self.assertNotIsInstance(node, HTTPError)
+            self.assertNotIsInstance(node, TransportError)
+
+        seen.clear()
+
+        def open_null_parse(request: object, **_kwargs: object) -> Response:
+            url = str(getattr(request, "full_url"))
+            method = request_method(request)
+            seen.append((url, method))
+            return jsonrpc_error_response(
+                {"code": -32700, "message": "Parse error"},
+                response_id=None,
+            )
+
+        with patch("_shared.rpc.urlopen", side_effect=open_null_parse) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaisesRegex(RpcError, "Parse error") as raised:
+            rpc_failover(
+                "eth_call",
+                [],
+                endpoints=(SECRET_ENDPOINT, "https://second.local"),
+                max_retries=3,
+            )
+        self.assertEqual(seen, [(SECRET_ENDPOINT, "eth_chainId")])
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+        self.assertIn('"code": -32700', str(raised.exception))
+
+    def test_http_200_jsonrpc_long_secret_message_is_redacted_and_truncated(
+        self,
+    ) -> None:
+        data_secret = "rpc-error-data-secret-marker"
+        tail_secret = "rpc-error-message-tail-secret"
+        indicator = RPC_ERROR_MESSAGE_TRUNCATION_INDICATOR
+        keep = max(MAX_RPC_ERROR_MESSAGE_CHARS - len(indicator), 0)
+        long_message = ("x" * keep) + tail_secret
+        self.assertGreater(len(long_message), MAX_RPC_ERROR_MESSAGE_CHARS)
+        expected_message = (long_message[:keep] + indicator)[
+            :MAX_RPC_ERROR_MESSAGE_CHARS
+        ]
+        self.assertEqual(len(expected_message), MAX_RPC_ERROR_MESSAGE_CHARS)
+        error_fields: dict[str, object] = {
+            "code": -32000,
+            "message": long_message,
+            "data": {"credential": data_secret, "endpoint": SECRET_ENDPOINT},
+            "extra": data_secret,
+        }
+        expected_exc = (
+            "RPC eth_call failed: "
+            + json.dumps(
+                {"code": -32000, "message": expected_message},
+                sort_keys=True,
+            )
+        )
+
+        first = jsonrpc_error_response(error_fields)
+        with patch("_shared.rpc.urlopen", return_value=first) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaises(RpcError) as raised:
+            rpc(SECRET_ENDPOINT, "eth_call", [], attempts=3, retry_delay=0.25)
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+        self.assertTrue(first.closed)
+        self.assertEqual(str(raised.exception), expected_exc)
+        payload = json.loads(str(raised.exception).split("failed: ", 1)[1])
+        self.assertEqual(payload, {"code": -32000, "message": expected_message})
+        surface = exception_chain_text(raised.exception)
+        for fragment in (data_secret, tail_secret, long_message, *SECRET_FRAGMENTS):
+            self.assertNotIn(fragment, surface)
+        self.assertNotIn('"data"', surface)
+        self.assertNotIn('"extra"', surface)
+        for node in walk_exception_chain(raised.exception):
+            self.assertNotIsInstance(node, HTTPError)
+            self.assertNotIsInstance(node, TransportError)
+
+        echoed = f"execution reverted at {SECRET_ENDPOINT}"
+        expected_redacted = _without_absolute_urls(echoed)
+        echoed_error = jsonrpc_error_response(
+            {
+                "code": -32000,
+                "message": echoed,
+                "data": {"endpoint": SECRET_ENDPOINT, "credential": data_secret},
+                "extra": data_secret,
+            }
+        )
+        with patch("_shared.rpc.urlopen", return_value=echoed_error) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaises(RpcError) as raised:
+            rpc(SECRET_ENDPOINT, "eth_call", [], attempts=3, retry_delay=0)
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+        payload = json.loads(str(raised.exception).split("failed: ", 1)[1])
+        self.assertEqual(
+            payload, {"code": -32000, "message": expected_redacted}
+        )
+        self.assertIn("<redacted-url>", payload["message"])
+        surface = exception_chain_text(raised.exception)
+        for fragment in (*SECRET_FRAGMENTS, data_secret):
+            self.assertNotIn(fragment, surface)
+        self.assertNotIn("https://", str(raised.exception))
+        self.assertNotIn('"data"', surface)
+        self.assertNotIn('"extra"', surface)
+
+    def test_http_200_5000_digit_json_integer_retries_then_recovers(self) -> None:
+        oversized = b'{"result":' + (b"1" * 5000) + b"}"
+        first = Response(oversized)
+        with patch("_shared.rpc.urlopen", side_effect=[first]) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept, self.assertRaises(RuntimeError) as raised:
+            rpc(SECRET_ENDPOINT, "eth_chainId", [], attempts=1, retry_delay=0)
+        self.assertEqual(opened.call_count, 1)
+        slept.assert_not_called()
+        self.assertTrue(first.closed)
+        surface = exception_chain_text(raised.exception)
+        self.assertIn("RPC response was invalid", surface)
+        self.assertNotIn("1" * 32, surface)
+        self.assertNotIn("5000 digits", surface)
+        self.assertNotIn("4300 digits", surface)
+        self.assertTrue(
+            any(
+                isinstance(node, TransportError) and node.retryable
+                for node in walk_exception_chain(raised.exception)
+            )
+        )
+        for node in walk_exception_chain(raised.exception):
+            self.assertNotIsInstance(node, RpcError)
+
+        first = Response(oversized)
+        responses = [first, Response(b'{"result":"0x14a34"}')]
+        with patch("_shared.rpc.urlopen", side_effect=responses) as opened, patch(
+            "_shared.rpc.time.sleep"
+        ) as slept:
+            self.assertEqual(
+                rpc(SECRET_ENDPOINT, "eth_chainId", [], retry_delay=0.25),
+                "0x14a34",
+            )
+        self.assertEqual(opened.call_count, 2)
+        slept.assert_called_once_with(0.25)
+        self.assertTrue(first.closed)
 
 
 if __name__ == "__main__":

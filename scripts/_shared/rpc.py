@@ -154,18 +154,14 @@ def _jsonrpc_id_binds_to_request(
     return False
 
 
-def _jsonrpc_error_object(raw: bytes, request_id: object) -> tuple[int, str] | None:
-    """Return matching JSON-RPC 2.0 code and message, else None.
+def _jsonrpc_error_fields(
+    parsed: object, request_id: object
+) -> tuple[int, str] | None:
+    """Return matching JSON-RPC 2.0 code and message from a parsed object.
 
     Message length is not a recognition criterion. Safe projection bounds
     the message when raising RpcError.
     """
-    if not raw or len(raw) > MAX_RPC_ERROR_BODY_BYTES:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        return None
     if not isinstance(parsed, dict):
         return None
     if parsed.get("jsonrpc") != "2.0":
@@ -186,6 +182,21 @@ def _jsonrpc_error_object(raw: bytes, request_id: object) -> tuple[int, str] | N
     if not _jsonrpc_id_binds_to_request(parsed["id"], request_id, code):
         return None
     return code, message
+
+
+def _jsonrpc_error_object(raw: bytes, request_id: object) -> tuple[int, str] | None:
+    """Return matching JSON-RPC 2.0 code and message, else None.
+
+    Parses at most MAX_RPC_ERROR_BODY_BYTES and delegates field validation
+    to _jsonrpc_error_fields. Message length is not a recognition criterion.
+    """
+    if not raw or len(raw) > MAX_RPC_ERROR_BODY_BYTES:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return None
+    return _jsonrpc_error_fields(parsed, request_id)
 
 
 def _project_rpc_error_message(message: str) -> str:
@@ -262,7 +273,7 @@ def _rpc_call(
             f"{_without_absolute_urls(error)}",
             retryable=True,
         )
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
         transport_error = TransportError(
             f"RPC response was invalid for {method} at {_redact_endpoint(endpoint)}",
             retryable=True,
@@ -281,9 +292,17 @@ def _rpc_call(
             f"RPC response was not an object for {method} at {_redact_endpoint(endpoint)}",
             retryable=True,
         )
-    if body.get("error"):
+    if "error" in body:
+        recognized = _jsonrpc_error_fields(body, request_id)
+        if recognized is None:
+            raise TransportError(
+                f"RPC response was invalid for {method} at {_redact_endpoint(endpoint)}",
+                retryable=True,
+            )
+        code, message = recognized
         raise RpcError(
-            f"RPC {method} failed: {json.dumps(body['error'], sort_keys=True)}"
+            f"RPC {method} failed: "
+            f"{json.dumps({'code': code, 'message': _project_rpc_error_message(message)}, sort_keys=True)}"
         )
     return body.get("result")
 
