@@ -12,5 +12,11 @@
     "system"
   ],
   "maintainer_wallets": [],
+  "excluded_bounty_contracts": [
+    "0x3e052b933628b960d61654a68fca23d869d8989f",
+    "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+    "0xf8c8897e748e4057d52182c27beb4025f4d49d68",
+    "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa"
+  ],
   "wallet_ownership_boundary": "Wallet ownership is never inferred. Only addresses deliberately added to this public policy are excluded as maintainer-controlled."
 }

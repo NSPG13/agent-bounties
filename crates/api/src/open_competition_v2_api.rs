@@ -8,14 +8,16 @@ use axum::{
 };
 use chain_base::{
     fetch_block_number, fetch_exact_block_identity, fetch_transaction_receipt,
-    plan_open_competition_v2_action, plan_open_competition_v2_broker_payment,
-    plan_open_competition_v2_creation, plan_open_competition_v2_funding,
-    plan_open_competition_v2_proof, validate_open_competition_v2_release, ChainBaseError,
+    normalize_evm_address, plan_open_competition_v2_action,
+    plan_open_competition_v2_broker_payment, plan_open_competition_v2_creation,
+    plan_open_competition_v2_funding, plan_open_competition_v2_proof,
+    validate_open_competition_v2_release, ChainBaseError,
     OpenCompetitionV2BrokerPaymentAuthorization, OpenCompetitionV2CreateParams,
-    OpenCompetitionV2CreationRequest, OpenCompetitionV2ProgramClassification,
-    OpenCompetitionV2ProofSystem, OpenCompetitionV2Release, OpenCompetitionV2ScoreDirection,
-    OpenCompetitionV2WinnerMode, OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-    OPEN_COMPETITION_V2_BASE_USDC, OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+    OpenCompetitionV2CreationRequest, OpenCompetitionV2EventKind,
+    OpenCompetitionV2ProgramClassification, OpenCompetitionV2ProofSystem, OpenCompetitionV2Release,
+    OpenCompetitionV2ScoreDirection, OpenCompetitionV2WinnerMode,
+    OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC, OPEN_COMPETITION_V2_BASE_USDC,
+    OPEN_COMPETITION_V2_PROTOCOL_VERSION,
 };
 use chrono::{DateTime, Utc};
 use competition_metric_core::{
@@ -82,6 +84,10 @@ pub(crate) fn router() -> Router<SharedState> {
         .route(
             "/v1/base/open-competition-v2-beta3/proof-preparation",
             post(prepare_proof),
+        )
+        .route(
+            "/v1/base/open-competition-v2-beta3/proof-attribution",
+            get(proof_attribution),
         )
         .route(
             "/v1/base/open-competition-v2-beta3/action-preparation",
@@ -206,6 +212,13 @@ pub(crate) struct ProofQuoteBody {
     artifact_hash: String,
     relay: bool,
     metric: ProofMetricBody,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProofAttributionQuery {
+    network: Option<String>,
+    competition_contract: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -842,6 +855,104 @@ pub(crate) async fn get_proof_job(
         "job": job,
         "next_action": proof_job_next_action(job.state),
         "evidence_boundary": "Only canonical payment and refund evidence attached to the job proves money movement. A hosted state alone does not."
+    })))
+}
+
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta3/proof-attribution", params(("network" = Option<String>, Query, description = "Base network"), ("competition_contract" = String, Query, description = "Exact competition contract")), responses((status = 200, description = "Public hosted-proof, x402, relay, and settlement attribution"), (status = 404, description = "No hosted proof jobs found")))]
+pub(crate) async fn proof_attribution(
+    State(state): State<SharedState>,
+    Query(query): Query<ProofAttributionQuery>,
+) -> ApiResult {
+    let network = network_or_default(query.network);
+    let competition_contract =
+        normalize_evm_address(&query.competition_contract).map_err(|_| {
+            bad_request(
+                "proof_attribution",
+                "competition_contract_invalid",
+                "Use the exact EVM competition contract address.",
+            )
+        })?;
+    let release = release_from_environment(&network)?;
+    current_indexer_agreement(&state, &network, &release).await?;
+    let store = state.store.as_ref().ok_or_else(database_unavailable)?;
+    let jobs = store
+        .list_open_competition_v2_proof_jobs_for_contract(&network, &competition_contract)
+        .await
+        .map_err(|error| {
+            service_error(
+                "proof_attribution",
+                "proof_job_read_failed",
+                error.to_string(),
+            )
+        })?;
+    if jobs.is_empty() {
+        return Err(not_found(
+            "proof_attribution",
+            "hosted_proof_jobs_not_found",
+        ));
+    }
+    let events = store
+        .list_open_competition_v2_events_for_contract(&network, &competition_contract)
+        .await
+        .map_err(|error| {
+            service_error(
+                "proof_attribution",
+                "canonical_event_read_failed",
+                error.to_string(),
+            )
+        })?;
+    let relayer = state.x402_relayer.address();
+    let attributed = jobs
+        .iter()
+        .map(|job| {
+            let settlement = events.iter().find(|event| {
+                event.kind == OpenCompetitionV2EventKind::CompetitionSettled
+                    && event
+                        .data
+                        .get("solver")
+                        .and_then(Value::as_str)
+                        .is_some_and(|solver| solver.eq_ignore_ascii_case(&job.solver))
+            });
+            json!({
+                "proof_job_id": job.id,
+                "solver_wallet": job.solver,
+                "state": job.state,
+                "x402_payment": {
+                    "payer": job.payer,
+                    "transaction_hash": job.payment_tx_hash,
+                    "canonical_evidence_recorded": job.payment_evidence.is_some()
+                },
+                "hosted_proof": {
+                    "used": job.proof_provider_job_id.is_some(),
+                    "provider": "agent-bounties-hosted-sp1",
+                    "provider_job_recorded": job.proof_provider_job_id.is_some()
+                },
+                "hosted_relay": {
+                    "requested": job.requested_relay,
+                    "used": job.relay_tx_hash.is_some(),
+                    "relayer_wallet": relayer,
+                    "transaction_hash": job.relay_tx_hash
+                },
+                "canonical_settlement": settlement.map(|event| json!({
+                    "event": "CompetitionSettledV2",
+                    "transaction_hash": event.tx_hash,
+                    "block_number": event.block_number,
+                    "solver_reward": event.data.get("solver_reward"),
+                    "keeper_wallet": event.data.get("keeper"),
+                    "keeper_reward": event.data.get("keeper_reward")
+                })),
+                "contactability": "wallet_only_unless_the_solver_registers_a_signed_contact_profile"
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "schema_version": "agent-bounties/open-competition-v2-proof-attribution-v1",
+        "protocol_version": OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+        "network": network,
+        "competition_contract": competition_contract,
+        "jobs": attributed,
+        "identity_boundary": "A solver wallet is canonical attribution, not a verified person. Contact requires a separately signed contact profile.",
+        "evidence_boundary": "The proof-job record attributes hosted services. Only CompetitionSettledV2 proves solver and keeper payment."
     })))
 }
 

@@ -1,8 +1,8 @@
 # Open Competition V2 Beta3
 
-Status: implementation beta, not deployed. Creation and hosted proving remain
-disabled until the release gates below produce matching evidence. V2 is
-opt-in and is not the default bounty protocol.
+Status: Base-mainnet public beta. Creation and hosted proving are enabled only
+while the immutable release and primary/shadow safe-block indexers agree. V2
+is opt-in and is not yet the default bounty protocol.
 
 The exact release procedure and current blockers are in
 [`open-competition-v2-beta3-release.md`](open-competition-v2-beta3-release.md).
@@ -208,6 +208,14 @@ selector, a journal mismatch, deterministic relay rejection, or an expired SLA
 becomes `refund_due`. HTTP 429, HTTP 5xx, and transport failures retry only
 until the SLA. Provider credentials are sent as an optional bearer token and
 are never included in proof-job records or public evidence.
+
+Hosted-service attribution is public at
+`GET /v1/base/open-competition-v2-beta3/proof-attribution`. Pass the exact
+`competition_contract`. The response joins each proof job to its x402 payment,
+the project SP1 prover record, hosted relayer wallet and transaction, and the
+safe-block `CompetitionSettledV2` event. It never claims that a wallet is a
+person. Private contact requires a separately signed, consented contact
+profile; permissionless direct solvers may remain pseudonymous.
 
 ## Program Catalog
 

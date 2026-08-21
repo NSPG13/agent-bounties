@@ -242,6 +242,7 @@ use worker::{
         open_competition_v2_api::prepare_proof,
         open_competition_v2_api::prepare_action,
         open_competition_v2_api::get_proof_job,
+        open_competition_v2_api::proof_attribution,
         open_competition_v2_api::pay_proof_job,
         open_competition_v2_api::authorize_proof_job_relay,
         get_standing_meta_v4_readiness,
@@ -1550,6 +1551,7 @@ struct PublicMetricsPolicy {
     maintainer_github_logins: Vec<String>,
     maintainer_comment_authors: Vec<String>,
     maintainer_wallets: Vec<String>,
+    excluded_bounty_contracts: Vec<String>,
     wallet_ownership_boundary: String,
 }
 
@@ -1605,6 +1607,7 @@ struct PlatformPayoutMetricsResponse {
     lifetime: PlatformAmountResponse,
     selected_solver_pay: PlatformAmountResponse,
     selected_verifier_pay: PlatformAmountResponse,
+    selected_keeper_pay: PlatformAmountResponse,
     selected_completion_bonus: PlatformAmountResponse,
     selected_settled_rounds: u64,
     previous_settled_rounds: u64,
@@ -1650,6 +1653,7 @@ struct PlatformCoverageResponse {
     status: String,
     autonomous_indexer_fresh: bool,
     open_competition_indexer_fresh: bool,
+    open_competition_v2_indexer_fresh: bool,
     verified_canonical_events: u64,
     awaiting_block_time_events: u64,
     opportunity_comments: u64,
@@ -2016,11 +2020,12 @@ struct OpenCompetitionInventorySummary {
 struct PlatformCanonicalSourceFreshness {
     autonomous: bool,
     open_competition: bool,
+    open_competition_v2: bool,
 }
 
 impl PlatformCanonicalSourceFreshness {
     fn complete(self) -> bool {
-        self.autonomous && self.open_competition
+        self.autonomous && self.open_competition && self.open_competition_v2
     }
 }
 
@@ -5163,6 +5168,12 @@ fn public_metrics_policy() -> Result<PublicMetricsPolicy, StatusCode> {
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .collect();
+    policy.excluded_bounty_contracts = policy
+        .excluded_bounty_contracts
+        .into_iter()
+        .map(|value| normalize_evm_address(&value).map(|value| value.to_ascii_lowercase()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(policy)
 }
 
@@ -5286,7 +5297,7 @@ fn platform_metrics_response(
     );
     definitions.insert(
         "marketplace_payout_volume".to_string(),
-        "Confirmed solver reward, verifier reward, and completion bonus from block-time-verified BountySettled events across Autonomous and Open Competition, plus verifier pay from block-time-verified SubmissionRejected and CompetitionSubmissionRejected events. Returned bonds, refunds, funding plans, and prizes are excluded.".to_string(),
+        "Confirmed solver, verifier, keeper, and completion-bonus payouts from canonical BountySettled and CompetitionSettledV2 events, plus verifier pay from canonical rejection events. Returned bonds, refunds, funding plans, prizes, and declared synthetic canaries are excluded.".to_string(),
     );
     definitions.insert(
         "mature_claim_to_settlement".to_string(),
@@ -5345,6 +5356,7 @@ fn platform_metrics_response(
             lifetime: platform_amount(stats.payouts.lifetime_total_base_units)?,
             selected_solver_pay: platform_amount(stats.payouts.selected_solver_base_units)?,
             selected_verifier_pay: platform_amount(stats.payouts.selected_verifier_base_units)?,
+            selected_keeper_pay: platform_amount(stats.payouts.selected_keeper_base_units)?,
             selected_completion_bonus: platform_amount(stats.payouts.selected_bonus_base_units)?,
             selected_settled_rounds: stats.payouts.selected_settled_rounds,
             previous_settled_rounds: stats.payouts.previous_settled_rounds,
@@ -5378,6 +5390,7 @@ fn platform_metrics_response(
             status: coverage_status.to_string(),
             autonomous_indexer_fresh: source_freshness.autonomous,
             open_competition_indexer_fresh: source_freshness.open_competition,
+            open_competition_v2_indexer_fresh: source_freshness.open_competition_v2,
             verified_canonical_events: stats.coverage.verified_canonical_events,
             awaiting_block_time_events: stats.coverage.awaiting_block_time_events,
             opportunity_comments: stats.coverage.opportunity_comments,
@@ -5399,7 +5412,7 @@ fn platform_metrics_response(
             ],
         },
         definitions,
-        evidence_boundary: "This public response contains aggregate counts and amounts only. Canonical metrics use events whose Base block time has been verified. It returns no wallet, GitHub, comment-author, event, transaction, or customer identifiers. GitHub participation is intentionally generated as a separate aggregate snapshot to avoid double counting. Only confirmed canonical BountySettled proves solver payment.".to_string(),
+        evidence_boundary: "This public response contains aggregate counts and amounts only. Canonical metrics use block-time-verified legacy events and safe-block V2 events. It returns no wallet, GitHub, comment-author, event, transaction, or customer identifiers. GitHub participation is intentionally generated as a separate aggregate snapshot to avoid double counting. Only BountySettled or CompetitionSettledV2 proves solver payment.".to_string(),
     })
 }
 
@@ -5435,6 +5448,7 @@ async fn platform_canonical_source_freshness(
         return PlatformCanonicalSourceFreshness {
             autonomous: false,
             open_competition: false,
+            open_competition_v2: false,
         };
     };
     let autonomous = if let Some(factory) = autonomous_factory_for_chain(8_453) {
@@ -5456,9 +5470,19 @@ async fn platform_canonical_source_freshness(
             .is_some_and(|heartbeat| public_metrics_indexer_heartbeat_fresh(&heartbeat, now)),
         Err(_) => false,
     };
+    let open_competition_v2 =
+        match open_competition_v2_api::release_from_environment("base-mainnet") {
+            Ok(release) => {
+                open_competition_v2_api::current_indexer_agreement(state, "base-mainnet", &release)
+                    .await
+                    .is_ok()
+            }
+            Err(_) => false,
+        };
     PlatformCanonicalSourceFreshness {
         autonomous,
         open_competition,
+        open_competition_v2,
     }
 }
 
@@ -5482,7 +5506,10 @@ async fn platform_metrics(
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let window = platform_metric_window(query.period.as_deref(), Utc::now())?;
     let policy = public_metrics_policy()?;
-    let excluded_contracts = state.recovery_reservations.contracts();
+    let mut excluded_contracts = state.recovery_reservations.contracts();
+    excluded_contracts.extend(policy.excluded_bounty_contracts.iter().cloned());
+    excluded_contracts.sort();
+    excluded_contracts.dedup();
     let stats = store
         .platform_metrics_stats(
             "base-mainnet",
@@ -19529,6 +19556,7 @@ mod tests {
                 lifetime_total_base_units: "1350000".to_string(),
                 selected_solver_base_units: "1000000".to_string(),
                 selected_verifier_base_units: "200000".to_string(),
+                selected_keeper_base_units: "0".to_string(),
                 selected_bonus_base_units: "50000".to_string(),
                 selected_settled_rounds: 1,
                 previous_settled_rounds: 0,
@@ -19566,12 +19594,17 @@ mod tests {
             PlatformCanonicalSourceFreshness {
                 autonomous: true,
                 open_competition: true,
+                open_competition_v2: true,
             },
         )
         .unwrap();
         let json = serde_json::to_string(&response).unwrap();
 
         assert_eq!(response.marketplace_payout_volume.selected.usdc, "1.250000");
+        assert_eq!(
+            response.marketplace_payout_volume.selected_keeper_pay.usdc,
+            "0.000000"
+        );
         assert_eq!(
             response.mature_claim_to_settlement.settlement_rate,
             Some(0.5)
@@ -19663,6 +19696,7 @@ mod tests {
                         lifetime_total_base_units: "0".to_string(),
                         selected_solver_base_units: "0".to_string(),
                         selected_verifier_base_units: "0".to_string(),
+                        selected_keeper_base_units: "0".to_string(),
                         selected_bonus_base_units: "0".to_string(),
                         selected_settled_rounds: 0,
                         previous_settled_rounds: 0,
@@ -19694,6 +19728,7 @@ mod tests {
                 PlatformCanonicalSourceFreshness {
                     autonomous: true,
                     open_competition: true,
+                    open_competition_v2: true,
                 },
             )
             .unwrap()
@@ -19799,6 +19834,7 @@ mod tests {
             "/v1/base/open-competition-v2-beta3/events",
             "/v1/base/open-competition-v2-beta3/proof-quotes",
             "/v1/base/open-competition-v2-beta3/proof-preparation",
+            "/v1/base/open-competition-v2-beta3/proof-attribution",
             "/v1/base/open-competition-v2-beta3/action-preparation",
             "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}",
             "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment",

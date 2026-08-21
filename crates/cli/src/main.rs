@@ -5854,7 +5854,11 @@ fn is_doc_contract_file(path: &Path) -> bool {
 
 fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
     let mut routes = BTreeSet::new();
-    for relative_path in ["crates/api/src/main.rs", "crates/mcp-server/src/main.rs"] {
+    for relative_path in [
+        "crates/api/src/main.rs",
+        "crates/api/src/open_competition_v2_api.rs",
+        "crates/mcp-server/src/main.rs",
+    ] {
         let source_path = contract_root.join(relative_path);
         let source = fs::read_to_string(&source_path)
             .with_context(|| format!("failed to read {}", source_path.display()))?;
