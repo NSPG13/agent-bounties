@@ -186,6 +186,8 @@ h2 {
 
 .steps li div { display: grid; gap: 3px; min-width: 0; }
 .steps a { overflow-wrap: anywhere; color: var(--lime-bright); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.8rem; }
+.steps code { overflow-wrap: anywhere; }
+.steps small { color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
 
 .interface-grid,
 .workflow-grid {

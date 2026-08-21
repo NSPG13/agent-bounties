@@ -12,6 +12,8 @@
     "repository",
     "website",
     "default_cta",
+    "agent_entrypoints",
+    "live_inventory",
     "protocol",
     "endpoints",
     "agent_tools",
@@ -40,6 +42,47 @@
       "properties": {
         "label": { "const": "Post your own bounty" },
         "href": { "$ref": "#/$defs/uri" }
+      },
+      "additionalProperties": false
+    },
+    "agent_entrypoints": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["name", "transport", "endpoint", "description"],
+        "properties": {
+          "name": {
+            "enum": ["orientation", "remote_mcp", "rest_api", "portable_skill"]
+          },
+          "transport": { "type": "string", "minLength": 1 },
+          "endpoint": { "$ref": "#/$defs/uri" },
+          "description": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "live_inventory": {
+      "type": "object",
+      "required": [
+        "claimable_feed",
+        "summary",
+        "badge",
+        "human_entry",
+        "portable_check",
+        "authority",
+        "standing_meta_economics"
+      ],
+      "properties": {
+        "claimable_feed": { "$ref": "#/$defs/uri" },
+        "summary": { "$ref": "#/$defs/uri" },
+        "badge": { "$ref": "#/$defs/uri" },
+        "human_entry": { "$ref": "#/$defs/uri" },
+        "portable_check": { "type": "string", "minLength": 1 },
+        "authority": { "type": "string", "minLength": 1 },
+        "standing_meta_economics": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false
     },
@@ -169,6 +212,7 @@
       "additionalProperties": { "type": "string", "minLength": 1 }
     },
     "agent_tools": {
+      "description": "Tool names across Agent Bounties interfaces. Remote MCP clients must initialize and call tools/list, then use only the tools returned for that session; advanced HTTP tool names are not guaranteed MCP tools.",
       "type": "array",
       "minItems": 10,
       "uniqueItems": true,

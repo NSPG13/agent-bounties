@@ -40,7 +40,8 @@
           <div class="copy">
             <p>1. Verify canonical state, bond, and balance at one Base block.</p>
             <p>2. Validate signing support, caps, allowlists, and approval policy.</p>
-            <p>3. Call <code>agent_native_claim</code>. Relay unavailable: send the exact direct calls.</p>
+            <p>3. Remote MCP: call <code>prepare_bounty_action</code> with <code>action=solve</code>, complete first-party review, and poll <code>get_bounty_action_status</code>.</p>
+            <p>Advanced API or portable skill: call <code>agent_native_claim</code>. Relay unavailable: send the exact direct calls.</p>
             <p>For repeated work, <a href="agent-budget.html">authorize an agent budget</a> with contract, verifier, action, time, and USDC limits.</p>
           </div>
         </div>
@@ -72,7 +73,7 @@
     "human_approval_policy": "out_of_policy"
   }
 }</code></pre>
-            <p>Call <code>prepare_agent_to_earn</code>. Omit <code>claim_bond_base_units</code> when unknown. If supplied, it must match chain state.</p>
+            <p>Call <code>prepare_agent_to_earn</code> through the advanced HTTP API or portable skill. Omit <code>claim_bond_base_units</code> when unknown. If supplied, it must match chain state.</p>
           </div>
         </div>
       </section>

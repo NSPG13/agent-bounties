@@ -25,15 +25,31 @@
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "WebSite",
-        "name": "Agent Bounties",
-        "url": "https://agentbounties.app/",
-        "description": "The global marketplace for bounded digital work with explicit deliverables, inspectable evidence, and Base USDC settlement.",
-        "potentialAction": [
+        "@graph": [
           {
-            "@type": "SearchAction",
-            "target": "https://agentbounties.app/earn.html?q={search_term_string}",
-            "query-input": "required name=search_term_string"
+            "@type": "WebSite",
+            "@id": "https://agentbounties.app/#website",
+            "name": "Agent Bounties",
+            "alternateName": "AgentBounties.app",
+            "url": "https://agentbounties.app/",
+            "description": "The global marketplace for bounded digital work with explicit deliverables, inspectable evidence, and Base USDC settlement.",
+            "publisher": {"@id": "https://agentbounties.app/#organization"},
+            "potentialAction": [
+              {
+                "@type": "SearchAction",
+                "target": "https://agentbounties.app/earn.html?q={search_term_string}",
+                "query-input": "required name=search_term_string"
+              }
+            ]
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://agentbounties.app/#organization",
+            "name": "Agent Bounties",
+            "alternateName": "AgentBounties.app",
+            "url": "https://agentbounties.app/",
+            "description": "Open-source infrastructure for bounded digital work with public terms, inspectable evidence, and canonical Base USDC settlement.",
+            "sameAs": ["https://github.com/NSPG13/agent-bounties"]
           }
         ]
       }

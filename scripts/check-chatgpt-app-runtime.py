@@ -30,7 +30,8 @@ CHATGPT_TOOLS = {
     "create_share_bundle",
 }
 CORE_COMPATIBILITY_TOOLS = {"list_autonomous_bounties"}
-CORE_TOOLS = CHATGPT_TOOLS | CORE_COMPATIBILITY_TOOLS
+CORE_EXTENSION_TOOLS = {"inspect_open_competition_v2", "prepare_open_competition_v2"}
+CORE_TOOLS = CHATGPT_TOOLS | CORE_COMPATIBILITY_TOOLS | CORE_EXTENSION_TOOLS
 FEED_WIDGET_URI = "ui://agent-bounties/live-feed-v4.html"
 MODERN_PROTOCOL_VERSION = "2026-07-28"
 LEGACY_PROTOCOL_VERSION = "2025-06-18"

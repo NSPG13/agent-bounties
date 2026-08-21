@@ -22,7 +22,7 @@ python scripts/check-mcp-protocol-eras.py \
 | Legacy `initialize` handshake | Negotiates a supported legacy version and preserves legacy result shapes |
 | Modern `initialize` or `ping` | `404` with JSON-RPC `-32601`; those methods are not in the modern core |
 | Modern `GET /mcp` or `DELETE /mcp` | `405`; modern Streamable HTTP uses one `POST` per request |
-| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Eleven-tool core catalog, including the cached-client compatibility tool `list_autonomous_bounties` |
+| Ordinary core discovery (client name is not `openai-mcp` and no exact ChatGPT `Origin`) | Thirteen-tool core catalog: the ten app tools, cached-client compatibility tool `list_autonomous_bounties`, and the two Open Competition V2 tools |
 | Modern discovery with exact `params._meta["io.modelcontextprotocol/clientInfo"].name="openai-mcp"` | Ten-tool app catalog; the only bounty-discovery entry point is **get_bounty_feed** |
 | Discovery from an exact ChatGPT browser `Origin` | Ten-tool app catalog as a browser-client fallback |
 | `tools/call` for `list_autonomous_bounties` from a cached ChatGPT registration | Accepted and dispatched even though the alias is absent from new ChatGPT discovery |
@@ -130,7 +130,7 @@ exact ChatGPT browser origins provide the same metadata-only fallback. These
 self-declared signals never authenticate a caller or grant wallet, payment,
 publishing, analytics-exclusion, or operator authority. Release must stop
 before registration changes if a real ChatGPT metadata scan sees the
-eleven-tool core catalog.
+thirteen-tool core catalog.
 
 ## Verification
 
@@ -144,7 +144,7 @@ python scripts/check-mcp-protocol-eras.py --endpoint http://127.0.0.1:8080/mcp -
 The runtime check calls modern `server/discover`, both modern catalog profiles,
 a resource, and a tool, plus legacy `initialize` and both legacy catalog
 profiles through the real HTTP endpoint. It requires ten tools for the exact
-`openai-mcp` client-info name, eleven tools for an ordinary core client, and a
+`openai-mcp` client-info name, thirteen tools for an ordinary core client, and a
 successful cached-client dispatch attempt for `list_autonomous_bounties`.
 
 The deployed production smoke performs modern discovery and legacy initialize
