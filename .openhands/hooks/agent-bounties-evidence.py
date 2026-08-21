@@ -11,6 +11,11 @@ EXIT CONTRACT (per https://docs.openhands.dev/openhands/usage/customization/hook
     other  -> non-blocking error.
 JSON on stdout carries the human-readable decision alongside the exit code.
 
+INVOCATION: registered in `.openhands/hooks.json` through an explicit Python
+interpreter (`python3 .openhands/hooks/agent-bounties-evidence.py`) rather than as
+a bare executable path, so it does not depend on the +x bit or on a shebang being
+honoured by the host shell.
+
 STDIN is the OpenHands event payload, NOT bounty state. Claim state is read from
 an authoritative producer configured by AGENT_BOUNTIES_STATE_CMD (preferred) or
 AGENT_BOUNTIES_STATE (a file path). The session id from the event payload is
@@ -22,9 +27,13 @@ unconfigured case — no state source at all, i.e. a repo not doing bounty work 
 allows completion, and unrelated sessions exit 0.
 
 Local input can never assert payment. A `bounty_settled` boolean in local state is
-treated as UNVERIFIED; paid language requires canonical event identity plus a
-settlement receipt (event id / tx hash / log key) carried in
-`settlement.canonical_event`. Forged local state cannot say paid.
+treated as UNVERIFIED. Paid language requires a settlement receipt in
+`settlement.canonical_event` that is LIVE-CANONICAL (`provenance:
+canonical_live`), carries real chain identity (`tx_hash`, `log_key`, a positive
+`block_number`), and is BOUND to the same canonical network, bounty id, bounty
+contract, round and solver as the active claim. A forged snapshot, a receipt for
+another bounty or round, or a receipt on a non-canonical network cannot say paid.
+This mirrors the producer's own rule on purpose: defence in depth, not one line.
 
 WALLET SAFETY: never reads, stores, logs, or transmits secret key material, and
 never broadcasts a transaction.
@@ -56,8 +65,16 @@ REQUIRED_EVIDENCE = (
     "improvement_feedback",
 )
 
-# A canonical settlement receipt must carry a real event identity, not a boolean.
-RECEIPT_FIELDS = ("event_id", "log_key", "tx_hash")
+# A canonical settlement receipt must carry real chain identity, not a boolean.
+RECEIPT_IDENTITY = ("tx_hash", "log_key")
+
+# Only a network with a canonical AgentBountyFactory deployment and its immutable
+# settlement token can settle. See docs/autonomous-protocol.md.
+CANONICAL_NETWORKS = {"base-mainnet"}
+
+# The only provenance that may produce paid language: an event read live from the
+# canonical feed in this very invocation. Offline snapshots are test-only.
+LIVE_PROVENANCE = "canonical_live"
 
 
 def emit(decision: str, reason: str, code: int) -> int:
@@ -91,6 +108,28 @@ def session_id(event: dict) -> str:
     )
 
 
+def parse_state_cmd(cmd: str) -> list[str]:
+    """Turn AGENT_BOUNTIES_STATE_CMD into argv, portably.
+
+    A JSON array is the unambiguous form and is recommended on Windows:
+        ["C:\\\\Python311\\\\python.exe", "-B", "C:\\\\repo\\\\state_producer.py"]
+
+    A plain string is also accepted. POSIX-mode shlex treats a backslash as an
+    escape character, which would silently mangle an unquoted Windows path such
+    as C:\\repo\\state_producer.py into C:reposstate_producer.py, so on Windows
+    the string is split in non-POSIX mode and the surrounding quotes stripped.
+    """
+    text = cmd.strip()
+    if text.startswith("["):
+        parsed = json.loads(text)
+        if not isinstance(parsed, list) or not all(isinstance(x, str) for x in parsed):
+            raise ValueError("AGENT_BOUNTIES_STATE_CMD JSON must be an array of strings")
+        return parsed
+    if os.name == "nt":
+        return [tok.strip('"') for tok in shlex.split(text, posix=False)]
+    return shlex.split(text)
+
+
 def load_claim_state(sid: str):
     """Resolve authoritative claim state.
 
@@ -101,7 +140,9 @@ def load_claim_state(sid: str):
     cmd = os.environ.get("AGENT_BOUNTIES_STATE_CMD")
     if cmd:
         try:
-            argv = shlex.split(cmd)
+            argv = parse_state_cmd(cmd)
+            if not argv:
+                return None, True, "AGENT_BOUNTIES_STATE_CMD is set but parses to no command"
             if sid:
                 argv.append(sid)
             done = subprocess.run(
@@ -131,17 +172,63 @@ def load_claim_state(sid: str):
     return None, False, None
 
 
-def has_canonical_receipt(state: dict) -> bool:
-    """True only when settlement carries real canonical event identity."""
+def receipt_rejection(state: dict, claim: dict) -> str | None:
+    """Return None when the receipt genuinely proves payment, else why it does not.
+
+    A receipt is only payment evidence when it is live-canonical, carries real
+    chain identity, and is bound to the exact claim this session holds. Anything
+    else -- a test snapshot, a receipt for another bounty/round/solver, a
+    non-canonical network -- is rejected, and the caller falls through to the
+    "$0.00, not confirmed" branch.
+    """
     settlement = state.get("settlement")
     if not isinstance(settlement, dict):
-        return False
+        return "no settlement section"
     event = settlement.get("canonical_event")
     if not isinstance(event, dict):
-        return False
+        return "settlement.canonical_event is not an object"
     if str(event.get("kind", "")).lower() not in ("bountysettled", "bounty_settled"):
-        return False
-    return any(str(event.get(field, "")).strip() for field in RECEIPT_FIELDS)
+        return f"receipt kind {event.get('kind')!r} is not BountySettled"
+
+    provenance = str(event.get("provenance", "")).strip()
+    if provenance != LIVE_PROVENANCE:
+        return (
+            f"receipt provenance is {provenance or '(absent)'!r}, not {LIVE_PROVENANCE!r}; "
+            "offline snapshots are test-only and are never payment evidence"
+        )
+
+    network = str(event.get("network", "")).strip().lower()
+    if network not in CANONICAL_NETWORKS:
+        return f"receipt network {network or '(absent)'!r} is not a canonical settlement network"
+
+    missing = [f for f in RECEIPT_IDENTITY if not str(event.get(f, "")).strip()]
+    if missing:
+        return f"receipt is missing chain identity: {', '.join(missing)}"
+    block = event.get("block_number")
+    if not isinstance(block, int) or isinstance(block, bool) or block <= 0:
+        return f"receipt has no positive block_number (got {block!r})"
+
+    # Bind the receipt to THIS claim. A settlement for a different bounty, round
+    # or solver is somebody else's payment.
+    for field in ("network", "bounty_id", "bounty_contract"):
+        want = str(claim.get(field, "")).strip().lower()
+        got = str(event.get(field, "")).strip().lower()
+        if not want:
+            return f"claim does not declare {field}, so the receipt cannot be bound to it"
+        if got != want:
+            return f"receipt {field} {got or '(absent)'!r} does not match the claim's {want!r}"
+    solver_want = str(claim.get("solver", "")).strip().lower()
+    solver_got = str(event.get("solver", "")).strip().lower()
+    if not solver_want:
+        return "claim does not declare a solver, so the receipt cannot be bound to it"
+    if solver_got != solver_want:
+        return f"receipt solver {solver_got or '(absent)'!r} is not the claim solver {solver_want!r}"
+    if event.get("round") != claim.get("round"):
+        return (
+            f"receipt round {event.get('round')!r} does not match the claim round "
+            f"{claim.get('round')!r}"
+        )
+    return None
 
 
 def decide(state, configured, err, sid):
@@ -180,6 +267,23 @@ def decide(state, configured, err, sid):
             "claim.active is absent, so an active claim cannot be ruled out. Failing closed.",
             BLOCK,
         )
+
+    # A bound canonical receipt is TERMINAL and must be evaluated before the
+    # "no active claim" early-out. Settlement ENDS the claim, so a genuinely paid
+    # bounty arrives here with claim.active == False; checking occupancy first
+    # would report "no active claim" and silently lose the payment evidence.
+    rejection = receipt_rejection(state, claim)
+    if rejection is None:
+        receipt = state["settlement"]["canonical_event"]
+        return (
+            "allow",
+            "Canonical BountySettled receipt is present, live-canonical, and bound to this "
+            f"claim (network {receipt['network']}, bounty {receipt['bounty_id']}, round "
+            f"{receipt['round']}, tx {receipt['tx_hash']}, log {receipt['log_key']}, block "
+            f"{receipt['block_number']}); work is paid.",
+            ALLOW,
+        )
+
     if active is not True:
         return "allow", f"no active claim for session {sid or '(unknown)'}", ALLOW
 
@@ -225,14 +329,16 @@ def decide(state, configured, err, sid):
             BLOCK,
         )
 
-    # 4. Paid language requires a canonical receipt — never a local boolean.
-    if has_canonical_receipt(state):
-        return "allow", "canonical BountySettled receipt present; work is paid", ALLOW
-
-    claims_paid = bool(submission.get("bounty_settled")) or bool(state.get("paid"))
+    # 4. Paid language requires a canonical receipt — never a local boolean. The
+    # receipt was already evaluated above; `rejection` says why it did not count.
+    claims_paid = (
+        bool(submission.get("bounty_settled"))
+        or bool(state.get("paid"))
+        or isinstance(state.get("settlement"), dict)
+    )
     note = (
-        " Local state asserts settlement but carries no canonical event receipt; that assertion is "
-        "ignored on purpose, because local input cannot prove payment."
+        " A settlement assertion was present but REJECTED as payment evidence: "
+        f"{rejection}. Local or unbound input cannot prove payment."
         if claims_paid else ""
     )
     return (

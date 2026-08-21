@@ -4,7 +4,7 @@
       "matcher": "*",
       "hooks": [
         {
-          "command": ".openhands/hooks/agent-bounties-evidence.py",
+          "command": "python3 .openhands/hooks/agent-bounties-evidence.py",
           "timeout": 60
         }
       ]
