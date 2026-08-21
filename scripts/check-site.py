@@ -273,7 +273,7 @@ def main() -> int:
             "prepare_bounty_action(action=solve)",
             "get_bounty_action_status(intent_id)",
             "advanced HTTP catalog is not the MCP tool list",
-            "Only <code>BountySettled</code> proves autonomous-v1 payment",
+            "Only <code>BountySettled</code> proves bounty payment",
             "inspect_open_competition_v2(operation=guide)",
             "CompetitionSettledV2",
         ],

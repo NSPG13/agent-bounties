@@ -6111,14 +6111,14 @@ fn prepare_open_competition_v2_policies(arguments: Value) -> Json<serde_json::Va
         Ok(body) => body,
         Err(error) => return mcp_error(format!("invalid V2 policies: {error}")),
     };
-    if !body
+    if body
         .execution_policy
         .as_object()
-        .is_some_and(|policy| !policy.is_empty())
-        || !body
+        .is_none_or(|policy| policy.is_empty())
+        || body
             .settlement_policy
             .as_object()
-            .is_some_and(|policy| !policy.is_empty())
+            .is_none_or(|policy| policy.is_empty())
     {
         return mcp_error("execution_policy and settlement_policy must be non-empty objects");
     }
