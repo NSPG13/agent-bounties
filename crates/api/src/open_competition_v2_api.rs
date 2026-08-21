@@ -13,7 +13,7 @@ use chain_base::{
     plan_open_competition_v2_funding, plan_open_competition_v2_proof,
     validate_open_competition_v2_release, ChainBaseError,
     OpenCompetitionV2BrokerPaymentAuthorization, OpenCompetitionV2CreateParams,
-    OpenCompetitionV2CreationRequest, OpenCompetitionV2EventKind,
+    OpenCompetitionV2CreationRequest, OpenCompetitionV2Event, OpenCompetitionV2EventKind,
     OpenCompetitionV2ProgramClassification, OpenCompetitionV2ProofSystem, OpenCompetitionV2Release,
     OpenCompetitionV2ScoreDirection, OpenCompetitionV2WinnerMode,
     OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC, OPEN_COMPETITION_V2_BASE_USDC,
@@ -906,12 +906,14 @@ pub(crate) async fn proof_attribution(
         .iter()
         .map(|job| {
             let settlement = events.iter().find(|event| {
-                event.kind == OpenCompetitionV2EventKind::CompetitionSettled
-                    && event
-                        .data
-                        .get("solver")
-                        .and_then(Value::as_str)
-                        .is_some_and(|solver| solver.eq_ignore_ascii_case(&job.solver))
+                proof_job_matches_settlement(
+                    job.state,
+                    &job.solver,
+                    job.settlement_event_id,
+                    job.requested_relay,
+                    job.relay_tx_hash.as_deref(),
+                    event,
+                )
             });
             json!({
                 "proof_job_id": job.id,
@@ -954,6 +956,26 @@ pub(crate) async fn proof_attribution(
         "identity_boundary": "A solver wallet is canonical attribution, not a verified person. Contact requires a separately signed contact profile.",
         "evidence_boundary": "The proof-job record attributes hosted services. Only CompetitionSettledV2 proves solver and keeper payment."
     })))
+}
+
+fn proof_job_matches_settlement(
+    job_state: OpenCompetitionV2ProofJobState,
+    job_solver: &str,
+    settlement_event_id: Option<Uuid>,
+    requested_relay: bool,
+    relay_tx_hash: Option<&str>,
+    event: &OpenCompetitionV2Event,
+) -> bool {
+    job_state == OpenCompetitionV2ProofJobState::Confirmed
+        && settlement_event_id == Some(event.id)
+        && event.kind == OpenCompetitionV2EventKind::CompetitionSettled
+        && event
+            .data
+            .get("solver")
+            .and_then(Value::as_str)
+            .is_some_and(|solver| solver.eq_ignore_ascii_case(job_solver))
+        && (!requested_relay
+            || relay_tx_hash.is_some_and(|tx_hash| tx_hash.eq_ignore_ascii_case(&event.tx_hash)))
 }
 
 #[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment", params(("job_id" = Uuid, Path, description = "Quoted hosted proof job ID")), responses((status = 200, description = "Canonical Base USDC payment confirmed"), (status = 202, description = "Payment relay is awaiting canonical confirmation"), (status = 402, description = "Exact x402 payment authorization required")))]
@@ -2817,5 +2839,64 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn proof_attribution_requires_the_exact_confirmed_relay_transaction() {
+        let solver = "0x1111111111111111111111111111111111111111";
+        let relay_tx_hash = hash(0xaa);
+        let event = OpenCompetitionV2Event {
+            id: Uuid::new_v4(),
+            protocol_version: OPEN_COMPETITION_V2_PROTOCOL_VERSION.to_string(),
+            log_key: "settlement:0".to_string(),
+            tx_hash: relay_tx_hash.clone(),
+            block_number: 42,
+            log_index: 0,
+            contract_address: "0x2222222222222222222222222222222222222222".to_string(),
+            bounty_id: hash(0xbb),
+            kind: OpenCompetitionV2EventKind::CompetitionSettled,
+            data: json!({ "solver": solver }),
+            occurred_at: Utc::now(),
+        };
+        assert!(proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(event.id),
+            true,
+            Some(&relay_tx_hash),
+            &event,
+        ));
+        assert!(!proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::PaymentPending,
+            solver,
+            None,
+            true,
+            Some(&relay_tx_hash),
+            &event,
+        ));
+        assert!(!proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(event.id),
+            true,
+            Some(&hash(0x99)),
+            &event,
+        ));
+        assert!(proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(event.id),
+            false,
+            None,
+            &event,
+        ));
+        assert!(!proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(Uuid::new_v4()),
+            false,
+            None,
+            &event,
+        ));
     }
 }
