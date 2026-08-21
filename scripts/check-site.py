@@ -376,6 +376,10 @@ def main() -> int:
         fail("retired browser settlement bundle site/main.js must not exist")
 
     pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    if "https://mcpmarket.com/server/agent-bounties" in (site_dir / "news.html").read_text(
+        encoding="utf-8"
+    ):
+        fail("news.html must not link to the retired MCP Market listing")
     metrics_page = (site_dir / "metrics.html").read_text(encoding="utf-8")
     metrics_css = (site_dir / "metrics.css").read_text(encoding="utf-8")
     metrics_javascript = (site_dir / "metrics.js").read_text(encoding="utf-8")
