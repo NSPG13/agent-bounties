@@ -258,7 +258,7 @@ jobs:
             --manifest target/release-gates.json --gate base_sepolia_x402_and_byo_complete \
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$RELEASE_SOURCE_COMMIT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: inputs.mode != 'recover-second-only'
         with:
           name: open-competition-v2-beta3-live-sepolia-resumed
@@ -279,7 +279,7 @@ jobs:
             target/sepolia-prover.log
           if-no-files-found: error
           retention-days: 90
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: inputs.mode == 'recover-second-only'
         with:
           name: open-competition-v2-beta3-x402-charge-recovery-5

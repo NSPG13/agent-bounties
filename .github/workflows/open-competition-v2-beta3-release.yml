@@ -156,7 +156,7 @@ jobs:
           python scripts/verify_open_competition_v2_slither.py \
             --report target/open-competition-v2-beta3-slither.json \
             --output target/open-competition-v2-beta3-slither-triage.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-static-analysis-${{ github.sha }}
           path: target/open-competition-v2-beta3-slither-triage.json
@@ -267,7 +267,7 @@ jobs:
           cargo check --locked -p sp1-recursion-circuit
           cargo check --locked -p sp1-prover --bin regenerate_wrap_template
           cargo check --locked -p sp1-prover --bin verify_wrap_template
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-patched-source-${{ github.sha }}
           path: |
@@ -316,7 +316,7 @@ jobs:
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-metric-${{ matrix.profile }}-${{ matrix.builder }}-${{ github.sha }}
           path: programs/${{ matrix.profile }}/evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl
@@ -362,7 +362,7 @@ jobs:
           fi
           python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
           cargo test --locked -p competition-metric-core
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-metric-release-${{ matrix.profile }}-${{ github.sha }}
           path: target/${{ matrix.profile }}.json
@@ -573,7 +573,7 @@ jobs:
             --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.json --gates target/release-gates.json \
             --output target/mainnet.presepolia.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-release-assets-${{ github.sha }}
           path: |
@@ -749,7 +749,7 @@ jobs:
             --gate base_sepolia_x402_and_byo_complete \
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-live-sepolia-${{ github.sha }}
           path: |
@@ -822,7 +822,7 @@ jobs:
             --evidence target/mainnet-deployment-evidence.json \
             --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --source-commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-deployment-${{ github.sha }}
           path: |
@@ -928,7 +928,7 @@ jobs:
           python scripts/wait_open_competition_v2_beta3_runtime.py \
             --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
             --expect-public true --output target/public-beta-activation.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-public-activation-${{ github.sha }}
           path: |
@@ -1015,7 +1015,7 @@ jobs:
               "gpu_proving_enabled": False,
           }, Path("target/prover-deployment.json").open("w"), sort_keys=True)
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-production-prover-${{ github.sha }}
           path: |
@@ -1105,7 +1105,7 @@ jobs:
           python scripts/wait_open_competition_v2_beta3_runtime.py \
             --runtime target/mainnet-broker.runtime.json --expect-broker true \
             --expect-public false --output target/production-broker-runtime.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-production-control-plane-${{ github.sha }}
           path: |
@@ -1316,7 +1316,7 @@ jobs:
             --gate fresh_agent_wallet_flow_complete \
             --evidence target/mainnet-fresh-agent-flow.json \
             --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-canaries-${{ github.sha }}
           path: |

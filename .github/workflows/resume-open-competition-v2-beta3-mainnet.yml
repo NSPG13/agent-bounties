@@ -67,7 +67,7 @@ jobs:
             --runtime target/production-control-plane/mainnet-broker.runtime.json \
             --expect-broker true --expect-public false \
             --output target/retryable-payment-api-ready.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-retryable-payment-api
           path: |
@@ -300,7 +300,7 @@ jobs:
             --url "$OPEN_COMPETITION_V2_RUNTIME_READINESS_URL" \
             --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
             --expect-public true --output target/public-beta-activation.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-resumed-and-activated
           path: |
