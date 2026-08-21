@@ -4344,8 +4344,12 @@ async fn production_smoke_check(
     }
     let mcp_llms = production_get_text(&client, &format!("{mcp}/llms.txt")).await?;
     require(
-        mcp_llms.contains("MCP tools") && mcp_llms.contains("list_autonomous_bounties"),
-        "MCP llms.txt must orient agents to autonomous tools",
+        mcp_llms.contains("## Remote MCP default")
+            && mcp_llms.contains("call `tools/list`")
+            && mcp_llms.contains("prepare_bounty_action")
+            && mcp_llms.contains("get_bounty_action_status")
+            && mcp_llms.contains("list_autonomous_bounties"),
+        "MCP llms.txt must distinguish remote MCP from advanced autonomous tools",
     )?;
 
     let mcp_tools_url =
