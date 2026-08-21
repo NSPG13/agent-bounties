@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
@@ -18,7 +19,9 @@ BASE_RPC_ENDPOINTS: Sequence[str] = (
 )
 MAX_RETRIES = 3
 INITIAL_BACKOFF_SECONDS = 0.5
-RETRYABLE_HTTP_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+MAX_RPC_ERROR_BODY_BYTES = 65536
+# Bounded retry: transport failures, HTTP 408/429, and every HTTP 5xx (500-599).
+RETRYABLE_HTTP_STATUS = frozenset({408, 429, *range(500, 600)})
 RETRYABLE_TRANSPORT_MARKERS = (
     "http error 408",
     "http error 429",
@@ -41,6 +44,8 @@ RETRYABLE_TRANSPORT_MARKERS = (
     "timed out",
     "timeout",
 )
+_ABSOLUTE_URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
+_HTTP_STATUS_IN_TEXT_RE = re.compile(r"http(?:\s+error)?\s+(\d{3})\b", re.IGNORECASE)
 
 
 class TransportError(RuntimeError):
@@ -76,6 +81,11 @@ def redact_rpc_endpoint(endpoint: str) -> str:
     return _redact_endpoint(endpoint)
 
 
+def _without_absolute_urls(value: object) -> str:
+    """Strip absolute URLs from interpolated error text."""
+    return _ABSOLUTE_URL_RE.sub("<redacted-url>", str(value))
+
+
 def _is_https(endpoint: str) -> bool:
     try:
         parsed = urlsplit(endpoint)
@@ -84,12 +94,49 @@ def _is_https(endpoint: str) -> bool:
         return False
 
 
+def is_retryable_http_status(status: int) -> bool:
+    """Retry HTTP 408, 429, and every HTTP 5xx; never other client errors."""
+    return int(status) in RETRYABLE_HTTP_STATUS
+
+
 def is_retryable_transport_output(value: object) -> bool:
-    """Classify subprocess output without treating JSON-RPC errors as transport."""
+    """Classify output; explicit JSON-RPC errors take precedence over HTTP text."""
     text = str(value).lower()
-    if "json-rpc" in text and "error" in text and "http" not in text:
+    if "json-rpc" in text and "error" in text:
         return False
+    match = _HTTP_STATUS_IN_TEXT_RE.search(text)
+    if match and is_retryable_http_status(int(match.group(1))):
+        return True
     return any(marker in text for marker in RETRYABLE_TRANSPORT_MARKERS)
+
+
+def _read_bounded_http_error_body(error: HTTPError) -> bytes:
+    """Read at most MAX_RPC_ERROR_BODY_BYTES+1 from an HTTPError response."""
+    reader = getattr(error, "read", None)
+    if not callable(reader):
+        return b""
+    try:
+        return reader(MAX_RPC_ERROR_BODY_BYTES + 1)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return b""
+
+
+def _jsonrpc_error_object(raw: bytes) -> object | None:
+    """Return the JSON-RPC error object from a bounded HTTP error body, if any."""
+    if not raw or len(raw) > MAX_RPC_ERROR_BODY_BYTES:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    payload = parsed.get("error")
+    if not isinstance(payload, dict) or not payload:
+        return None
+    if "code" not in payload or "message" not in payload:
+        return None
+    return payload
 
 
 def _rpc_call(
@@ -111,37 +158,56 @@ def _rpc_call(
             "user-agent": "agent-bounties-rpc/1",
         },
     )
+    # Raise transport and JSON-RPC errors after the except block so urllib
+    # HTTPError/URLError objects (filename/url/userinfo/path/query/fragment)
+    # cannot survive as __cause__ or __context__, and failover cannot hide a
+    # confirmed JSON-RPC execution error carried in an HTTP error body.
+    transport_error: TransportError | None = None
+    jsonrpc_error: object | None = None
+    body: Any = None
     try:
         with urlopen(request, timeout=timeout) as response:
             status = response.getcode() if hasattr(response, "getcode") else 200
             status = 200 if status is None else int(status)
-            if status in RETRYABLE_HTTP_STATUS:
-                raise TransportError(
-                    f"HTTP {status} from {_redact_endpoint(endpoint)}",
-                    retryable=True,
-                )
             if status >= 400:
-                raise TransportError(
+                transport_error = TransportError(
                     f"HTTP {status} from {_redact_endpoint(endpoint)}",
-                    retryable=False,
+                    retryable=is_retryable_http_status(status),
                 )
-            body = json.load(response)
+            else:
+                body = json.load(response)
     except HTTPError as error:
         code = int(error.code)
-        raise TransportError(
-            f"HTTP {code} from {_redact_endpoint(endpoint)}",
-            retryable=code in RETRYABLE_HTTP_STATUS,
-        ) from error
+        raw = b""
+        try:
+            raw = _read_bounded_http_error_body(error)
+        finally:
+            error.close()
+        error_object = _jsonrpc_error_object(raw)
+        if error_object is not None:
+            jsonrpc_error = error_object
+        else:
+            transport_error = TransportError(
+                f"HTTP {code} from {_redact_endpoint(endpoint)}",
+                retryable=is_retryable_http_status(code),
+            )
     except (TimeoutError, URLError, OSError) as error:
-        raise TransportError(
-            f"RPC transport failed for {method} at {_redact_endpoint(endpoint)}: {error}",
+        transport_error = TransportError(
+            f"RPC transport failed for {method} at {_redact_endpoint(endpoint)}: "
+            f"{_without_absolute_urls(error)}",
             retryable=True,
-        ) from error
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise TransportError(
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        transport_error = TransportError(
             f"RPC response was invalid for {method} at {_redact_endpoint(endpoint)}",
             retryable=True,
-        ) from error
+        )
+    if jsonrpc_error is not None:
+        raise RpcError(
+            f"RPC {method} failed: {json.dumps(jsonrpc_error, sort_keys=True)}"
+        )
+    if transport_error is not None:
+        raise transport_error
 
     if not isinstance(body, dict):
         raise TransportError(
