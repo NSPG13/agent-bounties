@@ -107,7 +107,7 @@
     handoffReview: false,
   };
 
-  function enableChatgptHandoffReview() {
+  function enableAiHandoffReview() {
     state.handoffReview = true;
     document.body.classList.add("chatgpt-handoff-review");
     ui.form.dataset.handoffReview = "true";
@@ -401,7 +401,9 @@
     state.approved = false;
     ui.input.value = "";
     ui.prompt.textContent = state.handoffReview
-      ? "Review the exact image and bounty terms you approved in ChatGPT. Agent Bounties cannot edit or replace them."
+      ? (state.bountyImage
+          ? "Review the exact image and bounty terms you approved in your AI conversation. Agent Bounties cannot edit or replace them."
+          : "Review the exact bounty terms you approved in your AI conversation. This card uses a deterministic content-derived visual.")
       : "Review the bounty card your AI prepared. You can approve it or ask your AI for a revision.";
     await renderPreview();
   }
@@ -769,10 +771,10 @@
       ui.preview.scrollIntoView({ behavior: "smooth", block: "start" });
     }
     setStatus("Rendering a bounded pre-publication illustration from the prepared draft. Nothing has been posted or funded.", "pending");
-    if (state.handoffReview) {
+    if (state.handoffReview && state.bountyImage) {
       ui.approve.textContent = "Loading approved image…";
       setStatus(
-        "Loading the exact image approved in ChatGPT. Agent Bounties will not generate or substitute an image.",
+        "Loading the exact image approved in your AI conversation. Agent Bounties will not generate or substitute an image.",
         "pending",
       );
     }
@@ -782,7 +784,9 @@
     setStatus("Review the result, completion checks, time window, reward, and creator-verification disclosure. Nothing has been posted or funded.");
     if (state.handoffReview) {
       ui.approve.textContent = "Confirm bounty";
-      setStatus("Review the exact ChatGPT-approved image, terms, reward, and verification disclosure. Nothing has been posted or funded.");
+      setStatus(state.bountyImage
+        ? "Review the exact approved image, terms, reward, and verification disclosure. Nothing has been posted or funded."
+        : "Review the terms, reward, content-derived visual, and verification disclosure. Nothing has been posted or funded.");
     }
   }
 
@@ -1188,20 +1192,14 @@
 
   function approveCard() {
     if (!state.imageReady) return;
-    if (!state.bountyImage) {
-      requestUserOwnedAi(
-        "Generate a unique image for this bounty in my ChatGPT account, show it to me for approval, and then prepare the Agent Bounties post handoff.",
-        { title: state.draft?.title, goal: state.draft?.goal }
-      );
-      setStatus("Create and approve this bounty’s image in ChatGPT before posting. Agent Bounties will not generate a replacement image.", "error");
-      return;
-    }
     state.approved = true;
     ui.approve.dataset.approved = "true";
     ui.approve.textContent = state.handoffReview ? "Confirmed ✓" : "Approved ✓";
     ui.fund.disabled = false;
     setProgress("fund");
-    setStatus("Card approved. Funding still requires a separate wallet review and signature.", "success");
+    setStatus(state.bountyImage
+      ? "Card approved with the exact supplied image. Funding still requires a separate wallet review and signature."
+      : "Card approved with a deterministic content-derived visual. Funding still requires a separate wallet review and signature.", "success");
   }
 
   function reviseCard() {
@@ -1279,7 +1277,7 @@
 
   function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(rewards.total),currency:"usdc"},funding_deadline:now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
 
-  function termsDocument(committed){if(!state.bountyImage)throw new Error("The approved ChatGPT image is missing.");return{schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:null,discovery_source:"chatgpt_user_generated_image_handoff",image:canonicalJsonValue(state.bountyImage)};}
+  function termsDocument(committed){const document={schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:null,discovery_source:state.bountyImage?"ai_assistant_approved_image_handoff":"ai_assistant_terms_handoff"};if(state.bountyImage)document.image=canonicalJsonValue(state.bountyImage);return document;}
 
   function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:REGRESSION_VERIFIERS,threshold:REGRESSION_VERIFIERS.length,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
 
@@ -1295,8 +1293,8 @@
 
   async function prefillFromQuery() {
     const params = new URLSearchParams(window.location.search);
-    const fromChatgpt = params.get("from") === "chatgpt-app";
-    if (fromChatgpt) enableChatgptHandoffReview();
+    const fromAiApp = ["ai-app", "chatgpt-app"].includes(params.get("from"));
+    if (fromAiApp) enableAiHandoffReview();
     const title = params.get("title");
     const goal = params.get("goal");
     const criteria = params.getAll("criterion");
@@ -1315,15 +1313,15 @@
           source_url: params.get("sourceUrl"),
           crowdfund: params.get("crowdfund") === "true",
           discovery_source: params.get("discoverySource") || "AI assistant via MCP",
-          image_required: fromChatgpt,
-          image: {
-            source: "chatgpt_user_generated",
-            asset_url: params.get("imageUrl"),
-            sha256: params.get("imageSha256"),
-            mime_type: params.get("imageMimeType"),
-            prompt: params.get("imagePrompt"),
-            alt_text: params.get("imageAlt"),
-          },
+          image_required: Boolean(params.get("imageUrl")),
+          image: params.get("imageUrl") ? {
+              source: "chatgpt_user_generated",
+              asset_url: params.get("imageUrl"),
+              sha256: params.get("imageSha256"),
+              mime_type: params.get("imageMimeType"),
+              prompt: params.get("imagePrompt"),
+              alt_text: params.get("imageAlt"),
+            } : null,
         });
       } catch (error) {
         setStatus(error.message || String(error), "error");

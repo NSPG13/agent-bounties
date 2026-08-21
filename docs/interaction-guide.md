@@ -28,7 +28,8 @@ For ChatGPT development or private use:
    `https://mcp.agentbounties.app/mcp`.
 3. Refresh the app after a server tool or metadata change.
 4. Ask it to inspect work or call `prepare_bounty_post` after the exact terms
-   and image are approved.
+   are approved. The image fields are optional but must be supplied together
+   when the AI can attach an approved image.
 
 Production has exactly two durable ChatGPT registrations:
 

@@ -194,22 +194,24 @@ def main() -> None:
         "read-only widget must load the live projection through the host bridge",
     )
     require(
-        "generate one unique bounty image using my ChatGPT account" in widget
+        "otherwise omit all three optional image fields" in widget
         and "prepare_bounty_post" in widget
-        and "must not generate a replacement" in widget,
-        "Post bounty conversation must preserve the user-owned ChatGPT image flow",
+        and "deterministic content-derived visual" in widget,
+        "Post bounty conversation must preserve both optional-image and no-image flows",
     )
     composer = (ROOT / "site" / "bounty-composer-v2.js").read_text(
         encoding="utf-8"
     )
     chat_css = (ROOT / "site" / "bounty-chat.css").read_text(encoding="utf-8")
     require(
-        "enableChatgptHandoffReview" in composer
-        and 'params.get("from") === "chatgpt-app"' in composer
+        "enableAiHandoffReview" in composer
+        and '["ai-app", "chatgpt-app"].includes(params.get("from"))' in composer
         and 'inputWrap.hidden = true' in composer
         and 'ui.revise.hidden = true' in composer
+        and 'image_required: Boolean(params.get("imageUrl"))' in composer
+        and 'discovery_source:state.bountyImage?"ai_assistant_approved_image_handoff":"ai_assistant_terms_handoff"' in composer
         and "chatgpt-handoff-review" in chat_css,
-        "ChatGPT post handoff must show a read-only review card without a second composer",
+        "AI post handoff must show a read-only review card and support a no-image fallback",
     )
     for mutating_tool in FULL_TOOLS - {"get_bounty_feed", "render_bounty_feed"}:
         require(
