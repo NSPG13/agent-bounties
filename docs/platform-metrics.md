@@ -62,6 +62,30 @@ same aggregate instead of recomputing them from the current opportunity feed.
 Platform revenue is reported separately as `0 USDC — monetization not active`.
 Marketplace payout volume is not platform revenue.
 
+### Demand growth and GMV
+
+The North Star is rolling 28-day canonical GMV. GMV is narrower than payout
+volume: it includes solver, verifier/keeper, and completion-bonus value only from
+confirmed canonical settlement events. Rejected-submission verifier payments,
+funding contributions, approvals, plans, broadcasts, advisory verdicts, refunds,
+and unconfirmed transaction hashes are excluded.
+
+The versioned `demand_growth` object reports:
+
+- `gmv_usdc_7d` and `gmv_usdc_28d`;
+- `lifetime_canonical_gmv_usdc` and the broader
+  `lifetime_canonical_payouts_usdc`;
+- new non-operator poster/funder wallets in the rolling 28-day window;
+- the share of active poster/funder wallets with at least two canonical supply
+  actions in that window;
+- the non-operator-funded share of 28-day GMV, prorated from canonical
+  `FundingAdded` amounts.
+
+Funding share is unavailable unless every settlement in the window can be
+attributed to canonical funding events. Wallet cohorts are directional and are
+not unique people. Operator wallets and declared synthetic canary contracts from
+the public policy are excluded.
+
 ### Mature claim-to-settlement rate
 
 The cohort unit is `(network, bounty_id, round)`. A claimed round enters the
@@ -75,11 +99,14 @@ included in participation and payout metrics but not in this claim cohort.
 
 `GET /v1/metrics/platform?period=7d|28d|90d|lifetime`
 
-The default period is `7d`. The versioned response includes exact windows,
+The default period is `7d`. Schema `agent-bounties/platform-metrics-v3` includes exact windows,
 platform identity aggregates, payment totals and splits, mature claims,
-current inventory from both the exclusive-claim and Open Competition protocols,
+one unified current funded-inventory total across marketplace mechanisms,
+rolling demand-growth metrics,
 daily series, zero platform revenue, freshness, coverage, and plain-language
-definitions. Combined inventory is withheld when either protocol is unavailable.
+definitions. Coverage exposes one `marketplace_indexers_fresh` flag rather than
+mechanism-specific health fields. Combined inventory is withheld when any
+required canonical source is unavailable.
 The response intentionally excludes GitHub participation
 and all raw handles, wallet addresses, comment authors, event IDs, and
 transaction IDs.
@@ -89,10 +116,11 @@ canonical event surfaces:
 
 - `GET /v1/base/autonomous-bounties/events?network=base-mainnet`
 - `GET /v1/base/open-competition-v1/events?network=base-mainnet`
+- `GET /v1/base/open-competition-v2-beta3/events?network=base-mainnet`
 
 It filters those records to the selected UTC window, applies the payout formula
-above, and requires the exact base-unit sum and `BountySettled` count to match
-the aggregate. Every displayed payout row links to the bounty-scoped raw event
+above, and requires the exact base-unit sum and canonical settlement count to
+match the aggregate. Every displayed payout row links to the bounty-scoped raw event
 set and its BaseScan transaction. Contract, bounty, event, and transaction
 identifiers are public blockchain evidence; participant wallet identities are
 not rendered in the ledger. A missing stream or arithmetic mismatch marks the

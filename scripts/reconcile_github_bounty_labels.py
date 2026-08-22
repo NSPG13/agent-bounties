@@ -581,10 +581,7 @@ def augment_projection_with_beta3(
     )
     coverage = metrics.get("coverage")
     beta3_fresh = (
-        coverage.get(
-            "open_competition_v2_indexer_fresh",
-            coverage.get("open_competition_indexer_fresh"),
-        )
+        coverage.get("marketplace_indexers_fresh")
         if isinstance(coverage, dict)
         else False
     )

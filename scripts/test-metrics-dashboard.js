@@ -1,10 +1,20 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const metrics = require("../site/metrics.js");
 
 const NOW = Date.parse("2026-08-12T20:22:19Z");
+
+test("public dashboard presents one marketplace without mechanism counters", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "site", "metrics.html"), "utf8");
+  assert.doesNotMatch(html, /Open Competition V[12]/i);
+  assert.doesNotMatch(html, /standing meta/i);
+  assert.doesNotMatch(html, /autonomous inventory/i);
+  assert.match(html, /Active funded opportunities/i);
+});
 
 function platform(overrides = {}) {
   return {
@@ -252,23 +262,40 @@ test("canonical payout audit reconciles exact public event arithmetic", () => {
       },
     ],
   };
-  const rows = metrics.canonicalPayoutRows(autonomous, competition, {
+  const competitionV2 = {
+    events: [
+      {
+        kind: "competition_settled",
+        contract_address: "0x6666666666666666666666666666666666666666",
+        bounty_id: "0xfff",
+        tx_hash: "0x666",
+        block_number: 16,
+        log_index: 9,
+        occurred_at: "2026-08-12T14:00:00Z",
+        data: { solver_reward: 3_000_000, keeper_reward: 40_000 },
+      },
+    ],
+  };
+  const rows = metrics.canonicalPayoutRows(autonomous, competition, competitionV2, {
     started_at: "2026-08-11T00:00:00Z",
     ended_at: "2026-08-13T00:00:00Z",
   });
   const summary = metrics.payoutAuditSummary(rows);
 
-  assert.equal(rows.length, 4);
-  assert.equal(rows[0].tx_hash, "0x555");
-  assert.match(rows[0].explorer_url, /basescan\.org\/tx\/0x555#eventlog$/);
-  assert.match(rows[0].api_url, /bounty_id=0xeee$/);
+  assert.equal(rows.length, 5);
+  assert.equal(rows[0].tx_hash, "0x666");
+  assert.match(rows[0].explorer_url, /basescan\.org\/tx\/0x666#eventlog$/);
+  assert.match(rows[0].api_url, /bounty_id=0xfff$/);
+  assert.equal(rows[0].protocol, "Open competition");
+  assert.equal(rows[0].keeper_base_units, 40_000);
   assert.equal(rows.some((row) => row.contract_address.startsWith("0x9999")), true);
   assert.deepEqual(summary, {
-    payout_events: 4,
-    settlement_events: 2,
-    solver_base_units: 3_000_000,
+    payout_events: 5,
+    settlement_events: 3,
+    solver_base_units: 6_000_000,
     verifier_base_units: 600_000,
+    keeper_base_units: 40_000,
     bonus_base_units: 125_000,
-    total_base_units: 3_725_000,
+    total_base_units: 6_765_000,
   });
 });

@@ -104,14 +104,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           BOUNTY_INVENTORY_THRESHOLD: "5"
+          PRIVATE_V2_INVENTORY_FLOOR: "5"
+          PRIVATE_V2_INVENTORY_TARGET: "10"
           META_BOUNTY_INVENTORY_THRESHOLD: "1"
           META_BOUNTY_REPLENISHMENT_TARGET: "2"
         run: |
           python scripts/bounty_inventory_guard.py \
             --claimable-report claimable-inventory.json \
             --json-out bounty-inventory-report.json \
-            --md-out bounty-inventory-report.md
-      - name: Enforce claimable and standing meta-bounty floors
+            --md-out bounty-inventory-report.md \
+            --private-json-out "$RUNNER_TEMP/bounty-inventory-private.json"
+      - name: Enforce unified liquidity and private operational floors
         run: |
           python - <<'PY'
           import json
@@ -119,33 +122,36 @@ jobs:
           from pathlib import Path
 
           report = json.loads(Path("bounty-inventory-report.json").read_text())
+          private = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "bounty-inventory-private.json").read_text()
+          )
           status = (
-              f"verified claimable bounties: {report['verified_claimable_count']}/"
-              f"{report['threshold']}; protocol={report['protocol_status']}; "
+              f"active funded opportunities: {report['active_funded_opportunities']}/"
+              f"{report['minimum_active_funded_opportunities']}; protocol={report['protocol_status']}; "
               f"evidence_valid={str(report['inventory_evidence_valid']).lower()}"
           )
-          meta_status = (
-              f"standing meta-bounties: {report['verified_meta_claimable_count']}/"
-              f"{report['meta_threshold']} floor; "
-              f"target={report['meta_replenishment_target']}"
+          operational_failure = (
+              report["below_public_floor"]
+              or private["private_v2_below_floor"]
+              or private["meta_below_threshold"]
           )
-          if report["below_threshold"]:
-              print(f"::error title=Bounty inventory invariant not met::{status}; {meta_status}")
-          elif report["meta_replenishment_required"]:
-              print(f"::warning title=Standing meta-bounty buffer needs replenishment::{meta_status}")
+          if operational_failure:
+              print(f"::error title=Bounty liquidity invariant not met::{status}")
+          elif private["private_v2_replenishment_required"]:
+              print(f"::warning title=Private liquidity buffer needs replenishment::{status}")
+          elif private["meta_replenishment_required"]:
+              print(f"::warning title=Private liquidity buffer needs replenishment::{status}")
           else:
-              print(f"{status}; {meta_status}")
+              print(status)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## Claimable bounty liquidity\n\n")
+              summary.write("## Unified marketplace liquidity\n\n")
               summary.write(f"- {status}\n")
-              summary.write(f"- {meta_status}\n")
-              summary.write(f"- below threshold: {str(report['below_threshold']).lower()}\n")
               summary.write(
-                  "- meta replenishment required: "
-                  f"{str(report['meta_replenishment_required']).lower()}\n"
+                  "- liquidity policy healthy: "
+                  f"{str(not operational_failure).lower()}\n"
               )
               summary.write("- GitHub issues are candidate supply, not funding evidence.\n")
-          if report["below_threshold"]:
+          if operational_failure:
               raise SystemExit(2)
           PY
       - name: Upload report artifacts

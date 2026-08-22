@@ -229,6 +229,15 @@ Beta3 ships two reviewed candidates:
   supports UTF-8 inclusion and exclusion, a byte limit, valid JSON, required
   JSON pointers, exact JSON string values, and minimum JSON array lengths.
 
+`canonical-gmv-attribution-metric-v1` is independently reproduced and reviewed
+as a beta3 profile. It scores a wallet from a frozen closed-epoch snapshot using
+`settlement GMV * entrant canonical funding / total canonical funding`, with
+operator/reserve funding, excluded reward contracts, creator-as-solver, and
+entrant-as-solver rows scoring zero. It must not be used for a funded
+competition until its public snapshot fixtures pass, primary and shadow
+indexers agree on each snapshot,
+and the release catalog marks the exact profile `reviewed`.
+
 Each exact Rust/SP1 version, source hash, ELF hash, and vkey is committed in
 its `programs/<profile>/release-identity.json`. A profile remains `disabled`
 until two isolated source-to-ELF/vkey builds agree, its public fixtures pass,

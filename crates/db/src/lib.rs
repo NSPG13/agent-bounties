@@ -70,6 +70,8 @@ pub const OPEN_COMPETITION_V2_BETA2_MIGRATION: &str =
     include_str!("../../../migrations/0023_open_competition_v2_beta2.sql");
 pub const OPEN_COMPETITION_V2_BETA3_MIGRATION: &str =
     include_str!("../../../migrations/0024_open_competition_v2_beta3.sql");
+pub const OPPORTUNITY_FEEDBACK_MIGRATION: &str =
+    include_str!("../../../migrations/0025_opportunity_feedback.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -273,6 +275,7 @@ pub struct NewOpportunityComment {
     pub opportunity_id: String,
     pub author: String,
     pub body: String,
+    pub feedback: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +284,7 @@ pub struct OpportunityComment {
     pub opportunity_id: String,
     pub author: String,
     pub body: String,
+    pub feedback: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -621,6 +625,18 @@ pub struct PlatformMetricsStats {
     pub claim_cohort: PlatformClaimCohortStats,
     pub daily: Vec<PlatformDailyStats>,
     pub coverage: PlatformMetricsCoverageStats,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlatformDemandGrowthStats {
+    pub gmv_7d_base_units: String,
+    pub gmv_28d_base_units: String,
+    pub lifetime_gmv_base_units: String,
+    pub new_poster_funder_wallets_28d: u64,
+    pub active_poster_funder_wallets_28d: u64,
+    pub repeat_poster_funder_wallets_28d: u64,
+    pub non_operator_attributed_gmv_28d_base_units: String,
+    pub attributed_gmv_28d_base_units: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1167,6 +1183,7 @@ impl PostgresStore {
                 EXTERNAL_INTERFACE_USAGE_MIGRATION,
                 OPEN_COMPETITION_V2_BETA2_MIGRATION,
                 OPEN_COMPETITION_V2_BETA3_MIGRATION,
+                OPPORTUNITY_FEEDBACK_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1980,6 +1997,177 @@ impl PostgresStore {
         })
     }
 
+    pub async fn platform_demand_growth_stats(
+        &self,
+        network: &str,
+        ended_at: DateTime<Utc>,
+        launch_at: DateTime<Utc>,
+        excluded_wallets: &[String],
+        excluded_bounty_contracts: &[String],
+    ) -> DbResult<PlatformDemandGrowthStats> {
+        let row = sqlx::query(
+            r#"
+            WITH supply_actions AS (
+              SELECT event.occurred_at,
+                     lower(CASE
+                       WHEN event.kind = 'canonical_bounty_created' THEN event.data->>'creator'
+                       WHEN event.kind = 'external_bounty_submitted' THEN event.data->>'submitter'
+                       ELSE event.data->>'contributor'
+                     END) AS identity,
+                     'autonomous:' || event.id::text AS action_key
+              FROM autonomous_bounty_events AS event
+              WHERE event.network = $1
+                AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($5)
+                AND event.kind IN ('canonical_bounty_created', 'external_bounty_submitted', 'funding_added')
+              UNION ALL
+              SELECT event.occurred_at,
+                     lower(CASE WHEN event.kind = 'canonical_competition_created'
+                       THEN event.data->>'creator' ELSE event.data->>'contributor' END) AS identity,
+                     'open-v1:' || event.id::text AS action_key
+              FROM open_competition_events AS event
+              WHERE event.network = $1
+                AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(COALESCE(event.data->>'bounty_contract', event.contract_address)) = ANY($5)
+                AND event.kind IN ('canonical_competition_created', 'funding_added')
+              UNION ALL
+              SELECT event.occurred_at,
+                     lower(CASE WHEN event.kind = 'canonical_competition_created'
+                       THEN event.data->>'creator' ELSE event.data->>'contributor' END) AS identity,
+                     'open-v2:' || event.id::text AS action_key
+              FROM open_competition_v2_events AS event
+              WHERE event.network = $1
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND NOT lower(event.contract_address) = ANY($5)
+                AND event.kind IN ('canonical_competition_created', 'funding_added')
+            ), external_supply_actions AS (
+              SELECT * FROM supply_actions
+              WHERE identity ~ '^0x[0-9a-f]{40}$'
+                AND identity <> '0x0000000000000000000000000000000000000000'
+                AND NOT identity = ANY($4)
+            ), wallet_rollup AS (
+              SELECT identity,
+                     MIN(occurred_at) AS first_action_at,
+                     COUNT(DISTINCT action_key) FILTER (
+                       WHERE occurred_at >= $2 - INTERVAL '28 days'
+                     ) AS actions_28d
+              FROM external_supply_actions
+              GROUP BY identity
+            ), funding AS (
+              SELECT 'autonomous'::text AS protocol, event.contract_address,
+                     event.bounty_id, event.occurred_at,
+                     lower(event.data->>'contributor') AS contributor,
+                     COALESCE((event.data->>'amount')::numeric, 0) AS amount
+              FROM autonomous_bounty_events AS event
+              WHERE event.network = $1 AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND event.kind = 'funding_added'
+                AND NOT lower(event.contract_address) = ANY($5)
+              UNION ALL
+              SELECT 'open-v1', event.contract_address, event.bounty_id, event.occurred_at,
+                     lower(event.data->>'contributor'), COALESCE((event.data->>'amount')::numeric, 0)
+              FROM open_competition_events AS event
+              WHERE event.network = $1 AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND event.kind = 'funding_added'
+                AND NOT lower(event.contract_address) = ANY($5)
+              UNION ALL
+              SELECT 'open-v2', event.contract_address, event.bounty_id, event.occurred_at,
+                     lower(event.data->>'contributor'), COALESCE((event.data->>'amount')::numeric, 0)
+              FROM open_competition_v2_events AS event
+              WHERE event.network = $1
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND event.kind = 'funding_added'
+                AND NOT lower(event.contract_address) = ANY($5)
+            ), settlements AS (
+              SELECT 'autonomous'::text AS protocol, event.contract_address,
+                     event.bounty_id, event.occurred_at,
+                     COALESCE((event.data->>'solver_reward')::numeric, 0)
+                     + COALESCE((event.data->>'verifier_reward')::numeric, 0)
+                     + COALESCE((event.data->>'timeout_bond_bonus')::numeric, 0) AS gmv
+              FROM autonomous_bounty_events AS event
+              WHERE event.network = $1 AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND event.kind = 'bounty_settled'
+                AND NOT lower(event.contract_address) = ANY($5)
+              UNION ALL
+              SELECT 'open-v1', event.contract_address, event.bounty_id, event.occurred_at,
+                     COALESCE((event.data->>'solver_reward')::numeric, 0)
+                     + COALESCE((event.data->>'verifier_reward')::numeric, 0)
+                     + COALESCE((event.data->>'timeout_bond_bonus')::numeric, 0)
+              FROM open_competition_events AS event
+              WHERE event.network = $1 AND event.block_time_verified = TRUE
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND event.kind = 'bounty_settled'
+                AND NOT lower(event.contract_address) = ANY($5)
+              UNION ALL
+              SELECT 'open-v2', event.contract_address, event.bounty_id, event.occurred_at,
+                     COALESCE((event.data->>'solver_reward')::numeric, 0)
+                     + COALESCE((event.data->>'keeper_reward')::numeric, 0)
+              FROM open_competition_v2_events AS event
+              WHERE event.network = $1
+                AND event.occurred_at >= $3 AND event.occurred_at < $2
+                AND event.kind = 'competition_settled'
+                AND NOT lower(event.contract_address) = ANY($5)
+            ), attributed AS (
+              SELECT settlement.*,
+                     COALESCE(SUM(funding.amount), 0) AS total_funding,
+                     COALESCE(SUM(funding.amount) FILTER (
+                       WHERE funding.contributor ~ '^0x[0-9a-f]{40}$'
+                         AND funding.contributor <> '0x0000000000000000000000000000000000000000'
+                         AND NOT funding.contributor = ANY($4)
+                     ), 0) AS non_operator_funding
+              FROM settlements AS settlement
+              LEFT JOIN funding
+                ON funding.protocol = settlement.protocol
+               AND lower(funding.contract_address) = lower(settlement.contract_address)
+               AND funding.bounty_id = settlement.bounty_id
+               AND funding.occurred_at <= settlement.occurred_at
+              GROUP BY settlement.protocol, settlement.contract_address,
+                       settlement.bounty_id, settlement.occurred_at, settlement.gmv
+            )
+            SELECT
+              COALESCE((SELECT SUM(gmv) FROM attributed
+                WHERE occurred_at >= $2 - INTERVAL '7 days'), 0)::text AS gmv_7d,
+              COALESCE((SELECT SUM(gmv) FROM attributed
+                WHERE occurred_at >= $2 - INTERVAL '28 days'), 0)::text AS gmv_28d,
+              COALESCE((SELECT SUM(gmv) FROM attributed), 0)::text AS lifetime_gmv,
+              (SELECT COUNT(*) FROM wallet_rollup
+                WHERE actions_28d > 0 AND first_action_at >= $2 - INTERVAL '28 days') AS new_wallets_28d,
+              (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d > 0) AS active_wallets_28d,
+              (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d >= 2) AS repeat_wallets_28d,
+              COALESCE((SELECT SUM(gmv * non_operator_funding / total_funding)
+                FROM attributed
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0)::text
+                AS non_operator_attributed_gmv_28d,
+              COALESCE((SELECT SUM(gmv)
+                FROM attributed
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0)::text
+                AS attributed_gmv_28d
+            "#,
+        )
+        .bind(network)
+        .bind(ended_at)
+        .bind(launch_at)
+        .bind(excluded_wallets)
+        .bind(excluded_bounty_contracts)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(PlatformDemandGrowthStats {
+            gmv_7d_base_units: row.try_get("gmv_7d")?,
+            gmv_28d_base_units: row.try_get("gmv_28d")?,
+            lifetime_gmv_base_units: row.try_get("lifetime_gmv")?,
+            new_poster_funder_wallets_28d: u64_from_i64(row.try_get("new_wallets_28d")?)?,
+            active_poster_funder_wallets_28d: u64_from_i64(row.try_get("active_wallets_28d")?)?,
+            repeat_poster_funder_wallets_28d: u64_from_i64(row.try_get("repeat_wallets_28d")?)?,
+            non_operator_attributed_gmv_28d_base_units: row
+                .try_get("non_operator_attributed_gmv_28d")?,
+            attributed_gmv_28d_base_units: row.try_get("attributed_gmv_28d")?,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn platform_metrics_stats(
         &self,
@@ -2235,6 +2423,7 @@ impl PostgresStore {
                 AND block_time_verified = TRUE
                 AND occurred_at >= $5
                 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($7)
                 AND kind IN ('bounty_settled', 'submission_rejected')
               UNION ALL
               SELECT occurred_at, kind = 'bounty_settled' AS settled,
@@ -2254,6 +2443,7 @@ impl PostgresStore {
                 AND block_time_verified = TRUE
                 AND occurred_at >= $5
                 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($7)
                 AND kind IN ('bounty_settled', 'competition_submission_rejected')
               UNION ALL
               SELECT occurred_at, TRUE AS settled,
@@ -2944,16 +3134,17 @@ impl PostgresStore {
     ) -> DbResult<OpportunityComment> {
         let inserted = sqlx::query(
             r#"
-            INSERT INTO opportunity_comments (id, opportunity_id, author, body)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO opportunity_comments (id, opportunity_id, author, body, feedback)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (id) DO NOTHING
-            RETURNING id, opportunity_id, author, body, created_at
+            RETURNING id, opportunity_id, author, body, feedback, created_at
             "#,
         )
         .bind(comment.id)
         .bind(&comment.opportunity_id)
         .bind(&comment.author)
         .bind(&comment.body)
+        .bind(&comment.feedback)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -2962,7 +3153,7 @@ impl PostgresStore {
             None => {
                 sqlx::query(
                     r#"
-                    SELECT id, opportunity_id, author, body, created_at
+                    SELECT id, opportunity_id, author, body, feedback, created_at
                     FROM opportunity_comments
                     WHERE id = $1
                     "#,
@@ -2976,6 +3167,7 @@ impl PostgresStore {
         if persisted.opportunity_id != comment.opportunity_id
             || persisted.author != comment.author
             || persisted.body != comment.body
+            || persisted.feedback != comment.feedback
         {
             return Err(DbError::OpportunityCommentConflict);
         }
@@ -2990,7 +3182,7 @@ impl PostgresStore {
         let limit = i64::from(limit.clamp(1, 100));
         sqlx::query(
             r#"
-            SELECT id, opportunity_id, author, body, created_at
+            SELECT id, opportunity_id, author, body, feedback, created_at
             FROM opportunity_comments
             WHERE opportunity_id = $1
             ORDER BY created_at DESC, id DESC
@@ -8122,6 +8314,7 @@ fn opportunity_comment_from_row(row: PgRow) -> DbResult<OpportunityComment> {
         opportunity_id: row.try_get("opportunity_id")?,
         author: row.try_get("author")?,
         body: row.try_get("body")?,
+        feedback: row.try_get("feedback")?,
         created_at: row.try_get("created_at")?,
     })
 }
@@ -9890,6 +10083,22 @@ mod tests {
     }
 
     #[test]
+    fn opportunity_feedback_migration_is_bounded_and_private_evidence_capable() {
+        for invariant in [
+            "ADD COLUMN IF NOT EXISTS feedback JSONB",
+            "jsonb_typeof(feedback) = 'object'",
+            "pg_column_size(feedback) <= 4096",
+            "'wallet_signature'",
+            "'evidence_reference'",
+        ] {
+            assert!(
+                OPPORTUNITY_FEEDBACK_MIGRATION.contains(invariant),
+                "missing opportunity feedback invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
     fn chatgpt_action_intents_are_bounded_idempotent_and_canonical_event_backed() {
         for invariant in [
             "chatgpt_action_intents",
@@ -10174,6 +10383,10 @@ mod tests {
             opportunity_id: "canonical:base-mainnet:0xabc".to_string(),
             author: "Ada".to_string(),
             body: "The acceptance criteria are clear.".to_string(),
+            feedback: Some(serde_json::json!({
+                "stage": "posting",
+                "friction": "The exact funding sequence was hard to find."
+            })),
         };
         let created = store
             .create_or_get_opportunity_comment(&comment)
@@ -11041,6 +11254,28 @@ mod tests {
                 .sum::<u128>(),
             174_925_000
         );
+
+        let growth = store
+            .platform_demand_growth_stats(
+                &network,
+                selected_ended_at,
+                launch_at,
+                &[maintainer_wallet.to_string()],
+                &[recovery_contract.to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(growth.gmv_7d_base_units, "18625000");
+        assert_eq!(growth.gmv_28d_base_units, "18625000");
+        assert_eq!(growth.lifetime_gmv_base_units, "18625000");
+        assert_eq!(growth.new_poster_funder_wallets_28d, 2);
+        assert_eq!(growth.active_poster_funder_wallets_28d, 2);
+        assert_eq!(growth.repeat_poster_funder_wallets_28d, 1);
+        // The five V2 settlement fixtures intentionally omit FundingAddedV2.
+        // GMV remains canonical, while the external-funding share must be
+        // withheld by the API because only 3.425 USDC is attributable.
+        assert_eq!(growth.non_operator_attributed_gmv_28d_base_units, "3425000");
+        assert_eq!(growth.attributed_gmv_28d_base_units, "3425000");
 
         sqlx::query("DELETE FROM open_competition_v2_events WHERE network = $1")
             .bind(&network)

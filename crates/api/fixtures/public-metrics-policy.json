@@ -11,7 +11,12 @@
     "nspg13",
     "system"
   ],
-  "maintainer_wallets": [],
+  "maintainer_wallets": [
+    "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+    "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+  ],
   "excluded_bounty_contracts": [
     "0x3e052b933628b960d61654a68fca23d869d8989f",
     "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",

@@ -18,6 +18,16 @@ export const SUPPORTED_REGRESSION_QUORUM = Object.freeze({
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
   ]),
 });
+export const CANONICAL_GMV_PROFILE = Object.freeze({
+  profile_id: "canonical-gmv-attribution-metric-v1",
+  classification: "reviewed",
+  program_vkey: "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
+  source_hash: "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
+  elf_hash: "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5",
+  journal_schema_hash: "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+  metric_program_hash: "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead",
+  review_evidence_hash: "0x0d679fe190be3e2248953ee5d5f4cb5adfe3a64255404ac752f8caed9862bf86",
+});
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -1223,9 +1233,25 @@ function reviewedV2Program(release, projection) {
   );
 }
 
+function reviewedCanonicalGmvProgram(release) {
+  const exact = (actual, expected) => (
+    typeof actual === "string"
+    && actual.toLowerCase() === expected.toLowerCase()
+  );
+  return (Array.isArray(release?.metric_programs) ? release.metric_programs : []).find(
+    (profile) => Object.entries(CANONICAL_GMV_PROFILE).every(
+      ([field, expected]) => exact(profile?.[field], expected),
+    ),
+  ) || null;
+}
+
 export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryResponse, apiBaseUrl) {
   if (!releaseResponse && !inventoryResponse) {
-    return { status: "not_checked", verified: [], warning: null };
+    return {
+      status: "not_checked", verified: [], warning: null,
+      observedSafeBlock: null, releaseHash: null, factoryContract: null,
+      gmvProfile: null,
+    };
   }
   try {
     if (releaseResponse?.status !== 200 || inventoryResponse?.status !== 200) {
@@ -1242,6 +1268,7 @@ export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryRespo
       || release?.public_creation_enabled !== true
       || release?.proof_broker_enabled !== true
       || !ADDRESS.test(release?.factory_contract || "")
+      || !HASH.test(release?.release_hash || "")
       || agreement?.agrees !== true
       || !Number.isSafeInteger(agreement?.common_safe_block)
       || agreement.common_safe_block <= 0
@@ -1258,6 +1285,7 @@ export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryRespo
     if (!Number.isFinite(observedAt) || Math.abs(Date.now() - observedAt) > 10 * 60 * 1000) {
       throw new Error("Beta3 indexer agreement is stale");
     }
+    const gmvProfile = reviewedCanonicalGmvProgram(release);
     const ids = new Set();
     const contracts = new Set();
     const verified = [];
@@ -1316,13 +1344,25 @@ export function verifyOpenCompetitionV2Inventory(releaseResponse, inventoryRespo
         proof_quote_url: `${apiBaseUrl}/v1/base/open-competition-v2-beta3/proof-quotes`,
       });
     }
-    return { status: "verified", verified, warning: null };
+    return {
+      status: "verified",
+      verified,
+      warning: null,
+      observedSafeBlock: agreement.common_safe_block,
+      releaseHash: release.release_hash.toLowerCase(),
+      factoryContract: release.factory_contract.toLowerCase(),
+      gmvProfile: gmvProfile ? { ...CANONICAL_GMV_PROFILE } : null,
+    };
   } catch (error) {
     return {
       status: "verification_failed",
       verified: [],
       warning: "open_competition_v2_inventory_verification_failed",
       error: String(error?.message || error),
+      observedSafeBlock: null,
+      releaseHash: null,
+      factoryContract: null,
+      gmvProfile: null,
     };
   }
 }
@@ -1450,6 +1490,10 @@ export async function collectInventory({
     direct_chain_observed_block: direct.observed_block,
     verified_claimable_bounties: verified,
     open_competition_v2_status: v2.status,
+    open_competition_v2_observed_safe_block: v2.observedSafeBlock,
+    open_competition_v2_release_hash: v2.releaseHash,
+    open_competition_v2_factory_contract: v2.factoryContract,
+    open_competition_v2_gmv_profile: v2.gmvProfile,
     verified_open_competition_v2_bounties: v2.verified,
     excluded_claimable_candidates: excluded,
     funding_candidates: fundingCandidates,

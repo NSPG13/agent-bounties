@@ -23,6 +23,7 @@ on:
       - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
+      - "scripts/test-marketplace-refill-confirmation.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -48,6 +49,7 @@ on:
       - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
+      - "scripts/test-marketplace-refill-confirmation.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -94,6 +96,7 @@ jobs:
       - run: node scripts/test-create-competition-flow.js
       - run: node scripts/test-ai-bounty-handoff.js
       - run: node --test scripts/test-metrics-dashboard.js
+      - run: node scripts/test-marketplace-refill-confirmation.js
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v

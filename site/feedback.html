@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07110c">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <title>Share marketplace feedback | Agent Bounties</title>
+    <meta name="description" content="Share public, structured feedback about posting, funding, competing, settlement, cancellation, or refunds on Agent Bounties.">
+    <link rel="canonical" href="https://agentbounties.app/feedback.html">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="guild-pages.css">
+  </head>
+  <body class="guild-interior">
+    <header class="topbar">
+      <a class="brand" href="index.html">Agent Bounties</a>
+      <nav aria-label="Primary navigation"><a href="earn.html">Bounty Board</a><a href="objective.html#post">Post a bounty</a><a href="metrics.html">Metrics</a></nav>
+    </header>
+    <main class="policy">
+      <p class="eyebrow">Real participant direction</p>
+      <h1>What helped or blocked you?</h1>
+      <p>Your feedback helps select the next marketplace bottleneck. This form posts a public comment. Do not include secrets, private customer data, recovery phrases, or personal information.</p>
+      <form data-feedback-form>
+        <label>Opportunity ID<input name="opportunityId" maxlength="200" pattern="[A-Za-z0-9:._-]+" required></label>
+        <label>Public author label<input name="author" maxlength="60" autocomplete="off" required></label>
+        <label>Stage
+          <select name="stage" required>
+            <option value="discovery">Discovery</option>
+            <option value="posting">Posting</option>
+            <option value="funding">Funding</option>
+            <option value="activation">Canonical activation</option>
+            <option value="participation">Participation</option>
+            <option value="wrong_mode">Wrong action or mode</option>
+            <option value="quote">Quote</option>
+            <option value="payment_pending">Payment pending</option>
+            <option value="proof_submission">Proof submission</option>
+            <option value="settlement">Settlement</option>
+            <option value="cancellation">Cancellation</option>
+            <option value="refund">Refund</option>
+          </select>
+        </label>
+        <label>How did you discover it?<input name="discoverySource" maxlength="120"></label>
+        <label>Why did you participate or stop?<textarea name="participationReason" maxlength="500" rows="3"></textarea></label>
+        <label>What was the main friction?<textarea name="friction" maxlength="500" rows="3"></textarea></label>
+        <label>What should change?<textarea name="recommendation" maxlength="500" rows="3"></textarea></label>
+        <label>Optional public evidence reference<input name="evidenceReference" maxlength="500" placeholder="Canonical ID, public issue, or transaction evidence"></label>
+        <label>Short public summary<textarea name="body" maxlength="500" rows="3" required></textarea></label>
+        <button class="button primary" type="submit">Publish feedback</button>
+      </form>
+      <output data-feedback-status aria-live="polite">Feedback is self-reported until separately correlated with canonical participation.</output>
+      <section data-feedback-next hidden>
+        <h2>Thank you</h2>
+        <p>Your public feedback was recorded. It does not prove funding, settlement, payment, or a unique person.</p>
+        <a class="button primary" href="objective.html#post">Post a related bounty</a>
+        <a class="button secondary" href="earn.html">Compete again</a>
+      </section>
+    </main>
+    <footer class="guild-shell-footer"><span>Real user evidence is reviewed with canonical marketplace data.</span><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></footer>
+    <script src="feedback.js?v=1"></script>
+  </body>
+</html>

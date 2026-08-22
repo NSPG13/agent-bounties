@@ -321,6 +321,7 @@
   }
 
   async function initialize() {
+    by("[data-competition-feedback]").href = `feedback.html?opportunity=${encodeURIComponent(`open-competition:${network}:${bounty}`)}&stage=participation`;
     by("[data-connect-competition-wallet]").addEventListener("click", guard(connect));
     by("[data-generate-commitment]").addEventListener("click", guard(createEnvelope));
     by("[data-competition-commit-form]").addEventListener("submit", guard(prepareCommit));
