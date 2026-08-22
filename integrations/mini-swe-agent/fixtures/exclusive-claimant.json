@@ -1,0 +1,14 @@
+{
+  "observed_at": "2026-08-06T12:00:00Z",
+  "inventory": [
+    {
+      "bounty_id": "B-4001",
+      "title": "Design migration plan",
+      "claimable": true,
+      "verification_ready": true,
+      "margin_usdc": "1.80",
+      "funding_updated_at": "2026-08-06T11:40:00Z",
+      "exclusive_claimant": "0x7f2c1a9d4e6b8c0f3a5d7e9b1c3f5a7d9b1c3f5a"
+    }
+  ]
+}
