@@ -35,8 +35,8 @@ jobs:
           test "$(stat -c '%U:%G:%a:%s' -- "$primary")" = "root:root:600:$primary_size"
           test "$(stat -c '%U:%G:%a:%s' -- "$secondary")" = "root:root:600:$secondary_size"
 
-          primary_used_bytes="$(swapon --show --noheadings --bytes --raw --output=NAME,USED | awk '$1 == "/swapfile" {print $2}')"
-          secondary_used_bytes="$(swapon --show --noheadings --bytes --raw --output=NAME,USED | awk '$1 == "/swapfile2" {print $2}')"
+          primary_used_bytes="$(swapon --show --noheadings --bytes --raw --output NAME,USED | awk '$1 == "/swapfile" {print $2}')"
+          secondary_used_bytes="$(swapon --show --noheadings --bytes --raw --output NAME,USED | awk '$1 == "/swapfile2" {print $2}')"
           test "$primary_used_bytes" = 0
           test "$secondary_used_bytes" = 0
 
@@ -55,8 +55,8 @@ jobs:
           printf 'fstab_before_sha256=%s\n' "$fstab_before_sha256"
 
           sudo -n swapoff -- "$secondary"
-          test "$(swapon --show --noheadings --raw --output=NAME | awk '$1 == "/swapfile2" {n++} END {print n+0}')" = 0
-          test "$(swapon --show --noheadings --raw --output=NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
+          test "$(swapon --show --noheadings --raw --output NAME | awk '$1 == "/swapfile2" {n++} END {print n+0}')" = 0
+          test "$(swapon --show --noheadings --raw --output NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
 
           fstab_tmp="$(mktemp)"
           trap 'rm -f -- "$fstab_tmp"' EXIT
@@ -69,7 +69,7 @@ jobs:
           sudo -n rm -f -- "$secondary"
           test ! -e "$secondary"
           test -f "$primary"
-          test "$(swapon --show --noheadings --raw --output=NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
+          test "$(swapon --show --noheadings --raw --output NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
 
           after_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
           recovered_bytes="$((after_bytes - before_bytes))"
