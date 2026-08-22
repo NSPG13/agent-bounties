@@ -168,6 +168,29 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertIn('X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"', sepolia)
         self.assertNotIn('X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"', sepolia)
 
+    def test_sepolia_rehearsal_authenticates_the_owned_prover_before_payment(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        sepolia = workflow.split("  live-sepolia-rehearsal:", 1)[1].split(
+            "  deploy-mainnet:", 1
+        )[0]
+        auth_probe = 'Authorization: Bearer ${OPEN_COMPETITION_V2_PROVER_API_KEY}'
+        payment_rehearsal = "python scripts/run_open_competition_v2_x402_rehearsal.py"
+        self.assertIn('kill -0 "$prover_pid"', sepolia)
+        self.assertIn("GITHUB_RUN_ATTEMPT * 997", sepolia)
+        self.assertIn('OPEN_COMPETITION_V2_PROVER_URL="http://127.0.0.1:${prover_port}/v1/prove"', sepolia)
+        self.assertIn('PUBLIC_BASE_URL="http://127.0.0.1:${api_port}"', sepolia)
+        self.assertIn(auth_probe, sepolia)
+        self.assertIn('test "$prover_auth_status" = "400"', sepolia)
+        self.assertLess(sepolia.index(auth_probe), sepolia.index(payment_rehearsal))
+        upload = sepolia.split(
+            "- uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            1,
+        )[1]
+        self.assertIn("if: always()", upload)
+        self.assertIn("target/sepolia-prover-auth.json", upload)
+
     def test_mainnet_deploys_the_exact_recoverable_reserve_factory(self):
         workflow = (
             MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"

@@ -1,11 +1,38 @@
 import unittest
+from pathlib import Path
 
 from eth_account import Account
 
 import recover_open_competition_v2_rehearsal_funds as recovery
 
 
+WORKFLOW = (
+    Path(__file__).parents[1]
+    / ".github/workflows/open-competition-v2-beta3-sepolia-rehearsal-recovery.yml"
+)
+
+
 class RehearsalRecoveryTests(unittest.TestCase):
+    def test_current_x402_charge_is_refunded_before_current_actor_sweep(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        refund = "python scripts/recover_open_competition_v2_x402_charge.py"
+        actor_sweep = "python scripts/recover_open_competition_v2_rehearsal_funds.py"
+        self.assertIn(refund, workflow)
+        self.assertIn(
+            "--payment-transaction 0xe8c661ecb109910de75cd0391c4dc3d07a3a769d5174328a54fe3221cc5aca90",
+            workflow,
+        )
+        self.assertIn("--payer 0xa4b3e826aaa584a45f47906b7b202f695b6640bd", workflow)
+        self.assertIn(
+            "--additional-actor-scope 5dbdb1938bcdae0ce43349597973f43d0978909b:32596784971:1",
+            workflow,
+        )
+        self.assertIn(
+            "--expired-competition 0x2e749dd59cb50e14b61d9bf0d40dd1a012b62efa",
+            workflow,
+        )
+        self.assertLess(workflow.index(refund), workflow.index(actor_sweep))
+
     def test_actor_derivation_is_stable_and_unique(self) -> None:
         root = bytes.fromhex("11" * 32)
         actors = recovery.actor_set(

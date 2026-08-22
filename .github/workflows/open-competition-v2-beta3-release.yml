@@ -718,7 +718,10 @@ jobs:
           export OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS=10000
           export OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS=1800
           export OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS=1800
-          export OPEN_COMPETITION_V2_PROVER_URL=http://127.0.0.1:9070/v1/prove
+          port_offset=$(((GITHUB_RUN_ID + GITHUB_RUN_ATTEMPT * 997) % 10000))
+          prover_port=$((20000 + port_offset))
+          api_port=$((30000 + port_offset))
+          export OPEN_COMPETITION_V2_PROVER_URL="http://127.0.0.1:${prover_port}/v1/prove"
           export OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS=600
           export OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS=630
           export OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
@@ -727,19 +730,42 @@ jobs:
           export X402_RELAYER_MIN_USDC_BASE_UNITS=100000
           export X402_RELAYER_MAX_USDC_BASE_UNITS=500000
           export ENABLE_X402_HOSTED_RELAY=true
-          export PUBLIC_BASE_URL=http://127.0.0.1:8787
-          export PORT=9070
+          export PUBLIC_BASE_URL="http://127.0.0.1:${api_port}"
+          export PORT="$prover_port"
           python scripts/open_competition_v2_prover_service.py >target/sepolia-prover.log 2>&1 &
           prover_pid=$!
-          export PORT=8787
+          export PORT="$api_port"
           target/release/api >target/sepolia-api.log 2>&1 &
           api_pid=$!
           cleanup() {
             kill "$api_pid" "$prover_pid" 2>/dev/null || true
           }
           trap cleanup EXIT
+          prover_auth_status=""
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:8787/health >/dev/null; then
+            if ! kill -0 "$prover_pid" 2>/dev/null; then
+              cat target/sepolia-prover.log
+              exit 1
+            fi
+            prover_auth_status="$(curl --silent --output target/sepolia-prover-auth.json \
+              --write-out '%{http_code}' --request POST \
+              --header "Authorization: Bearer ${OPEN_COMPETITION_V2_PROVER_API_KEY}" \
+              --header 'content-type: application/json' \
+              --header 'idempotency-key: beta3-sepolia-auth-readiness' \
+              --data '{}' "$OPEN_COMPETITION_V2_PROVER_URL" || true)"
+            if [[ "$prover_auth_status" == "400" ]]; then
+              break
+            fi
+            if [[ "$prover_auth_status" == "401" ]]; then
+              cat target/sepolia-prover.log
+              cat target/sepolia-prover-auth.json
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$prover_auth_status" = "400"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "http://127.0.0.1:${api_port}/health" >/dev/null; then
               break
             fi
             if ! kill -0 "$api_pid" 2>/dev/null; then
@@ -748,9 +774,9 @@ jobs:
             fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:8787/health >/dev/null
+          curl --fail --silent "http://127.0.0.1:${api_port}/health" >/dev/null
           python scripts/run_open_competition_v2_x402_rehearsal.py \
-            --api http://127.0.0.1:8787 --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --api "http://127.0.0.1:${api_port}" --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --rehearsal target/sepolia-rehearsal.json --worker-binary target/release/worker \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
@@ -774,6 +800,7 @@ jobs:
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$GITHUB_SHA"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: open-competition-v2-beta3-live-sepolia-${{ github.sha }}
           path: |
@@ -786,6 +813,7 @@ jobs:
             target/release-gates.json
             target/sepolia-api.log
             target/sepolia-prover.log
+            target/sepolia-prover-auth.json
           if-no-files-found: error
           retention-days: 90
 
