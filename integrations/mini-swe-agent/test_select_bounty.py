@@ -155,6 +155,21 @@ EXPECTATIONS = {
         "refresh", "a precomputed margin that contradicts its own components"),
     "adversarial-item-funding-decimal-mismatch.json": (
         "refresh", "comparing 6dp funding against an 18dp target is meaningless"),
+    # (c) partial/incoherent `cash_economics`. The review reproduced a `claim`
+    # on an object rewritten down to `gross_cash_margin` alone, which hides the
+    # external spend that decides whether the work is worth doing.
+    "adversarial-item-economics-only-margin.json": (
+        "refresh", "an object with 1 of 6 required members reports nothing"),
+    "adversarial-item-economics-no-external-spend.json": (
+        "refresh", "an unknown external spend is not a zero external spend"),
+    "adversarial-item-economics-empty.json": (
+        "refresh", "an empty object is not 'economics unavailable'"),
+    "adversarial-item-economics-absent.json": (
+        "refresh", "both canonical constructors emit Some(...), so absence contradicts source_type"),
+    "adversarial-item-economics-flag-lies.json": (
+        "refresh", "gross_cash_margin_positive=true over a negative margin"),
+    "adversarial-item-bond-disagrees-with-economics.json": (
+        "refresh", "bond and refundable_claim_bond come from one upstream value"),
 }
 
 # The parameters the API actually deserializes. See
@@ -349,7 +364,13 @@ def probe(label: str, expected: set, **changes) -> None:
     result = run(path)
     action = result.get("action")
     check(action in expected, f"{label} -> {'/'.join(sorted(expected))} (got {action!r})")
-    check(result.get("selected") is None, f"  {label} selects nothing")
+    # A refusal must not smuggle a selection out alongside it. When the probe
+    # legitimately expects `claim` (the coherent-control cases), the opposite
+    # is required: something must actually have been chosen.
+    if expected == {"claim"}:
+        check(result.get("selected") is not None, f"  {label} selects a record")
+    else:
+        check(result.get("selected") is None, f"  {label} selects nothing")
 
 
 _DELETE = object()
@@ -389,8 +410,19 @@ probe("payment_committed='true' (string)", {"refresh"}, payment_committed="true"
 probe("funded_amount < funding_target", {"skip"},
       funded_amount={"amount": "1", "currency": "USDC", "unit": "base_units",
                      "decimals": 6})
-probe("bond is zero", {"skip"},
+# Upstream builds `bond` and `cash_economics.refundable_claim_bond` from the one
+# `item.claim_bond` value (opportunities.rs:796, :848). So zeroing ONLY the
+# top-level field is a record upstream cannot have produced -- a data fault
+# (`refresh`), not a cheap bounty...
+probe("bond zeroed but refundable_claim_bond left at 10000", {"refresh"},
       bond={"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6})
+# ...whereas a COHERENT zero bond breaches nothing and is refused on its merits.
+probe("bond is zero in both places (coherent)", {"skip"},
+      bond={"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      cash_economics=dict(
+          json.loads(json.dumps(GOOD_ITEM["cash_economics"])),
+          refundable_claim_bond={"amount": "0", "currency": "USDC",
+                                 "unit": "base_units", "decimals": 6}))
 probe("bond in a different currency", {"refresh"},
       bond={"amount": "10000", "currency": "DAI", "unit": "base_units", "decimals": 6})
 probe("reward amount is a float", {"refresh"},
@@ -399,6 +431,95 @@ probe("work_state='open'", {"skip"}, work_state="open")
 probe("work_state='completed'", {"skip"}, work_state="completed")
 probe("source_type='github_discovery'", {"skip"}, source_type="github_discovery")
 probe("terms_hash is not a 32-byte hash", {"skip"}, terms_hash="0xdeadbeef")
+
+print()
+print("=== a PARTIAL cash_economics object is corrupt data, not less data ===")
+# `OpportunityCashEconomics` (opportunities.rs:87-95) has six NON-optional
+# members. The previous head validated each inner field only `if field in econ`,
+# so deleting one simply removed it from scrutiny -- the exact fail-open class
+# already removed from the top-level escrow fields. The review reproduced a
+# `claim` on an object rewritten down to `gross_cash_margin` alone.
+_ECON = GOOD_ITEM["cash_economics"]
+
+
+def _econ_without(*dropped: str) -> dict:
+    return {k: v for k, v in _ECON.items() if k not in dropped}
+
+
+# The maintainer's two named probes, verbatim.
+probe("cash_economics = ONLY gross_cash_margin", {"refresh"},
+      cash_economics={"gross_cash_margin": _ECON["gross_cash_margin"]})
+probe("cash_economics missing ONLY required_external_spend", {"refresh"},
+      cash_economics=_econ_without("required_external_spend"))
+# ...and each remaining member, one at a time, so no single omission is safe.
+for _member in sorted(_ECON):
+    probe(f"cash_economics missing {_member!r}", {"refresh"},
+          cash_economics=_econ_without(_member))
+probe("cash_economics = {} (empty object)", {"refresh"}, cash_economics={})
+probe("cash_economics DELETED from a canonical record", {"refresh"},
+      cash_economics=_DELETE)
+probe("cash_economics is a list, not an object", {"refresh"}, cash_economics=[])
+probe("cash_economics is a string", {"refresh"}, cash_economics="none")
+
+print()
+print("=== ...and a COMPLETE one must still be internally coherent ===")
+
+
+def _econ_with(**changes) -> dict:
+    out = json.loads(json.dumps(_ECON))
+    out.update(changes)
+    return out
+
+
+_USDC = {"currency": "USDC", "unit": "base_units", "decimals": 6}
+# The flag is what a careless consumer reads instead of doing the subtraction,
+# so it is the single most valuable field to lie in.
+probe("gross_cash_margin_positive=True over a NEGATIVE margin", {"refresh"},
+      cash_economics=_econ_with(
+          required_external_spend={"amount": "1990000", **_USDC},
+          gross_cash_margin={"amount": "-1000000", **_USDC},
+          gross_cash_margin_positive=True))
+probe("gross_cash_margin_positive=False over a POSITIVE margin", {"refresh"},
+      cash_economics=_econ_with(gross_cash_margin_positive=False))
+probe("gross_cash_margin_positive is the string 'true'", {"refresh"},
+      cash_economics=_econ_with(gross_cash_margin_positive="true"))
+# margin must equal solver_reward - required_external_spend (:793-800).
+probe("margin contradicts its own components", {"refresh"},
+      cash_economics=_econ_with(
+          required_external_spend={"amount": "500000", **_USDC}))
+probe("required_external_spend is NEGATIVE (a cost as a bonus)", {"refresh"},
+      cash_economics=_econ_with(
+          required_external_spend={"amount": "-1000000", **_USDC},
+          gross_cash_margin={"amount": "3000000", **_USDC}))
+# Upstream builds these pairs from ONE value each, so they cannot differ:
+#   reward / solver_reward         <- item.solver_reward (:795, :842)
+#   bond   / refundable_claim_bond <- item.claim_bond    (:796, :848)
+probe("solver_reward disagrees with the top-level reward", {"refresh"},
+      cash_economics=_econ_with(solver_reward={"amount": "99000000", **_USDC}))
+probe("refundable_claim_bond disagrees with the top-level bond", {"refresh"},
+      cash_economics=_econ_with(refundable_claim_bond={"amount": "1", **_USDC}))
+# Denomination: an 18dp or foreign-currency amount cannot be subtracted from a
+# 6dp USDC reward, and must not be ranked against one.
+probe("solver_reward denominated in EUR", {"refresh"},
+      cash_economics=_econ_with(
+          solver_reward={"amount": "2000000", "currency": "EUR",
+                         "unit": "base_units", "decimals": 6}))
+probe("required_external_spend carries 18 decimals", {"refresh"},
+      cash_economics=_econ_with(
+          required_external_spend={"amount": "0", "currency": "USDC",
+                                   "unit": "base_units", "decimals": 18}))
+probe("scope_disclaimer is empty", {"refresh"},
+      cash_economics=_econ_with(scope_disclaimer="   "))
+probe("scope_disclaimer is not a string", {"refresh"},
+      cash_economics=_econ_with(scope_disclaimer=7))
+# Control: a coherent record with a genuinely different (still positive)
+# margin must STILL claim, proving the rules above reject incoherence rather
+# than simply rejecting anything that is not the baseline object.
+probe("coherent economics with a smaller positive margin", {"claim"},
+      cash_economics=_econ_with(
+          required_external_spend={"amount": "1000000", **_USDC},
+          gross_cash_margin={"amount": "1000000", **_USDC},
+          gross_cash_margin_positive=True))
 
 print()
 print("=== a malformed record poisons the WHOLE response, not just itself ===")

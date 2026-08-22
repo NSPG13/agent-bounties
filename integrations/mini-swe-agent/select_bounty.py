@@ -404,19 +404,138 @@ def validate_item_schema(item):
             f"{reward_cur}/{reward_dec}dp/{reward_unit}"
         )
 
-    # cash_economics is Option<...> upstream, but when present every inner
-    # amount is non-optional, so a partial one is malformed rather than absent.
-    econ = item.get("cash_economics")
-    if econ is not None:
-        if not isinstance(econ, dict):
-            raise Malformed("cash_economics is present but is not an object")
-        for field in ("solver_reward", "required_external_spend", "gross_cash_margin"):
-            if field in econ:
-                try:
-                    money(econ[field], f"cash_economics.{field}")
-                except Invalid as exc:
-                    raise Malformed(str(exc)) from exc
+    validate_cash_economics(item, amounts)
     return amounts
+
+
+# Every field of `OpportunityCashEconomics` (opportunities.rs:87-95). All six
+# are NON-OPTIONAL in the struct, so a partial object is malformed data, not a
+# projection that merely told us less.
+CASH_ECONOMICS_AMOUNTS = (
+    "solver_reward",
+    "refundable_claim_bond",
+    "required_external_spend",
+    "gross_cash_margin",
+)
+CASH_ECONOMICS_FIELDS = CASH_ECONOMICS_AMOUNTS + (
+    "gross_cash_margin_positive",
+    "scope_disclaimer",
+)
+
+
+def validate_cash_economics(item, amounts):
+    """Enforce the whole `OpportunityCashEconomics` contract, or refuse.
+
+    `cash_economics` is `Option<OpportunityCashEconomics>` on the item, but the
+    struct it wraps has NO optional members. An earlier version validated each
+    inner field only `if field in econ`, which is the same fail-open class the
+    top-level escrow fields already had removed: replacing the object with just
+    `{"gross_cash_margin": ...}` dropped `required_external_spend` from view and
+    the record still returned `claim`. An unknown external spend is precisely
+    the number that decides whether the work is worth doing, so "absent" must
+    never read as "zero".
+
+    Both canonical constructors (opportunities.rs:794 and :1064) always emit
+    `Some(...)`; only the `unfunded_offchain` (:547) and `legacy_bounty` (:672)
+    paths emit `None`. So for a canonical_base record the object is REQUIRED,
+    while a non-canonical record may legitimately omit it (it is skipped for
+    not being canonical long before its economics matter).
+    """
+    econ = item.get("cash_economics")
+    canonical = item.get("source_type") == CANONICAL_SOURCE_TYPE
+    if econ is None:
+        if canonical:
+            raise Malformed(
+                "canonical_base record has no cash_economics; the canonical "
+                "projection always emits it, so this record is not what it claims"
+            )
+        return None
+    if not isinstance(econ, dict):
+        raise Malformed("cash_economics is present but is not an object")
+
+    missing = [f for f in CASH_ECONOMICS_FIELDS if f not in econ]
+    if missing:
+        raise Malformed(
+            "cash_economics is present but incomplete: missing "
+            + ", ".join(missing)
+            + ". OpportunityCashEconomics has no optional members, so a partial "
+            "object hides economics rather than reporting them"
+        )
+
+    _, reward_cur, reward_dec, reward_unit = amounts["reward"]
+    decoded = {}
+    for field in CASH_ECONOMICS_AMOUNTS:
+        try:
+            value, currency, decimals, unit = money(econ[field],
+                                                    f"cash_economics.{field}")
+        except Invalid as exc:
+            raise Malformed(str(exc)) from exc
+        # Denomination must match `reward`; otherwise the subtraction below and
+        # the ranking that consumes it are comparing different currencies.
+        if (currency, decimals, unit) != (reward_cur, reward_dec, reward_unit):
+            raise Malformed(
+                f"cash_economics.{field} is {currency}/{decimals}dp/{unit} but "
+                f"reward is {reward_cur}/{reward_dec}dp/{reward_unit}"
+            )
+        decoded[field] = value
+
+    if not isinstance(econ["gross_cash_margin_positive"], bool):
+        raise Malformed(
+            f"cash_economics.gross_cash_margin_positive is "
+            f"{econ['gross_cash_margin_positive']!r}, not a boolean"
+        )
+    if not isinstance(econ["scope_disclaimer"], str):
+        raise Malformed("cash_economics.scope_disclaimer is not a string")
+    if not econ["scope_disclaimer"].strip():
+        raise Malformed(
+            "cash_economics.scope_disclaimer is empty; the projection is "
+            "contractually required to state what the margin excludes"
+        )
+
+    # The two amounts that upstream builds from the SAME source value as their
+    # top-level twins must still agree with them:
+    #   reward / solver_reward         <- item.solver_reward (:795, :842)
+    #   bond   / refundable_claim_bond <- item.claim_bond     (:796, :848)
+    # A disagreement means one of the pair was rewritten after construction.
+    reward_amount = amounts["reward"][0]
+    if decoded["solver_reward"] != reward_amount:
+        raise Malformed(
+            f"cash_economics.solver_reward is {decoded['solver_reward']} but the "
+            f"item reward is {reward_amount}; upstream builds both from the same "
+            "value, so they cannot legitimately differ"
+        )
+    bond_amount = amounts["bond"][0]
+    if decoded["refundable_claim_bond"] != bond_amount:
+        raise Malformed(
+            f"cash_economics.refundable_claim_bond is "
+            f"{decoded['refundable_claim_bond']} but the item bond is "
+            f"{bond_amount}; upstream builds both from the same value"
+        )
+
+    # gross_cash_margin = solver_reward - required_external_spend (:793-800).
+    computed = decoded["solver_reward"] - decoded["required_external_spend"]
+    if decoded["gross_cash_margin"] != computed:
+        raise Malformed(
+            f"cash_economics is self-contradictory: gross_cash_margin="
+            f"{decoded['gross_cash_margin']} but solver_reward - "
+            f"required_external_spend = {computed}"
+        )
+    # `gross_cash_margin_positive: gross_cash_margin > 0` (:801). The flag is
+    # what a careless consumer reads instead of doing the arithmetic, so it is
+    # the single most useful field to lie in.
+    if econ["gross_cash_margin_positive"] != (decoded["gross_cash_margin"] > 0):
+        raise Malformed(
+            f"cash_economics.gross_cash_margin_positive is "
+            f"{econ['gross_cash_margin_positive']} but gross_cash_margin is "
+            f"{decoded['gross_cash_margin']}"
+        )
+    # Negative external spend would turn a cost into a bonus.
+    if decoded["required_external_spend"] < 0:
+        raise Malformed(
+            f"cash_economics.required_external_spend is "
+            f"{decoded['required_external_spend']}; a required spend cannot be negative"
+        )
+    return decoded
 
 
 def canonical_source(item):
@@ -516,53 +635,51 @@ def claim_status(item):
 
 
 def margin_of(item, amounts):
-    """Gross cash margin in base units, cross-checked against the components.
+    """Gross cash margin in base units.
 
-    Upstream computes `gross_cash_margin = solver_reward - required_external_spend`
-    (opportunities.rs:793-800). Trusting the server's precomputed figure alone
-    would let a compromised projection advertise a fat margin on a record whose
-    own components say otherwise, so when both are present they must AGREE.
+    By the time this runs, `validate_item_schema` has already enforced the whole
+    `OpportunityCashEconomics` contract for a canonical record -- all six fields
+    present, denominations matching `reward`, and
+    `gross_cash_margin == solver_reward - required_external_spend` agreeing with
+    `gross_cash_margin_positive`. So this function does not need permissive
+    fallbacks, and must not have them: the old version defaulted a missing
+    `required_external_spend` to "no spend" and a missing object to
+    `reward_amount`, which is how an omitted cost became an advertised margin.
+
+    Non-canonical records may legitimately carry no `cash_economics`; they are
+    skipped for not being canonical, and are never ranked on this number.
     """
-    econ = item.get("cash_economics") or {}
+    econ = item.get("cash_economics")
     reward_amount, reward_cur, reward_dec, reward_unit = amounts["reward"]
 
-    declared = None
-    if econ.get("gross_cash_margin") is not None:
-        value, currency, decimals, unit = money(econ["gross_cash_margin"],
-                                                "gross_cash_margin")
-        if (currency, decimals, unit) != (reward_cur, reward_dec, reward_unit):
-            raise Invalid(
-                f"gross_cash_margin is {currency}/{decimals}dp/{unit} but reward is "
-                f"{reward_cur}/{reward_dec}dp/{reward_unit}"
-            )
-        declared = value
+    if econ is None:
+        # Only reachable for a non-canonical record. Refuse rather than invent a
+        # margin: an unknown external spend is not a zero external spend.
+        raise Invalid(
+            "cash_economics is absent, so gross cash margin is unknown; a "
+            "margin is never assumed from the reward alone"
+        )
 
-    computed = None
-    solver_obj = econ.get("solver_reward")
-    base = reward_amount
-    if solver_obj is not None:
-        base, scur, sdec, sunit = money(solver_obj, "solver_reward")
-        if (scur, sdec, sunit) != (reward_cur, reward_dec, reward_unit):
-            raise Invalid(f"solver_reward is {scur}/{sdec}dp/{sunit}, reward is "
-                          f"{reward_cur}/{reward_dec}dp/{reward_unit}")
-    spend_obj = econ.get("required_external_spend")
-    if spend_obj is not None:
-        spend, scur, sdec, sunit = money(spend_obj, "required_external_spend")
-        if (scur, sdec, sunit) != (reward_cur, reward_dec, reward_unit):
-            raise Invalid(
-                f"unit mismatch: reward in {reward_cur}/{reward_dec}dp/{reward_unit}, "
-                f"external spend in {scur}/{sdec}dp/{sunit}"
-            )
-        computed = base - spend
-
-    if declared is not None and computed is not None and declared != computed:
+    # Re-decode rather than trusting a value threaded through from elsewhere, so
+    # this function is correct on its own terms. Validation already proved these
+    # parse, agree dimensionally, and are internally consistent.
+    declared, currency, decimals, unit = money(econ["gross_cash_margin"],
+                                               "gross_cash_margin")
+    if (currency, decimals, unit) != (reward_cur, reward_dec, reward_unit):
+        raise Invalid(
+            f"gross_cash_margin is {currency}/{decimals}dp/{unit} but reward is "
+            f"{reward_cur}/{reward_dec}dp/{reward_unit}"
+        )
+    solver, _, _, _ = money(econ["solver_reward"], "solver_reward")
+    spend, _, _, _ = money(econ["required_external_spend"],
+                           "required_external_spend")
+    computed = solver - spend
+    if declared != computed:
         raise Invalid(
             f"cash_economics is self-contradictory: gross_cash_margin={declared} "
             f"but solver_reward - required_external_spend = {computed}"
         )
-    value = declared if declared is not None else (
-        computed if computed is not None else reward_amount)
-    return value / (10 ** reward_dec), reward_cur, reward_dec
+    return declared / (10 ** reward_dec), reward_cur, reward_dec
 
 
 def select(inv):

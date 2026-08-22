@@ -55,19 +55,19 @@
         "decimals": 6
       },
       "funded_amount": {
-        "amount": "990000",
+        "amount": "1000000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
       },
       "funding_target": {
-        "amount": "990000",
+        "amount": "1000000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
       },
       "bond": {
-        "amount": "0",
+        "amount": "10000",
         "currency": "USDC",
         "unit": "base_units",
         "decimals": 6
@@ -91,19 +91,19 @@
           "decimals": 6
         },
         "refundable_claim_bond": {
-          "amount": "0",
+          "amount": "10000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
         },
         "required_external_spend": {
-          "amount": "0",
+          "amount": "1990000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6
         },
         "gross_cash_margin": {
-          "amount": "990000",
+          "amount": "-1000000",
           "currency": "USDC",
           "unit": "base_units",
           "decimals": 6

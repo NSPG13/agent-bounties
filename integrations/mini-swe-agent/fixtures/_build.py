@@ -254,7 +254,23 @@ FIXTURES["adversarial-item-not-escrowed.json"] = solo(
     CHECKER, payment_state="seeking_funding")
 FIXTURES["adversarial-item-payment-uncommitted.json"] = solo(
     CHECKER, payment_committed=False)
-FIXTURES["adversarial-item-zero-bond.json"] = solo(CHECKER, bond=usdc("0"))
+# A COHERENT zero-bond record: upstream builds `bond` and
+# `cash_economics.refundable_claim_bond` from the same `item.claim_bond` value
+# (opportunities.rs:796 and :848), so a record whose bond is genuinely zero has
+# zero in BOTH places. Building it through `item(bond="0")` keeps the pair --
+# and the derived funding target -- consistent, so the record breaches no
+# contract and is refused purely on its merits: `skip`.
+FIXTURES["adversarial-item-zero-bond.json"] = envelope([item(
+    oid="canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    contract="0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    title="Add a deterministic MCP discovery checker",
+    goal="Implement a deterministic checker for MCP discovery.",
+    categories=["coding"], reward="990000", bond="0")])
+# Zeroing ONLY the top-level bond leaves it disagreeing with
+# `refundable_claim_bond`, which upstream cannot produce. That is a data fault,
+# not a cheap bounty, so it must `refresh` rather than be judged on merits.
+FIXTURES["adversarial-item-bond-disagrees-with-economics.json"] = solo(
+    CHECKER, bond=usdc("0"))
 FIXTURES["adversarial-item-work-state-open.json"] = solo(CHECKER, work_state="open")
 FIXTURES["no-margin.json"] = envelope([item(
     oid="canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
@@ -303,6 +319,40 @@ FIXTURES["adversarial-item-contradictory-economics.json"] = solo(
 FIXTURES["adversarial-item-funding-decimal-mismatch.json"] = solo(
     CHECKER, funding_target={"amount": "1000000", "currency": "USDC",
                              "unit": "base_units", "decimals": 18})
+
+# ------------------------------------------------ item: partial cash_economics
+# `OpportunityCashEconomics` (opportunities.rs:87-95) has SIX non-optional
+# members. The object as a whole is `Option<...>` on the item, but a canonical
+# record always carries it, and a PARTIAL object is corrupt data rather than a
+# projection that politely told us less. The dangerous case is the one the
+# review reproduced: drop `required_external_spend` and the advertised margin
+# describes work whose real cost is unknown.
+FIXTURES["adversarial-item-economics-only-margin.json"] = solo(
+    CHECKER, cash_economics={"gross_cash_margin": usdc("990000")})
+FIXTURES["adversarial-item-economics-no-external-spend.json"] = solo(
+    CHECKER, cash_economics={
+        "solver_reward": usdc("990000"),
+        "refundable_claim_bond": usdc("10000"),
+        "gross_cash_margin": usdc("990000"),
+        "gross_cash_margin_positive": True,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk.",
+    })
+FIXTURES["adversarial-item-economics-empty.json"] = solo(
+    CHECKER, cash_economics={})
+# A canonical record with the object DELETED. Both canonical constructors
+# (:832, :1094) emit `Some(...)`, so its absence contradicts source_type.
+FIXTURES["adversarial-item-economics-absent.json"] = solo(
+    CHECKER, cash_economics=None)
+# The flag a careless consumer reads instead of doing the arithmetic, lying.
+FIXTURES["adversarial-item-economics-flag-lies.json"] = solo(
+    CHECKER, cash_economics={
+        "solver_reward": usdc("990000"),
+        "refundable_claim_bond": usdc("10000"),
+        "required_external_spend": usdc("1990000"),
+        "gross_cash_margin": usdc("-1000000"),
+        "gross_cash_margin_positive": True,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk.",
+    })
 
 # --------------------------------------------------------------- claim status
 _live = mutate(CHECKER, work_state="in_progress",
