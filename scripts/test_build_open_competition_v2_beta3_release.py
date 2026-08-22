@@ -257,6 +257,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             for path in (
                 "programs/public-vector-metric-v1/release-identity.json",
                 "programs/structured-artifact-metric-v1/release-identity.json",
+                "programs/canonical-gmv-attribution-metric-v1/release-identity.json",
             )
         ]
         circuit_commits = {identity["sp1_commit"] for identity in identities}

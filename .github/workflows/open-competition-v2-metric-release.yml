@@ -60,19 +60,8 @@ jobs:
             bash "$GITHUB_WORKSPACE/scripts/build_open_competition_v2_metric_elf.sh" \
               "${{ matrix.profile }}" "$elf_dir"
             export OPEN_COMPETITION_V2_METRIC_ELF="$elf_dir/${{ matrix.profile }}-program"
-            mode=(execute)
-            if [[ "${{ matrix.profile }}" = canonical-gmv-attribution-metric-v1 ]]; then
-              source_hash="$(python ../../scripts/verify-open-competition-v2-metric-release.py \
-                --source-hash \
-                --source-file crates/competition-metric-core/Cargo.toml \
-                --source-file crates/competition-metric-core/src/lib.rs \
-                --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.toml \
-                --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.lock \
-                --source-file programs/canonical-gmv-attribution-metric-v1/program/src/main.rs)"
-              mode=(release-candidate "$source_hash")
-            fi
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
-              fixtures/golden-v1.json "${mode[@]}"
+              fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -119,7 +108,6 @@ jobs:
             )
           elif [[ "${{ matrix.profile }}" = canonical-gmv-attribution-metric-v1 ]]; then
             args+=(
-              --candidate
               --source-file crates/competition-metric-core/Cargo.toml
               --source-file crates/competition-metric-core/src/lib.rs
               --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.toml

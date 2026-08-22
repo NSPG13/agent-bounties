@@ -42,6 +42,15 @@ STRUCTURED_ARTIFACT_IDENTITY = json.loads(
 STRUCTURED_ARTIFACT_REVIEW_EVIDENCE_HASH = keccak256(
     STRUCTURED_ARTIFACT_IDENTITY_PATH.read_bytes().replace(b"\r\n", b"\n")
 )
+CANONICAL_GMV_IDENTITY_PATH = (
+    ROOT / "programs/canonical-gmv-attribution-metric-v1/release-identity.json"
+)
+CANONICAL_GMV_IDENTITY = json.loads(
+    CANONICAL_GMV_IDENTITY_PATH.read_text(encoding="utf-8")
+)
+CANONICAL_GMV_REVIEW_EVIDENCE_HASH = keccak256(
+    CANONICAL_GMV_IDENTITY_PATH.read_bytes().replace(b"\r\n", b"\n")
+)
 METRIC_PROFILES = (
     {
         "identity": METRIC_IDENTITY,
@@ -56,6 +65,13 @@ METRIC_PROFILES = (
         "journal_schema_hash": "0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d",
         "metric_program_hash": "0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9",
         "review_evidence_hash": STRUCTURED_ARTIFACT_REVIEW_EVIDENCE_HASH,
+    },
+    {
+        "identity": CANONICAL_GMV_IDENTITY,
+        "identity_path": CANONICAL_GMV_IDENTITY_PATH,
+        "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+        "metric_program_hash": "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead",
+        "review_evidence_hash": CANONICAL_GMV_REVIEW_EVIDENCE_HASH,
     },
 )
 PROOF_SYSTEM_GROTH16 = keccak256(b"sp1-groth16")
@@ -154,6 +170,7 @@ SOURCE_FILES = (
     "crates/competition-metric-core/src/lib.rs",
     "programs/public-vector-metric-v1/program/src/main.rs",
     "programs/structured-artifact-metric-v1/program/src/main.rs",
+    "programs/canonical-gmv-attribution-metric-v1/program/src/main.rs",
 )
 
 

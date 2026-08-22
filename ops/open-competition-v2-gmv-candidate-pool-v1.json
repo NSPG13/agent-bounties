@@ -6,14 +6,14 @@
   "release_hash": "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be",
   "profile_release": {
     "profile_id": "canonical-gmv-attribution-metric-v1",
-    "status": "awaiting_reproduction",
+    "status": "reviewed",
     "metric_program_hash": "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead",
     "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
     "execution_policy_hash": "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a",
     "settlement_policy_hash": "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee",
-    "program_vkey": null,
-    "source_hash": null,
-    "elf_hash": null
+    "program_vkey": "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
+    "source_hash": "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
+    "elf_hash": "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5"
   },
   "approved_at": "2026-08-21T14:30:00Z",
   "expires_at": "2026-09-20T14:30:00Z",

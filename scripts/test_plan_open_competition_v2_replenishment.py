@@ -43,17 +43,8 @@ def inventory(active: int, *, observed_at: str = "2026-08-21T14:34:00Z") -> dict
 
 
 def reviewed_specs(specs: dict) -> dict:
-    """Promote deterministic fixture hashes; checked-in production specs stay blocked."""
+    """Add deterministic ready snapshots to the checked-in reviewed profile."""
     result = copy.deepcopy(specs)
-    profile = result["profile_release"]
-    profile.update(
-        {
-            "status": "reviewed",
-            "program_vkey": "0x" + "1" * 64,
-            "source_hash": "0x" + "2" * 64,
-            "elf_hash": "0x" + "3" * 64,
-        }
-    )
     for index, candidate in enumerate(result["candidates"]):
         snapshot_hash = "0x" + hashlib.sha256(f"snapshot-{index}".encode()).hexdigest()
         candidate["snapshot"] = {
@@ -158,14 +149,14 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         self.assertNotIn('"scores"', serialized)
         self.assertEqual(self.plan(0)["status"], "ready")
 
-    def test_checked_in_pool_fails_closed_until_profile_and_snapshots_are_reviewed(self) -> None:
+    def test_checked_in_pool_fails_closed_until_snapshots_are_reviewed(self) -> None:
         plan = self.plan(
             0,
             candidate_specs=self.pending_specs,
             private_ranking=synthetic_private_ranking(self.pending_specs),
         )
         self.assertEqual(plan["status"], "blocked")
-        self.assertTrue(any("profile" in blocker for blocker in plan["blockers"]))
+        self.assertFalse(any("profile" in blocker for blocker in plan["blockers"]))
         self.assertTrue(any("snapshots" in blocker for blocker in plan["blockers"]))
 
     def test_same_inputs_and_clock_produce_identical_plan(self) -> None:
