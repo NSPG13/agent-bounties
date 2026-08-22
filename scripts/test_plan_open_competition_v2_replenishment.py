@@ -108,8 +108,11 @@ def execution(
 
 class ReplenishmentPlannerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.pending_specs = load_json(SPECS_PATH)
-        self.specs = reviewed_specs(self.pending_specs)
+        checked_in_specs = load_json(SPECS_PATH)
+        self.pending_specs = copy.deepcopy(checked_in_specs)
+        for candidate in self.pending_specs["candidates"]:
+            candidate["snapshot"] = {"status": "pending"}
+        self.specs = reviewed_specs(checked_in_specs)
         self.ranking = synthetic_private_ranking(self.specs)
         self.ledger = load_json(LEDGER_PATH)
 

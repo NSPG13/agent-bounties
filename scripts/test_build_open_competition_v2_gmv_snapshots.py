@@ -199,6 +199,13 @@ class GmvSnapshotBuilderTests(unittest.TestCase):
             MODULE.RpcPair("https://a.example", "https://b.example", 0)
         with self.assertRaisesRegex(MODULE.SnapshotError, "maximum runtime"):
             MODULE.RpcPair("https://a.example", "https://b.example", 1, 59)
+        with self.assertRaisesRegex(MODULE.SnapshotError, "address batch size"):
+            MODULE.RpcPair(
+                "https://a.example",
+                "https://b.example",
+                1,
+                address_batch_size=0,
+            )
 
     def test_log_query_accepts_a_factory_derived_contract_set(self) -> None:
         pair = MODULE.RpcPair("https://a.example", "https://b.example", 100)
@@ -231,6 +238,37 @@ class GmvSnapshotBuilderTests(unittest.TestCase):
             )
         self.assertEqual(responses, [pair.primary, pair.shadow])
 
+    def test_log_query_batches_factory_derived_contracts(self) -> None:
+        pair = MODULE.RpcPair(
+            "https://a.example",
+            "https://b.example",
+            100,
+            address_batch_size=2,
+        )
+        addresses = [
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+            "0x3333333333333333333333333333333333333333",
+        ]
+        observed: list[tuple[str, list[str]]] = []
+
+        def fake_call(endpoint: str, method: str, params: list) -> list:
+            self.assertEqual(method, "eth_getLogs")
+            observed.append((endpoint, params[0]["address"]))
+            return []
+
+        with mock.patch.object(pair, "call", side_effect=fake_call):
+            self.assertEqual(pair.logs(1, 2, "0x" + "44" * 32, addresses), [])
+        self.assertEqual(
+            observed,
+            [
+                (pair.primary, addresses[:2]),
+                (pair.shadow, addresses[:2]),
+                (pair.primary, addresses[2:]),
+                (pair.shadow, addresses[2:]),
+            ],
+        )
+
     def test_checked_in_pool_has_twenty_unique_closed_evidence_candidates(self) -> None:
         pool = json.loads(
             (ROOT / "ops/open-competition-v2-gmv-candidate-pool-v1.json").read_text(
@@ -247,7 +285,43 @@ class GmvSnapshotBuilderTests(unittest.TestCase):
                 MODULE.parse_time(candidate["epoch"]["starts_at"], "start"),
                 MODULE.parse_time(candidate["epoch"]["ends_at"], "end"),
             )
-            self.assertEqual(candidate["snapshot"], {"status": "pending"})
+            snapshot = candidate["snapshot"]
+            self.assertEqual(snapshot["status"], "ready")
+            self.assertEqual(
+                snapshot["primary_projection_hash"],
+                snapshot["shadow_projection_hash"],
+            )
+            self.assertEqual(snapshot["snapshot_hash"], snapshot["primary_projection_hash"])
+            document = json.loads(
+                (
+                    ROOT
+                    / "site/generated/gmv-snapshots"
+                    / f"{candidate['candidate_id']}.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(document["candidate_id"], candidate["candidate_id"])
+            self.assertEqual(document["snapshot_hash"], snapshot["snapshot_hash"])
+            self.assertEqual(
+                document["snapshot_hash"],
+                "0x"
+                + MODULE.snapshot_hash(
+                    document["campaign"], document["settlements"]
+                ).hex(),
+            )
+            self.assertEqual(
+                document["verification_policy_hash"],
+                "0x"
+                + MODULE.verification_policy_hash(
+                    document["campaign"],
+                    pool["profile_release"]["source_hash"],
+                    bytes.fromhex(document["snapshot_hash"].removeprefix("0x")),
+                ).hex(),
+            )
+            self.assertGreater(document["eligible_wallet_count"], 0)
+            self.assertGreater(int(document["eligible_gmv_base_units"]), 0)
+            self.assertEqual(
+                document["reconciliation"]["status"], "primary_shadow_agree"
+            )
 
 
 if __name__ == "__main__":

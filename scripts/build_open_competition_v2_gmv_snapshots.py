@@ -165,6 +165,7 @@ class RpcPair:
         span: int,
         max_runtime_seconds: int = 900,
         progress_every: int = 100,
+        address_batch_size: int = 100,
     ) -> None:
         if primary.strip() == shadow.strip():
             raise SnapshotError("primary and shadow RPC endpoints must be independent")
@@ -174,6 +175,8 @@ class RpcPair:
             raise SnapshotError("maximum runtime must be between 60 and 7200 seconds")
         if progress_every < 1 or progress_every > 10_000:
             raise SnapshotError("progress interval must be between 1 and 10000 calls")
+        if address_batch_size < 1 or address_batch_size > 1_000:
+            raise SnapshotError("address batch size must be between 1 and 1000")
         self.primary = primary
         self.shadow = shadow
         self.span = span
@@ -181,6 +184,7 @@ class RpcPair:
         self.started_at = time.monotonic()
         self.max_runtime_seconds = max_runtime_seconds
         self.progress_every = progress_every
+        self.address_batch_size = address_batch_size
         self.completed_calls = 0
         self.blocks: dict[tuple[str, int], dict[str, Any]] = {}
         self.receipts: dict[tuple[str, str], dict[str, Any]] = {}
@@ -286,22 +290,32 @@ class RpcPair:
         event_topic: str,
         address: str | list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        if isinstance(address, list):
+            if not address:
+                return []
+            address_batches: list[str | list[str] | None] = [
+                address[index : index + self.address_batch_size]
+                for index in range(0, len(address), self.address_batch_size)
+            ]
+        else:
+            address_batches = [address]
         projections: list[list[dict[str, Any]]] = [[], []]
         endpoints = (self.primary, self.shadow)
         for start in range(from_block, to_block + 1, self.span):
             end = min(to_block, start + self.span - 1)
-            query: dict[str, Any] = {
-                "fromBlock": hex(start),
-                "toBlock": hex(end),
-                "topics": [event_topic],
-            }
-            if address is not None:
-                query["address"] = address
-            for index, endpoint in enumerate(endpoints):
-                result = self.call(endpoint, "eth_getLogs", [query])
-                if not isinstance(result, list):
-                    raise SnapshotError("eth_getLogs did not return a list")
-                projections[index].extend(raw_log_identity(log) for log in result)
+            for address_batch in address_batches:
+                query: dict[str, Any] = {
+                    "fromBlock": hex(start),
+                    "toBlock": hex(end),
+                    "topics": [event_topic],
+                }
+                if address_batch is not None:
+                    query["address"] = address_batch
+                for index, endpoint in enumerate(endpoints):
+                    result = self.call(endpoint, "eth_getLogs", [query])
+                    if not isinstance(result, list):
+                        raise SnapshotError("eth_getLogs did not return a list")
+                    projections[index].extend(raw_log_identity(log) for log in result)
         for projection in projections:
             projection.sort(key=lambda value: (value["block_number"], value["transaction_hash"], value["log_index"]))
         if projections[0] != projections[1]:
@@ -487,8 +501,13 @@ def eligible_scores(settlements: list[dict[str, Any]], excluded_wallets: set[str
     return {wallet: score for wallet, score in scores.items() if score > 0}
 
 
-def reconcile_event_sets(pair: RpcPair, events: dict[str, list[dict[str, Any]]], maximum_block: int) -> None:
-    known_contracts: set[str] = set()
+def reconcile_event_sets(
+    pair: RpcPair,
+    events: dict[str, list[dict[str, Any]]],
+    minimum_block: int,
+    maximum_block: int,
+) -> None:
+    known_contracts: dict[str, set[str]] = {}
     for protocol in PROTOCOLS:
         creations = [event for event in events[protocol.name] if event.get("kind") == protocol.creation_kind]
         raw_creations = pair.logs(protocol.deployment_block, maximum_block, topic(protocol.creation_signature), protocol.factory)
@@ -499,28 +518,37 @@ def reconcile_event_sets(pair: RpcPair, events: dict[str, list[dict[str, Any]]],
         }
         if api_creation_keys != raw_creation_keys:
             raise SnapshotError(f"{protocol.name} API and RPC creation event sets disagree")
+        protocol_contracts: set[str] = set()
         for event in creations:
+            if int(event["block_number"]) > maximum_block:
+                continue
             contract_field = "competition" if protocol.name == "open_competition_v2" else "bounty_contract"
-            known_contracts.add(normalize_address(event["data"][contract_field], "created contract"))
-    minimum_block = min(protocol.deployment_block for protocol in PROTOCOLS)
+            protocol_contracts.add(normalize_address(event["data"][contract_field], "created contract"))
+        known_contracts[protocol.name] = protocol_contracts
     for signature in {protocol.settlement_signature for protocol in PROTOCOLS}:
+        matching_protocols = [protocol for protocol in PROTOCOLS if protocol.settlement_signature == signature]
+        settlement_contracts = sorted({
+            contract
+            for protocol in matching_protocols
+            for contract in known_contracts[protocol.name]
+        })
         raw = pair.logs(
             minimum_block,
             maximum_block,
             topic(signature),
-            sorted(known_contracts),
+            settlement_contracts,
         )
         raw_keys = {
             (log["block_number"], log["transaction_hash"], log["log_index"], log["address"])
             for log in raw
-            if log["address"] in known_contracts
+            if log["address"] in settlement_contracts
         }
         api_keys = {
             api_key(event)
-            for protocol in PROTOCOLS
-            if protocol.settlement_signature == signature
+            for protocol in matching_protocols
             for event in events[protocol.name]
-            if event.get("kind") == protocol.settlement_kind and int(event["block_number"]) <= maximum_block
+            if event.get("kind") == protocol.settlement_kind
+            and minimum_block <= int(event["block_number"]) <= maximum_block
         }
         if raw_keys != api_keys:
             raise SnapshotError("canonical API and dual-RPC settlement event sets disagree")
@@ -540,13 +568,17 @@ def build_snapshots(
     if candidate_ids is not None and {item["candidate_id"] for item in selected} != candidate_ids:
         raise SnapshotError("one or more requested candidate ids are unknown")
     safe_head = pair.safe_head()
+    start_boundaries: dict[int, int] = {}
     boundaries: dict[int, tuple[int, dict[str, Any]]] = {}
     for candidate in selected:
+        start = int(parse_time(candidate["epoch"]["starts_at"], "epoch.starts_at").timestamp())
         end = int(parse_time(candidate["epoch"]["ends_at"], "epoch.ends_at").timestamp())
+        start_boundaries[start] = pair.first_block_at_or_after(start, safe_head)
         end_block = pair.last_block_before(end, safe_head)
         boundaries[end] = (end_block, pair.exact_block(end_block))
+    minimum_block = min(start_boundaries.values())
     maximum_block = max(value[0] for value in boundaries.values())
-    reconcile_event_sets(pair, events, maximum_block)
+    reconcile_event_sets(pair, events, minimum_block, maximum_block)
     documents: dict[str, dict[str, Any]] = {}
     snapshot_fields: dict[str, dict[str, Any]] = {}
     policy = pool.get("eligibility_policy")
@@ -562,7 +594,7 @@ def build_snapshots(
         candidate_id = candidate["candidate_id"]
         starts_at = int(parse_time(candidate["epoch"]["starts_at"], "epoch.starts_at").timestamp())
         ends_at = int(parse_time(candidate["epoch"]["ends_at"], "epoch.ends_at").timestamp())
-        start_block = pair.first_block_at_or_after(starts_at, safe_head)
+        start_block = start_boundaries[starts_at]
         end_block, end_header = boundaries[ends_at]
         campaign = {
             "epoch_id": "0x" + keccak_bytes(EPOCH_DOMAIN + candidate_id.encode("utf-8")).hex(),
@@ -672,9 +704,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--api-base-url", default="https://api.agentbounties.app")
     parser.add_argument("--primary-rpc", required=True)
     parser.add_argument("--shadow-rpc", required=True)
-    parser.add_argument("--rpc-block-span", type=int, default=50_000)
+    parser.add_argument("--rpc-block-span", type=int, default=10_000)
     parser.add_argument("--max-runtime-seconds", type=int, default=900)
     parser.add_argument("--progress-every", type=int, default=100)
+    parser.add_argument("--rpc-address-batch-size", type=int, default=100)
     parser.add_argument("--candidate-id", action="append", dest="candidate_ids")
     args = parser.parse_args(argv)
     try:
@@ -685,6 +718,7 @@ def main(argv: list[str] | None = None) -> int:
             args.rpc_block_span,
             args.max_runtime_seconds,
             args.progress_every,
+            args.rpc_address_batch_size,
         )
         pair.validate_chains()
         events = api_events(args.api_base_url)
