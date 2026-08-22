@@ -1,0 +1,56 @@
+{
+  "description": "Not fully funded: a paid bounty must be funded before claim -> skip.",
+  "expected_action": "skip",
+  "age_seconds": 60,
+  "bounty": {
+    "bounty_id": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "bounty_contract": "0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+    "work_state": "open",
+    "funded": false,
+    "funding_complete": false,
+    "funding": {
+      "confirmed": {
+        "amount": "500000",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "required": {
+        "amount": "2010000",
+        "currency": "USDC",
+        "decimals": 6
+      }
+    },
+    "verifier": {
+      "ready": true,
+      "mode": "sandboxed_regression_v1"
+    },
+    "reward": {
+      "amount": "2000000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "bond": {
+      "amount": "10000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "cash_economics": {
+      "solver_reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "required_external_spend": {
+        "amount": "0",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "gross_cash_margin": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      }
+    }
+  },
+  "next_action": "Skip: funding is incomplete. Re-poll canonical events until funding is confirmed."
+}
