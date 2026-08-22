@@ -7,7 +7,7 @@ repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 program="$repository/programs/$profile/program"
 
 case "$profile" in
-  public-vector-metric-v1|structured-artifact-metric-v1|canonical-gmv-attribution-metric-v1) ;;
+  public-vector-metric-v1|structured-artifact-metric-v1|canonical-gmv-attribution-metric-v1|forward-canonical-gmv-attribution-metric-v2) ;;
   *) echo "unsupported metric profile: $profile" >&2; exit 2 ;;
 esac
 

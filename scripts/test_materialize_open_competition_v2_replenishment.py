@@ -53,7 +53,7 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
             self.assertEqual(creation["settlement"]["winner_mode"], "best_score")
             self.assertEqual(creation["settlement"]["score_direction"], "higher_is_better")
             self.assertEqual(creation["settlement"]["score_threshold_base_units"], 1)
-            self.assertEqual(creation["meta_bounty"]["snapshot"]["status"], "ready")
+            self.assertEqual(creation["meta_bounty"]["snapshot"]["status"], "scheduled")
             self.assertEqual(
                 creation["meta_bounty"]["excluded_wallets"],
                 MATERIALIZER.REQUIRED_EXCLUDED_WALLETS,

@@ -18,9 +18,9 @@ if str(SCRIPTS) not in sys.path:
 
 import plan_open_competition_v2_replenishment as PLANNER
 
-SPECS_PATH = ROOT / "ops" / "open-competition-v2-gmv-candidate-pool-v1.json"
+SPECS_PATH = ROOT / "ops" / "open-competition-v2-forward-gmv-candidate-pool-v2.json"
 LEDGER_PATH = ROOT / "ops" / "open-competition-v2-replenishment-ledger-v1.example.json"
-NOW = datetime(2026, 8, 22, 4, 35, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 22, 20, 35, tzinfo=timezone.utc)
 RELEASE_HASH = "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be"
 FACTORY = "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4"
 
@@ -29,7 +29,7 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def inventory(active: int, *, observed_at: str = "2026-08-22T04:34:00Z") -> dict:
+def inventory(active: int, *, observed_at: str = "2026-08-22T20:34:00Z") -> dict:
     return {
         "inventory_evidence_valid": True,
         "private_gmv_meta_floor": 5,
@@ -44,22 +44,12 @@ def inventory(active: int, *, observed_at: str = "2026-08-22T04:34:00Z") -> dict
 
 
 def reviewed_specs(specs: dict) -> dict:
-    """Add deterministic ready snapshots to the checked-in reviewed profile."""
+    """Bind the scheduled pool to a deterministic reviewed live profile."""
     result = copy.deepcopy(specs)
-    for index, candidate in enumerate(result["candidates"]):
-        snapshot_hash = "0x" + hashlib.sha256(f"snapshot-{index}".encode()).hexdigest()
-        candidate["snapshot"] = {
-            "status": "ready",
-            "safe_block": 50_266_000 + index,
-            "end_block_hash": "0x" + hashlib.sha256(f"block-{index}".encode()).hexdigest(),
-            "snapshot_hash": snapshot_hash,
-            "verification_policy_hash": "0x"
-            + hashlib.sha256(f"policy-{index}".encode()).hexdigest(),
-            "primary_projection_hash": snapshot_hash,
-            "shadow_projection_hash": snapshot_hash,
-            "snapshot_url": f"https://api.agentbounties.app/v1/gmv-snapshots/{candidate['candidate_id']}",
-            "reconciled_at": "2026-08-22T04:31:00Z",
-        }
+    profile = result["profile_release"]
+    profile["status"] = "reviewed"
+    for key in ("program_vkey", "source_hash", "elf_hash"):
+        profile[key] = PLANNER.REQUIRED_LIVE_GMV_PROFILE[key]
     return result
 
 
@@ -93,7 +83,7 @@ def execution(
     index: int,
     *,
     status: str = "planned",
-    occurred_at: str = "2026-08-22T04:30:00Z",
+    occurred_at: str = "2026-08-22T20:30:00Z",
     candidate_id: str | None = None,
     amount: int | float = PLANNER.TOTAL_PER_COMPETITION_BASE_UNITS,
 ) -> dict:
@@ -111,7 +101,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         checked_in_specs = load_json(SPECS_PATH)
         self.pending_specs = copy.deepcopy(checked_in_specs)
         for candidate in self.pending_specs["candidates"]:
-            candidate["snapshot"] = {"status": "pending"}
+            candidate["snapshot"]["status"] = "pending"
         self.specs = reviewed_specs(checked_in_specs)
         self.ranking = synthetic_private_ranking(self.specs)
         self.ledger = load_json(LEDGER_PATH)
@@ -153,7 +143,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         self.assertNotIn('"scores"', serialized)
         self.assertEqual(self.plan(0)["status"], "ready")
 
-    def test_checked_in_pool_fails_closed_until_snapshots_are_reviewed(self) -> None:
+    def test_pool_fails_closed_when_forward_campaign_policy_is_not_scheduled(self) -> None:
         plan = self.plan(
             0,
             candidate_specs=self.pending_specs,
@@ -161,15 +151,12 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         )
         self.assertEqual(plan["status"], "blocked")
         self.assertFalse(any("profile" in blocker for blocker in plan["blockers"]))
-        self.assertTrue(any("snapshots" in blocker for blocker in plan["blockers"]))
+        self.assertTrue(any("scheduled" in blocker for blocker in plan["blockers"]))
 
     def test_checked_in_ready_pool_restores_target_when_every_live_gate_matches(self) -> None:
-        specs = load_json(SPECS_PATH)
-        current = datetime(2026, 8, 22, 5, 40, tzinfo=timezone.utc)
-        report = inventory(0, observed_at="2026-08-22T05:39:00Z")
-        report["private_v2_observed_safe_block"] = max(
-            candidate["snapshot"]["safe_block"] for candidate in specs["candidates"]
-        )
+        specs = reviewed_specs(load_json(SPECS_PATH))
+        current = datetime(2026, 8, 22, 20, 40, tzinfo=timezone.utc)
+        report = inventory(0, observed_at="2026-08-22T20:39:00Z")
         plan = PLANNER.build_plan(
             report,
             specs,
@@ -210,7 +197,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
                 self.assertIn("not live", plan["blockers"][0])
 
     def test_stale_and_future_inventory_fail_closed(self) -> None:
-        for observed_at in ("2026-08-22T04:19:59Z", "2026-08-22T04:36:01Z"):
+        for observed_at in ("2026-08-22T20:19:59Z", "2026-08-22T20:36:01Z"):
             with self.subTest(observed_at=observed_at):
                 plan = self.plan(4, inventory_report=inventory(4, observed_at=observed_at))
                 self.assertEqual(plan["status"], "blocked")
@@ -317,7 +304,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         cases = [
             [base, duplicate_key],
             [base, execution(2, candidate_id=base["candidate_id"])],
-            [execution(3, occurred_at="2026-08-22T04:35:01Z")],
+            [execution(3, occurred_at="2026-08-22T20:35:01Z")],
             [execution(4, amount=3_040_000.0)],
             [execution(5, amount=3_040_001)],
         ]

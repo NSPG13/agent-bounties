@@ -1,0 +1,739 @@
+{
+  "schema_version": "agent-bounties/open-competition-v2-forward-gmv-meta-candidate-specs-v2",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
+  "network": "base-mainnet",
+  "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+  "release_hash": "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be",
+  "profile_release": {
+    "profile_id": "forward-canonical-gmv-attribution-metric-v2",
+    "status": "awaiting_reproduction",
+    "metric_program_hash": "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9",
+    "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+    "execution_policy_hash": "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a",
+    "settlement_policy_hash": "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee",
+    "program_vkey": null,
+    "source_hash": null,
+    "elf_hash": null
+  },
+  "approved_at": "2026-08-22T20:00:00Z",
+  "expires_at": "2026-10-31T23:59:59Z",
+  "economics": {
+    "solver_reward_base_units": 3000000,
+    "keeper_reward_base_units": 40000,
+    "total_per_competition_base_units": 3040000
+  },
+  "eligibility_policy": {
+    "excluded_wallets": [
+      "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "excluded_bounty_contracts": [
+      "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+      "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+    ],
+    "wallet_boundary": "Known owner, reserve, delegate, deployer, and snapshot-attester wallets are ineligible. Wallets are not inferred to be unique people.",
+    "contract_boundary": "Declared synthetic canaries and prior GMV reward contracts are ineligible and must be extended before each future snapshot review."
+  },
+  "attestation_policy": {
+    "attesters": [
+      "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "threshold": 2,
+    "purpose": "Two deterministic signers attest the exact dual-indexer safe-block snapshot; neither signer nor AI selects the winner."
+  },
+  "scoring_policy": {
+    "score_unit": "usdc_base_units",
+    "winner_mode": "best_score",
+    "score_direction": "higher_is_better",
+    "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
+    "tie_break": "earliest qualifying proof sequence"
+  },
+  "candidates": [
+    {
+      "candidate_id": "external-gmv-forward-daily-20260824-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260824",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-24T00:00:00Z",
+        "ends_at": "2026-08-25T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x853f9c7a07e8fa1ce5c3b822634d5cf17831f502f11d428cf646b2d8a7d44356"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x05931d2bbfe247ef43ffe801612c594dcbd2b5e82ad47cd64a81bc9035e73043",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-25T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-daily-20260825-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260825",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-25T00:00:00Z",
+        "ends_at": "2026-08-26T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xb00494c5d310614a1f9421e522ae76ea9b520cdcb138abebd41939d724b821fa"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x2b9775948aeaf2914c1c4fc190f1b1a9cfeb48793372e80f2598022de8473dd1",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-26T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-daily-20260826-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260826",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-26T00:00:00Z",
+        "ends_at": "2026-08-27T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xdf2ca136c2bfcf42dfac78584d6b2293bd51339e4fac7373b24f41eadba6288d"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x7170dea3f14ac474e4096b09494d3a0ceb75f6c277554005bd0f1a9dee72b9a2",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-27T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-daily-20260827-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260827",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-27T00:00:00Z",
+        "ends_at": "2026-08-28T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x6a26927d5353f491fe377ed6edaf5c3618b9f95d4bc10d5a42e905c96bbe2b62"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xdc52517bbad1fd92dccf055fa34f971c5943a06172395e79437d5889d8414214",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-28T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-week-20260824-v2",
+      "title": "Highest externally funded canonical GMV \u2014 week 20260824",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-24T00:00:00Z",
+        "ends_at": "2026-08-31T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x7037d741033453aab56a3e57c3f261dd11891bd808be56d67980d0c8263ddd81"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xb31c1e4fc0d4a80efde34b87e4c8c0c1a226c1ffc05b229d0022c9be6fec70ee",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-31T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-week-20260831-v2",
+      "title": "Highest externally funded canonical GMV \u2014 week 20260831",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-31T00:00:00Z",
+        "ends_at": "2026-09-07T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x3b20496282476095677bba3800efafd147a6c728f08eb69f3a1ba59a53ccaf2d"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x22b4a5502c37c027a7efd4d6cde74a51e4ad0fa5f6a1811dd06433d7a3bbfb39",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-07T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-fortnight-20260824-v2",
+      "title": "Highest externally funded canonical GMV \u2014 fortnight 20260824",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-24T00:00:00Z",
+        "ends_at": "2026-09-07T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xf4954bbd1a48ec059078bfbb84a24cd68d35e8837631a562704dbe83edde5a9d"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x8b8ec37b1a125db66c7f2b728360ba9ae409345e863d214f699d6d5e999afa00",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-07T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-fortnight-20260907-v2",
+      "title": "Highest externally funded canonical GMV \u2014 fortnight 20260907",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-07T00:00:00Z",
+        "ends_at": "2026-09-21T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x6223c992fe85417a81b97e2895b8e1bc35fccc5eb1ead9d6c4191467734ef5b8"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xbd2c2545cd166e5f7cc4ebe96227ef242d7a3edbb0183fd411ba2884bfbdb42a",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-21T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-month-20260824-v2",
+      "title": "Highest externally funded canonical GMV \u2014 month 20260824",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-24T00:00:00Z",
+        "ends_at": "2026-09-21T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xd9a0ed086fb1b4df2f9e6006bd9330e7fb56ff000c18101a2b2958a39497dcbd"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xe3371ab6549ea45c23ee2056b897416e114fa76204d2c8bdca56689ceaba6b0a",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-21T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-sprint-20260824-v2",
+      "title": "Highest externally funded canonical GMV \u2014 sprint 20260824",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-24T00:00:00Z",
+        "ends_at": "2026-08-27T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x34c8b8362111ed2a48f8e73e6b555c2df3e217bf77337d692182545652086647"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x9e15dce68c297693d42becbc60952ede9b8e72be7f3d668ae9cc03825f1f8cbd",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-27T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-daily-20260828-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260828",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-28T00:00:00Z",
+        "ends_at": "2026-08-29T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xb6a9401606ddbf389e85bd6ea77a33eddff92810079487092902f512bdaad5bb"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xea0eab32fbba745aa4d1a23912e5a700fd04d5f5e58d195b603c0fb4c5ef82ab",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-29T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-daily-20260829-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260829",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-29T00:00:00Z",
+        "ends_at": "2026-08-30T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x08366119a9d0191b65ba079b6dce7d46c599ed3d2a899a1e5d5eb18055212f0a"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x2d9c205b6b4a3e3f3c781a555d4b5c734f711dd57cd1dfd1da2ea125c23643dd",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-30T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-daily-20260830-v2",
+      "title": "Highest externally funded canonical GMV \u2014 daily 20260830",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-30T00:00:00Z",
+        "ends_at": "2026-08-31T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x53e838e7e98a1162ea4a38cf844695ef2bd9c2d64f93c7764a5c3404600c3f24"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x50be14f85f983ed9a6feca1f74a8c038c6562159b3dd6e73344df8ef359f2135",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-31T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-week-20260907-v2",
+      "title": "Highest externally funded canonical GMV \u2014 week 20260907",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-07T00:00:00Z",
+        "ends_at": "2026-09-14T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x3aeb10e4ce32f579d2b613b85337e8c742215c1445b1ef38ea3c82710548b87e"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xff9a2a278dc20e8dc5a05274e817ed6d4d7df633d4bc8f0d42a74f9a401b80f6",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-14T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-week-20260914-v2",
+      "title": "Highest externally funded canonical GMV \u2014 week 20260914",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-14T00:00:00Z",
+        "ends_at": "2026-09-21T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xcd49401d971868a856ac0b09d859ecd20127c9e76487e7a1c7eab230652944d0"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xe6ae55b6c096caefbb65809159354cb1f1ead6f965d80339ccd5c719ca5694fc",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-21T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-fortnight-20260921-v2",
+      "title": "Highest externally funded canonical GMV \u2014 fortnight 20260921",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-21T00:00:00Z",
+        "ends_at": "2026-10-05T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xdef46ef98bdf4d6c858bdeef02b742358e9cd8cae55d15d533a09722a3eea752"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x11f21b70390b1862b4904afd1f2dc25fc0775f744476037717c26e199cb12601",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-10-05T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-month-20260921-v2",
+      "title": "Highest externally funded canonical GMV \u2014 month 20260921",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-21T00:00:00Z",
+        "ends_at": "2026-10-19T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xbc47a26c1f96a1a28476a999b5ecbeed4a54383a3dee9304a3a4ea186a6f8234"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x41b6040187841eeae180701401b0d9ebc0468470def2a07a5613ba3fc3d7cc1d",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-10-19T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-sprint-20260827-v2",
+      "title": "Highest externally funded canonical GMV \u2014 sprint 20260827",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-27T00:00:00Z",
+        "ends_at": "2026-08-30T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x763b8239e4d3028d474a423bfeb382df1e2cbee11be4978c72673402ccbc6f29"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x18e42a9f346c5a62011678052ac95c4b16ab36542943fc18d8b01d42d8b0eac6",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-30T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-sprint-20260830-v2",
+      "title": "Highest externally funded canonical GMV \u2014 sprint 20260830",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-30T00:00:00Z",
+        "ends_at": "2026-09-02T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xcba661ee45cea5676fed7baea2054d1bffcee70a32bfbba45b8cb69d63539c3e"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x9347a2eb7a75e5991f1950225e6a3b6656ffb5959d29828eb3bc191ebe625e8a",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-02T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-forward-sprint-20260902-v2",
+      "title": "Highest externally funded canonical GMV \u2014 sprint 20260902",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-02T00:00:00Z",
+        "ends_at": "2026-09-05T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xf65cc7064845e7a8798f2966505c06e236fc25253c05c48179aec1f2e2fffefa"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xca3c9af6e0361cf89a2ea0ee065e4db8d94dd5fc2ebd228550ea6c81156de505",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-05T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    }
+  ]
+}

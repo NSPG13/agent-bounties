@@ -13,10 +13,11 @@ continues to show one unified marketplace.
 - `scripts/materialize_open_competition_v2_replenishment.py` converts a ready
   plan into objective best-score GMV meta-competition terms without private
   ranking fields.
-- `ops/open-competition-v2-gmv-candidate-pool-v1.json` contains twenty public
-  closed-epoch campaign specifications and evidence references. A `pending`
-  snapshot is intentionally not spendable. The file contains no operational
-  scores or active/standby ranking.
+- `ops/open-competition-v2-forward-gmv-candidate-pool-v2.json` contains twenty
+  announced forward campaign specifications and evidence references. Each
+  competition fixes its scoring window, exclusions, and 2-of-2 deterministic
+  snapshot-attester quorum before funding. The file contains no operational
+  scores or private replenishment ranking.
 - `BoundedOpenCompetitionV2Wallet` holds the USDC reserve under the operator
   owner's on-chain control. Its delegate can create only reviewed, exact-value
   competitions; it cannot transfer or withdraw USDC.
@@ -49,13 +50,15 @@ block before recording activation.
 The on-chain reserve independently requires:
 
 1. Base mainnet, the reviewed factory/release and independently reproduced
-   `canonical-gmv-attribution-metric-v1` profile, plus fresh safe-block evidence
+   `forward-canonical-gmv-attribution-metric-v2` profile, plus fresh safe-block evidence
    with primary/shadow agreement.
 2. Exactly 3.00 USDC solver reward and 0.04 USDC keeper reward per creation.
 3. No more than 30.40 USDC per UTC day or 77.668098 USDC lifetime. The initial
    policy cannot spend more than the exact owner-authorized reserve.
-4. A candidate in the private ranking whose ID and public spec hash match, whose
-   epoch has closed, and whose primary/shadow snapshot hashes are identical.
+4. A candidate in the private ranking whose ID and public spec hash match and
+   whose future scoring window and attester quorum were fixed before creation.
+   After the window closes, primary/shadow snapshot hashes must be identical
+   before either deterministic attester signs.
 5. A durable idempotency reservation containing policy epoch, safe block,
    candidate hashes, derived nonce, and predicted contract address.
 6. Exact USDC allowance immediately before factory creation and zero allowance

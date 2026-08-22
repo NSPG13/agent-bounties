@@ -21,7 +21,7 @@ from eth_utils import keccak, to_checksum_address
 ROOT = Path(__file__).resolve().parents[1]
 CHAIN_ID = 8453
 PROTOCOL = "agent-bounties/open-competition-v2-beta3"
-PROFILE_ID = "canonical-gmv-attribution-metric-v1"
+PROFILE_ID = "forward-canonical-gmv-attribution-metric-v2"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 OWNER = "0x884834e884d6e93462655a2820140ad03e6747bc"
 DELEGATE = "0xfb58949365e3a30fd62e86edb0daffccf4ef7477"
@@ -31,7 +31,7 @@ KEEPER_REWARD = 40_000
 PER_COMPETITION = SOLVER_REWARD + KEEPER_REWARD
 DAILY_CAP = 30_400_000
 PERIOD_SECONDS = 86_400
-PROOF_WINDOW_SECONDS = 30 * 86_400
+PROOF_WINDOW_SECONDS = 90 * 86_400
 PARAM_TYPE = "(uint256,uint256,uint64,uint64,uint8,uint8,int256,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)"
 POLICY_TYPE = "(address,uint64,uint64,uint64,uint256,uint256,uint256,uint256,uint256,bytes32,bytes32,bytes32)"
 ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
@@ -147,7 +147,7 @@ def build_activation(
 
     if (
         pool.get("schema_version")
-        != "agent-bounties/open-competition-v2-gmv-meta-candidate-specs-v1"
+        != "agent-bounties/open-competition-v2-forward-gmv-meta-candidate-specs-v2"
         or pool.get("protocol_version") != PROTOCOL
         or pool.get("network") != "base-mainnet"
         or address(pool.get("factory_contract"), "candidate factory") != factory
@@ -158,7 +158,11 @@ def build_activation(
     if not activation_time < expires_at:
         raise ActivationError("candidate approval has expired")
     pool_profile = pool.get("profile_release")
-    if not isinstance(pool_profile, dict) or pool_profile.get("profile_id") != PROFILE_ID:
+    if (
+        not isinstance(pool_profile, dict)
+        or pool_profile.get("profile_id") != PROFILE_ID
+        or pool_profile.get("status") != "reviewed"
+    ):
         raise ActivationError("candidate pool does not use the canonical GMV profile")
     for field in (
         "program_vkey",
@@ -191,8 +195,12 @@ def build_activation(
             raise ActivationError(f"{candidate_id} does not target external demand")
         snapshot = candidate.get("snapshot")
         epoch = candidate.get("epoch")
-        if not isinstance(snapshot, dict) or snapshot.get("status") != "ready" or not isinstance(epoch, dict):
-            raise ActivationError(f"{candidate_id} lacks a ready snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("status") != "scheduled" or not isinstance(epoch, dict):
+            raise ActivationError(f"{candidate_id} lacks a scheduled forward campaign")
+        starts_at = parse_time(str(epoch.get("starts_at")), f"{candidate_id} starts_at")
+        ends_at = parse_time(str(epoch.get("ends_at")), f"{candidate_id} ends_at")
+        if starts_at >= ends_at or ends_at >= expires_at:
+            raise ActivationError(f"{candidate_id} forward campaign timing is invalid")
         score_threshold = int(epoch.get("minimum_score_base_units", 0))
         if score_threshold <= 0:
             raise ActivationError(f"{candidate_id} score threshold is invalid")
@@ -371,7 +379,7 @@ def build_activation(
         "gmv_journal_schema_hash": hash32(profile.get("journal_schema_hash"), "journal schema"),
     }
     return {
-        "schema_version": "agent-bounties/open-competition-v2-gmv-meta-activation-v1",
+        "schema_version": "agent-bounties/open-competition-v2-forward-gmv-meta-activation-v2",
         "network": "base-mainnet",
         "chain_id": CHAIN_ID,
         "protocol_version": PROTOCOL,
@@ -434,7 +442,7 @@ def main() -> int:
     parser.add_argument(
         "--candidate-pool",
         type=Path,
-        default=ROOT / "ops" / "open-competition-v2-gmv-candidate-pool-v1.json",
+        default=ROOT / "ops" / "open-competition-v2-forward-gmv-candidate-pool-v2.json",
     )
     parser.add_argument("--owner", default=OWNER)
     parser.add_argument("--delegate", default=DELEGATE)

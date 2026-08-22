@@ -716,8 +716,7 @@ pub fn execute_forward_canonical_gmv_program(
     validate_scope(&input.scope)?;
     validate_forward_canonical_gmv_campaign(&input.campaign)?;
     validate_forward_canonical_gmv_snapshot(&input.campaign, &input.snapshot)?;
-    let verification_policy_hash =
-        forward_canonical_gmv_policy_hash(&input.scope, &input.campaign);
+    let verification_policy_hash = forward_canonical_gmv_policy_hash(&input.scope, &input.campaign);
     let snapshot_hash = forward_canonical_gmv_snapshot_hash_unchecked(
         input.scope.chain_id,
         &input.campaign,
@@ -1026,8 +1025,7 @@ fn validate_forward_canonical_gmv_campaign(
         || campaign.snapshot_attesters.len() < 2
         || !strictly_sorted_nonzero_addresses(&campaign.snapshot_attesters)
         || campaign.snapshot_attestation_threshold < 2
-        || usize::from(campaign.snapshot_attestation_threshold)
-            > campaign.snapshot_attesters.len()
+        || usize::from(campaign.snapshot_attestation_threshold) > campaign.snapshot_attesters.len()
     {
         return Err(MetricError::InvalidGmvCampaign);
     }
@@ -1132,9 +1130,7 @@ fn forward_canonical_gmv_snapshot_hash_unchecked(
     keccak256(&bytes)
 }
 
-fn forward_canonical_gmv_exclusions_hash(
-    campaign: &ForwardCanonicalGmvCampaign,
-) -> [u8; 32] {
+fn forward_canonical_gmv_exclusions_hash(campaign: &ForwardCanonicalGmvCampaign) -> [u8; 32] {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&GMV_EXCLUSIONS_DOMAIN);
     bytes.extend_from_slice(&(campaign.excluded_wallets.len() as u32).to_be_bytes());
@@ -1202,8 +1198,8 @@ fn recover_snapshot_attester(
         0 | 1 => signature_bytes[64],
         _ => return Err(MetricError::InvalidGmvAttestation),
     };
-    let recovery_id = RecoveryId::try_from(recovery_value)
-        .map_err(|_| MetricError::InvalidGmvAttestation)?;
+    let recovery_id =
+        RecoveryId::try_from(recovery_value).map_err(|_| MetricError::InvalidGmvAttestation)?;
     let key = VerifyingKey::recover_from_prehash(&digest, &signature, recovery_id)
         .map_err(|_| MetricError::InvalidGmvAttestation)?;
     let encoded = key.to_encoded_point(false);
@@ -2143,8 +2139,14 @@ mod tests {
     fn forward_gmv_input() -> ForwardCanonicalGmvProgramInput {
         let old = gmv_input();
         let mut signer_pairs = alloc::vec![
-            (signer_address(&SigningKey::from_bytes((&[1_u8; 32]).into()).unwrap()), SigningKey::from_bytes((&[1_u8; 32]).into()).unwrap()),
-            (signer_address(&SigningKey::from_bytes((&[2_u8; 32]).into()).unwrap()), SigningKey::from_bytes((&[2_u8; 32]).into()).unwrap()),
+            (
+                signer_address(&SigningKey::from_bytes((&[1_u8; 32]).into()).unwrap()),
+                SigningKey::from_bytes((&[1_u8; 32]).into()).unwrap()
+            ),
+            (
+                signer_address(&SigningKey::from_bytes((&[2_u8; 32]).into()).unwrap()),
+                SigningKey::from_bytes((&[2_u8; 32]).into()).unwrap()
+            ),
         ];
         signer_pairs.sort_by_key(|value| value.0);
         let campaign = ForwardCanonicalGmvCampaign {

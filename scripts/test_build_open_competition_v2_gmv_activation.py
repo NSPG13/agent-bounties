@@ -22,7 +22,7 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.pool = json.loads(
-            (ROOT / "ops" / "open-competition-v2-gmv-candidate-pool-v1.json").read_text()
+            (ROOT / "ops" / "open-competition-v2-forward-gmv-candidate-pool-v2.json").read_text()
         )
         cls.reserve = json.loads(
             (
@@ -32,6 +32,10 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
             ).read_text()
         )
         profile = cls.pool["profile_release"]
+        profile["status"] = "reviewed"
+        profile["program_vkey"] = "0x" + "31" * 32
+        profile["source_hash"] = "0x" + "32" * 32
+        profile["elf_hash"] = "0x" + "33" * 32
         cls.release = {
             "protocol_version": MODULE.PROTOCOL,
             "network": "base-mainnet",
