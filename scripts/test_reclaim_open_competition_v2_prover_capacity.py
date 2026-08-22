@@ -33,8 +33,9 @@ class ProverCapacityReclaimWorkflowTests(unittest.TestCase):
             "secondary=/swapfile2",
             "primary_size=68719476736",
             "secondary_size=51539607552",
-            'test "$primary_used_bytes" = 0',
-            'test "$secondary_used_bytes" = 0',
+            'test "$primary_used_kib" = 0',
+            'test "$secondary_used_kib" = 0',
+            "/proc/swaps",
             "minimum_available_memory_kib=209715200",
             "minimum_recovered_bytes=50000000000",
             "/etc/fstab",
@@ -47,8 +48,7 @@ class ProverCapacityReclaimWorkflowTests(unittest.TestCase):
         self.assertIn("sudo -n awk '$1 != \"/swapfile2\"' /etc/fstab", text)
         self.assertIn('sudo -n rm -f -- "$secondary"', text)
         self.assertIn('test -f "$primary"', text)
-        self.assertIn("--output NAME,USED", text)
-        self.assertNotIn("swapon --show --noheadings --bytes --raw --output=", text)
+        self.assertNotIn("swapon --show --noheadings --bytes --raw --output", text)
         for forbidden in (
             "rm -rf",
             "$HOME",
