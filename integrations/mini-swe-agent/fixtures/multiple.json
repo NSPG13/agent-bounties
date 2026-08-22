@@ -1,0 +1,42 @@
+{
+  "snapshot_status": "fresh",
+  "opportunities": [
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000aa",
+      "status": "claimable",
+      "terms_valid": true,
+      "verification_ready": true,
+      "gross_cash_margin": "1500000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/1",
+          "benchmark": {"engine": "sandboxed_regression_v1"}
+        }
+      }
+    },
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000bb",
+      "status": "claimable",
+      "terms_valid": true,
+      "verification_ready": true,
+      "gross_cash_margin": "2000000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/2",
+          "benchmark": {"engine": "sandboxed_regression_v1"}
+        }
+      }
+    },
+    {
+      "bounty_contract": "0x00000000000000000000000000000000000000cc",
+      "status": "open",
+      "gross_cash_margin": "9000000",
+      "terms": {
+        "document": {
+          "source_url": "https://github.com/example/project/issues/3",
+          "benchmark": {"engine": "sandboxed_regression_v1"}
+        }
+      }
+    }
+  ]
+}
