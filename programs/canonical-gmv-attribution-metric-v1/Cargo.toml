@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["script"]
+exclude = ["program"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+competition-metric-core = { path = "../../crates/competition-metric-core" }
+hex = "0.4"
+serde_json = "1"
+sha2 = "0.10"
+sp1-sdk = { git = "https://github.com/NSPG13/sp1", rev = "c2d292c260333a9e4f166cd1435e8ef4897c8b43" }
+tiny-keccak = { version = "2", features = ["keccak"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[patch.crates-io]
+p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "c2d292c260333a9e4f166cd1435e8ef4897c8b43" }

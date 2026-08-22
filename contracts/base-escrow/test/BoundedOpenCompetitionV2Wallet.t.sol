@@ -84,8 +84,8 @@ contract BoundedOpenCompetitionV2WalletTest {
     bytes32 constant PROGRAM_VKEY = keccak256("public-vector-metric-v1-vkey");
     bytes32 constant SOURCE_HASH = keccak256("public-vector-metric-v1-source");
     bytes32 constant ELF_HASH = keccak256("public-vector-metric-v1-elf");
-    bytes32 constant JOURNAL_SCHEMA_HASH = keccak256("open-competition-v2-journal-schema");
-    bytes32 constant METRIC_PROGRAM_HASH = keccak256("public-vector-metric-v1");
+    bytes32 constant JOURNAL_SCHEMA_HASH = 0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40;
+    bytes32 constant METRIC_PROGRAM_HASH = 0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead;
     bytes32 constant EXECUTION_POLICY_HASH = keccak256("execution-policy");
     bytes32 constant VERIFICATION_POLICY_HASH = keccak256("verification-policy");
     bytes32 constant SETTLEMENT_POLICY_HASH = keccak256("settlement-policy");
@@ -185,6 +185,26 @@ contract BoundedOpenCompetitionV2WalletTest {
         changed = params;
         changed.betaRiskHash = keccak256("different risk");
         vm.expectRevert(BoundedOpenCompetitionV2Wallet.ReserveRiskHashMismatch.selector);
+        vm.prank(DELEGATE);
+        reserve.createCompetition(changed, bytes32(uint256(1)));
+    }
+
+    function testOnlyBestScoreCanonicalGmvMetaCompetitionsAreAllowed() public {
+        OpenCompetitionBountyFactoryV2Beta3.CreateCompetitionParams memory changed = params;
+        changed.winnerMode = OpenCompetitionBountyV2Beta3.WinnerMode.FirstProven;
+        vm.expectRevert(BoundedOpenCompetitionV2Wallet.ReserveNotGmvMetaCompetition.selector);
+        vm.prank(DELEGATE);
+        reserve.createCompetition(changed, bytes32(uint256(1)));
+
+        changed = params;
+        changed.scoreDirection = OpenCompetitionBountyV2Beta3.ScoreDirection.LowerIsBetter;
+        vm.expectRevert(BoundedOpenCompetitionV2Wallet.ReserveNotGmvMetaCompetition.selector);
+        vm.prank(DELEGATE);
+        reserve.createCompetition(changed, bytes32(uint256(1)));
+
+        changed = params;
+        changed.metricProgramHash = keccak256("not-gmv");
+        vm.expectRevert(BoundedOpenCompetitionV2Wallet.ReserveNotGmvMetaCompetition.selector);
         vm.prank(DELEGATE);
         reserve.createCompetition(changed, bytes32(uint256(1)));
     }
@@ -409,9 +429,9 @@ contract BoundedOpenCompetitionV2WalletTest {
             keeperReward: KEEPER_REWARD,
             fundingDeadline: uint64(block.timestamp + 7 days),
             proofWindowSeconds: 3 days,
-            winnerMode: OpenCompetitionBountyV2Beta3.WinnerMode.FirstProven,
+            winnerMode: OpenCompetitionBountyV2Beta3.WinnerMode.BestScore,
             scoreDirection: OpenCompetitionBountyV2Beta3.ScoreDirection.HigherIsBetter,
-            scoreThreshold: 0,
+            scoreThreshold: 1,
             proofSystem: competitionFactory.PROOF_SYSTEM_GROTH16(),
             programVKey: PROGRAM_VKEY,
             sourceHash: SOURCE_HASH,
@@ -448,7 +468,9 @@ contract BoundedOpenCompetitionV2WalletTest {
             exactFundingPerCompetition: EXACT_FUNDING,
             maxPerPeriod: maxPerPeriod,
             maxLifetimeSpend: maxLifetimeSpend,
-            betaRiskHash: BETA_RISK_HASH
+            betaRiskHash: BETA_RISK_HASH,
+            gmvMetricProgramHash: METRIC_PROGRAM_HASH,
+            gmvJournalSchemaHash: JOURNAL_SCHEMA_HASH
         });
     }
 

@@ -32,14 +32,43 @@ def load_json(path: Path) -> dict:
 def inventory(active: int, *, observed_at: str = "2026-08-21T14:34:00Z") -> dict:
     return {
         "inventory_evidence_valid": True,
-        "private_v2_floor": 5,
-        "private_v2_target": 10,
-        "verified_open_competition_v2_count": active,
+        "private_gmv_meta_floor": 5,
+        "private_gmv_meta_target": 10,
+        "verified_gmv_meta_competition_count": active,
         "private_v2_observed_safe_block": 50_266_417,
         "private_v2_release_hash": RELEASE_HASH,
         "private_v2_factory_contract": FACTORY,
         "private_inventory_observed_at": observed_at,
     }
+
+
+def reviewed_specs(specs: dict) -> dict:
+    """Promote deterministic fixture hashes; checked-in production specs stay blocked."""
+    result = copy.deepcopy(specs)
+    profile = result["profile_release"]
+    profile.update(
+        {
+            "status": "reviewed",
+            "program_vkey": "0x" + "1" * 64,
+            "source_hash": "0x" + "2" * 64,
+            "elf_hash": "0x" + "3" * 64,
+        }
+    )
+    for index, candidate in enumerate(result["candidates"]):
+        snapshot_hash = "0x" + hashlib.sha256(f"snapshot-{index}".encode()).hexdigest()
+        candidate["snapshot"] = {
+            "status": "ready",
+            "safe_block": 50_266_000 + index,
+            "end_block_hash": "0x" + hashlib.sha256(f"block-{index}".encode()).hexdigest(),
+            "snapshot_hash": snapshot_hash,
+            "verification_policy_hash": "0x"
+            + hashlib.sha256(f"policy-{index}".encode()).hexdigest(),
+            "primary_projection_hash": snapshot_hash,
+            "shadow_projection_hash": snapshot_hash,
+            "snapshot_url": f"https://api.agentbounties.app/v1/gmv-snapshots/{candidate['candidate_id']}",
+            "reconciled_at": "2026-08-21T14:31:00Z",
+        }
+    return result
 
 
 def synthetic_private_ranking(specs: dict) -> dict:
@@ -87,7 +116,8 @@ def execution(
 
 class ReplenishmentPlannerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.specs = load_json(SPECS_PATH)
+        self.pending_specs = load_json(SPECS_PATH)
+        self.specs = reviewed_specs(self.pending_specs)
         self.ranking = synthetic_private_ranking(self.specs)
         self.ledger = load_json(LEDGER_PATH)
 
@@ -120,13 +150,23 @@ class ReplenishmentPlannerTests(unittest.TestCase):
                         selected * PLANNER.TOTAL_PER_COMPETITION_BASE_UNITS,
                     )
 
-    def test_checked_in_specs_are_reviewed_and_private_ranking_is_separate(self) -> None:
+    def test_reviewed_fixture_has_twenty_meta_campaigns_and_private_ranking_is_separate(self) -> None:
         self.assertEqual(len(self.specs["candidates"]), 20)
         serialized = json.dumps(self.specs)
         self.assertNotIn("ranking_weights", serialized)
         self.assertNotIn("launch_role", serialized)
         self.assertNotIn('"scores"', serialized)
         self.assertEqual(self.plan(0)["status"], "ready")
+
+    def test_checked_in_pool_fails_closed_until_profile_and_snapshots_are_reviewed(self) -> None:
+        plan = self.plan(
+            0,
+            candidate_specs=self.pending_specs,
+            private_ranking=synthetic_private_ranking(self.pending_specs),
+        )
+        self.assertEqual(plan["status"], "blocked")
+        self.assertTrue(any("profile" in blocker for blocker in plan["blockers"]))
+        self.assertTrue(any("snapshots" in blocker for blocker in plan["blockers"]))
 
     def test_same_inputs_and_clock_produce_identical_plan(self) -> None:
         first = self.plan(4)
@@ -136,7 +176,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
 
     def test_missing_or_invalid_inventory_fails_closed(self) -> None:
         missing = inventory(4)
-        missing.pop("verified_open_competition_v2_count")
+        missing.pop("verified_gmv_meta_competition_count")
         invalid = inventory(4)
         invalid["inventory_evidence_valid"] = False
         for report in (missing, invalid, None):
@@ -195,7 +235,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         plan = self.plan(0, ledger=ledger)
         self.assertEqual(plan["status"], "blocked")
         self.assertEqual(plan["selected_candidates"], [])
-        self.assertIn("fewer unused candidates", plan["blockers"][0])
+        self.assertIn("fewer unused", plan["blockers"][0])
 
     def test_daily_cap_and_later_utc_day_recovery(self) -> None:
         ledger = {

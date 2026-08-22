@@ -7,7 +7,7 @@ interface IERC20OpenCompetitionReserve is IERC20BountyToken {
     function allowance(address owner, address spender) external view returns (uint256);
 }
 
-/// @notice Owner-recoverable USDC reserve for reviewed Open Competition V2 creations.
+/// @notice Owner-recoverable USDC reserve for reviewed GMV meta-competitions.
 /// @dev The delegate can create only exact, preapproved competition configurations.
 /// The owner can revoke the delegate and recover every uncommitted token without
 /// cooperation from the delegate, relayer, hosted API, or wallet provider.
@@ -25,6 +25,8 @@ contract BoundedOpenCompetitionV2Wallet {
         uint256 maxPerPeriod;
         uint256 maxLifetimeSpend;
         bytes32 betaRiskHash;
+        bytes32 gmvMetricProgramHash;
+        bytes32 gmvJournalSchemaHash;
     }
 
     uint256 public constant MAX_APPROVED_CREATIONS = 64;
@@ -87,6 +89,7 @@ contract BoundedOpenCompetitionV2Wallet {
     error ReserveCreationAlreadyUsed();
     error ReserveEconomicsMismatch();
     error ReserveRiskHashMismatch();
+    error ReserveNotGmvMetaCompetition();
     error ReservePerPeriodCapExceeded();
     error ReserveLifetimeCapExceeded();
     error ReserveUnexpectedCompetition();
@@ -188,6 +191,12 @@ contract BoundedOpenCompetitionV2Wallet {
                 || params.solverReward + params.keeperReward != policy.exactFundingPerCompetition
         ) revert ReserveEconomicsMismatch();
         if (params.betaRiskHash != policy.betaRiskHash) revert ReserveRiskHashMismatch();
+        if (
+            params.winnerMode != OpenCompetitionBountyV2Beta3.WinnerMode.BestScore
+                || params.scoreDirection != OpenCompetitionBountyV2Beta3.ScoreDirection.HigherIsBetter
+                || params.scoreThreshold <= 0 || params.metricProgramHash != policy.gmvMetricProgramHash
+                || params.journalSchemaHash != policy.gmvJournalSchemaHash
+        ) revert ReserveNotGmvMetaCompetition();
 
         bytes32 commitment = creationCommitment(params, creationNonce);
         if (!_approvedCreation[policyVersion][commitment]) revert ReserveCreationNotApproved();
@@ -271,6 +280,7 @@ contract BoundedOpenCompetitionV2Wallet {
                 || nextPolicy.solverReward + nextPolicy.keeperReward != nextPolicy.exactFundingPerCompetition
                 || nextPolicy.maxPerPeriod < nextPolicy.exactFundingPerCompetition
                 || nextPolicy.maxLifetimeSpend < lifetimeSpent || nextPolicy.betaRiskHash == bytes32(0)
+                || nextPolicy.gmvMetricProgramHash == bytes32(0) || nextPolicy.gmvJournalSchemaHash == bytes32(0)
                 || approvedCreations.length == 0 || approvedCreations.length > MAX_APPROVED_CREATIONS
         ) revert ReserveInvalidPolicy();
 

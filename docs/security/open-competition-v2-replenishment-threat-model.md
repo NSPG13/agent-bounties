@@ -37,8 +37,9 @@ on-chain analysis is in
 - Reserve principal: at most 77,668,098 USDC base units.
 - Daily exposure: at most 30,400,000 base units per UTC day.
 - One creation: exactly 3,000,000 solver plus 40,000 keeper base units.
-- Allowed target: the reviewed Beta3 factory and release hash in the candidate
-  specifications and fresh canonical inventory.
+- Allowed target: the reviewed Beta3 factory/release plus only best-score,
+  higher-is-better canonical-GMV profile commitments backed by reconciled
+  closed-epoch snapshots.
 - Allowance: exact amount, consumed by the matching creation, then zero.
 - Idempotency: safe block, release, candidate/spec hashes, predicted contract,
   policy epoch, and durable execution record are bound before broadcast.
@@ -54,6 +55,9 @@ on-chain analysis is in
 | Duplicate worker, retry, or crash | duplicate funding | serialized workflow, content-addressed request, durable signer reservation before broadcast, predicted-address check |
 | Pending broadcast followed by another batch | target overshoot | any planned/broadcast ledger record blocks new plans until reconciled |
 | Tampered candidate pool or private scores | unauthorized terms | exact public spec hash, private ranking schema, twenty-ID equality, 50/30/20 weights, expiry |
+| Non-GMV or first-proven creation | reserve spends on the wrong objective | contract-level best-score, higher-is-better, positive threshold, and exact metric/journal hash checks before spend |
+| Snapshot omission or indexer divergence | fabricated winner or score | closed epoch, safe block, exact content hash, primary/shadow equality, public snapshot, and independent reproduction gate |
+| Reserve-funded or self-settled volume wins | circular spend masquerades as demand | exclude operator/reserve wallets, reward contracts, creator-as-solver, and entrant-as-solver rows from pro-rata attributed GMV |
 | Cap or integer bypass | reserve loss | integer base units only; on-chain UTC-day and persistent lifetime counters; exact per-call amount |
 | Stuck or excessive allowance | token loss | approve exact amount immediately before the matching creation; require zero afterward; stop on mismatch |
 | Runner/token compromise | repeated valid requests | signer revalidates every request, narrowly scoped revocable token, rate limit, durable idempotency, no arbitrary calldata |
@@ -66,12 +70,13 @@ on-chain analysis is in
 
 ## Abuse tests
 
-Tests must cover inventory counts 10, 9, 5, 4, and 0; five and six concurrent
+Tests must cover qualifying GMV-meta inventory counts 10, 9, 5, 4, and 0; five and six concurrent
 exits; duplicate candidates and ledger keys; concurrent workers; crashes before
 reservation, after reservation, after approval, after creation broadcast, and
 after receipt; stale/future evidence; release changes; indexer disagreement;
 candidate exhaustion; daily/lifetime caps; malformed schemas; non-integer
-amounts; allowance not returning to zero; and a signer response without
+amounts; wrong winner mode/direction/profile; snapshot reordering, duplicates,
+source drift, operator funding, self-settlement; allowance not returning to zero; and a signer response without
 canonical reconciliation.
 
 ## Detection, containment, and recovery

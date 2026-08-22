@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "canonical-gmv-attribution-metric-v1-program"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+competition-metric-core = { path = "../../../crates/competition-metric-core", default-features = false }
+sp1-zkvm = { git = "https://github.com/NSPG13/sp1", rev = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d" }
+
+[patch.crates-io]
+p3-challenger = { git = "https://github.com/NSPG13/sp1", rev = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d" }

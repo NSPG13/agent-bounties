@@ -18,12 +18,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-CANDIDATE_SPECS_SCHEMA = "agent-bounties/open-competition-v2-reviewed-candidate-specs-v1"
+CANDIDATE_SPECS_SCHEMA = "agent-bounties/open-competition-v2-gmv-meta-candidate-specs-v1"
 PRIVATE_RANKING_SCHEMA = "agent-bounties/open-competition-v2-private-ranking-v1"
 LEDGER_SCHEMA = "agent-bounties/open-competition-v2-replenishment-ledger-v1"
 PLAN_SCHEMA = "agent-bounties/open-competition-v2-replenishment-plan-v1"
 PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta3"
-PROFILE_ID = "structured-artifact-metric-v1"
+PROFILE_ID = "canonical-gmv-attribution-metric-v1"
+GMV_METRIC_PROGRAM_HASH = "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead"
+GMV_JOURNAL_SCHEMA_HASH = "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40"
+GMV_EXECUTION_POLICY_HASH = "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a"
+GMV_SETTLEMENT_POLICY_HASH = "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee"
 SOLVER_REWARD_BASE_UNITS = 3_000_000
 KEEPER_REWARD_BASE_UNITS = 40_000
 TOTAL_PER_COMPETITION_BASE_UNITS = 3_040_000
@@ -105,11 +109,14 @@ def validate_inventory(report: object, now: datetime, floor: int, target: int) -
         raise PlanError("inventory report must be an object")
     if report.get("inventory_evidence_valid") is not True:
         raise PlanError("inventory evidence is not valid")
-    if report.get("private_v2_floor") != floor or report.get("private_v2_target") != target:
+    if (
+        report.get("private_gmv_meta_floor") != floor
+        or report.get("private_gmv_meta_target") != target
+    ):
         raise PlanError("inventory floor/target does not match signer policy")
     active = require_int(
-        report.get("verified_open_competition_v2_count"),
-        "verified_open_competition_v2_count",
+        report.get("verified_gmv_meta_competition_count"),
+        "verified_gmv_meta_competition_count",
     )
     safe_block = require_int(
         report.get("private_v2_observed_safe_block"),
@@ -147,8 +154,32 @@ def validate_candidate_specs(
         raise PlanError(f"candidate specs must use {CANDIDATE_SPECS_SCHEMA}")
     if specs.get("protocol_version") != PROTOCOL_VERSION:
         raise PlanError("candidate specs protocol version is invalid")
-    if specs.get("profile_id") != PROFILE_ID:
-        raise PlanError("candidate specs profile is not the reviewed structured-artifact profile")
+    profile = specs.get("profile_release")
+    if not isinstance(profile, dict) or profile.get("profile_id") != PROFILE_ID:
+        raise PlanError("candidate specs do not use the canonical GMV attribution profile")
+    profile_status = profile.get("status")
+    if profile_status not in {"awaiting_reproduction", "reviewed"}:
+        raise PlanError("canonical GMV profile status is invalid")
+    if str(profile.get("metric_program_hash") or "").lower() != GMV_METRIC_PROGRAM_HASH:
+        raise PlanError("canonical GMV metric program hash is invalid")
+    if str(profile.get("journal_schema_hash") or "").lower() != GMV_JOURNAL_SCHEMA_HASH:
+        raise PlanError("canonical GMV journal schema hash is invalid")
+    if str(profile.get("execution_policy_hash") or "").lower() != GMV_EXECUTION_POLICY_HASH:
+        raise PlanError("canonical GMV execution policy hash is invalid")
+    if str(profile.get("settlement_policy_hash") or "").lower() != GMV_SETTLEMENT_POLICY_HASH:
+        raise PlanError("canonical GMV settlement policy hash is invalid")
+    profile_hashes: dict[str, str | None] = {}
+    for key in ("program_vkey", "source_hash", "elf_hash"):
+        value = profile.get(key)
+        if profile_status == "reviewed":
+            normalized = str(value or "").lower()
+            if not HASH.fullmatch(normalized):
+                raise PlanError(f"reviewed canonical GMV profile {key} is invalid")
+            profile_hashes[key] = normalized
+        else:
+            if value is not None:
+                raise PlanError(f"unreproduced canonical GMV profile {key} must be null")
+            profile_hashes[key] = None
     if specs.get("economics") != {
         "solver_reward_base_units": SOLVER_REWARD_BASE_UNITS,
         "keeper_reward_base_units": KEEPER_REWARD_BASE_UNITS,
@@ -163,6 +194,18 @@ def validate_candidate_specs(
     expires_at = parse_timestamp(specs.get("expires_at"), "expires_at")
     if approved_at > now or expires_at <= now or approved_at >= expires_at:
         raise PlanError("candidate specs approval window is not current")
+    scoring = specs.get("scoring_policy")
+    if not isinstance(scoring, dict) or any(
+        scoring.get(key) != expected
+        for key, expected in {
+            "score_unit": "usdc_base_units",
+            "winner_mode": "best_score",
+            "score_direction": "higher_is_better",
+            "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
+            "tie_break": "earliest qualifying proof sequence",
+        }.items()
+    ):
+        raise PlanError("candidate specs do not use the reviewed GMV scoring policy")
     raw = specs.get("candidates")
     if not isinstance(raw, list) or len(raw) != 20:
         raise PlanError("candidate specs must contain exactly twenty reviewed candidates")
@@ -179,6 +222,61 @@ def validate_candidate_specs(
         lane = item.get("gmv_lane")
         if lane not in ALLOWED_LANES:
             raise PlanError(f"{field}.gmv_lane is invalid")
+        epoch = item.get("epoch")
+        if not isinstance(epoch, dict):
+            raise PlanError(f"{field}.epoch must be an object")
+        starts_at = parse_timestamp(epoch.get("starts_at"), f"{field}.epoch.starts_at")
+        ends_at = parse_timestamp(epoch.get("ends_at"), f"{field}.epoch.ends_at")
+        minimum_score = require_int(
+            epoch.get("minimum_score_base_units"),
+            f"{field}.epoch.minimum_score_base_units",
+            minimum=1,
+        )
+        if starts_at >= ends_at or ends_at > now:
+            raise PlanError(f"{field}.epoch must be closed before planning")
+        snapshot = item.get("snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("status") not in {"pending", "ready"}:
+            raise PlanError(f"{field}.snapshot status is invalid")
+        snapshot_status = str(snapshot["status"])
+        normalized_snapshot: dict[str, Any] = {"status": snapshot_status}
+        if snapshot_status == "pending":
+            if set(snapshot) != {"status"}:
+                raise PlanError(f"{field}.pending snapshot cannot contain unreviewed evidence")
+        else:
+            safe_block = require_int(snapshot.get("safe_block"), f"{field}.snapshot.safe_block", minimum=1)
+            if safe_block > inventory["safe_block"]:
+                raise PlanError(f"{field}.snapshot safe block is newer than inventory evidence")
+            for key in (
+                "end_block_hash",
+                "snapshot_hash",
+                "verification_policy_hash",
+                "primary_projection_hash",
+                "shadow_projection_hash",
+            ):
+                value = str(snapshot.get(key) or "").lower()
+                if not HASH.fullmatch(value):
+                    raise PlanError(f"{field}.snapshot.{key} is invalid")
+                normalized_snapshot[key] = value
+            if normalized_snapshot["primary_projection_hash"] != normalized_snapshot["snapshot_hash"]:
+                raise PlanError(f"{field}.snapshot primary indexer disagrees")
+            if normalized_snapshot["shadow_projection_hash"] != normalized_snapshot["snapshot_hash"]:
+                raise PlanError(f"{field}.snapshot shadow indexer disagrees")
+            snapshot_url = validate_source(
+                {"kind": "canonical_snapshot", "url": snapshot.get("snapshot_url")},
+                f"{field}.snapshot",
+            )["url"]
+            reconciled_at = parse_timestamp(
+                snapshot.get("reconciled_at"), f"{field}.snapshot.reconciled_at"
+            )
+            if reconciled_at > now or reconciled_at < ends_at:
+                raise PlanError(f"{field}.snapshot reconciliation time is invalid")
+            normalized_snapshot.update(
+                {
+                    "safe_block": safe_block,
+                    "snapshot_url": snapshot_url,
+                    "reconciled_at": reconciled_at.isoformat().replace("+00:00", "Z"),
+                }
+            )
         analysis_sources = item.get("analysis_sources")
         feedback_sources = item.get("feedback_sources")
         if not isinstance(analysis_sources, list) or not analysis_sources:
@@ -198,14 +296,21 @@ def validate_candidate_specs(
             "title": require_text(item.get("title"), f"{field}.title", maximum=160),
             "summary": require_text(item.get("summary"), f"{field}.summary", maximum=500),
             "gmv_lane": lane,
-            "minimum_findings": require_int(
-                item.get("minimum_findings"), f"{field}.minimum_findings", minimum=3
-            ),
-            "minimum_recommendations": require_int(
-                item.get("minimum_recommendations"),
-                f"{field}.minimum_recommendations",
-                minimum=1,
-            ),
+            "epoch": {
+                "starts_at": starts_at.isoformat().replace("+00:00", "Z"),
+                "ends_at": ends_at.isoformat().replace("+00:00", "Z"),
+                "minimum_score_base_units": minimum_score,
+            },
+            "snapshot": normalized_snapshot,
+            "profile_release": {
+                "profile_id": PROFILE_ID,
+                "status": profile_status,
+                "metric_program_hash": GMV_METRIC_PROGRAM_HASH,
+                "journal_schema_hash": GMV_JOURNAL_SCHEMA_HASH,
+                "execution_policy_hash": GMV_EXECUTION_POLICY_HASH,
+                "settlement_policy_hash": GMV_SETTLEMENT_POLICY_HASH,
+                **profile_hashes,
+            },
             "analysis_sources": analysis,
             "feedback_sources": feedback,
         }
@@ -398,7 +503,13 @@ def build_plan(
             "evidence_boundary": "Canonical inventory is already at or above the private target; no value-changing action was planned.",
         }
 
-    available = [candidate for candidate in candidates if candidate["candidate_id"] not in reserved]
+    unreserved = [candidate for candidate in candidates if candidate["candidate_id"] not in reserved]
+    available = [
+        candidate
+        for candidate in unreserved
+        if candidate["profile_release"]["status"] == "reviewed"
+        and candidate["snapshot"]["status"] == "ready"
+    ]
     available.sort(
         key=lambda candidate: (
             0 if candidate["launch_role"] == "initial" else 1,
@@ -408,8 +519,12 @@ def build_plan(
     )
     required_spend = deficit * per_candidate_base_units
     blockers: list[str] = []
+    if any(candidate["profile_release"]["status"] != "reviewed" for candidate in unreserved):
+        blockers.append("canonical GMV metric profile has not completed independent reproduction and review")
     if len(available) < deficit:
-        blockers.append("reviewed candidate pool has fewer unused candidates than the full target deficit")
+        blockers.append(
+            "reviewed pool has fewer unused, reconciled canonical GMV snapshots than the full target deficit"
+        )
     if daily_spent + required_spend > daily_cap_base_units:
         blockers.append("full target restoration would exceed the UTC-day spending cap")
     if lifetime_spent + required_spend > lifetime_cap_base_units:
@@ -455,6 +570,8 @@ def build_plan(
         "signer_requirements": {
             "revalidate_canonical_safe_block": True,
             "revalidate_release_and_factory": True,
+            "revalidate_gmv_profile_and_snapshot_hashes": True,
+            "revalidate_best_score_meta_terms": True,
             "revalidate_unused_candidate_ids": True,
             "revalidate_daily_and_lifetime_caps": True,
             "allowed_calls": ["usdc.approve_exact", "factory.create_competition_v2"],

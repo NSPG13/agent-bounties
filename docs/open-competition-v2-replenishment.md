@@ -11,10 +11,12 @@ continues to show one unified marketplace.
 - `scripts/plan_open_competition_v2_replenishment.py` builds a deterministic,
   unsigned, fail-closed plan.
 - `scripts/materialize_open_competition_v2_replenishment.py` converts a ready
-  plan into objective schema-based terms without private ranking fields.
-- `ops/open-competition-v2-gmv-candidate-pool-v1.json` contains twenty public,
-  reviewed candidate specifications and evidence references. It intentionally
-  contains no operational scores or active/standby ranking.
+  plan into objective best-score GMV meta-competition terms without private
+  ranking fields.
+- `ops/open-competition-v2-gmv-candidate-pool-v1.json` contains twenty public
+  closed-epoch campaign specifications and evidence references. A `pending`
+  snapshot is intentionally not spendable. The file contains no operational
+  scores or active/standby ranking.
 - `BoundedOpenCompetitionV2Wallet` holds the USDC reserve under the operator
   owner's on-chain control. Its delegate can create only reviewed, exact-value
   competitions; it cannot transfer or withdraw USDC.
@@ -46,18 +48,29 @@ block before recording activation.
 
 The on-chain reserve independently requires:
 
-1. Base mainnet, the reviewed factory/release/profile, and fresh safe-block
-   evidence with primary/shadow agreement.
+1. Base mainnet, the reviewed factory/release and independently reproduced
+   `canonical-gmv-attribution-metric-v1` profile, plus fresh safe-block evidence
+   with primary/shadow agreement.
 2. Exactly 3.00 USDC solver reward and 0.04 USDC keeper reward per creation.
 3. No more than 30.40 USDC per UTC day or 77.668098 USDC lifetime. The initial
    policy cannot spend more than the exact owner-authorized reserve.
-4. A candidate in the private ranking whose ID and public spec hash match.
+4. A candidate in the private ranking whose ID and public spec hash match, whose
+   epoch has closed, and whose primary/shadow snapshot hashes are identical.
 5. A durable idempotency reservation containing policy epoch, safe block,
    candidate hashes, derived nonce, and predicted contract address.
 6. Exact USDC allowance immediately before factory creation and zero allowance
    after consumption.
 7. No settlement, verifier, arbitrary-transfer, owner-recovery, or
    policy-changing call from the delegate.
+8. `best_score`, `higher_is_better`, positive USDC-base-unit threshold, and the
+   exact canonical-GMV program and journal hashes. First-proven and general
+   artifact work revert in the reserve contract.
+
+GMV attribution is `settlement GMV * entrant canonical funding / total
+canonical funding`, rounded down for each settlement. Exclude operator/reserve
+wallet funding, listed reward contracts, creator-as-solver and
+entrant-as-solver settlements, and all noncanonical states. The prize
+competition's own payout is excluded from the snapshot used to score it.
 
 The owner remains `0x884834E884d6e93462655A2820140aD03E6747bC` for the
 initial rollout. The delegate is not the owner and receives no reserve USDC; it
@@ -89,15 +102,18 @@ paths; settled rewards belong to the solver and keeper.
 3. Set `V2_REPLENISHMENT_ENABLED=true`, keep
    `V2_REPLENISHMENT_EXECUTE=false`, and compare dry-run plans with manual
    canonical inventory for at least one review cycle.
-4. Obtain explicit R3 maintainer risk approval and name signer, rollback, and
-   incident owners.
+4. Reproduce the GMV program twice, freeze and publish each canonical epoch
+   snapshot, and obtain explicit R4 maintainer risk approval naming signer,
+   rollback, and incident owners.
 5. Have the owner atomically create and fund the bounded reserve with exactly
    77.668098 USDC. Fund the delegate separately with minimal Base ETH only.
 6. Enable one internal canary, confirm allowance returns to zero and both
    indexers observe canonical activation, then enable the first batch.
 7. Continue until ten are canonically active or a hard policy condition blocks.
 
-Never increase reserve spending just to improve a count or reported GMV.
+Never increase reserve spending just to improve a count or reported GMV. The
+checked-in confirmation page remains blocked while the new profile or snapshots
+are pending; the superseded structured-artifact batch must not be submitted.
 
 ## Incident response
 

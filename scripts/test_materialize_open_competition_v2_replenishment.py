@@ -23,13 +23,14 @@ from test_plan_open_competition_v2_replenishment import (
     SPECS_PATH,
     inventory,
     load_json,
+    reviewed_specs,
     synthetic_private_ranking,
 )
 
 
 class ReplenishmentMaterializerTests(unittest.TestCase):
     def setUp(self) -> None:
-        specs = load_json(SPECS_PATH)
+        specs = reviewed_specs(load_json(SPECS_PATH))
         self.plan = PLANNER.build_plan(
             inventory(4),
             specs,
@@ -47,34 +48,13 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
         for creation in request["creations"]:
             self.assertEqual(creation["economics"]["solver_reward_base_units"], 3_000_000)
             self.assertEqual(creation["economics"]["keeper_reward_base_units"], 40_000)
-            requirements = creation["requirements"]
-            self.assertIn(
-                {
-                    "kind": "json_array_minimum_length",
-                    "pointer": "/user_evidence",
-                    "minimum": 1,
-                    "weight": 1,
-                },
-                requirements,
-            )
-            self.assertIn(
-                {
-                    "kind": "json_pointer_string_equals",
-                    "pointer": "/user_evidence/0/kind",
-                    "expected": "real_user_source",
-                    "weight": 1,
-                },
-                requirements,
-            )
-            self.assertIn(
-                {
-                    "kind": "utf8_contains",
-                    "needle": "https://",
-                    "minimum_occurrences": 2,
-                    "weight": 1,
-                },
-                requirements,
-            )
+            self.assertEqual(creation["profile_id"], MATERIALIZER.PROFILE_ID)
+            self.assertEqual(creation["meta_bounty"]["objective"], "highest_external_canonical_gmv")
+            self.assertEqual(creation["settlement"]["winner_mode"], "best_score")
+            self.assertEqual(creation["settlement"]["score_direction"], "higher_is_better")
+            self.assertEqual(creation["settlement"]["score_threshold_base_units"], 1)
+            self.assertEqual(creation["meta_bounty"]["snapshot"]["status"], "ready")
+            self.assertNotIn("artifact_template", creation)
             self.assertNotIn("scores", json.dumps(creation))
             self.assertNotIn("launch_role", json.dumps(creation))
 
@@ -103,7 +83,7 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
                     MATERIALIZER.materialize(plan)
 
     def test_noop_plan_is_rejected(self) -> None:
-        specs = load_json(SPECS_PATH)
+        specs = reviewed_specs(load_json(SPECS_PATH))
         plan = PLANNER.build_plan(
             inventory(10),
             specs,

@@ -3,7 +3,7 @@
 ## Scope and assets
 
 The reserve wallet holds operator USDC used only for reviewed Open Competition
-V2 Beta3 creations. The assets are the uncommitted USDC balance, creator refund
+V2 Beta3 GMV meta-competitions. The assets are the uncommitted USDC balance, creator refund
 rights in canonical competitions, policy integrity, candidate commitments,
 spending counters, owner recovery authority, and evidence that a competition is
 canonically active.
@@ -38,6 +38,9 @@ change policy.
 | Unauthorized withdrawal | No delegate withdrawal selector; recovery requires owner plus prior revocation | Compromised owner can recover uncommitted funds |
 | Policy reconfiguration resets caps | Lifetime spend persists across versions; period duration cannot change; same-period spend is synchronized before update | Owner can deliberately increase future caps in a separately signed transaction |
 | Duplicate or replayed creation | Commitment binds chain, immutable factory, full parameters, and nonce; global used flag survives policy versions | None unless commitment collision breaks keccak256 |
+| Delegate funds a general artifact or first-proven bounty | Wallet independently requires `BestScore`, `HigherIsBetter`, positive threshold, and exact canonical-GMV metric/journal hashes before charging spend | A defect in the approved GMV program remains an R4 profile-review risk |
+| Fabricated or selectively omitted GMV | Full closed-epoch snapshot is content-addressed; primary and shadow projections must match; the proof derives score from the exact frozen snapshot | Indexer agreement is not proof of organizational independence; the public snapshot must remain reproducible from canonical events |
+| Self-funded or circular volume | Operator/reserve funding, excluded reward contracts, creator-equals-solver, and entrant-equals-solver rows score zero | Different wallets can share beneficial control; v1 does not claim person-level sybil resistance |
 | Allowance theft | Wallet approves only the predicted competition for exactly 3.04 USDC and resets allowance to zero after canonical activation | A defective approved factory release remains a release-review risk |
 | Fake or partially funded activation | Post-call checks require predicted address, canonical-factory registration, owner identity, token, target, funded amount, active status, and zero allowance | Canonical factory or token defects require migration |
 | Front-run deterministic wallet deployment | Unfunded deployment requires `msg.sender == owner`; funded EIP-3009 execution sends funds only to the owner/policy-bound predicted wallet | A copied valid authorization may be relayed first, but cannot redirect funds |

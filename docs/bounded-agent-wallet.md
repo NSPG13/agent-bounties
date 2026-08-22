@@ -19,8 +19,9 @@ or a relayer is compromised.
 Open Competition V2 replenishment uses the narrower
 `BoundedOpenCompetitionV2Wallet`, not an ordinary delegate wallet and not the
 general-purpose wallet described below. It keeps the reserve under the funding
-owner's control, permits the delegate only to activate exact preapproved V2
-configurations, and provides owner-only revocation plus recovery of uncommitted
+owner's control, permits the delegate only to activate exact preapproved
+best-score canonical-GMV meta-competitions, rejects general artifact and
+first-proven configurations, and provides owner-only revocation plus recovery of uncommitted
 and canonically refundable USDC. See the
 [private replenishment runbook](open-competition-v2-replenishment.md) and
 [reserve threat model](threat-model-bounded-open-competition-v2-wallet.md).

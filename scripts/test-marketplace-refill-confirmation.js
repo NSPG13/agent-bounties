@@ -35,6 +35,8 @@ for (const entry of entries) {
 
 assert.equal(entries.flatMap((entry) => entry.calls).length, 20);
 assert.match(source, /atomicRequired: true/);
+assert.match(source, /const GMV_META_PROFILE_REVIEWED = false;/);
+assert.match(source, /previous artifact batch is superseded/);
 assert.match(source, /wallet\("wallet_sendCalls"/);
 assert.match(source, /wallet\("wallet_getCallsStatus"/);
 assert.doesNotMatch(source, /eth_sendTransaction/);

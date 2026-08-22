@@ -11,6 +11,10 @@
   const PER_COMPETITION = 3_040_000n;
   const TOTAL_FUNDING = 30_400_000n;
   const MINIMUM_GAS_BALANCE = 100_000_000_000_000n;
+  // Fail closed: the prior structured-artifact batch is superseded. This gate
+  // is changed only by a reviewed build that embeds reproduced GMV-profile and
+  // reconciled snapshot commitments.
+  const GMV_META_PROFILE_REVIEWED = false;
   const RELEASE_URL = "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/release";
   const INVENTORY_URL = "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet";
   const PROFILE = Object.freeze({
@@ -267,6 +271,9 @@
   }
 
   async function validateFrozenPlan(nowSeconds = Math.floor(Date.now() / 1000)) {
+    if (!GMV_META_PROFILE_REVIEWED) {
+      fail("The previous artifact batch is superseded. Canonical GMV meta-competition profile review and snapshot reconciliation are still pending; no wallet request was made.");
+    }
     if (await sha256Hex(JSON.stringify(FROZEN_ENTRIES)) !== PLAN_SHA256) {
       fail("The frozen batch content hash does not match. No wallet request was made.");
     }
@@ -609,4 +616,3 @@
   });
   initialReadiness();
 })();
-

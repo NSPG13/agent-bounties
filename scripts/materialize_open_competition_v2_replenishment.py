@@ -18,8 +18,12 @@ from pathlib import Path
 from typing import Any
 
 PLAN_SCHEMA = "agent-bounties/open-competition-v2-replenishment-plan-v1"
-REQUEST_SCHEMA = "agent-bounties/open-competition-v2-replenishment-request-v1"
-ARTIFACT_SCHEMA = "agent-bounties/gmv-growth-artifact-v1"
+REQUEST_SCHEMA = "agent-bounties/open-competition-v2-gmv-meta-replenishment-request-v1"
+PROFILE_ID = "canonical-gmv-attribution-metric-v1"
+GMV_METRIC_PROGRAM_HASH = "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead"
+GMV_JOURNAL_SCHEMA_HASH = "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40"
+GMV_EXECUTION_POLICY_HASH = "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a"
+GMV_SETTLEMENT_POLICY_HASH = "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee"
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
 CANDIDATE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$")
 
@@ -85,122 +89,83 @@ def materialize(plan: object) -> dict[str, Any]:
             raise MaterializeError(f"{field}.candidate_hash is invalid or duplicated")
         ids.add(candidate_id)
         hashes.add(candidate_hash)
-        lane = candidate.get("gmv_lane")
-        if lane not in {"external_supply", "acquisition", "retention", "feedback"}:
-            raise MaterializeError(f"{field}.gmv_lane is invalid")
-        minimum_findings = require_int(candidate.get("minimum_findings"), f"{field}.minimum_findings", 3)
-        minimum_recommendations = require_int(
-            candidate.get("minimum_recommendations"),
-            f"{field}.minimum_recommendations",
-            1,
-        )
+        if candidate.get("gmv_lane") != "external_supply":
+            raise MaterializeError(f"{field}.gmv_lane must reward external demand")
         title = str(candidate.get("title") or "").strip()
         summary = str(candidate.get("summary") or "").strip()
         if not title or not summary:
             raise MaterializeError(f"{field} title and summary are required")
-        artifact_template = {
-            "schema_version": ARTIFACT_SCHEMA,
-            "task_id": candidate_id,
-            "gmv_lane": lane,
-            "findings": [{"finding": "", "quantitative_source": "https://"}],
-            "recommendations": [{"recommendation": "", "gmv_pathway": ""}],
-            "user_evidence": [{"kind": "real_user_source", "reference": "https://"}],
+        epoch = candidate.get("epoch")
+        snapshot = candidate.get("snapshot")
+        profile = candidate.get("profile_release")
+        if not isinstance(epoch, dict) or not isinstance(snapshot, dict) or not isinstance(profile, dict):
+            raise MaterializeError(f"{field} epoch, snapshot, and profile are required")
+        minimum_score = require_int(
+            epoch.get("minimum_score_base_units"),
+            f"{field}.epoch.minimum_score_base_units",
+            1,
+        )
+        if snapshot.get("status") != "ready":
+            raise MaterializeError(f"{field} canonical GMV snapshot is not ready")
+        if profile.get("profile_id") != PROFILE_ID or profile.get("status") != "reviewed":
+            raise MaterializeError(f"{field} canonical GMV metric profile is not reviewed")
+        expected_profile = {
+            "metric_program_hash": GMV_METRIC_PROGRAM_HASH,
+            "journal_schema_hash": GMV_JOURNAL_SCHEMA_HASH,
+            "execution_policy_hash": GMV_EXECUTION_POLICY_HASH,
+            "settlement_policy_hash": GMV_SETTLEMENT_POLICY_HASH,
         }
+        for key, expected in expected_profile.items():
+            if str(profile.get(key) or "").lower() != expected:
+                raise MaterializeError(f"{field}.profile_release.{key} is invalid")
+        for key in ("program_vkey", "source_hash", "elf_hash"):
+            if not HASH.fullmatch(str(profile.get(key) or "").lower()):
+                raise MaterializeError(f"{field}.profile_release.{key} is invalid")
+        for key in (
+            "end_block_hash",
+            "snapshot_hash",
+            "verification_policy_hash",
+            "primary_projection_hash",
+            "shadow_projection_hash",
+        ):
+            if not HASH.fullmatch(str(snapshot.get(key) or "").lower()):
+                raise MaterializeError(f"{field}.snapshot.{key} is invalid")
+        if snapshot["primary_projection_hash"] != snapshot["snapshot_hash"]:
+            raise MaterializeError(f"{field} primary indexer snapshot disagreement")
+        if snapshot["shadow_projection_hash"] != snapshot["snapshot_hash"]:
+            raise MaterializeError(f"{field} shadow indexer snapshot disagreement")
         creations.append(
             {
                 "candidate_id": candidate_id,
                 "candidate_hash": candidate_hash,
                 "title": title,
                 "summary": summary,
-                "profile_id": "structured-artifact-metric-v1",
-                "artifact_template": artifact_template,
-                "requirements": [
-                    {"kind": "json_valid", "weight": 1},
-                    {"kind": "maximum_bytes", "maximum": 131_072, "weight": 1},
-                    {"kind": "utf8_excludes", "needle": "localhost", "weight": 1},
-                    {"kind": "utf8_excludes", "needle": "127.0.0.1", "weight": 1},
-                    {
-                        "kind": "json_pointer_string_equals",
-                        "pointer": "/schema_version",
-                        "expected": ARTIFACT_SCHEMA,
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_string_equals",
-                        "pointer": "/task_id",
-                        "expected": candidate_id,
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_string_equals",
-                        "pointer": "/gmv_lane",
-                        "expected": lane,
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_array_minimum_length",
-                        "pointer": "/findings",
-                        "minimum": minimum_findings,
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_array_minimum_length",
-                        "pointer": "/recommendations",
-                        "minimum": minimum_recommendations,
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_array_minimum_length",
-                        "pointer": "/user_evidence",
-                        "minimum": 1,
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_exists",
-                        "pointer": "/findings/0/finding",
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_exists",
-                        "pointer": "/findings/0/quantitative_source",
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_exists",
-                        "pointer": "/recommendations/0/recommendation",
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_exists",
-                        "pointer": "/recommendations/0/gmv_pathway",
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_string_equals",
-                        "pointer": "/user_evidence/0/kind",
-                        "expected": "real_user_source",
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "json_pointer_exists",
-                        "pointer": "/user_evidence/0/reference",
-                        "weight": 1,
-                    },
-                    {
-                        "kind": "utf8_contains",
-                        "needle": "https://",
-                        "minimum_occurrences": 2,
-                        "weight": 1,
-                    },
-                ],
+                "profile_id": PROFILE_ID,
+                "profile_release": profile,
+                "meta_bounty": {
+                    "objective": "highest_external_canonical_gmv",
+                    "epoch": epoch,
+                    "snapshot": snapshot,
+                    "score_unit": "usdc_base_units",
+                    "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
+                    "exclusions": [
+                        "operator_or_reserve_wallet funding",
+                        "excluded reward contracts",
+                        "creator-equals-solver settlements",
+                        "entrant-equals-solver settlements",
+                        "noncanonical or unconfirmed activity",
+                    ],
+                },
                 "economics": {
                     "solver_reward_base_units": expected_policy["solver_reward_base_units"],
                     "keeper_reward_base_units": expected_policy["keeper_reward_base_units"],
                 },
                 "settlement": {
-                    "winner_mode": "first_proven",
-                    "proof_system": "groth16",
+                    "winner_mode": "best_score",
+                    "proof_system": "plonk",
                     "score_direction": "higher_is_better",
+                    "score_threshold_base_units": minimum_score,
+                    "tie_break": "earliest qualifying proof sequence",
                     "payment_evidence": "CompetitionSettledV2",
                 },
             }
