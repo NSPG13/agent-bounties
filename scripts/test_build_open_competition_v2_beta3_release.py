@@ -168,6 +168,18 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertIn('X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"', sepolia)
         self.assertNotIn('X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"', sepolia)
 
+    def test_mainnet_deploys_the_exact_recoverable_reserve_factory(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        mainnet = workflow.split("  deploy-mainnet:", 1)[1].split(
+            "  activate-public-beta:", 1
+        )[0]
+        self.assertIn("build_bounded_open_competition_v2_wallet_bundle.py", mainnet)
+        self.assertIn("deploy_bounded_open_competition_v2_wallet_factory.py", mainnet)
+        self.assertIn("target/mainnet-exact.runtime.json", mainnet)
+        self.assertIn("bounded-open-competition-v2-wallet-deployment-evidence.json", mainnet)
+
     @staticmethod
     def verifier_assets() -> dict:
         systems = {}
@@ -257,7 +269,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             for path in (
                 "programs/public-vector-metric-v1/release-identity.json",
                 "programs/structured-artifact-metric-v1/release-identity.json",
-                "programs/canonical-gmv-attribution-metric-v1/release-identity.json",
+                "programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json",
             )
         ]
         circuit_commits = {identity["sp1_commit"] for identity in identities}
@@ -388,6 +400,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
             MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
         ):
             runtime = MODULE.runtime_manifest(bundle, 10)
         self.assertTrue(runtime["proof_broker_enabled"])
@@ -480,6 +494,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
             MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
         ):
             self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
             self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])

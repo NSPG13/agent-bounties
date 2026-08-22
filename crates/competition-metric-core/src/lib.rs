@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use tiny_keccak::{Hasher, Keccak};
 
@@ -55,6 +56,8 @@ pub const STRUCTURED_ARTIFACT_JOURNAL_SCHEMA_HASH: [u8; 32] =
     hex!("63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d");
 pub const CANONICAL_GMV_METRIC_PROGRAM_HASH: [u8; 32] =
     hex!("915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead");
+pub const FORWARD_CANONICAL_GMV_METRIC_PROGRAM_HASH: [u8; 32] =
+    hex!("e1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9");
 pub const CANONICAL_GMV_JOURNAL_SCHEMA_HASH: [u8; 32] =
     hex!("660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40");
 pub const MAXIMUM_GMV_SETTLEMENTS: usize = 4_096;
@@ -81,6 +84,10 @@ const GMV_EVIDENCE_DOMAIN: [u8; 32] =
     hex!("cb38b40aec7187cd77a6727c114010324d92a376cb62a262fc166b77b579b3b1");
 const GMV_EXCLUSIONS_DOMAIN: [u8; 32] =
     hex!("c6b6b1da9249908bdb0412604fe8ddc48caa98251c069921a6de76b150af5d43");
+const FORWARD_GMV_ATTESTATION_DOMAIN: [u8; 32] =
+    hex!("7e5926612bbf5815ecf92cc25cc224d2c938651deec0fc6b40310e67dc6fba67");
+const FORWARD_GMV_ATTESTERS_DOMAIN: [u8; 32] =
+    hex!("5d74cd7806a10862ef069bd28f20646c4018c7f8a5c07357c5ca2fbc40e4ca69");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -424,6 +431,40 @@ pub struct CanonicalGmvProgramInput {
     pub settlements: Vec<CanonicalGmvSettlement>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardCanonicalGmvCampaign {
+    pub epoch_id: [u8; 32],
+    pub starts_at: u64,
+    pub ends_at: u64,
+    pub minimum_score_base_units: u128,
+    pub excluded_wallets: Vec<[u8; 20]>,
+    pub excluded_bounty_contracts: Vec<[u8; 20]>,
+    pub snapshot_attesters: Vec<[u8; 20]>,
+    pub snapshot_attestation_threshold: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalGmvSnapshotAttestation {
+    pub signer: [u8; 20],
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardCanonicalGmvSnapshot {
+    pub start_block: u64,
+    pub end_safe_block: u64,
+    pub end_block_hash: [u8; 32],
+    pub settlements: Vec<CanonicalGmvSettlement>,
+    pub attestations: Vec<CanonicalGmvSnapshotAttestation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardCanonicalGmvProgramInput {
+    pub scope: JournalScopeV2,
+    pub campaign: ForwardCanonicalGmvCampaign,
+    pub snapshot: ForwardCanonicalGmvSnapshot,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalGmvProgramOutput {
     pub passed: bool,
@@ -450,6 +491,7 @@ pub enum MetricError {
     InvalidJson,
     InvalidGmvCampaign,
     InvalidGmvSnapshot,
+    InvalidGmvAttestation,
 }
 
 pub fn execute_public_vector_program(
@@ -601,6 +643,11 @@ pub fn execute_canonical_gmv_program(
                 .excluded_bounty_contracts
                 .binary_search(&settlement.bounty_contract)
                 .is_ok()
+                || input
+                    .campaign
+                    .excluded_wallets
+                    .binary_search(&settlement.creator)
+                    .is_ok()
                 || settlement.creator == settlement.solver
                 || settlement.solver == entrant
             {
@@ -662,6 +709,161 @@ pub fn execute_canonical_gmv_program(
         evidence_hash,
         journal,
     })
+}
+
+/// Scores a forward GMV campaign whose terms and attester quorum are fixed
+/// before the campaign begins. The later safe-block snapshot must carry the
+/// exact threshold of deterministic signer attestations before it can be
+/// proven, so the competition can be funded while the scoring window is live.
+pub fn execute_forward_canonical_gmv_program(
+    input: &ForwardCanonicalGmvProgramInput,
+) -> Result<CanonicalGmvProgramOutput, MetricError> {
+    validate_scope(&input.scope)?;
+    validate_forward_canonical_gmv_campaign(&input.campaign)?;
+    validate_forward_canonical_gmv_snapshot(&input.campaign, &input.snapshot)?;
+    let verification_policy_hash = forward_canonical_gmv_policy_hash(&input.scope, &input.campaign);
+    let snapshot_hash = forward_canonical_gmv_snapshot_hash_unchecked(
+        input.scope.chain_id,
+        &input.campaign,
+        &input.snapshot,
+    );
+    let attestation_digest = forward_canonical_gmv_attestation_digest(
+        input.scope.chain_id,
+        verification_policy_hash,
+        snapshot_hash,
+        input.snapshot.end_block_hash,
+    );
+    validate_forward_canonical_gmv_attestations(
+        &input.campaign,
+        &input.snapshot.attestations,
+        attestation_digest,
+    )?;
+
+    let entrant = input.scope.solver;
+    let entrant_excluded = input
+        .campaign
+        .excluded_wallets
+        .binary_search(&entrant)
+        .is_ok();
+    let mut score = 0_u128;
+    if !entrant_excluded {
+        for settlement in &input.snapshot.settlements {
+            if input
+                .campaign
+                .excluded_bounty_contracts
+                .binary_search(&settlement.bounty_contract)
+                .is_ok()
+                || input
+                    .campaign
+                    .excluded_wallets
+                    .binary_search(&settlement.creator)
+                    .is_ok()
+                || settlement.creator == settlement.solver
+                || settlement.solver == entrant
+            {
+                continue;
+            }
+            let total_funding = settlement.funding.iter().try_fold(0_u128, |total, value| {
+                total
+                    .checked_add(value.amount_base_units)
+                    .ok_or(MetricError::ArithmeticOverflow)
+            })?;
+            let entrant_funding = settlement
+                .funding
+                .binary_search_by_key(&entrant, |value| value.contributor)
+                .ok()
+                .map(|index| settlement.funding[index].amount_base_units)
+                .unwrap_or(0);
+            if entrant_funding == 0 {
+                continue;
+            }
+            score = score
+                .checked_add(
+                    settlement
+                        .gmv_base_units
+                        .checked_mul(entrant_funding)
+                        .ok_or(MetricError::ArithmeticOverflow)?
+                        / total_funding,
+                )
+                .ok_or(MetricError::ArithmeticOverflow)?;
+        }
+    }
+    let score = i128::try_from(score).map_err(|_| MetricError::ArithmeticOverflow)?;
+    let passed = u128::try_from(score)
+        .ok()
+        .is_some_and(|value| value >= input.campaign.minimum_score_base_units);
+    let submission_hash = forward_canonical_gmv_submission_hash(
+        input.scope.solver,
+        input.campaign.epoch_id,
+        snapshot_hash,
+    );
+    let evidence_hash = canonical_gmv_evidence_hash(
+        verification_policy_hash,
+        submission_hash,
+        input.snapshot.end_block_hash,
+    );
+    let journal = encode_journal(
+        &input.scope,
+        submission_hash,
+        evidence_hash,
+        verification_policy_hash,
+        passed,
+        score,
+        CANONICAL_GMV_JOURNAL_SCHEMA_HASH,
+        FORWARD_CANONICAL_GMV_METRIC_PROGRAM_HASH,
+    );
+    Ok(CanonicalGmvProgramOutput {
+        passed,
+        score,
+        snapshot_hash,
+        verification_policy_hash,
+        submission_hash,
+        evidence_hash,
+        journal,
+    })
+}
+
+pub fn forward_canonical_gmv_policy_hash(
+    scope: &JournalScopeV2,
+    campaign: &ForwardCanonicalGmvCampaign,
+) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&GMV_POLICY_DOMAIN);
+    bytes.extend_from_slice(&scope.chain_id.to_be_bytes());
+    bytes.extend_from_slice(&campaign.epoch_id);
+    bytes.extend_from_slice(&campaign.starts_at.to_be_bytes());
+    bytes.extend_from_slice(&campaign.ends_at.to_be_bytes());
+    bytes.extend_from_slice(&campaign.minimum_score_base_units.to_be_bytes());
+    bytes.extend_from_slice(&forward_canonical_gmv_exclusions_hash(campaign));
+    bytes.extend_from_slice(&forward_canonical_gmv_attesters_hash(campaign));
+    keccak256(&bytes)
+}
+
+pub fn forward_canonical_gmv_snapshot_hash(
+    chain_id: u64,
+    campaign: &ForwardCanonicalGmvCampaign,
+    snapshot: &ForwardCanonicalGmvSnapshot,
+) -> Result<[u8; 32], MetricError> {
+    validate_forward_canonical_gmv_campaign(campaign)?;
+    validate_forward_canonical_gmv_snapshot(campaign, snapshot)?;
+    Ok(forward_canonical_gmv_snapshot_hash_unchecked(
+        chain_id, campaign, snapshot,
+    ))
+}
+
+pub fn forward_canonical_gmv_attestation_digest(
+    chain_id: u64,
+    policy_hash: [u8; 32],
+    snapshot_hash: [u8; 32],
+    end_block_hash: [u8; 32],
+) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(136);
+    bytes.extend_from_slice(&FORWARD_GMV_ATTESTATION_DOMAIN);
+    bytes.extend_from_slice(&chain_id.to_be_bytes());
+    bytes.extend_from_slice(&policy_hash);
+    bytes.extend_from_slice(&snapshot_hash);
+    bytes.extend_from_slice(&end_block_hash);
+    keccak256(&bytes)
 }
 
 pub fn canonical_gmv_snapshot_hash(
@@ -817,6 +1019,216 @@ fn canonical_gmv_exclusions_hash(campaign: &CanonicalGmvCampaign) -> [u8; 32] {
         bytes.extend_from_slice(address);
     }
     keccak256(&bytes)
+}
+
+fn validate_forward_canonical_gmv_campaign(
+    campaign: &ForwardCanonicalGmvCampaign,
+) -> Result<(), MetricError> {
+    let zero_hash = [0_u8; 32];
+    if campaign.epoch_id == zero_hash
+        || campaign.starts_at >= campaign.ends_at
+        || campaign.minimum_score_base_units == 0
+        || campaign.excluded_wallets.is_empty()
+        || campaign.excluded_bounty_contracts.is_empty()
+        || !strictly_sorted_nonzero_addresses(&campaign.excluded_wallets)
+        || !strictly_sorted_nonzero_addresses(&campaign.excluded_bounty_contracts)
+        || campaign.snapshot_attesters.len() < 2
+        || !strictly_sorted_nonzero_addresses(&campaign.snapshot_attesters)
+        || campaign.snapshot_attestation_threshold < 2
+        || usize::from(campaign.snapshot_attestation_threshold) > campaign.snapshot_attesters.len()
+    {
+        return Err(MetricError::InvalidGmvCampaign);
+    }
+    Ok(())
+}
+
+fn validate_forward_canonical_gmv_snapshot(
+    campaign: &ForwardCanonicalGmvCampaign,
+    snapshot: &ForwardCanonicalGmvSnapshot,
+) -> Result<(), MetricError> {
+    let zero_address = [0_u8; 20];
+    let zero_hash = [0_u8; 32];
+    if snapshot.start_block == 0
+        || snapshot.start_block > snapshot.end_safe_block
+        || snapshot.end_block_hash == zero_hash
+        || snapshot.settlements.is_empty()
+        || snapshot.settlements.len() > MAXIMUM_GMV_SETTLEMENTS
+    {
+        return Err(MetricError::InvalidGmvSnapshot);
+    }
+    let mut previous: Option<CanonicalGmvSettlementOrder> = None;
+    for settlement in &snapshot.settlements {
+        let key = (
+            settlement.block_number,
+            settlement.transaction_hash,
+            settlement.log_index,
+            settlement.bounty_contract,
+            settlement.bounty_id,
+        );
+        if previous.as_ref().is_some_and(|value| value >= &key)
+            || settlement.bounty_contract == zero_address
+            || settlement.bounty_id == zero_hash
+            || settlement.creator == zero_address
+            || settlement.solver == zero_address
+            || settlement.transaction_hash == zero_hash
+            || settlement.settled_at < campaign.starts_at
+            || settlement.settled_at >= campaign.ends_at
+            || settlement.block_number < snapshot.start_block
+            || settlement.block_number > snapshot.end_safe_block
+            || settlement.gmv_base_units == 0
+            || settlement.funding.is_empty()
+            || settlement.funding.len() > MAXIMUM_GMV_FUNDERS_PER_SETTLEMENT
+        {
+            return Err(MetricError::InvalidGmvSnapshot);
+        }
+        let mut previous_funder: Option<[u8; 20]> = None;
+        let mut total_funding = 0_u128;
+        for funding in &settlement.funding {
+            if funding.contributor == zero_address
+                || funding.amount_base_units == 0
+                || previous_funder.is_some_and(|value| value >= funding.contributor)
+            {
+                return Err(MetricError::InvalidGmvSnapshot);
+            }
+            total_funding = total_funding
+                .checked_add(funding.amount_base_units)
+                .ok_or(MetricError::ArithmeticOverflow)?;
+            previous_funder = Some(funding.contributor);
+        }
+        if total_funding == 0 {
+            return Err(MetricError::InvalidGmvSnapshot);
+        }
+        previous = Some(key);
+    }
+    Ok(())
+}
+
+fn forward_canonical_gmv_snapshot_hash_unchecked(
+    chain_id: u64,
+    campaign: &ForwardCanonicalGmvCampaign,
+    snapshot: &ForwardCanonicalGmvSnapshot,
+) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&GMV_SNAPSHOT_DOMAIN);
+    bytes.extend_from_slice(&chain_id.to_be_bytes());
+    bytes.extend_from_slice(&campaign.epoch_id);
+    bytes.extend_from_slice(&campaign.starts_at.to_be_bytes());
+    bytes.extend_from_slice(&campaign.ends_at.to_be_bytes());
+    bytes.extend_from_slice(&snapshot.start_block.to_be_bytes());
+    bytes.extend_from_slice(&snapshot.end_safe_block.to_be_bytes());
+    bytes.extend_from_slice(&snapshot.end_block_hash);
+    bytes.extend_from_slice(&campaign.minimum_score_base_units.to_be_bytes());
+    bytes.extend_from_slice(&forward_canonical_gmv_exclusions_hash(campaign));
+    bytes.extend_from_slice(&(snapshot.settlements.len() as u32).to_be_bytes());
+    for settlement in &snapshot.settlements {
+        bytes.push(settlement.protocol.tag());
+        bytes.extend_from_slice(&settlement.bounty_contract);
+        bytes.extend_from_slice(&settlement.bounty_id);
+        bytes.extend_from_slice(&settlement.creator);
+        bytes.extend_from_slice(&settlement.solver);
+        bytes.extend_from_slice(&settlement.settled_at.to_be_bytes());
+        bytes.extend_from_slice(&settlement.block_number.to_be_bytes());
+        bytes.extend_from_slice(&settlement.transaction_hash);
+        bytes.extend_from_slice(&settlement.log_index.to_be_bytes());
+        bytes.extend_from_slice(&settlement.gmv_base_units.to_be_bytes());
+        bytes.extend_from_slice(&(settlement.funding.len() as u32).to_be_bytes());
+        for funding in &settlement.funding {
+            bytes.extend_from_slice(&funding.contributor);
+            bytes.extend_from_slice(&funding.amount_base_units.to_be_bytes());
+        }
+    }
+    keccak256(&bytes)
+}
+
+fn forward_canonical_gmv_exclusions_hash(campaign: &ForwardCanonicalGmvCampaign) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&GMV_EXCLUSIONS_DOMAIN);
+    bytes.extend_from_slice(&(campaign.excluded_wallets.len() as u32).to_be_bytes());
+    for address in &campaign.excluded_wallets {
+        bytes.extend_from_slice(address);
+    }
+    bytes.extend_from_slice(&(campaign.excluded_bounty_contracts.len() as u32).to_be_bytes());
+    for address in &campaign.excluded_bounty_contracts {
+        bytes.extend_from_slice(address);
+    }
+    keccak256(&bytes)
+}
+
+fn forward_canonical_gmv_attesters_hash(campaign: &ForwardCanonicalGmvCampaign) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&FORWARD_GMV_ATTESTERS_DOMAIN);
+    bytes.push(campaign.snapshot_attestation_threshold);
+    bytes.extend_from_slice(&(campaign.snapshot_attesters.len() as u32).to_be_bytes());
+    for address in &campaign.snapshot_attesters {
+        bytes.extend_from_slice(address);
+    }
+    keccak256(&bytes)
+}
+
+fn validate_forward_canonical_gmv_attestations(
+    campaign: &ForwardCanonicalGmvCampaign,
+    attestations: &[CanonicalGmvSnapshotAttestation],
+    digest: [u8; 32],
+) -> Result<(), MetricError> {
+    if attestations.len() < usize::from(campaign.snapshot_attestation_threshold)
+        || attestations.len() > campaign.snapshot_attesters.len()
+    {
+        return Err(MetricError::InvalidGmvAttestation);
+    }
+    let mut previous: Option<[u8; 20]> = None;
+    for attestation in attestations {
+        if previous.is_some_and(|value| value >= attestation.signer)
+            || campaign
+                .snapshot_attesters
+                .binary_search(&attestation.signer)
+                .is_err()
+            || recover_snapshot_attester(digest, &attestation.signature)? != attestation.signer
+        {
+            return Err(MetricError::InvalidGmvAttestation);
+        }
+        previous = Some(attestation.signer);
+    }
+    Ok(())
+}
+
+fn recover_snapshot_attester(
+    digest: [u8; 32],
+    signature_bytes: &[u8],
+) -> Result<[u8; 20], MetricError> {
+    if signature_bytes.len() != 65 {
+        return Err(MetricError::InvalidGmvAttestation);
+    }
+    let signature = Signature::from_slice(&signature_bytes[..64])
+        .map_err(|_| MetricError::InvalidGmvAttestation)?;
+    if signature.normalize_s().is_some() {
+        return Err(MetricError::InvalidGmvAttestation);
+    }
+    let recovery_value = match signature_bytes[64] {
+        27 | 28 => signature_bytes[64] - 27,
+        0 | 1 => signature_bytes[64],
+        _ => return Err(MetricError::InvalidGmvAttestation),
+    };
+    let recovery_id =
+        RecoveryId::try_from(recovery_value).map_err(|_| MetricError::InvalidGmvAttestation)?;
+    let key = VerifyingKey::recover_from_prehash(&digest, &signature, recovery_id)
+        .map_err(|_| MetricError::InvalidGmvAttestation)?;
+    let encoded = key.to_encoded_point(false);
+    let public_key = encoded.as_bytes();
+    if public_key.len() != 65 {
+        return Err(MetricError::InvalidGmvAttestation);
+    }
+    let hash = keccak256(&public_key[1..]);
+    let mut address = [0_u8; 20];
+    address.copy_from_slice(&hash[12..]);
+    Ok(address)
+}
+
+fn forward_canonical_gmv_submission_hash(
+    entrant: [u8; 20],
+    epoch_id: [u8; 32],
+    snapshot_hash: [u8; 32],
+) -> [u8; 32] {
+    canonical_gmv_submission_hash(entrant, epoch_id, snapshot_hash)
 }
 
 fn canonical_gmv_submission_hash(
@@ -1209,6 +1621,7 @@ fn keccak256(bytes: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::ecdsa::SigningKey;
 
     fn fixture() -> PublicVectorProgramInput {
         PublicVectorProgramInput {
@@ -1685,7 +2098,7 @@ mod tests {
         );
         assert_eq!(
             output.verification_policy_hash,
-            hex!("60a114110529d22982ce9794b288b6a2407bc2c0b13a9d86e2f4d23136de1a7b")
+            canonical_gmv_policy_hash(&input.scope, &input.campaign, output.snapshot_hash)
         );
     }
 
@@ -1722,6 +2135,155 @@ mod tests {
         assert_eq!(
             execute_canonical_gmv_program(&input),
             Err(MetricError::InvalidGmvSnapshot)
+        );
+    }
+
+    fn signer_address(key: &SigningKey) -> [u8; 20] {
+        let encoded = key.verifying_key().to_encoded_point(false);
+        let digest = keccak256(&encoded.as_bytes()[1..]);
+        let mut address = [0_u8; 20];
+        address.copy_from_slice(&digest[12..]);
+        address
+    }
+
+    fn forward_signer_pairs() -> Vec<([u8; 20], SigningKey)> {
+        let mut pairs = alloc::vec![
+            (
+                signer_address(&SigningKey::from_bytes((&[1_u8; 32]).into()).unwrap()),
+                SigningKey::from_bytes((&[1_u8; 32]).into()).unwrap(),
+            ),
+            (
+                signer_address(&SigningKey::from_bytes((&[2_u8; 32]).into()).unwrap()),
+                SigningKey::from_bytes((&[2_u8; 32]).into()).unwrap(),
+            ),
+        ];
+        pairs.sort_by_key(|value| value.0);
+        pairs
+    }
+
+    fn attest_forward_input(input: &mut ForwardCanonicalGmvProgramInput) {
+        let signer_pairs = forward_signer_pairs();
+        assert_eq!(
+            input.campaign.snapshot_attesters,
+            signer_pairs.iter().map(|value| value.0).collect::<Vec<_>>()
+        );
+        let policy_hash = forward_canonical_gmv_policy_hash(&input.scope, &input.campaign);
+        let snapshot_hash = forward_canonical_gmv_snapshot_hash(
+            input.scope.chain_id,
+            &input.campaign,
+            &input.snapshot,
+        )
+        .unwrap();
+        let digest = forward_canonical_gmv_attestation_digest(
+            input.scope.chain_id,
+            policy_hash,
+            snapshot_hash,
+            input.snapshot.end_block_hash,
+        );
+        input.snapshot.attestations = signer_pairs
+            .into_iter()
+            .map(|(signer, key)| {
+                let (signature, recovery_id) = key.sign_prehash_recoverable(&digest).unwrap();
+                let mut bytes = signature.to_bytes().to_vec();
+                bytes.push(recovery_id.to_byte());
+                CanonicalGmvSnapshotAttestation {
+                    signer,
+                    signature: bytes,
+                }
+            })
+            .collect();
+    }
+
+    fn forward_gmv_input() -> ForwardCanonicalGmvProgramInput {
+        let old = gmv_input();
+        let signer_pairs = forward_signer_pairs();
+        let campaign = ForwardCanonicalGmvCampaign {
+            epoch_id: old.campaign.epoch_id,
+            starts_at: old.campaign.starts_at,
+            ends_at: old.campaign.ends_at,
+            minimum_score_base_units: old.campaign.minimum_score_base_units,
+            excluded_wallets: old.campaign.excluded_wallets,
+            excluded_bounty_contracts: old.campaign.excluded_bounty_contracts,
+            snapshot_attesters: signer_pairs.iter().map(|value| value.0).collect(),
+            snapshot_attestation_threshold: 2,
+        };
+        let mut input = ForwardCanonicalGmvProgramInput {
+            scope: old.scope,
+            campaign,
+            snapshot: ForwardCanonicalGmvSnapshot {
+                start_block: old.campaign.start_block,
+                end_safe_block: old.campaign.end_safe_block,
+                end_block_hash: old.campaign.end_block_hash,
+                settlements: old.settlements,
+                attestations: Vec::new(),
+            },
+        };
+        attest_forward_input(&mut input);
+        input
+    }
+
+    #[test]
+    fn forward_gmv_campaign_is_funded_before_snapshot_and_scores_external_demand() {
+        let input = forward_gmv_input();
+        let policy_before_snapshot =
+            forward_canonical_gmv_policy_hash(&input.scope, &input.campaign);
+        let output = execute_forward_canonical_gmv_program(&input).unwrap();
+        assert!(output.passed);
+        assert_eq!(output.score, 600);
+        assert_eq!(output.verification_policy_hash, policy_before_snapshot);
+        assert_eq!(
+            &output.journal[13 * 32..14 * 32],
+            &FORWARD_CANONICAL_GMV_METRIC_PROGRAM_HASH
+        );
+    }
+
+    #[test]
+    fn forward_gmv_rejects_single_attester_and_post_attestation_snapshot_drift() {
+        let mut input = forward_gmv_input();
+        input.snapshot.attestations.pop();
+        assert_eq!(
+            execute_forward_canonical_gmv_program(&input),
+            Err(MetricError::InvalidGmvAttestation)
+        );
+
+        input = forward_gmv_input();
+        input.snapshot.settlements[0].gmv_base_units += 1;
+        assert_eq!(
+            execute_forward_canonical_gmv_program(&input),
+            Err(MetricError::InvalidGmvAttestation)
+        );
+    }
+
+    #[test]
+    fn forward_gmv_excludes_operator_and_reserve_created_settlements() {
+        let mut input = forward_gmv_input();
+        input.snapshot.settlements[0].creator = input.campaign.excluded_wallets[0];
+        attest_forward_input(&mut input);
+        let output = execute_forward_canonical_gmv_program(&input).unwrap();
+        assert!(!output.passed);
+        assert_eq!(output.score, 0);
+    }
+
+    #[test]
+    fn forward_gmv_release_fixture_is_exact_and_attested() {
+        let raw = include_str!(
+            "../../../programs/forward-canonical-gmv-attribution-metric-v2/fixtures/golden-v1.json"
+        );
+        let input: ForwardCanonicalGmvProgramInput = serde_json::from_str(raw).unwrap();
+        let output = execute_forward_canonical_gmv_program(&input).unwrap();
+        assert_eq!(output.score, 2_000_000);
+        assert_eq!(
+            output.verification_policy_hash,
+            forward_canonical_gmv_policy_hash(&input.scope, &input.campaign)
+        );
+        assert_eq!(
+            output.snapshot_hash,
+            forward_canonical_gmv_snapshot_hash(
+                input.scope.chain_id,
+                &input.campaign,
+                &input.snapshot,
+            )
+            .unwrap()
         );
     }
 }

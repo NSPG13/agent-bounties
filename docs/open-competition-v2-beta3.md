@@ -222,21 +222,27 @@ profile; permissionless direct solvers may remain pseudonymous.
 Any program vkey is valid at the protocol layer. Hosted discovery classifies a
 program as `reviewed`, `custom_unreviewed`, or `disabled`.
 
-Beta3 ships two reviewed candidates:
+Beta3 ships three reviewed candidates:
 
 - `public-vector-metric-v1` scores committed public numeric fixtures.
 - `structured-artifact-metric-v1` evaluates the submitted artifact bytes. It
   supports UTF-8 inclusion and exclusion, a byte limit, valid JSON, required
   JSON pointers, exact JSON string values, and minimum JSON array lengths.
+- `forward-canonical-gmv-attribution-metric-v2` rewards entrants for generating
+  externally funded canonical GMV during an announced future scoring window.
 
-`canonical-gmv-attribution-metric-v1` is independently reproduced and reviewed
-as a beta3 profile. It scores a wallet from a frozen closed-epoch snapshot using
+`forward-canonical-gmv-attribution-metric-v2` is independently reproduced and
+reviewed as a beta3 profile. It scores a wallet from a frozen post-window
+snapshot using
 `settlement GMV * entrant canonical funding / total canonical funding`, with
-operator/reserve funding, excluded reward contracts, creator-as-solver, and
-entrant-as-solver rows scoring zero. It must not be used for a funded
-competition until its public snapshot fixtures pass, primary and shadow
-indexers agree on each snapshot,
-and the release catalog marks the exact profile `reviewed`.
+operator/reserve funding, operator/reserve-created settlements, excluded reward
+contracts, creator-as-solver, and entrant-as-solver rows scoring zero. Campaign
+terms, exclusions, and the 2-of-2 snapshot-attester quorum are fixed before the
+window opens. It must not be used for a funded competition until its public
+fixtures pass, primary and shadow indexers agree on the safe-block snapshot,
+and the release catalog marks the exact profile `reviewed`. The retrospective
+`canonical-gmv-attribution-metric-v1` profile is retained only for historical
+compatibility and cannot satisfy the private liquidity-floor policy.
 
 Each exact Rust/SP1 version, source hash, ELF hash, and vkey is committed in
 its `programs/<profile>/release-identity.json`. A profile remains `disabled`

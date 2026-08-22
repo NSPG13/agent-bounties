@@ -109,13 +109,8 @@ contract BoundedOpenCompetitionV2WalletFactory {
         }
     }
 
-    function predictWallet(
-        address owner,
-        BoundedOpenCompetitionV2Wallet.Policy calldata policy,
-        bytes32[] calldata approvedCreations,
-        bytes32 userSalt
-    ) external view returns (address) {
-        return _predictWallet(owner, userSalt, _policyHash(policy, approvedCreations));
+    function predictWallet(address owner, bytes32 userSalt) external view returns (address) {
+        return _predictWallet(owner, userSalt);
     }
 
     function walletInitCodeHash() public view returns (bytes32) {
@@ -129,8 +124,8 @@ contract BoundedOpenCompetitionV2WalletFactory {
         );
     }
 
-    function effectiveSalt(address owner, bytes32 userSalt, bytes32 initialPolicyHash) public pure returns (bytes32) {
-        return keccak256(abi.encode(owner, userSalt, initialPolicyHash));
+    function effectiveSalt(address owner, bytes32 userSalt) public pure returns (bytes32) {
+        return keccak256(abi.encode(owner, userSalt));
     }
 
     function _deploy(
@@ -144,8 +139,8 @@ contract BoundedOpenCompetitionV2WalletFactory {
     ) private returns (address wallet, bool created) {
         if (owner == address(0)) revert ReserveFactoryInvalidConfiguration();
         bytes32 initialPolicyHash = _policyHash(policy, approvedCreations);
-        bytes32 salt = effectiveSalt(owner, userSalt, initialPolicyHash);
-        wallet = _predictWallet(owner, userSalt, initialPolicyHash);
+        bytes32 salt = effectiveSalt(owner, userSalt);
+        wallet = _predictWallet(owner, userSalt);
         if (wallet.code.length > 0) {
             if (
                 !allowExisting || !isFactoryWallet[wallet]
@@ -171,7 +166,7 @@ contract BoundedOpenCompetitionV2WalletFactory {
         return keccak256(abi.encode(policy, approvedCreations));
     }
 
-    function _predictWallet(address owner, bytes32 userSalt, bytes32 initialPolicyHash) private view returns (address) {
+    function _predictWallet(address owner, bytes32 userSalt) private view returns (address) {
         return address(
             uint160(
                 uint256(
@@ -179,7 +174,7 @@ contract BoundedOpenCompetitionV2WalletFactory {
                         abi.encodePacked(
                             bytes1(0xff),
                             address(this),
-                            effectiveSalt(owner, userSalt, initialPolicyHash),
+                            effectiveSalt(owner, userSalt),
                             walletInitCodeHash()
                         )
                     )

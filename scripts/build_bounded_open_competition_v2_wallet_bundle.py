@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -142,9 +143,28 @@ def source_sha256(name: str) -> str:
     return f"0x{hashlib.sha256((CONTRACTS / 'src' / f'{name}.sol').read_bytes()).hexdigest()}"
 
 
-def build_bundle() -> dict:
+def normalize_address(value: str, field: str) -> str:
+    normalized = value.strip().lower()
+    if not re.fullmatch(r"0x[0-9a-f]{40}", normalized):
+        raise SystemExit(f"{field} must be a 20-byte hex address")
+    return normalized
+
+
+def normalize_hash(value: str, field: str) -> str:
+    normalized = value.strip().lower()
+    if not re.fullmatch(r"0x[0-9a-f]{64}", normalized) or normalized == "0x" + "00" * 32:
+        raise SystemExit(f"{field} must be a nonzero bytes32 hex value")
+    return normalized
+
+
+def build_bundle(
+    competition_factory: str = COMPETITION_FACTORY,
+    release_hash: str = RELEASE_HASH,
+) -> dict:
+    competition_factory = normalize_address(competition_factory, "competition factory")
+    release_hash = normalize_hash(release_hash, "release hash")
     run([FORGE, "build", "--force", "--ast"], cwd=CONTRACTS)
-    init_code = append_constructor(bytecode(FACTORY_CONTRACT), "constructor(address)", COMPETITION_FACTORY)
+    init_code = append_constructor(bytecode(FACTORY_CONTRACT), "constructor(address)", competition_factory)
     salt = cast("keccak", SALT_LABEL).lower()
     init_code_hash = keccak(init_code)
     reserve_factory = cast(
@@ -160,7 +180,7 @@ def build_bundle() -> dict:
     factory_runtime = exact_runtime(
         FACTORY_CONTRACT,
         {
-            "competitionFactory": COMPETITION_FACTORY,
+            "competitionFactory": competition_factory,
             "settlementToken": USDC,
             "implementation": implementation,
         },
@@ -168,7 +188,7 @@ def build_bundle() -> dict:
     implementation_runtime = exact_runtime(
         WALLET_CONTRACT,
         {
-            "competitionFactory": COMPETITION_FACTORY,
+            "competitionFactory": competition_factory,
             "settlementToken": USDC,
             "deploymentFactory": reserve_factory,
         },
@@ -183,9 +203,9 @@ def build_bundle() -> dict:
         "chain_id": 8453,
         "canonical": {
             "protocol_version": "agent-bounties/open-competition-v2-beta3",
-            "competition_factory": COMPETITION_FACTORY,
+            "competition_factory": competition_factory,
             "settlement_token": USDC,
-            "release_hash": RELEASE_HASH,
+            "release_hash": release_hash,
         },
         "deterministic_deployer": {
             "address": CREATE2_DEPLOYER,
@@ -224,12 +244,22 @@ def build_bundle() -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--competition-factory",
+        default=COMPETITION_FACTORY,
+        help="Exact canonical Open Competition V2 Beta3 factory for this release.",
+    )
+    parser.add_argument(
+        "--release-hash",
+        default=RELEASE_HASH,
+        help="Exact canonical release hash bound to the factory.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=ROOT / "deployments" / "bounded-open-competition-v2-wallet-base-mainnet.json",
     )
     args = parser.parse_args()
-    bundle = build_bundle()
+    bundle = build_bundle(args.competition_factory, args.release_hash)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
     print(args.output)

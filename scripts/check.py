@@ -313,6 +313,7 @@ def main() -> int:
         "scripts.test_run_open_competition_v2_mainnet_fork_replay",
         "scripts.test_run_open_competition_v2_sepolia_rehearsal",
         "scripts.test_deploy_open_competition_v2_beta3",
+        "scripts.test_deploy_bounded_open_competition_v2_wallet_factory",
         "scripts.test_record_open_competition_v2_beta3_gate",
         "scripts.test_build_open_competition_v2_verifier_assets",
         "scripts.test_verify_open_competition_v2_slither",

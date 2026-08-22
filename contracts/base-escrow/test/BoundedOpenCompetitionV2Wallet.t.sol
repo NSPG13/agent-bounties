@@ -127,7 +127,7 @@ contract BoundedOpenCompetitionV2WalletTest {
         approvedCreations = _commitments(params, 12);
 
         BoundedOpenCompetitionV2Wallet.Policy memory policy = _policy(DAILY_CAP, RESERVE_FUNDING);
-        address predicted = reserveFactory.predictWallet(address(this), policy, approvedCreations, bytes32("primary"));
+        address predicted = reserveFactory.predictWallet(address(this), bytes32("primary"));
         token.mint(address(this), RESERVE_FUNDING);
         token.approve(address(reserveFactory), RESERVE_FUNDING);
         reserve = BoundedOpenCompetitionV2Wallet(
@@ -362,7 +362,7 @@ contract BoundedOpenCompetitionV2WalletTest {
         bytes32 userSalt = bytes32("authorization");
         bytes32 authorizationNonce = keccak256("usdc authorization");
         BoundedOpenCompetitionV2Wallet.Policy memory policy = _policy(DAILY_CAP, RESERVE_FUNDING);
-        address predicted = reserveFactory.predictWallet(address(this), policy, approvedCreations, userSalt);
+        address predicted = reserveFactory.predictWallet(address(this), userSalt);
         token.mint(address(this), RESERVE_FUNDING);
 
         address wallet = reserveFactory.createWalletWithAuthorization(
@@ -407,7 +407,7 @@ contract BoundedOpenCompetitionV2WalletTest {
 
         address wallet = reserveFactory.createWallet(address(this), policy, approvedCreations, userSalt);
         require(
-            wallet == reserveFactory.predictWallet(address(this), policy, approvedCreations, userSalt), "wrong wallet"
+            wallet == reserveFactory.predictWallet(address(this), userSalt), "wrong wallet"
         );
     }
 

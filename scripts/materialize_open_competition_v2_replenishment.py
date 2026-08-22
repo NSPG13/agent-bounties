@@ -18,16 +18,18 @@ from pathlib import Path
 from typing import Any
 
 PLAN_SCHEMA = "agent-bounties/open-competition-v2-replenishment-plan-v1"
-REQUEST_SCHEMA = "agent-bounties/open-competition-v2-gmv-meta-replenishment-request-v1"
-PROFILE_ID = "canonical-gmv-attribution-metric-v1"
-GMV_METRIC_PROGRAM_HASH = "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead"
+REQUEST_SCHEMA = "agent-bounties/open-competition-v2-forward-gmv-meta-replenishment-request-v2"
+PROFILE_ID = "forward-canonical-gmv-attribution-metric-v2"
+GMV_METRIC_PROGRAM_HASH = "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9"
 GMV_JOURNAL_SCHEMA_HASH = "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40"
 GMV_EXECUTION_POLICY_HASH = "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a"
 GMV_SETTLEMENT_POLICY_HASH = "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee"
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
+ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 CANDIDATE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$")
-REQUIRED_EXCLUDED_WALLETS = [
+BASE_REQUIRED_EXCLUDED_WALLETS = [
     "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
     "0x884834e884d6e93462655a2820140ad03e6747bc",
     "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
     "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
@@ -120,7 +122,16 @@ def materialize(plan: object) -> dict[str, Any]:
             raise MaterializeError(
                 f"{field} epoch, snapshot, profile, and eligibility policy are required"
             )
-        if eligibility.get("excluded_wallets") != REQUIRED_EXCLUDED_WALLETS:
+        reserve_wallet = str(candidate.get("reserve_wallet") or "").lower()
+        if (
+            not ADDRESS.fullmatch(reserve_wallet)
+            or reserve_wallet in BASE_REQUIRED_EXCLUDED_WALLETS
+        ):
+            raise MaterializeError(f"{field} reserve wallet is invalid")
+        required_excluded_wallets = sorted(
+            [*BASE_REQUIRED_EXCLUDED_WALLETS, reserve_wallet]
+        )
+        if eligibility.get("excluded_wallets") != required_excluded_wallets:
             raise MaterializeError(f"{field} operator-wallet exclusions are invalid")
         if (
             eligibility.get("excluded_bounty_contracts")
@@ -132,8 +143,8 @@ def materialize(plan: object) -> dict[str, Any]:
             f"{field}.epoch.minimum_score_base_units",
             1,
         )
-        if snapshot.get("status") != "ready":
-            raise MaterializeError(f"{field} canonical GMV snapshot is not ready")
+        if snapshot.get("status") != "scheduled":
+            raise MaterializeError(f"{field} forward GMV campaign is not scheduled")
         if profile.get("profile_id") != PROFILE_ID or profile.get("status") != "reviewed":
             raise MaterializeError(f"{field} canonical GMV metric profile is not reviewed")
         expected_profile = {
@@ -148,19 +159,13 @@ def materialize(plan: object) -> dict[str, Any]:
         for key in ("program_vkey", "source_hash", "elf_hash"):
             if not HASH.fullmatch(str(profile.get(key) or "").lower()):
                 raise MaterializeError(f"{field}.profile_release.{key} is invalid")
-        for key in (
-            "end_block_hash",
-            "snapshot_hash",
-            "verification_policy_hash",
-            "primary_projection_hash",
-            "shadow_projection_hash",
-        ):
-            if not HASH.fullmatch(str(snapshot.get(key) or "").lower()):
-                raise MaterializeError(f"{field}.snapshot.{key} is invalid")
-        if snapshot["primary_projection_hash"] != snapshot["snapshot_hash"]:
-            raise MaterializeError(f"{field} primary indexer snapshot disagreement")
-        if snapshot["shadow_projection_hash"] != snapshot["snapshot_hash"]:
-            raise MaterializeError(f"{field} shadow indexer snapshot disagreement")
+        if not HASH.fullmatch(str(snapshot.get("verification_policy_hash") or "").lower()):
+            raise MaterializeError(f"{field}.snapshot.verification_policy_hash is invalid")
+        if snapshot.get("snapshot_attesters") != [
+            "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+            "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+        ] or snapshot.get("snapshot_attestation_threshold") != 2:
+            raise MaterializeError(f"{field}.snapshot attester quorum is invalid")
         creations.append(
             {
                 "candidate_id": candidate_id,
@@ -171,14 +176,16 @@ def materialize(plan: object) -> dict[str, Any]:
                 "profile_release": profile,
                 "meta_bounty": {
                     "objective": "highest_external_canonical_gmv",
+                    "reserve_wallet": reserve_wallet,
                     "epoch": epoch,
                     "snapshot": snapshot,
                     "score_unit": "usdc_base_units",
                     "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
-                    "excluded_wallets": REQUIRED_EXCLUDED_WALLETS,
+                    "excluded_wallets": required_excluded_wallets,
                     "excluded_bounty_contracts": REQUIRED_EXCLUDED_BOUNTY_CONTRACTS,
                     "exclusions": [
                         "operator_or_reserve_wallet funding",
+                        "operator_or_reserve_wallet created settlements",
                         "excluded reward contracts",
                         "creator-equals-solver settlements",
                         "entrant-equals-solver settlements",

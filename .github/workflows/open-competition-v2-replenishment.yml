@@ -7,16 +7,27 @@ on:
   pull_request:
     paths:
       - ".github/workflows/open-competition-v2-replenishment.yml"
-      - "ops/open-competition-v2-gmv-candidate-pool-v1.json"
+      - "ops/open-competition-v2-forward-gmv-candidate-pool-v2.json"
       - "ops/open-competition-v2-replenishment-ledger-v1.example.json"
       - "scripts/bounty_inventory_guard.py"
       - "scripts/plan_open_competition_v2_replenishment.py"
       - "scripts/materialize_open_competition_v2_replenishment.py"
+      - "scripts/build_bounded_open_competition_v2_wallet_bundle.py"
+      - "scripts/build_open_competition_v2_gmv_activation.py"
+      - "scripts/build_open_competition_v2_gmv_relay.py"
+      - "scripts/serve_open_competition_v2_gmv_confirmation.py"
       - "scripts/build_open_competition_v2_gmv_snapshots.py"
+      - "scripts/forward_canonical_gmv.py"
+      - "scripts/build_forward_open_competition_v2_gmv_candidate_pool.py"
       - "scripts/test_bounty_inventory_guard.py"
       - "scripts/test_plan_open_competition_v2_replenishment.py"
       - "scripts/test_materialize_open_competition_v2_replenishment.py"
+      - "scripts/test_build_bounded_open_competition_v2_wallet_bundle.py"
+      - "scripts/test_build_open_competition_v2_gmv_activation.py"
+      - "scripts/test_build_open_competition_v2_gmv_relay.py"
       - "scripts/test_build_open_competition_v2_gmv_snapshots.py"
+      - "scripts/test_forward_canonical_gmv.py"
+      - "scripts/test_build_forward_open_competition_v2_gmv_candidate_pool.py"
       - "scripts/test_open_competition_v2_replenishment_workflow.py"
 
 permissions:
@@ -34,15 +45,19 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - name: Install pinned snapshot hashing dependency
-        run: python -m pip install -r scripts/requirements-attest.txt
+      - name: Install pinned snapshot and wallet dependencies
+        run: python -m pip install -r scripts/requirements-attest.txt -r scripts/requirements-wallet.txt
       - name: Test private guard, deterministic planning, and materialization
         run: |
           python -m unittest \
             scripts.test_bounty_inventory_guard \
             scripts.test_plan_open_competition_v2_replenishment \
             scripts.test_materialize_open_competition_v2_replenishment \
+            scripts.test_build_open_competition_v2_gmv_activation \
+            scripts.test_build_open_competition_v2_gmv_relay \
             scripts.test_build_open_competition_v2_gmv_snapshots \
+            scripts.test_forward_canonical_gmv \
+            scripts.test_build_forward_open_competition_v2_gmv_candidate_pool \
             scripts.test_open_competition_v2_replenishment_workflow \
             -v
 
@@ -120,7 +135,7 @@ jobs:
           DECISION_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           python scripts/plan_open_competition_v2_replenishment.py \
             --inventory-private "$RUNNER_TEMP/private-inventory.json" \
-            --candidate-specs ops/open-competition-v2-gmv-candidate-pool-v1.json \
+            --candidate-specs ops/open-competition-v2-forward-gmv-candidate-pool-v2.json \
             --private-ranking "$RUNNER_TEMP/private-ranking.json" \
             --execution-ledger "$RUNNER_TEMP/execution-ledger.json" \
             --now "$DECISION_TIME" \

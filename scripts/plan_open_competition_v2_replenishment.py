@@ -18,13 +18,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-CANDIDATE_SPECS_SCHEMA = "agent-bounties/open-competition-v2-gmv-meta-candidate-specs-v1"
+from forward_canonical_gmv import verification_policy_hash as forward_policy_hash
+
+CANDIDATE_SPECS_SCHEMA = "agent-bounties/open-competition-v2-forward-gmv-meta-candidate-specs-v2"
 PRIVATE_RANKING_SCHEMA = "agent-bounties/open-competition-v2-private-ranking-v1"
 LEDGER_SCHEMA = "agent-bounties/open-competition-v2-replenishment-ledger-v1"
 PLAN_SCHEMA = "agent-bounties/open-competition-v2-replenishment-plan-v1"
 PROTOCOL_VERSION = "agent-bounties/open-competition-v2-beta3"
-PROFILE_ID = "canonical-gmv-attribution-metric-v1"
-GMV_METRIC_PROGRAM_HASH = "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead"
+PROFILE_ID = "forward-canonical-gmv-attribution-metric-v2"
+GMV_METRIC_PROGRAM_HASH = "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9"
 GMV_JOURNAL_SCHEMA_HASH = "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40"
 GMV_EXECUTION_POLICY_HASH = "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a"
 GMV_SETTLEMENT_POLICY_HASH = "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee"
@@ -51,8 +53,9 @@ ALLOWED_ANALYSIS_KINDS = {
 }
 SPENDING_STATUSES = {"broadcast", "activated"}
 RESERVED_STATUSES = {"planned", "broadcast", "activated"}
-REQUIRED_EXCLUDED_WALLETS = [
+BASE_REQUIRED_EXCLUDED_WALLETS = [
     "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
     "0x884834e884d6e93462655a2820140ad03e6747bc",
     "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
     "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
@@ -64,7 +67,7 @@ REQUIRED_EXCLUDED_BOUNTY_CONTRACTS = [
     "0xf8c8897e748e4057d52182c27beb4025f4d49d68",
 ]
 WALLET_BOUNDARY = (
-    "Known owner, reserve, delegate, and deployer wallets are ineligible. "
+    "Known owner, reserve, delegate, deployer, and snapshot-attester wallets are ineligible. "
     "Wallets are not inferred to be unique people."
 )
 CONTRACT_BOUNDARY = (
@@ -74,12 +77,12 @@ CONTRACT_BOUNDARY = (
 REQUIRED_LIVE_GMV_PROFILE = {
     "profile_id": PROFILE_ID,
     "classification": "reviewed",
-    "program_vkey": "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
-    "source_hash": "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
-    "elf_hash": "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5",
+    "program_vkey": "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+    "source_hash": "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+    "elf_hash": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
     "journal_schema_hash": GMV_JOURNAL_SCHEMA_HASH,
     "metric_program_hash": GMV_METRIC_PROGRAM_HASH,
-    "review_evidence_hash": "0x0d679fe190be3e2248953ee5d5f4cb5adfe3a64255404ac752f8caed9862bf86",
+    "review_evidence_hash": "0xa721b85db55db5c827dee508d89de09a222d9d70150f3eeb2a69a34b670023dd",
 }
 
 
@@ -228,12 +231,21 @@ def validate_candidate_specs(
     eligibility = specs.get("eligibility_policy")
     if not isinstance(eligibility, dict):
         raise PlanError("candidate specs eligibility policy is required")
+    reserve_wallet = str(specs.get("reserve_wallet") or "").lower()
+    if (
+        not ADDRESS.fullmatch(reserve_wallet)
+        or reserve_wallet in BASE_REQUIRED_EXCLUDED_WALLETS
+    ):
+        raise PlanError("candidate specs reserve wallet is invalid or collides with an operator")
+    required_excluded_wallets = sorted(
+        [*BASE_REQUIRED_EXCLUDED_WALLETS, reserve_wallet]
+    )
     excluded_wallets = [str(value).lower() for value in eligibility.get("excluded_wallets") or []]
     excluded_contracts = [
         str(value).lower() for value in eligibility.get("excluded_bounty_contracts") or []
     ]
-    if excluded_wallets != REQUIRED_EXCLUDED_WALLETS:
-        raise PlanError("candidate specs do not exclude every reviewed operator wallet")
+    if excluded_wallets != required_excluded_wallets:
+        raise PlanError("candidate specs do not exclude every reviewed operator and reserve wallet")
     if excluded_contracts != REQUIRED_EXCLUDED_BOUNTY_CONTRACTS:
         raise PlanError("candidate specs do not exclude every reviewed reward contract")
     if eligibility.get("wallet_boundary") != WALLET_BOUNDARY:
@@ -292,51 +304,54 @@ def validate_candidate_specs(
             f"{field}.epoch.minimum_score_base_units",
             minimum=1,
         )
-        if starts_at >= ends_at or ends_at > now:
-            raise PlanError(f"{field}.epoch must be closed before planning")
+        epoch_id = str(epoch.get("epoch_id") or "").lower()
+        if not HASH.fullmatch(epoch_id):
+            raise PlanError(f"{field}.epoch.epoch_id is invalid")
+        if starts_at >= ends_at or ends_at <= now:
+            raise PlanError(f"{field}.epoch must retain a future scoring interval")
         snapshot = item.get("snapshot")
-        if not isinstance(snapshot, dict) or snapshot.get("status") not in {"pending", "ready"}:
-            raise PlanError(f"{field}.snapshot status is invalid")
-        snapshot_status = str(snapshot["status"])
-        normalized_snapshot: dict[str, Any] = {"status": snapshot_status}
-        if snapshot_status == "pending":
-            if set(snapshot) != {"status"}:
-                raise PlanError(f"{field}.pending snapshot cannot contain unreviewed evidence")
-        else:
-            safe_block = require_int(snapshot.get("safe_block"), f"{field}.snapshot.safe_block", minimum=1)
-            if safe_block > inventory["safe_block"]:
-                raise PlanError(f"{field}.snapshot safe block is newer than inventory evidence")
-            for key in (
-                "end_block_hash",
-                "snapshot_hash",
-                "verification_policy_hash",
-                "primary_projection_hash",
-                "shadow_projection_hash",
-            ):
-                value = str(snapshot.get(key) or "").lower()
-                if not HASH.fullmatch(value):
-                    raise PlanError(f"{field}.snapshot.{key} is invalid")
-                normalized_snapshot[key] = value
-            if normalized_snapshot["primary_projection_hash"] != normalized_snapshot["snapshot_hash"]:
-                raise PlanError(f"{field}.snapshot primary indexer disagrees")
-            if normalized_snapshot["shadow_projection_hash"] != normalized_snapshot["snapshot_hash"]:
-                raise PlanError(f"{field}.snapshot shadow indexer disagrees")
-            snapshot_url = validate_source(
-                {"kind": "canonical_snapshot", "url": snapshot.get("snapshot_url")},
-                f"{field}.snapshot",
-            )["url"]
-            reconciled_at = parse_timestamp(
-                snapshot.get("reconciled_at"), f"{field}.snapshot.reconciled_at"
-            )
-            if reconciled_at > now or reconciled_at < ends_at:
-                raise PlanError(f"{field}.snapshot reconciliation time is invalid")
-            normalized_snapshot.update(
-                {
-                    "safe_block": safe_block,
-                    "snapshot_url": snapshot_url,
-                    "reconciled_at": reconciled_at.isoformat().replace("+00:00", "Z"),
-                }
-            )
+        if not isinstance(snapshot, dict) or snapshot.get("status") != "scheduled":
+            raise PlanError(f"{field}.snapshot must be a scheduled forward snapshot")
+        verification_policy = str(snapshot.get("verification_policy_hash") or "").lower()
+        attesters = [str(value).lower() for value in snapshot.get("snapshot_attesters") or []]
+        threshold = require_int(
+            snapshot.get("snapshot_attestation_threshold"),
+            f"{field}.snapshot.snapshot_attestation_threshold",
+            minimum=2,
+        )
+        due_after = parse_timestamp(
+            snapshot.get("canonical_snapshot_due_after"),
+            f"{field}.snapshot.canonical_snapshot_due_after",
+        )
+        if (
+            not HASH.fullmatch(verification_policy)
+            or attesters != [
+                "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+                "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+            ]
+            or threshold != 2
+            or due_after != ends_at
+        ):
+            raise PlanError(f"{field}.snapshot forward attestation policy is invalid")
+        campaign_policy = {
+            "epoch_id": epoch_id,
+            "starts_at": int(starts_at.timestamp()),
+            "ends_at": int(ends_at.timestamp()),
+            "minimum_score_base_units": minimum_score,
+            "excluded_wallets": excluded_wallets,
+            "excluded_bounty_contracts": excluded_contracts,
+            "snapshot_attesters": attesters,
+            "snapshot_attestation_threshold": threshold,
+        }
+        if verification_policy != "0x" + forward_policy_hash(campaign_policy).hex():
+            raise PlanError(f"{field}.snapshot verification policy hash is not reproducible")
+        normalized_snapshot = {
+            "status": "scheduled",
+            "verification_policy_hash": verification_policy,
+            "snapshot_attesters": attesters,
+            "snapshot_attestation_threshold": threshold,
+            "canonical_snapshot_due_after": due_after.isoformat().replace("+00:00", "Z"),
+        }
         analysis_sources = item.get("analysis_sources")
         feedback_sources = item.get("feedback_sources")
         if not isinstance(analysis_sources, list) or not analysis_sources:
@@ -353,6 +368,7 @@ def validate_candidate_specs(
         ]
         normalized = {
             "candidate_id": candidate_id,
+            "reserve_wallet": reserve_wallet,
             "title": require_text(item.get("title"), f"{field}.title", maximum=160),
             "summary": require_text(item.get("summary"), f"{field}.summary", maximum=500),
             "gmv_lane": lane,
@@ -360,6 +376,7 @@ def validate_candidate_specs(
                 "starts_at": starts_at.isoformat().replace("+00:00", "Z"),
                 "ends_at": ends_at.isoformat().replace("+00:00", "Z"),
                 "minimum_score_base_units": minimum_score,
+                "epoch_id": epoch_id,
             },
             "snapshot": normalized_snapshot,
             "profile_release": {
@@ -569,7 +586,7 @@ def build_plan(
         candidate
         for candidate in unreserved
         if candidate["profile_release"]["status"] == "reviewed"
-        and candidate["snapshot"]["status"] == "ready"
+        and candidate["snapshot"]["status"] == "scheduled"
     ]
     available.sort(
         key=lambda candidate: (
@@ -584,7 +601,7 @@ def build_plan(
         blockers.append("canonical GMV metric profile has not completed independent reproduction and review")
     if len(available) < deficit:
         blockers.append(
-            "reviewed pool has fewer unused, reconciled canonical GMV snapshots than the full target deficit"
+            "reviewed pool has fewer unused, precommitted forward GMV campaigns than the full target deficit"
         )
     if daily_spent + required_spend > daily_cap_base_units:
         blockers.append("full target restoration would exceed the UTC-day spending cap")

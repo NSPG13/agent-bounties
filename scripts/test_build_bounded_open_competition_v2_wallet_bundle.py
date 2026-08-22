@@ -63,6 +63,23 @@ class BoundedOpenCompetitionV2BundleTests(unittest.TestCase):
         for value in self.bundle["contracts"].values():
             self.assertTrue(re.fullmatch(r"0x[0-9a-f]{64}", value["source_sha256"]))
 
+    def test_release_binding_is_an_explicit_build_input(self) -> None:
+        competition_factory = "0x" + "12" * 20
+        release_hash = "0x" + "34" * 32
+        rebound = BUILDER.build_bundle(competition_factory, release_hash)
+        self.assertEqual(rebound["canonical"]["competition_factory"], competition_factory)
+        self.assertEqual(rebound["canonical"]["release_hash"], release_hash)
+        self.assertNotEqual(
+            rebound["reserve_factory"]["address"],
+            self.bundle["reserve_factory"]["address"],
+        )
+
+    def test_release_binding_rejects_malformed_values(self) -> None:
+        with self.assertRaises(SystemExit):
+            BUILDER.build_bundle("0x1234", BUILDER.RELEASE_HASH)
+        with self.assertRaises(SystemExit):
+            BUILDER.build_bundle(BUILDER.COMPETITION_FACTORY, "0x" + "00" * 32)
+
 
 if __name__ == "__main__":
     unittest.main()

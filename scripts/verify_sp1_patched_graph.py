@@ -26,21 +26,21 @@ EXPECTED_LOCKS = (
     Path("programs/public-vector-metric-v1/program/Cargo.lock"),
     Path("programs/structured-artifact-metric-v1/Cargo.lock"),
     Path("programs/structured-artifact-metric-v1/program/Cargo.lock"),
-    Path("programs/canonical-gmv-attribution-metric-v1/Cargo.lock"),
-    Path("programs/canonical-gmv-attribution-metric-v1/program/Cargo.lock"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/Cargo.lock"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.lock"),
 )
 EXPECTED_MANIFESTS = (
     Path("programs/public-vector-metric-v1/Cargo.toml"),
     Path("programs/public-vector-metric-v1/program/Cargo.toml"),
     Path("programs/structured-artifact-metric-v1/Cargo.toml"),
     Path("programs/structured-artifact-metric-v1/program/Cargo.toml"),
-    Path("programs/canonical-gmv-attribution-metric-v1/Cargo.toml"),
-    Path("programs/canonical-gmv-attribution-metric-v1/program/Cargo.toml"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/Cargo.toml"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.toml"),
 )
 IDENTITY_PATHS = (
     Path("programs/public-vector-metric-v1/release-identity.json"),
     Path("programs/structured-artifact-metric-v1/release-identity.json"),
-    Path("programs/canonical-gmv-attribution-metric-v1/release-identity.json"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json"),
 )
 
 

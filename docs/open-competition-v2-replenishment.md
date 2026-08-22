@@ -13,15 +13,18 @@ continues to show one unified marketplace.
 - `scripts/materialize_open_competition_v2_replenishment.py` converts a ready
   plan into objective best-score GMV meta-competition terms without private
   ranking fields.
-- `ops/open-competition-v2-gmv-candidate-pool-v1.json` contains twenty public
-  closed-epoch campaign specifications and evidence references. A `pending`
-  snapshot is intentionally not spendable. The file contains no operational
-  scores or active/standby ranking.
+- `ops/open-competition-v2-forward-gmv-candidate-pool-v2.json` contains twenty
+  announced forward campaign specifications and evidence references. Each
+  competition fixes its scoring window, exclusions, and 2-of-2 deterministic
+  snapshot-attester quorum before funding. The file contains no operational
+  scores or private replenishment ranking.
 - `BoundedOpenCompetitionV2Wallet` holds the USDC reserve under the operator
   owner's on-chain control. Its delegate can create only reviewed, exact-value
   competitions; it cannot transfer or withdraw USDC.
 - `BoundedOpenCompetitionV2WalletFactory` deterministically deploys that wallet
   and atomically funds it through an exact allowance or EIP-3009 authorization.
+  Its release-bound salt makes the reserve address knowable before campaign
+  policies are frozen, so every policy can exclude its exact funding wallet.
 - The isolated delegate owns the private ranking, durable execution ledger,
   predicted addresses, and canonical reconciliation. The contract, not the
   hosted delegate, enforces candidate commitments and spending caps.
@@ -49,13 +52,15 @@ block before recording activation.
 The on-chain reserve independently requires:
 
 1. Base mainnet, the reviewed factory/release and independently reproduced
-   `canonical-gmv-attribution-metric-v1` profile, plus fresh safe-block evidence
+   `forward-canonical-gmv-attribution-metric-v2` profile, plus fresh safe-block evidence
    with primary/shadow agreement.
 2. Exactly 3.00 USDC solver reward and 0.04 USDC keeper reward per creation.
 3. No more than 30.40 USDC per UTC day or 77.668098 USDC lifetime. The initial
    policy cannot spend more than the exact owner-authorized reserve.
-4. A candidate in the private ranking whose ID and public spec hash match, whose
-   epoch has closed, and whose primary/shadow snapshot hashes are identical.
+4. A candidate in the private ranking whose ID and public spec hash match and
+   whose future scoring window and attester quorum were fixed before creation.
+   After the window closes, primary/shadow snapshot hashes must be identical
+   before either deterministic attester signs.
 5. A durable idempotency reservation containing policy epoch, safe block,
    candidate hashes, derived nonce, and predicted contract address.
 6. Exact USDC allowance immediately before factory creation and zero allowance
@@ -68,7 +73,8 @@ The on-chain reserve independently requires:
 
 GMV attribution is `settlement GMV * entrant canonical funding / total
 canonical funding`, rounded down for each settlement. Exclude operator/reserve
-wallet funding, listed reward contracts, creator-as-solver and
+wallet funding, every settlement created by an operator or reserve wallet,
+listed reward contracts, creator-as-solver and
 entrant-as-solver settlements, and all noncanonical states. The prize
 competition's own payout is excluded from the snapshot used to score it.
 
@@ -114,6 +120,52 @@ paths; settled rewards belong to the solver and keeper.
 Never increase reserve spending just to improve a count or reported GMV. The
 checked-in confirmation page remains blocked while the new profile or snapshots
 are pending; the superseded structured-artifact batch must not be submitted.
+
+### Exact owner confirmation
+
+The protected production release builds and deploys the exact reserve factory,
+waits for a Base safe block, and uploads both
+`bounded-open-competition-v2-wallet-base-mainnet.json` and
+`bounded-open-competition-v2-wallet-deployment-evidence.json` with the mainnet
+deployment artifact. Download that exact manifest; do not rebuild it from a
+different source revision. After the production release and candidate pool name
+the same factory and release hash, build the activation bundle:
+
+```powershell
+python scripts/build_forward_open_competition_v2_gmv_candidate_pool.py `
+  --factory <exact-production-factory> `
+  --release-hash <exact-production-release-hash> `
+  --reserve-deployment deployments/bounded-open-competition-v2-wallet-base-mainnet.json `
+  --approved-at <actual-UTC-review-time>
+python scripts/build_open_competition_v2_gmv_activation.py `
+  --release <exact-production-runtime.json> `
+  --reserve-deployment deployments/bounded-open-competition-v2-wallet-base-mainnet.json `
+  --output <private-temporary-activation.json>
+python scripts/serve_open_competition_v2_gmv_confirmation.py `
+  --bundle <private-temporary-activation.json>
+```
+
+Open the printed loopback URL in the owner's wallet-enabled browser. The page
+checks Base mainnet and the exact owner before requesting one EIP-3009 typed-data
+signature for 77.668098 USDC. It states the predicted recoverable reserve
+address, the 3.04-USDC creation limit, the 30.40-USDC UTC-day cap, and the
+77.668098-USDC lifetime cap. The page verifies the signature locally and sends
+it nowhere except the loopback process.
+
+Build relay calldata only from the verified signature and the same bundle:
+
+```powershell
+python scripts/build_open_competition_v2_gmv_relay.py `
+  --bundle <private-temporary-activation.json> `
+  --signature <verified-eip3009-signature> `
+  --output <private-temporary-relay.json>
+```
+
+Any gas-paying address may submit the exact relay call. The destination is the
+bounded reserve factory, while the USDC destination remains the predicted
+reserve owned by `0x884834E884d6e93462655A2820140aD03E6747bC`. A valid
+signature, relay call, or transaction hash is not funding evidence; reconcile
+the reserve creation event and the exact USDC balance at a canonical safe block.
 
 ## Incident response
 
