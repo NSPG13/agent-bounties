@@ -1,0 +1,83 @@
+name: Reclaim Open Competition V2 prover capacity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-prover-maintenance
+  cancel-in-progress: false
+
+jobs:
+  reclaim-unused-secondary-swap:
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, Linux, X64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 10
+    steps:
+      - name: Reclaim only the verified unused secondary swap file
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_workspace=/home/pooln/actions-runner/_work/agent-bounties/agent-bounties
+          workspace="$(realpath -m "$GITHUB_WORKSPACE")"
+          test "$workspace" = "$expected_workspace"
+
+          primary=/swapfile
+          secondary=/swapfile2
+          primary_size=68719476736
+          secondary_size=51539607552
+          minimum_available_memory_kib=209715200
+          minimum_recovered_bytes=50000000000
+
+          test -f "$primary" && test -f "$secondary"
+          test "$(stat -c '%U:%G:%a:%s' -- "$primary")" = "root:root:600:$primary_size"
+          test "$(stat -c '%U:%G:%a:%s' -- "$secondary")" = "root:root:600:$secondary_size"
+
+          primary_used_bytes="$(swapon --show --noheadings --bytes --raw --output=NAME,USED | awk '$1 == "/swapfile" {print $2}')"
+          secondary_used_bytes="$(swapon --show --noheadings --bytes --raw --output=NAME,USED | awk '$1 == "/swapfile2" {print $2}')"
+          test "$primary_used_bytes" = 0
+          test "$secondary_used_bytes" = 0
+
+          available_memory_kib="$(awk '$1 == "MemAvailable:" {print $2}' /proc/meminfo)"
+          test -n "$available_memory_kib"
+          test "$available_memory_kib" -ge "$minimum_available_memory_kib"
+
+          test "$(sudo -n awk '$1 == "/swapfile" {n++} END {print n+0}' /etc/fstab)" = 1
+          test "$(sudo -n awk '$1 == "/swapfile2" {n++} END {print n+0}' /etc/fstab)" = 1
+          sudo -n awk '$1 == "/swapfile2" {exit !($2 == "none" && $3 == "swap" && $4 == "sw" && $5 == "0" && $6 == "0")}' /etc/fstab
+
+          before_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
+          fstab_before_sha256="$(sudo -n sha256sum /etc/fstab | awk '{print $1}')"
+          printf 'disk_before_bytes=%s\n' "$before_bytes"
+          printf 'available_memory_kib=%s\n' "$available_memory_kib"
+          printf 'fstab_before_sha256=%s\n' "$fstab_before_sha256"
+
+          sudo -n swapoff -- "$secondary"
+          test "$(swapon --show --noheadings --raw --output=NAME | awk '$1 == "/swapfile2" {n++} END {print n+0}')" = 0
+          test "$(swapon --show --noheadings --raw --output=NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
+
+          fstab_tmp="$(mktemp)"
+          trap 'rm -f -- "$fstab_tmp"' EXIT
+          sudo -n awk '$1 != "/swapfile2"' /etc/fstab > "$fstab_tmp"
+          test "$(awk '$1 == "/swapfile" {n++} END {print n+0}' "$fstab_tmp")" = 1
+          test "$(awk '$1 == "/swapfile2" {n++} END {print n+0}' "$fstab_tmp")" = 0
+          sudo -n install -o root -g root -m 0644 -- "$fstab_tmp" /etc/fstab
+          test "$(sudo -n awk '$1 == "/swapfile2" {n++} END {print n+0}' /etc/fstab)" = 0
+
+          sudo -n rm -f -- "$secondary"
+          test ! -e "$secondary"
+          test -f "$primary"
+          test "$(swapon --show --noheadings --raw --output=NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
+
+          after_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
+          recovered_bytes="$((after_bytes - before_bytes))"
+          fstab_after_sha256="$(sudo -n sha256sum /etc/fstab | awk '{print $1}')"
+          printf 'disk_after_bytes=%s\n' "$after_bytes"
+          printf 'recovered_bytes=%s\n' "$recovered_bytes"
+          printf 'fstab_after_sha256=%s\n' "$fstab_after_sha256"
+          test "$recovered_bytes" -ge "$minimum_recovered_bytes"
+          df -h "$workspace"
+          swapon --show --bytes
+          free -h
