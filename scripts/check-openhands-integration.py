@@ -30,6 +30,7 @@ Run: python -B scripts/check-openhands-integration.py
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
 import os
 import shlex
@@ -83,7 +84,13 @@ def in_parallel(jobs):
     groups -- anything sharing the live HTTP fixture or mutating the workfile --
     are deliberately NOT batched.
     """
-    with ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 2) * 2)) as pool:
+    # Each job blocks on subprocesses rather than doing CPU work here, so the
+    # useful width is a little above the core count -- but not far above: every
+    # job spawns two Python interpreters, and oversubscribing makes the suite
+    # slower, not faster. This keeps the run inside the immutable benchmark's
+    # 30s subprocess timeout.
+    workers = max(4, min(12, (os.cpu_count() or 2) + 2, len(jobs) or 1))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(lambda job: job(), jobs))
 
 
@@ -985,110 +992,225 @@ check("path-traversal session id is refused", traversal.returncode != 0,
 # ---------------------------------------------------------------------------
 print("\n=== a LIVE canonical BountySettled is the only thing that pays ===")
 
-SERVED: dict = {"events": [CLAIM_EVENT], "status": 200}
+def make_handler(events, status):
+    """A handler bound to ONE scenario's payload.
 
+    The previous version shared a module-level `SERVED` dict, which forced every
+    live case to run serially even though the cases are mutually independent and
+    all read the same (constant, already-complete) workfile. Giving each case its
+    own ephemeral server removes the shared mutable state so the cases can be
+    batched, which is what keeps this suite inside the immutable benchmark's
+    30s subprocess timeout.
+    """
+    body = json.dumps(events).encode("utf-8")
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
-        if "/v1/base/autonomous-bounties/events" not in self.path:
-            self.send_response(404)
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+            if "/v1/base/autonomous-bounties/events" not in self.path:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            return
-        status = SERVED["status"]
-        body = json.dumps(SERVED["events"]).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+            self.wfile.write(body)
 
-    def log_message(self, format, *args):  # noqa: A002 - BaseHTTPRequestHandler API
-        return  # silence the default stderr access log
+        def log_message(self, format, *args):  # noqa: A002 - BaseHTTPRequestHandler API
+            return  # silence the default stderr access log
 
+    return Handler
 
-httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-httpd.socket.settimeout(5)
-threading.Thread(target=httpd.serve_forever, daemon=True).start()
-API = f"http://127.0.0.1:{httpd.server_address[1]}"
-with socket.create_connection(("127.0.0.1", httpd.server_address[1]), timeout=5):
-    pass  # the server is genuinely accepting connections before any assertion runs
 
 # Complete local work, so only settlement is in question.
 workfile.write_text(json.dumps({
     "test": PASSED, "evidence": FULL_EVIDENCE, "submission": {"submitted_onchain": True},
 }), encoding="utf-8")
-LIVE = {"AGENT_BOUNTIES_API": API}
 
 
 def run_live(events, status=200, extra=None):
-    SERVED["events"] = events
-    SERVED["status"] = status
-    env = dict(LIVE)
-    env.update(extra or {})
-    return run_registered("sess-bounty", env, drop=("AGENT_BOUNTIES_EVENTS_FILE",
-                                                    "AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT"))
+    """Serve `events` from a private ephemeral server and run the real hook."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(events, status))
+    server.socket.settimeout(5)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=5):
+            pass  # genuinely accepting connections before the assertion runs
+        env = {"AGENT_BOUNTIES_API": f"http://127.0.0.1:{port}"}
+        env.update(extra or {})
+        return run_registered("sess-bounty", env,
+                              drop=("AGENT_BOUNTIES_EVENTS_FILE",
+                                    "AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT"))
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
-rc, body, err = run_live([CLAIM_EVENT])
+# Every case below is independent -- its own server, the same read-only
+# workfile -- so they are executed concurrently and asserted in order.
+LIVE_REFUSALS: list[tuple[str, list]] = [
+    ("paid to another solver", [CLAIM_EVENT, event("bounty_settled", solver=OTHER_SOLVER)]),
+    ("block_number 0", [CLAIM_EVENT, event("bounty_settled", block=0)]),
+    ("no chain identity at all", [CLAIM_EVENT, event("bounty_settled", tx="", log_key="")]),
+    ("a timestamp in the future",
+     [CLAIM_EVENT, event("bounty_settled", occurred_at=now_iso(600))]),
+    ("a foreign contract", [CLAIM_EVENT, event("bounty_settled", contract="0x" + "99" * 20)]),
+    # The review's exact probe: an empty contract plus a stub tx_hash previously
+    # produced a `canonical_live` receipt, and the receipt then substituted the
+    # BOUND contract for one the event never carried.
+    ("an EMPTY contract + '0xabc' tx (the review probe)",
+     [CLAIM_EVENT, event("bounty_settled", contract="", tx="0xabc")]),
+    ("no contract_address", [CLAIM_EVENT, event("bounty_settled", contract="")]),
+    ("a non-hex contract_address",
+     [CLAIM_EVENT, event("bounty_settled", contract="0x" + "z" * 40)]),
+    ("a truncated contract_address",
+     [CLAIM_EVENT, event("bounty_settled", contract="0xdeadbeef")]),
+    ("a short tx_hash", [CLAIM_EVENT, event("bounty_settled", tx="0xabc")]),
+    ("a tx_hash with no 0x prefix", [CLAIM_EVENT, event("bounty_settled", tx="cd" * 32)]),
+    ("a non-hex tx_hash", [CLAIM_EVENT, event("bounty_settled", tx="0x" + "zz" * 32)]),
+    ("a tx_hash one nibble short", [CLAIM_EVENT, event("bounty_settled", tx="0x" + "c" * 63)]),
+]
+
+_live_jobs = [
+    lambda: run_live([CLAIM_EVENT]),
+    lambda: run_live([CLAIM_EVENT, SETTLE_EVENT]),
+    lambda: run_live([CLAIM_EVENT, event("bounty_settled", rnd=ROUND + 5)]),
+] + [(lambda evs=evs: run_live(evs)) for _, evs in LIVE_REFUSALS] + [
+    # ISOLATING CASE for the cross-bounty rule. The generic cross-bounty snapshot
+    # elsewhere is also refused by the snapshot-cannot-settle rule, so on its own
+    # it does not prove the bounty_id binding exists. Here the settlement is
+    # live-canonical and valid in EVERY other respect -- only the bounty_id is
+    # foreign -- so this fails if and only if the cross-bounty check is removed.
+    lambda: run_live([CLAIM_EVENT, event("bounty_settled", bounty_id="0x" + "99" * 32)]),
+    lambda: run_live([CLAIM_EVENT, event("claim_expired")]),
+    lambda: run_live([], status=500),
+    lambda: run_registered("sess-bounty", {"AGENT_BOUNTIES_API": "http://127.0.0.1:1"},
+                           drop=("AGENT_BOUNTIES_EVENTS_FILE",
+                                 "AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT")),
+]
+_live = in_parallel(_live_jobs)
+_tail = _live[-4:]
+
+rc, body, err = _live[0]
 reason = body.get("reason", "")
 check("live feed, claimed but unsettled -> exit 0 and $0.00", rc == 0 and "$0.00" in reason,
       f"exit={rc} reason={reason[:250]} stderr={err[-200:]}")
 check("  and it does NOT say paid", "work is paid" not in reason.lower(), reason[:250])
 
-rc, body, err = run_live([CLAIM_EVENT, SETTLE_EVENT])
+rc, body, err = _live[1]
 reason = body.get("reason", "")
 check("live canonical BountySettled -> exit 0 and PAID", rc == 0 and "work is paid" in reason.lower(),
       f"exit={rc} reason={reason[:300]} stderr={err[-200:]}")
 check("  and the reason carries the real tx hash", SETTLE_EVENT["tx_hash"] in reason, reason[:300])
 
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", solver=OTHER_SOLVER)])
-check("live settlement paid to another solver -> exit 2 (refused, never ours)", rc == 2,
-      f"exit={rc}")
-
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", rnd=ROUND + 5)])
+rc, body, err = _live[2]
 reason = body.get("reason", "")
 check("live settlement for another round -> not our payment", "work is paid" not in reason.lower(),
       f"exit={rc} reason={reason[:250]}")
 
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", block=0)])
-check("live settlement with block_number 0 -> exit 2", rc == 2, f"exit={rc}")
+for (_label, _), (rc, body, err) in zip(LIVE_REFUSALS, _live[3:-4]):
+    reason = body.get("reason", "")
+    check(f"live settlement with {_label} -> exit 2", rc == 2,
+          f"exit={rc} reason={reason[:250]}")
+    check(f"  ({_label}) never says paid", "work is paid" not in reason.lower(), reason[:250])
 
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", tx="", log_key="")])
-check("live settlement with no chain identity -> exit 2", rc == 2, f"exit={rc}")
-
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", occurred_at=now_iso(600))])
-check("live settlement stamped in the future -> exit 2 (not fresh evidence)", rc == 2,
-      f"exit={rc}")
-
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", contract="0x" + "99" * 20)])
-check("live settlement on a foreign contract -> exit 2", rc == 2, f"exit={rc}")
-
-# ISOLATING CASE for the cross-bounty rule. The generic cross-bounty snapshot
-# above is also refused by the snapshot-cannot-settle rule, so on its own it does
-# not prove the bounty_id binding exists. Here the settlement is live-canonical
-# and valid in EVERY other respect -- only the bounty_id is foreign -- so this
-# case fails if and only if the cross-bounty check is removed.
-rc, body, err = run_live([CLAIM_EVENT, event("bounty_settled", bounty_id="0x" + "99" * 32)])
+rc, body, err = _tail[0]
 reason = body.get("reason", "")
 check("live settlement for a FOREIGN BOUNTY -> exit 2 (isolates the bounty binding)",
       rc == 2, f"exit={rc} reason={reason[:250]}")
 check("  and it never says paid", "work is paid" not in reason.lower(), reason[:250])
 
-rc, body, err = run_live([CLAIM_EVENT, event("claim_expired")])
+rc, body, err = _tail[1]
 reason = body.get("reason", "")
 check("live claim expiry -> claim released, exit 0", rc == 0, f"exit={rc} reason={reason[:200]}")
 check("  and it does not say paid", "work is paid" not in reason.lower())
 
-rc, body, err = run_live([], status=500)
+rc, body, err = _tail[2]
 check("live feed HTTP 500 -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
-rc, body, err = run_registered("sess-bounty",
-                               {"AGENT_BOUNTIES_API": "http://127.0.0.1:1"},
-                               drop=("AGENT_BOUNTIES_EVENTS_FILE",
-                                     "AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT"))
+rc, body, err = _tail[3]
 check("live feed unreachable -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
-httpd.shutdown()
+# ---------------------------------------------------------------------------
+# ISOLATED assertions on bind_event()/settlement_receipt().
+#
+# The end-to-end cases above prove the shipped path refuses malformed identity,
+# but they cannot show WHICH rule refused. That matters: a mutation restoring
+# the old `if contract and ...` fail-open in bind_event() still passed every
+# end-to-end case, because every malformed-contract event in them is a
+# settlement and settlement_receipt() re-refused it downstream. These call the
+# functions directly, with no downstream call, so each layer is pinned on its
+# own.
+# ---------------------------------------------------------------------------
+print("\n=== isolated: every event must prove its own contract identity ===")
+
+_spec = importlib.util.spec_from_file_location("agent_bounties_state_producer", PRODUCER)
+assert _spec and _spec.loader
+producer = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(producer)
+
+ISO_CLAIM = {
+    "network": NETWORK,
+    "bounty_id": BOUNTY_ID,
+    "bounty_contract": CONTRACT,
+    "round": ROUND,
+    "solver": SOLVER,
+}
+
+BAD_CONTRACTS = [
+    ("contract_address=''", ""),
+    ("a whitespace-only contract_address", "   "),
+    ("a non-hex contract_address", "0x" + "z" * 40),
+    ("a truncated 4-byte contract_address", "0xdeadbeef"),
+    ("a FOREIGN contract_address", "0x" + "99" * 20),
+]
+
+
+def bind_refuses(label: str, ev: dict) -> None:
+    """`bind_event` ITSELF must raise -- asserted with no settlement call."""
+    try:
+        producer.bind_event(ev, ISO_CLAIM)
+    except producer.Unresolvable:
+        check(label, True)
+        return
+    check(label, False, "bind_event accepted it (a downstream check cannot cover this)")
+
+
+# Non-settlement kinds are the point of this block: they never reach
+# settlement_receipt, so bind_event is the ONLY thing standing between a forged
+# event and the claim state it mutates.
+for _kind in ("bounty_settled", "claim_expired", "bounty_claimed",
+              "submission_added", "submission_rejected"):
+    for _label, _contract in BAD_CONTRACTS:
+        bind_refuses(f"bind_event alone refuses {_kind} with {_label}",
+                     event(_kind, contract=_contract))
+    _missing = event(_kind)
+    _missing.pop("contract_address")
+    bind_refuses(f"bind_event alone refuses {_kind} with NO contract_address key",
+                 _missing)
+    # Control: the correctly-bound event must still bind, so the refusals above
+    # prove a real boundary rather than a blanket rejection.
+    _k, _ = producer.bind_event(event(_kind), ISO_CLAIM)
+    check(f"  and a correctly-bound {_kind} still binds", _k == _kind, f"kind={_k!r}")
+
+# A forged contract-less `claim_expired` must not be able to RELEASE a live
+# claim. This is the concrete exploit the settlement-only rule allowed: the
+# expiry clears claim_active, so the guard stops protecting unfinished funded
+# work.
+_claimed = event("bounty_claimed")
+_active, _ = producer.reduce_events([_claimed], ISO_CLAIM, "canonical_live")
+check("an honest claim event marks the claim ACTIVE", _active is True, f"active={_active}")
+for _label, _contract in BAD_CONTRACTS:
+    try:
+        _after, _ = producer.reduce_events(
+            [_claimed, event("claim_expired", contract=_contract)],
+            ISO_CLAIM, "canonical_live")
+        _released = _after is not True
+    except producer.Unresolvable:
+        _released = False  # refused outright, which is the desired behaviour
+    check(f"  a forged claim_expired with {_label} CANNOT release it",
+          not _released, "the forged expiry cleared claim_active")
 
 # ---------------------------------------------------------------------------
 print("\n=== event payload handling ===")

@@ -85,7 +85,6 @@ the operator.
 
 from __future__ import annotations
 
-import argparse
 import base64
 import binascii
 import hmac
@@ -94,10 +93,12 @@ import os
 import re
 import stat
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
+
+# `urllib.request` pulls in http.client, email, ssl, tempfile and shutil, which
+# costs roughly 50ms of interpreter startup. This producer is spawned once per
+# OpenHands Stop event and only reaches the network on the live-feed branch, so
+# the import is deferred to that branch instead of being paid on every run.
 from pathlib import Path
 
 # Verification is local to this integration and standard-library only, so the
@@ -124,6 +125,35 @@ CLAIMED = {"bounty_claimed"}
 RELEASED = {"claim_expired", "submission_expired", "bounty_cancelled",
             "refund_withdrawn", "submission_rejected"}
 SETTLED = {"bounty_settled"}
+
+
+def _is_hex(value: str, nbytes: int) -> bool:
+    """True when value is exactly nbytes of 0x-prefixed hex.
+
+    Used to reject settlement evidence that merely LOOKS present. A non-empty
+    string is not identity: `tx_hash: "0xabc"` is three hex characters, not a
+    32-byte transaction hash, and accepting it let malformed live data be
+    reported as payment.
+    """
+    v = str(value).strip().lower()
+    if not v.startswith("0x"):
+        return False
+    body = v[2:]
+    if len(body) != nbytes * 2:
+        return False
+    return all(c in "0123456789abcdef" for c in body)
+
+
+def _is_address(value: str) -> bool:
+    """True when value is a valid 20-byte EVM address."""
+    return _is_hex(value, 20)
+
+
+def _is_tx_hash(value: str) -> bool:
+    """True when value is a valid 32-byte transaction hash."""
+    return _is_hex(value, 32)
+
+
 # Kinds that are scoped to a specific round and therefore must match the bound
 # round exactly. Lifecycle events for the bounty as a whole are not.
 ROUND_SCOPED = CLAIMED | SETTLED | {"submission_added", "submission_rejected",
@@ -437,6 +467,11 @@ def fetch_events(claim: dict) -> tuple[list, str]:
         payload = _read_json(snapshot, "canonical event snapshot")
         provenance = "test_snapshot"
     else:
+        # Deferred: see the note beside the top-level imports.
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
         base = os.environ.get("AGENT_BOUNTIES_API", DEFAULT_API).rstrip("/")
         parsed = urllib.parse.urlsplit(base)
         if parsed.scheme not in ("http", "https"):
@@ -500,8 +535,26 @@ def bind_event(event, claim: dict) -> tuple[str, dict]:
             f"bound to {claim['bounty_id']}; refusing a cross-bounty payload"
         )
 
+    # An ABSENT contract_address must not be a free pass. Validating only when the
+    # field happens to be non-empty meant a malformed live event carrying
+    # contract_address:"" skipped the identity check entirely, and the receipt was
+    # then built from the operator's binding — so unidentified data was upgraded
+    # into "work is paid".
+    #
+    # This rule applies to EVERY kind, not just settlements. Restricting it to
+    # `SETTLED` still let a contract-less `claim_expired` through, and that event
+    # clears `claim_active` -- so a forged expiry with no contract identity
+    # released a live claim and let the session stop with unfinished funded work.
+    # An event that cannot prove which contract it came from is not evidence about
+    # this bounty, whatever it claims to be.
     contract = str(event.get("contract_address", "")).strip().lower()
-    if contract and contract != claim["bounty_contract"]:
+    if not _is_address(contract):
+        raise Unresolvable(
+            f"canonical {kind} event carries no valid 20-byte contract_address "
+            f"(got {contract or '(empty)'!r}); refusing to infer it from the operator "
+            "binding, because an event must prove its own contract identity"
+        )
+    if contract != claim["bounty_contract"]:
         raise Unresolvable(
             f"canonical event contract_address {contract} does not match the bound "
             f"bounty contract {claim['bounty_contract']}"
@@ -550,11 +603,32 @@ def settlement_receipt(event: dict, claim: dict, provenance: str) -> dict:
             f"canonical BountySettled paid {solver or '(unknown)'}, not the bound solver "
             f"{claim['solver']}"
         )
+    # Identity must come from the OBSERVED event and must be well-formed. A
+    # non-empty string is not proof: "0xabc" is three hex characters, not a
+    # transaction hash. bind_event() has already required a valid contract_address
+    # equal to the bound contract for SETTLED kinds; re-read it here so the receipt
+    # is built from what the event actually carried rather than from the binding.
+    event_contract = str(event.get("contract_address", "")).strip().lower()
+    if not _is_address(event_contract):
+        raise Unresolvable(
+            "canonical BountySettled event carries no valid 20-byte contract_address; "
+            "refusing to synthesize it from the operator binding"
+        )
+    if event_contract != claim["bounty_contract"]:
+        raise Unresolvable(
+            f"canonical BountySettled contract {event_contract} does not match the bound "
+            f"bounty contract {claim['bounty_contract']}"
+        )
     tx_hash = str(event.get("tx_hash", "")).strip()
     log_key = str(event.get("log_key", "")).strip()
     block_number = event.get("block_number")
-    if not tx_hash or not log_key:
-        raise Unresolvable("canonical BountySettled event carries no tx_hash/log_key identity")
+    if not _is_tx_hash(tx_hash):
+        raise Unresolvable(
+            f"canonical BountySettled event has no valid 32-byte tx_hash, got "
+            f"{tx_hash or '(empty)'!r}"
+        )
+    if not log_key:
+        raise Unresolvable("canonical BountySettled event carries no log_key identity")
     if not isinstance(block_number, int) or isinstance(block_number, bool) or block_number <= 0:
         raise Unresolvable(
             f"canonical BountySettled event has no positive block_number, got {block_number!r}"
@@ -565,7 +639,8 @@ def settlement_receipt(event: dict, claim: dict, provenance: str) -> dict:
         "provenance": provenance,
         "network": claim["network"],
         "bounty_id": claim["bounty_id"],
-        "bounty_contract": claim["bounty_contract"],
+        # From the validated EVENT, never substituted from the binding.
+        "bounty_contract": event_contract,
         "round": claim["round"],
         "solver": claim["solver"],
         "tx_hash": tx_hash,
@@ -642,11 +717,31 @@ def build_state(session: str) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Agent Bounties OpenHands state producer")
-    parser.add_argument("session", nargs="?", default=os.environ.get("OPENHANDS_SESSION_ID", ""))
-    args = parser.parse_args(argv)
+    # Hand-rolled instead of `argparse`: importing argparse costs ~30ms and
+    # drags in shutil -> bz2/lzma (another ~50ms) purely to read one optional
+    # positional. This producer is spawned once per OpenHands Stop event (and
+    # dozens of times by the checker), so that startup tax is paid on every
+    # invocation. The accepted surface below is identical.
+    if any(a in ("-h", "--help") for a in argv):
+        print("usage: state_producer.py [-h] [session]\n\n"
+              "Agent Bounties OpenHands state producer\n\n"
+              "positional arguments:\n"
+              "  session     OpenHands session id "
+              "(default: $OPENHANDS_SESSION_ID)")
+        return 0
+    positional = [a for a in argv if not a.startswith("-")]
+    unknown = [a for a in argv if a.startswith("-")]
+    if unknown:
+        print(f"agent-bounties state producer: unrecognized arguments: "
+              f"{' '.join(unknown)}", file=sys.stderr)
+        return 2
+    if len(positional) > 1:
+        print(f"agent-bounties state producer: unrecognized arguments: "
+              f"{' '.join(positional[1:])}", file=sys.stderr)
+        return 2
+    session = positional[0] if positional else os.environ.get("OPENHANDS_SESSION_ID", "")
     try:
-        print(json.dumps(build_state(args.session)))
+        print(json.dumps(build_state(session)))
     except Unresolvable as exc:
         # Nothing on stdout: the hook must not be able to parse a partial answer.
         print(f"agent-bounties state producer: {exc}", file=sys.stderr)
