@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -196,6 +197,39 @@ class GmvSnapshotBuilderTests(unittest.TestCase):
             MODULE.RpcPair("https://rpc.example", "https://rpc.example", 1)
         with self.assertRaisesRegex(MODULE.SnapshotError, "span"):
             MODULE.RpcPair("https://a.example", "https://b.example", 0)
+        with self.assertRaisesRegex(MODULE.SnapshotError, "maximum runtime"):
+            MODULE.RpcPair("https://a.example", "https://b.example", 1, 59)
+
+    def test_log_query_accepts_a_factory_derived_contract_set(self) -> None:
+        pair = MODULE.RpcPair("https://a.example", "https://b.example", 100)
+        responses = []
+
+        def fake_call(endpoint: str, method: str, params: list) -> list:
+            self.assertEqual(method, "eth_getLogs")
+            self.assertEqual(
+                params[0]["address"],
+                [
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222",
+                ],
+            )
+            responses.append(endpoint)
+            return []
+
+        with mock.patch.object(pair, "call", side_effect=fake_call):
+            self.assertEqual(
+                pair.logs(
+                    1,
+                    2,
+                    "0x" + "33" * 32,
+                    [
+                        "0x1111111111111111111111111111111111111111",
+                        "0x2222222222222222222222222222222222222222",
+                    ],
+                ),
+                [],
+            )
+        self.assertEqual(responses, [pair.primary, pair.shadow])
 
     def test_checked_in_pool_has_twenty_unique_closed_evidence_candidates(self) -> None:
         pool = json.loads(

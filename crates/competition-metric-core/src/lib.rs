@@ -402,6 +402,8 @@ pub struct CanonicalGmvSettlement {
     pub funding: Vec<CanonicalGmvFunding>,
 }
 
+type CanonicalGmvSettlementOrder = (u64, [u8; 32], u32, [u8; 20], [u8; 32]);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalGmvCampaign {
     pub epoch_id: [u8; 32],
@@ -719,7 +721,7 @@ fn validate_canonical_gmv_snapshot(
         return Err(MetricError::InvalidGmvSnapshot);
     }
 
-    let mut previous: Option<(u64, [u8; 32], u32, [u8; 20], [u8; 32])> = None;
+    let mut previous: Option<CanonicalGmvSettlementOrder> = None;
     for settlement in settlements {
         let key = (
             settlement.block_number,
@@ -845,8 +847,7 @@ fn canonical_gmv_evidence_hash(
 
 fn strictly_sorted_nonzero_addresses(values: &[[u8; 20]]) -> bool {
     let zero = [0_u8; 20];
-    !values.iter().any(|value| *value == zero)
-        && values.windows(2).all(|values| values[0] < values[1])
+    !values.contains(&zero) && values.windows(2).all(|values| values[0] < values[1])
 }
 
 fn validate_scope(scope: &JournalScopeV2) -> Result<(), MetricError> {

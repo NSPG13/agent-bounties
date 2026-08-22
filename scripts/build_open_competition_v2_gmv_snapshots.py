@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -157,21 +158,51 @@ def raw_log_identity(log: dict[str, Any]) -> dict[str, Any]:
 
 
 class RpcPair:
-    def __init__(self, primary: str, shadow: str, span: int) -> None:
+    def __init__(
+        self,
+        primary: str,
+        shadow: str,
+        span: int,
+        max_runtime_seconds: int = 900,
+        progress_every: int = 100,
+    ) -> None:
         if primary.strip() == shadow.strip():
             raise SnapshotError("primary and shadow RPC endpoints must be independent")
         if span < 1 or span > 100_000:
             raise SnapshotError("RPC block span must be between 1 and 100000")
+        if max_runtime_seconds < 60 or max_runtime_seconds > 7_200:
+            raise SnapshotError("maximum runtime must be between 60 and 7200 seconds")
+        if progress_every < 1 or progress_every > 10_000:
+            raise SnapshotError("progress interval must be between 1 and 10000 calls")
         self.primary = primary
         self.shadow = shadow
         self.span = span
         self.request_id = 40_000
+        self.started_at = time.monotonic()
+        self.max_runtime_seconds = max_runtime_seconds
+        self.progress_every = progress_every
+        self.completed_calls = 0
         self.blocks: dict[tuple[str, int], dict[str, Any]] = {}
         self.receipts: dict[tuple[str, str], dict[str, Any]] = {}
 
     def call(self, endpoint: str, method: str, params: list[Any]) -> Any:
+        elapsed = time.monotonic() - self.started_at
+        if elapsed > self.max_runtime_seconds:
+            raise SnapshotError(
+                f"dual-RPC reconciliation exceeded {self.max_runtime_seconds} seconds"
+            )
         self.request_id += 1
-        return rpc(endpoint, method, params, self.request_id, attempts=3, timeout=30)
+        result = rpc(endpoint, method, params, self.request_id, attempts=3, timeout=30)
+        self.completed_calls += 1
+        if self.completed_calls % self.progress_every == 0:
+            print(
+                "GMV snapshot reconciliation progress: "
+                f"{self.completed_calls} RPC calls completed in "
+                f"{int(time.monotonic() - self.started_at)} seconds",
+                file=sys.stderr,
+                flush=True,
+            )
+        return result
 
     def validate_chains(self) -> None:
         for label, endpoint in (("primary", self.primary), ("shadow", self.shadow)):
@@ -248,7 +279,13 @@ class RpcPair:
             raise SnapshotError(f"RPCs disagree on {tx_hash}:{log_index}")
         return identities[0]
 
-    def logs(self, from_block: int, to_block: int, event_topic: str, address: str | None = None) -> list[dict[str, Any]]:
+    def logs(
+        self,
+        from_block: int,
+        to_block: int,
+        event_topic: str,
+        address: str | list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         projections: list[list[dict[str, Any]]] = [[], []]
         endpoints = (self.primary, self.shadow)
         for start in range(from_block, to_block + 1, self.span):
@@ -467,7 +504,12 @@ def reconcile_event_sets(pair: RpcPair, events: dict[str, list[dict[str, Any]]],
             known_contracts.add(normalize_address(event["data"][contract_field], "created contract"))
     minimum_block = min(protocol.deployment_block for protocol in PROTOCOLS)
     for signature in {protocol.settlement_signature for protocol in PROTOCOLS}:
-        raw = pair.logs(minimum_block, maximum_block, topic(signature))
+        raw = pair.logs(
+            minimum_block,
+            maximum_block,
+            topic(signature),
+            sorted(known_contracts),
+        )
         raw_keys = {
             (log["block_number"], log["transaction_hash"], log["log_index"], log["address"])
             for log in raw
@@ -631,11 +673,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--primary-rpc", required=True)
     parser.add_argument("--shadow-rpc", required=True)
     parser.add_argument("--rpc-block-span", type=int, default=50_000)
+    parser.add_argument("--max-runtime-seconds", type=int, default=900)
+    parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--candidate-id", action="append", dest="candidate_ids")
     args = parser.parse_args(argv)
     try:
         pool = json.loads(args.candidate_pool.read_text(encoding="utf-8-sig"))
-        pair = RpcPair(args.primary_rpc, args.shadow_rpc, args.rpc_block_span)
+        pair = RpcPair(
+            args.primary_rpc,
+            args.shadow_rpc,
+            args.rpc_block_span,
+            args.max_runtime_seconds,
+            args.progress_every,
+        )
         pair.validate_chains()
         events = api_events(args.api_base_url)
         documents, snapshots = build_snapshots(
