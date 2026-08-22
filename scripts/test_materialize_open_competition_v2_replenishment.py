@@ -54,6 +54,14 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
             self.assertEqual(creation["settlement"]["score_direction"], "higher_is_better")
             self.assertEqual(creation["settlement"]["score_threshold_base_units"], 1)
             self.assertEqual(creation["meta_bounty"]["snapshot"]["status"], "ready")
+            self.assertEqual(
+                creation["meta_bounty"]["excluded_wallets"],
+                MATERIALIZER.REQUIRED_EXCLUDED_WALLETS,
+            )
+            self.assertEqual(
+                creation["meta_bounty"]["excluded_bounty_contracts"],
+                MATERIALIZER.REQUIRED_EXCLUDED_BOUNTY_CONTRACTS,
+            )
             self.assertNotIn("artifact_template", creation)
             self.assertNotIn("scores", json.dumps(creation))
             self.assertNotIn("launch_role", json.dumps(creation))
@@ -89,8 +97,14 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
             specs,
             synthetic_private_ranking(specs),
             load_json(LEDGER_PATH),
-            now=datetime(2026, 8, 21, 14, 35, tzinfo=timezone.utc),
+            now=datetime(2026, 8, 22, 4, 35, tzinfo=timezone.utc),
         )
+        with self.assertRaises(MATERIALIZER.MaterializeError):
+            MATERIALIZER.materialize(plan)
+
+    def test_materializer_rejects_exclusion_drift_after_planning(self) -> None:
+        plan = copy.deepcopy(self.plan)
+        plan["selected_candidates"][0]["eligibility_policy"]["excluded_wallets"].pop()
         with self.assertRaises(MATERIALIZER.MaterializeError):
             MATERIALIZER.materialize(plan)
 

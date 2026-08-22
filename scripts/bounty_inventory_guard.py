@@ -59,6 +59,16 @@ STANDING_META_VERIFIER_CODE_HASH = (
 STANDING_META_ACCEPTANCE_HASH = (
     "0x25c41d7d51e2c807754b901733de17cdb1778dbd353f86347ff33e10289fcb54"
 )
+REQUIRED_GMV_PROFILE = {
+    "profile_id": "canonical-gmv-attribution-metric-v1",
+    "classification": "reviewed",
+    "program_vkey": "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
+    "source_hash": "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
+    "elf_hash": "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5",
+    "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+    "metric_program_hash": "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead",
+    "review_evidence_hash": "0x0d679fe190be3e2248953ee5d5f4cb5adfe3a64255404ac752f8caed9862bf86",
+}
 
 
 @dataclass
@@ -79,6 +89,7 @@ class InventoryReport:
     private_v2_observed_safe_block: int | None
     private_v2_release_hash: str | None
     private_v2_factory_contract: str | None
+    private_v2_gmv_profile: dict[str, str] | None
     private_inventory_observed_at: str | None
     verified_meta_claimable_count: int
     missing_count: int
@@ -109,6 +120,7 @@ class InventoryReport:
             "private_v2_observed_safe_block",
             "private_v2_release_hash",
             "private_v2_factory_contract",
+            "private_v2_gmv_profile",
             "private_inventory_observed_at",
             "meta_threshold",
             "meta_replenishment_target",
@@ -643,6 +655,11 @@ def build_report(
         if isinstance(claimable_report, dict)
         else ""
     )
+    private_v2_gmv_profile = (
+        claimable_report.get("open_competition_v2_gmv_profile")
+        if isinstance(claimable_report, dict)
+        else None
+    )
     if private_v2_floor > 0 or private_v2_target > 0:
         v2_evidence_valid = v2_evidence_valid and (
             isinstance(private_v2_safe_block, int)
@@ -650,6 +667,7 @@ def build_report(
             and private_v2_safe_block > 0
             and bool(BYTES32.fullmatch(private_v2_release_hash))
             and bool(ADDRESS.fullmatch(private_v2_factory_contract))
+            and private_v2_gmv_profile == REQUIRED_GMV_PROFILE
         )
     private_v2_missing_to_floor = max(0, private_v2_floor - private_v2_count)
     private_v2_missing_to_target = max(0, private_v2_target - private_v2_count)
@@ -712,6 +730,11 @@ def build_report(
         private_v2_observed_safe_block=private_v2_safe_block,
         private_v2_release_hash=private_v2_release_hash or None,
         private_v2_factory_contract=private_v2_factory_contract or None,
+        private_v2_gmv_profile=(
+            dict(private_v2_gmv_profile)
+            if private_v2_gmv_profile == REQUIRED_GMV_PROFILE
+            else None
+        ),
         private_inventory_observed_at=(
             str(claimable_report.get("observed_at"))
             if isinstance(claimable_report, dict) and claimable_report.get("observed_at")

@@ -119,6 +119,7 @@ def open_competition_v2_report(*, count: int = 5) -> Path:
     data["open_competition_v2_observed_safe_block"] = 50_223_549
     data["open_competition_v2_release_hash"] = "0x" + "ab" * 32
     data["open_competition_v2_factory_contract"] = "0x" + "cd" * 20
+    data["open_competition_v2_gmv_profile"] = dict(GUARD.REQUIRED_GMV_PROFILE)
     data["verified_open_competition_v2_bounties"] = [
         {
             "id": "0x" + f"{index + 1:02x}" * 32,
@@ -242,6 +243,34 @@ class BountyInventoryGuardTests(unittest.TestCase):
         self.assertEqual(payload["missing_to_public_floor"], 0)
         self.assertNotIn("claimable_bounty_ids", payload)
         self.assertIn("does not imply", payload["disclaimer"].lower())
+
+    def test_private_v2_floor_rejects_missing_or_drifted_live_gmv_profile(self) -> None:
+        for mode in ("missing", "drifted"):
+            with self.subTest(mode=mode):
+                path = open_competition_v2_report()
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if mode == "missing":
+                    data.pop("open_competition_v2_gmv_profile")
+                else:
+                    data["open_competition_v2_gmv_profile"]["program_vkey"] = "0x" + "11" * 32
+                path.write_text(json.dumps(data), encoding="utf-8")
+                proc = run_guard(
+                    "--fixture",
+                    str(FIXTURES / "bounty_inventory_above.json"),
+                    "--threshold",
+                    "5",
+                    "--claimable-report",
+                    str(path),
+                    "--private-v2-floor",
+                    "5",
+                    "--private-v2-target",
+                    "10",
+                    "--fail-below",
+                )
+                self.assertEqual(proc.returncode, 2, proc.stderr + proc.stdout)
+                payload = private_payload()
+                self.assertTrue(payload["private_v2_below_floor"])
+                self.assertIsNone(payload["private_v2_gmv_profile"])
 
     def test_standing_meta_floor_and_replenishment_buffer(self) -> None:
         proc = run_guard(

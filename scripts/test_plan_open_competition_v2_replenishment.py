@@ -20,7 +20,7 @@ import plan_open_competition_v2_replenishment as PLANNER
 
 SPECS_PATH = ROOT / "ops" / "open-competition-v2-gmv-candidate-pool-v1.json"
 LEDGER_PATH = ROOT / "ops" / "open-competition-v2-replenishment-ledger-v1.example.json"
-NOW = datetime(2026, 8, 21, 14, 35, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 22, 4, 35, tzinfo=timezone.utc)
 RELEASE_HASH = "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be"
 FACTORY = "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4"
 
@@ -29,7 +29,7 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def inventory(active: int, *, observed_at: str = "2026-08-21T14:34:00Z") -> dict:
+def inventory(active: int, *, observed_at: str = "2026-08-22T04:34:00Z") -> dict:
     return {
         "inventory_evidence_valid": True,
         "private_gmv_meta_floor": 5,
@@ -38,6 +38,7 @@ def inventory(active: int, *, observed_at: str = "2026-08-21T14:34:00Z") -> dict
         "private_v2_observed_safe_block": 50_266_417,
         "private_v2_release_hash": RELEASE_HASH,
         "private_v2_factory_contract": FACTORY,
+        "private_v2_gmv_profile": dict(PLANNER.REQUIRED_LIVE_GMV_PROFILE),
         "private_inventory_observed_at": observed_at,
     }
 
@@ -57,7 +58,7 @@ def reviewed_specs(specs: dict) -> dict:
             "primary_projection_hash": snapshot_hash,
             "shadow_projection_hash": snapshot_hash,
             "snapshot_url": f"https://api.agentbounties.app/v1/gmv-snapshots/{candidate['candidate_id']}",
-            "reconciled_at": "2026-08-21T14:31:00Z",
+            "reconciled_at": "2026-08-22T04:31:00Z",
         }
     return result
 
@@ -92,7 +93,7 @@ def execution(
     index: int,
     *,
     status: str = "planned",
-    occurred_at: str = "2026-08-21T14:30:00Z",
+    occurred_at: str = "2026-08-22T04:30:00Z",
     candidate_id: str | None = None,
     amount: int | float = PLANNER.TOTAL_PER_COMPETITION_BASE_UNITS,
 ) -> dict:
@@ -176,8 +177,19 @@ class ReplenishmentPlannerTests(unittest.TestCase):
                     self.plan(4, inventory_report=report)["status"], "blocked"
                 )
 
+    def test_missing_or_drifted_live_gmv_profile_fails_closed(self) -> None:
+        missing = inventory(4)
+        missing.pop("private_v2_gmv_profile")
+        drifted = inventory(4)
+        drifted["private_v2_gmv_profile"]["program_vkey"] = "0x" + "11" * 32
+        for report in (missing, drifted):
+            with self.subTest():
+                plan = self.plan(4, inventory_report=report)
+                self.assertEqual(plan["status"], "blocked")
+                self.assertIn("not live", plan["blockers"][0])
+
     def test_stale_and_future_inventory_fail_closed(self) -> None:
-        for observed_at in ("2026-08-21T14:19:59Z", "2026-08-21T14:36:01Z"):
+        for observed_at in ("2026-08-22T04:19:59Z", "2026-08-22T04:36:01Z"):
             with self.subTest(observed_at=observed_at):
                 plan = self.plan(4, inventory_report=inventory(4, observed_at=observed_at))
                 self.assertEqual(plan["status"], "blocked")
@@ -193,6 +205,24 @@ class ReplenishmentPlannerTests(unittest.TestCase):
                 plan = self.plan(4, candidate_specs=specs)
                 self.assertEqual(plan["status"], "blocked")
                 self.assertEqual(plan["severity"], "critical")
+
+    def test_candidate_profile_must_equal_the_live_release(self) -> None:
+        drifted = copy.deepcopy(self.specs)
+        drifted["profile_release"]["program_vkey"] = "0x" + "11" * 32
+        plan = self.plan(4, candidate_specs=drifted)
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("differs from the live release", plan["blockers"][0])
+
+    def test_missing_or_drifted_gmv_exclusions_fail_closed(self) -> None:
+        missing = copy.deepcopy(self.specs)
+        missing.pop("eligibility_policy")
+        omitted_operator = copy.deepcopy(self.specs)
+        omitted_operator["eligibility_policy"]["excluded_wallets"].pop()
+        reordered_contracts = copy.deepcopy(self.specs)
+        reordered_contracts["eligibility_policy"]["excluded_bounty_contracts"].reverse()
+        for specs in (missing, omitted_operator, reordered_contracts):
+            with self.subTest():
+                self.assertEqual(self.plan(4, candidate_specs=specs)["status"], "blocked")
 
     def test_duplicate_candidates_and_ranking_mismatches_fail_closed(self) -> None:
         duplicate_specs = copy.deepcopy(self.specs)
@@ -238,8 +268,8 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         recovered = self.plan(
             8,
             ledger=ledger,
-            now=datetime(2026, 8, 22, 0, 5, tzinfo=timezone.utc),
-            inventory_report=inventory(8, observed_at="2026-08-22T00:04:00Z"),
+            now=datetime(2026, 8, 23, 0, 5, tzinfo=timezone.utc),
+            inventory_report=inventory(8, observed_at="2026-08-23T00:04:00Z"),
         )
         self.assertEqual(recovered["status"], "ready")
 
@@ -266,7 +296,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         cases = [
             [base, duplicate_key],
             [base, execution(2, candidate_id=base["candidate_id"])],
-            [execution(3, occurred_at="2026-08-21T14:35:01Z")],
+            [execution(3, occurred_at="2026-08-22T04:35:01Z")],
             [execution(4, amount=3_040_000.0)],
             [execution(5, amount=3_040_001)],
         ]

@@ -48,6 +48,7 @@ class ReplenishmentWorkflowContractTests(unittest.TestCase):
         self.assertIn('PRIVATE_V2_INVENTORY_TARGET: "10"', self.text)
         self.assertIn("plan_open_competition_v2_replenishment.py", self.text)
         self.assertIn("materialize_open_competition_v2_replenishment.py", self.text)
+        self.assertIn("test_build_open_competition_v2_gmv_snapshots", self.text)
         self.assertIn("isolated signer", self.text)
         self.assertIn("canonical activation remains required", self.text)
 

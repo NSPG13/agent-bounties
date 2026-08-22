@@ -51,6 +51,36 @@ ALLOWED_ANALYSIS_KINDS = {
 }
 SPENDING_STATUSES = {"broadcast", "activated"}
 RESERVED_STATUSES = {"planned", "broadcast", "activated"}
+REQUIRED_EXCLUDED_WALLETS = [
+    "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+    "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+]
+REQUIRED_EXCLUDED_BOUNTY_CONTRACTS = [
+    "0x3e052b933628b960d61654a68fca23d869d8989f",
+    "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+    "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+    "0xf8c8897e748e4057d52182c27beb4025f4d49d68",
+]
+WALLET_BOUNDARY = (
+    "Known owner, reserve, delegate, and deployer wallets are ineligible. "
+    "Wallets are not inferred to be unique people."
+)
+CONTRACT_BOUNDARY = (
+    "Declared synthetic canaries and prior GMV reward contracts are ineligible "
+    "and must be extended before each future snapshot review."
+)
+REQUIRED_LIVE_GMV_PROFILE = {
+    "profile_id": PROFILE_ID,
+    "classification": "reviewed",
+    "program_vkey": "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
+    "source_hash": "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
+    "elf_hash": "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5",
+    "journal_schema_hash": GMV_JOURNAL_SCHEMA_HASH,
+    "metric_program_hash": GMV_METRIC_PROGRAM_HASH,
+    "review_evidence_hash": "0x0d679fe190be3e2248953ee5d5f4cb5adfe3a64255404ac752f8caed9862bf86",
+}
 
 
 class PlanError(ValueError):
@@ -125,10 +155,13 @@ def validate_inventory(report: object, now: datetime, floor: int, target: int) -
     )
     release_hash = str(report.get("private_v2_release_hash") or "").lower()
     factory = str(report.get("private_v2_factory_contract") or "").lower()
+    live_profile = report.get("private_v2_gmv_profile")
     if not HASH.fullmatch(release_hash):
         raise PlanError("private_v2_release_hash is invalid")
     if not ADDRESS.fullmatch(factory):
         raise PlanError("private_v2_factory_contract is invalid")
+    if live_profile != REQUIRED_LIVE_GMV_PROFILE:
+        raise PlanError("the exact reviewed canonical GMV profile is not live")
     observed_at = parse_timestamp(
         report.get("private_inventory_observed_at"),
         "private_inventory_observed_at",
@@ -143,6 +176,7 @@ def validate_inventory(report: object, now: datetime, floor: int, target: int) -
         "safe_block": safe_block,
         "release_hash": release_hash,
         "factory_contract": factory,
+        "live_gmv_profile": dict(REQUIRED_LIVE_GMV_PROFILE),
         "observed_at": observed_at.isoformat().replace("+00:00", "Z"),
     }
 
@@ -180,12 +214,38 @@ def validate_candidate_specs(
             if value is not None:
                 raise PlanError(f"unreproduced canonical GMV profile {key} must be null")
             profile_hashes[key] = None
+    if profile_status == "reviewed" and any(
+        profile_hashes[key] != inventory["live_gmv_profile"][key]
+        for key in ("program_vkey", "source_hash", "elf_hash")
+    ):
+        raise PlanError("candidate specs canonical GMV profile differs from the live release")
     if specs.get("economics") != {
         "solver_reward_base_units": SOLVER_REWARD_BASE_UNITS,
         "keeper_reward_base_units": KEEPER_REWARD_BASE_UNITS,
         "total_per_competition_base_units": TOTAL_PER_COMPETITION_BASE_UNITS,
     }:
         raise PlanError("candidate specs economics do not match the bounded signer policy")
+    eligibility = specs.get("eligibility_policy")
+    if not isinstance(eligibility, dict):
+        raise PlanError("candidate specs eligibility policy is required")
+    excluded_wallets = [str(value).lower() for value in eligibility.get("excluded_wallets") or []]
+    excluded_contracts = [
+        str(value).lower() for value in eligibility.get("excluded_bounty_contracts") or []
+    ]
+    if excluded_wallets != REQUIRED_EXCLUDED_WALLETS:
+        raise PlanError("candidate specs do not exclude every reviewed operator wallet")
+    if excluded_contracts != REQUIRED_EXCLUDED_BOUNTY_CONTRACTS:
+        raise PlanError("candidate specs do not exclude every reviewed reward contract")
+    if eligibility.get("wallet_boundary") != WALLET_BOUNDARY:
+        raise PlanError("candidate specs wallet boundary is invalid")
+    if eligibility.get("contract_boundary") != CONTRACT_BOUNDARY:
+        raise PlanError("candidate specs contract boundary is invalid")
+    normalized_eligibility = {
+        "excluded_wallets": excluded_wallets,
+        "excluded_bounty_contracts": excluded_contracts,
+        "wallet_boundary": WALLET_BOUNDARY,
+        "contract_boundary": CONTRACT_BOUNDARY,
+    }
     if str(specs.get("release_hash") or "").lower() != inventory["release_hash"]:
         raise PlanError("candidate specs release hash does not match canonical inventory")
     if str(specs.get("factory_contract") or "").lower() != inventory["factory_contract"]:
@@ -311,6 +371,7 @@ def validate_candidate_specs(
                 "settlement_policy_hash": GMV_SETTLEMENT_POLICY_HASH,
                 **profile_hashes,
             },
+            "eligibility_policy": normalized_eligibility,
             "analysis_sources": analysis,
             "feedback_sources": feedback,
         }

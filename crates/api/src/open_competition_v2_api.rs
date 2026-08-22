@@ -311,6 +311,11 @@ fn profiles_document(
                     "profile_id": "structured-artifact-metric-v1",
                     "classification": "disabled",
                     "reason": "Enable only after two isolated builds reproduce the ELF digest and vkey and the published adversarial corpus passes."
+                },
+                {
+                    "profile_id": "canonical-gmv-attribution-metric-v1",
+                    "classification": "disabled",
+                    "reason": "Enable only after two isolated builds reproduce the ELF digest and vkey, the published adversarial corpus passes, and canonical GMV snapshots reconcile."
                 }
             ])
         });
@@ -2659,6 +2664,12 @@ mod tests {
         assert!(response["canonical_rails"]["sp1_source_commit"].is_null());
         assert!(response["canonical_rails"]["groth16_verifier"].is_null());
         assert_eq!(response["creation_enabled"], false);
+        assert_eq!(response["programs"].as_array().map(Vec::len), Some(3));
+        assert_eq!(
+            response["programs"][2]["profile_id"],
+            "canonical-gmv-attribution-metric-v1"
+        );
+        assert_eq!(response["programs"][2]["classification"], "disabled");
     }
 
     #[test]

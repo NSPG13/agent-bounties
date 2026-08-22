@@ -12,9 +12,11 @@ on:
       - "scripts/bounty_inventory_guard.py"
       - "scripts/plan_open_competition_v2_replenishment.py"
       - "scripts/materialize_open_competition_v2_replenishment.py"
+      - "scripts/build_open_competition_v2_gmv_snapshots.py"
       - "scripts/test_bounty_inventory_guard.py"
       - "scripts/test_plan_open_competition_v2_replenishment.py"
       - "scripts/test_materialize_open_competition_v2_replenishment.py"
+      - "scripts/test_build_open_competition_v2_gmv_snapshots.py"
       - "scripts/test_open_competition_v2_replenishment_workflow.py"
 
 permissions:
@@ -38,6 +40,7 @@ jobs:
             scripts.test_bounty_inventory_guard \
             scripts.test_plan_open_competition_v2_replenishment \
             scripts.test_materialize_open_competition_v2_replenishment \
+            scripts.test_build_open_competition_v2_gmv_snapshots \
             scripts.test_open_competition_v2_replenishment_workflow \
             -v
 

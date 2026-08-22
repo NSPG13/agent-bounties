@@ -1672,6 +1672,23 @@ mod tests {
     }
 
     #[test]
+    fn canonical_gmv_snapshot_builder_vector_matches() {
+        let raw = include_str!(
+            "../../../programs/canonical-gmv-attribution-metric-v1/fixtures/golden-v1.json"
+        );
+        let input: CanonicalGmvProgramInput = serde_json::from_str(raw).unwrap();
+        let output = execute_canonical_gmv_program(&input).unwrap();
+        assert_eq!(
+            output.snapshot_hash,
+            hex!("108f20c52064147687060a3c40ecf8558784f2aa0c848da4c1e9b23e0b36a053")
+        );
+        assert_eq!(
+            output.verification_policy_hash,
+            hex!("60a114110529d22982ce9794b288b6a2407bc2c0b13a9d86e2f4d23136de1a7b")
+        );
+    }
+
+    #[test]
     fn canonical_gmv_operator_wallet_cannot_qualify() {
         let mut input = gmv_input();
         input.scope.solver = [0x22; 20];

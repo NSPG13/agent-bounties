@@ -26,6 +26,18 @@ GMV_EXECUTION_POLICY_HASH = "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b6
 GMV_SETTLEMENT_POLICY_HASH = "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee"
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
 CANDIDATE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$")
+REQUIRED_EXCLUDED_WALLETS = [
+    "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+    "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+]
+REQUIRED_EXCLUDED_BOUNTY_CONTRACTS = [
+    "0x3e052b933628b960d61654a68fca23d869d8989f",
+    "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+    "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+    "0xf8c8897e748e4057d52182c27beb4025f4d49d68",
+]
 
 
 class MaterializeError(ValueError):
@@ -98,8 +110,23 @@ def materialize(plan: object) -> dict[str, Any]:
         epoch = candidate.get("epoch")
         snapshot = candidate.get("snapshot")
         profile = candidate.get("profile_release")
-        if not isinstance(epoch, dict) or not isinstance(snapshot, dict) or not isinstance(profile, dict):
-            raise MaterializeError(f"{field} epoch, snapshot, and profile are required")
+        eligibility = candidate.get("eligibility_policy")
+        if (
+            not isinstance(epoch, dict)
+            or not isinstance(snapshot, dict)
+            or not isinstance(profile, dict)
+            or not isinstance(eligibility, dict)
+        ):
+            raise MaterializeError(
+                f"{field} epoch, snapshot, profile, and eligibility policy are required"
+            )
+        if eligibility.get("excluded_wallets") != REQUIRED_EXCLUDED_WALLETS:
+            raise MaterializeError(f"{field} operator-wallet exclusions are invalid")
+        if (
+            eligibility.get("excluded_bounty_contracts")
+            != REQUIRED_EXCLUDED_BOUNTY_CONTRACTS
+        ):
+            raise MaterializeError(f"{field} reward-contract exclusions are invalid")
         minimum_score = require_int(
             epoch.get("minimum_score_base_units"),
             f"{field}.epoch.minimum_score_base_units",
@@ -148,6 +175,8 @@ def materialize(plan: object) -> dict[str, Any]:
                     "snapshot": snapshot,
                     "score_unit": "usdc_base_units",
                     "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
+                    "excluded_wallets": REQUIRED_EXCLUDED_WALLETS,
+                    "excluded_bounty_contracts": REQUIRED_EXCLUDED_BOUNTY_CONTRACTS,
                     "exclusions": [
                         "operator_or_reserve_wallet funding",
                         "excluded reward contracts",

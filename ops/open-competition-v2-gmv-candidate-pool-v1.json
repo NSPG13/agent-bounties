@@ -22,163 +22,89 @@
     "keeper_reward_base_units": 40000,
     "total_per_competition_base_units": 3040000
   },
+  "eligibility_policy": {
+    "excluded_wallets": [
+      "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "excluded_bounty_contracts": [
+      "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+      "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+    ],
+    "wallet_boundary": "Known owner, reserve, delegate, and deployer wallets are ineligible. Wallets are not inferred to be unique people.",
+    "contract_boundary": "Declared synthetic canaries and prior GMV reward contracts are ineligible and must be extended before each future snapshot review."
+  },
   "candidates": [
     {
-      "candidate_id": "external-gmv-daily-20260811-v1",
-      "title": "Highest externally funded canonical GMV — August 11",
+      "candidate_id": "external-gmv-daily-20260714-v1",
+      "title": "Highest externally funded canonical GMV — July 14",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-11T00:00:00Z", "ends_at": "2026-08-12T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-07-14T00:00:00Z", "ends_at": "2026-07-15T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
     },
     {
-      "candidate_id": "external-gmv-daily-20260812-v1",
-      "title": "Highest externally funded canonical GMV — August 12",
+      "candidate_id": "external-gmv-daily-20260716-v1",
+      "title": "Highest externally funded canonical GMV — July 16",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-12T00:00:00Z", "ends_at": "2026-08-13T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-07-16T00:00:00Z", "ends_at": "2026-07-17T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
     },
     {
-      "candidate_id": "external-gmv-daily-20260813-v1",
-      "title": "Highest externally funded canonical GMV — August 13",
+      "candidate_id": "external-gmv-daily-20260731-v1",
+      "title": "Highest externally funded canonical GMV — July 31",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-13T00:00:00Z", "ends_at": "2026-08-14T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-07-31T00:00:00Z", "ends_at": "2026-08-01T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
     },
     {
-      "candidate_id": "external-gmv-daily-20260814-v1",
-      "title": "Highest externally funded canonical GMV — August 14",
+      "candidate_id": "external-gmv-daily-20260806-v1",
+      "title": "Highest externally funded canonical GMV — August 6",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-14T00:00:00Z", "ends_at": "2026-08-15T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-08-06T00:00:00Z", "ends_at": "2026-08-07T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
     },
     {
-      "candidate_id": "external-gmv-daily-20260815-v1",
-      "title": "Highest externally funded canonical GMV — August 15",
+      "candidate_id": "external-gmv-daily-20260807-v1",
+      "title": "Highest externally funded canonical GMV — August 7",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-15T00:00:00Z", "ends_at": "2026-08-16T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-08-07T00:00:00Z", "ends_at": "2026-08-08T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
     },
     {
-      "candidate_id": "external-gmv-daily-20260816-v1",
-      "title": "Highest externally funded canonical GMV — August 16",
+      "candidate_id": "external-gmv-daily-20260810-v1",
+      "title": "Highest externally funded canonical GMV — August 10",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-16T00:00:00Z", "ends_at": "2026-08-17T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-08-10T00:00:00Z", "ends_at": "2026-08-11T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
     },
     {
-      "candidate_id": "external-gmv-daily-20260817-v1",
-      "title": "Highest externally funded canonical GMV — August 17",
+      "candidate_id": "external-gmv-daily-20260821-v1",
+      "title": "Highest externally funded canonical GMV — August 21",
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
       "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-17T00:00:00Z", "ends_at": "2026-08-18T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-daily-20260818-v1",
-      "title": "Highest externally funded canonical GMV — August 18",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-18T00:00:00Z", "ends_at": "2026-08-19T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-daily-20260819-v1",
-      "title": "Highest externally funded canonical GMV — August 19",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-19T00:00:00Z", "ends_at": "2026-08-20T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-daily-20260820-v1",
-      "title": "Highest externally funded canonical GMV — August 20",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-08-20T00:00:00Z", "ends_at": "2026-08-21T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260601-v1",
-      "title": "Highest externally funded canonical GMV — week of June 1",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-06-01T00:00:00Z", "ends_at": "2026-06-08T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260608-v1",
-      "title": "Highest externally funded canonical GMV — week of June 8",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-06-08T00:00:00Z", "ends_at": "2026-06-15T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260615-v1",
-      "title": "Highest externally funded canonical GMV — week of June 15",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-06-15T00:00:00Z", "ends_at": "2026-06-22T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260622-v1",
-      "title": "Highest externally funded canonical GMV — week of June 22",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-06-22T00:00:00Z", "ends_at": "2026-06-29T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260629-v1",
-      "title": "Highest externally funded canonical GMV — week of June 29",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-06-29T00:00:00Z", "ends_at": "2026-07-06T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260706-v1",
-      "title": "Highest externally funded canonical GMV — week of July 6",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-07-06T00:00:00Z", "ends_at": "2026-07-13T00:00:00Z", "minimum_score_base_units": 1},
+      "epoch": {"starts_at": "2026-08-21T00:00:00Z", "ends_at": "2026-08-22T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
@@ -189,16 +115,6 @@
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
       "gmv_lane": "external_supply",
       "epoch": {"starts_at": "2026-07-13T00:00:00Z", "ends_at": "2026-07-20T00:00:00Z", "minimum_score_base_units": 1},
-      "snapshot": {"status": "pending"},
-      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
-      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
-    },
-    {
-      "candidate_id": "external-gmv-week-20260720-v1",
-      "title": "Highest externally funded canonical GMV — week of July 20",
-      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
-      "gmv_lane": "external_supply",
-      "epoch": {"starts_at": "2026-07-20T00:00:00Z", "ends_at": "2026-07-27T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
@@ -219,6 +135,106 @@
       "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
       "gmv_lane": "external_supply",
       "epoch": {"starts_at": "2026-08-03T00:00:00Z", "ends_at": "2026-08-10T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-week-20260810-v1",
+      "title": "Highest externally funded canonical GMV — week of August 10",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-08-10T00:00:00Z", "ends_at": "2026-08-17T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260817-v1",
+      "title": "Highest externally funded canonical GMV — August 17–22 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-08-17T00:00:00Z", "ends_at": "2026-08-22T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-fortnight-20260708-v1",
+      "title": "Highest externally funded canonical GMV — July 8–22",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-07-08T20:22:19Z", "ends_at": "2026-07-22T20:22:19Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-fortnight-20260722-v1",
+      "title": "Highest externally funded canonical GMV — July 22–August 5",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-07-22T00:00:00Z", "ends_at": "2026-08-05T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-fortnight-20260805-v1",
+      "title": "Highest externally funded canonical GMV — August 5–19",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-08-05T00:00:00Z", "ends_at": "2026-08-19T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-month-20260708-v1",
+      "title": "Highest externally funded canonical GMV — launch month through August 8",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-07-08T20:22:19Z", "ends_at": "2026-08-08T20:22:19Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260714-v1",
+      "title": "Highest externally funded canonical GMV — July 14–17 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-07-14T00:00:00Z", "ends_at": "2026-07-17T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260731-v1",
+      "title": "Highest externally funded canonical GMV — July 31–August 8 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-07-31T00:00:00Z", "ends_at": "2026-08-08T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260806-v1",
+      "title": "Highest externally funded canonical GMV — August 6–11 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-08-06T00:00:00Z", "ends_at": "2026-08-11T00:00:00Z", "minimum_score_base_units": 1},
+      "snapshot": {"status": "pending"},
+      "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
+      "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260820-v1",
+      "title": "Highest externally funded canonical GMV — August 20–22 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {"starts_at": "2026-08-20T00:00:00Z", "ends_at": "2026-08-22T00:00:00Z", "minimum_score_base_units": 1},
       "snapshot": {"status": "pending"},
       "analysis_sources": [{"kind": "canonical_platform_metric", "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"}],
       "feedback_sources": [{"kind": "documented_contributor_feedback", "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"}]

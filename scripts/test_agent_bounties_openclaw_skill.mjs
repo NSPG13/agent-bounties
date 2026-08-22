@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  CANONICAL_GMV_PROFILE,
   collectInventory,
   githubIssueNumberFromSourceUrl,
   keccak256Hex,
@@ -964,7 +965,7 @@ test("Beta3 inventory requires current safe-block agreement and positive hosted 
         release_hash: hash("a"),
         public_creation_enabled: true,
         proof_broker_enabled: true,
-        metric_programs: [program],
+        metric_programs: [program, CANONICAL_GMV_PROFILE],
       },
       indexer_agreement: {
         agrees: true,
@@ -1009,6 +1010,7 @@ test("Beta3 inventory requires current safe-block agreement and positive hosted 
   assert.equal(verified.status, "verified");
   assert.equal(verified.observedSafeBlock, 100);
   assert.equal(verified.releaseHash, hash("a"));
+  assert.deepEqual(verified.gmvProfile, CANONICAL_GMV_PROFILE);
   assert.equal(verified.verified.length, 1);
   assert.equal(verified.verified[0].hosted_net_prize_if_win_minor, 2_890_000);
 

@@ -19808,6 +19808,20 @@ mod tests {
     }
 
     #[test]
+    fn public_metrics_policy_excludes_the_declared_operator_wallets() {
+        let policy = public_metrics_policy().unwrap();
+        assert_eq!(
+            policy.maintainer_wallets,
+            vec![
+                "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+                "0x884834e884d6e93462655a2820140ad03e6747bc",
+                "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+                "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+            ]
+        );
+    }
+
+    #[test]
     fn platform_metrics_response_is_aggregate_only_and_preserves_payment_math() {
         let generated_at = parse_public_metrics_timestamp("2026-08-12T20:22:19Z").unwrap();
         let stats = PlatformMetricsStats {
