@@ -163,6 +163,21 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         self.assertFalse(any("profile" in blocker for blocker in plan["blockers"]))
         self.assertTrue(any("snapshots" in blocker for blocker in plan["blockers"]))
 
+    def test_checked_in_ready_pool_restores_target_when_every_live_gate_matches(self) -> None:
+        specs = load_json(SPECS_PATH)
+        current = datetime(2026, 8, 22, 5, 40, tzinfo=timezone.utc)
+        report = inventory(0, observed_at="2026-08-22T05:39:00Z")
+        plan = PLANNER.build_plan(
+            report,
+            specs,
+            synthetic_private_ranking(specs),
+            self.ledger,
+            now=current,
+        )
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(len(plan["selected_candidates"]), 10)
+        self.assertEqual(plan["blockers"], [])
+
     def test_same_inputs_and_clock_produce_identical_plan(self) -> None:
         first = self.plan(4)
         second = self.plan(4)
