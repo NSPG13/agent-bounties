@@ -221,7 +221,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
                     status="activated",
                     occurred_at="2026-08-20T12:00:00Z",
                 )
-                for index in range(49)
+                for index in range(25)
             ],
         }
         plan = self.plan(8, ledger=ledger)

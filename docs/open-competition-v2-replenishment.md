@@ -15,8 +15,14 @@ continues to show one unified marketplace.
 - `ops/open-competition-v2-gmv-candidate-pool-v1.json` contains twenty public,
   reviewed candidate specifications and evidence references. It intentionally
   contains no operational scores or active/standby ranking.
-- The isolated signer owns the private ranking, durable ledger, policy counters,
-  bounded key, predicted addresses, and canonical reconciliation.
+- `BoundedOpenCompetitionV2Wallet` holds the USDC reserve under the operator
+  owner's on-chain control. Its delegate can create only reviewed, exact-value
+  competitions; it cannot transfer or withdraw USDC.
+- `BoundedOpenCompetitionV2WalletFactory` deterministically deploys that wallet
+  and atomically funds it through an exact allowance or EIP-3009 authorization.
+- The isolated delegate owns the private ranking, durable execution ledger,
+  predicted addresses, and canonical reconciliation. The contract, not the
+  hosted delegate, enforces candidate commitments and spending caps.
 
 ## Configuration
 
@@ -38,19 +44,41 @@ block before recording activation.
 
 ## Signer policy
 
-The signer independently requires:
+The on-chain reserve independently requires:
 
 1. Base mainnet, the reviewed factory/release/profile, and fresh safe-block
    evidence with primary/shadow agreement.
 2. Exactly 3.00 USDC solver reward and 0.04 USDC keeper reward per creation.
-3. No more than 30.40 USDC per UTC day or 152 USDC lifetime, including pending
-   broadcasts.
+3. No more than 30.40 USDC per UTC day or 77.668098 USDC lifetime. The initial
+   policy cannot spend more than the exact owner-authorized reserve.
 4. A candidate in the private ranking whose ID and public spec hash match.
 5. A durable idempotency reservation containing policy epoch, safe block,
    candidate hashes, derived nonce, and predicted contract address.
 6. Exact USDC allowance immediately before factory creation and zero allowance
    after consumption.
-7. No settlement, verifier, arbitrary-transfer, or policy-changing call.
+7. No settlement, verifier, arbitrary-transfer, owner-recovery, or
+   policy-changing call from the delegate.
+
+The owner remains `0x884834E884d6e93462655A2820140aD03E6747bC` for the
+initial rollout. The delegate is not the owner and receives no reserve USDC; it
+needs only enough Base ETH to submit authorized creation calls.
+
+## Recovery
+
+Recovery does not depend on the delegate, hosted API, relayer, or wallet
+provider. The owner can:
+
+1. call `revokePolicy()` to stop every future delegate creation;
+2. call `recoverUncommitted()` to return the wallet's remaining USDC directly
+   to the current owner;
+3. after an owned competition is cancelled, expired, or its pinned verifier is
+   unavailable, pull the creator refund into the reserve and recover it; and
+4. transfer recovery authority only through two-step ownership acceptance.
+
+Funds already escrowed in a healthy active competition are deliberately not
+clawbackable before its committed proof window ends. This preserves participant
+trust. They become recoverable only through the competition's canonical refund
+paths; settled rewards belong to the solver and keeper.
 
 ## Staged rollout
 
@@ -63,7 +91,8 @@ The signer independently requires:
    canonical inventory for at least one review cycle.
 4. Obtain explicit R3 maintainer risk approval and name signer, rollback, and
    incident owners.
-5. Fund the isolated mainnet signer with exactly 152 USDC plus minimal gas.
+5. Have the owner atomically create and fund the bounded reserve with exactly
+   77.668098 USDC. Fund the delegate separately with minimal Base ETH only.
 6. Enable one internal canary, confirm allowance returns to zero and both
    indexers observe canonical activation, then enable the first batch.
 7. Continue until ten are canonically active or a hard policy condition blocks.
@@ -82,8 +111,8 @@ the finality window:
 2. Preserve the plan and signer ledger privately; do not upload them to the
    public workflow or issue.
 3. Reconcile safe-block factory and activation events through both indexers.
-4. Revoke the signer token and wallet authority if unexpected calls or amounts
-   are present.
+4. Revoke the on-chain policy, revoke the signer token, and recover uncommitted
+   USDC to the owner if unexpected calls or amounts are present.
 5. Repair forward with a reviewed policy epoch; canonical history is never
    rewritten.
 6. Publish only a generic unified-liquidity incident statement unless a public
@@ -96,6 +125,10 @@ python -m unittest scripts.test_bounty_inventory_guard -v
 python -m unittest scripts.test_plan_open_competition_v2_replenishment -v
 python -m unittest scripts.test_materialize_open_competition_v2_replenishment -v
 python -m unittest scripts.test_open_competition_v2_replenishment_workflow -v
+python -m unittest scripts.test_build_bounded_open_competition_v2_wallet_bundle -v
+python scripts/build_bounded_open_competition_v2_wallet_bundle.py
+cd contracts/base-escrow
+forge test --match-contract BoundedOpenCompetitionV2WalletTest -vv
 ```
 
 The implementation is not operationally complete until the signer exists, the

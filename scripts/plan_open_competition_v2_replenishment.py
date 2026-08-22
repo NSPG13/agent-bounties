@@ -359,7 +359,7 @@ def build_plan(
     target: int = 10,
     per_candidate_base_units: int = TOTAL_PER_COMPETITION_BASE_UNITS,
     daily_cap_base_units: int = 30_400_000,
-    lifetime_cap_base_units: int = 152_000_000,
+    lifetime_cap_base_units: int = 77_668_098,
 ) -> dict[str, Any]:
     require_int(floor, "floor", minimum=1)
     require_int(target, "target", minimum=floor)

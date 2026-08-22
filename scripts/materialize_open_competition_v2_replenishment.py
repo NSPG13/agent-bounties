@@ -62,7 +62,7 @@ def materialize(plan: object) -> dict[str, Any]:
         "keeper_reward_base_units": 40_000,
         "per_candidate_base_units": 3_040_000,
         "daily_cap_base_units": 30_400_000,
-        "lifetime_cap_base_units": 152_000_000,
+        "lifetime_cap_base_units": 77_668_098,
     }
     for field, expected in expected_policy.items():
         if policy.get(field) != expected:

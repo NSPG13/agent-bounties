@@ -2,11 +2,12 @@
 
 ## Scope and authority
 
-This is an R3 path because it can spend reserved USDC. The public repository and
-GitHub runner can observe and plan, but cannot sign. The isolated signer is
-authorized only for exact USDC approval and reviewed factory-creation calls.
-It is not authorized to settle, verify, transfer arbitrary funds, change policy,
-or infer paid status.
+This is an R4 path because it introduces a value-bearing bounded reserve
+contract. The public repository and GitHub runner can observe and plan, but
+cannot sign. The isolated delegate is authorized only to submit exact reviewed
+factory-creation calls. The reserve contract independently prevents settlement,
+verification, arbitrary transfer, owner recovery, and policy changes by the
+delegate.
 
 ```text
 canonical safe-block sources -> private guard -> deterministic planner
@@ -16,21 +17,24 @@ private ranking + durable ledger (isolated service) ---/
                                                        |
                                               unsigned exact request
                                                        |
-                                                isolated signer
+                                               isolated delegate
                                                        |
-                                         USDC + approved V2 factory
+                                     bounded reserve + approved V2 factory
                                                        |
                                       canonical activation reconciliation
 ```
 
-The reserve wallet holds at most 152 USDC plus minimal Base gas. GitHub stores
-only an HTTPS signer endpoint and revocable bearer credential, never the wallet
-key. Public output is unified and contains no mechanism-specific floor, deficit,
-ranking, or private feedback.
+The reserve contract holds at most 77.668098 USDC and is owned by the funding
+wallet. The delegate holds minimal Base gas but no reserve USDC. GitHub stores
+only an HTTPS signer endpoint and revocable bearer credential, never either
+owner or delegate key. Public output is unified and contains no
+mechanism-specific floor, deficit, ranking, or private feedback. The detailed
+on-chain analysis is in
+[`../threat-model-bounded-open-competition-v2-wallet.md`](../threat-model-bounded-open-competition-v2-wallet.md).
 
 ## Assets and invariants
 
-- Reserve principal: at most 152,000,000 USDC base units.
+- Reserve principal: at most 77,668,098 USDC base units.
 - Daily exposure: at most 30,400,000 base units per UTC day.
 - One creation: exactly 3,000,000 solver plus 40,000 keeper base units.
 - Allowed target: the reviewed Beta3 factory and release hash in the candidate
@@ -50,10 +54,12 @@ ranking, or private feedback.
 | Duplicate worker, retry, or crash | duplicate funding | serialized workflow, content-addressed request, durable signer reservation before broadcast, predicted-address check |
 | Pending broadcast followed by another batch | target overshoot | any planned/broadcast ledger record blocks new plans until reconciled |
 | Tampered candidate pool or private scores | unauthorized terms | exact public spec hash, private ranking schema, twenty-ID equality, 50/30/20 weights, expiry |
-| Cap or integer bypass | reserve loss | integer base units only; independent signer day/lifetime counters; exact per-call amount |
+| Cap or integer bypass | reserve loss | integer base units only; on-chain UTC-day and persistent lifetime counters; exact per-call amount |
 | Stuck or excessive allowance | token loss | approve exact amount immediately before the matching creation; require zero afterward; stop on mismatch |
 | Runner/token compromise | repeated valid requests | signer revalidates every request, narrowly scoped revocable token, rate limit, durable idempotency, no arbitrary calldata |
-| Signer compromise | reserve loss | isolated wallet with lifetime-limited balance, minimal gas, owner revocation, no settlement authority |
+| Delegate compromise | bounded in-policy spend | preapproved one-use creation commitments, daily/lifetime caps, no withdrawal selector, owner revocation |
+| Owner needs funds back | liquidity trapped in delegate custody | owner revokes on-chain policy and withdraws every uncommitted unit without delegate cooperation; canonical refunds can be pulled after cancellation or expiry |
+| Early owner clawback | participant trust failure | healthy active escrow cannot be cancelled through the reserve before its committed proof window ends |
 | AI-generated feedback or ranking | bad growth direction | at least one genuine user source and one quantitative source per candidate; AI is advisory only |
 | Public artifact leakage | strategy/privacy breach | temporary runner files only; no artifact upload, body logging, public type counts, or private comments |
 | Broadcast called funded/paid | false trust claim | response language says submitted only; later safe-block reconciliation is mandatory |
@@ -73,8 +79,8 @@ canonical reconciliation.
 Alert on a floor breach, planning block, signer-policy rejection, nonzero stale
 allowance, unexpected target/calldata, cap mismatch, pending execution beyond
 the canonical finality window, or primary/shadow disagreement. Contain by setting
-`V2_REPLENISHMENT_EXECUTE=false`, revoking the signer bearer credential, and
-revoking wallet authority or moving the bounded remainder through the owner path.
+`V2_REPLENISHMENT_EXECUTE=false`, revoking the delegate bearer credential, and
+calling `revokePolicy()` followed by `recoverUncommitted()` from the owner.
 Do not delete the ledger. Reconcile canonical events, mark every reservation
 activated or rejected, rotate credentials, and rerun the deterministic plan.
 
