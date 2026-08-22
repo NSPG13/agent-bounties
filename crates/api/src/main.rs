@@ -5335,6 +5335,10 @@ fn public_metrics_policy() -> Result<PublicMetricsPolicy, StatusCode> {
     Ok(policy)
 }
 
+fn historical_platform_metric_exclusions(policy: &PublicMetricsPolicy) -> Vec<String> {
+    policy.excluded_bounty_contracts.clone()
+}
+
 fn exact_usdc(amount: u128) -> String {
     format!("{}.{:06}", amount / 1_000_000, amount % 1_000_000)
 }
@@ -5702,10 +5706,10 @@ async fn platform_metrics(
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let window = platform_metric_window(query.period.as_deref(), Utc::now())?;
     let policy = public_metrics_policy()?;
-    let mut excluded_contracts = state.recovery_reservations.contracts();
-    excluded_contracts.extend(policy.excluded_bounty_contracts.iter().cloned());
-    excluded_contracts.sort();
-    excluded_contracts.dedup();
+    // Historical metrics are immutable once their canonical events are verified.
+    // Recovery reservations only protect current earning inventory; the public
+    // metrics policy is the sole authority for excluding historical contracts.
+    let excluded_contracts = historical_platform_metric_exclusions(&policy);
     let stats = store
         .platform_metrics_stats(
             "base-mainnet",
@@ -19819,6 +19823,20 @@ mod tests {
                 "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
             ]
         );
+    }
+
+    #[test]
+    fn platform_metric_history_uses_policy_exclusions_not_recovery_reservations() {
+        let recovery_contract = "0x9999999999999999999999999999999999999999";
+        let reservations =
+            AutonomousBountyRecoveryReservations::parse_csv(Some(recovery_contract)).unwrap();
+        assert!(reservations.contains(recovery_contract));
+
+        let exclusions = historical_platform_metric_exclusions(&public_metrics_policy().unwrap());
+        assert!(!exclusions
+            .iter()
+            .any(|contract| contract == recovery_contract));
+        assert_eq!(exclusions.len(), 4);
     }
 
     #[test]

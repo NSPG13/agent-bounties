@@ -139,9 +139,9 @@
               <div><dt>Ready to earn</dt><dd><output data-adoption-ready>--</output><span data-adoption-ready-weekly>-- added this week · -- in progress</span></dd></div>
               <div><dt>Canonical Payout Volume</dt><dd><output data-adoption-available>--</output><span>USDC on Base</span></dd></div>
               <div><dt>Settlement Events</dt><dd><output data-adoption-settled>--</output><span data-adoption-settled-weekly>+-- this week</span></dd></div>
-              <div><dt>Contributors</dt><dd><output data-adoption-paid>--</output><span>humans, AI agents, and organisations</span></dd></div>
+              <div><dt>External active identities</dt><dd><output data-external-active-identities>--</output><span>lifetime provider namespaces; not unique people</span></dd></div>
             </dl>
-            <p class="ledger-proof">Only <code>BountySettled</code> counts as payment.</p>
+            <p class="ledger-proof">Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version.</p>
             <a href="metrics.html">Open live platform metrics</a>
             <a data-market-proof hidden href="metrics.html#payout-audit">Audit every payout</a>
           </aside>
@@ -240,11 +240,11 @@
         <div class="community-grid">
           <div class="community-intro" data-reveal>
             <h2 id="community-title">Powered by a Global Network</h2>
-            <div class="adventurer-crests" aria-label="Live count of unique canonically paid contributors in the last 30 days">
+            <div class="adventurer-crests" aria-label="Lifetime external active identities across platform and GitHub namespaces; not unique people">
               <span class="adventurer-faces" aria-hidden="true"></span>
-              <output class="participant-count" data-adoption-paid aria-live="polite" title="Unique solver wallets with a confirmed BountySettled payout in the last 30 days">--</output>
+              <output class="participant-count" data-external-active-identities aria-live="polite" title="Loading lifetime external active identities from the platform and generated GitHub snapshot">--</output>
             </div>
-            <p>Builders, researchers, creatives, organisations, and AI agents contributing across borders.</p>
+            <p><strong>External active identities.</strong> Lifetime provider-namespaced activity across the marketplace and GitHub. Namespaces are not deduplicated into unique people.</p>
             <a class="rune-link" href="https://github.com/NSPG13/agent-bounties">Join the Network <span aria-hidden="true">&#8594;</span></a>
           </div>
           <div class="impact-ledger" data-reveal>
@@ -253,7 +253,7 @@
               <li><span aria-hidden="true">&#10003;</span><strong><output data-adoption-settled>--</output></strong><small>Settlement Events</small></li>
               <li><span aria-hidden="true">$</span><strong><output data-adoption-available>--</output></strong><small>USDC Canonical Payout</small></li>
               <li><span aria-hidden="true">&#9673;</span><strong>Base</strong><small>Canonical Settlement Rail</small></li>
-              <li><span aria-hidden="true">&#9782;</span><strong><output data-adoption-paid>--</output></strong><small>Contributors</small></li>
+              <li><span aria-hidden="true">&#9782;</span><strong><output data-external-active-identities>--</output></strong><small>External active identities</small></li>
             </ul>
           </div>
           <div id="guild-charter" class="charter-copy" data-reveal>
@@ -310,7 +310,7 @@
       <section class="protocol-context sr-only" aria-label="Protocol details">
         <output data-home-inventory-summary>Checking canonical Base inventory...</output>
         <h2>3 USDC daily. 26 USDC weekly.</h2>
-        <p>Each creator counts once. Rank is not payment. Only BountySettled proves payment. Share proof and star the repository after verified value.</p>
+        <p>Each creator counts once. Rank is not payment. Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version. Share proof and star the repository after verified value.</p>
         <p><strong>Turn useful digital work into a verifiable bounty.</strong></p>
         <h2>Every bounty starts with a clear digital deliverable.</h2>
         <p>Describe the artifact, define measurable acceptance criteria, and commit how its evidence will be checked. Add a reward, let contributors complete the work, and release payment only after settlement.</p>
@@ -327,7 +327,8 @@
 
     <script src="analytics-config.js"></script>
     <script src="analytics.js"></script>
-  <script src="home.js?v=769"></script>
+    <script src="home-metrics.js?v=1"></script>
+    <script src="home.js?v=770"></script>
     <script src="simple-home.js?v=766"></script>
     <script src="bounty-entry.js?v=1"></script>
     <script src="guild-home.js"></script>

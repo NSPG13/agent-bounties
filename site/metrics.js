@@ -11,6 +11,7 @@
   const AUTONOMOUS_EVENTS_URL = "https://api.agentbounties.app/v1/base/autonomous-bounties/events?network=base-mainnet";
   const COMPETITION_EVENTS_URL = "https://api.agentbounties.app/v1/base/open-competition-v1/events?network=base-mainnet";
   const COMPETITION_V2_EVENTS_URL = "https://api.agentbounties.app/v1/base/open-competition-v2-beta3/events?network=base-mainnet";
+  const PUBLIC_METRICS_POLICY_URL = "generated/public-metrics-policy.json";
   const BASESCAN_TX_URL = "https://basescan.org/tx/";
   const GITHUB_URL = "generated/github-participation.json";
   const ACQUISITION_URL = "https://api.agentbounties.app/v1/analytics/site";
@@ -244,6 +245,78 @@
     });
   }
 
+  function normalizedPublicMetricsPolicy(policy) {
+    if (!policy || policy.schema_version !== "agent-bounties/public-metrics-policy-v1") return null;
+    const listFields = [
+      "maintainer_github_logins",
+      "maintainer_comment_authors",
+      "maintainer_wallets",
+      "excluded_bounty_contracts",
+    ];
+    if (!listFields.every((field) => Array.isArray(policy[field]))) return null;
+    if (typeof policy.wallet_ownership_boundary !== "string" || !policy.wallet_ownership_boundary.trim()) return null;
+    const normalized = policy.excluded_bounty_contracts.map((value) => String(value || "").trim().toLowerCase());
+    if (normalized.some((value) => !/^0x[0-9a-f]{40}$/.test(value))) return null;
+    if (new Set(normalized).size !== normalized.length) return null;
+    return { ...policy, excluded_bounty_contracts: normalized };
+  }
+
+  function partitionCanonicalPayoutRows(rows, policy) {
+    const normalizedPolicy = normalizedPublicMetricsPolicy(policy);
+    if (!normalizedPolicy) return null;
+    const excludedContracts = new Set(normalizedPolicy.excluded_bounty_contracts);
+    return (Array.isArray(rows) ? rows : []).reduce((partition, row) => {
+      const contract = String(row?.contract_address || "").trim().toLowerCase();
+      partition[excludedContracts.has(contract) ? "excluded" : "included"].push(row);
+      return partition;
+    }, { included: [], excluded: [] });
+  }
+
+  function exactBaseUnits(value) {
+    const text = String(value ?? "");
+    if (!/^\d+$/.test(text)) return null;
+    const amount = Number(text);
+    return Number.isSafeInteger(amount) ? amount : null;
+  }
+
+  function payoutAuditSnapshot(platform, autonomousResponse, competitionResponse, competitionV2Response, policy) {
+    const empty = payoutAuditSummary([]);
+    if (!platform || !autonomousResponse || !competitionResponse || !competitionV2Response) {
+      return { status: "unavailable", rows: [], excluded_rows: [], summary: empty, excluded_summary: empty, generated_at: null };
+    }
+    const rows = canonicalPayoutRows(
+      autonomousResponse,
+      competitionResponse,
+      competitionV2Response,
+      platform.window,
+    );
+    const partition = partitionCanonicalPayoutRows(rows, policy);
+    if (!partition) {
+      return { status: "unavailable", rows: [], excluded_rows: [], summary: empty, excluded_summary: empty, generated_at: null };
+    }
+    const summary = payoutAuditSummary(partition.included);
+    const excludedSummary = payoutAuditSummary(partition.excluded);
+    const payout = platform.marketplace_payout_volume;
+    const expected = {
+      total_base_units: exactBaseUnits(payout?.selected?.usdc_base_units),
+      solver_base_units: exactBaseUnits(payout?.selected_solver_pay?.usdc_base_units),
+      verifier_base_units: exactBaseUnits(payout?.selected_verifier_pay?.usdc_base_units),
+      keeper_base_units: exactBaseUnits(payout?.selected_keeper_pay?.usdc_base_units),
+      bonus_base_units: exactBaseUnits(payout?.selected_completion_bonus?.usdc_base_units),
+      settlement_events: Number(payout?.selected_settled_rounds),
+    };
+    const reconciled = Object.values(expected).every(Number.isSafeInteger)
+      && Object.entries(expected).every(([field, value]) => summary[field] === value);
+    return {
+      status: reconciled ? "ready" : "partial",
+      rows: partition.included,
+      excluded_rows: partition.excluded,
+      summary,
+      excluded_summary: excludedSummary,
+      generated_at: rows[0]?.occurred_at || platform.generated_at,
+    };
+  }
+
   function weeklyGrowth(current, previous) {
     const now = Math.max(0, finiteNumber(current));
     const before = Math.max(0, finiteNumber(previous));
@@ -423,6 +496,7 @@
       autonomousEvents: null,
       competitionEvents: null,
       competitionV2Events: null,
+      publicMetricsPolicy: null,
       github: null,
       acquisition: null,
       errors: {},
@@ -449,31 +523,6 @@
       return text.length > 18 ? `${text.slice(0, 10)}…${text.slice(-6)}` : text || "—";
     }
 
-    function payoutAuditSnapshot(platform) {
-      if (!platform || !state.autonomousEvents || !state.competitionEvents || !state.competitionV2Events) {
-        return { status: "unavailable", rows: [], summary: payoutAuditSummary([]), generated_at: null };
-      }
-      const rows = canonicalPayoutRows(
-        state.autonomousEvents,
-        state.competitionEvents,
-        state.competitionV2Events,
-        platform.window,
-      );
-      const summary = payoutAuditSummary(rows);
-      const expectedTotal = Number(platform.marketplace_payout_volume?.selected?.usdc_base_units);
-      const expectedSettlements = Number(platform.marketplace_payout_volume?.selected_settled_rounds);
-      const reconciled = Number.isSafeInteger(expectedTotal)
-        && Number.isSafeInteger(expectedSettlements)
-        && summary.total_base_units === expectedTotal
-        && summary.settlement_events === expectedSettlements;
-      return {
-        status: reconciled ? "ready" : "partial",
-        rows,
-        summary,
-        generated_at: rows[0]?.occurred_at || platform.generated_at,
-      };
-    }
-
     function renderPayoutAudit(audit) {
       const status = one("[data-audit-status]");
       if (status) {
@@ -491,11 +540,17 @@
       setText("[data-audit-payout-events]", audit.status === "unavailable"
         ? "—"
         : formatInteger(audit.summary.payout_events));
+      setText("[data-audit-excluded-events]", audit.status === "unavailable"
+        ? "—"
+        : formatInteger(audit.excluded_summary.payout_events));
+      setText("[data-audit-excluded-volume]", audit.status === "unavailable"
+        ? "—"
+        : formatUsdc(audit.excluded_summary.total_base_units / USDC_SCALE));
       setText("[data-audit-copy]", audit.status === "ready"
         ? "The independent event sum exactly matches the headline payout and settlement count for this period."
         : audit.status === "partial"
           ? "The public event sum does not match the aggregate yet. Treat the headline as partial while indexing catches up."
-          : "The raw canonical event streams are unavailable. No unverifiable replacement is shown.");
+          : "A canonical event source or the public metrics policy is unavailable or malformed. No unverifiable replacement is shown.");
 
       const body = one("[data-audit-rows]");
       if (!body) return;
@@ -715,7 +770,13 @@
         now,
         GITHUB_DELAY_MS,
       );
-      const audit = payoutAuditSnapshot(platform);
+      const audit = payoutAuditSnapshot(
+        platform,
+        state.autonomousEvents,
+        state.competitionEvents,
+        state.competitionV2Events,
+        state.publicMetricsPolicy,
+      );
       const interfaceSummary = interfaceUsageSummary(state.acquisition);
       const interfaceUsage = interfaceSummary.status === "unavailable"
         ? interfaceSummary
@@ -733,9 +794,9 @@
         .filter(Number.isFinite);
       setText("[data-last-update]", timestamps.length ? new Date(Math.min(...timestamps)).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "not available");
 
-      const activeSuffix = merged.active_complete ? "" : "*";
-      setText("[data-active-identities]", platform ? `${formatInteger(merged.active_identities)}${activeSuffix}` : "—");
-      setText("[data-active-growth]", platform ? weeklyGrowth(merged.latest_week, merged.previous_week) : "—");
+      const identitiesAvailable = Boolean(platform && merged.active_complete);
+      setText("[data-active-identities]", identitiesAvailable ? formatInteger(merged.active_identities) : "—");
+      setText("[data-active-growth]", identitiesAvailable ? weeklyGrowth(merged.latest_week, merged.previous_week) : "—");
       setText("[data-active-context]", merged.active_complete
         ? "Distinct participating identities across separate GitHub, wallet, and comment-author namespaces."
         : "Partial identity count: one or more required participation sources are unavailable.");
@@ -745,12 +806,13 @@
       setText("[data-mature-cohort]", cohort ? formatInteger(cohort.mature_claimed_rounds) : "—");
       setText("[data-immature-context]", cohort ? `${formatInteger(cohort.immature_claimed_rounds)} immature claimed round${cohort.immature_claimed_rounds === 1 ? "" : "s"} shown separately.` : "Recent claims stay outside the rate until they mature or reach a terminal event.");
 
-      renderChart("[data-identity-chart]", merged.daily, "active_identities", "identities");
+      renderChart("[data-identity-chart]", identitiesAvailable ? merged.daily : [], "active_identities", "identities");
       renderChart("[data-payout-chart]", merged.daily, "payout_usdc", "payout");
       setText("[data-identity-chart-subtitle]", merged.active_complete ? "Selected period" : "Partial source coverage");
-      renderRoles(merged.roles);
+      renderRoles(identitiesAvailable ? merged.roles : []);
       setText("[data-solver-pay]", payout ? amount(payout.selected_solver_pay) : "—");
       setText("[data-verifier-pay]", payout ? amount(payout.selected_verifier_pay) : "—");
+      setText("[data-keeper-pay]", payout ? amount(payout.selected_keeper_pay) : "—");
       setText("[data-completion-bonus]", payout ? amount(payout.selected_completion_bonus) : "—");
       renderInterfaceUsage(interfaceUsage);
       renderPayoutAudit(audit);
@@ -787,8 +849,8 @@
             : "GMV is available, but the externally funded share is withheld because funding attribution is incomplete.",
       );
 
-      setText("[data-first-month-identities]", platform ? `${formatInteger(merged.first_month_identities)}${activeSuffix}` : "—");
-      setText("[data-lifetime-identities]", platform ? `${formatInteger(merged.lifetime_identities)}${activeSuffix}` : "—");
+      setText("[data-first-month-identities]", identitiesAvailable ? formatInteger(merged.first_month_identities) : "—");
+      setText("[data-lifetime-identities]", identitiesAvailable ? formatInteger(merged.lifetime_identities) : "—");
       setText("[data-first-month-payout]", payout ? amount(payout.first_month) : "—");
       setText("[data-lifetime-payout]", payout ? amount(payout.lifetime) : "—");
       setText("[data-first-month-settled]", payout ? formatInteger(payout.first_month_settled_rounds) : "—");
@@ -839,11 +901,12 @@
     }
 
     async function refreshPlatform() {
-      const [platformResult, autonomousResult, competitionResult, competitionV2Result] = await Promise.allSettled([
+      const [platformResult, autonomousResult, competitionResult, competitionV2Result, policyResult] = await Promise.allSettled([
         requestJson(`${PLATFORM_URL}?period=${encodeURIComponent(state.period)}`),
         requestJson(AUTONOMOUS_EVENTS_URL),
         requestJson(COMPETITION_EVENTS_URL),
         requestJson(COMPETITION_V2_EVENTS_URL),
+        requestJson(`${PUBLIC_METRICS_POLICY_URL}?v=${Date.now()}`),
       ]);
       if (platformResult.status === "fulfilled") {
         state.platform = platformResult.value;
@@ -872,6 +935,15 @@
       } else {
         state.competitionV2Events = null;
         state.errors.competitionV2Events = competitionV2Result.reason;
+      }
+      if (policyResult.status === "fulfilled" && normalizedPublicMetricsPolicy(policyResult.value)) {
+        state.publicMetricsPolicy = policyResult.value;
+        delete state.errors.publicMetricsPolicy;
+      } else {
+        state.publicMetricsPolicy = null;
+        state.errors.publicMetricsPolicy = policyResult.status === "fulfilled"
+          ? new Error("Malformed public metrics policy")
+          : policyResult.reason;
       }
       render();
     }
@@ -943,6 +1015,9 @@
     dashboardStatus,
     mergeDaily,
     mergeMetrics,
+    normalizedPublicMetricsPolicy,
+    partitionCanonicalPayoutRows,
+    payoutAuditSnapshot,
     payoutAuditSummary,
     interfaceUsageSummary,
     sourceStatus,

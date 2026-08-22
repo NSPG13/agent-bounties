@@ -2138,9 +2138,9 @@ impl PostgresStore {
                 WHERE actions_28d > 0 AND first_action_at >= $2 - INTERVAL '28 days') AS new_wallets_28d,
               (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d > 0) AS active_wallets_28d,
               (SELECT COUNT(*) FROM wallet_rollup WHERE actions_28d >= 2) AS repeat_wallets_28d,
-              COALESCE((SELECT SUM(gmv * non_operator_funding / total_funding)
+              TRUNC(COALESCE((SELECT SUM(gmv * non_operator_funding / total_funding)
                 FROM attributed
-                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0)::text
+                WHERE occurred_at >= $2 - INTERVAL '28 days' AND total_funding > 0), 0))::text
                 AS non_operator_attributed_gmv_28d,
               COALESCE((SELECT SUM(gmv)
                 FROM attributed
@@ -2708,6 +2708,7 @@ impl PostgresStore {
               WHERE network = $1
                 AND block_time_verified = TRUE
                 AND occurred_at >= $2 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($6)
                 AND kind IN ('bounty_settled', 'submission_rejected')
               UNION ALL
               SELECT occurred_at, kind = 'bounty_settled' AS settled,
@@ -2723,6 +2724,7 @@ impl PostgresStore {
               WHERE network = $1
                 AND block_time_verified = TRUE
                 AND occurred_at >= $2 AND occurred_at < $3
+                AND NOT lower(contract_address) = ANY($6)
                 AND kind IN ('bounty_settled', 'competition_submission_rejected')
               UNION ALL
               SELECT occurred_at, TRUE AS settled,
@@ -10749,6 +10751,7 @@ mod tests {
         let competition_refund_contract = "0x3434343434343434343434343434343434343434";
         let competition_factory = "0x4444444444444444444444444444444444444444";
         let recovery_contract = "0x9999999999999999999999999999999999999999";
+        let policy_excluded_contract = "0x9898989898989898989898989898989898989898";
         let funder = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let competition_funder = "0x4545454545454545454545454545454545454545";
         let refunded_funder = "0x4646464646464646464646464646464646464646";
@@ -10776,7 +10779,6 @@ mod tests {
             true,
         )
         .await;
-
         for (offset, solver) in [
             "0x6868686868686868686868686868686868686868",
             "0x7979797979797979797979797979797979797979",
@@ -11190,6 +11192,25 @@ mod tests {
             true,
         )
         .await;
+        block += 1;
+        add_event(
+            &store,
+            &network,
+            block,
+            policy_excluded_contract,
+            "policy-excluded-bounty",
+            AutonomousBountyEventKind::BountySettled,
+            serde_json::json!({
+                "round": 1,
+                "solver": "0x6767676767676767676767676767676767676767",
+                "solver_reward": 45_000_000,
+                "verifier_reward": 5_000_000,
+                "timeout_bond_bonus": 0
+            }),
+            at("2099-01-14T01:30:00Z"),
+            true,
+        )
+        .await;
 
         for (author, minute) in [
             ("  Alice   Agent  ", 0_i64),
@@ -11219,23 +11240,23 @@ mod tests {
                 first_month_ended_at,
                 &[maintainer_wallet.to_string()],
                 &["maintainer".to_string()],
-                &[recovery_contract.to_string()],
+                &[policy_excluded_contract.to_string()],
             )
             .await
             .unwrap();
 
-        assert_eq!(stats.identities.selected, 13);
+        assert_eq!(stats.identities.selected, 15);
         assert_eq!(stats.identities.previous, 1);
-        assert_eq!(stats.identities.lifetime, 13);
+        assert_eq!(stats.identities.lifetime, 15);
         assert_eq!(stats.identities.posters, 1);
         assert_eq!(stats.identities.funders, 3);
-        assert_eq!(stats.identities.solvers, 8);
+        assert_eq!(stats.identities.solvers, 10);
         assert_eq!(stats.identities.verifiers, 1);
         assert_eq!(stats.identities.commenters, 1);
-        assert_eq!(stats.identities.marketplace_wallets, 12);
+        assert_eq!(stats.identities.marketplace_wallets, 14);
         assert_eq!(stats.identities.opportunity_comment_authors, 1);
-        // Recovery reservations protect future earning and verification work; they
-        // must not erase block-time-verified payouts from immutable history.
+        // The recovery-reserved contract remains in immutable history, while the
+        // separately declared policy contract is excluded from every series.
         assert_eq!(stats.payouts.selected_total_base_units, "174925000");
         assert_eq!(stats.payouts.selected_solver_base_units, "158000000");
         assert_eq!(stats.payouts.selected_verifier_base_units, "16600000");
@@ -11261,13 +11282,13 @@ mod tests {
                 selected_ended_at,
                 launch_at,
                 &[maintainer_wallet.to_string()],
-                &[recovery_contract.to_string()],
+                &[policy_excluded_contract.to_string()],
             )
             .await
             .unwrap();
-        assert_eq!(growth.gmv_7d_base_units, "18625000");
-        assert_eq!(growth.gmv_28d_base_units, "18625000");
-        assert_eq!(growth.lifetime_gmv_base_units, "18625000");
+        assert_eq!(growth.gmv_7d_base_units, "174625000");
+        assert_eq!(growth.gmv_28d_base_units, "174625000");
+        assert_eq!(growth.lifetime_gmv_base_units, "174625000");
         assert_eq!(growth.new_poster_funder_wallets_28d, 2);
         assert_eq!(growth.active_poster_funder_wallets_28d, 2);
         assert_eq!(growth.repeat_poster_funder_wallets_28d, 1);

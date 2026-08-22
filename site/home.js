@@ -2,7 +2,6 @@
   const MARKET_REFRESH_MS = 15_000;
   const MARKET_STREAM_STALE_MS = 35_000;
   const LEADERBOARD_REFRESH_MS = 60_000;
-  const MARKET_WINDOW_HOURS = 720;
   const marketState = {
     evidenceGeneratedAt: null,
     fingerprint: null,
@@ -10,7 +9,7 @@
     lastReceivedAt: null,
     projection: null,
     readyProjection: null,
-    claim: null,
+    github: null,
     metrics: null,
     protocol: null,
     protocolPromise: null,
@@ -561,7 +560,7 @@
     return marketState.protocolPromise;
   }
 
-  function renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics) {
+  function renderMarketSnapshot(protocol, projection, readyProjection, metrics, github) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
@@ -573,7 +572,7 @@
       || readyItems.some((item) => !isReadyToEarn(item))) {
       throw new Error("Live earning inventory failed its claimability gate.");
     }
-    const referenceAt = new Date(metrics.generated_at || claim.generated_at || projection.generated_at);
+    const referenceAt = new Date(metrics.generated_at || projection.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
     const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
       && (item.work_state === "in_progress" || item.work_state === "submitted"));
@@ -592,8 +591,6 @@
         ? total + (Number(day.settled_rounds) || 0)
         : total;
     }, 0);
-    const activeContributors = Number(claim?.canonical_outcomes?.unique_paid_solver_wallets) || 0;
-
     setMetric("ready", readyItems.length);
     setMetricText(
       "[data-adoption-ready-weekly]",
@@ -602,7 +599,7 @@
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
-    setMetric("paid", activeContributors);
+    window.AgentBountiesHomeMetrics?.render(document, metrics, github);
     setMetricText("[data-board-active]", formatMetric(readyItems.length, 0));
     renderOpportunityBoard(container, readyItems);
 
@@ -640,31 +637,33 @@
     try {
       const protocol = await resolveProtocol();
       const api = protocol.api_base_url.replace(/\/$/, "");
-      const [projectionResponse, readyResponse, claimResponse, metricsResponse] = await Promise.all([
+      const [projectionResponse, readyResponse, metricsResponse, githubResponse] = await Promise.all([
         fetch(`${api}/v1/opportunities?network=base-mainnet&limit=300`, { cache: "no-store" }),
         fetch(`${api}/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`, {
           cache: "no-store",
           headers: { "Cache-Control": "no-cache" },
         }),
-        fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=${MARKET_WINDOW_HOURS}`, { cache: "no-store" }),
         fetch(`${api}/v1/metrics/platform?period=lifetime`, { cache: "no-store" }),
+        fetch(`generated/github-participation.json?v=${Date.now()}`, { cache: "no-store" }).catch(() => null),
       ]);
-      if (!projectionResponse.ok || !readyResponse.ok || !claimResponse.ok || !metricsResponse.ok) {
+      if (!projectionResponse.ok || !readyResponse.ok || !metricsResponse.ok) {
         throw new Error("Live market evidence is unavailable.");
       }
-      const [projection, readyProjection, claim, metrics] = await Promise.all([
+      const [projection, readyProjection, metrics] = await Promise.all([
         projectionResponse.json(),
         readyResponse.json(),
-        claimResponse.json(),
         metricsResponse.json(),
       ]);
+      const github = githubResponse?.ok
+        ? await githubResponse.json().catch(() => null)
+        : null;
       const firstLiveMarketView = !marketState.rendered;
       marketState.protocol = protocol;
       marketState.projection = projection;
       marketState.readyProjection = readyProjection;
-      marketState.claim = claim;
+      marketState.github = github;
       marketState.metrics = metrics;
-      renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics);
+      renderMarketSnapshot(protocol, projection, readyProjection, metrics, github);
       marketState.lastReceivedAt = Date.now();
       marketState.rendered = true;
       if (firstLiveMarketView) track("market_view");
@@ -696,7 +695,7 @@
         const readyProjection = JSON.parse(event.data);
         marketState.streamConnected = true;
         marketState.readyProjection = readyProjection;
-        if (!marketState.projection || !marketState.claim || !marketState.metrics) {
+        if (!marketState.projection || !marketState.metrics) {
           refreshMarket();
           return;
         }
@@ -704,8 +703,8 @@
           protocol,
           marketState.projection,
           readyProjection,
-          marketState.claim,
           marketState.metrics,
+          marketState.github,
         );
         marketState.lastReceivedAt = Date.now();
         marketState.rendered = true;
