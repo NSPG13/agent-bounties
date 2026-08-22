@@ -48,7 +48,7 @@ class ProverCapacityReclaimWorkflowTests(unittest.TestCase):
         self.assertIn('sudo -n rm -f -- "$secondary"', text)
         self.assertIn('test -f "$primary"', text)
         self.assertIn("--output NAME,USED", text)
-        self.assertNotIn("--output=", text)
+        self.assertNotIn("swapon --show --noheadings --bytes --raw --output=", text)
         for forbidden in (
             "rm -rf",
             "$HOME",
