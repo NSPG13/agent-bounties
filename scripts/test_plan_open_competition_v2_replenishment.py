@@ -167,6 +167,9 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         specs = load_json(SPECS_PATH)
         current = datetime(2026, 8, 22, 5, 40, tzinfo=timezone.utc)
         report = inventory(0, observed_at="2026-08-22T05:39:00Z")
+        report["private_v2_observed_safe_block"] = max(
+            candidate["snapshot"]["safe_block"] for candidate in specs["candidates"]
+        )
         plan = PLANNER.build_plan(
             report,
             specs,
@@ -174,7 +177,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
             self.ledger,
             now=current,
         )
-        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(plan["status"], "ready", plan)
         self.assertEqual(len(plan["selected_candidates"]), 10)
         self.assertEqual(plan["blockers"], [])
 
