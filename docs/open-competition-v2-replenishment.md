@@ -123,13 +123,15 @@ are pending; the superseded structured-artifact batch must not be submitted.
 
 ### Exact owner confirmation
 
-After the production release and candidate pool name the same factory and
-release hash, build the reserve deployment and activation bundles:
+The protected production release builds and deploys the exact reserve factory,
+waits for a Base safe block, and uploads both
+`bounded-open-competition-v2-wallet-base-mainnet.json` and
+`bounded-open-competition-v2-wallet-deployment-evidence.json` with the mainnet
+deployment artifact. Download that exact manifest; do not rebuild it from a
+different source revision. After the production release and candidate pool name
+the same factory and release hash, build the activation bundle:
 
 ```powershell
-python scripts/build_bounded_open_competition_v2_wallet_bundle.py `
-  --competition-factory <exact-production-factory> `
-  --release-hash <exact-production-release-hash>
 python scripts/build_forward_open_competition_v2_gmv_candidate_pool.py `
   --factory <exact-production-factory> `
   --release-hash <exact-production-release-hash> `

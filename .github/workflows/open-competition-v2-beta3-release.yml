@@ -840,6 +840,15 @@ jobs:
           python scripts/deploy_open_competition_v2_beta3.py \
             --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
             --output target/mainnet-deployment-evidence.json
+          FACTORY="$(python -c 'import json; print(json.load(open("target/mainnet-exact.runtime.json"))["factory_contract"])')"
+          RELEASE_HASH="$(python -c 'import json; print(json.load(open("target/mainnet-exact.runtime.json"))["release_hash"])')"
+          python scripts/build_bounded_open_competition_v2_wallet_bundle.py \
+            --competition-factory "$FACTORY" --release-hash "$RELEASE_HASH" \
+            --output target/bounded-open-competition-v2-wallet-base-mainnet.json
+          python scripts/deploy_bounded_open_competition_v2_wallet_factory.py \
+            --manifest target/bounded-open-competition-v2-wallet-base-mainnet.json \
+            --release target/mainnet-exact.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/bounded-open-competition-v2-wallet-deployment-evidence.json
           python scripts/record_open_competition_v2_beta3_gate.py \
             --manifest target/release-gates.json --gate mainnet_verifiers_factory_deployed \
             --evidence target/mainnet-deployment-evidence.json \
@@ -852,6 +861,8 @@ jobs:
             target/mainnet-exact.json
             target/mainnet-exact.runtime.json
             target/mainnet-deployment-evidence.json
+            target/bounded-open-competition-v2-wallet-base-mainnet.json
+            target/bounded-open-competition-v2-wallet-deployment-evidence.json
             target/mainnet-broker-seed.json
             target/owner-mainnet-deployment-approval.json
             target/release-gates.json
