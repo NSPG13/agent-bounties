@@ -41,7 +41,7 @@
 
   function formatUsdc(value, options = {}) {
     const amount = Math.max(0, finiteNumber(value));
-    const maximumFractionDigits = options.compact ? 1 : 2;
+    const maximumFractionDigits = options.maximumFractionDigits ?? (options.compact ? 1 : 2);
     return `${new Intl.NumberFormat("en-US", {
       notation: options.compact && amount >= 1000 ? "compact" : "standard",
       minimumFractionDigits: 0,
@@ -545,7 +545,7 @@
         : formatInteger(audit.excluded_summary.payout_events));
       setText("[data-audit-excluded-volume]", audit.status === "unavailable"
         ? "—"
-        : formatUsdc(audit.excluded_summary.total_base_units / USDC_SCALE));
+        : formatUsdc(audit.excluded_summary.total_base_units / USDC_SCALE, { maximumFractionDigits: 6 }));
       setText("[data-audit-copy]", audit.status === "ready"
         ? "The independent event sum exactly matches the headline payout and settlement count for this period."
         : audit.status === "partial"
@@ -1013,6 +1013,7 @@
     chartSvg,
     combinedStatus,
     dashboardStatus,
+    formatUsdc,
     mergeDaily,
     mergeMetrics,
     normalizedPublicMetricsPolicy,
