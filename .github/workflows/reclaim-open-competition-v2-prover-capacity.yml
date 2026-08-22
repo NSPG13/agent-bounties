@@ -35,12 +35,15 @@ jobs:
           test "$(stat -c '%U:%G:%a:%s' -- "$primary")" = "root:root:600:$primary_size"
           test "$(stat -c '%U:%G:%a:%s' -- "$secondary")" = "root:root:600:$secondary_size"
 
-          primary_used_bytes="$(swapon --show --noheadings --bytes --raw --output NAME,USED | awk '$1 == "/swapfile" {print $2}')"
-          secondary_used_bytes="$(swapon --show --noheadings --bytes --raw --output NAME,USED | awk '$1 == "/swapfile2" {print $2}')"
-          test "$primary_used_bytes" = 0
-          test "$secondary_used_bytes" = 0
+          primary_used_kib="$(awk '$1 == "/swapfile" {print $4}' /proc/swaps)"
+          secondary_used_kib="$(awk '$1 == "/swapfile2" {print $4}' /proc/swaps)"
+          printf 'primary_used_kib=%s\n' "$primary_used_kib"
+          printf 'secondary_used_kib=%s\n' "$secondary_used_kib"
+          test "$primary_used_kib" = 0
+          test "$secondary_used_kib" = 0
 
           available_memory_kib="$(awk '$1 == "MemAvailable:" {print $2}' /proc/meminfo)"
+          printf 'available_memory_kib=%s\n' "$available_memory_kib"
           test -n "$available_memory_kib"
           test "$available_memory_kib" -ge "$minimum_available_memory_kib"
 
@@ -55,8 +58,8 @@ jobs:
           printf 'fstab_before_sha256=%s\n' "$fstab_before_sha256"
 
           sudo -n swapoff -- "$secondary"
-          test "$(swapon --show --noheadings --raw --output NAME | awk '$1 == "/swapfile2" {n++} END {print n+0}')" = 0
-          test "$(swapon --show --noheadings --raw --output NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
+          test "$(awk '$1 == "/swapfile2" {n++} END {print n+0}' /proc/swaps)" = 0
+          test "$(awk '$1 == "/swapfile" {n++} END {print n+0}' /proc/swaps)" = 1
 
           fstab_tmp="$(mktemp)"
           trap 'rm -f -- "$fstab_tmp"' EXIT
@@ -69,7 +72,7 @@ jobs:
           sudo -n rm -f -- "$secondary"
           test ! -e "$secondary"
           test -f "$primary"
-          test "$(swapon --show --noheadings --raw --output NAME | awk '$1 == "/swapfile" {n++} END {print n+0}')" = 1
+          test "$(awk '$1 == "/swapfile" {n++} END {print n+0}' /proc/swaps)" = 1
 
           after_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
           recovered_bytes="$((after_bytes - before_bytes))"
