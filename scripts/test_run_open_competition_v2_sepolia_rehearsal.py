@@ -225,6 +225,69 @@ class SepoliaRehearsalTests(unittest.TestCase):
         self.assertNotIn("proof_hex", summary)
         self.assertNotIn("journal_hex", summary)
 
+    def test_malformed_proof_cases_cover_encoding_and_cryptographic_payload(self):
+        proof = bytes(range(32))
+        cases = MODULE.malformed_proof_cases(proof)
+        self.assertEqual(
+            set(cases),
+            {"selector_mismatch", "truncated", "payload_mutation", "zeroed_payload"},
+        )
+        self.assertNotEqual(cases["selector_mismatch"][:4], proof[:4])
+        self.assertEqual(len(cases["truncated"]), len(proof) - 1)
+        self.assertNotEqual(cases["payload_mutation"][-1], proof[-1])
+        self.assertEqual(cases["zeroed_payload"][4:], bytes(len(proof) - 4))
+
+    def test_proof_rejection_consensus_requires_valid_acceptance_and_all_rejections(self):
+        proof = bytes(range(32))
+        calls = []
+
+        def rpc_response(url, method, params):
+            self.assertEqual(method, "eth_call")
+            calls.append((url, params))
+            if len(calls) in (1, 7):
+                return "0x"
+            raise MODULE.RpcError("execution reverted")
+
+        with patch.object(MODULE, "rpc", side_effect=rpc_response):
+            evidence = MODULE.proof_rejection_consensus(
+                ("https://primary.invalid", "https://shadow.invalid"),
+                adapter="0x" + "11" * 20,
+                program_vkey=bytes.fromhex("22" * 32),
+                journal=bytes.fromhex("33" * 64),
+                proof=proof,
+                sender="0x" + "44" * 20,
+                block="0x123",
+            )
+
+        self.assertEqual(evidence["rpc_endpoint_count"], 2)
+        self.assertTrue(evidence["valid_proof_accepted"])
+        self.assertEqual(len(evidence["rejected_cases"]), 5)
+        self.assertEqual(len(calls), 12)
+
+    def test_proof_rejection_consensus_fails_closed_on_duplicate_or_false_success(self):
+        arguments = dict(
+            adapter="0x" + "11" * 20,
+            program_vkey=bytes.fromhex("22" * 32),
+            journal=bytes.fromhex("33" * 64),
+            proof=bytes(range(32)),
+            sender="0x" + "44" * 20,
+            block="0x123",
+        )
+        with self.assertRaisesRegex(MODULE.SepoliaRehearsalError, "two independent"):
+            MODULE.proof_rejection_consensus(
+                ("https://same.invalid", "https://same.invalid"), **arguments
+            )
+        with patch.object(MODULE, "rpc", return_value="0x"):
+            with self.assertRaisesRegex(MODULE.SepoliaRehearsalError, "was not rejected"):
+                MODULE.proof_rejection_consensus(
+                    ("https://primary.invalid", "https://shadow.invalid"), **arguments
+                )
+        with patch.object(MODULE, "rpc", side_effect=RuntimeError("transport failed")):
+            with self.assertRaisesRegex(RuntimeError, "transport failed"):
+                MODULE.proof_rejection_consensus(
+                    ("https://primary.invalid", "https://shadow.invalid"), **arguments
+                )
+
     def test_private_key_validation_fails_closed(self):
         for value in ("", "0x1", "0x" + "00" * 32):
             with self.assertRaises(MODULE.SepoliaRehearsalError):

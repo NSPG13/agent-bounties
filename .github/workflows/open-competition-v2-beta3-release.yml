@@ -699,6 +699,7 @@ jobs:
           done
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepared-proof-dir target/sepolia-proof-inputs \
+            --shadow-rpc-url "$BASE_SEPOLIA_SHADOW_RPC_URL" \
             --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
