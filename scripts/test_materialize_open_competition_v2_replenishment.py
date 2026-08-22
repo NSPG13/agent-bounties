@@ -56,7 +56,12 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
             self.assertEqual(creation["meta_bounty"]["snapshot"]["status"], "scheduled")
             self.assertEqual(
                 creation["meta_bounty"]["excluded_wallets"],
-                MATERIALIZER.REQUIRED_EXCLUDED_WALLETS,
+                sorted(
+                    [
+                        *MATERIALIZER.BASE_REQUIRED_EXCLUDED_WALLETS,
+                        creation["meta_bounty"]["reserve_wallet"],
+                    ]
+                ),
             )
             self.assertEqual(
                 creation["meta_bounty"]["excluded_bounty_contracts"],

@@ -53,7 +53,7 @@ ALLOWED_ANALYSIS_KINDS = {
 }
 SPENDING_STATUSES = {"broadcast", "activated"}
 RESERVED_STATUSES = {"planned", "broadcast", "activated"}
-REQUIRED_EXCLUDED_WALLETS = [
+BASE_REQUIRED_EXCLUDED_WALLETS = [
     "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
     "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
     "0x884834e884d6e93462655a2820140ad03e6747bc",
@@ -231,12 +231,21 @@ def validate_candidate_specs(
     eligibility = specs.get("eligibility_policy")
     if not isinstance(eligibility, dict):
         raise PlanError("candidate specs eligibility policy is required")
+    reserve_wallet = str(specs.get("reserve_wallet") or "").lower()
+    if (
+        not ADDRESS.fullmatch(reserve_wallet)
+        or reserve_wallet in BASE_REQUIRED_EXCLUDED_WALLETS
+    ):
+        raise PlanError("candidate specs reserve wallet is invalid or collides with an operator")
+    required_excluded_wallets = sorted(
+        [*BASE_REQUIRED_EXCLUDED_WALLETS, reserve_wallet]
+    )
     excluded_wallets = [str(value).lower() for value in eligibility.get("excluded_wallets") or []]
     excluded_contracts = [
         str(value).lower() for value in eligibility.get("excluded_bounty_contracts") or []
     ]
-    if excluded_wallets != REQUIRED_EXCLUDED_WALLETS:
-        raise PlanError("candidate specs do not exclude every reviewed operator wallet")
+    if excluded_wallets != required_excluded_wallets:
+        raise PlanError("candidate specs do not exclude every reviewed operator and reserve wallet")
     if excluded_contracts != REQUIRED_EXCLUDED_BOUNTY_CONTRACTS:
         raise PlanError("candidate specs do not exclude every reviewed reward contract")
     if eligibility.get("wallet_boundary") != WALLET_BOUNDARY:
@@ -359,6 +368,7 @@ def validate_candidate_specs(
         ]
         normalized = {
             "candidate_id": candidate_id,
+            "reserve_wallet": reserve_wallet,
             "title": require_text(item.get("title"), f"{field}.title", maximum=160),
             "summary": require_text(item.get("summary"), f"{field}.summary", maximum=500),
             "gmv_lane": lane,

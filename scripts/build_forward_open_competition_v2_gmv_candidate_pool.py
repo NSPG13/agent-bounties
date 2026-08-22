@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 
+from eth_abi import encode
 from eth_utils import keccak
 
 from forward_canonical_gmv import verification_policy_hash
@@ -26,10 +27,11 @@ ATTESTERS = [
     "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
     "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
 ]
-EXCLUDED_WALLETS = [
+OWNER = "0x884834e884d6e93462655a2820140ad03e6747bc"
+BASE_EXCLUDED_WALLETS = [
     "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
     "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
-    "0x884834e884d6e93462655a2820140ad03e6747bc",
+    OWNER,
     "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
     "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
 ]
@@ -69,11 +71,58 @@ def timestamp(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
 
 
-def build(factory: str, release_hash: str, identity: dict) -> dict:
+def predict_reserve_wallet(
+    reserve_factory: str,
+    reserve_implementation: str,
+    release_hash: str,
+    owner: str = OWNER,
+) -> str:
+    for value, field in (
+        (reserve_factory, "reserve factory"),
+        (reserve_implementation, "reserve implementation"),
+        (owner, "reserve owner"),
+    ):
+        if not ADDRESS.fullmatch(value.lower()):
+            raise ValueError(f"{field} must be an exact address")
+    if not HASH.fullmatch(release_hash.lower()):
+        raise ValueError("release hash must be exact bytes32")
+    user_salt = keccak(
+        text=f"agent-bounties/base-mainnet/gmv-meta-reserve/{owner.lower()}/{release_hash.lower()}/v1"
+    )
+    effective_salt = keccak(
+        encode(["address", "bytes32"], [owner.lower(), user_salt])
+    )
+    init_code = (
+        bytes.fromhex("3d602d80600a3d3981f3")
+        + bytes.fromhex("363d3d373d3d3d363d73")
+        + bytes.fromhex(reserve_implementation.lower()[2:])
+        + bytes.fromhex("5af43d82803e903d91602b57fd5bf3")
+    )
+    return "0x" + keccak(
+        b"\xff"
+        + bytes.fromhex(reserve_factory.lower()[2:])
+        + effective_salt
+        + keccak(init_code)
+    )[12:].hex()
+
+
+def build(
+    factory: str,
+    release_hash: str,
+    reserve_factory: str,
+    reserve_implementation: str,
+    identity: dict,
+) -> dict:
     factory = factory.lower()
     release_hash = release_hash.lower()
     if not ADDRESS.fullmatch(factory) or not HASH.fullmatch(release_hash):
         raise ValueError("factory and release hash must be exact lowercase values")
+    reserve_wallet = predict_reserve_wallet(
+        reserve_factory.lower(), reserve_implementation.lower(), release_hash
+    )
+    if reserve_wallet in BASE_EXCLUDED_WALLETS:
+        raise ValueError("the release-bound reserve collides with a reviewed operator wallet")
+    excluded_wallets = sorted([*BASE_EXCLUDED_WALLETS, reserve_wallet])
     reproduced = identity.get("status") == "reproduced_beta3"
     profile = {
         "profile_id": PROFILE_ID,
@@ -94,7 +143,7 @@ def build(factory: str, release_hash: str, identity: dict) -> dict:
             "starts_at": timestamp(starts_at),
             "ends_at": timestamp(ends_at),
             "minimum_score_base_units": 1,
-            "excluded_wallets": EXCLUDED_WALLETS,
+            "excluded_wallets": excluded_wallets,
             "excluded_bounty_contracts": EXCLUDED_CONTRACTS,
             "snapshot_attesters": ATTESTERS,
             "snapshot_attestation_threshold": 2,
@@ -139,6 +188,7 @@ def build(factory: str, release_hash: str, identity: dict) -> dict:
         "network": "base-mainnet",
         "factory_contract": factory,
         "release_hash": release_hash,
+        "reserve_wallet": reserve_wallet,
         "profile_release": profile,
         "approved_at": "2026-08-22T20:00:00Z",
         "expires_at": "2026-10-31T23:59:59Z",
@@ -148,7 +198,7 @@ def build(factory: str, release_hash: str, identity: dict) -> dict:
             "total_per_competition_base_units": 3_040_000,
         },
         "eligibility_policy": {
-            "excluded_wallets": EXCLUDED_WALLETS,
+            "excluded_wallets": excluded_wallets,
             "excluded_bounty_contracts": EXCLUDED_CONTRACTS,
             "wallet_boundary": "Known owner, reserve, delegate, deployer, and snapshot-attester wallets are ineligible. Wallets are not inferred to be unique people.",
             "contract_boundary": "Declared synthetic canaries and prior GMV reward contracts are ineligible and must be extended before each future snapshot review.",
@@ -174,6 +224,11 @@ def main() -> int:
     parser.add_argument("--factory", required=True)
     parser.add_argument("--release-hash", required=True)
     parser.add_argument(
+        "--reserve-deployment",
+        type=Path,
+        default=ROOT / "deployments/bounded-open-competition-v2-wallet-base-mainnet.json",
+    )
+    parser.add_argument(
         "--identity",
         type=Path,
         default=ROOT / "programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json",
@@ -184,9 +239,12 @@ def main() -> int:
         default=ROOT / "ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
     )
     args = parser.parse_args()
+    reserve = json.loads(args.reserve_deployment.read_text(encoding="utf-8"))["reserve_factory"]
     value = build(
         args.factory,
         args.release_hash,
+        reserve["address"],
+        reserve["implementation"],
         json.loads(args.identity.read_text(encoding="utf-8")),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

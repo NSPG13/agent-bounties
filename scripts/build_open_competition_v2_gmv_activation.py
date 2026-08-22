@@ -17,6 +17,8 @@ from typing import Any
 from eth_abi import encode
 from eth_utils import keccak, to_checksum_address
 
+from build_forward_open_competition_v2_gmv_candidate_pool import predict_reserve_wallet
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAIN_ID = 8453
@@ -144,6 +146,12 @@ def build_activation(
     ).lower()
     if not re.fullmatch(r"0x(?:[0-9a-f]{2})+", reserve_factory_deployment):
         raise ActivationError("reserve factory deployment transaction is invalid")
+    user_salt = keccak(
+        text=f"agent-bounties/base-mainnet/gmv-meta-reserve/{owner}/{release_hash}/v1"
+    )
+    reserve = predict_reserve_wallet(
+        reserve_factory, reserve_implementation, release_hash, owner
+    )
 
     if (
         pool.get("schema_version")
@@ -152,6 +160,7 @@ def build_activation(
         or pool.get("network") != "base-mainnet"
         or address(pool.get("factory_contract"), "candidate factory") != factory
         or hash32(pool.get("release_hash"), "candidate release hash") != release_hash
+        or address(pool.get("reserve_wallet"), "candidate reserve wallet") != reserve
     ):
         raise ActivationError("candidate pool is not bound to the exact release")
     expires_at = parse_time(str(pool.get("expires_at")), "candidate approval expiry")
@@ -164,6 +173,12 @@ def build_activation(
         or pool_profile.get("status") != "reviewed"
     ):
         raise ActivationError("candidate pool does not use the canonical GMV profile")
+    excluded_wallets = [
+        address(value, "candidate excluded wallet")
+        for value in pool.get("eligibility_policy", {}).get("excluded_wallets", [])
+    ]
+    if excluded_wallets != sorted(excluded_wallets) or reserve not in excluded_wallets:
+        raise ActivationError("candidate pool does not exclude its exact reserve wallet")
     for field in (
         "program_vkey",
         "source_hash",
@@ -283,13 +298,10 @@ def build_activation(
         raw_hash(hash32(profile.get("journal_schema_hash"), "journal schema")),
     )
     policy_hash = keccak(encode([POLICY_TYPE, "bytes32[]"], [policy, commitments]))
-    user_salt = keccak(
-        text=f"agent-bounties/base-mainnet/gmv-meta-reserve/{owner}/{release_hash}/v1"
-    )
     effective_salt = keccak(
         encode(
-            ["address", "bytes32", "bytes32"],
-            [to_checksum_address(owner), user_salt, policy_hash],
+            ["address", "bytes32"],
+            [to_checksum_address(owner), user_salt],
         )
     )
     clone_init = bytes.fromhex("3d602d80600a3d3981f3") + bytes.fromhex(
@@ -297,7 +309,8 @@ def build_activation(
     ) + bytes.fromhex(reserve_implementation[2:]) + bytes.fromhex(
         "5af43d82803e903d91602b57fd5bf3"
     )
-    reserve = create2(reserve_factory, effective_salt, keccak(clone_init))
+    if reserve != create2(reserve_factory, effective_salt, keccak(clone_init)):
+        raise ActivationError("independent reserve prediction disagrees")
 
     competition_init = bytes.fromhex("3d602d80600a3d3981f3") + bytes.fromhex(
         "363d3d373d3d3d363d73"

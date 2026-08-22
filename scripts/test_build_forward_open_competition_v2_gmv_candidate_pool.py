@@ -22,12 +22,19 @@ class ForwardGmvCandidatePoolTests(unittest.TestCase):
         }
 
     def build(self, reproduced: bool = True) -> dict:
-        return MODULE.build("0x" + "44" * 20, "0x" + "55" * 32, self.identity(reproduced))
+        return MODULE.build(
+            "0x" + "44" * 20,
+            "0x" + "55" * 32,
+            "0x" + "66" * 20,
+            "0x" + "77" * 20,
+            self.identity(reproduced),
+        )
 
     def test_pool_contains_ten_initial_and_ten_standby_forward_competitions(self) -> None:
         pool = self.build()
         self.assertEqual(pool["profile_release"]["profile_id"], MODULE.PROFILE_ID)
         self.assertEqual(pool["profile_release"]["status"], "reviewed")
+        self.assertIn(pool["reserve_wallet"], pool["eligibility_policy"]["excluded_wallets"])
         self.assertEqual(len(pool["candidates"]), 20)
         self.assertTrue(all("role" not in item for item in pool["candidates"]))
         for candidate in pool["candidates"]:

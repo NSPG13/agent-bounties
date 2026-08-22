@@ -25,8 +25,9 @@ GMV_JOURNAL_SCHEMA_HASH = "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf0465183
 GMV_EXECUTION_POLICY_HASH = "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a"
 GMV_SETTLEMENT_POLICY_HASH = "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee"
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
+ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
 CANDIDATE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-v[1-9][0-9]*$")
-REQUIRED_EXCLUDED_WALLETS = [
+BASE_REQUIRED_EXCLUDED_WALLETS = [
     "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
     "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
     "0x884834e884d6e93462655a2820140ad03e6747bc",
@@ -121,7 +122,16 @@ def materialize(plan: object) -> dict[str, Any]:
             raise MaterializeError(
                 f"{field} epoch, snapshot, profile, and eligibility policy are required"
             )
-        if eligibility.get("excluded_wallets") != REQUIRED_EXCLUDED_WALLETS:
+        reserve_wallet = str(candidate.get("reserve_wallet") or "").lower()
+        if (
+            not ADDRESS.fullmatch(reserve_wallet)
+            or reserve_wallet in BASE_REQUIRED_EXCLUDED_WALLETS
+        ):
+            raise MaterializeError(f"{field} reserve wallet is invalid")
+        required_excluded_wallets = sorted(
+            [*BASE_REQUIRED_EXCLUDED_WALLETS, reserve_wallet]
+        )
+        if eligibility.get("excluded_wallets") != required_excluded_wallets:
             raise MaterializeError(f"{field} operator-wallet exclusions are invalid")
         if (
             eligibility.get("excluded_bounty_contracts")
@@ -166,14 +176,16 @@ def materialize(plan: object) -> dict[str, Any]:
                 "profile_release": profile,
                 "meta_bounty": {
                     "objective": "highest_external_canonical_gmv",
+                    "reserve_wallet": reserve_wallet,
                     "epoch": epoch,
                     "snapshot": snapshot,
                     "score_unit": "usdc_base_units",
                     "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
-                    "excluded_wallets": REQUIRED_EXCLUDED_WALLETS,
+                    "excluded_wallets": required_excluded_wallets,
                     "excluded_bounty_contracts": REQUIRED_EXCLUDED_BOUNTY_CONTRACTS,
                     "exclusions": [
                         "operator_or_reserve_wallet funding",
+                        "operator_or_reserve_wallet created settlements",
                         "excluded reward contracts",
                         "creator-equals-solver settlements",
                         "entrant-equals-solver settlements",

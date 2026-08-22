@@ -83,6 +83,10 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
         self.assertEqual(len(value["approved_creation_commitments"]), 20)
         self.assertEqual(len(value["creations"]), 20)
         self.assertEqual(len({item["predicted_competition"] for item in value["creations"]}), 20)
+        self.assertEqual(value["reserve_wallet"], self.pool["reserve_wallet"])
+        self.assertIn(
+            value["reserve_wallet"], self.pool["eligibility_policy"]["excluded_wallets"]
+        )
         self.assertEqual(
             value["owner_authorization"]["typed_data"]["message"]["to"].lower(),
             value["reserve_wallet"],

@@ -23,6 +23,8 @@ continues to show one unified marketplace.
   competitions; it cannot transfer or withdraw USDC.
 - `BoundedOpenCompetitionV2WalletFactory` deterministically deploys that wallet
   and atomically funds it through an exact allowance or EIP-3009 authorization.
+  Its release-bound salt makes the reserve address knowable before campaign
+  policies are frozen, so every policy can exclude its exact funding wallet.
 - The isolated delegate owns the private ranking, durable execution ledger,
   predicted addresses, and canonical reconciliation. The contract, not the
   hosted delegate, enforces candidate commitments and spending caps.
@@ -71,7 +73,8 @@ The on-chain reserve independently requires:
 
 GMV attribution is `settlement GMV * entrant canonical funding / total
 canonical funding`, rounded down for each settlement. Exclude operator/reserve
-wallet funding, listed reward contracts, creator-as-solver and
+wallet funding, every settlement created by an operator or reserve wallet,
+listed reward contracts, creator-as-solver and
 entrant-as-solver settlements, and all noncanonical states. The prize
 competition's own payout is excluded from the snapshot used to score it.
 
