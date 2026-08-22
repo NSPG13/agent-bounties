@@ -61,7 +61,7 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
                 }
             ],
         }
-        cls.now = datetime(2026, 8, 22, 6, 30, tzinfo=timezone.utc)
+        cls.now = datetime(2026, 8, 22, 8, 30, tzinfo=timezone.utc)
 
     def build(self, **changes: object) -> dict:
         release = copy.deepcopy(self.release)

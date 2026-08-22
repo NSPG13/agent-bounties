@@ -130,6 +130,11 @@ release hash, build the reserve deployment and activation bundles:
 python scripts/build_bounded_open_competition_v2_wallet_bundle.py `
   --competition-factory <exact-production-factory> `
   --release-hash <exact-production-release-hash>
+python scripts/build_forward_open_competition_v2_gmv_candidate_pool.py `
+  --factory <exact-production-factory> `
+  --release-hash <exact-production-release-hash> `
+  --reserve-deployment deployments/bounded-open-competition-v2-wallet-base-mainnet.json `
+  --approved-at <actual-UTC-review-time>
 python scripts/build_open_competition_v2_gmv_activation.py `
   --release <exact-production-runtime.json> `
   --reserve-deployment deployments/bounded-open-competition-v2-wallet-base-mainnet.json `

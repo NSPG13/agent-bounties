@@ -19,14 +19,14 @@ export const SUPPORTED_REGRESSION_QUORUM = Object.freeze({
   ]),
 });
 export const CANONICAL_GMV_PROFILE = Object.freeze({
-  profile_id: "canonical-gmv-attribution-metric-v1",
+  profile_id: "forward-canonical-gmv-attribution-metric-v2",
   classification: "reviewed",
-  program_vkey: "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
-  source_hash: "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
-  elf_hash: "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5",
+  program_vkey: "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+  source_hash: "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+  elf_hash: "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
   journal_schema_hash: "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
-  metric_program_hash: "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead",
-  review_evidence_hash: "0x0d679fe190be3e2248953ee5d5f4cb5adfe3a64255404ac752f8caed9862bf86",
+  metric_program_hash: "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9",
+  review_evidence_hash: "0xa721b85db55db5c827dee508d89de09a222d9d70150f3eeb2a69a34b670023dd",
 });
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;

@@ -28,6 +28,7 @@ class ForwardGmvCandidatePoolTests(unittest.TestCase):
             "0x" + "66" * 20,
             "0x" + "77" * 20,
             self.identity(reproduced),
+            "2026-08-22T08:00:00Z",
         )
 
     def test_pool_contains_ten_initial_and_ten_standby_forward_competitions(self) -> None:
@@ -60,6 +61,22 @@ class ForwardGmvCandidatePoolTests(unittest.TestCase):
         self.assertIsNone(profile["program_vkey"])
         self.assertIsNone(profile["source_hash"])
         self.assertIsNone(profile["elf_hash"])
+
+    def test_approval_time_must_be_truthful_utc_and_precede_scoring(self) -> None:
+        args = (
+            "0x" + "44" * 20,
+            "0x" + "55" * 32,
+            "0x" + "66" * 20,
+            "0x" + "77" * 20,
+            self.identity(True),
+        )
+        for invalid in (
+            "2026-08-22T08:00:00+01:00",
+            "2026-08-22T08:00:00.123Z",
+            "2026-08-24T00:00:00Z",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                MODULE.build(*args, invalid)
 
 
 if __name__ == "__main__":

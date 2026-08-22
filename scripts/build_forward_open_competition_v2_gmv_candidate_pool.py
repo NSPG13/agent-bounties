@@ -71,6 +71,17 @@ def timestamp(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
 
 
+def reviewed_timestamp(value: str) -> str:
+    if not value.endswith("Z"):
+        raise ValueError("approved_at must be an exact UTC timestamp ending in Z")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo != timezone.utc or parsed.microsecond != 0:
+        raise ValueError("approved_at must use whole UTC seconds")
+    if parsed >= datetime.fromisoformat(WINDOWS[0][1].replace("Z", "+00:00")):
+        raise ValueError("approved_at must precede the first forward scoring window")
+    return value
+
+
 def predict_reserve_wallet(
     reserve_factory: str,
     reserve_implementation: str,
@@ -112,6 +123,7 @@ def build(
     reserve_factory: str,
     reserve_implementation: str,
     identity: dict,
+    approved_at: str,
 ) -> dict:
     factory = factory.lower()
     release_hash = release_hash.lower()
@@ -190,7 +202,7 @@ def build(
         "release_hash": release_hash,
         "reserve_wallet": reserve_wallet,
         "profile_release": profile,
-        "approved_at": "2026-08-22T20:00:00Z",
+        "approved_at": reviewed_timestamp(approved_at),
         "expires_at": "2026-10-31T23:59:59Z",
         "economics": {
             "solver_reward_base_units": 3_000_000,
@@ -224,6 +236,11 @@ def main() -> int:
     parser.add_argument("--factory", required=True)
     parser.add_argument("--release-hash", required=True)
     parser.add_argument(
+        "--approved-at",
+        required=True,
+        help="Actual UTC time when the exact release, reserve, exclusions, and candidates were reviewed",
+    )
+    parser.add_argument(
         "--reserve-deployment",
         type=Path,
         default=ROOT / "deployments/bounded-open-competition-v2-wallet-base-mainnet.json",
@@ -246,6 +263,7 @@ def main() -> int:
         reserve["address"],
         reserve["implementation"],
         json.loads(args.identity.read_text(encoding="utf-8")),
+        args.approved_at,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")

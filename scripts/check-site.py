@@ -122,6 +122,7 @@ INTERNAL_NOINDEX_PAGES = {
     "chatgpt-bounty-card-preview.html",
     "chatgpt-bounty-feed-widget.html",
     "chatgpt-post-widget.html",
+    "feedback.html",
     "marketplace-refill-confirmation.html",
     "operator.html",
     "onramp.html",

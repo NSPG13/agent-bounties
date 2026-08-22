@@ -163,9 +163,10 @@ def build_activation(
         or address(pool.get("reserve_wallet"), "candidate reserve wallet") != reserve
     ):
         raise ActivationError("candidate pool is not bound to the exact release")
+    approved_at = parse_time(str(pool.get("approved_at")), "candidate approval time")
     expires_at = parse_time(str(pool.get("expires_at")), "candidate approval expiry")
-    if not activation_time < expires_at:
-        raise ActivationError("candidate approval has expired")
+    if not approved_at <= activation_time < expires_at or approved_at >= expires_at:
+        raise ActivationError("candidate approval window is not current")
     pool_profile = pool.get("profile_release")
     if (
         not isinstance(pool_profile, dict)

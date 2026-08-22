@@ -77,12 +77,12 @@ CONTRACT_BOUNDARY = (
 REQUIRED_LIVE_GMV_PROFILE = {
     "profile_id": PROFILE_ID,
     "classification": "reviewed",
-    "program_vkey": "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
-    "source_hash": "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
-    "elf_hash": "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5",
+    "program_vkey": "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+    "source_hash": "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+    "elf_hash": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
     "journal_schema_hash": GMV_JOURNAL_SCHEMA_HASH,
     "metric_program_hash": GMV_METRIC_PROGRAM_HASH,
-    "review_evidence_hash": "0x0d679fe190be3e2248953ee5d5f4cb5adfe3a64255404ac752f8caed9862bf86",
+    "review_evidence_hash": "0xa721b85db55db5c827dee508d89de09a222d9d70150f3eeb2a69a34b670023dd",
 }
 
 
