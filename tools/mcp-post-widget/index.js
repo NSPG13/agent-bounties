@@ -29,9 +29,21 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
     byId("window").textContent = `${value.task_window_days || 30} days`;
     byId("initial").textContent = `${value.initial_funding_usdc ?? "—"} USDC`;
     byId("continue").disabled = !value.post_url;
-    byId("status").textContent = value.crowdfund
-      ? "Unfunded posting selected: no USDC will be deposited now and no payment is promised yet."
-      : `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose “Post with 0 USDC now” to publish without committing a reward.`;
+
+    // Improved status text: surface the post_url directly for unassisted agents
+    // so they can act without requiring an interactive connection.
+    if (value.crowdfund) {
+      byId("status").textContent =
+        "Unfunded posting selected: no USDC will be deposited now and no payment is promised yet.";
+    } else if (value.post_url) {
+      byId("status").textContent =
+        `Full funding is currently selected (${value.target_usdc || "—"} USDC). ` +
+        `On the next page, choose "Post with 0 USDC now" to publish without committing a reward. ` +
+        `Review URL: ${value.post_url}`;
+    } else {
+      byId("status").textContent =
+        `Full funding is currently selected (${value.target_usdc || "—"} USDC). On the next page, choose "Post with 0 USDC now" to publish without committing a reward.`;
+    }
   }
 
   app.ontoolresult = (params) => render(params.structuredContent);
@@ -58,6 +70,7 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
       }
       window.open(current.post_url, "_blank", "noopener,noreferrer");
     } catch (_error) {
+      // Always surface the URL so unassisted agents can navigate directly.
       byId("status").textContent = `Open this secure review URL: ${current.post_url}`;
     }
   });
@@ -67,8 +80,17 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
     const context = app.getHostContext();
     if (context?.theme) document.documentElement.dataset.theme = context.theme;
   }).catch(() => {
+    // For unassisted agents (Open Competition V2), surface the post_url in the
+    // status area so the agent can proceed without an interactive connection.
     if (!window.openai) {
-      byId("status").textContent = "The interactive card could not connect. The same draft and secure review URL remain available in the conversation.";
+      const postUrl = current?.post_url;
+      if (postUrl) {
+        byId("status").textContent =
+          `The interactive card could not connect. To post this bounty, open: ${postUrl}`;
+      } else {
+        byId("status").textContent =
+          "The interactive card could not connect. The same draft and secure review URL remain available in the conversation.";
+      }
     }
   });
 })();
