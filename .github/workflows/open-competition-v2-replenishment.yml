@@ -29,6 +29,8 @@ on:
       - "scripts/test_forward_canonical_gmv.py"
       - "scripts/test_build_forward_open_competition_v2_gmv_candidate_pool.py"
       - "scripts/test_open_competition_v2_replenishment_workflow.py"
+      - ".github/workflows/seed-open-competition-v2-replenisher-gas.yml"
+      - "scripts/test_seed_open_competition_v2_replenisher_gas.py"
 
 permissions:
   contents: read
@@ -59,6 +61,7 @@ jobs:
             scripts.test_forward_canonical_gmv \
             scripts.test_build_forward_open_competition_v2_gmv_candidate_pool \
             scripts.test_open_competition_v2_replenishment_workflow \
+            scripts.test_seed_open_competition_v2_replenisher_gas \
             -v
 
   plan-or-execute:
