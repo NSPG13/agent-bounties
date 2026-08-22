@@ -52,6 +52,12 @@ class ReplenishmentWorkflowContractTests(unittest.TestCase):
         self.assertIn("isolated signer", self.text)
         self.assertIn("canonical activation remains required", self.text)
 
+    def test_snapshot_hashing_dependency_is_pinned(self) -> None:
+        self.assertIn(
+            "python -m pip install -r scripts/requirements-attest.txt",
+            self.text,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

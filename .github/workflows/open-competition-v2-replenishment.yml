@@ -34,6 +34,8 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
+      - name: Install pinned snapshot hashing dependency
+        run: python -m pip install -r scripts/requirements-attest.txt
       - name: Test private guard, deterministic planning, and materialization
         run: |
           python -m unittest \
