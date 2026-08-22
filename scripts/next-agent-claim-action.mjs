@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Repair claim-next-action state mapper
 
 import { readFileSync } from "node:fs";
 
