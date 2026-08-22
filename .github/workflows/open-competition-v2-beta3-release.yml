@@ -26,6 +26,7 @@ on:
       - "crates/worker/**"
       - "programs/public-vector-metric-v1/**"
       - "programs/structured-artifact-metric-v1/**"
+      - "programs/forward-canonical-gmv-attribution-metric-v2/**"
       - "deployments/open-competition-v2-beta3-*"
       - "migrations/0023_open_competition_v2_beta2.sql"
       - "migrations/0024_open_competition_v2_beta3.sql"
@@ -69,9 +70,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SP1_SAFE_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_SAFE_RUNTIME_COMMIT: c2d292c260333a9e4f166cd1435e8ef4897c8b43
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
   SP1_GNARK_IMAGE: agent-bounties-sp1-gnark-safe-v5:f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
 
 jobs:
@@ -81,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - name: Run deterministic gates
@@ -136,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - name: Run pinned Slither
@@ -154,7 +157,7 @@ jobs:
           python scripts/verify_open_competition_v2_slither.py \
             --report target/open-competition-v2-beta3-slither.json \
             --output target/open-competition-v2-beta3-slither-triage.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-static-analysis-${{ github.sha }}
           path: target/open-competition-v2-beta3-slither-triage.json
@@ -178,7 +181,7 @@ jobs:
       - name: Verify patched native and recursion transcript paths
         run: |
           set -euo pipefail
-          test "$(git -C .sp1-safe rev-parse HEAD)" = "$SP1_SAFE_COMMIT"
+          test "$(git -C .sp1-safe rev-parse HEAD)" = "$SP1_SAFE_CIRCUIT_COMMIT"
           test "$(cat .sp1-safe/SP1_CIRCUIT_VERSION)" = "$SP1_SAFE_CIRCUIT_VERSION"
           python scripts/verify_sp1_patched_graph.py | tee sp1-patched-graph.json
           python scripts/verify_open_competition_v2_wrap_template.py .sp1-safe \
@@ -265,7 +268,7 @@ jobs:
           cargo check --locked -p sp1-recursion-circuit
           cargo check --locked -p sp1-prover --bin regenerate_wrap_template
           cargo check --locked -p sp1-prover --bin verify_wrap_template
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-patched-source-${{ github.sha }}
           path: |
@@ -283,7 +286,7 @@ jobs:
       fail-fast: false
       matrix:
         builder: [a, b]
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: ./.github/actions/setup-rust
@@ -307,10 +310,14 @@ jobs:
           test "$(rustc --version | awk '{print $2}')" = "$expected_rust"
           {
             cargo prove --version
+            elf_dir="$GITHUB_WORKSPACE/target/metric-elf-${{ matrix.profile }}-${{ matrix.builder }}"
+            bash "$GITHUB_WORKSPACE/scripts/build_open_competition_v2_metric_elf.sh" \
+              "${{ matrix.profile }}" "$elf_dir"
+            export OPEN_COMPETITION_V2_METRIC_ELF="$elf_dir/${{ matrix.profile }}-program"
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-metric-${{ matrix.profile }}-${{ matrix.builder }}-${{ github.sha }}
           path: programs/${{ matrix.profile }}/evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl
@@ -325,7 +332,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -353,10 +360,20 @@ jobs:
               --journal-schema-hash 0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d
               --metric-program-hash 0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9
             )
+          elif [[ "${{ matrix.profile }}" = forward-canonical-gmv-attribution-metric-v2 ]]; then
+            args+=(
+              --source-file crates/competition-metric-core/Cargo.toml
+              --source-file crates/competition-metric-core/src/lib.rs
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.toml
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.lock
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/src/main.rs
+              --journal-schema-hash 0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40
+              --metric-program-hash 0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9
+            )
           fi
           python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
           cargo test --locked -p competition-metric-core
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-metric-release-${{ matrix.profile }}-${{ github.sha }}
           path: target/${{ matrix.profile }}.json
@@ -375,7 +392,7 @@ jobs:
         with:
           toolchain: "1.96.1"
       - uses: ./.github/actions/setup-protoc
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
@@ -407,19 +424,23 @@ jobs:
             --expected-version "$SP1_SAFE_CIRCUIT_VERSION"
           test "$(python -c 'import json; print(json.load(open("programs/public-vector-metric-v1/release-identity.json"))["status"])')" = reproduced_beta3
           test "$(python -c 'import json; print(json.load(open("programs/structured-artifact-metric-v1/release-identity.json"))["status"])')" = reproduced_beta3
+          test "$(python -c 'import json; print(json.load(open("programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json"))["status"])')" = reproduced_beta3
           rm -rf .sp1-safe/crates/prover/build
           DOCKER_BUILDKIT=1 docker build --pull=false \
             --file - \
-            --build-arg SP1_SOURCE_COMMIT="$SP1_SAFE_COMMIT" \
+            --build-arg SP1_SOURCE_COMMIT="$SP1_SAFE_CIRCUIT_COMMIT" \
             --build-arg SP1_CIRCUIT_VERSION="$SP1_SAFE_CIRCUIT_VERSION" \
             --tag "$SP1_GNARK_IMAGE" .sp1-safe \
             < ops/open-competition-v2-gnark-safe.Dockerfile
-          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_COMMIT"
+          test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_CIRCUIT_COMMIT"
           test "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{ index .Config.Labels "app.agent-bounties.circuit-version" }}')" = "$SP1_SAFE_CIRCUIT_VERSION"
           docker image inspect "$SP1_GNARK_IMAGE" > target/gnark-image.json
           docker run --rm --entrypoint sha256sum "$SP1_GNARK_IMAGE" /gnark-cli \
             | tee target/gnark-cli.sha256
           grep -Eq '^[0-9a-f]{64}  /gnark-cli$' target/gnark-cli.sha256
+          docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{.Id}}')" = \
+            "$(docker image inspect "$SP1_GNARK_IMAGE" --format '{{.Id}}')"
           trusted_root="$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT"
           test -f "$trusted_root/trusted-setup.json"
           rm -rf .sp1-safe/crates/prover/build
@@ -456,25 +477,43 @@ jobs:
             forge build --root "$root" --force
           done
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-public-vector"
+          bash scripts/build_open_competition_v2_metric_elf.sh public-vector-metric-v1 \
+            "$GITHUB_WORKSPACE/target/metric-elf-public-vector"
+          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-public-vector/public-vector-metric-v1-program"
           cargo build --locked --release --manifest-path programs/public-vector-metric-v1/Cargo.toml \
             -p public-vector-metric-v1-script
           install -m 0755 "$CARGO_TARGET_DIR/release/public-vector-metric-v1-script" target/public-vector-metric-v1-script
           target/public-vector-metric-v1-script --capabilities | tee target/prover-capabilities.json
-          python -c 'import json; v=json.load(open("target/prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False'
+          python -c 'import json,os; v=json.load(open("target/prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-structured-artifact"
+          bash scripts/build_open_competition_v2_metric_elf.sh structured-artifact-metric-v1 \
+            "$GITHUB_WORKSPACE/target/metric-elf-structured-artifact"
+          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-structured-artifact/structured-artifact-metric-v1-program"
           cargo build --locked --release --manifest-path programs/structured-artifact-metric-v1/Cargo.toml \
             -p structured-artifact-metric-v1-script
           install -m 0755 "$CARGO_TARGET_DIR/release/structured-artifact-metric-v1-script" target/structured-artifact-metric-v1-script
           target/structured-artifact-metric-v1-script --capabilities | tee target/structured-artifact-prover-capabilities.json
-          python -c 'import json; v=json.load(open("target/structured-artifact-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False'
+          python -c 'import json,os; v=json.load(open("target/structured-artifact-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-canonical-gmv"
+          bash scripts/build_open_competition_v2_metric_elf.sh forward-canonical-gmv-attribution-metric-v2 \
+            "$GITHUB_WORKSPACE/target/metric-elf-canonical-gmv"
+          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-canonical-gmv/forward-canonical-gmv-attribution-metric-v2-program"
+          cargo build --locked --release --manifest-path programs/forward-canonical-gmv-attribution-metric-v2/Cargo.toml \
+            -p forward-canonical-gmv-attribution-metric-v2-script
+          install -m 0755 "$CARGO_TARGET_DIR/release/forward-canonical-gmv-attribution-metric-v2-script" target/forward-canonical-gmv-attribution-metric-v2-script
+          target/forward-canonical-gmv-attribution-metric-v2-script --capabilities | tee target/canonical-gmv-prover-capabilities.json
+          python -c 'import json,os; v=json.load(open("target/canonical-gmv-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
       - name: Generate three real proofs and replay the exact mainnet release
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_ARCHIVE_RPC_URL || 'https://mainnet.base.org' }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
           OPEN_COMPETITION_V2_PROVER_BINARY: ${{ github.workspace }}/target/public-vector-metric-v1-script
           SP1_PROVER: cpu
         run: |
           set -euo pipefail
+          test -n "$BASE_DEPLOYER_ADDRESS"
+          DEPLOYER="${BASE_DEPLOYER_ADDRESS,,}"
           export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
           forge build --root contracts/base-escrow --force --ast
@@ -482,7 +521,7 @@ jobs:
           plonk_source=.sp1-safe/crates/prover/build/plonk/SP1VerifierPlonk.sol
           GROTH_HASH="$(python -c 'import re,sys; print(re.search(r"return (0x[0-9a-f]{64});", open(sys.argv[1]).read()).group(1))' "$groth_source")"
           PLONK_HASH="$(python -c 'import re,sys; print(re.search(r"return (0x[0-9a-f]{64});", open(sys.argv[1]).read()).group(1))' "$plonk_source")"
-          common=(--sp1-source-commit "$SP1_SAFE_COMMIT" --groth16-artifact target/generated-verifier-groth16/out/SP1VerifierGroth16.sol/SP1Verifier.json --groth16-verifier-hash "$GROTH_HASH" --plonk-artifact target/generated-verifier-plonk/out/SP1VerifierPlonk.sol/SP1Verifier.json --plonk-verifier-hash "$PLONK_HASH")
+          common=(--sp1-source-commit "$SP1_SAFE_CIRCUIT_COMMIT" --groth16-artifact target/generated-verifier-groth16/out/SP1VerifierGroth16.sol/SP1Verifier.json --groth16-verifier-hash "$GROTH_HASH" --plonk-artifact target/generated-verifier-plonk/out/SP1VerifierPlonk.sol/SP1Verifier.json --plonk-verifier-hash "$PLONK_HASH")
           setup=(
             --trusted-setup-manifest "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
             --groth16-constraint-system .sp1-safe/crates/prover/build/groth16/groth16_circuit.bin
@@ -500,7 +539,7 @@ jobs:
             "${setup[@]}" \
             --allow-pending-proof-evidence --output target/verifier-assets.pending.json
           python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.pending.json --allow-pending-proof-evidence \
             --output target/mainnet.pending.json
           python scripts/run_open_competition_v2_mainnet_fork_replay.py --bundle target/mainnet.pending.json \
@@ -518,7 +557,7 @@ jobs:
             --plonk-proof-evidence-2 target/proofs/plonk_best_b.json \
             --output target/verifier-assets.json
           python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.json --output target/mainnet.json
           python scripts/run_open_competition_v2_mainnet_fork_replay.py --bundle target/mainnet.json \
             --rpc-url "$BASE_MAINNET_RPC_URL" --proof-rehearsal \
@@ -537,7 +576,7 @@ jobs:
           import hashlib, json
           from pathlib import Path
           evidence = {}
-          for profile in ("public-vector-metric-v1", "structured-artifact-metric-v1"):
+          for profile in ("public-vector-metric-v1", "structured-artifact-metric-v1", "forward-canonical-gmv-attribution-metric-v2"):
               path = Path("target/prerequisites/metric-release") / f"{profile}.json"
               evidence[profile] = hashlib.sha256(path.read_bytes()).hexdigest()
           Path("target/metric-release-evidence.json").write_text(
@@ -552,10 +591,10 @@ jobs:
           record_gate base_mainnet_fork_exact_replay_complete target/mainnet-fork-replay.json
           record_gate critical_and_high_findings_resolved target/prerequisites/patched-source/sp1-patched-graph.json
           python scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --source-commit "$GITHUB_SHA" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" --source-commit "$GITHUB_SHA" \
             --verifier-assets target/verifier-assets.json --gates target/release-gates.json \
             --output target/mainnet.presepolia.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-release-assets-${{ github.sha }}
           path: |
@@ -569,8 +608,10 @@ jobs:
             target/proofs/*.json
             target/public-vector-metric-v1-script
             target/structured-artifact-metric-v1-script
+            target/forward-canonical-gmv-attribution-metric-v2-script
             target/prover-capabilities.json
             target/structured-artifact-prover-capabilities.json
+            target/canonical-gmv-prover-capabilities.json
             target/gnark-image.json
             target/gnark-cli.sha256
             target/verifier-vk-root-normalization.json
@@ -601,7 +642,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -645,6 +686,7 @@ jobs:
             --gates target/release-assets/release-gates.json --output target/sepolia.json
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepare-proof-fixtures target/sepolia-proof-inputs \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --resolved-bundle-output target/sepolia.json \
@@ -657,6 +699,8 @@ jobs:
           done
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --bundle target/sepolia.json \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" --prepared-proof-dir target/sepolia-proof-inputs \
+            --shadow-rpc-url "$BASE_SEPOLIA_SHADOW_RPC_URL" \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --proof-evidence-dir target/sepolia-proofs --prepare-x402-canary \
@@ -729,7 +773,7 @@ jobs:
             --gate base_sepolia_x402_and_byo_complete \
             --evidence target/sepolia-x402-rehearsal.json --uri "$evidence_uri" \
             --source-commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-live-sepolia-${{ github.sha }}
           path: |
@@ -754,7 +798,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -797,18 +841,29 @@ jobs:
           python scripts/deploy_open_competition_v2_beta3.py \
             --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
             --output target/mainnet-deployment-evidence.json
+          FACTORY="$(python -c 'import json; print(json.load(open("target/mainnet-exact.runtime.json"))["factory_contract"])')"
+          RELEASE_HASH="$(python -c 'import json; print(json.load(open("target/mainnet-exact.runtime.json"))["release_hash"])')"
+          python scripts/build_bounded_open_competition_v2_wallet_bundle.py \
+            --competition-factory "$FACTORY" --release-hash "$RELEASE_HASH" \
+            --output target/bounded-open-competition-v2-wallet-base-mainnet.json
+          python scripts/deploy_bounded_open_competition_v2_wallet_factory.py \
+            --manifest target/bounded-open-competition-v2-wallet-base-mainnet.json \
+            --release target/mainnet-exact.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --output target/bounded-open-competition-v2-wallet-deployment-evidence.json
           python scripts/record_open_competition_v2_beta3_gate.py \
             --manifest target/release-gates.json --gate mainnet_verifiers_factory_deployed \
             --evidence target/mainnet-deployment-evidence.json \
             --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --source-commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-deployment-${{ github.sha }}
           path: |
             target/mainnet-exact.json
             target/mainnet-exact.runtime.json
             target/mainnet-deployment-evidence.json
+            target/bounded-open-competition-v2-wallet-base-mainnet.json
+            target/bounded-open-competition-v2-wallet-deployment-evidence.json
             target/mainnet-broker-seed.json
             target/owner-mainnet-deployment-approval.json
             target/release-gates.json
@@ -823,7 +878,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -908,7 +963,7 @@ jobs:
           python scripts/wait_open_competition_v2_beta3_runtime.py \
             --runtime target/mainnet-public-beta.runtime.json --expect-broker true \
             --expect-public true --output target/public-beta-activation.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-public-activation-${{ github.sha }}
           path: |
@@ -935,7 +990,7 @@ jobs:
         with:
           name: open-competition-v2-beta3-release-assets-${{ github.sha }}
           path: target/release-assets
-      - name: Install both reviewed CPU provers as one fail-closed service
+      - name: Install reviewed CPU provers as one fail-closed service
         env:
           OPEN_COMPETITION_V2_PROVER_API_KEY: ${{ secrets.OPEN_COMPETITION_V2_PROVER_API_KEY }}
           OPEN_COMPETITION_V2_PROVER_URL: ${{ vars.OPEN_COMPETITION_V2_PROVER_URL }}
@@ -943,24 +998,35 @@ jobs:
           set -euo pipefail
           test "${#OPEN_COMPETITION_V2_PROVER_API_KEY}" -ge 32
           test -f "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/circuits
+          sudo python3 scripts/install_open_competition_v2_prover_assets.py \
+            --trusted-root "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT" \
+            --install-root /var/lib/agent-bounties-prover/circuits \
+            --circuit-version "$SP1_SAFE_CIRCUIT_VERSION" \
+            --output /tmp/open-competition-v2-prover-assets.json
+          sudo chown -R agent-bounties-prover:agent-bounties-prover /var/lib/agent-bounties-prover/circuits
+          sudo chmod -R u=rwX,go= /var/lib/agent-bounties-prover/circuits
           sudo install -d -m 0755 /opt/agent-bounties/bin /opt/agent-bounties/scripts /etc/agent-bounties
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/jobs
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/tmp
           sudo install -m 0755 target/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 target/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 target/release-assets/forward-canonical-gmv-attribution-metric-v2-script /opt/agent-bounties/bin/
           sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/
           sudo install -m 0644 ops/open-competition-v2-prover.service /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
           umask 077
           cat >target/prover.env <<EOF
           OPEN_COMPETITION_V2_PROVER_API_KEY='$OPEN_COMPETITION_V2_PROVER_API_KEY'
-          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script"}'
+          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script","forward-canonical-gmv-attribution-metric-v2":"/opt/agent-bounties/bin/forward-canonical-gmv-attribution-metric-v2-script"}'
           OPEN_COMPETITION_V2_PROVER_JOB_DIR=/var/lib/agent-bounties-prover/jobs
           OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
           OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
           OPEN_COMPETITION_V2_PROVER_BIND=127.0.0.1
           PORT=9070
           SP1_PROVER=cpu
-          SP1_GROTH16_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/groth16
-          SP1_PLONK_CIRCUIT_PATH=$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/plonk
+          SP1_GNARK_IMAGE=$SP1_GNARK_RUNTIME_IMAGE
+          SP1_GROTH16_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/groth16
+          SP1_PLONK_CIRCUIT_PATH=/var/lib/agent-bounties-prover/circuits/plonk
           EOF
           sudo install -m 0600 target/prover.env /etc/agent-bounties/prover.env
           sudo systemctl daemon-reload
@@ -970,6 +1036,8 @@ jobs:
             sleep 2
           done
           curl --fail --silent http://127.0.0.1:9070/health | tee target/prover-health.json
+          sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 \
+            /tmp/open-competition-v2-prover-assets.json target/prover-assets.json
           public_health="${OPEN_COMPETITION_V2_PROVER_URL%/v1/prove}/health"
           curl --fail --silent "$public_health" | tee target/prover-public-health.json
           python - <<'PY'
@@ -978,18 +1046,19 @@ jobs:
           json.dump({
               "schema_version": "agent-bounties/open-competition-v2-beta3-prover-deployment-v1",
               "passed": True,
-              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1"],
+              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1", "forward-canonical-gmv-attribution-metric-v2"],
               "backend": "cpu",
               "gpu_proving_enabled": False,
           }, Path("target/prover-deployment.json").open("w"), sort_keys=True)
           PY
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-production-prover-${{ github.sha }}
           path: |
             target/prover-deployment.json
             target/prover-health.json
             target/prover-public-health.json
+            target/prover-assets.json
           if-no-files-found: error
           retention-days: 365
 
@@ -1001,7 +1070,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -1072,7 +1141,7 @@ jobs:
           python scripts/wait_open_competition_v2_beta3_runtime.py \
             --runtime target/mainnet-broker.runtime.json --expect-broker true \
             --expect-public false --output target/production-broker-runtime.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-production-control-plane-${{ github.sha }}
           path: |
@@ -1110,7 +1179,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -1149,6 +1219,7 @@ jobs:
           KEEPER="${BASE_KEEPER_ADDRESS,,}"
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
+          forge build --root contracts/base-escrow --force --ast
           cargo build --locked --release -p api -p worker
           bundle=target/mainnet-deployment/mainnet-exact.json
           python scripts/verify_open_competition_v2_beta3_broker_reserve.py \
@@ -1158,6 +1229,7 @@ jobs:
             --output target/mainnet-broker-reserve-before.json
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --prepare-proof-fixtures target/mainnet-proof-inputs \
@@ -1170,6 +1242,7 @@ jobs:
           done
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle target/mainnet-canary-bundle.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --verifier-assets target/release-assets/verifier-assets.json \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --prepared-proof-dir target/mainnet-proof-inputs \
@@ -1279,7 +1352,7 @@ jobs:
             --gate fresh_agent_wallet_flow_complete \
             --evidence target/mainnet-fresh-agent-flow.json \
             --uri "$evidence_uri" --source-commit "$GITHUB_SHA"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-canaries-${{ github.sha }}
           path: |

@@ -6,15 +6,16 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from reconcile_github_bounty_labels import (
+    BETA3_PROTOCOL,
     LABEL_DEFINITIONS,
     MANAGED_START,
     HttpResult,
     LabelReconciliationError,
+    beta3_discovery_competition_mode,
     build_plans,
     execute_plans,
     fetch_github_issues,
@@ -157,6 +158,7 @@ def projection(*items: dict, degraded: bool = False) -> dict:
     competition_count = sum(
         record["protocol_version"] == "agent-bounties/open-competition-v1" for record in items
     )
+    beta3_count = sum(record["protocol_version"] == BETA3_PROTOCOL for record in items)
     return {
         "schema_version": "agent-bounties/github-bounty-discovery-v1",
         "generated_at": NOW,
@@ -188,6 +190,16 @@ def projection(*items: dict, degraded: bool = False) -> dict:
                 "available": not degraded,
                 "fresh": not degraded,
                 "item_count": competition_count,
+                "persisted_cursor_block": 49_799_500,
+                "error": None,
+            },
+            {
+                "source_type": "open_competition_v2",
+                "protocol_version": BETA3_PROTOCOL,
+                "factory_contract": "0x" + "3" * 40,
+                "available": not degraded,
+                "fresh": not degraded,
+                "item_count": beta3_count,
                 "persisted_cursor_block": 49_799_500,
                 "error": None,
             },
@@ -269,6 +281,14 @@ class FakeGitHub:
 
 
 class GitHubDiscoveryReconciliationTests(unittest.TestCase):
+    def test_beta3_discovery_rejects_unrepresentable_winner_mode(self) -> None:
+        self.assertEqual(
+            beta3_discovery_competition_mode("first_proven"),
+            "first_valid_submission",
+        )
+        with self.assertRaisesRegex(LabelReconciliationError, "winner mode safely"):
+            beta3_discovery_competition_mode("best_score")
+
     def test_workflow_is_least_privilege_concurrent_dry_run_by_default(self) -> None:
         workflow = Path(".github/workflows/bounty-inventory-guard.yml").read_text(encoding="utf-8")
         self.assertIn("issues: read", workflow)
@@ -410,6 +430,54 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         )
         self.assertLess(comment_index, close_index)
         self.assertEqual(service.issues[12]["state_reason"], "completed")
+
+    def test_beta3_settlement_removes_earning_labels_and_records_keeper(self) -> None:
+        settled = item(
+            1059,
+            state="settled",
+            mode="first_valid_submission",
+            source_url=f"https://github.com/{REPOSITORY}/issues/1059",
+        )
+        contract = settled["bounty_contract"]
+        settled.update(
+            {
+                "discovery_id": f"eip155:{CHAIN_ID}:{BETA3_PROTOCOL}:{contract}",
+                "protocol_version": BETA3_PROTOCOL,
+                "reward_usdc_base_units": "3000000",
+                "verifier_reward_usdc_base_units": "40000",
+                "bond_usdc_base_units": "0",
+                "funded_usdc_base_units": "3040000",
+                "funding_target_usdc_base_units": "3040000",
+                "settlement_evidence": {
+                    "event_name": "CompetitionSettledV2",
+                    "bounty_id": settled["bounty_id"],
+                    "bounty_contract": contract,
+                    "transaction_hash": TX,
+                    "block_number": 49_799_005,
+                    "log_index": 435,
+                    "solver_wallet": "0x" + "9" * 40,
+                    "solver_reward": "3000000",
+                    "keeper_wallet": "0x" + "6" * 40,
+                    "keeper_reward": "40000",
+                    "confirmed_canonical": True,
+                },
+            }
+        )
+        source = issue(
+            1059,
+            labels=["bounty", "funded-live", "ready-to-earn", "claimable-live"],
+        )
+        plan = build_plans(projection(settled), [source], policy(), REPOSITORY)[0]
+        self.assertEqual(plan.desired_state, "closed")
+        self.assertEqual(plan.desired_state_reason, "completed")
+        self.assertIn("settled-paid", plan.add_labels)
+        self.assertEqual(
+            set(plan.remove_labels),
+            {"claimable-live", "funded-live", "ready-to-earn"},
+        )
+        self.assertIn("CompetitionSettledV2", plan.settlement_receipt.body)
+        self.assertIn("Keeper wallet", plan.settlement_receipt.body)
+        self.assertIn("0.04 USDC", plan.settlement_receipt.body)
 
     def test_execution_is_idempotent_and_preserves_unmanaged_labels(self) -> None:
         record = item(13, difficulty="beginner")

@@ -12,6 +12,7 @@ composer = (site_dir / "bounty-composer-v2.js").read_text(encoding="utf-8")
 entry_js = (site_dir / "bounty-entry.js").read_text(encoding="utf-8")
 guild_home_js = (site_dir / "guild-home.js").read_text(encoding="utf-8")
 home_js = (site_dir / "home.js").read_text(encoding="utf-8")
+home_metrics_js = (site_dir / "home-metrics.js").read_text(encoding="utf-8")
 agent_html = (site_dir / "agent" / "index.html").read_text(encoding="utf-8")
 agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
 discovery = json.loads(
@@ -44,6 +45,7 @@ for marker in (
     'aria-label="Start a bounty for this digital work"',
     'type="text/markdown" title="Agent mode (Markdown)"',
     'src="bounty-entry.js?v=1"',
+    'src="home-metrics.js?v=1"',
 ):
     require("homepage", index_html, marker)
 
@@ -85,8 +87,30 @@ for marker in (
     "metrics?.marketplace_payout_volume?.lifetime?.usdc",
     "metrics?.marketplace_payout_volume?.lifetime_settled_rounds",
     'proof.href = "metrics.html#payout-audit"',
+    "generated/github-participation.json",
+    "AgentBountiesHomeMetrics?.render",
 ):
     require("homepage canonical payout metrics", home_js, marker)
+
+for marker in (
+    "lifetimeExternalActiveIdentities",
+    "platform_active_identities?.lifetime",
+    "periods?.lifetime?.active_identities",
+    "Namespaces are not deduplicated into unique people",
+):
+    require("homepage external identity metric", home_metrics_js, marker)
+
+if index_html.count("data-external-active-identities") != 3:
+    raise SystemExit("homepage must expose the same lifetime external active identity metric in all three locations")
+for retired in (
+    "data-adoption-paid",
+    "data-community-contributors",
+    "data-community-participants",
+    "/v1/audience/report",
+    "api.github.com/repos/NSPG13/agent-bounties",
+):
+    if retired in index_html or retired in home_js or retired in guild_home_js:
+        raise SystemExit(f"homepage still contains retired contributor fallback wiring: {retired}")
 
 for marker in (
     "window.AgentBountyEntry.consume(params)",

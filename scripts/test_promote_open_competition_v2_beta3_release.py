@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 PATH = Path(__file__).with_name("promote_open_competition_v2_beta3_release.py")
@@ -29,6 +30,8 @@ class PromotionTests(unittest.TestCase):
             "plonk_adapter": {"address": address("7"), "runtime_code_hash": digest("b")},
             "source_commit": "c" * 40,
             "sp1": {
+                "circuit_commit": "d" * 40,
+                "runtime_commit": "e" * 40,
                 "patched_source_commit": "d" * 40,
                 "circuit_version": "safe",
                 "host_rust_version": "1.96.1",
@@ -84,7 +87,15 @@ class PromotionTests(unittest.TestCase):
 
     def test_promotion_changes_only_activation_and_gate_evidence(self):
         bundle, deployment, gates = self.fixture()
-        promoted, runtime = MODULE.promote(bundle, deployment, gates)
+        with mock.patch.dict(
+            MODULE.release.METRIC_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.release.STRUCTURED_ARTIFACT_IDENTITY,
+            {"status": "reproduced_beta3"},
+        ), mock.patch.dict(
+            MODULE.release.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
+        ):
+            promoted, runtime = MODULE.promote(bundle, deployment, gates)
         self.assertTrue(promoted["activation"]["broker_canary_enabled"])
         self.assertFalse(promoted["activation"]["public_creation_enabled"])
         self.assertTrue(runtime["proof_broker_enabled"])

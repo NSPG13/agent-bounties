@@ -16,6 +16,20 @@ contract wallet, and the agent receives only a dedicated delegate signing key.
 The contract enforces the limits even if the agent, its prompt, the hosted API,
 or a relayer is compromised.
 
+Open Competition V2 replenishment uses the narrower
+`BoundedOpenCompetitionV2Wallet`, not an ordinary delegate wallet and not the
+general-purpose wallet described below. It keeps the reserve under the funding
+owner's control, permits the delegate only to activate exact preapproved
+best-score canonical-GMV meta-competitions, rejects general artifact and
+first-proven configurations, and provides owner-only revocation plus recovery of uncommitted
+and canonically refundable USDC. See the
+[private replenishment runbook](open-competition-v2-replenishment.md) and
+[reserve threat model](threat-model-bounded-open-competition-v2-wallet.md).
+The exact deterministic factory manifest is built by
+`scripts/build_bounded_open_competition_v2_wallet_bundle.py`; generated calldata
+is review evidence only until its deployment receipt and runtime hashes are
+confirmed on Base.
+
 ## Active 89 USDC Policy
 
 Base mainnet wallet

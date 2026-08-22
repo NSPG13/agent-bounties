@@ -24,6 +24,7 @@ JOURNAL_SCHEMA_WORD = 12
 METRIC_PROGRAM_WORD = 13
 EXPECTED_SP1_VERSION_PREFIX = "cargo-prove sp1 (f6a2dff "
 EXPECTED_SP1_COMMIT = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d"
+EXPECTED_SP1_RUNTIME_COMMIT = "c2d292c260333a9e4f166cd1435e8ef4897c8b43"
 DEFAULT_IDENTITY_PATH = "programs/public-vector-metric-v1/release-identity.json"
 DEFAULT_PROFILE_ID = "public-vector-metric-v1"
 DEFAULT_JOURNAL_SCHEMA_HASH = "0xd9c492538aa0822e8a1d651886e79a2b8ddfc2c3428b3ed92e19d337eefe77d4"
@@ -96,6 +97,11 @@ def main() -> int:
     parser.add_argument("--source-file", action="append", dest="source_files")
     parser.add_argument("--journal-schema-hash", default=DEFAULT_JOURNAL_SCHEMA_HASH)
     parser.add_argument("--metric-program-hash", default=DEFAULT_METRIC_PROGRAM_HASH)
+    parser.add_argument(
+        "--candidate",
+        action="store_true",
+        help="derive a non-production release identity from two isolated hydrated builds",
+    )
     args = parser.parse_args()
 
     source_files = tuple(args.source_files or DEFAULT_SOURCE_FILES)
@@ -108,6 +114,10 @@ def main() -> int:
 
     first = read_evidence(args.first)
     second = read_evidence(args.second)
+    if args.candidate and not (
+        first.get("release_candidate") is True and second.get("release_candidate") is True
+    ):
+        raise ValueError("candidate reproduction requires release-candidate execution evidence")
     for field in ("program_vkey", "elf_keccak256", "elf_sha256", "journal_hex"):
         if first.get(field) != second.get(field):
             raise ValueError(f"isolated builds disagree on {field}")
@@ -121,17 +131,30 @@ def main() -> int:
     source_hash_hex = canonical_source_hash(args.root, source_files)
     source_hash = bytes32(source_hash_hex, "source_hash")
     identity = json.loads((args.root / args.identity_path).read_text(encoding="utf-8"))
+    if identity.get("sp1_commit") != EXPECTED_SP1_COMMIT:
+        raise ValueError("metric identity does not pin the reviewed SP1 circuit commit")
+    if identity.get("sp1_runtime_commit") != EXPECTED_SP1_RUNTIME_COMMIT:
+        raise ValueError("metric identity does not pin the corrected SP1 runtime commit")
     expected_identity = {
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
         "elf_keccak256": first["elf_keccak256"],
         "elf_sha256": first["elf_sha256"],
     }
-    for field, observed in expected_identity.items():
-        if identity.get(field) != observed:
-            raise ValueError(
-                f"reproduced {field} does not match the committed metric release identity"
-            )
+    if args.candidate:
+        if identity.get("status") != "awaiting_reproduction":
+            raise ValueError("candidate metric identity must remain awaiting_reproduction")
+        for field in expected_identity:
+            if identity.get(field) is not None:
+                raise ValueError(f"candidate metric identity {field} must remain null")
+    else:
+        if identity.get("status") != "reproduced_beta3":
+            raise ValueError("reviewed metric identity must be reproduced_beta3")
+        for field, observed in expected_identity.items():
+            if identity.get(field) != observed:
+                raise ValueError(
+                    f"reproduced {field} does not match the committed metric release identity"
+                )
 
     if word(public_values, PROGRAM_VKEY_WORD) != program_vkey:
         raise ValueError("journal program_vkey does not match the SP1 setup vkey")
@@ -149,6 +172,7 @@ def main() -> int:
         "profile_id": args.profile_id,
         "sp1_release_line": "6.4.0-agent-bounties-sp1-safe-v5",
         "sp1_commit": EXPECTED_SP1_COMMIT,
+        "sp1_runtime_commit": EXPECTED_SP1_RUNTIME_COMMIT,
         "program_vkey": first["program_vkey"],
         "source_hash": source_hash_hex,
         "elf_hash": first["elf_keccak256"],
@@ -164,7 +188,7 @@ def main() -> int:
     ).hexdigest()
     result = {
         **summary,
-        "classification": "reviewed",
+        "classification": "candidate_reproduction" if args.candidate else "reviewed",
         "review_evidence_hash": "0x" + review_hash,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

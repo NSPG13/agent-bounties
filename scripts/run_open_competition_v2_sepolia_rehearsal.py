@@ -12,11 +12,12 @@ import time
 from typing import Any
 
 from eth_account import Account
+from eth_utils import to_checksum_address
 
 import build_open_competition_v2_beta3_release as release
 import open_competition_v2_proof_rehearsal as rehearsal
 from _shared.evm import keccak256, keccak_bytes
-from _shared.rpc import rpc
+from _shared.rpc import RpcError, rpc
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,6 +108,109 @@ def proof_summary(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def malformed_proof_cases(proof: bytes) -> dict[str, bytes]:
+    require(len(proof) > 5, "proof is too short for malformed-proof probes")
+    selector_mismatch = bytearray(proof)
+    selector_mismatch[0] ^= 1
+    payload_mutation = bytearray(proof)
+    payload_mutation[-1] ^= 1
+    return {
+        "selector_mismatch": bytes(selector_mismatch),
+        "truncated": proof[:-1],
+        "payload_mutation": bytes(payload_mutation),
+        "zeroed_payload": proof[:4] + bytes(len(proof) - 4),
+    }
+
+
+def exact_void_call(
+    url: str,
+    *,
+    sender: str,
+    to: str,
+    data: str,
+    block: str,
+    label: str,
+) -> None:
+    try:
+        result = rpc(url, "eth_call", [{"from": sender, "to": to, "data": data}, block])
+    except RpcError as error:
+        raise SepoliaRehearsalError(f"{label} unexpectedly reverted") from error
+    require(result == "0x", f"{label} returned malformed success data")
+
+
+def rejected_call(
+    url: str,
+    *,
+    sender: str,
+    to: str,
+    data: str,
+    block: str,
+    label: str,
+) -> None:
+    try:
+        result = rpc(url, "eth_call", [{"from": sender, "to": to, "data": data}, block])
+    except RpcError:
+        return
+    raise SepoliaRehearsalError(f"{label} was not rejected (RPC result {result!r})")
+
+
+def proof_rejection_consensus(
+    urls: tuple[str, ...],
+    *,
+    adapter: str,
+    program_vkey: bytes,
+    journal: bytes,
+    proof: bytes,
+    sender: str,
+    block: str,
+) -> dict[str, Any]:
+    unique_urls = tuple(dict.fromkeys(urls))
+    require(len(unique_urls) == 2, "proof rejection requires two independent RPC endpoints")
+    valid_call = rehearsal.function_data(
+        "verify(bytes32,bytes,bytes)",
+        ["bytes32", "bytes", "bytes"],
+        [program_vkey, journal, proof],
+    )
+    invalid_calls = {
+        name: rehearsal.function_data(
+            "verify(bytes32,bytes,bytes)",
+            ["bytes32", "bytes", "bytes"],
+            [program_vkey, journal, invalid_proof],
+        )
+        for name, invalid_proof in malformed_proof_cases(proof).items()
+    }
+    mutated_journal = bytearray(journal)
+    mutated_journal[-1] ^= 1
+    invalid_calls["journal_mutation"] = rehearsal.function_data(
+        "verify(bytes32,bytes,bytes)",
+        ["bytes32", "bytes", "bytes"],
+        [program_vkey, bytes(mutated_journal), proof],
+    )
+    for index, url in enumerate(unique_urls, start=1):
+        exact_void_call(
+            url,
+            sender=sender,
+            to=adapter,
+            data=valid_call,
+            block=block,
+            label=f"RPC {index} valid pinned-verifier probe",
+        )
+        for name, invalid_call in invalid_calls.items():
+            rejected_call(
+                url,
+                sender=sender,
+                to=adapter,
+                data=invalid_call,
+                block=block,
+                label=f"RPC {index} malformed-proof probe {name}",
+            )
+    return {
+        "rpc_endpoint_count": len(unique_urls),
+        "valid_proof_accepted": True,
+        "rejected_cases": sorted(invalid_calls),
+    }
+
+
 def x402_canary_spec(
     fixture: dict[str, Any], competition: str, bounty_id: str, solver: str, solver_nonce: int
 ) -> dict[str, Any]:
@@ -162,8 +266,9 @@ class SignedRpc:
             "maxPriorityFeePerGas": hex(priority),
         }
         if to is not None:
-            transaction["to"] = to
-            estimate_request["to"] = to
+            destination = to_checksum_address(to)
+            transaction["to"] = destination
+            estimate_request["to"] = destination
         gas = int(rpc(self.url, "eth_estimateGas", [estimate_request]), 16)
         transaction["gas"] = gas * 5 // 4 + 25_000
         signed = actor.sign_transaction(transaction)
@@ -196,7 +301,9 @@ def runtime_hash(url: str, address: str, block: str = "latest") -> tuple[str, in
     return keccak256(code), len(code)
 
 
-def bundle_for_nonce(bundle: dict[str, Any], nonce: int) -> dict[str, Any]:
+def bundle_for_nonce(
+    bundle: dict[str, Any], nonce: int, verifier_assets: dict[str, Any]
+) -> dict[str, Any]:
     preflight = deepcopy(bundle["preflight_safe_block"])
     preflight["deployer_nonce"] = nonce
     return release.build_bundle(
@@ -206,39 +313,64 @@ def bundle_for_nonce(bundle: dict[str, Any], nonce: int) -> dict[str, Any]:
         repository_subject=bundle["repository_subject"]["hash"],
         preflight=preflight,
         gates=deepcopy(bundle["release_gates"]),
-        verifier_assets=release.load_verifier_assets(),
+        verifier_assets=verifier_assets,
     )
 
 
-def resolve_or_deploy_factory(client: SignedRpc, signer: Any, bundle: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def resolve_or_deploy_factory(
+    client: SignedRpc,
+    signer: Any,
+    bundle: dict[str, Any],
+    verifier_assets: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     require(bundle.get("network") == NETWORK and bundle.get("chain_id") == CHAIN_ID, f"release bundle is not {NETWORK}")
     require(signer.address.lower() == bundle["deployer"], "signer does not match release bundle deployer")
     pending_nonce = int(rpc(client.url, "eth_getTransactionCount", [signer.address, "pending"]), 16)
 
     candidates = [bundle]
-    for nonce in range(max(0, pending_nonce - 32), pending_nonce):
-        if nonce != bundle["factory"]["from_nonce"]:
-            candidates.append(bundle_for_nonce(bundle, nonce))
+    original_start_nonce = int(bundle["preflight_safe_block"]["deployer_nonce"])
+    for nonce in range(max(0, pending_nonce - 34), pending_nonce + 1):
+        if nonce != original_start_nonce:
+            candidates.append(bundle_for_nonce(bundle, nonce, verifier_assets))
     for candidate in candidates:
         observed, size = runtime_hash(client.url, candidate["factory"]["address"])
         if size and observed == candidate["factory"]["runtime_code_hash"]:
-            return candidate, None
+            return candidate, {}
 
     require(NETWORK == "base-sepolia", "mainnet rehearsal requires the exact factory to be deployed first")
-    require(pending_nonce == bundle["factory"]["from_nonce"], "deployer nonce moved and no exact prior Beta3 factory was found; rebuild the release bundle")
-    observed, size = runtime_hash(client.url, bundle["factory"]["address"])
-    require(size == 0, f"predicted factory is occupied by {observed}")
-    receipt = client.send(signer, data=bundle["factory"]["deployment_calldata"])
-    require(
-        str(receipt.get("contractAddress", "")).lower() == bundle["factory"]["address"],
-        "deployed factory address differs from the release bundle",
-    )
-    return bundle, receipt
+    deployable = bundle_for_nonce(bundle, pending_nonce, verifier_assets)
+    transactions = deployable["deployment_transactions"]
+    require(len(transactions) == 3, "Beta3 deployment requires exactly three transactions")
+    for offset, transaction in enumerate(transactions):
+        require(
+            transaction["from_nonce"] == pending_nonce + offset,
+            "Beta3 deployment transaction nonces are not contiguous",
+        )
+        observed, size = runtime_hash(client.url, transaction["predicted_address"])
+        require(size == 0, f"predicted {transaction['component']} address is occupied by {observed}")
+
+    receipts: dict[str, dict[str, Any]] = {}
+    for transaction in transactions:
+        receipt = client.send(signer, data=transaction["data"])
+        require(
+            str(receipt.get("contractAddress", "")).lower()
+            == transaction["predicted_address"],
+            f"deployed {transaction['component']} address differs from the release bundle",
+        )
+        receipts[transaction["component"]] = receipt
+    return deployable, receipts
 
 
 def verify_components(url: str, bundle: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key in ("factory", "groth16_adapter", "plonk_adapter", "implementation"):
+    for key in (
+        "groth16_verifier",
+        "plonk_verifier",
+        "factory",
+        "groth16_adapter",
+        "plonk_adapter",
+        "implementation",
+    ):
         expected = bundle[key]
         observed_hash, observed_bytes = runtime_hash(url, expected["address"])
         require(observed_hash == expected["runtime_code_hash"], f"{key} runtime hash mismatch")
@@ -286,12 +418,23 @@ def actors_for(
     )
 
 
+def prepared_actor_set(actors: dict[str, str]) -> dict[str, str]:
+    return {
+        "creator": actors["deployer"],
+        "solver_a": actors["solver_a"],
+        "solver_b": actors["solver_b"],
+    }
+
+
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
     raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
     signer = Account.from_key(raw_key)
     raw_bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
+    verifier_assets = release.load_verifier_assets(args.verifier_assets)
     client = SignedRpc(args.rpc_url)
-    bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
+    bundle, deployment_receipts = resolve_or_deploy_factory(
+        client, signer, raw_bundle, verifier_assets
+    )
     components = verify_components(client.url, bundle)
     signer, solver_a, solver_b = actors_for(raw_key, bundle, args.actor_derivation_salt)
     context = rehearsal.prepare_context(
@@ -321,8 +464,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     result = {
         "schema_version": f"agent-bounties/open-competition-v2-beta3-{RUN_LABEL}-preparation-v1",
         "passed": True,
-        "broadcast": deployment_receipt is not None,
-        "factory_deployment_transaction": receipt_hash(deployment_receipt) if deployment_receipt else None,
+        "broadcast": bool(deployment_receipts),
+        "deployment_transactions": {
+            name: receipt_hash(receipt)
+            for name, receipt in deployment_receipts.items()
+        },
+        "factory_deployment_transaction": (
+            receipt_hash(deployment_receipts["factory"])
+            if "factory" in deployment_receipts
+            else None
+        ),
         "source_commit": bundle["source_commit"],
         "components": components,
         "actors": {
@@ -346,8 +497,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     raw_key = normalized_key(os.environ.get(args.private_key_env, ""))
     signer = Account.from_key(raw_key)
     raw_bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
+    verifier_assets = release.load_verifier_assets(args.verifier_assets)
     client = SignedRpc(args.rpc_url)
-    bundle, deployment_receipt = resolve_or_deploy_factory(client, signer, raw_bundle)
+    bundle, deployment_receipts = resolve_or_deploy_factory(
+        client, signer, raw_bundle, verifier_assets
+    )
     components = verify_components(client.url, bundle)
 
     signer, solver_a, solver_b = actors_for(raw_key, bundle, args.actor_derivation_salt)
@@ -374,7 +528,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             funding_window=PREPARED_FUNDING_WINDOW,
         )
     context, fixtures = rehearsal.load_context(bundle, prepared)
-    require(context["actors"] == actors, "prepared proof actor set changed")
+    require(
+        context["actors"] == prepared_actor_set(actors),
+        "prepared proof actor set changed",
+    )
     required_proofs = (
         {"plonk_best_a", "plonk_best_b"}
         if args.x402_replaces_first_proven
@@ -415,8 +572,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     receipts: dict[str, dict[str, Any]] = {}
-    if deployment_receipt:
-        receipts["factory_deployment"] = deployment_receipt
+    for name, receipt in deployment_receipts.items():
+        receipts[f"deployment_{name}"] = receipt
     for name, actor in (("solver_a", solver_a), ("solver_b", solver_b)):
         if int(rpc(client.url, "eth_getBalance", [actor.address, "latest"]), 16) < args.actor_eth_wei:
             receipts[f"fund_{name}_gas"] = client.send(signer, to=actor.address, value=args.actor_eth_wei)
@@ -449,6 +606,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     expiry_result = None
     if not args.skip_expiry_refund:
+        require(args.shadow_rpc_url, "expiry and malformed-proof rehearsal requires a shadow RPC")
+        require(
+            int(rpc(args.shadow_rpc_url, "eth_chainId", []), 16) == CHAIN_ID,
+            f"shadow RPC is not {NETWORK}",
+        )
         expiry_template = json.loads(
             (PROGRAM_ROOT / "fixtures/rehearsal-first-proven.json").read_text(encoding="utf-8")
         )
@@ -457,23 +619,40 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         expiry_address, expiry_id = rehearsal.predict(client.url, factory, signer.address, expiry_params, expiry_nonce)
         receipts["approve_expiry"] = client.send(signer, to=token, data=rehearsal.function_data("approve(address,uint256)", ["address", "uint256"], [expiry_address, 105_000]))
         receipts["create_expiry"] = client.send(signer, to=factory, data=rehearsal.function_data(f"createCompetition({rehearsal.PARAM_TYPE},uint256,bytes32,bytes32)", [rehearsal.PARAM_TYPE, "uint256", "bytes32", "bytes32"], [expiry_params, 105_000, expiry_nonce, risk_hash]))
-        invalid_proof = bytearray(bytes.fromhex(proofs["groth16_first"]["proof_hex"][2:]))
-        invalid_proof[-1] ^= 1
-        invalid_call = rehearsal.function_data(
+        rehearsal_block = receipts["create_expiry"]["blockNumber"]
+        for index, url in enumerate((client.url, args.shadow_rpc_url), start=1):
+            observed_block = rpc(url, "eth_getBlockByNumber", [rehearsal_block, False])
+            require(
+                observed_block
+                and observed_block["hash"].lower()
+                == receipts["create_expiry"]["blockHash"].lower(),
+                f"RPC {index} disagrees on the malformed-proof rehearsal block",
+            )
+        journal = bytes.fromhex(proofs["groth16_first"]["journal_hex"][2:])
+        proof = bytes.fromhex(proofs["groth16_first"]["proof_hex"][2:])
+        rejection_evidence = proof_rejection_consensus(
+            (client.url, args.shadow_rpc_url),
+            adapter=bundle["groth16_adapter"]["address"],
+            program_vkey=bytes.fromhex(bundle["metric_profile"]["program_vkey"][2:]),
+            journal=journal,
+            proof=proof,
+            sender=solver_a.address,
+            block=rehearsal_block,
+        )
+        wrong_scope_call = rehearsal.function_data(
             "submitProof(bytes,bytes)",
             ["bytes", "bytes"],
-            [bytes.fromhex(proofs["groth16_first"]["journal_hex"][2:]), bytes(invalid_proof)],
+            [journal, proof],
         )
-        try:
-            rpc(
-                client.url,
-                "eth_call",
-                [{"from": solver_a.address, "to": expiry_address, "data": invalid_call}, "latest"],
+        for index, url in enumerate((client.url, args.shadow_rpc_url), start=1):
+            rejected_call(
+                url,
+                sender=solver_a.address,
+                to=expiry_address,
+                data=wrong_scope_call,
+                block=rehearsal_block,
+                label=f"RPC {index} wrong-scope competition proof",
             )
-        except RuntimeError:
-            invalid_proof_rejected = True
-        else:
-            raise SepoliaRehearsalError("the pinned verifier accepted a malformed proof")
         wait_until_chain_time(client.url, rehearsal.call_uint(client.url, expiry_address, "proofDeadline()"))
         receipts["expire"] = client.send(signer, to=expiry_address, data=rehearsal.function_data("expireCompetition()", [], []))
         require(has_topic(receipts["expire"], CANCELLED_TOPIC), "expiry cancellation event missing")
@@ -483,7 +662,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         expiry_result = {
             "competition": expiry_address,
             "bounty_id": expiry_id,
-            "invalid_proof_rejected": invalid_proof_rejected,
+            "invalid_proof_rejected": True,
+            "proof_rejection_consensus": rejection_evidence,
+            "wrong_scope_proof_rejected": True,
             "permissionless_refund": True,
             "escrow_balance": 0,
         }
@@ -611,7 +792,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--network", choices=("base-sepolia", "base-mainnet"), default="base-sepolia")
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--verifier-assets", type=Path, required=True)
     parser.add_argument("--rpc-url")
+    parser.add_argument("--shadow-rpc-url")
     parser.add_argument("--private-key-env", default="BASE_KEEPER_PRIVATE_KEY")
     parser.add_argument("--actor-derivation-salt", default="local")
     parser.add_argument("--actor-eth-wei", type=int, default=100_000_000_000_000)
@@ -635,10 +818,12 @@ def configure_network(args: argparse.Namespace) -> None:
         CHAIN_ID = 8453
         RUN_LABEL = "mainnet"
         args.rpc_url = args.rpc_url or os.environ.get("BASE_MAINNET_RPC_URL", "https://mainnet.base.org")
+        args.shadow_rpc_url = args.shadow_rpc_url or os.environ.get("BASE_MAINNET_SHADOW_RPC_URL")
     else:
         CHAIN_ID = 84532
         RUN_LABEL = "sepolia"
         args.rpc_url = args.rpc_url or os.environ.get("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org")
+        args.shadow_rpc_url = args.shadow_rpc_url or os.environ.get("BASE_SEPOLIA_SHADOW_RPC_URL")
 
 
 def main() -> int:

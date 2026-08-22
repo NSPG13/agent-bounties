@@ -11,6 +11,7 @@ default = ["std"]
 std = ["serde/std", "serde_json/std"]
 
 [dependencies]
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 tiny-keccak = { version = "2", features = ["keccak"] }

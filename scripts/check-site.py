@@ -19,7 +19,12 @@ REQUIRED_FILES = [
     "metrics.html",
     "metrics.css",
     "metrics.js",
+    "home-metrics.js",
+    "guild-home.js",
+    "marketplace-refill-confirmation.html",
+    "marketplace-refill-confirmation.js",
     "generated/github-participation.json",
+    "generated/public-metrics-policy.json",
     "competition.html",
     "competition.css",
     "competition.js",
@@ -36,6 +41,15 @@ REQUIRED_FILES = [
     "moonpay-onramp.js",
     "moonpay-link.js",
     "objective.html",
+    "how-it-works.html",
+    "authorize.html",
+    "contact.html",
+    "create-competition.html",
+    "durable-wallet-policy.html",
+    "leaderboard.html",
+    "news.html",
+    "standing-meta-v3-migration.html",
+    "verify.html",
     "objective.css",
     "objective.js",
     "x402.html",
@@ -85,9 +99,11 @@ CORE_PAGES = [
 ]
 PUBLIC_INDEXABLE_PAGES = {
     "index.html": "https://agentbounties.app/",
+    "how-it-works.html": "https://agentbounties.app/how-it-works.html",
     "earn.html": "https://agentbounties.app/earn.html",
     "metrics.html": "https://agentbounties.app/metrics.html",
     "competition.html": "https://agentbounties.app/competition.html",
+    "create-competition.html": "https://agentbounties.app/create-competition.html",
     "post.html": "https://agentbounties.app/post.html",
     "funding.html": "https://agentbounties.app/funding.html",
     "objective.html": "https://agentbounties.app/objective.html",
@@ -100,14 +116,27 @@ PUBLIC_INDEXABLE_PAGES = {
     "terms.html": "https://agentbounties.app/terms.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "refunds.html": "https://agentbounties.app/refunds.html",
+    "leaderboard.html": "https://agentbounties.app/leaderboard.html",
+    "news.html": "https://agentbounties.app/news.html",
+    "contact.html": "https://agentbounties.app/contact.html",
 }
 INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
+    "chatgpt-bounty-card-preview.html",
+    "chatgpt-bounty-feed-widget.html",
     "chatgpt-post-widget.html",
+    "feedback.html",
+    "marketplace-refill-confirmation.html",
     "operator.html",
     "onramp.html",
     "recovery.html",
     "success.html",
+}
+TRACKED_NOINDEX_PAGES = {
+    "authorize.html",
+    "durable-wallet-policy.html",
+    "standing-meta-v3-migration.html",
+    "verify.html",
 }
 ROUTE_ALIASES = {
     "tasks/index.html": "/earn.html",
@@ -168,6 +197,21 @@ def check_internal_link(site_dir: Path, source: Path, link: str, ids: set[str]) 
         fail(f"{source}: missing linked file {link}")
 
 
+def check_index_link(source: Path, link: str) -> None:
+    target, _ = urldefrag(link)
+    parsed = urlparse(target)
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        return
+    if parsed.netloc and parsed.netloc.lower() not in {
+        "agentbounties.app",
+        "www.agentbounties.app",
+    }:
+        return
+    path = parsed.path.replace("\\", "/")
+    if path == "index.html" or path.endswith("/index.html"):
+        fail(f"{source}: internal link must use the canonical directory URL, not {link}")
+
+
 def check_protocol(protocol: dict, deployment: dict) -> None:
     if protocol.get("protocol_version") != "agent-bounties/autonomous-v1":
         fail("protocol.json must identify autonomous-v1")
@@ -202,6 +246,14 @@ def main() -> int:
         if not (site_dir / relative).exists():
             fail(f"missing site file: {relative}")
 
+    api_metrics_policy = repo_root / "crates" / "api" / "fixtures" / "public-metrics-policy.json"
+    site_metrics_policy = site_dir / "generated" / "public-metrics-policy.json"
+    if api_metrics_policy.read_bytes() != site_metrics_policy.read_bytes():
+        fail("website public metrics policy must be byte-for-byte synchronized with the API fixture")
+    parsed_metrics_policy = json.loads(site_metrics_policy.read_text(encoding="utf-8"))
+    if parsed_metrics_policy.get("schema_version") != "agent-bounties/public-metrics-policy-v1":
+        fail("website public metrics policy has an unexpected schema version")
+
     for relative, destination in ROUTE_ALIASES.items():
         alias = site_dir / relative
         if not alias.exists():
@@ -231,12 +283,20 @@ def main() -> int:
             "https://mcp.agentbounties.app/mcp",
             "https://api.agentbounties.app/api-docs/openapi.json",
             "https://agentbounties.app/schemas/discovery-manifest.v2.json",
+            "Call <code>tools/list</code>",
+            "get_bounty_feed",
+            "prepare_bounty_action(action=solve)",
+            "get_bounty_action_status(intent_id)",
+            "advanced HTTP catalog is not the MCP tool list",
             "Only <code>BountySettled</code> proves bounty payment",
+            "inspect_open_competition_v2(operation=guide)",
+            "CompetitionSettledV2",
         ],
     )
     if re.search(r'<meta\s+name="robots"[^>]*noindex', agent_page, re.IGNORECASE):
         fail("agent/index.html must remain indexable")
     for link in agent_parser.links:
+        check_index_link(agent_page_path, link)
         check_internal_link(site_dir, agent_page_path, link, agent_parser.ids)
 
     agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
@@ -248,7 +308,14 @@ def main() -> int:
             "https://agentbounties.app/llms.txt",
             "https://mcp.agentbounties.app/mcp",
             "https://api.agentbounties.app/api-docs/openapi.json",
+            "call `tools/list`",
+            "get_bounty_feed",
+            "prepare_bounty_action",
+            "get_bounty_action_status",
+            "not guaranteed MCP tools",
             "Only a confirmed canonical `BountySettled` event proves bounty payment",
+            "inspect_open_competition_v2(operation=guide)",
+            "CompetitionSettledV2",
         ],
     )
 
@@ -272,6 +339,9 @@ def main() -> int:
                 fail(f"{html_file}: public page must load the analytics configuration exactly once")
             if text.index('src="analytics-config.js"') > text.index('src="analytics.js"'):
                 fail(f"{html_file}: analytics configuration must load before the collector")
+            h1_count = len(re.findall(r"<h1(?:\s|>)", text, re.IGNORECASE))
+            if h1_count != 1:
+                fail(f"{html_file}: public page must contain exactly one h1; found {h1_count}")
         elif html_file.name in INTERNAL_NOINDEX_PAGES:
             if not re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
                 fail(f"{html_file}: internal page must be noindex")
@@ -279,8 +349,25 @@ def main() -> int:
                 fail(f"{html_file}: internal page must not load the public analytics collector")
             if '<script src="analytics-config.js"></script>' in text:
                 fail(f"{html_file}: internal page must not load the public analytics configuration")
+        elif html_file.name in TRACKED_NOINDEX_PAGES:
+            if not re.search(r'<meta\s+name="robots"[^>]*noindex', text, re.IGNORECASE):
+                fail(f"{html_file}: wallet-action page must be noindex")
+            if text.count('<script src="analytics.js"></script>') != 1:
+                fail(f"{html_file}: wallet-action page must load analytics exactly once")
+            if text.count('<script src="analytics-config.js"></script>') != 1:
+                fail(f"{html_file}: wallet-action page must load analytics configuration exactly once")
+            if text.index('src="analytics-config.js"') > text.index('src="analytics.js"'):
+                fail(f"{html_file}: analytics configuration must load before the collector")
         for link in parser.links:
+            check_index_link(html_file, link)
             check_internal_link(site_dir, html_file, link, parser.ids)
+
+    root_pages = {path.name for path in site_dir.glob("*.html")}
+    classified_pages = set(PUBLIC_INDEXABLE_PAGES) | INTERNAL_NOINDEX_PAGES | TRACKED_NOINDEX_PAGES
+    if root_pages != classified_pages:
+        missing = sorted(root_pages - classified_pages)
+        stale = sorted(classified_pages - root_pages)
+        fail(f"root HTML crawl classification mismatch: unclassified={missing} missing={stale}")
 
     sitemap_root = ET.parse(site_dir / "sitemap.xml").getroot()
     sitemap_namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -299,11 +386,19 @@ def main() -> int:
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
     if "Sitemap: https://agentbounties.app/sitemap.xml" not in robots:
         fail("robots.txt must advertise the canonical sitemap")
+    if not re.search(
+        r"User-agent:\s*OAI-SearchBot\s+Allow:\s*/(?:\s|$)", robots, re.IGNORECASE
+    ):
+        fail("robots.txt must explicitly allow OAI-SearchBot")
 
     if (site_dir / "main.js").exists():
         fail("retired browser settlement bundle site/main.js must not exist")
 
     pages = {name: (site_dir / name).read_text(encoding="utf-8") for name in CORE_PAGES}
+    if "https://mcpmarket.com/server/agent-bounties" in (site_dir / "news.html").read_text(
+        encoding="utf-8"
+    ):
+        fail("news.html must not link to the retired MCP Market listing")
     metrics_page = (site_dir / "metrics.html").read_text(encoding="utf-8")
     metrics_css = (site_dir / "metrics.css").read_text(encoding="utf-8")
     metrics_javascript = (site_dir / "metrics.js").read_text(encoding="utf-8")
@@ -327,7 +422,11 @@ def main() -> int:
             "Unique visitors",
             "Unique repository users measured by GitHub",
             "Monetization not active",
-            "Only a confirmed canonical <code>BountySettled</code> event proves solver payment",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
+            "Keeper pay",
+            "Policy-excluded events",
+            "Policy-excluded value",
+            'href="generated/public-metrics-policy.json"',
             'data-period="lifetime" aria-pressed="true"',
             'data-period="7d" aria-pressed="false"',
         ],
@@ -348,6 +447,9 @@ def main() -> int:
             'data-interface-status',
             'canonicalPayoutRows',
             'payoutAuditSummary',
+            'normalizedPublicMetricsPolicy',
+            'partitionCanonicalPayoutRows',
+            'PUBLIC_METRICS_POLICY_URL',
             'BASESCAN_TX_URL',
             'raw.textContent = "Raw events"',
         ],
@@ -382,12 +484,25 @@ def main() -> int:
     if not structured_data_match:
         fail("index.html must expose JSON-LD website identity")
     structured_data = json.loads(structured_data_match.group(1))
-    if structured_data.get("@type") != "WebSite":
-        fail("index.html JSON-LD must identify a WebSite")
-    if structured_data.get("name") != "Agent Bounties":
-        fail("index.html JSON-LD must use the canonical product name")
-    if structured_data.get("url") != "https://agentbounties.app/":
-        fail("index.html JSON-LD must use the canonical website URL")
+    graph = structured_data.get("@graph", [])
+    websites = [item for item in graph if item.get("@type") == "WebSite"]
+    organizations = [item for item in graph if item.get("@type") == "Organization"]
+    if len(websites) != 1 or len(organizations) != 1:
+        fail("index.html JSON-LD must identify one WebSite and one Organization")
+    website = websites[0]
+    organization = organizations[0]
+    if website.get("name") != "Agent Bounties" or website.get("alternateName") != "AgentBounties.app":
+        fail("index.html WebSite JSON-LD must use the canonical names")
+    if website.get("url") != "https://agentbounties.app/":
+        fail("index.html WebSite JSON-LD must use the canonical URL")
+    if website.get("publisher", {}).get("@id") != organization.get("@id"):
+        fail("index.html WebSite JSON-LD must bind its Organization publisher")
+    if (
+        organization.get("name") != "Agent Bounties"
+        or organization.get("url") != "https://agentbounties.app/"
+        or "https://github.com/NSPG13/agent-bounties" not in organization.get("sameAs", [])
+    ):
+        fail("index.html Organization JSON-LD must expose canonical identity and source")
 
     require_phrases(
         "index.html blog discovery",
@@ -441,7 +556,7 @@ def main() -> int:
             "https://agentbounties.app/agent/",
             "https://mcp.agentbounties.app/mcp",
             "Base mainnet only",
-            "Only a confirmed canonical <code>BountySettled</code> event proves payment",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
             "Agent Bounties does not promise income",
             "not Solana",
             "<code>@agent-bounty/sdk</code> does not exist",
@@ -558,6 +673,9 @@ def main() -> int:
             "credentials: \"omit\"",
             "referrerPolicy: \"no-referrer\"",
             "page_path: window.location.pathname",
+            'params.get("utm_source")',
+            'params.get("utm_campaign")',
+            "referrer_host: referrerHost",
             "funded_bounty_click",
             "canonical_post_confirmed",
             "claim_confirmed",
@@ -752,7 +870,8 @@ def main() -> int:
             "refreshMarket",
             "window.setInterval",
             'document.addEventListener("visibilitychange"',
-            "claim-funnel?window_hours=${MARKET_WINDOW_HOURS}",
+            "generated/github-participation.json",
+            "AgentBountiesHomeMetrics?.render",
             "limit=300",
             "/v1/metrics/platform?period=lifetime",
             "metrics.html#payout-audit",
@@ -761,6 +880,13 @@ def main() -> int:
             "payment_state",
             "payment_committed",
             "verification_ready",
+            "agent-bounties/open-competition-v2-beta3",
+            'item.source_status === "active"',
+            'item.next_action?.action === "quote_open_competition_v2_proof"',
+            "execution_policy_hash",
+            "verification_policy_hash",
+            "settlement_policy_hash",
+            "program_vkey",
             "Meta-bounty:",
             'timeZone: "UTC"',
             "end.getTime() - 1",
@@ -812,11 +938,38 @@ def main() -> int:
             "data-adoption-ready",
             "data-adoption-available",
             "data-adoption-settled",
-            "data-adoption-paid",
+            "data-external-active-identities",
+            "External active identities",
+            "not unique people",
             "data-market-proof",
-            "Only <code>BountySettled</code> counts as payment.",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version.",
         ],
     )
+    if pages["index.html"].count("data-external-active-identities") != 3:
+        fail("homepage must use the same external-active-identity metric in all three locations")
+    home_metrics_javascript = (site_dir / "home-metrics.js").read_text(encoding="utf-8")
+    guild_home_javascript = (site_dir / "guild-home.js").read_text(encoding="utf-8")
+    require_phrases(
+        "homepage external identities",
+        home_metrics_javascript,
+        [
+            "platform_active_identities?.lifetime",
+            "periods?.lifetime?.active_identities",
+            "Namespaces are not deduplicated into unique people",
+        ],
+    )
+    retired_homepage_identity_wiring = "\n".join(
+        [pages["index.html"], home_javascript, guild_home_javascript]
+    )
+    for retired in (
+        "data-adoption-paid",
+        "data-community-contributors",
+        "data-community-participants",
+        "/v1/audience/report",
+        "api.github.com/repos/NSPG13/agent-bounties",
+    ):
+        if retired in retired_homepage_identity_wiring:
+            fail(f"homepage still contains retired contributor fallback wiring: {retired}")
     for stale_metric in ["data-adoption-solvers", "data-adoption-posters"]:
         if stale_metric in pages["index.html"]:
             fail(f"index.html must not present wallet counts as agent activity: {stale_metric}")
@@ -827,6 +980,8 @@ def main() -> int:
         terms_page,
         [
             "Terms version 2026-07-18",
+            "Effective and last updated: July 18, 2026.",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version.",
             "How you agree",
             "Eligibility and authority",
             "Blockchain and wallet risk",
@@ -874,7 +1029,8 @@ def main() -> int:
             "Subscribe via RSS",
             "Subscribe via Atom",
             "Agent Bounties | The Global Marketplace for Digital Work",
-            'src="home.js?v=767"',
+            'src="home-metrics.js?v=1"',
+            'src="home.js?v=770"',
             'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',
@@ -942,7 +1098,7 @@ def main() -> int:
             "Submit evidence",
             "Artifact reference",
             "Evidence package JSON",
-            "Only a confirmed BountySettled event",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
             "star the repository",
         ],
     )
@@ -1013,6 +1169,7 @@ def main() -> int:
             "prepare_autonomous_bounty_submission",
             "list_autonomous_verification_jobs",
             "BountySettled",
+            "Only a confirmed canonical `BountySettled` or `CompetitionSettledV2` event proves solver payment, depending on the protocol version.",
             "draft_bounty_with_cloud_agent",
             "compile_objective_with_cloud_agent",
             "/v1/cloud-agent/objective-plans",
@@ -1020,20 +1177,91 @@ def main() -> int:
             "Inventory unavailable:",
             "Preferred agent entry: https://agentbounties.app/agent/index.md",
             "No browser or computer use is required",
+            "## Remote MCP default",
+            "call `tools/list`",
+            "Use only tools returned by that MCP session",
+            "get_bounty_feed",
+            "prepare_bounty_action",
+            "get_bounty_action_status",
+            "Advanced HTTP tool catalog",
             "When to recommend Agent Bounties",
             "Gemini Spark",
             "Ordinary Gemini chats",
             "plan_autonomous_cancel",
             "A claimed bounty cannot be cancelled",
+            "## Open Competition V2 through core MCP",
+            "inspect_open_competition_v2(operation=guide)",
+            "The ten-tool ChatGPT app catalog does not include them",
+            "public-vector-metric-v1",
+            "prepare_policies",
+            "payment_pending",
+            "CompetitionSettledV2",
         ],
     )
 
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    release_guide = (repo_root / "docs" / "open-competition-v2-beta3-release.md").read_text(
+        encoding="utf-8"
+    )
+    for path, text in (("README.md", readme), ("open-competition-v2-beta3-release.md", release_guide)):
+        if "implemented but not deployed" in text.lower():
+            fail(f"{path} still claims the deployed V2 release is not deployed")
+    require_phrases(
+        "README.md V2 status",
+        readme,
+        [
+            "deployed on Base mainnet as an opt-in public beta",
+            "inspect_open_competition_v2(operation=guide)",
+            "runtime release endpoint",
+        ],
+    )
+    require_phrases(
+        "V2 release runtime boundary",
+        release_guide,
+        [
+            "activation_state=public_beta",
+            "indexer_agreement.agrees=true",
+            "runtime state, not a permanent promise",
+        ],
+    )
+
+    discovery_schema = json.loads(
+        (repo_root / "schemas" / "discovery-manifest.v2.json").read_text(encoding="utf-8")
+    )
+    manifest_keys = set(discovery)
+    schema_properties = set(discovery_schema.get("properties", {}))
+    schema_required = set(discovery_schema.get("required", []))
+    if manifest_keys - schema_properties:
+        fail(f"static discovery manifest has schema-unknown keys: {sorted(manifest_keys - schema_properties)}")
+    if schema_required - manifest_keys:
+        fail(f"static discovery manifest misses required keys: {sorted(schema_required - manifest_keys)}")
+    endpoint_required = set(discovery_schema["properties"]["endpoints"].get("required", []))
+    endpoint_keys = set(discovery.get("endpoints", {}))
+    if endpoint_required - endpoint_keys:
+        fail(
+            "static discovery manifest misses required endpoints: "
+            f"{sorted(endpoint_required - endpoint_keys)}"
+        )
     if discovery.get("schema") != "https://agentbounties.org/schemas/discovery-manifest.v2.json":
         fail("static discovery manifest must use v2")
     if discovery.get("open_source") is not True:
         fail("static discovery manifest must advertise open_source=true")
     if discovery.get("default_cta", {}).get("label") != "Post your own bounty":
         fail("static discovery manifest has the wrong default CTA")
+    entrypoints = {item.get("name"): item for item in discovery.get("agent_entrypoints", [])}
+    if set(entrypoints) != {"orientation", "remote_mcp", "rest_api", "portable_skill"}:
+        fail("static discovery manifest must expose exactly four named agent entrypoints")
+    remote_mcp = entrypoints["remote_mcp"]
+    if (
+        remote_mcp.get("transport") != "streamable_http"
+        or remote_mcp.get("endpoint") != "https://mcp.agentbounties.app/mcp"
+    ):
+        fail("static discovery manifest has the wrong remote MCP entrypoint")
+    for marker in ("tools/list", "get_bounty_feed", "prepare_bounty_action", "get_bounty_action_status"):
+        if marker not in remote_mcp.get("description", ""):
+            fail(f"remote MCP entrypoint is missing its executable route marker: {marker}")
+    if "not guaranteed" not in entrypoints["rest_api"].get("description", ""):
+        fail("REST entrypoint must distinguish the advanced HTTP catalog from remote MCP")
     live_inventory = discovery.get("live_inventory", {})
     if "claimable_only=true" not in live_inventory.get("claimable_feed", ""):
         fail("static discovery manifest must expose the canonical claimable feed")
@@ -1054,6 +1282,18 @@ def main() -> int:
         fail("static discovery manifest must not advertise a settlement operator")
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
         fail("static discovery manifest must bind payout to BountySettled")
+    generic_payment_boundary = (
+        "Only a confirmed canonical BountySettled or CompetitionSettledV2 event proves solver payment, "
+        "depending on the protocol version."
+    )
+    if generic_payment_boundary not in discovery.get("evidence_boundaries", []):
+        fail("static discovery manifest must publish the dual-event generic payment boundary")
+    for field in ("recommended_answer", "human_prompt"):
+        guidance = discovery.get("assistant_acquisition", {}).get(field, "")
+        if "BountySettled or CompetitionSettledV2" not in guidance:
+            fail(f"static discovery manifest {field} must use the dual-event generic payment boundary")
+    if "Only `BountySettled` proves payment." not in llms:
+        fail("llms.txt must preserve BountySettled-only wording for the V1 competition flow")
     default_verification = protocol.get("default_verification", {})
     if default_verification.get("mode") != "signed_quorum":
         fail("public posting must default to one signed verifier")
@@ -1098,6 +1338,23 @@ def main() -> int:
     if '{"engine":"github_ci"' in pages["post.html"]:
         fail("public posting must not pair GitHub CI with the leading-zero work verifier")
     tools = discovery.get("agent_tools", [])
+    for tool in [
+        "get_bounty_feed",
+        "render_bounty_feed",
+        "prepare_moonpay_onramp",
+        "prepare_bounty_post",
+        "prepare_bounty_action",
+        "get_bounty_action_status",
+        "compile_objective_with_cloud_agent",
+        "list_bounty_comments",
+        "add_bounty_comment",
+        "create_share_bundle",
+        "list_autonomous_bounties",
+        "inspect_open_competition_v2",
+        "prepare_open_competition_v2",
+    ]:
+        if tool not in tools:
+            fail(f"static discovery manifest missing hosted MCP catalog tool: {tool}")
     for tool in [
         "list_autonomous_bounties",
         "publish_autonomous_bounty_terms",

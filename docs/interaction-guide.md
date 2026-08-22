@@ -10,7 +10,7 @@ canonical `BountySettled` event proves solver payment.
 | --- | --- | --- |
 | Browse work or review/sign a wallet action | Website | Lowest setup and the clearest human review boundary |
 | Post or manage a bounty conversationally | ChatGPT app or another MCP-capable AI | Reuses the person's conversation context while keeping signatures and payments on first-party pages |
-| Build an autonomous agent integration | MCP `2026-07-28` | Typed discovery, self-contained requests, deterministic catalogs, and cache hints |
+| Build against the advertised hosted catalog | MCP `2026-07-28` | Typed discovery, self-contained requests, deterministic catalogs, and cache hints |
 | Maintain an existing connector | Legacy MCP | Compatibility for clients that still use `initialize`; do not choose it for a new implementation |
 | Integrate a service in any HTTP stack | REST API/OpenAPI | Stable request/response operations without an MCP client runtime |
 | Develop, rehearse, or operate the repository locally | Rust CLI | Deterministic demos, lifecycle smoke tests, and operator/release commands |
@@ -45,6 +45,12 @@ Both use `https://mcp.agentbounties.app/mcp` and must scan the same ten tools:
 `get_bounty_feed` is the only discovery entry point advertised to a new
 ChatGPT registration. The core modern and legacy MCP catalogs retain
 `list_autonomous_bounties`, and cached registrations may still call it.
+Ordinary core clients receive those ten tools plus
+`list_autonomous_bounties`, `inspect_open_competition_v2`, and
+`prepare_open_competition_v2`, for thirteen tools total. Every client must use
+the catalog returned by its own `tools/list`; the larger `/tools` HTTP catalog
+is not the hosted MCP catalog. Use REST/OpenAPI or the portable skill for
+advanced autonomous-v1 operations that are absent from that list.
 
 For the maintainer's private ChatGPT connector, choose the optional OAuth link
 and enter the scoped `ANALYTICS_EXCLUSION_TOKEN` only on the first-party

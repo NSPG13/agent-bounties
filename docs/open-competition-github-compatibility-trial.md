@@ -13,6 +13,13 @@ The issue action remains **Enter competition**. An exclusive Claim endpoint or
 GitHub `/claim` command must return `wrong_competition_mode` with the public
 competition URL and `enter_competition` next action.
 
+For Open Competition V2 Beta3, the issue action is **Prove work**. A GitHub
+`/claim` command returns `wrong_competition_mode`, the exact competition
+contract, the active-inventory and proof-quote endpoints, and `quote_proof` as
+the next action. It creates no reservation, requires no claim bond, and must
+never route through the autonomous-v1 claim feed. Only a confirmed canonical
+`CompetitionSettledV2` event proves V2 payment.
+
 The required initial canary at
 `0x3551ca7bb9090fb8c1648eea40837c8a1cbcc973` settled canonically before the
 controlled GitHub backfill. It is therefore retained as a closed

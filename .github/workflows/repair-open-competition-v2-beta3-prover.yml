@@ -1,0 +1,126 @@
+name: Repair Open Competition V2 Beta3 prover
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-production-prover-repair
+  cancel-in-progress: false
+
+env:
+  SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
+  SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
+  SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
+  OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
+  FAILED_PROVIDER_JOB_ID: beta3-a6d75c2a19ded9fb0788d6418db711374780fe83452c70e7db37b989194cb0b5
+
+jobs:
+  repair-and-rehearse:
+    if: github.ref == 'refs/heads/main'
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - name: Verify repair code and pinned local assets
+        run: |
+          set -euo pipefail
+          python3 scripts/test_install_open_competition_v2_prover_assets.py -v
+          python3 scripts/test_rehearse_open_competition_v2_beta3_prover_service.py -v
+          test -f "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT/trusted-setup.json"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SP1_SAFE_CIRCUIT_COMMIT"
+          test "$(docker image inspect "$SP1_GNARK_RUNTIME_IMAGE" --format '{{ index .Config.Labels "app.agent-bounties.circuit-version" }}')" = "$SP1_SAFE_CIRCUIT_VERSION"
+
+      - name: Install versioned setup and repair the restricted service
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 \
+            /var/lib/agent-bounties-prover/circuits
+          sudo python3 scripts/install_open_competition_v2_prover_assets.py \
+            --trusted-root "$OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT" \
+            --install-root /var/lib/agent-bounties-prover/circuits \
+            --circuit-version "$SP1_SAFE_CIRCUIT_VERSION" \
+            --output /tmp/open-competition-v2-prover-assets.json
+          sudo chown -R agent-bounties-prover:agent-bounties-prover \
+            /var/lib/agent-bounties-prover/circuits
+          sudo chmod -R u=rwX,go= /var/lib/agent-bounties-prover/circuits
+          sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 \
+            /var/lib/agent-bounties-prover/tmp
+          sudo install -m 0755 scripts/open_competition_v2_prover_service.py \
+            /opt/agent-bounties/scripts/open_competition_v2_prover_service.py
+          sudo install -m 0644 ops/open-competition-v2-prover.service \
+            /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
+          sudo SP1_GNARK_RUNTIME_IMAGE="$SP1_GNARK_RUNTIME_IMAGE" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path("/etc/agent-bounties/prover.env")
+          updates = {
+              "SP1_GNARK_IMAGE": os.environ["SP1_GNARK_RUNTIME_IMAGE"],
+              "SP1_GROTH16_CIRCUIT_PATH": "/var/lib/agent-bounties-prover/circuits/groth16",
+              "SP1_PLONK_CIRCUIT_PATH": "/var/lib/agent-bounties-prover/circuits/plonk",
+          }
+          kept = []
+          for line in path.read_text(encoding="utf-8").splitlines():
+              key = line.split("=", 1)[0]
+              if key not in updates:
+                  kept.append(line)
+          kept.extend(f"{key}={value}" for key, value in updates.items())
+          temporary = path.with_suffix(".env.repair")
+          temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
+          temporary.chmod(0o600)
+          os.chown(temporary, 0, 0)
+          os.replace(temporary, path)
+          PY
+          sudo systemctl daemon-reload
+          sudo systemctl restart agent-bounties-open-competition-v2-prover.service
+          sudo systemctl is-active --quiet agent-bounties-open-competition-v2-prover.service
+          test "$(sudo systemctl show agent-bounties-open-competition-v2-prover.service -p SupplementaryGroups --value)" = docker
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:9070/health >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:9070/health | tee target/prover-health.json
+          sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 \
+            /tmp/open-competition-v2-prover-assets.json target/prover-assets.json
+
+      - name: Rehearse one authenticated proof without moving money
+        env:
+          REPAIR_IDEMPOTENCY_KEY: repair:${{ github.run_id }}:${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          sudo bash -c "set -a; source /etc/agent-bounties/prover.env; set +a; python3 '$GITHUB_WORKSPACE/scripts/rehearse_open_competition_v2_beta3_prover_service.py' --provider-job-id '$FAILED_PROVIDER_JOB_ID' --idempotency-key '$REPAIR_IDEMPOTENCY_KEY' --output /tmp/production-prover-rehearsal.json"
+          sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 \
+            /tmp/production-prover-rehearsal.json target/production-prover-rehearsal.json
+          jq -e '.passed == true and .public_values_match == true and .money_moved == false' \
+            target/production-prover-rehearsal.json >/dev/null
+
+      - name: Collect sanitized prover diagnostics
+        if: failure()
+        run: |
+          sudo journalctl \
+            -u agent-bounties-open-competition-v2-prover.service \
+            --since "20 minutes ago" \
+            --no-pager \
+            -o cat \
+            | grep -E '"event":"prover_(subprocess|internal)_failed"' \
+            | tail -200 \
+            > target/prover-service-failure.log || true
+
+      - name: Upload repair evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: beta3-production-prover-repair-${{ github.run_id }}
+          path: |
+            target/prover-assets.json
+            target/prover-health.json
+            target/production-prover-rehearsal.json
+            target/prover-service-failure.log
+          if-no-files-found: error
+          retention-days: 365

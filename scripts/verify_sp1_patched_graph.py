@@ -12,6 +12,7 @@ import tomllib
 ADVISORY = "GHSA-vj64-rjf3-w3v7"
 SP1_REPOSITORY = "https://github.com/NSPG13/sp1"
 SP1_COMMIT = "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d"
+SP1_RUNTIME_COMMIT = "c2d292c260333a9e4f166cd1435e8ef4897c8b43"
 SP1_CIRCUIT_VERSION = "agent-bounties-sp1-safe-v5"
 PATCHED_PACKAGES = ("p3-challenger",)
 P3_FIELD_VERSION = "0.4.3-succinct"
@@ -25,24 +26,29 @@ EXPECTED_LOCKS = (
     Path("programs/public-vector-metric-v1/program/Cargo.lock"),
     Path("programs/structured-artifact-metric-v1/Cargo.lock"),
     Path("programs/structured-artifact-metric-v1/program/Cargo.lock"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/Cargo.lock"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.lock"),
 )
 EXPECTED_MANIFESTS = (
     Path("programs/public-vector-metric-v1/Cargo.toml"),
     Path("programs/public-vector-metric-v1/program/Cargo.toml"),
     Path("programs/structured-artifact-metric-v1/Cargo.toml"),
     Path("programs/structured-artifact-metric-v1/program/Cargo.toml"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/Cargo.toml"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.toml"),
 )
 IDENTITY_PATHS = (
     Path("programs/public-vector-metric-v1/release-identity.json"),
     Path("programs/structured-artifact-metric-v1/release-identity.json"),
+    Path("programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json"),
 )
 
 
-def _exact_git_dependency(value: object, field: str) -> None:
+def _exact_git_dependency(value: object, field: str, commit: str = SP1_COMMIT) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be a table")
-    if value.get("git") != SP1_REPOSITORY or value.get("rev") != SP1_COMMIT:
-        raise ValueError(f"{field} must pin {SP1_REPOSITORY}@{SP1_COMMIT}")
+    if value.get("git") != SP1_REPOSITORY or value.get("rev") != commit:
+        raise ValueError(f"{field} must pin {SP1_REPOSITORY}@{commit}")
 
 
 def _verify_manifest(path: Path) -> None:
@@ -60,11 +66,16 @@ def _verify_manifest(path: Path) -> None:
     if not sp1_dependencies:
         raise ValueError(f"{path} has no source-pinned SP1 dependency")
     for name, value in sp1_dependencies.items():
-        _exact_git_dependency(value, f"{path}:{name}")
+        commit = SP1_RUNTIME_COMMIT if name == "sp1-sdk" else SP1_COMMIT
+        _exact_git_dependency(value, f"{path}:{name}", commit)
 
     patches = document.get("patch", {}).get("crates-io", {})
-    for package in PATCHED_PACKAGES:
-        _exact_git_dependency(patches.get(package), f"{path}:patch.{package}")
+    is_guest = path.parent.name == "program"
+    for patched_package in PATCHED_PACKAGES:
+        commit = SP1_COMMIT if is_guest else SP1_RUNTIME_COMMIT
+        _exact_git_dependency(
+            patches.get(patched_package), f"{path}:patch.{patched_package}", commit
+        )
     if "p3-field" in patches:
         raise ValueError(f"{path}:patch.p3-field must not replace the canonical registry package")
 
@@ -72,7 +83,8 @@ def _verify_manifest(path: Path) -> None:
 def _verify_lock(path: Path) -> dict[str, str]:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     result: dict[str, str] = {}
-    expected_prefix = f"git+{SP1_REPOSITORY}?rev={SP1_COMMIT}#{SP1_COMMIT}"
+    commit = SP1_COMMIT if path.parent.name == "program" else SP1_RUNTIME_COMMIT
+    expected_prefix = f"git+{SP1_REPOSITORY}?rev={commit}#{commit}"
     for package_name in PATCHED_PACKAGES:
         matches = [
             package
@@ -84,7 +96,7 @@ def _verify_lock(path: Path) -> dict[str, str]:
         source = matches[0].get("source")
         if source != expected_prefix:
             raise ValueError(
-                f"{path}:{package_name} must resolve only from the patched SP1 commit"
+                f"{path}:{package_name} must resolve only from the expected SP1 graph"
             )
         if "checksum" in matches[0]:
             raise ValueError(f"{path}:{package_name} unexpectedly retained a registry checksum")
@@ -123,6 +135,8 @@ def verify(root: Path) -> dict[str, object]:
         identity = json.loads((root / relative).read_text(encoding="utf-8"))
         if identity.get("sp1_commit") != SP1_COMMIT:
             raise ValueError(f"{relative} does not pin the patched SP1 commit")
+        if identity.get("sp1_runtime_commit") != SP1_RUNTIME_COMMIT:
+            raise ValueError(f"{relative} does not pin the corrected SP1 runtime commit")
         if identity.get("sp1_version") != "6.4.0-agent-bounties-sp1-safe-v5":
             raise ValueError(f"{relative} does not pin the patched circuit version")
         if identity.get("rust_version") != HOST_RUST_TOOLCHAIN_VERSION:
@@ -136,6 +150,7 @@ def verify(root: Path) -> dict[str, object]:
         "status": "patched_source_graph_pinned",
         "sp1_repository": SP1_REPOSITORY,
         "sp1_commit": SP1_COMMIT,
+        "sp1_runtime_commit": SP1_RUNTIME_COMMIT,
         "circuit_version": SP1_CIRCUIT_VERSION,
         "host_rust_toolchain": HOST_RUST_TOOLCHAIN_VERSION,
         "sp1_guest_rust_toolchain": GUEST_RUST_TOOLCHAIN_VERSION,

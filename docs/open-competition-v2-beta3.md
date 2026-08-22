@@ -1,8 +1,8 @@
 # Open Competition V2 Beta3
 
-Status: implementation beta, not deployed. Creation and hosted proving remain
-disabled until the release gates below produce matching evidence. V2 is
-opt-in and is not the default bounty protocol.
+Status: Base-mainnet public beta. Creation and hosted proving are enabled only
+while the immutable release and primary/shadow safe-block indexers agree. V2
+is opt-in and is not yet the default bounty protocol.
 
 The exact release procedure and current blockers are in
 [`open-competition-v2-beta3-release.md`](open-competition-v2-beta3-release.md).
@@ -209,17 +209,40 @@ becomes `refund_due`. HTTP 429, HTTP 5xx, and transport failures retry only
 until the SLA. Provider credentials are sent as an optional bearer token and
 are never included in proof-job records or public evidence.
 
+Hosted-service attribution is public at
+`GET /v1/base/open-competition-v2-beta3/proof-attribution`. Pass the exact
+`competition_contract`. The response joins each proof job to its x402 payment,
+the project SP1 prover record, hosted relayer wallet and transaction, and the
+safe-block `CompetitionSettledV2` event. It never claims that a wallet is a
+person. Private contact requires a separately signed, consented contact
+profile; permissionless direct solvers may remain pseudonymous.
+
 ## Program Catalog
 
 Any program vkey is valid at the protocol layer. Hosted discovery classifies a
 program as `reviewed`, `custom_unreviewed`, or `disabled`.
 
-Beta3 ships two reviewed candidates:
+Beta3 ships three reviewed candidates:
 
 - `public-vector-metric-v1` scores committed public numeric fixtures.
 - `structured-artifact-metric-v1` evaluates the submitted artifact bytes. It
   supports UTF-8 inclusion and exclusion, a byte limit, valid JSON, required
   JSON pointers, exact JSON string values, and minimum JSON array lengths.
+- `forward-canonical-gmv-attribution-metric-v2` rewards entrants for generating
+  externally funded canonical GMV during an announced future scoring window.
+
+`forward-canonical-gmv-attribution-metric-v2` is independently reproduced and
+reviewed as a beta3 profile. It scores a wallet from a frozen post-window
+snapshot using
+`settlement GMV * entrant canonical funding / total canonical funding`, with
+operator/reserve funding, operator/reserve-created settlements, excluded reward
+contracts, creator-as-solver, and entrant-as-solver rows scoring zero. Campaign
+terms, exclusions, and the 2-of-2 snapshot-attester quorum are fixed before the
+window opens. It must not be used for a funded competition until its public
+fixtures pass, primary and shadow indexers agree on the safe-block snapshot,
+and the release catalog marks the exact profile `reviewed`. The retrospective
+`canonical-gmv-attribution-metric-v1` profile is retained only for historical
+compatibility and cannot satisfy the private liquidity-floor policy.
 
 Each exact Rust/SP1 version, source hash, ELF hash, and vkey is committed in
 its `programs/<profile>/release-identity.json`. A profile remains `disabled`
@@ -238,9 +261,15 @@ does not describe host-only regression tests as zk-verified.
 Post a deterministic competition:
 
 1. Read `profiles`; stop if the selected profile is not `reviewed`.
-2. Call `prepare_profile` with the threshold and every artifact requirement.
-3. Copy the returned immutable fields into `validate`, then `create`.
-4. Sign the exact creation call, then `fund` until the canonical state is
+2. Call `prepare_profile`. For `structured-artifact-metric-v1`, provide the
+   threshold and every artifact requirement. For `public-vector-metric-v1`,
+   provide its profile ID, mode, threshold, and every expected value/weight;
+   observed values belong only in the later proof quote.
+3. Call `prepare_policies` with complete public execution and settlement
+   policy JSON plus one stable unique seed. It derives their canonical Keccak
+   hashes and a retry-safe creation nonce.
+4. Copy the returned immutable fields into `validate`, then `create`.
+5. Sign the exact creation call, then `fund` until the canonical state is
    `active`.
 
 Earn from an active competition:

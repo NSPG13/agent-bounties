@@ -1,0 +1,738 @@
+{
+  "schema_version": "agent-bounties/open-competition-v2-gmv-meta-candidate-specs-v1",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
+  "network": "base-mainnet",
+  "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+  "release_hash": "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be",
+  "profile_release": {
+    "profile_id": "canonical-gmv-attribution-metric-v1",
+    "status": "reviewed",
+    "metric_program_hash": "0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead",
+    "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+    "execution_policy_hash": "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a",
+    "settlement_policy_hash": "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee",
+    "program_vkey": "0x00ce47a82f13c6f575452683eb7f49c95eeb9891552b6137f924e9fd6a6d8178",
+    "source_hash": "0xd180037adb4403f20fa6ca06a974fb67969e95e220ea5ba9093da1f1fef4876f",
+    "elf_hash": "0x8351f4bb5a696090d13b1985e5549a749dfb4ca33a475a7d5749a735c377dae5"
+  },
+  "approved_at": "2026-08-21T14:30:00Z",
+  "expires_at": "2026-09-20T14:30:00Z",
+  "economics": {
+    "solver_reward_base_units": 3000000,
+    "keeper_reward_base_units": 40000,
+    "total_per_competition_base_units": 3040000
+  },
+  "eligibility_policy": {
+    "excluded_wallets": [
+      "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "excluded_bounty_contracts": [
+      "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+      "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+    ],
+    "wallet_boundary": "Known owner, reserve, delegate, and deployer wallets are ineligible. Wallets are not inferred to be unique people.",
+    "contract_boundary": "Declared synthetic canaries and prior GMV reward contracts are ineligible and must be extended before each future snapshot review."
+  },
+  "candidates": [
+    {
+      "candidate_id": "external-gmv-daily-20260714-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 14",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-14T00:00:00Z",
+        "ends_at": "2026-07-15T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 48642126,
+        "end_block_hash": "0xd56e3ef168f3dabc506413e7991ffe38d63c39cc7c4f519ffe9cbf080a06dfd9",
+        "snapshot_hash": "0x965d665917bc1a61dcc6b64b09e62970f3877968007dd713e5170fff87c04fc4",
+        "verification_policy_hash": "0x257d352b9c96b3816fee639b4f45e7292f56841ebfd5f223a12874100d76c8a4",
+        "primary_projection_hash": "0x965d665917bc1a61dcc6b64b09e62970f3877968007dd713e5170fff87c04fc4",
+        "shadow_projection_hash": "0x965d665917bc1a61dcc6b64b09e62970f3877968007dd713e5170fff87c04fc4",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260714-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-daily-20260716-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 16",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-16T00:00:00Z",
+        "ends_at": "2026-07-17T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 48728526,
+        "end_block_hash": "0xa3b16a49f33792769104441fa50afed7b69e02cc45da78e8a816f748b0df57bb",
+        "snapshot_hash": "0x43ef5b43e6c4f12ec9ac4db1bab16c8f68e1bd0cdac1c8f5c9ac5ff3e3531799",
+        "verification_policy_hash": "0xaa5c42ba2da0a2b73c7cc7f660c4503baa4afcd97c2fdc775b999a9f922b769d",
+        "primary_projection_hash": "0x43ef5b43e6c4f12ec9ac4db1bab16c8f68e1bd0cdac1c8f5c9ac5ff3e3531799",
+        "shadow_projection_hash": "0x43ef5b43e6c4f12ec9ac4db1bab16c8f68e1bd0cdac1c8f5c9ac5ff3e3531799",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260716-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-daily-20260731-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 31",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-31T00:00:00Z",
+        "ends_at": "2026-08-01T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49376526,
+        "end_block_hash": "0x4d45ac93a7d393bbf975d1d11ebe642853c6dcca97eea27aa33e32110ff301a4",
+        "snapshot_hash": "0x8e0ddb77acdb13998f3aabb6584e4857da6206a020fe43f7733b6ed90ccb1ac2",
+        "verification_policy_hash": "0xd67596ad2bdae81729f99b6a47187d093ab4fed6a12cf7655ba430adefa129ee",
+        "primary_projection_hash": "0x8e0ddb77acdb13998f3aabb6584e4857da6206a020fe43f7733b6ed90ccb1ac2",
+        "shadow_projection_hash": "0x8e0ddb77acdb13998f3aabb6584e4857da6206a020fe43f7733b6ed90ccb1ac2",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260731-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-daily-20260806-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 6",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-06T00:00:00Z",
+        "ends_at": "2026-08-07T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49635726,
+        "end_block_hash": "0xe398d0cecccc757e9ae70789d326e4edf3ce8c2de7227b769f3dffda16671eb1",
+        "snapshot_hash": "0x2d2b75b5bbeb747501f59168fbc1993826bc36958eaa851b19eb2626545797b0",
+        "verification_policy_hash": "0x8fb9fea2bf9dd62b4ff4d8b00f45816221ad857147b299ecfc84328c881a63c0",
+        "primary_projection_hash": "0x2d2b75b5bbeb747501f59168fbc1993826bc36958eaa851b19eb2626545797b0",
+        "shadow_projection_hash": "0x2d2b75b5bbeb747501f59168fbc1993826bc36958eaa851b19eb2626545797b0",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260806-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-daily-20260807-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 7",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-07T00:00:00Z",
+        "ends_at": "2026-08-08T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49678926,
+        "end_block_hash": "0x98bea847bac3aaf7b10e6f74b68670497b9767d330048286ff8f23dbb27a8bea",
+        "snapshot_hash": "0xf8cccbc027541623e6e515763f93035de5bc579790f18dda5badc5771962a52d",
+        "verification_policy_hash": "0x8d0e979dffef28ce9cf4d3a2f1cbbf6c64c8d054c63f1e76ffaed59567672889",
+        "primary_projection_hash": "0xf8cccbc027541623e6e515763f93035de5bc579790f18dda5badc5771962a52d",
+        "shadow_projection_hash": "0xf8cccbc027541623e6e515763f93035de5bc579790f18dda5badc5771962a52d",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260807-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-daily-20260810-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 10",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-10T00:00:00Z",
+        "ends_at": "2026-08-11T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49808526,
+        "end_block_hash": "0xeacf36db9575457bdf2b4eda3fecbef8313e716667174b127f03828fe999578c",
+        "snapshot_hash": "0x7233822e8ef1804c92495aba4dcde393b67412a2f806e0baa8664da55ef717f9",
+        "verification_policy_hash": "0xba2d6373cffb1a8f95de2b99f2ccbef09fdb074564d8aa7b7759195799cbcd36",
+        "primary_projection_hash": "0x7233822e8ef1804c92495aba4dcde393b67412a2f806e0baa8664da55ef717f9",
+        "shadow_projection_hash": "0x7233822e8ef1804c92495aba4dcde393b67412a2f806e0baa8664da55ef717f9",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260810-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-daily-20260821-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 21",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed daily epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-21T00:00:00Z",
+        "ends_at": "2026-08-22T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 50283726,
+        "end_block_hash": "0x5ca8c09dff7b3d394874c21d8060e2c3b830c10cbe30e97a38bced71dae9bcff",
+        "snapshot_hash": "0xf8161b154ca52ee9f0e32cfed77d072450185fef5f8fbc0af466200c2898c327",
+        "verification_policy_hash": "0xb44ca7f70a29937591e27b6c675e377976b4fd719793601380896a9312ca73db",
+        "primary_projection_hash": "0xf8161b154ca52ee9f0e32cfed77d072450185fef5f8fbc0af466200c2898c327",
+        "shadow_projection_hash": "0xf8161b154ca52ee9f0e32cfed77d072450185fef5f8fbc0af466200c2898c327",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-daily-20260821-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-week-20260713-v1",
+      "title": "Highest externally funded canonical GMV \u2014 week of July 13",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-13T00:00:00Z",
+        "ends_at": "2026-07-20T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 48858126,
+        "end_block_hash": "0xc82931cc9284e3927e77c86590f442d480da2a41856feac5e18f8e4b974de223",
+        "snapshot_hash": "0xbc29af795efa10b5c6a4a95e369c3b3dc1d69fe48db706f419aabb1e99f4aaef",
+        "verification_policy_hash": "0xd3d201dd0825f567641d6eb66ccbb111a1288eec702c92241d45b4591ae3e678",
+        "primary_projection_hash": "0xbc29af795efa10b5c6a4a95e369c3b3dc1d69fe48db706f419aabb1e99f4aaef",
+        "shadow_projection_hash": "0xbc29af795efa10b5c6a4a95e369c3b3dc1d69fe48db706f419aabb1e99f4aaef",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-week-20260713-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-week-20260727-v1",
+      "title": "Highest externally funded canonical GMV \u2014 week of July 27",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-27T00:00:00Z",
+        "ends_at": "2026-08-03T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49462926,
+        "end_block_hash": "0x9c4af50337be8593b8f7c0ccd72b52f40d650571df19a8e88a5e310cbd68a561",
+        "snapshot_hash": "0xdc48654d829c8f564f1dc32a6d2b1dd123c50696aa93ee7237c2f355b154bc07",
+        "verification_policy_hash": "0x03d7752bd7431663e533fd974ca3d9bcb8e8c3bc0f516bcaaaff86960f61da2c",
+        "primary_projection_hash": "0xdc48654d829c8f564f1dc32a6d2b1dd123c50696aa93ee7237c2f355b154bc07",
+        "shadow_projection_hash": "0xdc48654d829c8f564f1dc32a6d2b1dd123c50696aa93ee7237c2f355b154bc07",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-week-20260727-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-week-20260803-v1",
+      "title": "Highest externally funded canonical GMV \u2014 week of August 3",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-03T00:00:00Z",
+        "ends_at": "2026-08-10T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49765326,
+        "end_block_hash": "0xde2a0e1840d8d31c84fa401a279a3a7c9081f1cadcca2b2993e5e0f042896e1e",
+        "snapshot_hash": "0xe1566db3ef749461503d39ffbadc1eea91f00b5bc8c1c74f73b2f924fe632cfd",
+        "verification_policy_hash": "0x44d0400bb60e6a37e2b5fa5389489b0d4b0e3efeddc8b337c956b3f08dfb97b7",
+        "primary_projection_hash": "0xe1566db3ef749461503d39ffbadc1eea91f00b5bc8c1c74f73b2f924fe632cfd",
+        "shadow_projection_hash": "0xe1566db3ef749461503d39ffbadc1eea91f00b5bc8c1c74f73b2f924fe632cfd",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-week-20260803-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-week-20260810-v1",
+      "title": "Highest externally funded canonical GMV \u2014 week of August 10",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed weekly epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-10T00:00:00Z",
+        "ends_at": "2026-08-17T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 50067726,
+        "end_block_hash": "0x952df22f7ae4ee695ed9368df338a48490ea82d52fc2788b8fe7c685876bae4c",
+        "snapshot_hash": "0x20ecfe4cbf45ef8d4420fa74570ea136a0ded0e4ee9bb0d2b09957bd219422a4",
+        "verification_policy_hash": "0xf6a5aef5391963a63212e483f2a7bfd0125562bf34e110566cef50334f96b769",
+        "primary_projection_hash": "0x20ecfe4cbf45ef8d4420fa74570ea136a0ded0e4ee9bb0d2b09957bd219422a4",
+        "shadow_projection_hash": "0x20ecfe4cbf45ef8d4420fa74570ea136a0ded0e4ee9bb0d2b09957bd219422a4",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-week-20260810-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260817-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 17\u201322 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-17T00:00:00Z",
+        "ends_at": "2026-08-22T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 50283726,
+        "end_block_hash": "0x5ca8c09dff7b3d394874c21d8060e2c3b830c10cbe30e97a38bced71dae9bcff",
+        "snapshot_hash": "0xd7ca8c191e9066aba2292a3a09cee61fb48fbfa33ab2397725012c7111e49729",
+        "verification_policy_hash": "0xccf1045a2f9fa870d3c2a95151169c61c563a1a3b0dbb46591dfcc25ae97484f",
+        "primary_projection_hash": "0xd7ca8c191e9066aba2292a3a09cee61fb48fbfa33ab2397725012c7111e49729",
+        "shadow_projection_hash": "0xd7ca8c191e9066aba2292a3a09cee61fb48fbfa33ab2397725012c7111e49729",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-sprint-20260817-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-fortnight-20260708-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 8\u201322",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-08T20:22:19Z",
+        "ends_at": "2026-07-22T20:22:19Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 48981195,
+        "end_block_hash": "0xa860665ddd7adb712fd58c316d55230c940a687e1b14037cd0975cfd479f5ceb",
+        "snapshot_hash": "0xfbbc51f971dd710abb79c728ee4df80d9c146258333aa99ce44593771b07c069",
+        "verification_policy_hash": "0xf7c4f1cb2b20849866f99e7c615fed9ca4515e5261d26f6cc43fb2ac78b7c6e8",
+        "primary_projection_hash": "0xfbbc51f971dd710abb79c728ee4df80d9c146258333aa99ce44593771b07c069",
+        "shadow_projection_hash": "0xfbbc51f971dd710abb79c728ee4df80d9c146258333aa99ce44593771b07c069",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-fortnight-20260708-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-fortnight-20260722-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 22\u2013August 5",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-22T00:00:00Z",
+        "ends_at": "2026-08-05T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49549326,
+        "end_block_hash": "0x0aaf0bf2cc20476dbd3d93411a729aacafb37e4023bdc54c0ae8bd9af5fcdcaf",
+        "snapshot_hash": "0x73b69fbf82c4bce45029a710b64324ef78f308fd93468813aa96c45c58e969e8",
+        "verification_policy_hash": "0x8e17cb89674c5fff22a466c3ac32ff3e5880dd089baff71af6bc3eaec7ec94c1",
+        "primary_projection_hash": "0x73b69fbf82c4bce45029a710b64324ef78f308fd93468813aa96c45c58e969e8",
+        "shadow_projection_hash": "0x73b69fbf82c4bce45029a710b64324ef78f308fd93468813aa96c45c58e969e8",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-fortnight-20260722-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-fortnight-20260805-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 5\u201319",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-05T00:00:00Z",
+        "ends_at": "2026-08-19T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 50154126,
+        "end_block_hash": "0xa098af679b649fad66e45dffa538b0f486d3823d4acd4126d76623be73a94765",
+        "snapshot_hash": "0x518175885a8e2e2ff148903b5d1a048929dd265bb429490ac466067902a0382b",
+        "verification_policy_hash": "0x11658b7effeddcfc5c5fba668556daefbf1619538cf5e7e561ffd7b37087ee14",
+        "primary_projection_hash": "0x518175885a8e2e2ff148903b5d1a048929dd265bb429490ac466067902a0382b",
+        "shadow_projection_hash": "0x518175885a8e2e2ff148903b5d1a048929dd265bb429490ac466067902a0382b",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-fortnight-20260805-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-month-20260708-v1",
+      "title": "Highest externally funded canonical GMV \u2014 launch month through August 8",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-08T20:22:19Z",
+        "ends_at": "2026-08-08T20:22:19Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49715595,
+        "end_block_hash": "0xb07dbb3c0524b715c96023fc9712416686f56228b5d4ef09b919c5beb80070bf",
+        "snapshot_hash": "0x3b4d5dac39e5b0626c1aaf3d8fad97e78494ed3f98cf7e8ed828c2c3ae64d33d",
+        "verification_policy_hash": "0x1ac904c34cd705844be70ee9503c6e79e1be92ca5707d767542eea40f61046a9",
+        "primary_projection_hash": "0x3b4d5dac39e5b0626c1aaf3d8fad97e78494ed3f98cf7e8ed828c2c3ae64d33d",
+        "shadow_projection_hash": "0x3b4d5dac39e5b0626c1aaf3d8fad97e78494ed3f98cf7e8ed828c2c3ae64d33d",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-month-20260708-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260714-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 14\u201317 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-14T00:00:00Z",
+        "ends_at": "2026-07-17T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 48728526,
+        "end_block_hash": "0xa3b16a49f33792769104441fa50afed7b69e02cc45da78e8a816f748b0df57bb",
+        "snapshot_hash": "0xfc3dcfcfc1e237c0113cf8e15c2d07383a9274c75c3fe544ebb23af93f4dc3d1",
+        "verification_policy_hash": "0x9b21a1f2ced122702515f85481b42328d40a7d45db20a82cdc42cf25d40328db",
+        "primary_projection_hash": "0xfc3dcfcfc1e237c0113cf8e15c2d07383a9274c75c3fe544ebb23af93f4dc3d1",
+        "shadow_projection_hash": "0xfc3dcfcfc1e237c0113cf8e15c2d07383a9274c75c3fe544ebb23af93f4dc3d1",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-sprint-20260714-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260731-v1",
+      "title": "Highest externally funded canonical GMV \u2014 July 31\u2013August 8 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-07-31T00:00:00Z",
+        "ends_at": "2026-08-08T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49678926,
+        "end_block_hash": "0x98bea847bac3aaf7b10e6f74b68670497b9767d330048286ff8f23dbb27a8bea",
+        "snapshot_hash": "0xecb17040a6fca37af50a534df418c62a7c24874fd2f4f093afdae15ab8d51a1e",
+        "verification_policy_hash": "0xf6e5c2bf105ea666e3f23cb35f4cc5af1721c2880be29ecf3d209088b920db4e",
+        "primary_projection_hash": "0xecb17040a6fca37af50a534df418c62a7c24874fd2f4f093afdae15ab8d51a1e",
+        "shadow_projection_hash": "0xecb17040a6fca37af50a534df418c62a7c24874fd2f4f093afdae15ab8d51a1e",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-sprint-20260731-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260806-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 6\u201311 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-06T00:00:00Z",
+        "ends_at": "2026-08-11T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 49808526,
+        "end_block_hash": "0xeacf36db9575457bdf2b4eda3fecbef8313e716667174b127f03828fe999578c",
+        "snapshot_hash": "0xab4507a572e194077d41ae9b2b673f54ee8e94232961dc5db16aa0218356ac05",
+        "verification_policy_hash": "0xb82d510b8e84b7d5e5a9e00cc57d57ed48907e4cff14892af032b19513ccba61",
+        "primary_projection_hash": "0xab4507a572e194077d41ae9b2b673f54ee8e94232961dc5db16aa0218356ac05",
+        "shadow_projection_hash": "0xab4507a572e194077d41ae9b2b673f54ee8e94232961dc5db16aa0218356ac05",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-sprint-20260806-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-sprint-20260820-v1",
+      "title": "Highest externally funded canonical GMV \u2014 August 20\u201322 sprint",
+      "summary": "Reward the wallet with the highest pro-rata externally funded GMV from canonically settled marketplace work in this closed review epoch.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-20T00:00:00Z",
+        "ends_at": "2026-08-22T00:00:00Z",
+        "minimum_score_base_units": 1
+      },
+      "snapshot": {
+        "status": "ready",
+        "safe_block": 50283726,
+        "end_block_hash": "0x5ca8c09dff7b3d394874c21d8060e2c3b830c10cbe30e97a38bced71dae9bcff",
+        "snapshot_hash": "0x070a0636a2b2cb839ce1607518175cc3253508f219ec790158f90ff433099a5f",
+        "verification_policy_hash": "0x285058e3f0ac860c8f2b27d8e72a60461eebda42c4e188f92760be9e7a85e288",
+        "primary_projection_hash": "0x070a0636a2b2cb839ce1607518175cc3253508f219ec790158f90ff433099a5f",
+        "shadow_projection_hash": "0x070a0636a2b2cb839ce1607518175cc3253508f219ec790158f90ff433099a5f",
+        "snapshot_url": "https://agentbounties.app/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json",
+        "reconciled_at": "2026-08-22T05:34:09.555313Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "documented_contributor_feedback",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/distribution-learning.md"
+        }
+      ]
+    }
+  ],
+  "scoring_policy": {
+    "score_unit": "usdc_base_units",
+    "winner_mode": "best_score",
+    "score_direction": "higher_is_better",
+    "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
+    "included": "confirmed canonical settlements within the frozen epoch",
+    "excluded": [
+      "operator_or_reserve_wallet funding",
+      "excluded reward contracts",
+      "creator-equals-solver settlements",
+      "entrant-equals-solver settlements",
+      "deposits approvals broadcasts and unconfirmed transactions"
+    ],
+    "tie_break": "earliest qualifying proof sequence"
+  }
+}

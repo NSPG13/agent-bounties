@@ -1,0 +1,114 @@
+{
+  "schema": "agent-bounties/canonical-gmv-snapshot-v1",
+  "candidate_id": "external-gmv-daily-20260807-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "campaign": {
+    "epoch_id": "0x7ca836f646705551ce8e24687a27cf017f51f3e388b2ee57e8b9c7ba16abe2da",
+    "starts_at": 1786060800,
+    "ends_at": 1786147200,
+    "start_block": 49635727,
+    "end_safe_block": 49678926,
+    "end_block_hash": "0x98bea847bac3aaf7b10e6f74b68670497b9767d330048286ff8f23dbb27a8bea",
+    "minimum_score_base_units": 1,
+    "excluded_wallets": [
+      "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "excluded_bounty_contracts": [
+      "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+      "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+    ]
+  },
+  "settlements": [
+    {
+      "protocol": "open_competition_v1",
+      "bounty_contract": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+      "bounty_id": "0x078d1d7cb973c093c4a3f9a6ce9cd0cd1996ee6ad8f6552613eaa3f28dff3d92",
+      "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "solver": "0xb87c9679a14e082e92c103f66327fd1f1e846087",
+      "settled_at": 1786118859,
+      "block_number": 49664756,
+      "transaction_hash": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5",
+      "log_index": 217,
+      "gmv_base_units": 1100000,
+      "funding": [
+        {
+          "contributor": "0x884834e884d6e93462655a2820140ad03e6747bc",
+          "amount_base_units": 1100000
+        }
+      ]
+    },
+    {
+      "protocol": "autonomous",
+      "bounty_contract": "0xbf026b9b40505cf34fe78576050410e5def695e5",
+      "bounty_id": "0x15511b145aa3c553e88d1a4de7e8e74a163619f0dba633f96051cfe9a496d455",
+      "creator": "0x820a7bf90d944bb26bfd9b62ab172fc3a0829cb9",
+      "solver": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "settled_at": 1786134281,
+      "block_number": 49672467,
+      "transaction_hash": "0xcfdff9ae98dcf1225a3a697d5b64a6c93c54b39b150024d825c7b8eae1e391c4",
+      "log_index": 133,
+      "gmv_base_units": 1000000,
+      "funding": [
+        {
+          "contributor": "0x820a7bf90d944bb26bfd9b62ab172fc3a0829cb9",
+          "amount_base_units": 1000000
+        }
+      ]
+    },
+    {
+      "protocol": "autonomous",
+      "bounty_contract": "0x41f7f2722f0af7289c2f2eea6afed6f4873f722a",
+      "bounty_id": "0xeba5dad578290281d78a230169b3c6bf53abc3d06292f927b8d66aaf53f55304",
+      "creator": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "solver": "0x820a7bf90d944bb26bfd9b62ab172fc3a0829cb9",
+      "settled_at": 1786135581,
+      "block_number": 49673117,
+      "transaction_hash": "0x0a5bfb2014118d9d6c536d818bf7bd183fcc65a35e1cfda852adddbfa40925f4",
+      "log_index": 160,
+      "gmv_base_units": 2010000,
+      "funding": [
+        {
+          "contributor": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+          "amount_base_units": 2010000
+        }
+      ]
+    }
+  ],
+  "snapshot_hash": "0xf8cccbc027541623e6e515763f93035de5bc579790f18dda5badc5771962a52d",
+  "verification_policy_hash": "0x8d0e979dffef28ce9cf4d3a2f1cbbf6c64c8d054c63f1e76ffaed59567672889",
+  "eligible_wallet_count": 1,
+  "eligible_gmv_base_units": "1000000",
+  "canonical_evidence": [
+    {
+      "protocol": "autonomous",
+      "transaction_hash": "0xcfdff9ae98dcf1225a3a697d5b64a6c93c54b39b150024d825c7b8eae1e391c4",
+      "log_index": 133,
+      "block_hash": "0xe16c558794a6bcacb50cf7386730bbd01b0ef3c37aeb0f66357bbd2b0c70a106"
+    },
+    {
+      "protocol": "autonomous",
+      "transaction_hash": "0x0a5bfb2014118d9d6c536d818bf7bd183fcc65a35e1cfda852adddbfa40925f4",
+      "log_index": 160,
+      "block_hash": "0x48d53727548970e5267a7f911f05e36f1e21b0387d11e977c713a43a197caeea"
+    },
+    {
+      "protocol": "open_competition_v1",
+      "transaction_hash": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5",
+      "log_index": 217,
+      "block_hash": "0xf37aeb77780ccbd27d92e230c4150aa32a0479c5b52721f1cade1c0839d88c2a"
+    }
+  ],
+  "reconciliation": {
+    "status": "primary_shadow_agree",
+    "primary_rpc": "https://mainnet.base.org",
+    "shadow_rpc": "https://base.gateway.tenderly.co",
+    "reconciled_at": "2026-08-22T05:34:09.555313Z",
+    "evidence_boundary": "API event projections were reproduced from exact logs and block identities returned by two independent Base RPCs. Only canonical settlement events contribute GMV."
+  }
+}

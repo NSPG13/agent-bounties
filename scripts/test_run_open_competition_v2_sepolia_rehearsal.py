@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 PATH = Path(__file__).with_name("run_open_competition_v2_sepolia_rehearsal.py")
@@ -11,6 +13,181 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SepoliaRehearsalTests(unittest.TestCase):
+    def test_signed_rpc_checksummed_lowercase_contract_destination(self):
+        destination = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+
+        class Actor:
+            address = "0xfd7bE4C69541aB297aEcE2a674fc1418b898cC0a"
+
+            def sign_transaction(self, transaction):
+                self.transaction = transaction
+                return SimpleNamespace(raw_transaction=b"signed")
+
+        def rpc_response(_url, method, _params):
+            return {
+                "eth_chainId": hex(MODULE.CHAIN_ID),
+                "eth_getTransactionCount": "0x0",
+                "eth_getBlockByNumber": {"baseFeePerGas": "0x1"},
+                "eth_maxPriorityFeePerGas": "0x1",
+                "eth_estimateGas": "0x5208",
+                "eth_sendRawTransaction": "0x" + "44" * 32,
+            }[method]
+
+        actor = Actor()
+        with patch.object(MODULE, "rpc", side_effect=rpc_response):
+            client = MODULE.SignedRpc("https://base-sepolia.invalid")
+            with patch.object(client, "wait_receipt", return_value={"status": "0x1"}):
+                client.send(actor, to=destination)
+
+        self.assertEqual(
+            actor.transaction["to"],
+            "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        )
+
+    def test_prepared_actor_roles_normalize_creator_to_deployer(self):
+        actors = {
+            "deployer": "0x" + "11" * 20,
+            "solver_a": "0x" + "22" * 20,
+            "solver_b": "0x" + "33" * 20,
+        }
+        self.assertEqual(
+            MODULE.prepared_actor_set(actors),
+            {
+                "creator": actors["deployer"],
+                "solver_a": actors["solver_a"],
+                "solver_b": actors["solver_b"],
+            },
+        )
+
+    def test_sepolia_rebind_deploys_exact_three_component_sequence(self):
+        deployer = "0x" + "11" * 20
+        predicted = ["0x" + f"{value:040x}" for value in (101, 102, 103)]
+        transactions = [
+            {
+                "component": component,
+                "from_nonce": 9 + offset,
+                "predicted_address": predicted[offset],
+                "data": "0x" + f"{offset + 1:02x}",
+            }
+            for offset, component in enumerate(
+                ("groth16_verifier", "plonk_verifier", "factory")
+            )
+        ]
+        raw_bundle = {
+            "network": "base-sepolia",
+            "chain_id": 84532,
+            "deployer": deployer,
+            "preflight_safe_block": {"deployer_nonce": 4},
+            "factory": {
+                "address": "0x" + "22" * 20,
+                "runtime_code_hash": "0x" + "33" * 32,
+            },
+        }
+
+        def rebuild(_bundle, nonce, _assets):
+            return {
+                **raw_bundle,
+                "preflight_safe_block": {"deployer_nonce": nonce},
+                "factory": {
+                    "address": "0x" + f"{nonce + 500:040x}",
+                    "runtime_code_hash": "0x" + "44" * 32,
+                },
+                "deployment_transactions": transactions,
+            }
+
+        class Client:
+            url = "https://base-sepolia.invalid"
+
+            def __init__(self):
+                self.sent = []
+
+            def send(self, _signer, *, data):
+                offset = len(self.sent)
+                self.sent.append(data)
+                return {
+                    "contractAddress": predicted[offset],
+                    "transactionHash": "0x" + f"{offset + 1:064x}",
+                }
+
+        signer = type("Signer", (), {"address": deployer})()
+        client = Client()
+        with patch.object(MODULE, "rpc", return_value=hex(9)), patch.object(
+            MODULE, "runtime_hash", return_value=("0x" + "00" * 32, 0)
+        ), patch.object(MODULE, "bundle_for_nonce", side_effect=rebuild):
+            resolved, receipts = MODULE.resolve_or_deploy_factory(
+                client, signer, raw_bundle, {"pinned": True}
+            )
+
+        self.assertEqual(resolved["preflight_safe_block"]["deployer_nonce"], 9)
+        self.assertEqual(client.sent, [item["data"] for item in transactions])
+        self.assertEqual(list(receipts), [item["component"] for item in transactions])
+
+    def test_component_verification_includes_external_verifiers(self):
+        keys = (
+            "groth16_verifier",
+            "plonk_verifier",
+            "factory",
+            "groth16_adapter",
+            "plonk_adapter",
+            "implementation",
+        )
+        bundle = {
+            key: {
+                "address": "0x" + f"{index + 1:040x}",
+                "runtime_code_hash": "0x" + f"{index + 1:064x}",
+                "runtime_code_bytes": index + 10,
+            }
+            for index, key in enumerate(keys)
+        }
+
+        def observed(_url, address):
+            item = next(value for value in bundle.values() if value["address"] == address)
+            return item["runtime_code_hash"], item["runtime_code_bytes"]
+
+        with patch.object(MODULE, "runtime_hash", side_effect=observed):
+            self.assertEqual(set(MODULE.verify_components("unused", bundle)), set(keys))
+
+    def test_every_release_rehearsal_call_pins_generated_verifier_assets(self):
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        lines = workflow.splitlines()
+        calls = [
+            index
+            for index, line in enumerate(lines)
+            if "python scripts/run_open_competition_v2_sepolia_rehearsal.py" in line
+        ]
+        self.assertEqual(len(calls), 4)
+        for index in calls:
+            self.assertIn(
+                "--verifier-assets target/release-assets/verifier-assets.json",
+                "\n".join(lines[index : index + 6]),
+            )
+
+    def test_nonce_rebind_uses_explicit_pinned_verifier_assets(self):
+        bundle = {
+            "preflight_safe_block": {"deployer_nonce": 7},
+            "deployer": "0x" + "11" * 20,
+            "source_commit": "22" * 20,
+            "repository_subject": {"hash": "0x" + "33" * 32},
+            "release_gates": {"pinned": True},
+        }
+        verifier_assets = {"proof_systems": {"pinned": True}}
+        rebuilt = {"factory": {"from_nonce": 11}}
+
+        with patch.object(
+            MODULE.release,
+            "load_verifier_assets",
+            side_effect=AssertionError("filesystem fallback"),
+        ), patch.object(MODULE.release, "build_bundle", return_value=rebuilt) as build:
+            self.assertIs(MODULE.bundle_for_nonce(bundle, 9, verifier_assets), rebuilt)
+
+        self.assertEqual(build.call_args.kwargs["preflight"]["deployer_nonce"], 9)
+        self.assertIs(build.call_args.kwargs["verifier_assets"], verifier_assets)
+
     def test_actor_derivation_is_stable_and_scoped(self):
         key = bytes.fromhex("11" * 32)
         commit = "22" * 20
@@ -47,6 +224,69 @@ class SepoliaRehearsalTests(unittest.TestCase):
         self.assertEqual(summary["journal_bytes"], 2)
         self.assertNotIn("proof_hex", summary)
         self.assertNotIn("journal_hex", summary)
+
+    def test_malformed_proof_cases_cover_encoding_and_cryptographic_payload(self):
+        proof = bytes(range(32))
+        cases = MODULE.malformed_proof_cases(proof)
+        self.assertEqual(
+            set(cases),
+            {"selector_mismatch", "truncated", "payload_mutation", "zeroed_payload"},
+        )
+        self.assertNotEqual(cases["selector_mismatch"][:4], proof[:4])
+        self.assertEqual(len(cases["truncated"]), len(proof) - 1)
+        self.assertNotEqual(cases["payload_mutation"][-1], proof[-1])
+        self.assertEqual(cases["zeroed_payload"][4:], bytes(len(proof) - 4))
+
+    def test_proof_rejection_consensus_requires_valid_acceptance_and_all_rejections(self):
+        proof = bytes(range(32))
+        calls = []
+
+        def rpc_response(url, method, params):
+            self.assertEqual(method, "eth_call")
+            calls.append((url, params))
+            if len(calls) in (1, 7):
+                return "0x"
+            raise MODULE.RpcError("execution reverted")
+
+        with patch.object(MODULE, "rpc", side_effect=rpc_response):
+            evidence = MODULE.proof_rejection_consensus(
+                ("https://primary.invalid", "https://shadow.invalid"),
+                adapter="0x" + "11" * 20,
+                program_vkey=bytes.fromhex("22" * 32),
+                journal=bytes.fromhex("33" * 64),
+                proof=proof,
+                sender="0x" + "44" * 20,
+                block="0x123",
+            )
+
+        self.assertEqual(evidence["rpc_endpoint_count"], 2)
+        self.assertTrue(evidence["valid_proof_accepted"])
+        self.assertEqual(len(evidence["rejected_cases"]), 5)
+        self.assertEqual(len(calls), 12)
+
+    def test_proof_rejection_consensus_fails_closed_on_duplicate_or_false_success(self):
+        arguments = dict(
+            adapter="0x" + "11" * 20,
+            program_vkey=bytes.fromhex("22" * 32),
+            journal=bytes.fromhex("33" * 64),
+            proof=bytes(range(32)),
+            sender="0x" + "44" * 20,
+            block="0x123",
+        )
+        with self.assertRaisesRegex(MODULE.SepoliaRehearsalError, "two independent"):
+            MODULE.proof_rejection_consensus(
+                ("https://same.invalid", "https://same.invalid"), **arguments
+            )
+        with patch.object(MODULE, "rpc", return_value="0x"):
+            with self.assertRaisesRegex(MODULE.SepoliaRehearsalError, "was not rejected"):
+                MODULE.proof_rejection_consensus(
+                    ("https://primary.invalid", "https://shadow.invalid"), **arguments
+                )
+        with patch.object(MODULE, "rpc", side_effect=RuntimeError("transport failed")):
+            with self.assertRaisesRegex(RuntimeError, "transport failed"):
+                MODULE.proof_rejection_consensus(
+                    ("https://primary.invalid", "https://shadow.invalid"), **arguments
+                )
 
     def test_private_key_validation_fails_closed(self):
         for value in ("", "0x1", "0x" + "00" * 32):

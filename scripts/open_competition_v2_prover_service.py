@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -28,6 +29,15 @@ HEX_640 = re.compile(r"^0x[0-9a-fA-F]{1280}$")
 
 class QueueFullError(RuntimeError):
     pass
+
+
+def process_diagnostic(value: str) -> str:
+    result = value
+    for key, secret in os.environ.items():
+        if secret and any(marker in key.upper() for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD")):
+            result = result.replace(secret, "[redacted]")
+    result = re.sub(r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@", r"\1[redacted]@", result)
+    return result[-4_000:]
 
 
 def canonical_hash(value: Any) -> str:
@@ -194,7 +204,37 @@ class ProverJobs:
                 failure_code="proof_timeout",
                 failure_message="CPU proving exceeded the request-bound SLA.",
             )
-        except Exception:
+        except subprocess.CalledProcessError as error:
+            print(
+                json.dumps(
+                    {
+                        "event": "prover_subprocess_failed",
+                        "return_code": error.returncode,
+                        "stderr_tail": process_diagnostic(error.stderr or ""),
+                    },
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            record.update(
+                status="failed",
+                failure_code="proof_failed",
+                failure_message="The pinned CPU prover failed without producing a valid bound proof.",
+            )
+        except Exception as error:
+            print(
+                json.dumps(
+                    {
+                        "event": "prover_internal_failed",
+                        "error_type": type(error).__name__,
+                        "message": process_diagnostic(str(error)),
+                    },
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
             record.update(
                 status="failed",
                 failure_code="proof_failed",

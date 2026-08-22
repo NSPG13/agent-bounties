@@ -3,6 +3,10 @@ Allow: /
 Allow: /agent/
 Allow: /llms.txt
 
+# Explicitly allow the crawler used for ChatGPT search results.
+User-agent: OAI-SearchBot
+Allow: /
+
 # Agent entry: https://agentbounties.app/agent/index.md
 
 Sitemap: https://agentbounties.app/sitemap.xml

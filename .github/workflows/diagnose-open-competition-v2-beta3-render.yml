@@ -1,0 +1,40 @@
+name: Diagnose Open Competition V2 Beta3 Render
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: v2-beta2-mainnet
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Verify diagnostic contract
+        run: |
+          python scripts/test_diagnose_open_competition_v2_beta3_render.py -v
+          python -m py_compile scripts/diagnose_open_competition_v2_beta3_render.py
+
+      - name: Collect redacted runtime diagnostics
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          python scripts/diagnose_open_competition_v2_beta3_render.py \
+            --output target/beta3-render-diagnostic.json
+
+      - name: Upload redacted diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: beta3-render-diagnostic-${{ github.run_id }}
+          path: target/beta3-render-diagnostic.json
+          if-no-files-found: error
+          retention-days: 14

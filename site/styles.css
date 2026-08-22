@@ -991,6 +991,135 @@ textarea {
   font-size: 14px;
 }
 
+.refill-topbar {
+  min-height: 64px;
+}
+
+.refill-private-label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.refill-page {
+  background:
+    radial-gradient(circle at 82% 9%, rgba(35, 129, 112, 0.12), transparent 28rem),
+    var(--paper);
+}
+
+.refill-head h1 {
+  max-width: 780px;
+}
+
+.refill-receipt {
+  max-width: 880px;
+}
+
+.refill-summary {
+  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
+  gap: 32px;
+}
+
+.refill-summary h2 {
+  margin: 4px 0 10px;
+  font-size: clamp(42px, 7vw, 76px);
+  line-height: 0.95;
+}
+
+.refill-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+}
+
+.refill-facts div {
+  min-width: 0;
+  padding: 16px;
+  background: var(--panel);
+}
+
+.refill-facts dt,
+.refill-commitments dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.refill-facts dd,
+.refill-commitments dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 750;
+}
+
+.refill-candidates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  padding: 1px;
+  list-style-position: inside;
+  background: var(--line);
+}
+
+.refill-candidates li {
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  line-height: 1.45;
+}
+
+.refill-candidates code {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.refill-commitments {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 10px 18px;
+  margin: 0;
+}
+
+.refill-confirm {
+  padding-bottom: 0;
+}
+
+.refill-button {
+  width: 100%;
+  min-height: 58px;
+  justify-content: center;
+  font-size: 17px;
+}
+
+@media (max-width: 720px) {
+  .refill-summary,
+  .refill-candidates {
+    grid-template-columns: 1fr;
+  }
+
+  .refill-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .refill-commitments {
+    grid-template-columns: 1fr;
+  }
+}
+
 .feed-layout {
   grid-template-columns: minmax(220px, 0.62fr) minmax(0, 1.38fr);
 }

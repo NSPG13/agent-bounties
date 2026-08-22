@@ -8,14 +8,16 @@ use axum::{
 };
 use chain_base::{
     fetch_block_number, fetch_exact_block_identity, fetch_transaction_receipt,
-    plan_open_competition_v2_action, plan_open_competition_v2_broker_payment,
-    plan_open_competition_v2_creation, plan_open_competition_v2_funding,
-    plan_open_competition_v2_proof, validate_open_competition_v2_release,
+    normalize_evm_address, plan_open_competition_v2_action,
+    plan_open_competition_v2_broker_payment, plan_open_competition_v2_creation,
+    plan_open_competition_v2_funding, plan_open_competition_v2_proof,
+    validate_open_competition_v2_release, ChainBaseError,
     OpenCompetitionV2BrokerPaymentAuthorization, OpenCompetitionV2CreateParams,
-    OpenCompetitionV2CreationRequest, OpenCompetitionV2ProgramClassification,
-    OpenCompetitionV2ProofSystem, OpenCompetitionV2Release, OpenCompetitionV2ScoreDirection,
-    OpenCompetitionV2WinnerMode, OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC,
-    OPEN_COMPETITION_V2_BASE_USDC, OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+    OpenCompetitionV2CreationRequest, OpenCompetitionV2Event, OpenCompetitionV2EventKind,
+    OpenCompetitionV2ProgramClassification, OpenCompetitionV2ProofSystem, OpenCompetitionV2Release,
+    OpenCompetitionV2ScoreDirection, OpenCompetitionV2WinnerMode,
+    OPEN_COMPETITION_V2_BASE_SEPOLIA_USDC, OPEN_COMPETITION_V2_BASE_USDC,
+    OPEN_COMPETITION_V2_PROTOCOL_VERSION,
 };
 use chrono::{DateTime, Utc};
 use competition_metric_core::{
@@ -82,6 +84,10 @@ pub(crate) fn router() -> Router<SharedState> {
         .route(
             "/v1/base/open-competition-v2-beta3/proof-preparation",
             post(prepare_proof),
+        )
+        .route(
+            "/v1/base/open-competition-v2-beta3/proof-attribution",
+            get(proof_attribution),
         )
         .route(
             "/v1/base/open-competition-v2-beta3/action-preparation",
@@ -210,6 +216,13 @@ pub(crate) struct ProofQuoteBody {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ProofAttributionQuery {
+    network: Option<String>,
+    competition_contract: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PublicVectorMetricBody {
     mode: PublicVectorMode,
     threshold: String,
@@ -298,6 +311,11 @@ fn profiles_document(
                     "profile_id": "structured-artifact-metric-v1",
                     "classification": "disabled",
                     "reason": "Enable only after two isolated builds reproduce the ELF digest and vkey and the published adversarial corpus passes."
+                },
+                {
+                    "profile_id": "canonical-gmv-attribution-metric-v1",
+                    "classification": "disabled",
+                    "reason": "Enable only after two isolated builds reproduce the ELF digest and vkey, the published adversarial corpus passes, and canonical GMV snapshots reconcile."
                 }
             ])
         });
@@ -517,6 +535,8 @@ pub(crate) async fn inventory(
         .map(|record| {
             let estimated_net = estimated_hosted_net_prize(&record.projection);
             let proof_fee = configured_proof_fee(&record.projection);
+            let relay_fee =
+                configured_u128_optional("OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS");
             let risk = if !matches!(
                 record.projection.state,
                 chain_base::OpenCompetitionV2ProjectedState::Active
@@ -534,10 +554,11 @@ pub(crate) async fn inventory(
                 "earning_estimate": {
                     "gross_prize": record.projection.solver_reward.to_string(),
                     "hosted_proof_fee_quote": proof_fee.map(|value| value.to_string()),
+                    "hosted_relay_fee_quote": relay_fee.map(|value| value.to_string()),
                     "hosted_net_prize_if_win": estimated_net.map(|value| value.to_string()),
                     "profitable_if_win": estimated_net.map(|value| value > 0),
                     "competition_risk": risk,
-                    "relay_fee_excluded": true,
+                    "relay_fee_excluded": false,
                     "warning": "A positive net prize is conditional on winning and is never guaranteed profit. Request a solver-bound five-minute quote before paying."
                 }
             })
@@ -842,6 +863,126 @@ pub(crate) async fn get_proof_job(
     })))
 }
 
+#[utoipa::path(get, path = "/v1/base/open-competition-v2-beta3/proof-attribution", params(("network" = Option<String>, Query, description = "Base network"), ("competition_contract" = String, Query, description = "Exact competition contract")), responses((status = 200, description = "Public hosted-proof, x402, relay, and settlement attribution"), (status = 404, description = "No hosted proof jobs found")))]
+pub(crate) async fn proof_attribution(
+    State(state): State<SharedState>,
+    Query(query): Query<ProofAttributionQuery>,
+) -> ApiResult {
+    let network = network_or_default(query.network);
+    let competition_contract =
+        normalize_evm_address(&query.competition_contract).map_err(|_| {
+            bad_request(
+                "proof_attribution",
+                "competition_contract_invalid",
+                "Use the exact EVM competition contract address.",
+            )
+        })?;
+    let release = release_from_environment(&network)?;
+    current_indexer_agreement(&state, &network, &release).await?;
+    let store = state.store.as_ref().ok_or_else(database_unavailable)?;
+    let jobs = store
+        .list_open_competition_v2_proof_jobs_for_contract(&network, &competition_contract)
+        .await
+        .map_err(|error| {
+            service_error(
+                "proof_attribution",
+                "proof_job_read_failed",
+                error.to_string(),
+            )
+        })?;
+    if jobs.is_empty() {
+        return Err(not_found(
+            "proof_attribution",
+            "hosted_proof_jobs_not_found",
+        ));
+    }
+    let events = store
+        .list_open_competition_v2_events_for_contract(&network, &competition_contract)
+        .await
+        .map_err(|error| {
+            service_error(
+                "proof_attribution",
+                "canonical_event_read_failed",
+                error.to_string(),
+            )
+        })?;
+    let relayer = state.x402_relayer.address();
+    let attributed = jobs
+        .iter()
+        .map(|job| {
+            let settlement = events.iter().find(|event| {
+                proof_job_matches_settlement(
+                    job.state,
+                    &job.solver,
+                    job.settlement_event_id,
+                    job.requested_relay,
+                    job.relay_tx_hash.as_deref(),
+                    event,
+                )
+            });
+            json!({
+                "proof_job_id": job.id,
+                "solver_wallet": job.solver,
+                "state": job.state,
+                "x402_payment": {
+                    "payer": job.payer,
+                    "transaction_hash": job.payment_tx_hash,
+                    "canonical_evidence_recorded": job.payment_evidence.is_some()
+                },
+                "hosted_proof": {
+                    "used": job.proof_provider_job_id.is_some(),
+                    "provider": "agent-bounties-hosted-sp1",
+                    "provider_job_recorded": job.proof_provider_job_id.is_some()
+                },
+                "hosted_relay": {
+                    "requested": job.requested_relay,
+                    "used": job.relay_tx_hash.is_some(),
+                    "relayer_wallet": relayer,
+                    "transaction_hash": job.relay_tx_hash
+                },
+                "canonical_settlement": settlement.map(|event| json!({
+                    "event": "CompetitionSettledV2",
+                    "transaction_hash": event.tx_hash,
+                    "block_number": event.block_number,
+                    "solver_reward": event.data.get("solver_reward"),
+                    "keeper_wallet": event.data.get("keeper"),
+                    "keeper_reward": event.data.get("keeper_reward")
+                })),
+                "contactability": "wallet_only_unless_the_solver_registers_a_signed_contact_profile"
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "schema_version": "agent-bounties/open-competition-v2-proof-attribution-v1",
+        "protocol_version": OPEN_COMPETITION_V2_PROTOCOL_VERSION,
+        "network": network,
+        "competition_contract": competition_contract,
+        "jobs": attributed,
+        "identity_boundary": "A solver wallet is canonical attribution, not a verified person. Contact requires a separately signed contact profile.",
+        "evidence_boundary": "The proof-job record attributes hosted services. Only CompetitionSettledV2 proves solver and keeper payment."
+    })))
+}
+
+fn proof_job_matches_settlement(
+    job_state: OpenCompetitionV2ProofJobState,
+    job_solver: &str,
+    settlement_event_id: Option<Uuid>,
+    requested_relay: bool,
+    relay_tx_hash: Option<&str>,
+    event: &OpenCompetitionV2Event,
+) -> bool {
+    job_state == OpenCompetitionV2ProofJobState::Confirmed
+        && settlement_event_id == Some(event.id)
+        && event.kind == OpenCompetitionV2EventKind::CompetitionSettled
+        && event
+            .data
+            .get("solver")
+            .and_then(Value::as_str)
+            .is_some_and(|solver| solver.eq_ignore_ascii_case(job_solver))
+        && (!requested_relay
+            || relay_tx_hash.is_some_and(|tx_hash| tx_hash.eq_ignore_ascii_case(&event.tx_hash)))
+}
+
 #[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/payment", params(("job_id" = Uuid, Path, description = "Quoted hosted proof job ID")), responses((status = 200, description = "Canonical Base USDC payment confirmed"), (status = 202, description = "Payment relay is awaiting canonical confirmation"), (status = 402, description = "Exact x402 payment authorization required")))]
 pub(crate) async fn pay_proof_job(
     State(state): State<SharedState>,
@@ -967,8 +1108,21 @@ pub(crate) async fn pay_proof_job(
             .release_x402_relayer_lease(&job.network, lease)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
-        let transaction = result?;
         release_result?;
+        let transaction = match result {
+            Ok(transaction) => transaction,
+            Err(ProofPaymentBroadcastError::Chain(error)) => {
+                eprintln!(
+                    "open_competition_v2 proof payment relay did not broadcast: job_id={} error={error}",
+                    job.id
+                );
+                if let Some(reason) = retryable_proof_payment_broadcast_error(&error) {
+                    return proof_job_payment_retry_response(&job, reason);
+                }
+                return Err(StatusCode::UNPROCESSABLE_ENTITY);
+            }
+            Err(ProofPaymentBroadcastError::Status(status)) => return Err(status),
+        };
         job = store
             .transition_open_competition_v2_proof_job(
                 job.id,
@@ -988,7 +1142,7 @@ pub(crate) async fn pay_proof_job(
     proof_job_payment_response(&job)
 }
 
-#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 digest or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
+#[utoipa::path(post, path = "/v1/base/open-competition-v2-beta3/proof-jobs/{job_id}/relay-authorization", params(("job_id" = Uuid, Path, description = "Proved hosted job ID")), responses((status = 200, description = "Exact EIP-712 typed data or accepted scoped signature"), (status = 409, description = "Job is not relayable")))]
 pub(crate) async fn authorize_proof_job_relay(
     State(state): State<SharedState>,
     Path(job_id): Path<Uuid>,
@@ -1164,7 +1318,7 @@ pub(crate) async fn authorize_proof_job_relay(
         "proof_job_id": job.id,
         "state": job.state,
         "plan": plan,
-        "next_action": "Sign plan.relay_authorization.digest with the solver wallet, then call this endpoint again with solver_signature."
+        "next_action": "Sign the exact plan.relay_authorization EIP-712 typed data with the solver wallet, then call this endpoint again with solver_signature."
     })))
 }
 
@@ -1279,17 +1433,21 @@ async fn broadcast_proof_job_payment(
     job: &OpenCompetitionV2ProofJob,
     release: &OpenCompetitionV2Release,
     authorization: &payments_x402::ValidatedExactAuthorization,
-) -> Result<chain_base::BaseRelayedTransaction, StatusCode> {
+) -> Result<chain_base::BaseRelayedTransaction, ProofPaymentBroadcastError> {
     let relayer = state
         .x402_relayer
         .relayer
         .as_ref()
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        .ok_or(ProofPaymentBroadcastError::Status(
+            StatusCode::SERVICE_UNAVAILABLE,
+        ))?;
     if !authorization
         .recipient
         .eq_ignore_ascii_case(&relayer.address())
     {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(ProofPaymentBroadcastError::Status(
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ));
     }
     let intent = plan_open_competition_v2_broker_payment(
         &job.network,
@@ -1306,24 +1464,62 @@ async fn broadcast_proof_job_payment(
             s: authorization.s.clone(),
         },
     )
-    .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?;
+    .map_err(|_| ProofPaymentBroadcastError::Status(StatusCode::UNPROCESSABLE_ENTITY))?;
     let (_, rpc_url) = state
         .base_rpc_urls
         .resolve(&job.network)
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(|_| ProofPaymentBroadcastError::Status(StatusCode::SERVICE_UNAVAILABLE))?;
     timeout(
         Duration::from_secs(state.x402_relayer.rpc_timeout_seconds),
         relayer.simulate_and_broadcast(
             &rpc_url,
-            network_chain_id(&job.network)?,
+            network_chain_id(&job.network).map_err(ProofPaymentBroadcastError::Status)?,
             &intent,
             state.x402_relayer.max_gas,
             state.x402_relayer.max_fee_per_gas_wei,
         ),
     )
     .await
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-    .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)
+    .map_err(|_| ProofPaymentBroadcastError::Status(StatusCode::SERVICE_UNAVAILABLE))?
+    .map_err(ProofPaymentBroadcastError::Chain)
+}
+
+#[derive(Debug)]
+enum ProofPaymentBroadcastError {
+    Chain(ChainBaseError),
+    Status(StatusCode),
+}
+
+fn retryable_proof_payment_broadcast_error(error: &ChainBaseError) -> Option<&'static str> {
+    match error {
+        ChainBaseError::RelayerSimulation(message)
+            if message.contains("transfer amount exceeds balance") =>
+        {
+            Some("payer_balance_not_yet_visible")
+        }
+        ChainBaseError::RelayerSimulation(message)
+            if message.contains("authorization is not yet valid") =>
+        {
+            Some("authorization_not_yet_visible")
+        }
+        ChainBaseError::RelayerSimulation(message)
+            if [
+                "authorization is expired",
+                "invalid signature",
+                "authorization is used",
+            ]
+            .iter()
+            .any(|terminal| message.contains(terminal)) =>
+        {
+            None
+        }
+        ChainBaseError::RelayerSimulation(_) => Some("relayer_simulation_retry"),
+        ChainBaseError::RelayerProvider(_) => Some("relayer_provider_retry"),
+        ChainBaseError::RelayerGasLimitExceeded { .. } => Some("gas_limit_retry"),
+        ChainBaseError::RelayerFeeCapExceeded { .. } => Some("fee_cap_retry"),
+        ChainBaseError::RelayerInsufficientBalance { .. } => Some("gas_reserve_retry"),
+        _ => None,
+    }
 }
 
 async fn reconcile_proof_job_payment(
@@ -1534,6 +1730,35 @@ fn proof_job_payment_response(job: &OpenCompetitionV2ProofJob) -> Result<Respons
             HeaderValue::from_str(&encoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         );
     }
+    Ok(response)
+}
+
+fn proof_job_payment_retry_response(
+    job: &OpenCompetitionV2ProofJob,
+    reason: &'static str,
+) -> Result<Response, StatusCode> {
+    let mut response = (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "schema_version": "agent-bounties/open-competition-v2-proof-payment-v1",
+            "proof_job_id": job.id,
+            "state": job.state,
+            "payment_evidence": job.payment_evidence,
+            "retryable": true,
+            "retry_after_seconds": 2,
+            "pending_reason": reason,
+            "next_action": "Retry this exact payment endpoint without signing another authorization.",
+            "evidence_boundary": "A retryable relay response is not payment evidence. Only attached canonical Base USDC evidence proves payment."
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, private"),
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
     Ok(response)
 }
 
@@ -1972,7 +2197,7 @@ fn build_creation_plan(
     .map_err(|error| bad_request("prepare_creation", "invalid_profile", error.to_string()))
 }
 
-fn release_from_environment(
+pub(crate) fn release_from_environment(
     network: &str,
 ) -> Result<OpenCompetitionV2Release, (StatusCode, Json<Value>)> {
     let prefix = match network {
@@ -2020,7 +2245,7 @@ fn release_from_environment(
     Ok(release)
 }
 
-async fn current_indexer_agreement(
+pub(crate) async fn current_indexer_agreement(
     state: &SharedState,
     network: &str,
     release: &OpenCompetitionV2Release,
@@ -2157,7 +2382,10 @@ fn estimated_hosted_net_prize(
 ) -> Option<u128> {
     projection
         .solver_reward
-        .checked_sub(configured_proof_fee(projection)?)
+        .checked_sub(configured_proof_fee(projection)?)?
+        .checked_sub(configured_u128_optional(
+            "OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS",
+        )?)
 }
 
 fn settlement_token(network: &str) -> Result<&'static str, (StatusCode, Json<Value>)> {
@@ -2436,6 +2664,12 @@ mod tests {
         assert!(response["canonical_rails"]["sp1_source_commit"].is_null());
         assert!(response["canonical_rails"]["groth16_verifier"].is_null());
         assert_eq!(response["creation_enabled"], false);
+        assert_eq!(response["programs"].as_array().map(Vec::len), Some(3));
+        assert_eq!(
+            response["programs"][2]["profile_id"],
+            "canonical-gmv-attribution-metric-v1"
+        );
+        assert_eq!(response["programs"][2]["classification"], "disabled");
     }
 
     #[test]
@@ -2556,6 +2790,124 @@ mod tests {
         agreement.primary_safe_head = 110;
         assert!(!indexer_agreement_is_current(
             &release, &agreement, 121, 120, 64
+        ));
+    }
+
+    #[test]
+    fn proof_payment_retries_transient_balance_and_provider_observation() {
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerSimulation(
+                "execution reverted: ERC20: transfer amount exceeds balance".to_string(),
+            )),
+            Some("payer_balance_not_yet_visible")
+        );
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerProvider(
+                "temporary upstream failure".to_string(),
+            )),
+            Some("relayer_provider_retry")
+        );
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerInsufficientBalance {
+                balance: 1,
+                required: 2,
+            }),
+            Some("gas_reserve_retry")
+        );
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerSimulation(
+                "execution reverted without decoded reason".to_string(),
+            )),
+            Some("relayer_simulation_retry")
+        );
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerGasLimitExceeded {
+                estimated: 2,
+                maximum: 1,
+            }),
+            Some("gas_limit_retry")
+        );
+    }
+
+    #[test]
+    fn proof_payment_rejects_terminal_authorization_failures() {
+        for message in [
+            "FiatTokenV2: authorization is expired",
+            "FiatTokenV2: invalid signature",
+            "FiatTokenV2: authorization is used",
+        ] {
+            assert_eq!(
+                retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerSimulation(
+                    message.to_string(),
+                )),
+                None
+            );
+        }
+        assert_eq!(
+            retryable_proof_payment_broadcast_error(&ChainBaseError::RelayerChainMismatch {
+                expected: 8453,
+                observed: 1,
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn proof_attribution_requires_the_exact_confirmed_relay_transaction() {
+        let solver = "0x1111111111111111111111111111111111111111";
+        let relay_tx_hash = hash(0xaa);
+        let event = OpenCompetitionV2Event {
+            id: Uuid::new_v4(),
+            protocol_version: OPEN_COMPETITION_V2_PROTOCOL_VERSION.to_string(),
+            log_key: "settlement:0".to_string(),
+            tx_hash: relay_tx_hash.clone(),
+            block_number: 42,
+            log_index: 0,
+            contract_address: "0x2222222222222222222222222222222222222222".to_string(),
+            bounty_id: hash(0xbb),
+            kind: OpenCompetitionV2EventKind::CompetitionSettled,
+            data: json!({ "solver": solver }),
+            occurred_at: Utc::now(),
+        };
+        assert!(proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(event.id),
+            true,
+            Some(&relay_tx_hash),
+            &event,
+        ));
+        assert!(!proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::PaymentPending,
+            solver,
+            None,
+            true,
+            Some(&relay_tx_hash),
+            &event,
+        ));
+        assert!(!proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(event.id),
+            true,
+            Some(&hash(0x99)),
+            &event,
+        ));
+        assert!(proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(event.id),
+            false,
+            None,
+            &event,
+        ));
+        assert!(!proof_job_matches_settlement(
+            OpenCompetitionV2ProofJobState::Confirmed,
+            solver,
+            Some(Uuid::new_v4()),
+            false,
+            None,
+            &event,
         ));
     }
 }

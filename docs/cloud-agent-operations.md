@@ -6,8 +6,9 @@ draft bounty terms without running a model on a contributor's computer.
 ## Runtime Boundary
 
 - `POST /v1/cloud-agent/bounty-drafts` runs in the hosted API service.
-- `draft_bounty_with_cloud_agent` in MCP proxies that API; the MCP service does
-  not receive the model credential.
+- The advanced HTTP tool `draft_bounty_with_cloud_agent` proxies that API; the
+  MCP/HTTP service does not receive the model credential. Hosted remote MCP
+  clients must not assume that tool appears in their `tools/list`.
 - `GET /v1/cloud-agent/readiness` reports the provider, model, public access,
   limits, missing configuration, and the fact that there is no local fallback.
 - The hosted endpoints remain available for explicit API, evaluation, and

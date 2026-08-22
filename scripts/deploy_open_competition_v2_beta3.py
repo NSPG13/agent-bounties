@@ -74,8 +74,16 @@ class SignedRpc:
         require(int(rpc(url, "eth_chainId", []), 16) == 8453, "RPC is not Base mainnet")
 
     def code_hash(self, address: str, block: str = "latest") -> str | None:
-        raw = rpc(self.url, "eth_getCode", [address, block])
-        return None if raw == "0x" else keccak256(bytes.fromhex(raw[2:]))
+        deadline = time.time() + 120
+        last_error: RuntimeError | None = None
+        while time.time() < deadline:
+            try:
+                raw = rpc(self.url, "eth_getCode", [address, block])
+                return None if raw == "0x" else keccak256(bytes.fromhex(raw[2:]))
+            except RuntimeError as error:
+                last_error = error
+                time.sleep(2)
+        raise RuntimeError(f"runtime bytecode lookup failed: {last_error}") from last_error
 
     def pending_nonce(self) -> int:
         return int(
@@ -135,12 +143,27 @@ class SignedRpc:
 
     def wait_safe(self, block_number: int, timeout_seconds: int = 1800) -> dict[str, Any]:
         deadline = time.time() + timeout_seconds
+        last_error: RuntimeError | None = None
         while time.time() < deadline:
-            safe = rpc(self.url, "eth_getBlockByNumber", ["safe", False])
+            try:
+                safe = rpc(self.url, "eth_getBlockByNumber", ["safe", False])
+            except RuntimeError as error:
+                last_error = error
+                time.sleep(5)
+                continue
             if safe and int(safe["number"], 16) >= block_number:
                 return safe
             time.sleep(5)
-        raise RuntimeError("deployment did not reach a Base safe block")
+        detail = f": {last_error}" if last_error is not None else ""
+        raise RuntimeError(f"deployment did not reach a Base safe block{detail}")
+
+    def require_safe_code_hashes(
+        self, expected_hashes: dict[str, str], block_number: int
+    ) -> None:
+        safe = self.wait_safe(block_number)
+        for address, expected_hash in expected_hashes.items():
+            actual = self.code_hash(address, safe["number"])
+            require(actual == expected_hash, f"safe runtime hash mismatch: {address}")
 
 
 def expected_runtime_hashes(bundle: dict[str, Any]) -> dict[str, str]:
@@ -231,6 +254,24 @@ def deploy(bundle: dict[str, Any], client: SignedRpc, output: Path) -> dict[str,
                 f"existing evidence address differs: {component}",
             )
             continue
+        if component == "factory":
+            dependency_blocks = [
+                int(item["block_number"])
+                for item in evidence["transactions"]
+                if item["component"] in {"groth16_verifier", "plonk_verifier"}
+            ]
+            require(len(dependency_blocks) == 2, "factory verifier evidence is incomplete")
+            client.require_safe_code_hashes(
+                {
+                    bundle["groth16_verifier"]["address"]: bundle["groth16_verifier"][
+                        "runtime_code_hash"
+                    ],
+                    bundle["plonk_verifier"]["address"]: bundle["plonk_verifier"][
+                        "runtime_code_hash"
+                    ],
+                },
+                max(dependency_blocks),
+            )
         if client.code_hash(transaction["predicted_address"]) is not None or client.pending_nonce() > transaction["from_nonce"]:
             record = recovered_component_record(bundle, transaction, client)
         else:

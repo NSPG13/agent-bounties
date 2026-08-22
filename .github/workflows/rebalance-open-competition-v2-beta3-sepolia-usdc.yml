@@ -1,0 +1,40 @@
+name: Rebalance Open Competition V2 Beta3 Sepolia USDC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-sepolia-rebalance
+  cancel-in-progress: false
+
+jobs:
+  rebalance:
+    environment: v2-beta2-sepolia
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Return only the reviewed Sepolia canary deficit
+        env:
+          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$BASE_SEPOLIA_RPC_URL"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/rebalance_open_competition_v2_beta3_sepolia_usdc.py \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --output target/open-competition-v2-beta3-sepolia-rebalance.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: open-competition-v2-beta3-sepolia-rebalance-${{ github.sha }}
+          path: target/open-competition-v2-beta3-sepolia-rebalance.json
+          if-no-files-found: error
+          retention-days: 90

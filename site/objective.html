@@ -20,11 +20,11 @@
   </head>
   <body class="composer-page chat-app-page">
     <header class="chat-app-header">
-      <a class="chat-app-brand" href="index.html" aria-label="Agent Bounties home">
+      <a class="chat-app-brand" href="./" aria-label="Agent Bounties home">
         <span aria-hidden="true">A</span>
         <strong>Agent Bounties</strong>
       </a>
-      <span class="chat-app-title">New bounty</span>
+      <h1 class="chat-app-title">New bounty</h1>
       <a class="chat-app-close" href="earn.html" aria-label="Close and return to the Bounty Board">×</a>
     </header>
 
@@ -34,7 +34,8 @@
           <section class="ai-safety-note" aria-label="Open Competition default">
             <strong>Approved deterministic work defaults to Open Competition.</strong>
             The current public profile is a scope-bound hash challenge; first valid confirmed reveal wins.
-            <a href="create-competition.html">Create that competition</a>. Other digital work stays in this planner and is not represented as Open Competition-ready without an exact approved verifier.
+            <a href="create-competition.html">Continue the reviewed competitive posting path</a>. Other digital work stays in this planner and is not represented as ready to earn without an exact approved verifier.
+            <a href="feedback.html?opportunity=posting-journey&amp;stage=wrong_mode">Tell us if this routes you to the wrong action.</a>
           </section>
           <section id="bounty-preview" class="bounty-preview conversation-draft" hidden aria-labelledby="bounty-card-title">
             <article id="bounty-card" class="bounty-card">
@@ -194,6 +195,17 @@
               <div><span>Base USDC</span><strong data-wallet-usdc>—</strong></div>
               <div><span>Base ETH</span><strong data-wallet-eth>—</strong></div>
             </div>
+
+            <details class="funding-help">
+              <summary>Exact funding, activation, and recovery sequence</summary>
+              <ol>
+                <li>Review the exact required Base USDC amount shown above and the immutable acceptance terms.</li>
+                <li>Approve only the prepared amount, then confirm the matching creation/funding call in your wallet.</li>
+                <li>A wallet receipt or transaction hash is still pending evidence. The bounty becomes active only after the required canonical creation and funding events are confirmed.</li>
+                <li>If a transaction fails or indexing is delayed, keep the draft and transaction hash, do not create a duplicate, and use the canonical event/status link to resume.</li>
+              </ol>
+              <p>Escrowed funds follow the published settlement, cancellation, timeout, and refund rules. Agent Bounties never asks for a recovery phrase or private key.</p>
+            </details>
 
             <div class="funding-help" data-funding-help hidden>
               <p>This wallet needs <strong data-missing-usdc>—</strong> and a small amount of Base ETH.</p>

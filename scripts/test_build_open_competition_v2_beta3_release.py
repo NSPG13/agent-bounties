@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -14,6 +15,118 @@ SPEC.loader.exec_module(MODULE)
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
     subject_hash = "0x" + "33" * 32
 
+    def test_release_builder_defaults_to_the_isolated_deployer(self):
+        self.assertEqual(
+            MODULE.DEFAULT_DEPLOYER,
+            "0xfd7be4c69541ab297aece2a674fc1418b898cc0a",
+        )
+
+    def test_resumes_exact_verifiers_after_interrupted_factory_deployment(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        expected = {
+            MODULE.create_address(deployer, 2): "groth16",
+            MODULE.create_address(deployer, 3): "plonk",
+        }
+
+        start = MODULE.resume_exact_verifier_pair(
+            deployer=deployer,
+            observed_nonce=4,
+            code_hash=lambda address: expected.get(address),
+            groth16_runtime_hash="groth16",
+            plonk_runtime_hash="plonk",
+        )
+
+        self.assertEqual(start, 2)
+
+    def test_does_not_resume_inexact_partial_deployment(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        groth16 = MODULE.create_address(deployer, 2)
+        plonk = MODULE.create_address(deployer, 3)
+        cases = (
+            {groth16: "wrong", plonk: "plonk"},
+            {groth16: "groth16", plonk: "wrong"},
+        )
+        for observed in cases:
+            with self.subTest(observed=observed):
+                self.assertEqual(
+                    MODULE.resume_exact_verifier_pair(
+                        deployer=deployer,
+                        observed_nonce=4,
+                        code_hash=lambda address, values=observed: values.get(address),
+                        groth16_runtime_hash="groth16",
+                        plonk_runtime_hash="plonk",
+                    ),
+                    4,
+                )
+
+    def test_resumes_completed_exact_deployment_for_reconciliation(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        observed = {
+            MODULE.create_address(deployer, 2): "groth16",
+            MODULE.create_address(deployer, 3): "plonk",
+            MODULE.create_address(deployer, 4): "factory",
+        }
+
+        self.assertEqual(
+            MODULE.resume_exact_verifier_pair(
+                deployer=deployer,
+                observed_nonce=5,
+                code_hash=lambda address: observed.get(address),
+                groth16_runtime_hash="groth16",
+                plonk_runtime_hash="plonk",
+            ),
+            2,
+        )
+
+    def test_release_root_retargets_only_release_files(self):
+        original = (MODULE.ROOT, MODULE.CONTRACT_ROOT, MODULE.OUT)
+        try:
+            release_root = Path("target/frozen-release")
+            MODULE.configure_release_root(release_root)
+            self.assertEqual(MODULE.ROOT, release_root.resolve())
+            self.assertEqual(MODULE.CONTRACT_ROOT, MODULE.ROOT / "contracts/base-escrow")
+            self.assertEqual(MODULE.OUT, MODULE.CONTRACT_ROOT / "out")
+        finally:
+            MODULE.ROOT, MODULE.CONTRACT_ROOT, MODULE.OUT = original
+
+    def test_mainnet_continuation_uses_current_control_on_frozen_release(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml"
+        ).read_text(encoding="utf-8")
+        deploy = workflow.split("  deploy-mainnet:", 1)[1].split(
+            "  deploy-production-prover:", 1
+        )[0]
+        self.assertIn("path: .release-control", deploy)
+        self.assertIn(
+            "python .release-control/scripts/build_open_competition_v2_beta3_release.py",
+            deploy,
+        )
+        self.assertIn('--release-root "$GITHUB_WORKSPACE"', deploy)
+        self.assertIn(
+            "python .release-control/scripts/deploy_open_competition_v2_beta3.py",
+            deploy,
+        )
+
+    def test_proof_build_pins_every_bundle_to_the_configured_deployer(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        build = workflow.split("  build-release-assets:", 1)[1].split(
+            "  live-sepolia-rehearsal:", 1
+        )[0]
+        self.assertIn("BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}", build)
+        self.assertIn('test -n "$BASE_DEPLOYER_ADDRESS"', build)
+        self.assertEqual(
+            build.count(
+                'build_open_competition_v2_beta3_release.py --network base-mainnet'
+            ),
+            3,
+        )
+        self.assertEqual(
+            build.count('--deployer "$DEPLOYER" --source-commit "$GITHUB_SHA"'),
+            3,
+        )
+
     def test_mainnet_workflow_records_the_exact_x402_gate(self):
         workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
             encoding="utf-8"
@@ -23,6 +136,24 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("x402_success_and_refund_canaries_complete", workflow)
+
+    def test_mainnet_canaries_rebuild_cleaned_contract_artifacts(self):
+        for workflow_path in (
+            ".github/workflows/open-competition-v2-beta3-release.yml",
+            ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml",
+        ):
+            workflow = (MODULE.ROOT / workflow_path).read_text(encoding="utf-8")
+            canary = workflow.split("  mainnet-canaries:", 1)[1].split(
+                "  activate-public-beta:", 1
+            )[0]
+            self.assertIn(
+                "foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a",
+                canary,
+            )
+            self.assertIn(
+                "forge build --root contracts/base-escrow --force --ast",
+                canary,
+            )
 
     def test_sepolia_rehearsal_uses_an_isolated_broker(self):
         workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
@@ -36,6 +167,18 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertIn('OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS="$BROKER"', sepolia)
         self.assertIn('X402_RELAYER_PRIVATE_KEY="$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"', sepolia)
         self.assertNotIn('X402_RELAYER_PRIVATE_KEY="$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"', sepolia)
+
+    def test_mainnet_deploys_the_exact_recoverable_reserve_factory(self):
+        workflow = (
+            MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+        ).read_text(encoding="utf-8")
+        mainnet = workflow.split("  deploy-mainnet:", 1)[1].split(
+            "  activate-public-beta:", 1
+        )[0]
+        self.assertIn("build_bounded_open_competition_v2_wallet_bundle.py", mainnet)
+        self.assertIn("deploy_bounded_open_competition_v2_wallet_factory.py", mainnet)
+        self.assertIn("target/mainnet-exact.runtime.json", mainnet)
+        self.assertIn("bounded-open-competition-v2-wallet-deployment-evidence.json", mainnet)
 
     @staticmethod
     def verifier_assets() -> dict:
@@ -101,6 +244,42 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertEqual(MODULE.SOURCE_HASH, identity["source_hash"])
         self.assertEqual(MODULE.ELF_HASH, identity["elf_keccak256"])
         self.assertEqual(MODULE.ELF_SHA256, identity["elf_sha256"])
+
+    def test_metric_guest_and_host_builds_remain_separate(self) -> None:
+        helper = (MODULE.ROOT / "scripts/build_open_competition_v2_metric_elf.sh").read_text(
+            encoding="utf-8"
+        )
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cargo prove build --locked", helper)
+        self.assertIn("--remap-path-prefix=$repository=/agent-bounties", helper)
+        self.assertIn('"$strip" --strip-all "$elf"', helper)
+        self.assertIn("build_open_competition_v2_metric_elf.sh", workflow)
+        self.assertIn("OPEN_COMPETITION_V2_METRIC_ELF", workflow)
+        self.assertIn("SP1_SAFE_CIRCUIT_COMMIT", workflow)
+        self.assertIn("SP1_SAFE_RUNTIME_COMMIT", workflow)
+
+    def test_workflow_sp1_pins_match_metric_release_identities(self) -> None:
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text(
+            encoding="utf-8"
+        )
+        identities = [
+            json.loads((MODULE.ROOT / path).read_text(encoding="utf-8"))
+            for path in (
+                "programs/public-vector-metric-v1/release-identity.json",
+                "programs/structured-artifact-metric-v1/release-identity.json",
+                "programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json",
+            )
+        ]
+        circuit_commits = {identity["sp1_commit"] for identity in identities}
+        runtime_commits = {identity["sp1_runtime_commit"] for identity in identities}
+        self.assertEqual(len(circuit_commits), 1)
+        self.assertEqual(len(runtime_commits), 1)
+        circuit_commit = circuit_commits.pop()
+        runtime_commit = runtime_commits.pop()
+        self.assertIn(f"SP1_SAFE_CIRCUIT_COMMIT: {circuit_commit}", workflow)
+        self.assertIn(f"SP1_SAFE_RUNTIME_COMMIT: {runtime_commit}", workflow)
 
     def test_current_manifest_fails_closed(self) -> None:
         gates = MODULE.load_gates(
@@ -169,6 +348,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             value["evidence"][name] = evidence
         path.write_text(__import__("json").dumps(value), encoding="utf-8")
         gates = MODULE.load_gates(path, self.subject_hash)
+        self.assertEqual(gates["subject_hash"], self.subject_hash)
         self.assertTrue(gates["prelaunch_complete"])
         self.assertFalse(gates["public_beta_launch_complete"])
         self.assertFalse(gates["graduation_complete"])
@@ -220,6 +400,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
             MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
         ):
             runtime = MODULE.runtime_manifest(bundle, 10)
         self.assertTrue(runtime["proof_broker_enabled"])
@@ -312,6 +494,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
             MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
         ):
             self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
             self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])

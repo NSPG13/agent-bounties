@@ -176,6 +176,7 @@
     by("[data-created-address]").textContent = plan.predicted_bounty_contract;
     by("[data-created-link]").href = competitionUrl;
     by("[data-created-events]").href = eventsUrl;
+    by("[data-created-feedback]").href = `feedback.html?opportunity=${encodeURIComponent(`open-competition:${NETWORK}:${plan.bounty_id}`)}&stage=posting`;
     by("[data-created-competition]").hidden = false;
     output("Canonical creation, funding, and competition-open events confirmed. The competition is now public and ready for eligible entries.", "ready");
   }

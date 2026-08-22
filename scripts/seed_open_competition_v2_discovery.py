@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from eth_account import Account
-from eth_utils import keccak
+from eth_utils import keccak, to_checksum_address
 
 from _shared.evm import address_word
 from _shared.rpc import rpc
@@ -66,7 +66,7 @@ def validate_manifest(value: dict[str, Any]) -> dict[str, int]:
     minimum_net = int(economics.get("minimum_net_prize_base_units", 0))
     net = solver - proof - relay
     require(solver == 3_000_000, "seed solver reward must be exactly 3 USDC")
-    require(keeper == 50_000 and keeper <= solver // 20, "seed keeper reward is invalid")
+    require(keeper == 40_000 and keeper <= solver // 20, "seed keeper reward is invalid")
     require(proof == 100_000 and relay == 10_000, "seed hosted cost assumptions drifted")
     require(net >= minimum_net and net > 2_000_000, "seed net prize must exceed 2 USDC")
     require(value.get("winner_mode") == "first_proven", "seed winner mode must be first_proven")
@@ -162,10 +162,11 @@ class SignedRpc:
 
     def send_intent(self, intent: dict[str, Any]) -> dict[str, Any]:
         require(intent.get("from", "").lower() == self.signer.address.lower(), "wallet call sender mismatch")
-        to = intent.get("to", "")
+        target = intent.get("to", "")
         data = intent.get("data", "")
         value = int(intent.get("value_wei", 0))
-        require(ADDRESS.fullmatch(to) is not None, "wallet call target is invalid")
+        require(ADDRESS.fullmatch(target) is not None, "wallet call target is invalid")
+        to = to_checksum_address(target)
         require(isinstance(data, str) and data.startswith("0x") and len(data) % 2 == 0, "wallet call data is invalid")
         nonce = int(rpc(self.url, "eth_getTransactionCount", [self.signer.address, "pending"]), 16)
         latest = rpc(self.url, "eth_getBlockByNumber", ["latest", False])
@@ -407,6 +408,26 @@ After earning, share the canonical proof, tell your human or operator, star the 
 """
 
 
+def wallet_call_phases(
+    prepared: list[dict[str, Any]], factory_contract: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    approvals: list[dict[str, Any]] = []
+    creations: list[dict[str, Any]] = []
+    for item in prepared:
+        if item["exists"]:
+            continue
+        calls = item["plan"].get("wallet_calls", [])
+        require(len(calls) == 2, f"{item['task']['seed_id']} must use exact approve and create calls")
+        require(calls[0].get("to", "").lower() == USDC, "approval target is not Base USDC")
+        require(
+            calls[1].get("to", "").lower() == factory_contract.lower(),
+            "creation target is not the canonical factory",
+        )
+        approvals.append(calls[0])
+        creations.append(calls[1])
+    return approvals, creations
+
+
 def seed(
     *, manifest: dict[str, Any], api: str, rpc_url: str, private_key: str, issue_output_dir: Path
 ) -> dict[str, Any]:
@@ -461,16 +482,12 @@ def seed(
     require(balance_of(rpc_url, client.signer.address) >= missing_funding, f"deployer needs {missing_funding} USDC base units for missing seed competitions")
     require(int(rpc(rpc_url, "eth_getBalance", [client.signer.address, "latest"]), 16) >= 100_000_000_000_000, "deployer Base ETH reserve is below 0.0001 ETH")
 
-    receipts: list[dict[str, Any]] = []
-    for item in prepared:
-        if item["exists"]:
-            continue
-        calls = item["plan"].get("wallet_calls", [])
-        require(len(calls) == 2, f"{item['task']['seed_id']} must use exact approve and create calls")
-        require(calls[0].get("to", "").lower() == USDC, "approval target is not Base USDC")
-        require(calls[1].get("to", "").lower() == release["factory_contract"].lower(), "creation target is not the canonical factory")
-        for call in calls:
-            receipts.append(client.send_intent(call))
+    approval_calls, creation_calls = wallet_call_phases(prepared, release["factory_contract"])
+    receipts = [client.send_intent(call) for call in approval_calls]
+    if receipts:
+        highest_approval_block = max(int(receipt["blockNumber"], 16) for receipt in receipts)
+        client.wait_safe(highest_approval_block)
+    receipts.extend(client.send_intent(call) for call in creation_calls)
 
     receipt_block = max([int(receipt["blockNumber"], 16) for receipt in receipts] or [deployment_block])
     safe = client.wait_safe(receipt_block)

@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  CANONICAL_GMV_PROFILE,
   collectInventory,
   githubIssueNumberFromSourceUrl,
   keccak256Hex,
@@ -12,6 +13,7 @@ import {
   SUPPORTED_REGRESSION_QUORUM,
   verifyClaimableItem,
   verifyDirectChainInventory,
+  verifyOpenCompetitionV2Inventory,
 } from "../skills/agent-bounties/scripts/check-in.mjs";
 
 async function fixture(name) {
@@ -938,4 +940,87 @@ test("API URL rejects credentials and insecure remote HTTP", () => {
   );
   assert.throws(() => normalizeApiBaseUrl("http://api.example.test"), /HTTPS/);
   assert.equal(normalizeApiBaseUrl("http://127.0.0.1:8080/"), "http://127.0.0.1:8080");
+});
+
+test("Beta3 inventory requires current safe-block agreement and positive hosted net reward", () => {
+  const hash = (digit) => `0x${digit.repeat(64)}`;
+  const program = {
+    profile_id: "public-vector-metric-v1",
+    classification: "reviewed",
+    program_vkey: hash("1"),
+    source_hash: hash("2"),
+    elf_hash: hash("3"),
+    journal_schema_hash: hash("4"),
+    metric_program_hash: hash("5"),
+    review_evidence_hash: hash("6"),
+  };
+  const release = {
+    status: 200,
+    body: {
+      activation_state: "public_beta",
+      release: {
+        protocol_version: "agent-bounties/open-competition-v2-beta3",
+        network: "base-mainnet",
+        factory_contract: "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+        release_hash: hash("a"),
+        public_creation_enabled: true,
+        proof_broker_enabled: true,
+        metric_programs: [program, CANONICAL_GMV_PROFILE],
+      },
+      indexer_agreement: {
+        agrees: true,
+        common_safe_block: 100,
+        observed_at: new Date().toISOString(),
+      },
+    },
+  };
+  const projection = {
+    state: "active",
+    bounty_id: hash("7"),
+    competition: "0x1111111111111111111111111111111111111111",
+    solver_reward: "3000000",
+    keeper_reward: "40000",
+    funded_amount: "3040000",
+    proof_deadline: String(Math.floor(Date.now() / 1000) + 3600),
+    last_block: 99,
+    winner_mode: "first_proven",
+    proof_system: "groth16",
+    accepted_entries: 0,
+    ...program,
+  };
+  const inventory = {
+    status: 200,
+    body: {
+      schema_version: "agent-bounties/open-competition-v2-inventory-v1",
+      protocol_version: release.body.release.protocol_version,
+      network: "base-mainnet",
+      factory_contract: release.body.release.factory_contract,
+      competitions: [{
+        record: { projection, safe_block_number: 100 },
+        earning_estimate: { hosted_net_prize_if_win: "2890000" },
+      }],
+    },
+  };
+
+  const verified = verifyOpenCompetitionV2Inventory(
+    release,
+    inventory,
+    "https://api.example.test",
+  );
+  assert.equal(verified.status, "verified");
+  assert.equal(verified.observedSafeBlock, 100);
+  assert.equal(verified.releaseHash, hash("a"));
+  assert.deepEqual(verified.gmvProfile, CANONICAL_GMV_PROFILE);
+  assert.equal(verified.verified.length, 1);
+  assert.equal(verified.verified[0].hosted_net_prize_if_win_minor, 2_890_000);
+
+  const unsafe = structuredClone(inventory);
+  unsafe.body.competitions[0].record.projection.last_block = 101;
+  const rejected = verifyOpenCompetitionV2Inventory(
+    release,
+    unsafe,
+    "https://api.example.test",
+  );
+  assert.equal(rejected.status, "verification_failed");
+  assert.deepEqual(rejected.verified, []);
 });

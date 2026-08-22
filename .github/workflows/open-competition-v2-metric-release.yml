@@ -11,7 +11,9 @@ on:
       - "crates/competition-metric-core/**"
       - "programs/public-vector-metric-v1/**"
       - "programs/structured-artifact-metric-v1/**"
+      - "programs/forward-canonical-gmv-attribution-metric-v2/**"
       - "scripts/verify-open-competition-v2-metric-release.py"
+      - "scripts/build_open_competition_v2_metric_elf.sh"
       - "scripts/verify_sp1_patched_graph.py"
 
 permissions:
@@ -29,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         builder: [a, b]
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: ./.github/actions/setup-rust
@@ -54,10 +56,14 @@ jobs:
           python ../../scripts/verify_sp1_patched_graph.py
           {
             cargo prove --version
+            elf_dir="$GITHUB_WORKSPACE/target/metric-elf-${{ matrix.profile }}-${{ matrix.builder }}"
+            bash "$GITHUB_WORKSPACE/scripts/build_open_competition_v2_metric_elf.sh" \
+              "${{ matrix.profile }}" "$elf_dir"
+            export OPEN_COMPETITION_V2_METRIC_ELF="$elf_dir/${{ matrix.profile }}-program"
             cargo run --locked --release -p ${{ matrix.profile }}-script -- \
               fixtures/golden-v1.json execute
           } | tee "evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: metric-evidence-${{ matrix.profile }}-${{ matrix.builder }}
           path: programs/${{ matrix.profile }}/evidence-${{ matrix.profile }}-${{ matrix.builder }}.jsonl
@@ -72,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -100,11 +106,21 @@ jobs:
               --journal-schema-hash 0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d
               --metric-program-hash 0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9
             )
+          elif [[ "${{ matrix.profile }}" = forward-canonical-gmv-attribution-metric-v2 ]]; then
+            args+=(
+              --source-file crates/competition-metric-core/Cargo.toml
+              --source-file crates/competition-metric-core/src/lib.rs
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.toml
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.lock
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/src/main.rs
+              --journal-schema-hash 0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40
+              --metric-program-hash 0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9
+            )
           fi
           python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
       - name: Run adversarial metric corpus
         run: cargo test --locked -p competition-metric-core
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.profile }}-reviewed-release
           path: release/${{ matrix.profile }}.json

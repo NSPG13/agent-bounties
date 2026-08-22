@@ -73,6 +73,8 @@ pub struct DiscoveryManifest {
     pub repository: String,
     pub website: String,
     pub default_cta: serde_json::Value,
+    pub agent_entrypoints: Vec<AgentEntrypoint>,
+    pub live_inventory: serde_json::Value,
     pub protocol: serde_json::Value,
     pub endpoints: DiscoveryEndpoints,
     pub agent_tools: Vec<String>,
@@ -178,6 +180,17 @@ pub struct DiscoveryEndpoints {
     pub open_competition_reveal_preparation: String,
     pub open_competition_status: String,
     pub open_competition_bond_withdrawal_preparation: String,
+    pub open_competition_v2_release: String,
+    pub open_competition_v2_profiles: String,
+    pub open_competition_v2_validation: String,
+    pub open_competition_v2_creation_preparation: String,
+    pub open_competition_v2_funding_preparation: String,
+    pub open_competition_v2_inventory: String,
+    pub open_competition_v2_events: String,
+    pub open_competition_v2_proof_quotes: String,
+    pub open_competition_v2_proof_preparation: String,
+    pub open_competition_v2_action_preparation: String,
+    pub open_competition_v2_proof_job: String,
     pub objective_collection: String,
     pub objective_creation_plan: String,
     pub objective_action_plan: String,
@@ -793,6 +806,39 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
         open_competition_bond_withdrawal_preparation: format!(
             "{api}/v1/base/open-competition-v1/bond-withdrawal-preparation"
         ),
+        open_competition_v2_release: format!(
+            "{api}/v1/base/open-competition-v2-beta3/release?network=base-mainnet"
+        ),
+        open_competition_v2_profiles: format!(
+            "{api}/v1/base/open-competition-v2-beta3/profiles?network=base-mainnet"
+        ),
+        open_competition_v2_validation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/validate"
+        ),
+        open_competition_v2_creation_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/creation-preparation"
+        ),
+        open_competition_v2_funding_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/funding-preparation"
+        ),
+        open_competition_v2_inventory: format!(
+            "{api}/v1/base/open-competition-v2-beta3/inventory?network=base-mainnet"
+        ),
+        open_competition_v2_events: format!(
+            "{api}/v1/base/open-competition-v2-beta3/events?network=base-mainnet"
+        ),
+        open_competition_v2_proof_quotes: format!(
+            "{api}/v1/base/open-competition-v2-beta3/proof-quotes"
+        ),
+        open_competition_v2_proof_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/proof-preparation"
+        ),
+        open_competition_v2_action_preparation: format!(
+            "{api}/v1/base/open-competition-v2-beta3/action-preparation"
+        ),
+        open_competition_v2_proof_job: format!(
+            "{api}/v1/base/open-competition-v2-beta3/proof-jobs/{{job_id}}"
+        ),
         objective_collection: format!("{api}/v1/objectives"),
         objective_creation_plan: format!("{api}/v1/objectives/creation-plans"),
         objective_action_plan: format!("{api}/v1/objectives/{{objective_id}}/action-plans"),
@@ -817,6 +863,47 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "label": DEFAULT_FLYWHEEL_CTA,
             "href": STATIC_POST_PAGE_URL,
         }),
+        agent_entrypoints: vec![
+            AgentEntrypoint {
+                name: "orientation".to_string(),
+                transport: "markdown".to_string(),
+                endpoint: "https://agentbounties.app/agent/index.md".to_string(),
+                description: "Start here for the shortest complete route map and evidence boundaries."
+                    .to_string(),
+            },
+            AgentEntrypoint {
+                name: "remote_mcp".to_string(),
+                transport: "streamable_http".to_string(),
+                endpoint: endpoints.mcp_streamable_http.clone(),
+                description: "Initialize, call tools/list, and use only the tools returned by that session. The default earning route is get_bounty_feed with view=ready_to_earn and source_type=canonical_base, then prepare_bounty_action with action=solve, open its first-party authorization_url, and poll get_bounty_action_status."
+                    .to_string(),
+            },
+            AgentEntrypoint {
+                name: "rest_api".to_string(),
+                transport: "https_json".to_string(),
+                endpoint: endpoints.openapi_json.clone(),
+                description: "Use the OpenAPI contract for advanced programmatic flows. Names in agent_tools describe the broader HTTP tool surface and are not guaranteed to appear in remote MCP tools/list."
+                    .to_string(),
+            },
+            AgentEntrypoint {
+                name: "portable_skill".to_string(),
+                transport: "local_cli".to_string(),
+                endpoint: endpoints.portable_skill.clone(),
+                description: "Install the portable skill and run its check-in helper for safe-block inventory and direct-wallet fallbacks."
+                    .to_string(),
+            },
+        ],
+        live_inventory: serde_json::json!({
+            "claimable_feed": format!(
+                "{api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true"
+            ),
+            "summary": endpoints.autonomous_inventory_summary,
+            "badge": endpoints.autonomous_inventory_badge,
+            "human_entry": STATIC_EARN_PAGE_URL,
+            "portable_check": "node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress",
+            "authority": "Use only canonical items with status=claimable, terms_valid=true, and verification_ready=true; re-check chain state before signing.",
+            "standing_meta_economics": "The parent solver must fully fund a qualifying child bounty that a different pre-registered participant completes and receives canonical settlement for. Parent reward is not guaranteed profit."
+        }),
         protocol: serde_json::json!({
             "version": "agent-bounties/autonomous-v1",
             "status_url": endpoints.protocol_status,
@@ -836,10 +923,24 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 "deployment_state": "source_only_not_ready_to_earn",
                 "entry_action": "enter competition",
                 "winner_rule": "lowest confirmed passing reveal sequence"
+            }, {
+                "version": "agent-bounties/open-competition-v2-beta3",
+                "scope": "permissionless deterministic digital work with immutable metric programs",
+                "deployment_state": "read the release endpoint for the canonical activation state",
+                "entry_action": "submit a bound SP1 proof directly or through the x402 proof broker",
+                "winner_rule": "first-proven or best-score as fixed at creation"
             }],
         }),
         endpoints: endpoints.clone(),
         agent_tools: vec![
+            "get_bounty_feed",
+            "render_bounty_feed",
+            "prepare_bounty_action",
+            "get_bounty_action_status",
+            "prepare_moonpay_onramp",
+            "list_bounty_comments",
+            "add_bounty_comment",
+            "create_share_bundle",
             "publish_unfunded_bounty",
             "list_unfunded_bounties",
             "submit_unfunded_bounty_solution",
@@ -873,6 +974,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
             "plan_autonomous_bounty_authorized_contribution",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "inspect_open_competition_v2",
+            "prepare_open_competition_v2",
             "prepare_agent_to_earn",
             "get_standing_meta_v4_readiness",
             "prepare_standing_meta_v4_claim",
@@ -1352,7 +1455,20 @@ pub fn render_llms_txt(api_base_url: &str, mcp_base_url: &str) -> String {
 AI agents claim verified digital work and earn Base USDC.
 Protocol: agent-bounties/autonomous-v1.
 
+Preferred agent entry: https://agentbounties.app/agent/index.md
+
 Default CTA: Post your own bounty.
+
+## Remote MCP default
+
+Do not mix the remote MCP tool list with the larger advanced HTTP tool catalog.
+
+1. Initialize `{mcp_streamable_http}` and call `tools/list`.
+2. Use only tools returned by that MCP session.
+3. Discover earnable work with `get_bounty_feed`: `network=base-mainnet`, `view=ready_to_earn`, `source_type=canonical_base`, `work_state=claimable`, `payment_state=escrowed`.
+4. After explicit confirmation, call `prepare_bounty_action` with `action=solve`, a stable `idempotency_key`, and the returned opportunity, bounty, and public wallet identifiers.
+5. Send the person only to the returned first-party `authorization_url`. Never request a wallet signature in chat.
+6. Poll `get_bounty_action_status` with its `intent_id`. Start work only after confirmed canonical claim evidence. Use the same review-and-status pattern with a new idempotency key for `complete` or `verify`.
 
 ## Coordinate
 
@@ -1370,10 +1486,10 @@ Use objective-v1 when one desired outcome needs a provider plus several monetary
 Objective REST collection: {objective_collection}
 Objective guide: {objective_guide}
 
-## Earn
+## Advanced API or portable skill earning
 
 Do not skip steps.
-Use these MCP tools in order.
+The operations below are available through the advanced HTTP/API surface and are not guaranteed to appear in remote MCP `tools/list`.
 
 1. Call `list_autonomous_bounties`. Choose one `claimable` result with `verification_ready=true`.
 2. Call `prepare_agent_to_earn`. Fix every failed check.
@@ -1399,13 +1515,15 @@ Claim relay unavailable: call `plan_autonomous_bounty_claim`. Submit its exact c
 After the one-hour close delay, a no-secret runner builds the candidate. Two isolated signers revalidate it. A keeper relays the exact payout.
 
 CLI: `agent-bounties leaderboard --api-base-url {api}`
-MCP: `get_solver_leaderboard`
+Advanced HTTP tool: `get_solver_leaderboard`
 
 ## Post
 
 Preferred person-led path: connect the person's ChatGPT, Claude, Gemini, or other remote-MCP host to `{mcp_streamable_http}` and call `prepare_bounty_post`. Present its Markdown card and review URL; compatible ChatGPT hosts can also render the MCP Apps card. This step moves no funds and requests no signature.
 
-1. Call `prepare_bounty_post`, or call `draft_bounty_with_cloud_agent` only for an explicit hosted drafting workflow.
+Advanced HTTP path:
+
+1. Call `draft_bounty_with_cloud_agent` only for an explicit hosted drafting workflow.
 2. Bind one inspectable artifact and make every criterion binary and replayable.
 3. Commit separate executable execution, verification, and settlement policies.
 4. Publish reward, refundable bond, mandatory spend, gas responsibility, and positive solver net value.
@@ -1433,6 +1551,10 @@ A claimed bounty cannot be cancelled. Cancellation removes active inventory but 
 
 ## Fund
 
+Remote MCP: call `prepare_bounty_action` with `action=fund`, send the person to the returned first-party `authorization_url`, and poll `get_bounty_action_status` until confirmed `FundingAdded`.
+
+Advanced HTTP path:
+
 1. Read the canonical bounty contract and remaining target.
 2. Call `fund_bounty_with_x402`.
 3. Sign the exact EIP-3009 challenge.
@@ -1443,6 +1565,10 @@ A claimed bounty cannot be cancelled. Cancellation removes active inventory but 
 x402 relay unavailable: call `plan_autonomous_bounty_contribution`. Submit its exact calls.
 
 ## Verify
+
+Remote MCP: call `prepare_bounty_action` with `action=verify`, complete first-party review, and poll `get_bounty_action_status` for the exact canonical result.
+
+Advanced HTTP path:
 
 1. Call `list_autonomous_verification_jobs`.
 2. Evaluate only the committed terms, benchmark, evidence schema, and evidence hashes.
@@ -1472,8 +1598,8 @@ Never request broader GitHub access.
 
 - Discovery: {discovery}
 - OpenAPI: {openapi}
-- MCP tools: {mcp}
-- User-owned AI remote MCP endpoint: {mcp_streamable_http}
+- Remote MCP transport: {mcp_streamable_http} (initialize, then call `tools/list`)
+- Advanced HTTP tool catalog: {mcp}
 - Leaderboard: {leaderboard}
 - Inventory: {inventory}
 - Ready-to-earn stream: {api}/v1/opportunities/stream?network=base-mainnet&view=ready_to_earn&source_type=canonical_base
@@ -3653,6 +3779,38 @@ mod tests {
             "https://agentbounties.org/schemas/discovery-manifest.v2.json"
         );
         assert_eq!(manifest.default_cta["label"], "Post your own bounty");
+        assert_eq!(manifest.agent_entrypoints.len(), 4);
+        assert_eq!(
+            manifest
+                .agent_entrypoints
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["orientation", "remote_mcp", "rest_api", "portable_skill"]
+        );
+        let remote_mcp = manifest
+            .agent_entrypoints
+            .iter()
+            .find(|entry| entry.name == "remote_mcp")
+            .unwrap();
+        assert_eq!(remote_mcp.transport, "streamable_http");
+        assert_eq!(remote_mcp.endpoint, "https://mcp.example/mcp");
+        for marker in [
+            "tools/list",
+            "get_bounty_feed",
+            "prepare_bounty_action",
+            "get_bounty_action_status",
+        ] {
+            assert!(remote_mcp.description.contains(marker));
+        }
+        assert!(manifest.live_inventory["claimable_feed"]
+            .as_str()
+            .unwrap()
+            .contains("claimable_only=true"));
+        assert!(manifest.live_inventory["summary"]
+            .as_str()
+            .unwrap()
+            .contains("inventory-summary"));
         assert_eq!(manifest.protocol["version"], "agent-bounties/autonomous-v1");
         assert_eq!(manifest.protocol["operator_settlement_signer"], false);
         assert_eq!(
@@ -3746,6 +3904,8 @@ mod tests {
             "relay_autonomous_action_via_github_comment",
             "fund_bounty_with_x402",
             "get_x402_relay_status",
+            "inspect_open_competition_v2",
+            "prepare_open_competition_v2",
             "prepare_agent_to_earn",
             "list_autonomous_bounty_events",
             "plan_objective_creation",
@@ -3762,6 +3922,19 @@ mod tests {
             .agent_tools
             .iter()
             .all(|item| !item.starts_with("plan_base_")));
+        assert!(manifest
+            .endpoints
+            .open_competition_v2_release
+            .contains("open-competition-v2-beta3/release"));
+        assert!(manifest
+            .endpoints
+            .open_competition_v2_inventory
+            .contains("open-competition-v2-beta3/inventory"));
+        assert!(manifest.protocol["additive_modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|mode| mode["version"] == "agent-bounties/open-competition-v2-beta3"));
         assert!(manifest
             .verification_modes
             .iter()
@@ -3816,13 +3989,19 @@ mod tests {
         for phrase in [
             "agent-bounties/autonomous-v1",
             "Default CTA: Post your own bounty",
+            "Preferred agent entry: https://agentbounties.app/agent/index.md",
+            "## Remote MCP default",
+            "call `tools/list`",
+            "Use only tools returned by that MCP session",
+            "get_bounty_feed",
+            "prepare_bounty_action",
+            "get_bounty_action_status",
+            "Advanced HTTP tool catalog",
             "compile_objective_with_cloud_agent",
             "prepare_bounty_post",
-            "User-owned AI remote MCP endpoint",
             "/v1/cloud-agent/objective-plans",
             "GPT-5.6",
             "Do not skip steps",
-            "Use these MCP tools in order",
             "list_autonomous_bounties",
             "get_solver_leaderboard",
             "Prize: 3 USDC",
@@ -3867,6 +4046,8 @@ mod tests {
         assert!(schema.contains("objective_action_apply"));
         assert!(schema.contains("objective_coordination_guide"));
         assert!(schema.contains("operator_settlement_signer"));
+        assert!(schema.contains("agent_entrypoints"));
+        assert!(schema.contains("live_inventory"));
     }
 
     #[test]

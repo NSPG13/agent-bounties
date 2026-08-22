@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import deploy_open_competition_v2_beta3 as deploy
 
@@ -78,6 +79,41 @@ class DeploymentValidationTests(unittest.TestCase):
             value["repository_subject"]["hash"] = "0x" + "ff" * 32
             with self.assertRaisesRegex(RuntimeError, "another release"):
                 deploy.load_evidence(value, output)
+
+    def test_safe_runtime_check_uses_one_canonical_safe_block(self) -> None:
+        client = object.__new__(deploy.SignedRpc)
+        client.wait_safe = mock.Mock(return_value={"number": "0x2a"})
+        client.code_hash = mock.Mock(return_value="0xexact")
+
+        addresses = ("0x" + "12" * 20, "0x" + "34" * 20)
+        client.require_safe_code_hashes(
+            {address: "0xexact" for address in addresses}, 41
+        )
+
+        client.wait_safe.assert_called_once_with(41)
+        self.assertEqual(
+            client.code_hash.call_args_list,
+            [mock.call(address, "0x2a") for address in addresses],
+        )
+
+    @mock.patch.object(deploy.time, "sleep")
+    @mock.patch.object(deploy.time, "time", side_effect=[0, 1, 2])
+    @mock.patch.object(
+        deploy,
+        "rpc",
+        side_effect=[RuntimeError("HTTP 408"), {"number": "0x2a"}],
+    )
+    def test_safe_block_polling_recovers_from_transport_error(
+        self, rpc_call: mock.Mock, _time: mock.Mock, sleep: mock.Mock
+    ) -> None:
+        client = object.__new__(deploy.SignedRpc)
+        client.url = "https://rpc.example"
+
+        result = client.wait_safe(41, timeout_seconds=10)
+
+        self.assertEqual(result["number"], "0x2a")
+        self.assertEqual(rpc_call.call_count, 2)
+        sleep.assert_called_once_with(5)
 
 
 if __name__ == "__main__":

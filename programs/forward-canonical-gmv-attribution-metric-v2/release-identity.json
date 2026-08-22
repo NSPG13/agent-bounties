@@ -1,0 +1,14 @@
+{
+  "schema": "agent-bounties/open-competition-v2-metric-release-identity-v1",
+  "profile_id": "forward-canonical-gmv-attribution-metric-v2",
+  "status": "reproduced_beta3",
+  "rust_version": "1.96.1",
+  "sp1_guest_rust_version": "1.94.0-dev",
+  "sp1_version": "6.4.0-agent-bounties-sp1-safe-v5",
+  "sp1_commit": "f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d",
+  "sp1_runtime_commit": "c2d292c260333a9e4f166cd1435e8ef4897c8b43",
+  "program_vkey": "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+  "source_hash": "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+  "elf_keccak256": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
+  "elf_sha256": "b7337f9a803f4284a456ff7604ccc4769233f31904a50ac185e54dedee70549b"
+}

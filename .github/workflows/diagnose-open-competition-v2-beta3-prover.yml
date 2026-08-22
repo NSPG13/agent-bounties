@@ -1,0 +1,44 @@
+name: Diagnose Open Competition V2 Beta3 prover
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider_job_id:
+        description: "Persisted provider job to replay"
+        required: true
+        default: beta3-a6d75c2a19ded9fb0788d6418db711374780fe83452c70e7db37b989194cb0b5
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+
+      - name: Verify diagnostic code
+        run: |
+          python3 scripts/test_diagnose_open_competition_v2_beta3_prover.py -v
+          python3 -m py_compile scripts/diagnose_open_competition_v2_beta3_prover.py
+
+      - name: Replay persisted request with redacted diagnostics
+        env:
+          PROVIDER_JOB_ID: ${{ inputs.provider_job_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          sudo bash -c "set -a; source /etc/agent-bounties/prover.env; set +a; python3 '$GITHUB_WORKSPACE/scripts/diagnose_open_competition_v2_beta3_prover.py' --provider-job-id '$PROVIDER_JOB_ID' --output /tmp/beta3-prover-diagnostic.json"
+          sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 /tmp/beta3-prover-diagnostic.json target/beta3-prover-diagnostic.json
+          jq '{passed, exit_code, timed_out, elapsed_seconds, stderr_tail}' target/beta3-prover-diagnostic.json
+
+      - name: Upload redacted diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: beta3-prover-diagnostic-${{ github.run_id }}
+          path: target/beta3-prover-diagnostic.json
+          if-no-files-found: error
+          retention-days: 14

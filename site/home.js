@@ -2,7 +2,6 @@
   const MARKET_REFRESH_MS = 15_000;
   const MARKET_STREAM_STALE_MS = 35_000;
   const LEADERBOARD_REFRESH_MS = 60_000;
-  const MARKET_WINDOW_HOURS = 720;
   const marketState = {
     evidenceGeneratedAt: null,
     fingerprint: null,
@@ -10,7 +9,7 @@
     lastReceivedAt: null,
     projection: null,
     readyProjection: null,
-    claim: null,
+    github: null,
     metrics: null,
     protocol: null,
     protocolPromise: null,
@@ -81,7 +80,33 @@
     return `Payment escrowed · ${formatAmount(item.reward)} reward`;
   }
 
+  function isOpenCompetition(item) {
+    return ["first_valid_submission", "first_proven", "best_score"]
+      .includes(item.competition_mode);
+  }
+
+  function isBytes32(value) {
+    return /^0x[0-9a-f]{64}$/i.test(String(value || ""));
+  }
+
+  function hasReadyEvidence(item) {
+    const evidence = item.evidence_requirements || {};
+    if (evidence.protocol_version === "agent-bounties/open-competition-v2-beta3") {
+      return item.source_status === "active"
+        && ["first_proven", "best_score"].includes(item.competition_mode)
+        && item.next_action?.action === "quote_open_competition_v2_proof"
+        && isBytes32(evidence.execution_policy_hash)
+        && isBytes32(evidence.verification_policy_hash)
+        && isBytes32(evidence.settlement_policy_hash)
+        && isBytes32(evidence.program_vkey);
+    }
+    return item.source_status === "claimable" && isBytes32(item.terms_hash);
+  }
+
   function actionHref(item) {
+    if (["first_proven", "best_score"].includes(item.competition_mode)) {
+      return safePublicUrl(item.source_url) || safePublicUrl(item.public_url);
+    }
     if (item.competition_mode === "first_valid_submission" && item.source_type === "canonical_base") {
       const profile = item.verifier_profile_id
         ? `&verifierProfileId=${encodeURIComponent(item.verifier_profile_id)}`
@@ -98,6 +123,10 @@
   }
 
   function actionLabel(item) {
+    if (["first_proven", "best_score"].includes(item.competition_mode)
+      && item.work_state === "claimable") {
+      return "Open earning instructions";
+    }
     if (item.competition_mode === "first_valid_submission" && item.work_state === "claimable") {
       return "Enter competition";
     }
@@ -146,7 +175,7 @@
 
     const method = document.createElement("p");
     method.className = "fine opportunity-method";
-    const openCompetition = item.competition_mode === "first_valid_submission";
+    const openCompetition = isOpenCompetition(item);
     const competitionMode = openCompetition ? "Open competition" : "Exclusive claim";
     method.textContent = `${competitionMode} · ${item.verification_method} · next: ${item.next_action.action}`;
 
@@ -158,12 +187,14 @@
       const entryBond = item.entry_bond ? formatAmount(item.entry_bond) : formatAmount(item.bond);
       const entryCount = Number(item.entry_count || 0);
       const maxEntries = Number(item.max_entries || 0);
-      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "bounded entry capacity";
+      const capacity = maxEntries > 0 ? `${entryCount}/${maxEntries} entries` : "unlimited entries";
       const deadline = item.competition_ends_at
         ? new Date(Number(item.competition_ends_at) * 1000).toLocaleString()
         : "published competition deadline";
       const profile = item.verifier_profile_name || item.verifier_profile_id || "approved deterministic verifier";
-      competition.textContent = `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
+      competition.textContent = ["first_proven", "best_score"].includes(item.competition_mode)
+        ? `${item.competition_mode === "best_score" ? "Best qualifying proof wins" : "First qualifying proof wins"} · no entry bond · ${capacity} · proof deadline ${deadline} · ${profile}. Winning is not guaranteed.`
+        : `First valid confirmed reveal wins · ${entryBond} entry bond · ${capacity} · deadline ${deadline} · ${profile}. One wallet does not prove one independent person.`;
       article.append(competition);
     }
 
@@ -331,12 +362,11 @@
 
   function isReadyToEarn(item) {
     return item.source_type === "canonical_base"
-      && item.source_status === "claimable"
       && item.work_state === "claimable"
       && item.payment_state === "escrowed"
       && item.payment_committed === true
       && item.verification_ready === true
-      && Boolean(item.terms_hash)
+      && hasReadyEvidence(item)
       && amountValue(item.funded_amount) >= amountValue(item.funding_target)
       && amountValue(item.reward) > 0;
   }
@@ -530,7 +560,7 @@
     return marketState.protocolPromise;
   }
 
-  function renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics) {
+  function renderMarketSnapshot(protocol, projection, readyProjection, metrics, github) {
     const container = document.getElementById("home-live-inventory");
     const heroSummary = document.querySelector("[data-home-inventory-summary]");
     const detail = document.querySelector("[data-home-inventory-detail]");
@@ -542,7 +572,7 @@
       || readyItems.some((item) => !isReadyToEarn(item))) {
       throw new Error("Live earning inventory failed its claimability gate.");
     }
-    const referenceAt = new Date(metrics.generated_at || claim.generated_at || projection.generated_at);
+    const referenceAt = new Date(metrics.generated_at || projection.generated_at);
     const oneWeekAgo = referenceAt.getTime() - (7 * 24 * 60 * 60 * 1_000);
     const inProgressItems = items.filter((item) => item.source_type === "canonical_base"
       && (item.work_state === "in_progress" || item.work_state === "submitted"));
@@ -561,8 +591,6 @@
         ? total + (Number(day.settled_rounds) || 0)
         : total;
     }, 0);
-    const activeContributors = Number(claim?.canonical_outcomes?.unique_paid_solver_wallets) || 0;
-
     setMetric("ready", readyItems.length);
     setMetricText(
       "[data-adoption-ready-weekly]",
@@ -571,7 +599,7 @@
     setMetric("available", transactionVolumeUsdc, 2);
     setMetric("settled", settlements);
     setMetricText("[data-adoption-settled-weekly]", `+${formatMetric(solvedThisWeek, 0)} this week`);
-    setMetric("paid", activeContributors);
+    window.AgentBountiesHomeMetrics?.render(document, metrics, github);
     setMetricText("[data-board-active]", formatMetric(readyItems.length, 0));
     renderOpportunityBoard(container, readyItems);
 
@@ -609,31 +637,33 @@
     try {
       const protocol = await resolveProtocol();
       const api = protocol.api_base_url.replace(/\/$/, "");
-      const [projectionResponse, readyResponse, claimResponse, metricsResponse] = await Promise.all([
+      const [projectionResponse, readyResponse, metricsResponse, githubResponse] = await Promise.all([
         fetch(`${api}/v1/opportunities?network=base-mainnet&limit=300`, { cache: "no-store" }),
         fetch(`${api}/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`, {
           cache: "no-store",
           headers: { "Cache-Control": "no-cache" },
         }),
-        fetch(`${api}/v1/base/autonomous-bounties/claim-funnel?window_hours=${MARKET_WINDOW_HOURS}`, { cache: "no-store" }),
         fetch(`${api}/v1/metrics/platform?period=lifetime`, { cache: "no-store" }),
+        fetch(`generated/github-participation.json?v=${Date.now()}`, { cache: "no-store" }).catch(() => null),
       ]);
-      if (!projectionResponse.ok || !readyResponse.ok || !claimResponse.ok || !metricsResponse.ok) {
+      if (!projectionResponse.ok || !readyResponse.ok || !metricsResponse.ok) {
         throw new Error("Live market evidence is unavailable.");
       }
-      const [projection, readyProjection, claim, metrics] = await Promise.all([
+      const [projection, readyProjection, metrics] = await Promise.all([
         projectionResponse.json(),
         readyResponse.json(),
-        claimResponse.json(),
         metricsResponse.json(),
       ]);
+      const github = githubResponse?.ok
+        ? await githubResponse.json().catch(() => null)
+        : null;
       const firstLiveMarketView = !marketState.rendered;
       marketState.protocol = protocol;
       marketState.projection = projection;
       marketState.readyProjection = readyProjection;
-      marketState.claim = claim;
+      marketState.github = github;
       marketState.metrics = metrics;
-      renderMarketSnapshot(protocol, projection, readyProjection, claim, metrics);
+      renderMarketSnapshot(protocol, projection, readyProjection, metrics, github);
       marketState.lastReceivedAt = Date.now();
       marketState.rendered = true;
       if (firstLiveMarketView) track("market_view");
@@ -665,7 +695,7 @@
         const readyProjection = JSON.parse(event.data);
         marketState.streamConnected = true;
         marketState.readyProjection = readyProjection;
-        if (!marketState.projection || !marketState.claim || !marketState.metrics) {
+        if (!marketState.projection || !marketState.metrics) {
           refreshMarket();
           return;
         }
@@ -673,8 +703,8 @@
           protocol,
           marketState.projection,
           readyProjection,
-          marketState.claim,
           marketState.metrics,
+          marketState.github,
         );
         marketState.lastReceivedAt = Date.now();
         marketState.rendered = true;

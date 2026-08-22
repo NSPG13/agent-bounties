@@ -10,7 +10,9 @@ import json
 import os
 from pathlib import Path
 import re
+import urllib.error
 import urllib.parse
+import urllib.request
 from typing import Any
 
 from eth_account import Account
@@ -20,6 +22,8 @@ import render_deploy_recovery as render
 
 V2_GROUP = "agent-bounties-v2-beta3"
 RELAYER_GROUP = "agent-bounties-x402-relayer"
+BASE_GROUP = "agent-bounties-base"
+RPC_LOG_BATCH_SIZE = 50
 V2_SERVICES = (
     render.ServiceSpec("agent-bounties-api", "web_service", "https://api.agentbounties.app/health"),
     render.ServiceSpec("agent-bounties-mcp", "web_service", "https://mcp.agentbounties.app/health"),
@@ -32,6 +36,46 @@ RELAYER_SERVICE_NAMES = {
     "agent-bounties-api",
     "agent-bounties-open-competition-v2-beta3-keeper",
     "agent-bounties-open-competition-v2-beta3-broker",
+}
+WORKER_ENVIRONMENT = {
+    "agent-bounties-open-competition-v2-beta3-indexer": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-beta3",
+        "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
+        "OPEN_COMPETITION_V2_INDEXER_POLL_SECONDS": "15",
+        "OPEN_COMPETITION_V2_INDEXER_CONFIRMATIONS": "2",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": str(RPC_LOG_BATCH_SIZE),
+        "BASE_INDEXER_RETRY_INITIAL_SECONDS": "5",
+        "BASE_INDEXER_RETRY_MAX_SECONDS": "120",
+        "BASE_INDEXER_EXIT_AFTER_FAILURES": "8",
+    },
+    "agent-bounties-open-competition-v2-beta3-shadow": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-shadow",
+        "OPEN_COMPETITION_V2_INDEXER_NETWORK": "base-mainnet",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_BLOCKS_PER_QUERY": str(RPC_LOG_BATCH_SIZE),
+        "OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS": "30",
+        "OPEN_COMPETITION_V2_SHADOW_REQUEST_DELAY_MS": "250",
+    },
+    "agent-bounties-open-competition-v2-beta3-keeper": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-keeper",
+        "OPEN_COMPETITION_V2_KEEPER_NETWORK": "base-mainnet",
+        "OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS": "5",
+    },
+    "agent-bounties-open-competition-v2-beta3-broker": {
+        "APP_PACKAGE": "worker",
+        "APP_BINARY": "worker",
+        "RUST_LOG": "info",
+        "BASE_INDEXER_PROTOCOL": "open-competition-v2-broker",
+        "OPEN_COMPETITION_V2_BROKER_POLL_SECONDS": "5",
+    },
 }
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -48,6 +92,115 @@ def utc_now() -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise Beta3RenderError(message)
+
+
+def rpc_call(
+    url: str, method: str, params: list[Any], request_id: int, *, role: str
+) -> Any:
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+        separators=(",", ":"),
+    ).encode()
+    request = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "content-type": "application/json",
+            "user-agent": "agent-bounties-beta3-rpc-preflight/1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            value = json.loads(response.read())
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        raise Beta3RenderError(
+            f"{role} {method} RPC preflight failed: {type(error).__name__}"
+        ) from None
+    require(isinstance(value, dict), f"{role} {method} RPC response must be an object")
+    error = value.get("error")
+    if error is not None:
+        code = error.get("code") if isinstance(error, dict) else "unknown"
+        raise Beta3RenderError(
+            f"{role} {method} RPC preflight returned error code={code}"
+        )
+    require("result" in value, f"{role} {method} RPC preflight omitted result")
+    return value["result"]
+
+
+def preflight_rpc_pair(
+    runtime: dict[str, Any], primary_rpc_url: str, shadow_rpc_url: str
+) -> dict[str, Any]:
+    deployment_block = runtime["deployment_block"]
+    query_end = deployment_block + RPC_LOG_BATCH_SIZE - 1
+    factory = runtime["factory_contract"].lower()
+    safe_blocks: list[dict[str, Any]] = []
+    for offset, (role, url) in enumerate(
+        (("primary", primary_rpc_url), ("shadow", shadow_rpc_url))
+    ):
+        chain_id = rpc_call(
+            url, "eth_chainId", [], 910_000 + offset * 10, role=role
+        )
+        require(chain_id == "0x2105", "RPC preflight returned a non-Base-mainnet chain id")
+        logs = rpc_call(
+            url,
+            "eth_getLogs",
+            [
+                {
+                    "address": factory,
+                    "fromBlock": hex(deployment_block),
+                    "toBlock": hex(query_end),
+                }
+            ],
+            910_001 + offset * 10,
+            role=role,
+        )
+        require(isinstance(logs, list), "RPC preflight logs result must be a list")
+        safe = rpc_call(
+            url,
+            "eth_getBlockByNumber",
+            ["safe", False],
+            910_002 + offset * 10,
+            role=role,
+        )
+        require(isinstance(safe, dict), "RPC preflight safe block must be an object")
+        try:
+            number = int(str(safe["number"]), 16)
+        except (KeyError, TypeError, ValueError):
+            raise Beta3RenderError("RPC preflight safe block number is invalid") from None
+        require(number >= deployment_block, "RPC safe head predates the Beta3 deployment")
+        safe_blocks.append({"number": number, "hash": str(safe.get("hash", "")).lower()})
+
+    common = min(item["number"] for item in safe_blocks)
+    common_hashes = []
+    for offset, (role, url) in enumerate(
+        (("primary", primary_rpc_url), ("shadow", shadow_rpc_url))
+    ):
+        block = rpc_call(
+            url,
+            "eth_getBlockByNumber",
+            [hex(common), False],
+            910_003 + offset * 10,
+            role=role,
+        )
+        require(isinstance(block, dict), "RPC preflight common block must be an object")
+        common_hashes.append(str(block.get("hash", "")).lower())
+    require(
+        len(set(common_hashes)) == 1 and HASH.fullmatch(common_hashes[0]) is not None,
+        "primary and shadow RPCs disagree on the common safe block",
+    )
+    max_lag = max(item["number"] - common for item in safe_blocks)
+    require(max_lag <= 64, "primary and shadow RPC safe heads differ by more than 64 blocks")
+    return {
+        "passed": True,
+        "chain_id": 8453,
+        "factory_contract": factory,
+        "archive_query_from_block": deployment_block,
+        "archive_query_to_block": query_end,
+        "common_safe_block": common,
+        "common_safe_block_hash": common_hashes[0],
+        "max_safe_head_lag_blocks": max_lag,
+        "endpoints_redacted": True,
+    }
 
 
 def validated_runtime(path: Path) -> dict[str, Any]:
@@ -102,6 +255,13 @@ def runtime_environment(
         "OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS": "10000",
         "OPEN_COMPETITION_V2_GROTH16_PROOF_SLA_SECONDS": "1800",
         "OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS": "1800",
+        "OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS": "120",
+        "OPEN_COMPETITION_V2_INDEXER_MAX_LAG_BLOCKS": "64",
+        "OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS": "120",
+        "OPEN_COMPETITION_V2_BROKER_LEASE_SECONDS": "180",
+        "OPEN_COMPETITION_V2_REFUND_WINDOW_SECONDS": "1800",
+        "OPEN_COMPETITION_V2_RELAYER_MAX_GAS": "8000000",
+        "OPEN_COMPETITION_V2_RELAYER_MAX_FEE_PER_GAS_WEI": "10000000000",
     }
 
 
@@ -116,6 +276,197 @@ def named_group(client: render.RenderClient, owner_id: str, name: str) -> dict[s
     group = groups[0]
     require(re.fullmatch(r"evg-[0-9a-z]+", str(group.get("id", ""))) is not None, f"{name} has an invalid id")
     return client.get_env_group(group["id"])
+
+
+def ensure_base_mainnet_transaction_rpc(
+    client: render.RenderClient, base_group: dict[str, Any], primary_rpc_url: str
+) -> dict[str, Any]:
+    require(primary_rpc_url.startswith("https://"), "Base mainnet transaction RPC must use HTTPS")
+    record = client.ensure_env_group_env_var(
+        base_group, "BASE_MAINNET_RPC_URL", primary_rpc_url
+    )
+    return {
+        "group": BASE_GROUP,
+        "key": "BASE_MAINNET_RPC_URL",
+        "changed": bool(record["changed"]),
+    }
+
+
+def ensure_v2_group(
+    client: render.RenderClient,
+    owner_id: str,
+    environment_id: str | None,
+) -> dict[str, Any]:
+    query = urllib.parse.urlencode({"name": V2_GROUP, "ownerId": owner_id, "limit": "20"})
+    matches = [
+        group
+        for group in render.unwrap_env_group_entries(
+            client._read_with_retry(f"/env-groups?{query}")
+        )
+        if group.get("name") == V2_GROUP and group.get("ownerId") == owner_id
+    ]
+    require(len(matches) <= 1, f"expected at most one Render environment group named {V2_GROUP}")
+    if not matches:
+        payload: dict[str, Any] = {
+            "name": V2_GROUP,
+            "ownerId": owner_id,
+            "envVars": [],
+            "secretFiles": [],
+            "serviceIds": [],
+        }
+        if environment_id is not None:
+            payload["environmentId"] = environment_id
+        try:
+            client._write_with_retry("POST", "/env-groups", payload)
+        except render.RenderHttpError as error:
+            if error.status != 409:
+                raise
+    group = named_group(client, owner_id, V2_GROUP)
+    require(
+        environment_id is None or group.get("environmentId") == environment_id,
+        f"{V2_GROUP} is in an unexpected project environment",
+    )
+    return group
+
+
+def ensure_group_link(
+    client: render.RenderClient,
+    group_name: str,
+    group: dict[str, Any],
+    spec: render.ServiceSpec,
+    service: dict[str, Any],
+) -> dict[str, Any]:
+    current = client.get_env_group(group["id"])
+    if not render.env_group_has_service(current, spec, service["id"]):
+        try:
+            client._write_with_retry(
+                "POST", f"/env-groups/{group['id']}/services/{service['id']}", None
+            )
+        except render.RenderHttpError as error:
+            if error.status != 409:
+                raise
+        current = client.get_env_group(group["id"])
+    require(
+        render.env_group_has_service(current, spec, service["id"]),
+        f"Render did not attach {group_name} to {spec.name}",
+    )
+    return current
+
+
+def provision_worker(
+    client: render.RenderClient,
+    spec: render.ServiceSpec,
+    reference: dict[str, Any],
+    groups: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    require(spec.name in WORKER_ENVIRONMENT, f"direct provisioning is not authorized for {spec.name}")
+    require(
+        reference.get("name") == "agent-bounties-api"
+        and reference.get("type") == "web_service"
+        and reference.get("branch") == "main"
+        and render.normalize_repo(reference.get("repo")) == render.REPOSITORY,
+        "Render provisioning reference service is invalid",
+    )
+    owner_id = render.validate_owner_id(reference.get("ownerId"))
+    environment_id = reference.get("environmentId")
+    if environment_id is not None:
+        environment_id = render.validate_environment_id(environment_id)
+    for name, group in groups.items():
+        require(group.get("ownerId") == owner_id, f"{name} is in an unexpected workspace")
+        group_environment = group.get("environmentId")
+        if group_environment is not None:
+            group_environment = render.validate_environment_id(group_environment)
+        if environment_id is None:
+            environment_id = group_environment
+        require(
+            group_environment is None or group_environment == environment_id,
+            f"{name} is in an unexpected project environment",
+        )
+    database_url = render.validate_database_url(
+        client.get_env_var(reference, "DATABASE_URL").get("value")
+    )
+    exact_environment = dict(WORKER_ENVIRONMENT[spec.name])
+    exact_environment["DATABASE_URL"] = database_url
+    payload: dict[str, Any] = {
+        "type": "background_worker",
+        "name": spec.name,
+        "ownerId": owner_id,
+        "repo": "https://github.com/NSPG13/agent-bounties",
+        "branch": "main",
+        "autoDeploy": "no",
+        "envVars": [
+            {"key": key, "value": value} for key, value in exact_environment.items()
+        ],
+        "serviceDetails": {
+            "runtime": "docker",
+            "envSpecificDetails": {
+                "dockerContext": ".",
+                "dockerfilePath": "./Dockerfile",
+            },
+            "plan": "starter",
+            "region": "oregon",
+            "maxShutdownDelaySeconds": 60,
+        },
+    }
+    if environment_id is not None:
+        payload["environmentId"] = environment_id
+    try:
+        created = render.select_service(
+            spec, [client._write_with_retry("POST", "/services", payload)]
+        )
+    except render.RenderHttpError as error:
+        if error.status != 409:
+            raise
+        created = client.resolve_service(spec)
+    require(created.get("ownerId") == owner_id, "new Render worker changed workspaces")
+    require(
+        environment_id is None or created.get("environmentId") == environment_id,
+        "new Render worker changed project environments",
+    )
+    for name, group in groups.items():
+        ensure_group_link(client, name, group, spec, created)
+    verified = client.resolve_service(spec)
+    require(verified.get("ownerId") == owner_id, "provisioned Render worker changed workspaces")
+    require(
+        environment_id is None or verified.get("environmentId") == environment_id,
+        "provisioned Render worker changed project environments",
+    )
+    for key, expected in exact_environment.items():
+        require(
+            client.get_env_var(verified, key) == {"key": key, "value": expected},
+            f"provisioned Render worker did not retain {key}",
+        )
+    return verified
+
+
+def resolve_services(client: render.RenderClient) -> dict[str, dict[str, Any]]:
+    services: dict[str, dict[str, Any]] = {}
+    missing: list[render.ServiceSpec] = []
+    for spec in V2_SERVICES:
+        try:
+            services[spec.name] = client.resolve_service(spec)
+        except render.RenderServiceMissing:
+            missing.append(spec)
+    if missing:
+        reference = services.get("agent-bounties-api")
+        require(reference is not None, "validated API reference service is unavailable")
+        owner_id = render.validate_owner_id(reference.get("ownerId"))
+        reference_environment = reference.get("environmentId")
+        if reference_environment is not None:
+            reference_environment = render.validate_environment_id(reference_environment)
+        all_groups = {
+            BASE_GROUP: named_group(client, owner_id, BASE_GROUP),
+            V2_GROUP: ensure_v2_group(client, owner_id, reference_environment),
+            RELAYER_GROUP: named_group(client, owner_id, RELAYER_GROUP),
+        }
+        for spec in missing:
+            required = {BASE_GROUP: all_groups[BASE_GROUP], V2_GROUP: all_groups[V2_GROUP]}
+            if spec.name in RELAYER_SERVICE_NAMES:
+                required[RELAYER_GROUP] = all_groups[RELAYER_GROUP]
+            services[spec.name] = provision_worker(client, spec, reference, required)
+    if missing:
+        services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
+    return services
 
 
 def deploy(
@@ -135,21 +486,31 @@ def deploy(
         == environment["OPEN_COMPETITION_V2_BROKER_PAYMENT_ADDRESS"],
         "relayer private key does not match the isolated broker address",
     )
-    services = {spec.name: client.resolve_service(spec) for spec in V2_SERVICES}
+    services = resolve_services(client)
     owner_ids = {str(service.get("ownerId")) for service in services.values()}
     require(len(owner_ids) == 1, "Beta3 services do not share one Render workspace")
     owner_id = render.validate_owner_id(owner_ids.pop())
+    base_group = named_group(client, owner_id, BASE_GROUP)
     v2_group = named_group(client, owner_id, V2_GROUP)
     relayer_group = named_group(client, owner_id, RELAYER_GROUP)
 
     for spec in V2_SERVICES:
         service = services[spec.name]
-        require(render.env_group_has_service(v2_group, spec, service["id"]), f"{V2_GROUP} is not linked to {spec.name}")
+        base_group = ensure_group_link(client, BASE_GROUP, base_group, spec, service)
+        v2_group = ensure_group_link(client, V2_GROUP, v2_group, spec, service)
         if spec.name in RELAYER_SERVICE_NAMES:
-            require(render.env_group_has_service(relayer_group, spec, service["id"]), f"{RELAYER_GROUP} is not linked to {spec.name}")
+            relayer_group = ensure_group_link(
+                client, RELAYER_GROUP, relayer_group, spec, service
+            )
         client.disable_native_auto_deploy(service)
 
-    changes = []
+    changes = [
+        ensure_base_mainnet_transaction_rpc(
+            client,
+            base_group,
+            environment["OPEN_COMPETITION_V2_INDEXER_RPC_URL"],
+        )
+    ]
     for key, value in environment.items():
         record = client.ensure_env_group_env_var(v2_group, key, value)
         changes.append({"group": V2_GROUP, "key": key, "changed": bool(record["changed"])})
@@ -229,6 +590,9 @@ def main() -> int:
         deployer_address=args.deployer_address,
         refund_reserve_min_base_units=args.refund_reserve_min_base_units,
     )
+    rpc_preflight = preflight_rpc_pair(
+        runtime, args.primary_rpc_url, args.shadow_rpc_url
+    )
     client = render.RenderClient(os.environ.get("RENDER_API_KEY", ""))
     evidence = deploy(
         client,
@@ -239,6 +603,7 @@ def main() -> int:
         timeout_seconds=args.timeout_seconds,
         poll_seconds=args.poll_seconds,
     )
+    evidence["rpc_preflight"] = rpc_preflight
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"passed": True, "output": str(args.output)}))

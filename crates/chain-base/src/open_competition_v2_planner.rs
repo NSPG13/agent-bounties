@@ -259,6 +259,7 @@ pub struct OpenCompetitionV2ActionPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenCompetitionV2ProofAuthorizationMessage {
     pub solver: String,
     pub solver_nonce: String,
@@ -268,6 +269,7 @@ pub struct OpenCompetitionV2ProofAuthorizationMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OpenCompetitionV2ProofAuthorizationTypedData {
     pub types: BTreeMap<String, Vec<Eip712TypeField>>,
     pub domain: Eip712DomainData,
@@ -1082,6 +1084,11 @@ mod tests {
         assert_eq!(plan.direct_call.function, "submitProof(bytes,bytes)");
         assert!(plan.relay_call_after_signature.is_none());
         assert_eq!(plan.relay_authorization.message.solver_nonce, "7");
+        let typed_data = serde_json::to_value(&plan.relay_authorization).unwrap();
+        assert_eq!(typed_data["primaryType"], "SubmitProof");
+        assert_eq!(typed_data["message"]["solverNonce"], "7");
+        assert!(typed_data.get("primary_type").is_none());
+        assert!(typed_data["message"].get("solver_nonce").is_none());
     }
 
     #[test]

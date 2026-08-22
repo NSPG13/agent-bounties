@@ -1,8 +1,14 @@
 # Open Competition V2 Beta3 Release
 
-Beta3 is implemented but not deployed. Public creation and hosted proving stay
-disabled until the release manifest contains evidence for every launch gate.
-A build, transaction hash, or deployment receipt does not clear a gate.
+Beta3 is deployed to Base mainnet as an opt-in public beta. On 2026-08-21, the
+runtime release endpoint reported `activation_state=public_beta`, public
+creation and hosted proving enabled, and agreeing primary/shadow safe-block
+indexers. Those conditions are runtime state, not a permanent promise: clients
+must read
+`GET /v1/base/open-competition-v2-beta3/release?network=base-mainnet` and stop
+unless the release remains public and `indexer_agreement.agrees=true`. A static
+document, build, transaction hash, or deployment receipt does not clear or
+preserve a gate.
 
 ## Proof Stack
 

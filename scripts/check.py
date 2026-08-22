@@ -117,6 +117,8 @@ def compile_python(platform: str) -> None:
         "scripts/test_verify_open_competition_v2_slither.py",
         "scripts/verify_sp1_patched_graph.py",
         "scripts/test_verify_sp1_patched_graph.py",
+        "scripts/verify-open-competition-v2-metric-release.py",
+        "scripts/test_verify_open_competition_v2_metric_release.py",
         "scripts/run_open_competition_v2_mainnet_fork_replay.py",
         "scripts/test_run_open_competition_v2_mainnet_fork_replay.py",
     ]
@@ -280,6 +282,7 @@ def main() -> int:
         ["--check", "scripts/open-competition-v1-signer.js"],
         ["scripts/test-open-competition-v1-signer-console.js"],
         ["scripts/test-create-competition-flow.js"],
+        ["scripts/test-marketplace-refill-confirmation.js"],
         ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
@@ -303,13 +306,21 @@ def main() -> int:
         "scripts.test_prepare_open_competition_v2_metric_fixture",
         "scripts.test_open_competition_v2_proof_rehearsal",
         "scripts.test_open_competition_v2_prover_service",
+        "scripts.test_diagnose_open_competition_v2_beta3_prover",
+        "scripts.test_install_open_competition_v2_prover_assets",
+        "scripts.test_rehearse_open_competition_v2_beta3_prover_service",
+        "scripts.test_repair_open_competition_v2_beta3_prover",
         "scripts.test_run_open_competition_v2_mainnet_fork_replay",
         "scripts.test_run_open_competition_v2_sepolia_rehearsal",
         "scripts.test_deploy_open_competition_v2_beta3",
+        "scripts.test_deploy_bounded_open_competition_v2_wallet_factory",
+        "scripts.test_seed_open_competition_v2_replenisher_gas",
+        "scripts.test_clean_open_competition_v2_prover_builds",
         "scripts.test_record_open_competition_v2_beta3_gate",
         "scripts.test_build_open_competition_v2_verifier_assets",
         "scripts.test_verify_open_competition_v2_slither",
         "scripts.test_verify_sp1_patched_graph",
+        "scripts.test_verify_open_competition_v2_metric_release",
         "-v",
     )
     check_deployment_bundles(cargo, platform)

@@ -23,6 +23,7 @@ on:
       - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
+      - "scripts/test-marketplace-refill-confirmation.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -48,6 +49,7 @@ on:
       - "scripts/test-create-competition-flow.js"
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
+      - "scripts/test-marketplace-refill-confirmation.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -67,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - run: python -m pip install -r scripts/requirements-site.txt
@@ -94,6 +96,7 @@ jobs:
       - run: node scripts/test-create-competition-flow.js
       - run: node scripts/test-ai-bounty-handoff.js
       - run: node --test scripts/test-metrics-dashboard.js
+      - run: node scripts/test-marketplace-refill-confirmation.js
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v
@@ -213,7 +216,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - uses: actions/setup-node@v7

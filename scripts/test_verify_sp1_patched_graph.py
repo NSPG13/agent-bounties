@@ -34,20 +34,21 @@ class Sp1PatchedGraphTests(unittest.TestCase):
         report = MODULE.verify(self.root)
         self.assertEqual(report["status"], "patched_source_graph_pinned")
         self.assertEqual(report["sp1_commit"], MODULE.SP1_COMMIT)
+        self.assertEqual(report["sp1_runtime_commit"], MODULE.SP1_RUNTIME_COMMIT)
 
     def test_registry_challenger_fails_closed(self) -> None:
-        lock = self.root / MODULE.EXPECTED_LOCKS[0]
+        lock = self.root / MODULE.EXPECTED_LOCKS[1]
         value = lock.read_text(encoding="utf-8").replace(
             f'source = "git+{MODULE.SP1_REPOSITORY}?rev={MODULE.SP1_COMMIT}#{MODULE.SP1_COMMIT}"',
             'source = "registry+https://github.com/rust-lang/crates.io-index"',
             1,
         )
         lock.write_text(value, encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "patched SP1 commit"):
+        with self.assertRaisesRegex(ValueError, "expected SP1 graph"):
             MODULE.verify(self.root)
 
     def test_forked_field_fails_closed(self) -> None:
-        manifest = self.root / MODULE.EXPECTED_MANIFESTS[0]
+        manifest = self.root / MODULE.EXPECTED_MANIFESTS[1]
         manifest.write_text(
             manifest.read_text(encoding="utf-8")
             + f'\np3-field = {{ git = "{MODULE.SP1_REPOSITORY}", rev = "{MODULE.SP1_COMMIT}" }}\n',
@@ -68,7 +69,7 @@ class Sp1PatchedGraphTests(unittest.TestCase):
             MODULE.verify(self.root)
 
     def test_manifest_revision_drift_fails_closed(self) -> None:
-        manifest = self.root / MODULE.EXPECTED_MANIFESTS[0]
+        manifest = self.root / MODULE.EXPECTED_MANIFESTS[1]
         manifest.write_text(
             manifest.read_text(encoding="utf-8").replace(MODULE.SP1_COMMIT, "0" * 40, 1),
             encoding="utf-8",
@@ -95,6 +96,14 @@ class Sp1PatchedGraphTests(unittest.TestCase):
         identity["sp1_commit"] = "0" * 40
         identity_path.write_text(json.dumps(identity), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "does not pin the patched SP1 commit"):
+            MODULE.verify(self.root)
+
+    def test_runtime_identity_drift_fails_closed(self) -> None:
+        identity_path = self.root / MODULE.IDENTITY_PATHS[0]
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        identity["sp1_runtime_commit"] = "0" * 40
+        identity_path.write_text(json.dumps(identity), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "corrected SP1 runtime commit"):
             MODULE.verify(self.root)
 
     def test_guest_toolchain_identity_drift_fails_closed(self) -> None:
