@@ -64,4 +64,24 @@ jobs:
           done
           du -x -h --max-depth=2 -- / 2>/dev/null | sort -h | tail -n 120 || true
           ls -lahS -- / /home/pooln 2>/dev/null || true
+          swapon --show --bytes || true
+          free -h || true
+          if command -v lsof >/dev/null 2>&1; then
+            sudo -n lsof +L1 2>/dev/null || lsof +L1 2>/dev/null || true
+          fi
+          du -x -h --max-depth=1 -- /home/pooln 2>/dev/null | sort -h | tail -n 80 || true
+          for audit_root in \
+            /home/pooln/agent-bounties-artifact-metric \
+            /home/pooln/agent-bounties-beta2 \
+            /home/pooln/agent-bounties-beta2-build-a-466e8d5 \
+            /home/pooln/agent-bounties-beta3 \
+            /home/pooln/agent-bounties-beta3-coordinator \
+            /home/pooln/go-build-cache \
+            /home/pooln/go-mod-cache \
+            /home/pooln/sp1-safe-v2-final
+          do
+            if [[ -e "$audit_root" ]]; then
+              du -x -h --max-depth=2 -- "$audit_root" 2>/dev/null | sort -h | tail -n 60 || true
+            fi
+          done
           test "$after_bytes" -ge 16106127360

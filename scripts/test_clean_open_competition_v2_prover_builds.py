@@ -49,6 +49,21 @@ class ProverCleanupWorkflowTests(unittest.TestCase):
         self.assertIn("du -x -h --max-depth=2", text)
         self.assertIn("du -x -h --max-depth=2 -- /", text)
         self.assertIn("ls -lahS -- / /home/pooln", text)
+        self.assertIn("swapon --show --bytes", text)
+        self.assertIn("free -h", text)
+        self.assertIn("lsof +L1", text)
+        self.assertIn("du -x -h --max-depth=1 -- /home/pooln", text)
+        for audit_root in (
+            "/home/pooln/agent-bounties-artifact-metric",
+            "/home/pooln/agent-bounties-beta2",
+            "/home/pooln/agent-bounties-beta2-build-a-466e8d5",
+            "/home/pooln/agent-bounties-beta3",
+            "/home/pooln/agent-bounties-beta3-coordinator",
+            "/home/pooln/go-build-cache",
+            "/home/pooln/go-mod-cache",
+            "/home/pooln/sp1-safe-v2-final",
+        ):
+            self.assertIn(audit_root, text)
         self.assertNotIn("secrets.", text)
         self.assertNotIn("actions/checkout", text)
 
