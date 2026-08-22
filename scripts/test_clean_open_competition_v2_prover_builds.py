@@ -45,6 +45,8 @@ class ProverCleanupWorkflowTests(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn('test "$after_bytes" -ge 16106127360', text)
         self.assertIn("df -h", text)
+        self.assertIn("/home/pooln/actions-runner/_work", text)
+        self.assertIn("du -x -h --max-depth=2", text)
         self.assertNotIn("secrets.", text)
         self.assertNotIn("actions/checkout", text)
 
