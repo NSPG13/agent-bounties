@@ -47,6 +47,8 @@ class ProverCapacityReclaimWorkflowTests(unittest.TestCase):
         self.assertIn("sudo -n awk '$1 != \"/swapfile2\"' /etc/fstab", text)
         self.assertIn('sudo -n rm -f -- "$secondary"', text)
         self.assertIn('test -f "$primary"', text)
+        self.assertIn("--output NAME,USED", text)
+        self.assertNotIn("--output=", text)
         for forbidden in (
             "rm -rf",
             "$HOME",
