@@ -19,9 +19,12 @@ REQUIRED_FILES = [
     "metrics.html",
     "metrics.css",
     "metrics.js",
+    "home-metrics.js",
+    "guild-home.js",
     "marketplace-refill-confirmation.html",
     "marketplace-refill-confirmation.js",
     "generated/github-participation.json",
+    "generated/public-metrics-policy.json",
     "competition.html",
     "competition.css",
     "competition.js",
@@ -116,6 +119,7 @@ PUBLIC_INDEXABLE_PAGES = {
     "leaderboard.html": "https://agentbounties.app/leaderboard.html",
     "news.html": "https://agentbounties.app/news.html",
     "contact.html": "https://agentbounties.app/contact.html",
+    "feedback.html": "https://agentbounties.app/feedback.html",
 }
 INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
@@ -242,6 +246,14 @@ def main() -> int:
     for relative in REQUIRED_FILES:
         if not (site_dir / relative).exists():
             fail(f"missing site file: {relative}")
+
+    api_metrics_policy = repo_root / "crates" / "api" / "fixtures" / "public-metrics-policy.json"
+    site_metrics_policy = site_dir / "generated" / "public-metrics-policy.json"
+    if api_metrics_policy.read_bytes() != site_metrics_policy.read_bytes():
+        fail("website public metrics policy must be byte-for-byte synchronized with the API fixture")
+    parsed_metrics_policy = json.loads(site_metrics_policy.read_text(encoding="utf-8"))
+    if parsed_metrics_policy.get("schema_version") != "agent-bounties/public-metrics-policy-v1":
+        fail("website public metrics policy has an unexpected schema version")
 
     for relative, destination in ROUTE_ALIASES.items():
         alias = site_dir / relative
@@ -411,7 +423,11 @@ def main() -> int:
             "Unique visitors",
             "Unique repository users measured by GitHub",
             "Monetization not active",
-            "Only a confirmed canonical <code>BountySettled</code> event proves solver payment",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
+            "Keeper pay",
+            "Policy-excluded events",
+            "Policy-excluded value",
+            'href="generated/public-metrics-policy.json"',
             'data-period="lifetime" aria-pressed="true"',
             'data-period="7d" aria-pressed="false"',
         ],
@@ -432,6 +448,9 @@ def main() -> int:
             'data-interface-status',
             'canonicalPayoutRows',
             'payoutAuditSummary',
+            'normalizedPublicMetricsPolicy',
+            'partitionCanonicalPayoutRows',
+            'PUBLIC_METRICS_POLICY_URL',
             'BASESCAN_TX_URL',
             'raw.textContent = "Raw events"',
         ],
@@ -538,7 +557,7 @@ def main() -> int:
             "https://agentbounties.app/agent/",
             "https://mcp.agentbounties.app/mcp",
             "Base mainnet only",
-            "Only a confirmed canonical <code>BountySettled</code> event proves payment",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
             "Agent Bounties does not promise income",
             "not Solana",
             "<code>@agent-bounty/sdk</code> does not exist",
@@ -852,7 +871,8 @@ def main() -> int:
             "refreshMarket",
             "window.setInterval",
             'document.addEventListener("visibilitychange"',
-            "claim-funnel?window_hours=${MARKET_WINDOW_HOURS}",
+            "generated/github-participation.json",
+            "AgentBountiesHomeMetrics?.render",
             "limit=300",
             "/v1/metrics/platform?period=lifetime",
             "metrics.html#payout-audit",
@@ -919,11 +939,38 @@ def main() -> int:
             "data-adoption-ready",
             "data-adoption-available",
             "data-adoption-settled",
-            "data-adoption-paid",
+            "data-external-active-identities",
+            "External active identities",
+            "not unique people",
             "data-market-proof",
-            "Only <code>BountySettled</code> counts as payment.",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version.",
         ],
     )
+    if pages["index.html"].count("data-external-active-identities") != 3:
+        fail("homepage must use the same external-active-identity metric in all three locations")
+    home_metrics_javascript = (site_dir / "home-metrics.js").read_text(encoding="utf-8")
+    guild_home_javascript = (site_dir / "guild-home.js").read_text(encoding="utf-8")
+    require_phrases(
+        "homepage external identities",
+        home_metrics_javascript,
+        [
+            "platform_active_identities?.lifetime",
+            "periods?.lifetime?.active_identities",
+            "Namespaces are not deduplicated into unique people",
+        ],
+    )
+    retired_homepage_identity_wiring = "\n".join(
+        [pages["index.html"], home_javascript, guild_home_javascript]
+    )
+    for retired in (
+        "data-adoption-paid",
+        "data-community-contributors",
+        "data-community-participants",
+        "/v1/audience/report",
+        "api.github.com/repos/NSPG13/agent-bounties",
+    ):
+        if retired in retired_homepage_identity_wiring:
+            fail(f"homepage still contains retired contributor fallback wiring: {retired}")
     for stale_metric in ["data-adoption-solvers", "data-adoption-posters"]:
         if stale_metric in pages["index.html"]:
             fail(f"index.html must not present wallet counts as agent activity: {stale_metric}")
@@ -934,6 +981,8 @@ def main() -> int:
         terms_page,
         [
             "Terms version 2026-07-18",
+            "Effective and last updated: July 18, 2026.",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version.",
             "How you agree",
             "Eligibility and authority",
             "Blockchain and wallet risk",
@@ -981,7 +1030,8 @@ def main() -> int:
             "Subscribe via RSS",
             "Subscribe via Atom",
             "Agent Bounties | The Global Marketplace for Digital Work",
-            'src="home.js?v=769"',
+            'src="home-metrics.js?v=1"',
+            'src="home.js?v=770"',
             'src="simple-home.js?v=766"',
             'property="og:title"',
             'name="twitter:card"',
@@ -1049,7 +1099,7 @@ def main() -> int:
             "Submit evidence",
             "Artifact reference",
             "Evidence package JSON",
-            "Only a confirmed BountySettled event",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
             "star the repository",
         ],
     )
@@ -1120,6 +1170,7 @@ def main() -> int:
             "prepare_autonomous_bounty_submission",
             "list_autonomous_verification_jobs",
             "BountySettled",
+            "Only a confirmed canonical `BountySettled` or `CompetitionSettledV2` event proves solver payment, depending on the protocol version.",
             "draft_bounty_with_cloud_agent",
             "compile_objective_with_cloud_agent",
             "/v1/cloud-agent/objective-plans",
@@ -1232,6 +1283,18 @@ def main() -> int:
         fail("static discovery manifest must not advertise a settlement operator")
     if manifest_protocol.get("payout_authority") != "confirmed canonical BountySettled event":
         fail("static discovery manifest must bind payout to BountySettled")
+    generic_payment_boundary = (
+        "Only a confirmed canonical BountySettled or CompetitionSettledV2 event proves solver payment, "
+        "depending on the protocol version."
+    )
+    if generic_payment_boundary not in discovery.get("evidence_boundaries", []):
+        fail("static discovery manifest must publish the dual-event generic payment boundary")
+    for field in ("recommended_answer", "human_prompt"):
+        guidance = discovery.get("assistant_acquisition", {}).get(field, "")
+        if "BountySettled or CompetitionSettledV2" not in guidance:
+            fail(f"static discovery manifest {field} must use the dual-event generic payment boundary")
+    if "Only `BountySettled` proves payment." not in llms:
+        fail("llms.txt must preserve BountySettled-only wording for the V1 competition flow")
     default_verification = protocol.get("default_verification", {})
     if default_verification.get("mode") != "signed_quorum":
         fail("public posting must default to one signed verifier")

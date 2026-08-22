@@ -299,3 +299,119 @@ test("canonical payout audit reconciles exact public event arithmetic", () => {
     total_base_units: 6_765_000,
   });
 });
+
+test("public policy excludes two canaries and exact current aggregate reconciles", () => {
+  const policy = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "..", "site", "generated", "public-metrics-policy.json"),
+    "utf8",
+  ));
+  const occurredAt = "2026-08-12T12:00:00Z";
+  const autonomous = [];
+  for (let index = 0; index < 36; index += 1) {
+    autonomous.push({
+      kind: "bounty_settled",
+      contract_address: `0x${String(index + 1).padStart(40, "0")}`,
+      bounty_id: `autonomous-${index}`,
+      tx_hash: `0xa${index}`,
+      block_number: 100 + index,
+      log_index: 0,
+      occurred_at: occurredAt,
+      data: {
+        solver_reward: 1_000_000,
+        verifier_reward: 40_000,
+        timeout_bond_bonus: index === 0 ? 30_000 : 0,
+      },
+    });
+  }
+  for (let index = 0; index < 7; index += 1) {
+    autonomous.push({
+      kind: "submission_rejected",
+      contract_address: `0x${String(index + 101).padStart(40, "0")}`,
+      bounty_id: `rejection-${index}`,
+      tx_hash: `0xb${index}`,
+      block_number: 200 + index,
+      log_index: 0,
+      occurred_at: occurredAt,
+      data: { verifier_reward: 100_000 },
+    });
+  }
+  const competition = { events: [{
+    kind: "bounty_settled",
+    contract_address: "0x7777777777777777777777777777777777777777",
+    bounty_id: "competition-v1",
+    tx_hash: "0xc1",
+    block_number: 300,
+    log_index: 0,
+    occurred_at: occurredAt,
+    data: { solver_reward: 3_190_000, verifier_reward: 230_000, timeout_bond_bonus: 0 },
+  }] };
+  const competitionV2 = { events: [] };
+  for (let index = 0; index < 5; index += 1) {
+    competitionV2.events.push({
+      kind: "competition_settled",
+      contract_address: `0x${String(index + 201).padStart(40, "0")}`,
+      bounty_id: `competition-v2-${index}`,
+      tx_hash: `0xd${index}`,
+      block_number: 400 + index,
+      log_index: 0,
+      occurred_at: occurredAt,
+      data: { solver_reward: 3_000_000, keeper_reward: 40_000 },
+    });
+  }
+  [policy.excluded_bounty_contracts[0], policy.excluded_bounty_contracts[3]].forEach((contract, index) => {
+    competitionV2.events.push({
+      kind: "competition_settled",
+      contract_address: index === 0 ? contract.toUpperCase().replace("0X", "0x") : contract,
+      bounty_id: `canary-${index}`,
+      tx_hash: `0xe${index}`,
+      block_number: 500 + index,
+      log_index: 0,
+      occurred_at: occurredAt,
+      data: { solver_reward: 250_000, keeper_reward: 12_500 },
+    });
+  });
+  const aggregate = {
+    generated_at: occurredAt,
+    window: { started_at: "2026-08-01T00:00:00Z", ended_at: "2026-08-13T00:00:00Z" },
+    marketplace_payout_volume: {
+      selected: { usdc_base_units: "56790000" },
+      selected_solver_pay: { usdc_base_units: "54190000" },
+      selected_verifier_pay: { usdc_base_units: "2370000" },
+      selected_keeper_pay: { usdc_base_units: "200000" },
+      selected_completion_bonus: { usdc_base_units: "30000" },
+      selected_settled_rounds: 42,
+    },
+  };
+
+  const audit = metrics.payoutAuditSnapshot(aggregate, autonomous, competition, competitionV2, policy);
+  assert.equal(audit.status, "ready");
+  assert.deepEqual(audit.summary, {
+    payout_events: 49,
+    settlement_events: 42,
+    solver_base_units: 54_190_000,
+    verifier_base_units: 2_370_000,
+    keeper_base_units: 200_000,
+    bonus_base_units: 30_000,
+    total_base_units: 56_790_000,
+  });
+  assert.equal(audit.excluded_summary.payout_events, 2);
+  assert.equal(audit.excluded_summary.settlement_events, 2);
+  assert.equal(audit.excluded_summary.total_base_units, 525_000);
+});
+
+test("missing or malformed public policy makes the proof ledger unavailable", () => {
+  const aggregate = {
+    window: { started_at: "2026-08-01T00:00:00Z", ended_at: "2026-08-13T00:00:00Z" },
+    marketplace_payout_volume: {},
+  };
+  const streams = [[], { events: [] }, { events: [] }];
+  assert.equal(metrics.payoutAuditSnapshot(aggregate, ...streams, null).status, "unavailable");
+  assert.equal(metrics.payoutAuditSnapshot(aggregate, ...streams, {
+    schema_version: "agent-bounties/public-metrics-policy-v1",
+    maintainer_github_logins: [],
+    maintainer_comment_authors: [],
+    maintainer_wallets: [],
+    excluded_bounty_contracts: ["not-an-address"],
+    wallet_ownership_boundary: "Declared addresses only.",
+  }).status, "unavailable");
+});

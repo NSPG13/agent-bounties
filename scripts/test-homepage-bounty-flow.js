@@ -3,11 +3,32 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const homeMetrics = require("../site/home-metrics.js");
 
 const source = fs.readFileSync(
   path.join(__dirname, "..", "site", "bounty-entry.js"),
   "utf8",
 );
+
+const externalIdentities = homeMetrics.lifetimeExternalActiveIdentities(
+  { coverage: { status: "ready" }, platform_active_identities: { lifetime: 38 } },
+  { coverage: { status: "ready" }, periods: { lifetime: { active_identities: 112 } } },
+);
+if (externalIdentities?.total !== 150) {
+  throw new Error(`homepage external identity metric did not reconcile 38 + 112: ${JSON.stringify(externalIdentities)}`);
+}
+if (homeMetrics.lifetimeExternalActiveIdentities(
+  { coverage: { status: "ready" }, platform_active_identities: { lifetime: 38 } },
+  { coverage: { status: "unavailable" }, periods: { lifetime: { active_identities: 112 } } },
+) !== null) {
+  throw new Error("homepage identity metric exposed a partial count when GitHub was unavailable");
+}
+if (homeMetrics.lifetimeExternalActiveIdentities(
+  { coverage: { status: "partial" }, platform_active_identities: { lifetime: 38 } },
+  { coverage: { status: "ready" }, periods: { lifetime: { active_identities: 112 } } },
+) !== null) {
+  throw new Error("homepage identity metric exposed a partial count when the platform was incomplete");
+}
 
 function loadEntry({ failStorage = false } = {}) {
   const values = new Map();
@@ -84,4 +105,4 @@ if (empty.api.start("   ") || empty.assigned.length) {
   throw new Error("empty homepage intent should not navigate");
 }
 
-console.log("homepage bounty intent reaches chat with exact, one-time autostart semantics");
+console.log("homepage bounty intent and lifetime external identity reconciliation are valid");
