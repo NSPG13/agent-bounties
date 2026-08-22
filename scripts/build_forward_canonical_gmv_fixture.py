@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the deterministic non-production release fixture for forward GMV."""
+"""Build the deterministic release fixture for forward GMV."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from forward_canonical_gmv import attestation_digest, sign_digest, snapshot_hash
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "programs/canonical-gmv-attribution-metric-v1/fixtures/golden-v1.json"
 OUTPUT = ROOT / "programs/forward-canonical-gmv-attribution-metric-v2/fixtures/golden-v1.json"
+IDENTITY = ROOT / "programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json"
 FIXTURE_KEYS = ("0x" + "00" * 31 + "01", "0x" + "00" * 31 + "02")
 
 
@@ -22,6 +23,15 @@ def hex_value(values: list[int]) -> str:
 
 def array(value: str) -> list[int]:
     return list(bytes.fromhex(value[2:]))
+
+
+def release_array(value: str) -> list[int]:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
+        raise ValueError("release identity values must be exact bytes32 hex")
+    raw = bytes.fromhex(value[2:])
+    if raw == bytes(32):
+        raise ValueError("release identity values must be nonzero")
+    return list(raw)
 
 
 def settlement_wire(value: dict) -> dict:
@@ -48,6 +58,16 @@ def settlement_wire(value: dict) -> dict:
 
 def build() -> dict:
     source = json.loads(SOURCE.read_text(encoding="utf-8"))
+    identity = json.loads(IDENTITY.read_text(encoding="utf-8"))
+    if identity.get("status") != "reproduced_beta3":
+        raise ValueError("forward GMV release identity is not independently reproduced")
+    scope = dict(source["scope"])
+    for scope_field, identity_field in (
+        ("program_vkey", "program_vkey"),
+        ("source_hash", "source_hash"),
+        ("elf_hash", "elf_keccak256"),
+    ):
+        scope[scope_field] = release_array(identity.get(identity_field))
     old_campaign = source["campaign"]
     signatures = [sign_digest(key, bytes(32)) for key in FIXTURE_KEYS]
     attesters = sorted(item["signer"] for item in signatures)
@@ -74,7 +94,7 @@ def build() -> dict:
     digest = attestation_digest(policy, snapshot, snapshot_wire["end_block_hash"])
     attestations = sorted((sign_digest(key, digest) for key in FIXTURE_KEYS), key=lambda value: value["signer"])
     return {
-        "scope": source["scope"],
+        "scope": scope,
         "campaign": {
             "epoch_id": old_campaign["epoch_id"],
             "starts_at": old_campaign["starts_at"],
