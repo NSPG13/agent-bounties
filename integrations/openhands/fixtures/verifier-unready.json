@@ -1,0 +1,10 @@
+{
+  "state": "verifier-unready",
+  "bounty_id": "888",
+  "repository": "NSPG13/agent-bounties",
+  "reward": "1.00 USDC",
+  "network": "Base",
+  "verification_ready": false,
+  "next_action": "Verifier service is not yet ready. Wait for verification_ready: true before claiming. Monitor canonical feed at https://api.agentbounties.app/v1/base/autonomous-bounties/feed",
+  "description": "Bounty requires verifier availability that is not yet confirmed. Do not claim until verifier is ready."
+}
