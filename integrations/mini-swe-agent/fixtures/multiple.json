@@ -1,0 +1,32 @@
+{
+  "synthetic": true,
+  "bounties": [
+    {
+      "number": 1001,
+      "title": "[SYNTHETIC] Claimable bounty A (moderate reward)",
+      "reward": {"amount": "2000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    },
+    {
+      "number": 1002,
+      "title": "[SYNTHETIC] Claimable bounty B (highest signed margin)",
+      "reward": {"amount": "3000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "0", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    },
+    {
+      "number": 1003,
+      "title": "[SYNTHETIC] Claimable bounty C (highest reward, high external spend)",
+      "reward": {"amount": "5000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "bond": {"amount": "10000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "external_spend": {"amount": "4000000", "currency": "USDC", "unit": "base_units", "decimals": 6},
+      "canonical_updated_at": "2099-01-01T00:00:00Z",
+      "claimable": true
+    }
+  ]
+}

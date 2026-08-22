@@ -1,0 +1,38 @@
+# mini-SWE-agent paid-work environment configuration
+# Automatically selects one canonically claimable coding bounty and emits
+# verification-ready evidence without exposing wallet credentials.
+
+version: "1.0"
+environment: mini-swe-agent
+
+inventory:
+  source: direct-argv
+  refresh_interval_seconds: 300
+  canonical_feed: "https://api.agentbounties.app/v1/base/autonomous-bounties/feed"
+
+claim:
+  mode: autonomous
+  strategy: "select_highest_signed_margin"
+  max_concurrent_claims: 1
+  require_canonical_state: true
+  respect_exclusive_claimants: true
+
+evidence:
+  packaging: "source_snapshot_digest"
+  include_discovery_source: true
+  sign_verification: true
+
+settlement:
+  check_interval_seconds: 60
+  canonical_settlement_proof: "BountySettled"
+  auto_submit_evidence: true
+
+# direct argv interface for fixture-driven selection
+direct argv:
+  input: "--input"
+  now: "--now"
+
+safety:
+  never_expose: ["wallet_credentials", "signing_key_material"]
+  sandboxed: true
+  max_spend_per_claim: "0.01 USDC"
