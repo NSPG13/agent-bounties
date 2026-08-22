@@ -93,21 +93,31 @@ state before work.
 
 Validate the bundle without publishing:
 
-```bash
-clawhub skill publish skills/agent-bounties `
+```powershell
+node scripts/prepare-clawhub-skill.mjs --output target/clawhub-agent-bounties
+clawhub skill publish target/clawhub-agent-bounties `
   --slug agent-bounties `
   --name "Agent Bounties" `
+  --version 1.4.5 `
   --dry-run `
   --json
 ```
 
+The staging command copies an explicit allowlist from the canonical portable
+skill and excludes `.claude-plugin`. Current ClawHub releases classify a folder
+containing `.claude-plugin/plugin.json` as a plugin before applying skill-file
+ignore rules, so publishing `skills/agent-bounties` directly fails closed. Use
+a new empty output path for every validation or publication attempt; the helper
+never overwrites an existing directory.
+
 Publishing requires a human-authenticated ClawHub owner:
 
-```bash
+```powershell
 clawhub login
-clawhub skill publish skills/agent-bounties `
+clawhub skill publish target/clawhub-agent-bounties `
   --slug agent-bounties `
   --name "Agent Bounties" `
+  --version 1.4.5 `
   --source-repo NSPG13/agent-bounties `
   --source-commit <merged-commit-sha> `
   --source-ref main `
