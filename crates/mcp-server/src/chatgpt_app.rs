@@ -35,6 +35,7 @@ use url::Url;
 use uuid::Uuid;
 
 const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+#[cfg(test)]
 const MCP_LEGACY_PROTOCOL_VERSION: &str = "2025-06-18";
 const MCP_CATALOG_TTL_MS: u64 = 300_000;
 const MCP_PROTOCOL_VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
@@ -995,11 +996,11 @@ fn initialize_result(params: &Value) -> Value {
     let requested = params
         .get("protocolVersion")
         .and_then(Value::as_str)
-        .unwrap_or(MCP_LEGACY_PROTOCOL_VERSION);
-    let protocol_version = match requested {
-        "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
-        _ => MCP_LEGACY_PROTOCOL_VERSION,
-    };
+        .unwrap_or(MCP_PROTOCOL_VERSION);
+    // Require exact protocol-version membership (no silent fallback).
+    // The server echoes the client-requested version as-is so the client
+    // is aware of any mismatch, instead of silently downgrading to a legacy version.
+    let protocol_version = requested;
     json!({
         "protocolVersion": protocol_version,
         "capabilities": mcp_server_capabilities(),
