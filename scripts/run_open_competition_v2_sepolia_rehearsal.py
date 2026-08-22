@@ -17,7 +17,7 @@ from eth_utils import to_checksum_address
 import build_open_competition_v2_beta3_release as release
 import open_competition_v2_proof_rehearsal as rehearsal
 from _shared.evm import keccak256, keccak_bytes
-from _shared.rpc import rpc
+from _shared.rpc import RpcError, rpc
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +105,109 @@ def proof_summary(value: dict[str, Any]) -> dict[str, Any]:
         "journal_hash": keccak256(journal),
         "journal_bytes": len(journal),
         "elapsed_seconds": value["elapsed_seconds"],
+    }
+
+
+def malformed_proof_cases(proof: bytes) -> dict[str, bytes]:
+    require(len(proof) > 5, "proof is too short for malformed-proof probes")
+    selector_mismatch = bytearray(proof)
+    selector_mismatch[0] ^= 1
+    payload_mutation = bytearray(proof)
+    payload_mutation[-1] ^= 1
+    return {
+        "selector_mismatch": bytes(selector_mismatch),
+        "truncated": proof[:-1],
+        "payload_mutation": bytes(payload_mutation),
+        "zeroed_payload": proof[:4] + bytes(len(proof) - 4),
+    }
+
+
+def exact_void_call(
+    url: str,
+    *,
+    sender: str,
+    to: str,
+    data: str,
+    block: str,
+    label: str,
+) -> None:
+    try:
+        result = rpc(url, "eth_call", [{"from": sender, "to": to, "data": data}, block])
+    except RpcError as error:
+        raise SepoliaRehearsalError(f"{label} unexpectedly reverted") from error
+    require(result == "0x", f"{label} returned malformed success data")
+
+
+def rejected_call(
+    url: str,
+    *,
+    sender: str,
+    to: str,
+    data: str,
+    block: str,
+    label: str,
+) -> None:
+    try:
+        result = rpc(url, "eth_call", [{"from": sender, "to": to, "data": data}, block])
+    except RpcError:
+        return
+    raise SepoliaRehearsalError(f"{label} was not rejected (RPC result {result!r})")
+
+
+def proof_rejection_consensus(
+    urls: tuple[str, ...],
+    *,
+    adapter: str,
+    program_vkey: bytes,
+    journal: bytes,
+    proof: bytes,
+    sender: str,
+    block: str,
+) -> dict[str, Any]:
+    unique_urls = tuple(dict.fromkeys(urls))
+    require(len(unique_urls) == 2, "proof rejection requires two independent RPC endpoints")
+    valid_call = rehearsal.function_data(
+        "verify(bytes32,bytes,bytes)",
+        ["bytes32", "bytes", "bytes"],
+        [program_vkey, journal, proof],
+    )
+    invalid_calls = {
+        name: rehearsal.function_data(
+            "verify(bytes32,bytes,bytes)",
+            ["bytes32", "bytes", "bytes"],
+            [program_vkey, journal, invalid_proof],
+        )
+        for name, invalid_proof in malformed_proof_cases(proof).items()
+    }
+    mutated_journal = bytearray(journal)
+    mutated_journal[-1] ^= 1
+    invalid_calls["journal_mutation"] = rehearsal.function_data(
+        "verify(bytes32,bytes,bytes)",
+        ["bytes32", "bytes", "bytes"],
+        [program_vkey, bytes(mutated_journal), proof],
+    )
+    for index, url in enumerate(unique_urls, start=1):
+        exact_void_call(
+            url,
+            sender=sender,
+            to=adapter,
+            data=valid_call,
+            block=block,
+            label=f"RPC {index} valid pinned-verifier probe",
+        )
+        for name, invalid_call in invalid_calls.items():
+            rejected_call(
+                url,
+                sender=sender,
+                to=adapter,
+                data=invalid_call,
+                block=block,
+                label=f"RPC {index} malformed-proof probe {name}",
+            )
+    return {
+        "rpc_endpoint_count": len(unique_urls),
+        "valid_proof_accepted": True,
+        "rejected_cases": sorted(invalid_calls),
     }
 
 
@@ -503,6 +606,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     expiry_result = None
     if not args.skip_expiry_refund:
+        require(args.shadow_rpc_url, "expiry and malformed-proof rehearsal requires a shadow RPC")
+        require(
+            int(rpc(args.shadow_rpc_url, "eth_chainId", []), 16) == CHAIN_ID,
+            f"shadow RPC is not {NETWORK}",
+        )
         expiry_template = json.loads(
             (PROGRAM_ROOT / "fixtures/rehearsal-first-proven.json").read_text(encoding="utf-8")
         )
@@ -511,23 +619,40 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         expiry_address, expiry_id = rehearsal.predict(client.url, factory, signer.address, expiry_params, expiry_nonce)
         receipts["approve_expiry"] = client.send(signer, to=token, data=rehearsal.function_data("approve(address,uint256)", ["address", "uint256"], [expiry_address, 105_000]))
         receipts["create_expiry"] = client.send(signer, to=factory, data=rehearsal.function_data(f"createCompetition({rehearsal.PARAM_TYPE},uint256,bytes32,bytes32)", [rehearsal.PARAM_TYPE, "uint256", "bytes32", "bytes32"], [expiry_params, 105_000, expiry_nonce, risk_hash]))
-        invalid_proof = bytearray(bytes.fromhex(proofs["groth16_first"]["proof_hex"][2:]))
-        invalid_proof[-1] ^= 1
-        invalid_call = rehearsal.function_data(
+        rehearsal_block = receipts["create_expiry"]["blockNumber"]
+        for index, url in enumerate((client.url, args.shadow_rpc_url), start=1):
+            observed_block = rpc(url, "eth_getBlockByNumber", [rehearsal_block, False])
+            require(
+                observed_block
+                and observed_block["hash"].lower()
+                == receipts["create_expiry"]["blockHash"].lower(),
+                f"RPC {index} disagrees on the malformed-proof rehearsal block",
+            )
+        journal = bytes.fromhex(proofs["groth16_first"]["journal_hex"][2:])
+        proof = bytes.fromhex(proofs["groth16_first"]["proof_hex"][2:])
+        rejection_evidence = proof_rejection_consensus(
+            (client.url, args.shadow_rpc_url),
+            adapter=bundle["groth16_adapter"]["address"],
+            program_vkey=bytes.fromhex(bundle["metric_profile"]["program_vkey"][2:]),
+            journal=journal,
+            proof=proof,
+            sender=solver_a.address,
+            block=rehearsal_block,
+        )
+        wrong_scope_call = rehearsal.function_data(
             "submitProof(bytes,bytes)",
             ["bytes", "bytes"],
-            [bytes.fromhex(proofs["groth16_first"]["journal_hex"][2:]), bytes(invalid_proof)],
+            [journal, proof],
         )
-        try:
-            rpc(
-                client.url,
-                "eth_call",
-                [{"from": solver_a.address, "to": expiry_address, "data": invalid_call}, "latest"],
+        for index, url in enumerate((client.url, args.shadow_rpc_url), start=1):
+            rejected_call(
+                url,
+                sender=solver_a.address,
+                to=expiry_address,
+                data=wrong_scope_call,
+                block=rehearsal_block,
+                label=f"RPC {index} wrong-scope competition proof",
             )
-        except RuntimeError:
-            invalid_proof_rejected = True
-        else:
-            raise SepoliaRehearsalError("the pinned verifier accepted a malformed proof")
         wait_until_chain_time(client.url, rehearsal.call_uint(client.url, expiry_address, "proofDeadline()"))
         receipts["expire"] = client.send(signer, to=expiry_address, data=rehearsal.function_data("expireCompetition()", [], []))
         require(has_topic(receipts["expire"], CANCELLED_TOPIC), "expiry cancellation event missing")
@@ -537,7 +662,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         expiry_result = {
             "competition": expiry_address,
             "bounty_id": expiry_id,
-            "invalid_proof_rejected": invalid_proof_rejected,
+            "invalid_proof_rejected": True,
+            "proof_rejection_consensus": rejection_evidence,
+            "wrong_scope_proof_rejected": True,
             "permissionless_refund": True,
             "escrow_balance": 0,
         }
@@ -667,6 +794,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--verifier-assets", type=Path, required=True)
     parser.add_argument("--rpc-url")
+    parser.add_argument("--shadow-rpc-url")
     parser.add_argument("--private-key-env", default="BASE_KEEPER_PRIVATE_KEY")
     parser.add_argument("--actor-derivation-salt", default="local")
     parser.add_argument("--actor-eth-wei", type=int, default=100_000_000_000_000)
@@ -690,10 +818,12 @@ def configure_network(args: argparse.Namespace) -> None:
         CHAIN_ID = 8453
         RUN_LABEL = "mainnet"
         args.rpc_url = args.rpc_url or os.environ.get("BASE_MAINNET_RPC_URL", "https://mainnet.base.org")
+        args.shadow_rpc_url = args.shadow_rpc_url or os.environ.get("BASE_MAINNET_SHADOW_RPC_URL")
     else:
         CHAIN_ID = 84532
         RUN_LABEL = "sepolia"
         args.rpc_url = args.rpc_url or os.environ.get("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org")
+        args.shadow_rpc_url = args.shadow_rpc_url or os.environ.get("BASE_SEPOLIA_SHADOW_RPC_URL")
 
 
 def main() -> int:
