@@ -300,6 +300,10 @@ test("canonical payout audit reconciles exact public event arithmetic", () => {
   });
 });
 
+test("policy-excluded payout values preserve exact USDC precision", () => {
+  assert.equal(metrics.formatUsdc(0.525, { maximumFractionDigits: 6 }), "0.525 USDC");
+});
+
 test("public policy excludes two canaries and exact current aggregate reconciles", () => {
   const policy = JSON.parse(fs.readFileSync(
     path.join(__dirname, "..", "site", "generated", "public-metrics-policy.json"),
