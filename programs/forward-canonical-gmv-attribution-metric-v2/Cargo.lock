@@ -2684,6 +2684,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "forward-canonical-gmv-attribution-metric-v2-script"
+version = "0.1.0"
+dependencies = [
+ "competition-metric-core",
+ "hex",
+ "serde_json",
+ "sha2 0.10.9",
+ "sp1-sdk",
+ "tiny-keccak",
+ "tokio",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4594,19 +4607,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost",
-]
-
-[[package]]
-name = "public-vector-metric-v1-script"
-version = "0.1.0"
-dependencies = [
- "competition-metric-core",
- "hex",
- "serde_json",
- "sha2 0.10.9",
- "sp1-sdk",
- "tiny-keccak",
- "tokio",
 ]
 
 [[package]]

@@ -288,6 +288,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
+name = "forward-canonical-gmv-attribution-metric-v2-program"
+version = "0.1.0"
+dependencies = [
+ "competition-metric-core",
+ "sp1-zkvm",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1031,14 +1039,6 @@ dependencies = [
  "sha2",
  "sp1-lib",
  "sp1-primitives",
-]
-
-[[package]]
-name = "structured-artifact-metric-v1-program"
-version = "0.1.0"
-dependencies = [
- "competition-metric-core",
- "sp1-zkvm",
 ]
 
 [[package]]

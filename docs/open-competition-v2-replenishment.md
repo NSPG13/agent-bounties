@@ -115,6 +115,45 @@ Never increase reserve spending just to improve a count or reported GMV. The
 checked-in confirmation page remains blocked while the new profile or snapshots
 are pending; the superseded structured-artifact batch must not be submitted.
 
+### Exact owner confirmation
+
+After the production release and candidate pool name the same factory and
+release hash, build the reserve deployment and activation bundles:
+
+```powershell
+python scripts/build_bounded_open_competition_v2_wallet_bundle.py `
+  --competition-factory <exact-production-factory> `
+  --release-hash <exact-production-release-hash>
+python scripts/build_open_competition_v2_gmv_activation.py `
+  --release <exact-production-runtime.json> `
+  --reserve-deployment deployments/bounded-open-competition-v2-wallet-base-mainnet.json `
+  --output <private-temporary-activation.json>
+python scripts/serve_open_competition_v2_gmv_confirmation.py `
+  --bundle <private-temporary-activation.json>
+```
+
+Open the printed loopback URL in the owner's wallet-enabled browser. The page
+checks Base mainnet and the exact owner before requesting one EIP-3009 typed-data
+signature for 77.668098 USDC. It states the predicted recoverable reserve
+address, the 3.04-USDC creation limit, the 30.40-USDC UTC-day cap, and the
+77.668098-USDC lifetime cap. The page verifies the signature locally and sends
+it nowhere except the loopback process.
+
+Build relay calldata only from the verified signature and the same bundle:
+
+```powershell
+python scripts/build_open_competition_v2_gmv_relay.py `
+  --bundle <private-temporary-activation.json> `
+  --signature <verified-eip3009-signature> `
+  --output <private-temporary-relay.json>
+```
+
+Any gas-paying address may submit the exact relay call. The destination is the
+bounded reserve factory, while the USDC destination remains the predicted
+reserve owned by `0x884834E884d6e93462655A2820140aD03E6747bC`. A valid
+signature, relay call, or transaction hash is not funding evidence; reconcile
+the reserve creation event and the exact USDC balance at a canonical safe block.
+
 ## Incident response
 
 On cap exhaustion, stale/conflicting evidence, a release change, candidate

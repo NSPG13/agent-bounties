@@ -26,7 +26,7 @@ on:
       - "crates/worker/**"
       - "programs/public-vector-metric-v1/**"
       - "programs/structured-artifact-metric-v1/**"
-      - "programs/canonical-gmv-attribution-metric-v1/**"
+      - "programs/forward-canonical-gmv-attribution-metric-v2/**"
       - "deployments/open-competition-v2-beta3-*"
       - "migrations/0023_open_competition_v2_beta2.sql"
       - "migrations/0024_open_competition_v2_beta3.sql"
@@ -286,7 +286,7 @@ jobs:
       fail-fast: false
       matrix:
         builder: [a, b]
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1, canonical-gmv-attribution-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: ./.github/actions/setup-rust
@@ -332,7 +332,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1, canonical-gmv-attribution-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -360,15 +360,15 @@ jobs:
               --journal-schema-hash 0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d
               --metric-program-hash 0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9
             )
-          elif [[ "${{ matrix.profile }}" = canonical-gmv-attribution-metric-v1 ]]; then
+          elif [[ "${{ matrix.profile }}" = forward-canonical-gmv-attribution-metric-v2 ]]; then
             args+=(
               --source-file crates/competition-metric-core/Cargo.toml
               --source-file crates/competition-metric-core/src/lib.rs
-              --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.toml
-              --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.lock
-              --source-file programs/canonical-gmv-attribution-metric-v1/program/src/main.rs
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.toml
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.lock
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/src/main.rs
               --journal-schema-hash 0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40
-              --metric-program-hash 0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead
+              --metric-program-hash 0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9
             )
           fi
           python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"
@@ -424,7 +424,7 @@ jobs:
             --expected-version "$SP1_SAFE_CIRCUIT_VERSION"
           test "$(python -c 'import json; print(json.load(open("programs/public-vector-metric-v1/release-identity.json"))["status"])')" = reproduced_beta3
           test "$(python -c 'import json; print(json.load(open("programs/structured-artifact-metric-v1/release-identity.json"))["status"])')" = reproduced_beta3
-          test "$(python -c 'import json; print(json.load(open("programs/canonical-gmv-attribution-metric-v1/release-identity.json"))["status"])')" = reproduced_beta3
+          test "$(python -c 'import json; print(json.load(open("programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json"))["status"])')" = reproduced_beta3
           rm -rf .sp1-safe/crates/prover/build
           DOCKER_BUILDKIT=1 docker build --pull=false \
             --file - \
@@ -495,13 +495,13 @@ jobs:
           target/structured-artifact-metric-v1-script --capabilities | tee target/structured-artifact-prover-capabilities.json
           python -c 'import json,os; v=json.load(open("target/structured-artifact-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/sp1-canonical-gmv"
-          bash scripts/build_open_competition_v2_metric_elf.sh canonical-gmv-attribution-metric-v1 \
+          bash scripts/build_open_competition_v2_metric_elf.sh forward-canonical-gmv-attribution-metric-v2 \
             "$GITHUB_WORKSPACE/target/metric-elf-canonical-gmv"
-          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-canonical-gmv/canonical-gmv-attribution-metric-v1-program"
-          cargo build --locked --release --manifest-path programs/canonical-gmv-attribution-metric-v1/Cargo.toml \
-            -p canonical-gmv-attribution-metric-v1-script
-          install -m 0755 "$CARGO_TARGET_DIR/release/canonical-gmv-attribution-metric-v1-script" target/canonical-gmv-attribution-metric-v1-script
-          target/canonical-gmv-attribution-metric-v1-script --capabilities | tee target/canonical-gmv-prover-capabilities.json
+          export OPEN_COMPETITION_V2_METRIC_ELF="$GITHUB_WORKSPACE/target/metric-elf-canonical-gmv/forward-canonical-gmv-attribution-metric-v2-program"
+          cargo build --locked --release --manifest-path programs/forward-canonical-gmv-attribution-metric-v2/Cargo.toml \
+            -p forward-canonical-gmv-attribution-metric-v2-script
+          install -m 0755 "$CARGO_TARGET_DIR/release/forward-canonical-gmv-attribution-metric-v2-script" target/forward-canonical-gmv-attribution-metric-v2-script
+          target/forward-canonical-gmv-attribution-metric-v2-script --capabilities | tee target/canonical-gmv-prover-capabilities.json
           python -c 'import json,os; v=json.load(open("target/canonical-gmv-prover-capabilities.json")); assert v["backends"] == ["cpu"] and v["gpu_proving_enabled"] is False and v["sp1_circuit_commit"] == os.environ["SP1_SAFE_CIRCUIT_COMMIT"] and v["sp1_runtime_commit"] == os.environ["SP1_SAFE_RUNTIME_COMMIT"]'
       - name: Generate three real proofs and replay the exact mainnet release
         env:
@@ -576,7 +576,7 @@ jobs:
           import hashlib, json
           from pathlib import Path
           evidence = {}
-          for profile in ("public-vector-metric-v1", "structured-artifact-metric-v1", "canonical-gmv-attribution-metric-v1"):
+          for profile in ("public-vector-metric-v1", "structured-artifact-metric-v1", "forward-canonical-gmv-attribution-metric-v2"):
               path = Path("target/prerequisites/metric-release") / f"{profile}.json"
               evidence[profile] = hashlib.sha256(path.read_bytes()).hexdigest()
           Path("target/metric-release-evidence.json").write_text(
@@ -608,7 +608,7 @@ jobs:
             target/proofs/*.json
             target/public-vector-metric-v1-script
             target/structured-artifact-metric-v1-script
-            target/canonical-gmv-attribution-metric-v1-script
+            target/forward-canonical-gmv-attribution-metric-v2-script
             target/prover-capabilities.json
             target/structured-artifact-prover-capabilities.json
             target/canonical-gmv-prover-capabilities.json
@@ -999,13 +999,13 @@ jobs:
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/tmp
           sudo install -m 0755 target/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 target/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
-          sudo install -m 0755 target/release-assets/canonical-gmv-attribution-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 target/release-assets/forward-canonical-gmv-attribution-metric-v2-script /opt/agent-bounties/bin/
           sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/
           sudo install -m 0644 ops/open-competition-v2-prover.service /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
           umask 077
           cat >target/prover.env <<EOF
           OPEN_COMPETITION_V2_PROVER_API_KEY='$OPEN_COMPETITION_V2_PROVER_API_KEY'
-          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script","canonical-gmv-attribution-metric-v1":"/opt/agent-bounties/bin/canonical-gmv-attribution-metric-v1-script"}'
+          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script","forward-canonical-gmv-attribution-metric-v2":"/opt/agent-bounties/bin/forward-canonical-gmv-attribution-metric-v2-script"}'
           OPEN_COMPETITION_V2_PROVER_JOB_DIR=/var/lib/agent-bounties-prover/jobs
           OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
           OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
@@ -1034,7 +1034,7 @@ jobs:
           json.dump({
               "schema_version": "agent-bounties/open-competition-v2-beta3-prover-deployment-v1",
               "passed": True,
-              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1", "canonical-gmv-attribution-metric-v1"],
+              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1", "forward-canonical-gmv-attribution-metric-v2"],
               "backend": "cpu",
               "gpu_proving_enabled": False,
           }, Path("target/prover-deployment.json").open("w"), sort_keys=True)

@@ -11,7 +11,7 @@ on:
       - "crates/competition-metric-core/**"
       - "programs/public-vector-metric-v1/**"
       - "programs/structured-artifact-metric-v1/**"
-      - "programs/canonical-gmv-attribution-metric-v1/**"
+      - "programs/forward-canonical-gmv-attribution-metric-v2/**"
       - "scripts/verify-open-competition-v2-metric-release.py"
       - "scripts/build_open_competition_v2_metric_elf.sh"
       - "scripts/verify_sp1_patched_graph.py"
@@ -31,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         builder: [a, b]
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1, canonical-gmv-attribution-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: ./.github/actions/setup-rust
@@ -78,7 +78,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [public-vector-metric-v1, structured-artifact-metric-v1, canonical-gmv-attribution-metric-v1]
+        profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -106,15 +106,15 @@ jobs:
               --journal-schema-hash 0x63c02a04ca74b569649c9374b088b08d90fb1e85d2be0d1e0ca141307938fb0d
               --metric-program-hash 0x760b8c342a91b4c215b8f102c85b696e70073a98c62a87987d2930eadbeb22b9
             )
-          elif [[ "${{ matrix.profile }}" = canonical-gmv-attribution-metric-v1 ]]; then
+          elif [[ "${{ matrix.profile }}" = forward-canonical-gmv-attribution-metric-v2 ]]; then
             args+=(
               --source-file crates/competition-metric-core/Cargo.toml
               --source-file crates/competition-metric-core/src/lib.rs
-              --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.toml
-              --source-file programs/canonical-gmv-attribution-metric-v1/program/Cargo.lock
-              --source-file programs/canonical-gmv-attribution-metric-v1/program/src/main.rs
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.toml
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/Cargo.lock
+              --source-file programs/forward-canonical-gmv-attribution-metric-v2/program/src/main.rs
               --journal-schema-hash 0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40
-              --metric-program-hash 0x915bf3efe2d9c90da53ba9342d0fb96f6ca5a17246e7e203f7372eeb30306ead
+              --metric-program-hash 0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9
             )
           fi
           python scripts/verify-open-competition-v2-metric-release.py "${args[@]}"

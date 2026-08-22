@@ -12,10 +12,17 @@ on:
       - "scripts/bounty_inventory_guard.py"
       - "scripts/plan_open_competition_v2_replenishment.py"
       - "scripts/materialize_open_competition_v2_replenishment.py"
+      - "scripts/build_bounded_open_competition_v2_wallet_bundle.py"
+      - "scripts/build_open_competition_v2_gmv_activation.py"
+      - "scripts/build_open_competition_v2_gmv_relay.py"
+      - "scripts/serve_open_competition_v2_gmv_confirmation.py"
       - "scripts/build_open_competition_v2_gmv_snapshots.py"
       - "scripts/test_bounty_inventory_guard.py"
       - "scripts/test_plan_open_competition_v2_replenishment.py"
       - "scripts/test_materialize_open_competition_v2_replenishment.py"
+      - "scripts/test_build_bounded_open_competition_v2_wallet_bundle.py"
+      - "scripts/test_build_open_competition_v2_gmv_activation.py"
+      - "scripts/test_build_open_competition_v2_gmv_relay.py"
       - "scripts/test_build_open_competition_v2_gmv_snapshots.py"
       - "scripts/test_open_competition_v2_replenishment_workflow.py"
 
@@ -34,14 +41,16 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - name: Install pinned snapshot hashing dependency
-        run: python -m pip install -r scripts/requirements-attest.txt
+      - name: Install pinned snapshot and wallet dependencies
+        run: python -m pip install -r scripts/requirements-attest.txt -r scripts/requirements-wallet.txt
       - name: Test private guard, deterministic planning, and materialization
         run: |
           python -m unittest \
             scripts.test_bounty_inventory_guard \
             scripts.test_plan_open_competition_v2_replenishment \
             scripts.test_materialize_open_competition_v2_replenishment \
+            scripts.test_build_open_competition_v2_gmv_activation \
+            scripts.test_build_open_competition_v2_gmv_relay \
             scripts.test_build_open_competition_v2_gmv_snapshots \
             scripts.test_open_competition_v2_replenishment_workflow \
             -v
