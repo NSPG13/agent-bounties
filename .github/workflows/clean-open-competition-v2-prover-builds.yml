@@ -50,4 +50,16 @@ jobs:
           after_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
           printf 'disk_after_bytes=%s\n' "$after_bytes"
           df -h "$workspace"
+          for audit_root in \
+            /home/pooln/actions-runner/_work \
+            /home/pooln/.cargo \
+            /home/pooln/.rustup \
+            /home/pooln/.sp1 \
+            /tmp \
+            /var/lib/docker
+          do
+            if [[ -e "$audit_root" ]]; then
+              du -x -h --max-depth=2 -- "$audit_root" 2>/dev/null | sort -h | tail -n 40 || true
+            fi
+          done
           test "$after_bytes" -ge 16106127360
