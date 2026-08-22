@@ -818,12 +818,16 @@ def configure_network(args: argparse.Namespace) -> None:
         CHAIN_ID = 8453
         RUN_LABEL = "mainnet"
         args.rpc_url = args.rpc_url or os.environ.get("BASE_MAINNET_RPC_URL", "https://mainnet.base.org")
-        args.shadow_rpc_url = args.shadow_rpc_url or os.environ.get("BASE_MAINNET_SHADOW_RPC_URL")
+        args.shadow_rpc_url = getattr(args, "shadow_rpc_url", None) or os.environ.get(
+            "BASE_MAINNET_SHADOW_RPC_URL"
+        )
     else:
         CHAIN_ID = 84532
         RUN_LABEL = "sepolia"
         args.rpc_url = args.rpc_url or os.environ.get("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org")
-        args.shadow_rpc_url = args.shadow_rpc_url or os.environ.get("BASE_SEPOLIA_SHADOW_RPC_URL")
+        args.shadow_rpc_url = getattr(args, "shadow_rpc_url", None) or os.environ.get(
+            "BASE_SEPOLIA_SHADOW_RPC_URL"
+        )
 
 
 def main() -> int:

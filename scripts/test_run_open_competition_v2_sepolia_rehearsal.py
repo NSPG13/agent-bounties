@@ -293,6 +293,16 @@ class SepoliaRehearsalTests(unittest.TestCase):
             with self.assertRaises(MODULE.SepoliaRehearsalError):
                 MODULE.normalized_key(value)
 
+    def test_configure_network_accepts_legacy_namespace_without_shadow_rpc_field(self):
+        args = SimpleNamespace(network="base-sepolia", rpc_url="https://primary.invalid")
+        with patch.dict(
+            MODULE.os.environ,
+            {"BASE_SEPOLIA_SHADOW_RPC_URL": "https://shadow.invalid"},
+        ):
+            MODULE.configure_network(args)
+        self.assertEqual(args.rpc_url, "https://primary.invalid")
+        self.assertEqual(args.shadow_rpc_url, "https://shadow.invalid")
+
     def test_x402_canary_spec_binds_artifact_to_the_journal(self):
         fixture = {
             "scope": {
