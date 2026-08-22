@@ -62,4 +62,6 @@ jobs:
               du -x -h --max-depth=2 -- "$audit_root" 2>/dev/null | sort -h | tail -n 40 || true
             fi
           done
+          du -x -h --max-depth=2 -- / 2>/dev/null | sort -h | tail -n 120 || true
+          ls -lahS -- / /home/pooln 2>/dev/null || true
           test "$after_bytes" -ge 16106127360

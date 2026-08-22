@@ -47,6 +47,8 @@ class ProverCleanupWorkflowTests(unittest.TestCase):
         self.assertIn("df -h", text)
         self.assertIn("/home/pooln/actions-runner/_work", text)
         self.assertIn("du -x -h --max-depth=2", text)
+        self.assertIn("du -x -h --max-depth=2 -- /", text)
+        self.assertIn("ls -lahS -- / /home/pooln", text)
         self.assertNotIn("secrets.", text)
         self.assertNotIn("actions/checkout", text)
 
