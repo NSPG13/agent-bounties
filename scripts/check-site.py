@@ -119,7 +119,6 @@ PUBLIC_INDEXABLE_PAGES = {
     "leaderboard.html": "https://agentbounties.app/leaderboard.html",
     "news.html": "https://agentbounties.app/news.html",
     "contact.html": "https://agentbounties.app/contact.html",
-    "feedback.html": "https://agentbounties.app/feedback.html",
 }
 INTERNAL_NOINDEX_PAGES = {
     "cancel.html",
