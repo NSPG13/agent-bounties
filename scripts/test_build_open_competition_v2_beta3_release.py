@@ -257,7 +257,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             for path in (
                 "programs/public-vector-metric-v1/release-identity.json",
                 "programs/structured-artifact-metric-v1/release-identity.json",
-                "programs/canonical-gmv-attribution-metric-v1/release-identity.json",
+                "programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json",
             )
         ]
         circuit_commits = {identity["sp1_commit"] for identity in identities}
@@ -388,6 +388,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
             MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
         ):
             runtime = MODULE.runtime_manifest(bundle, 10)
         self.assertTrue(runtime["proof_broker_enabled"])
@@ -480,6 +482,8 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
             MODULE.METRIC_IDENTITY, {"status": "reproduced_beta3"}
         ), mock.patch.dict(
             MODULE.STRUCTURED_ARTIFACT_IDENTITY, {"status": "reproduced_beta3"}
+        ), mock.patch.dict(
+            MODULE.CANONICAL_GMV_IDENTITY, {"status": "reproduced_beta3"}
         ):
             self.assertTrue(MODULE.runtime_manifest(sepolia, 10)["proof_broker_enabled"])
             self.assertFalse(MODULE.runtime_manifest(mainnet, 10)["proof_broker_enabled"])
