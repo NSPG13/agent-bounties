@@ -1,0 +1,53 @@
+name: Clean Open Competition V2 prover build output
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-prover-maintenance
+  cancel-in-progress: false
+
+jobs:
+  clean-generated-output:
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, Linux, X64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 15
+    steps:
+      - name: Validate scope and remove only generated build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_workspace=/home/pooln/actions-runner/_work/agent-bounties/agent-bounties
+          workspace="$(realpath -m "$GITHUB_WORKSPACE")"
+          test "$workspace" = "$expected_workspace"
+          test "$workspace" != / && test "$workspace" != /home && test "$workspace" != /home/pooln
+
+          before_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
+          printf 'disk_before_bytes=%s\n' "$before_bytes"
+          df -h "$workspace"
+
+          for relative in \
+            .sp1-safe/target \
+            target \
+            contracts/base-escrow/out \
+            contracts/base-escrow/cache
+          do
+            target="$(realpath -m "$workspace/$relative")"
+            case "$target" in
+              "$workspace"/*) ;;
+              *) echo "refusing out-of-workspace cleanup target: $target" >&2; exit 2 ;;
+            esac
+            if [[ -e "$target" ]]; then
+              du -sh -- "$target" || true
+              rm -rf --one-file-system -- "$target"
+              test ! -e "$target"
+            fi
+          done
+
+          after_bytes="$(df --output=avail -B1 "$workspace" | tail -n 1 | tr -d ' ')"
+          printf 'disk_after_bytes=%s\n' "$after_bytes"
+          df -h "$workspace"
+          test "$after_bytes" -ge 16106127360
