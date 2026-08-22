@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-08-18T12:05:00Z",
+  "items": [
+    {
+      "id": "0xbbb1",
+      "source": "source-degraded",
+      "status": "open",
+      "updated_at": "2026-08-18T12:00:00Z",
+      "verification_available": true
+    },
+    {
+      "id": "0xbbb2",
+      "source": "source-degraded",
+      "status": "claimed",
+      "updated_at": "2026-08-18T12:00:00Z",
+      "verification_available": false
+    },
+    {
+      "id": "0xbbb3",
+      "source": "source-degraded",
+      "status": "submitted",
+      "updated_at": "2026-08-18T12:00:00Z",
+      "verification_available": true
+    }
+  ],
+  "safe_block": 21001005,
+  "schema_version": "agent-bounties/inventory-state-breakdown-v1",
+  "source": "source-degraded"
+}

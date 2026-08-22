@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-08-18T12:00:00Z",
+  "items": [
+    {
+      "id": "0xaaa1",
+      "source": "canonical",
+      "status": "open",
+      "updated_at": "2026-08-18T11:00:00Z",
+      "verification_available": true
+    },
+    {
+      "id": "0xaaa2",
+      "source": "canonical",
+      "status": "open",
+      "updated_at": "2026-08-18T11:00:00Z",
+      "verification_available": false
+    },
+    {
+      "id": "0xaaa3",
+      "source": "canonical",
+      "status": "claimed",
+      "updated_at": "2026-08-18T11:30:00Z",
+      "verification_available": true
+    },
+    {
+      "id": "0xaaa4",
+      "source": "canonical",
+      "status": "claimed",
+      "updated_at": "2026-08-18T11:30:00Z",
+      "verification_available": false
+    },
+    {
+      "id": "0xaaa5",
+      "source": "canonical",
+      "status": "submitted",
+      "updated_at": "2026-08-18T11:45:00Z",
+      "verification_available": true
+    },
+    {
+      "id": "0xaaa6",
+      "source": "canonical",
+      "status": "submitted",
+      "updated_at": "2026-08-18T11:45:00Z",
+      "verification_available": false
+    },
+    {
+      "id": "0xaaa7",
+      "source": "canonical",
+      "status": "paid",
+      "updated_at": "2026-08-18T11:50:00Z",
+      "verification_available": true
+    },
+    {
+      "id": "0xaaa8",
+      "source": "canonical",
+      "status": "paid",
+      "updated_at": "2026-08-18T11:50:00Z",
+      "verification_available": false
+    }
+  ],
+  "safe_block": 21001000,
+  "schema_version": "agent-bounties/inventory-state-breakdown-v1",
+  "source": "canonical"
+}
