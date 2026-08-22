@@ -53,6 +53,7 @@ jobs:
           for audit_root in \
             /home/pooln/actions-runner/_work \
             /home/pooln/.cargo \
+            /home/pooln/.cache \
             /home/pooln/.rustup \
             /home/pooln/.sp1 \
             /tmp \
@@ -66,6 +67,8 @@ jobs:
           ls -lahS -- / /home/pooln 2>/dev/null || true
           swapon --show --bytes || true
           free -h || true
+          stat -c '%n %F %U %G %a %s' -- /swapfile /swapfile2 2>/dev/null || true
+          sudo -n awk 'NF && $1 !~ /^#/' /etc/fstab 2>/dev/null || true
           if command -v lsof >/dev/null 2>&1; then
             sudo -n lsof +L1 2>/dev/null || lsof +L1 2>/dev/null || true
           fi
