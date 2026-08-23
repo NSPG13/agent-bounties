@@ -1,0 +1,54 @@
+name: Open Competition V2 Beta3 broker surplus rebalance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-broker-surplus-rebalance
+  cancel-in-progress: false
+
+jobs:
+  rebalance:
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Return only bounded broker surplus to the protected deployer
+        env:
+          PYTHONPATH: ${{ github.workspace }}/scripts
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
+          BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
+        run: |
+          set -euo pipefail
+          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_SHADOW_RPC_URL"
+          test "${BASE_DEPLOYER_ADDRESS,,}" = "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+          test "${OPEN_COMPETITION_V2_BROKER_ADDRESS,,}" = "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          python -m pip install -r scripts/requirements-wallet.txt
+          python scripts/test_rebalance_open_competition_v2_beta3_broker.py
+          python scripts/rebalance_open_competition_v2_beta3_broker.py \
+            --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --deployer "$BASE_DEPLOYER_ADDRESS" \
+            --minimum-deployer-usdc-base-units 635000 \
+            --minimum-broker-usdc-base-units 110000 \
+            --maximum-transfer-base-units 525000 \
+            --minimum-broker-eth-after-wei 50000000000000 \
+            --output target/beta3-mainnet-broker-surplus-rebalance.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: open-competition-v2-beta3-broker-surplus-rebalance-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/beta3-mainnet-broker-surplus-rebalance.json
+          if-no-files-found: error
+          retention-days: 365
