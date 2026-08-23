@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import io
+import json
 import unittest
 import sys
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
@@ -18,6 +22,7 @@ from local_open_competition_v2_gmv_guard import (  # noqa: E402
     GuardError,
     choose_creations,
 )
+import local_open_competition_v2_gmv_guard as guard_module  # noqa: E402
 
 
 def guard_state(active: int, used: int, *, period_spent: int = 0, lifetime_spent: int = 0):
@@ -38,6 +43,43 @@ def guard_state(active: int, used: int, *, period_spent: int = 0, lifetime_spent
 
 
 class LocalGmvGuardTests(unittest.TestCase):
+    def test_rpc_retries_http_rate_limit_with_bounded_backoff(self) -> None:
+        rate_limit = urllib.error.HTTPError(
+            "https://primary.invalid", 429, "rate limited", {}, None
+        )
+        success = io.BytesIO(json.dumps({"jsonrpc": "2.0", "id": 1, "result": "0x2105"}).encode())
+        guard_module._LAST_RPC_REQUEST.clear()
+        with (
+            mock.patch.object(guard_module, "RPC_MIN_INTERVAL_SECONDS", 0),
+            mock.patch.object(
+                guard_module.urllib.request,
+                "urlopen",
+                side_effect=[rate_limit, success],
+            ) as urlopen,
+            mock.patch.object(guard_module.time, "sleep") as sleep,
+        ):
+            result = guard_module.rpc("https://primary.invalid", "eth_chainId", [], 1)
+        self.assertEqual(result, "0x2105")
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once_with(guard_module.RPC_RETRY_DELAYS[0])
+
+    def test_rpc_does_not_retry_contract_error(self) -> None:
+        failure = io.BytesIO(
+            json.dumps(
+                {"jsonrpc": "2.0", "id": 1, "error": {"code": 3, "message": "execution reverted"}}
+            ).encode()
+        )
+        guard_module._LAST_RPC_REQUEST.clear()
+        with (
+            mock.patch.object(guard_module, "RPC_MIN_INTERVAL_SECONDS", 0),
+            mock.patch.object(guard_module.urllib.request, "urlopen", return_value=failure) as urlopen,
+            mock.patch.object(guard_module.time, "sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(GuardError, "returned an error"):
+                guard_module.rpc("https://primary.invalid", "eth_call", [], 1)
+        urlopen.assert_called_once()
+        sleep.assert_not_called()
+
     def test_private_inventory_states_restore_exact_target(self) -> None:
         for active in (10, 9, 5, 4, 0):
             with self.subTest(active=active):
