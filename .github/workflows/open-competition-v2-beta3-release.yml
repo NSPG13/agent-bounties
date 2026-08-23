@@ -1072,7 +1072,7 @@ jobs:
             /tmp/open-competition-v2-prover-assets.json target/prover-assets.json
           public_health="${OPEN_COMPETITION_V2_PROVER_URL%/v1/prove}/health"
           curl --fail --silent "$public_health" | tee target/prover-public-health.json
-          python - <<'PY'
+          python3 - <<'PY'
           import json
           from pathlib import Path
           json.dump({

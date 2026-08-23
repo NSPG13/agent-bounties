@@ -3,8 +3,8 @@ name: Continue Open Competition V2 Beta3 mainnet release
 on:
   workflow_dispatch:
     inputs:
-      sepolia_run_id:
-        description: Successful bounded Sepolia continuation run containing the frozen release artifact
+      release_run_id:
+        description: Successful frozen release run containing the reviewed release and exact mainnet artifacts
         required: true
         type: string
 
@@ -17,7 +17,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_SOURCE_COMMIT: 4d09d82825c38f2bf93a8ee4375a95b302410c29
+  RELEASE_SOURCE_COMMIT: 5a351f3e373691be58a9575b4374812b494b6086
+  RELEASE_HASH: 0x46008fb819726a43209e55ee7e58c92700a8fc3435f76be282bfdef710ced594
+  COMPETITION_FACTORY: 0x29d0e39e0c03797c690633535722e6b34a69a78a
+  BOUNDED_RESERVE_FACTORY: 0xad0765eac772ff6cf696f2416751269d97a5419f
+  BOUNDED_RESERVE_IMPLEMENTATION: 0x9c62e1ab727909a18a830744eb244645ee91b0eb
+  PUBLIC_VECTOR_PROVER_SHA256: f7d2f60cf1458f2ec0e07f90ead783cd7939b4f5affa9bef6ce8d39133add79e
+  STRUCTURED_ARTIFACT_PROVER_SHA256: e3b201a1229773e46625e2b5a37325a4b2c076992f1a3a036f49549e029e2f81
+  FORWARD_GMV_PROVER_SHA256: f10ad7c23fe73be6d428b061ba3a1f36281d0cdaa2dc85fa402c5c0d1c9c3aa9
+  VERIFIER_ASSETS_SHA256: 47983cf57d3a65d217b6a6ce90365634fbf43e9f037b887f36dd265254801695
+  GNARK_IMAGE_EVIDENCE_SHA256: 2e275c28480da1b92d6a6e56e0221f5f6086d3c892883c1a1284aea752a05a50
+  GNARK_CLI_EVIDENCE_SHA256: 4bc1acb342df95f4ed7d7d8783c8449cfe5e6fe73aa44c231aaf525f6fa5a625
   SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
   SP1_SAFE_RUNTIME_COMMIT: c2d292c260333a9e4f166cd1435e8ef4897c8b43
   SP1_SAFE_CIRCUIT_VERSION: agent-bounties-sp1-safe-v5
@@ -35,95 +45,72 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
           ref: ${{ env.RELEASE_SOURCE_COMMIT }}
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
-        with:
-          ref: ${{ github.sha }}
-          path: .release-control
-      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: open-competition-v2-beta3-live-sepolia-resumed
-          path: target/live-sepolia
+          name: open-competition-v2-beta3-mainnet-deployment-${{ env.RELEASE_SOURCE_COMMIT }}
+          path: target/mainnet-source
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.sepolia_run_id }}
-      - name: Verify frozen Sepolia evidence and deploy exact mainnet bytecode
-        env:
-          PYTHONPATH: ${{ github.workspace }}/scripts
-          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
-          BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
-          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
-          SEPOLIA_RUN_ID: ${{ inputs.sepolia_run_id }}
+          run-id: ${{ inputs.release_run_id }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-release-assets-${{ env.RELEASE_SOURCE_COMMIT }}
+          path: target/release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.release_run_id }}
+      - name: Import only the exact canonically complete frozen release
         run: |
           set -euo pipefail
-          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
-          test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
-          test -f target/live-sepolia/sepolia-x402-rehearsal.json
-          test -f target/live-sepolia/x402-canary-replacement.json
-          test -f target/live-sepolia/failed-x402-charge-refund.json
-          test -f target/live-sepolia/failed-x402-charge-refund-2.json
-          test -f target/live-sepolia/failed-x402-charge-refund-3.json
-          test -f target/live-sepolia/failed-x402-charge-refund-4.json
-          test -f target/live-sepolia/failed-x402-charge-refund-5.json
-          jq -e '.passed == true and (.settlement_event_id | length > 0)' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
-          replacement="$(jq -r .competition target/live-sepolia/x402-canary-replacement.json)"
-          test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"
-          jq -e '.passed == true and .replacement_id == 1 and .minimum_broker_sla_seconds == 1800 and .superseded_recovery.recovered == true' \
-            target/live-sepolia/x402-canary-replacement.json >/dev/null
-          jq -e '.passed == true and .amount == "110000" and (.refund_transaction | length > 0)' \
-            target/live-sepolia/failed-x402-charge-refund.json >/dev/null
-          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312" and (.refund_transaction | length > 0)' \
-            target/live-sepolia/failed-x402-charge-refund-2.json >/dev/null
-          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56" and (.refund_transaction | length > 0)' \
-            target/live-sepolia/failed-x402-charge-refund-3.json >/dev/null
-          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a" and (.refund_transaction | length > 0)' \
-            target/live-sepolia/failed-x402-charge-refund-4.json >/dev/null
-          jq -e '.passed == true and .amount == "110000" and .payment_transaction == "0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27" and (.refund_transaction | length > 0)' \
-            target/live-sepolia/failed-x402-charge-refund-5.json >/dev/null
+          [[ "${{ inputs.release_run_id }}" =~ ^[0-9]+$ ]]
+          for file in \
+            mainnet-exact.json mainnet-exact.runtime.json mainnet-deployment-evidence.json \
+            bounded-open-competition-v2-wallet-base-mainnet.json \
+            bounded-open-competition-v2-wallet-deployment-evidence.json \
+            mainnet-broker-seed.json owner-mainnet-deployment-approval.json release-gates.json; do
+            test -f "target/mainnet-source/$file"
+          done
+          for profile in \
+            public-vector-metric-v1 structured-artifact-metric-v1 \
+            forward-canonical-gmv-attribution-metric-v2; do
+            test -f "target/release-assets/${profile}-script"
+          done
+          test -f target/release-assets/verifier-assets.json
+          printf '%s  %s\n' \
+            "$PUBLIC_VECTOR_PROVER_SHA256" target/release-assets/public-vector-metric-v1-script \
+            "$STRUCTURED_ARTIFACT_PROVER_SHA256" target/release-assets/structured-artifact-metric-v1-script \
+            "$FORWARD_GMV_PROVER_SHA256" target/release-assets/forward-canonical-gmv-attribution-metric-v2-script \
+            "$VERIFIER_ASSETS_SHA256" target/release-assets/verifier-assets.json \
+            "$GNARK_IMAGE_EVIDENCE_SHA256" target/release-assets/gnark-image.json \
+            "$GNARK_CLI_EVIDENCE_SHA256" target/release-assets/gnark-cli.sha256 \
+            | sha256sum --check --strict -
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
-            '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-rehearsal.json >/dev/null
-          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
-            '.passed == true and .source_commit == $commit' target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
-          cp -a target/live-sepolia/release-assets target/release-assets
-          cp target/live-sepolia/release-gates.json target/release-gates.json
-          python -m pip install -r scripts/requirements-wallet.txt
-          python scripts/fund_open_competition_v2_beta3_broker.py \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
-            --output target/mainnet-broker-seed.json
-          forge build --root contracts/base-escrow --force --ast
-          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
-          export RISK_HASH="$(python -c 'import json; from eth_utils import keccak; value=json.load(open("target/release-gates.json")); print("0x" + keccak(text=value["beta_risk_preimage"]).hex())')"
-          python - <<'PY'
-          import json, os
-          json.dump({
-              "environment": "v2-beta2-mainnet",
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "source_commit": os.environ["RELEASE_SOURCE_COMMIT"],
-              "risk_hash": os.environ["RISK_HASH"],
-              "sepolia_run_id": os.environ["SEPOLIA_RUN_ID"],
-          }, open("target/owner-mainnet-deployment-approval.json", "w"), indent=2)
-          PY
-          python scripts/record_open_competition_v2_beta3_gate.py \
-            --manifest target/release-gates.json --gate owner_mainnet_deployment_approved \
-            --evidence target/owner-mainnet-deployment-approval.json \
-            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --source-commit "$RELEASE_SOURCE_COMMIT" --owner-risk-hash "$RISK_HASH"
-          python .release-control/scripts/build_open_competition_v2_beta3_release.py --network base-mainnet \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --deployer "$DEPLOYER" \
-            --source-commit "$RELEASE_SOURCE_COMMIT" \
-            --verifier-assets target/release-assets/verifier-assets.json \
-            --gates target/release-gates.json --output target/mainnet-exact.json \
-            --release-root "$GITHUB_WORKSPACE"
-          python .release-control/scripts/deploy_open_competition_v2_beta3.py \
-            --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
-            --output target/mainnet-deployment-evidence.json
-          python scripts/record_open_competition_v2_beta3_gate.py \
-            --manifest target/release-gates.json --gate mainnet_verifiers_factory_deployed \
-            --evidence target/mainnet-deployment-evidence.json \
-            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --source-commit "$RELEASE_SOURCE_COMMIT"
+            '.network == "base-mainnet" and .chain_id == 8453 and .source_commit == $commit and
+             .deployment_state == "reviewed_ready_to_sign" and
+             .preflight_safe_block.observed_deployer_nonce == 38 and
+             .preflight_safe_block.resuming_exact_verifiers == true and
+             ([.metric_profiles[].profile_id] | index("forward-canonical-gmv-attribution-metric-v2") != null)' \
+            target/mainnet-source/mainnet-exact.json >/dev/null
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" --arg release "$RELEASE_HASH" \
+            --arg factory "$COMPETITION_FACTORY" \
+            '.network == "base-mainnet" and .source_commit == $commit and
+             .release_hash == $release and .factory_contract == $factory and
+             .public_creation_enabled == false and .proof_broker_enabled == false and
+             ([.metric_programs[].profile_id] | index("forward-canonical-gmv-attribution-metric-v2") != null)' \
+            target/mainnet-source/mainnet-exact.runtime.json >/dev/null
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" --arg factory "$COMPETITION_FACTORY" \
+            '.complete == true and .source_commit == $commit and
+             .runtime_manifest.factory_contract == $factory and
+             ([.transactions[] | select(.transaction_hash != null)] | length) == 0 and
+             ([.transactions[] | select(.recovered_exact_deployment != true)] | length) == 0 and
+             (.safe_block.number > 0)' \
+            target/mainnet-source/mainnet-deployment-evidence.json >/dev/null
+          jq -e --arg release "$RELEASE_HASH" --arg factory "$COMPETITION_FACTORY" \
+            --arg reserve "$BOUNDED_RESERVE_FACTORY" --arg implementation "$BOUNDED_RESERVE_IMPLEMENTATION" \
+            '.complete == true and .release_hash == $release and .competition_factory == $factory and
+             .reserve_factory == $reserve and .reserve_implementation == $implementation and
+             .transaction.transaction_hash == null and
+             .transaction.recovered_exact_deployment == true and (.safe_block.number > 0)' \
+            target/mainnet-source/bounded-open-competition-v2-wallet-deployment-evidence.json >/dev/null
+          cp -a target/mainnet-source/. target/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-mainnet-deployment-continuation
@@ -131,6 +118,8 @@ jobs:
             target/mainnet-exact.json
             target/mainnet-exact.runtime.json
             target/mainnet-deployment-evidence.json
+            target/bounded-open-competition-v2-wallet-base-mainnet.json
+            target/bounded-open-competition-v2-wallet-deployment-evidence.json
             target/mainnet-broker-seed.json
             target/owner-mainnet-deployment-approval.json
             target/release-gates.json
@@ -188,12 +177,13 @@ jobs:
           sudo install -d -o agent-bounties-prover -g agent-bounties-prover -m 0700 /var/lib/agent-bounties-prover/tmp
           sudo install -m 0755 target/mainnet-deployment/release-assets/public-vector-metric-v1-script /opt/agent-bounties/bin/
           sudo install -m 0755 target/mainnet-deployment/release-assets/structured-artifact-metric-v1-script /opt/agent-bounties/bin/
+          sudo install -m 0755 target/mainnet-deployment/release-assets/forward-canonical-gmv-attribution-metric-v2-script /opt/agent-bounties/bin/
           sudo install -m 0755 scripts/open_competition_v2_prover_service.py /opt/agent-bounties/scripts/
           sudo install -m 0644 .release-control/ops/open-competition-v2-prover.service /etc/systemd/system/agent-bounties-open-competition-v2-prover.service
           umask 077
           cat >target/prover.env <<EOF
           OPEN_COMPETITION_V2_PROVER_API_KEY='$OPEN_COMPETITION_V2_PROVER_API_KEY'
-          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script"}'
+          OPEN_COMPETITION_V2_PROVER_BINARIES='{"public-vector-metric-v1":"/opt/agent-bounties/bin/public-vector-metric-v1-script","structured-artifact-metric-v1":"/opt/agent-bounties/bin/structured-artifact-metric-v1-script","forward-canonical-gmv-attribution-metric-v2":"/opt/agent-bounties/bin/forward-canonical-gmv-attribution-metric-v2-script"}'
           OPEN_COMPETITION_V2_PROVER_JOB_DIR=/var/lib/agent-bounties-prover/jobs
           OPEN_COMPETITION_V2_PROVER_MAX_SECONDS=1800
           OPEN_COMPETITION_V2_PROVER_MAX_QUEUED=2
@@ -221,7 +211,7 @@ jobs:
           json.dump({
               "schema_version": "agent-bounties/open-competition-v2-beta3-prover-deployment-v1",
               "passed": True,
-              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1"],
+              "profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1", "forward-canonical-gmv-attribution-metric-v2"],
               "backend": "cpu",
               "gpu_proving_enabled": False,
           }, open("target/prover-deployment.json", "w"), sort_keys=True)

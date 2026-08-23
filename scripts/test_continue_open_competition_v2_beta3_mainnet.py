@@ -6,7 +6,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml"
-RELEASE_SOURCE_COMMIT = "4d09d82825c38f2bf93a8ee4375a95b302410c29"
+RELEASE_WORKFLOW = ROOT / ".github/workflows/open-competition-v2-beta3-release.yml"
+RELEASE_SOURCE_COMMIT = "5a351f3e373691be58a9575b4374812b494b6086"
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -136,44 +137,57 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
             activation,
         )
 
-    def test_only_successful_frozen_sepolia_evidence_can_continue(self):
-        self.assertIn("run-id: ${{ inputs.sepolia_run_id }}", self.text)
-        self.assertIn("open-competition-v2-beta3-live-sepolia-resumed", self.text)
-        self.assertIn("failed-x402-charge-refund.json", self.text)
-        self.assertIn("failed-x402-charge-refund-2.json", self.text)
-        self.assertIn("failed-x402-charge-refund-3.json", self.text)
-        self.assertIn("failed-x402-charge-refund-4.json", self.text)
-        self.assertIn("failed-x402-charge-refund-5.json", self.text)
-        self.assertIn("x402-canary-replacement.json", self.text)
-        self.assertIn(".minimum_broker_sla_seconds == 1800", self.text)
-        self.assertIn(".superseded_recovery.recovered == true", self.text)
+    def test_only_exact_completed_mainnet_artifacts_can_continue(self):
+        triggers = self.workflow.get("on", self.workflow.get(True))
+        self.assertEqual(
+            set(triggers["workflow_dispatch"]["inputs"].keys()),
+            {"release_run_id"},
+        )
+        self.assertEqual(self.text.count("run-id: ${{ inputs.release_run_id }}"), 2)
         self.assertIn(
-            "0xba73504377041ca89b5262421e7c994a40e7c955c5f71f9dc95f16d2c966d312",
+            "open-competition-v2-beta3-mainnet-deployment-${{ env.RELEASE_SOURCE_COMMIT }}",
             self.text,
         )
         self.assertIn(
-            "0x53fdaf15f234cf1ab4267bde5ce602221b8ad4e81ca011f457ab365a899e1e56",
+            "open-competition-v2-beta3-release-assets-${{ env.RELEASE_SOURCE_COMMIT }}",
             self.text,
         )
+        self.assertIn(".preflight_safe_block.observed_deployer_nonce == 38", self.text)
+        self.assertIn(".preflight_safe_block.resuming_exact_verifiers == true", self.text)
+        self.assertIn(".transaction.transaction_hash == null", self.text)
+        self.assertIn(".transaction.recovered_exact_deployment == true", self.text)
+        self.assertIn("bounded-open-competition-v2-wallet-deployment-evidence.json", self.text)
+        self.assertIn("sha256sum --check --strict", self.text)
         self.assertIn(
-            "0xedf4427c273df26905f3a5fe377d17bab4e2f9c8485f38f498652379ff4b622a",
+            "f10ad7c23fe73be6d428b061ba3a1f36281d0cdaa2dc85fa402c5c0d1c9c3aa9",
             self.text,
         )
+        self.assertNotIn("BASE_MAINNET_DEPLOYER_PRIVATE_KEY", self.text.split(
+            "  deploy-production-prover:", 1
+        )[0])
+
+    def test_prover_installs_all_three_reviewed_profiles(self):
+        prover = self.text.split("  deploy-production-prover:", 1)[1].split(
+            "  deploy-production-control-plane:", 1
+        )[0]
+        for profile in (
+            "public-vector-metric-v1",
+            "structured-artifact-metric-v1",
+            "forward-canonical-gmv-attribution-metric-v2",
+        ):
+            self.assertIn(f"{profile}-script", prover)
         self.assertIn(
-            "0x8b0b85cdd06147ae1e37fdbd4e8ea78876bb312bd234dcd49aadfa25e0b89c27",
-            self.text,
+            '"profiles": ["public-vector-metric-v1", "structured-artifact-metric-v1", "forward-canonical-gmv-attribution-metric-v2"]',
+            prover,
         )
-        self.assertIn(".settlement_event_id | length > 0", self.text)
-        self.assertIn(
-            'test "$replacement" = "$(jq -r .competition target/live-sepolia/sepolia-x402-rehearsal.json)"',
-            self.text,
-        )
-        self.assertNotIn(
-            'test "$replacement" = "$(jq -r .x402_canary.competition',
-            self.text,
-        )
-        self.assertIn(".source_commit == $commit", self.text)
-        self.assertNotIn('--source-commit "$GITHUB_SHA"', self.text)
+
+    def test_primary_release_uses_python3_on_the_self_hosted_prover(self):
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        prover = release.split("  deploy-production-prover:", 1)[1].split(
+            "  deploy-production-control-plane:", 1
+        )[0]
+        self.assertIn("python3 - <<'PY'", prover)
+        self.assertNotIn("python - <<'PY'", prover)
 
     def test_prover_installs_only_the_verified_local_gnark_alias(self):
         self.assertIn('docker tag "$SP1_GNARK_IMAGE" "$SP1_GNARK_RUNTIME_IMAGE"', self.text)
