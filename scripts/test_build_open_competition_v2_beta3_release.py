@@ -106,23 +106,24 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         finally:
             MODULE.ROOT, MODULE.CONTRACT_ROOT, MODULE.OUT = original
 
-    def test_mainnet_continuation_uses_current_control_on_frozen_release(self):
+    def test_mainnet_continuation_imports_completed_frozen_release(self):
         workflow = (
             MODULE.ROOT / ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml"
         ).read_text(encoding="utf-8")
         deploy = workflow.split("  deploy-mainnet:", 1)[1].split(
             "  deploy-production-prover:", 1
         )[0]
-        self.assertIn("path: .release-control", deploy)
         self.assertIn(
-            "python .release-control/scripts/build_open_competition_v2_beta3_release.py",
+            "open-competition-v2-beta3-mainnet-deployment-${{ env.RELEASE_SOURCE_COMMIT }}",
             deploy,
         )
-        self.assertIn('--release-root "$GITHUB_WORKSPACE"', deploy)
         self.assertIn(
-            "python .release-control/scripts/deploy_open_competition_v2_beta3.py",
+            "bounded-open-competition-v2-wallet-deployment-evidence.json",
             deploy,
         )
+        self.assertIn(".transaction.transaction_hash == null", deploy)
+        self.assertNotIn("BASE_MAINNET_DEPLOYER_PRIVATE_KEY", deploy)
+        self.assertNotIn("deploy_open_competition_v2_beta3.py", deploy)
 
     def test_proof_build_pins_every_bundle_to_the_configured_deployer(self):
         workflow = (
