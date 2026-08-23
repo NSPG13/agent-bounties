@@ -1,72 +1,81 @@
-# Taskmarket Integration Adapter
+# Taskmarket Adapter
 
-Lets an agent or product delegate real work to [Taskmarket](https://taskmarket.dev/)
-workers directly from inside the host product. Built for the Taskmarket
-integration bounty; it satisfies the required end-to-end requester workflow:
-discover work, create a task with explicit user authorization and spending
-limits, submit work, and retrieve submissions for human review.
-
-## Features
-- **Discover**: `taskmarket_list_tasks` lists open tasks (reward, subs, tags).
-- **Inspect**: `taskmarket_get_task` returns description, reward, deadline,
-  deliverables, Base network, and maximum spend.
-- **Create (guarded)**: `taskmarket_create_task` requires an explicit
-  `authorized=true` and refuses any reward above `max_spend_usdc`. It never
-  silently funds.
-- **Submit**: `taskmarket_submit` attaches a local deliverable file (free for
-  `requiresPayment=false` tasks).
-- **Wallet / Inbox**: `taskmarket_wallet_stats` and `taskmarket_inbox` give
-  live balance, earnings, and task status.
-- **Safe by default**: no private keys / seeds / tokens / cookies are read,
-  stored, logged, or committed. Settlement status is always returned; payments
-  are never blindly retried when status is unknown.
+A security-focused MCP (stdio JSON-RPC 2.0) adapter around the first-party
+`taskmarket` CLI. Standard library only; no third-party runtime dependencies.
 
 ## Install
-```bash
-pip install -e .            # installs taskmarket-adapter + server entrypoint
-# or run directly:
-python integrations/taskmarket/taskmarket_mcp_server.py
-```
-Requires the first-party `taskmarket` CLI on PATH (already configured on the
-delegating agent host).
 
-## Usage (MCP)
-The server speaks JSON-RPC 2.0 over stdio. Register it with any MCP client:
+```bash
+python -m pip install integrations/taskmarket
+taskmarket-mcp            # console script; or: python -m taskmarket_adapter
+```
+
+## Security model
+
+- **No caller-controlled authority.** Write tools take no `authorized` flag.
+  They require an operator-issued, HMAC-signed authorization artifact
+  configured out of band (see below). Without a valid artifact the CLI process
+  is never launched.
+- **Exact CLI contract.** argv is built strictly from the official command
+  contract: `task create --description ... --reward <usdc> --duration <hours>`
+  and `task submit <taskId> --file <path>`. No invented flags. `--reward` is a
+  human-readable USDC string ("5" means 5 USDC); Decimal-to-base-unit
+  conversion happens only for local cap checks and is unit-tested so 5 USDC can
+  never become 5,000,000.
+- **Artifact-root allowlist for submissions.** `file_path` must be an absolute
+  path with no symlink components, resolving to a regular file inside an
+  operator-configured root, within a size bound.
+- **Network allowlist.** Declared networks must be `base-mainnet` or
+  `base-sepolia`.
+- **Positive values only.** Rewards, durations, caps, and size limits must be
+  positive; parsing is fail-closed (no exponent notation, at most six decimals).
+- **Sanitized errors.** CLI stderr is logged host-side only; MCP callers get
+  generic failure messages.
+
+## Operator configuration (host environment)
+
+| Variable | Meaning |
+| --- | --- |
+| `TASKMARKET_ARTIFACT_ROOTS` | Colon-separated absolute directories that submissions may read from (required for `taskmarket_submit`). |
+| `TASKMARKET_MAX_ARTIFACT_BYTES` | Optional upload size bound (default 20 MiB). |
+| `TASKMARKET_AUTHORIZATION_FILE` | Path to the signed authorization artifact required by write tools. |
+| `TASKMARKET_OPERATOR_SECRET` | Shared secret used to verify artifact signatures. Keep host-only. |
+
+## Authorization artifact
+
+JSON file signed with HMAC-SHA256 over its canonical payload:
+
 ```json
 {
-  "mcpServers": {
-    "taskmarket": {
-      "command": "python",
-      "args": ["integrations/taskmarket/taskmarket_mcp_server.py"]
-    }
-  }
+  "version": 1,
+  "action": "task_create",
+  "expires_at": "2026-01-01T12:00:00+00:00",
+  "max_reward_usdc": "10",
+  "max_duration_hours": 168,
+  "signature": "<hex>"
 }
 ```
 
-### Example tool calls
-```
-> taskmarket_list_tasks  ->  [{id: "0x825e...", reward: "50000", submissions: 4, ...}]
-> taskmarket_get_task {task_id:"0x825e..."}  ->  {description, reward, deadline, deliverables, network, maxSpend}
-> taskmarket_submit {task_id:"0x825e...", file_path:"/artifacts/evidence.md"}  ->  {ok:true, submissionId: "..."}
-> taskmarket_create_task {description, reward, deadline, deliverables, max_spend_usdc, authorized:true}
-```
+`action` is `task_create` or `task_submit`; submit artifacts may bind one
+`task_id`. Every check fails closed: missing configuration, unreadable or
+malformed files, unknown versions/actions, naive timestamps, expired artifacts,
+bad signatures, and requests above the caps all refuse before any process runs.
 
-## Demo log (real run)
-```
-$ taskmarket stats
-{"ok":true,"data":{"agentId":"60667","balanceUsdc":"0.009000","totalEarnings":"0","completedTasks":0}}
-$ taskmarket task list --status open | python -c "import sys,json;print(len(json.load(sys.stdin)['data']['tasks']),'open tasks')"
-20 open tasks
-```
-(The adapter wraps exactly these first-party calls; see `taskmarket_client.py`.)
+## Tools
+
+Reads: `taskmarket_list_tasks`, `taskmarket_get_task`,
+`taskmarket_wallet_stats`, `taskmarket_inbox`.
+Writes (artifact-gated): `taskmarket_create_task`, `taskmarket_submit`.
 
 ## Tests
+
 ```bash
-pytest integrations/taskmarket/tests
+python -m pytest integrations/taskmarket/tests -q
+# or
+python -m unittest discover -s integrations/taskmarket/tests -t integrations/taskmarket
 ```
 
-## Security
-- Explicit user authorization before any task creation or funding.
-- Spending caps enforced client-side and delegated to the on-chain CLI.
-- No secrets handled; the wrapper only forwards intent to the official CLI.
-- Settlement status returned to the caller; no blind retries.
+The suite covers unit conversion, authorization artifacts, path/network policy,
+real-process boundary tests against a recording fake CLI (asserting exact argv
+and that refused calls launch no process), real-subprocess MCP protocol tests,
+and an installed-wheel smoke test of the console script.
