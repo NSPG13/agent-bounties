@@ -340,6 +340,7 @@ def main() -> int:
     parser.add_argument("--api", required=True)
     parser.add_argument("--network", choices=("base-sepolia", "base-mainnet"), default="base-sepolia")
     parser.add_argument("--rpc-url", required=True)
+    parser.add_argument("--shadow-rpc-url")
     parser.add_argument("--rehearsal", type=Path, required=True)
     parser.add_argument("--worker-binary", type=Path)
     parser.add_argument("--hosted-workers", action="store_true")
@@ -490,7 +491,7 @@ def main() -> int:
     require(job["state"] == "confirmed", "x402 proof relay did not settle")
     require(job.get("settlement_event_id"), "canonical settlement event is missing")
 
-    client = sepolia.SignedRpc(args.rpc_url)
+    client = sepolia.SignedRpc(args.rpc_url, args.shadow_rpc_url)
     token = payment_evidence["asset"]
     require(
         sepolia.rehearsal.token_balance(client.url, token, spec["competition"]) == 0,

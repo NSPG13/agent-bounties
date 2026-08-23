@@ -12,16 +12,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_SOURCE_COMMIT: 4d09d82825c38f2bf93a8ee4375a95b302410c29
-  SOURCE_RUN_ID: "32346174505"
-  SOURCE_ACTOR_DERIVATION_SALT: "32346174505:1:mainnet"
+  RELEASE_SOURCE_COMMIT: 5a351f3e373691be58a9575b4374812b494b6086
+  SOURCE_RUN_ID: "32629535171"
+  SOURCE_ACTOR_DERIVATION_SALT: "32623224167:1:mainnet"
   OPEN_COMPETITION_V2_RUNTIME_READINESS_URL: https://agent-bounties-api.onrender.com/v1/base/open-competition-v2-beta3/release
-  CANARY_TEMPLATE_JOB_ID: bccd0e3e-73d0-41ac-8bbd-0a806ea45194
-  CANARY_SUCCESS_JOB_ID: 57492f09-a3d2-497c-8650-a6bb1fe99f5d
-  PLONK_COMPETITION: "0x3e052b933628b960d61654a68fca23d869d8989f"
-  PLONK_SETTLEMENT_TRANSACTION: "0x830e856ddbade328a0715e47e3aaa36f6363c6be71c18bd20f0baaab75aed4f3"
-  FORCED_REFUND_PAYMENT_TRANSACTION: "0xdb833590333b36c69ee7e7d873a94f87d519278321df13f155253473e4a0a7c2"
-  FORCED_REFUND_TRANSACTION: "0x0fa117876516f1641181e3bb843f29fd74be63262b7685663e6afb6632205d38"
+  CANARY_TEMPLATE_JOB_ID: eed7303a-892a-41e1-81e5-c6c9c37237bd
+  CANARY_SUCCESS_JOB_ID: eed7303a-892a-41e1-81e5-c6c9c37237bd
+  PLONK_COMPETITION: "0x5cf577877c099eb3cdef844793dac152e7f598b5"
+  PLONK_SETTLEMENT_TRANSACTION: "0xc77a2689894c849c215885f63d6e09c1d5432d665d730f2021312994501ce259"
+  FORCED_REFUND_PAYMENT_TRANSACTION: "0x1f35e1eb06f921d7735c29ce3ab01164d46019e60756724d5016a6aad92dec11"
+  FORCED_REFUND_TRANSACTION: "0x2fee2a3cd0e546bf70e54d562f22fbbb810a61f2268b7aa9927b8fda14be1cac"
   BASE_USDC: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 
 jobs:
@@ -108,6 +108,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/.release-control/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
           OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
           BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
@@ -208,6 +209,7 @@ jobs:
           python .release-control/scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api https://api.agentbounties.app \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canary-resume.json \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$SOURCE_ACTOR_DERIVATION_SALT" \
             "${resume_args[@]}" --timeout-seconds 5400 --output target/mainnet-x402-success.json

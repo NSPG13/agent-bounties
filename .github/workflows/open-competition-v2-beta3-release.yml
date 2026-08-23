@@ -777,6 +777,7 @@ jobs:
           curl --fail --silent "http://127.0.0.1:${api_port}/health" >/dev/null
           python scripts/run_open_competition_v2_x402_rehearsal.py \
             --api "http://127.0.0.1:${api_port}" --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --shadow-rpc-url "$BASE_SEPOLIA_SHADOW_RPC_URL" \
             --rehearsal target/sepolia-rehearsal.json --worker-binary target/release/worker \
             --private-key-env BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
@@ -1231,6 +1232,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
           OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
           BASE_KEEPER_ADDRESS: ${{ vars.BASE_KEEPER_ADDRESS }}
@@ -1324,6 +1326,7 @@ jobs:
           python scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api http://127.0.0.1:8788 \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --worker-binary target/release/worker --expect-refund \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
@@ -1333,6 +1336,7 @@ jobs:
           python scripts/run_open_competition_v2_x402_rehearsal.py \
             --network base-mainnet --api https://api.agentbounties.app \
             --rpc-url "$BASE_MAINNET_RPC_URL" --rehearsal target/mainnet-canaries.json \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --hosted-workers --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --output target/mainnet-x402-success.json

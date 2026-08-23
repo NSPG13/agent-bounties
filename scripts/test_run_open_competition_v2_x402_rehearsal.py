@@ -16,6 +16,13 @@ SPEC.loader.exec_module(MODULE)
 
 
 class X402RehearsalTests(unittest.TestCase):
+    def test_reclaim_client_keeps_the_configured_shadow_rpc(self):
+        source = PATH.read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("--shadow-rpc-url")', source)
+        self.assertIn(
+            "sepolia.SignedRpc(args.rpc_url, args.shadow_rpc_url)", source
+        )
+
     def test_fresh_quote_waits_for_active_canonical_projection(self):
         competition = "0x" + "11" * 20
         active = {
