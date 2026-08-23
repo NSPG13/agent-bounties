@@ -45,7 +45,7 @@ def guard_state(active: int, used: int, *, period_spent: int = 0, lifetime_spent
 
 
 class LocalGmvGuardTests(unittest.TestCase):
-    def test_pending_recovery_uses_separate_receipt_rpc_pair(self) -> None:
+    def test_pending_recovery_uses_execution_pair_and_separate_receipt_pair(self) -> None:
         delegate = "0x" + "22" * 20
         transaction_hash = "0x" + "11" * 32
         ledger = {
@@ -74,15 +74,15 @@ class LocalGmvGuardTests(unittest.TestCase):
             ):
                 resumed = guard_module.resume_pending(
                     state_dir,
-                    "https://state-primary.invalid",
-                    "https://state-shadow.invalid",
+                    "https://execution-primary.invalid",
+                    "https://execution-shadow.invalid",
                     "https://receipt-primary.invalid",
                     "https://receipt-shadow.invalid",
                 )
         self.assertEqual(resumed, [evidence])
         self.assertEqual(
             [call.args[0] for call in rpc.call_args_list],
-            ["https://state-primary.invalid", "https://state-shadow.invalid"],
+            ["https://execution-primary.invalid", "https://execution-shadow.invalid"],
         )
         wait_receipt.assert_called_once_with(
             "https://receipt-primary.invalid",

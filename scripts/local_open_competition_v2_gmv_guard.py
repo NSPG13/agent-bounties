@@ -843,6 +843,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activation-bundle", type=Path, required=True)
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--shadow-rpc-url", required=True)
+    parser.add_argument("--execution-rpc-url")
+    parser.add_argument("--shadow-execution-rpc-url")
     parser.add_argument("--receipt-rpc-url")
     parser.add_argument("--shadow-receipt-rpc-url")
     parser.add_argument("--json-out", type=Path)
@@ -862,14 +864,16 @@ def main(argv: list[str] | None = None) -> int:
         reserve_deployment = load_object(args.reserve_deployment)
         pool = load_object(args.candidate_pool)
         bundle = load_object(args.activation_bundle)
+        execution_rpc_url = args.execution_rpc_url or args.rpc_url
+        shadow_execution_rpc_url = args.shadow_execution_rpc_url or args.shadow_rpc_url
         receipt_rpc_url = args.receipt_rpc_url or args.rpc_url
         shadow_receipt_rpc_url = args.shadow_receipt_rpc_url or args.shadow_rpc_url
         validate_reviewed_inputs(release, reserve_deployment, pool, bundle, delegate)
         with exclusive_guard(state_dir):
             resumed = resume_pending(
                 state_dir,
-                args.rpc_url,
-                args.shadow_rpc_url,
+                execution_rpc_url,
+                shadow_execution_rpc_url,
                 receipt_rpc_url,
                 shadow_receipt_rpc_url,
             )
@@ -893,8 +897,8 @@ def main(argv: list[str] | None = None) -> int:
                 direct = {"to": relay["to"], "data": relay["data"]}
                 execution = execute_direct(
                     state_dir,
-                    args.rpc_url,
-                    args.shadow_rpc_url,
+                    execution_rpc_url,
+                    shadow_execution_rpc_url,
                     receipt_rpc_url,
                     shadow_receipt_rpc_url,
                     direct,
@@ -946,8 +950,8 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         execution = execute_direct(
                             state_dir,
-                            args.rpc_url,
-                            args.shadow_rpc_url,
+                            execution_rpc_url,
+                            shadow_execution_rpc_url,
                             receipt_rpc_url,
                             shadow_receipt_rpc_url,
                             creation["delegate_transaction"],
