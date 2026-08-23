@@ -36,6 +36,9 @@ struct OpenCompetitionV2PublicMetadata {
     title: String,
     summary: String,
     source_url: String,
+    epoch_starts_at: Option<String>,
+    epoch_ends_at: Option<String>,
+    minimum_score_base_units: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -937,26 +940,57 @@ fn v2_public_metadata(
     let registry: OpenCompetitionV2PublicMetadataRegistry =
         serde_json::from_str(OPEN_COMPETITION_V2_METADATA_JSON)
             .map_err(|error| format!("invalid Open Competition V2 metadata: {error}"))?;
-    if registry.schema_version != "agent-bounties/open-competition-v2-public-metadata-v1"
-        || registry.network != release.network
+    if registry.schema_version != "agent-bounties/open-competition-v2-public-metadata-v1" {
+        return Err("Open Competition V2 public metadata schema mismatch".to_string());
+    }
+    // Display metadata is optional enrichment, not canonical inventory evidence.
+    // A release rotation must not hide otherwise valid safe-block records while
+    // its reviewed metadata registry is being updated.
+    if registry.network != release.network
         || !registry
             .factory_contract
             .eq_ignore_ascii_case(&release.factory_contract)
     {
-        return Err("Open Competition V2 public metadata identity mismatch".to_string());
+        return Ok(BTreeMap::new());
     }
     let mut indexed = BTreeMap::new();
     for item in registry.competitions {
         if item.seed_id.trim().is_empty()
             || item.title.trim().is_empty()
             || item.summary.trim().is_empty()
-            || !item
+            || !(item
                 .source_url
                 .starts_with("https://github.com/NSPG13/agent-bounties/issues/")
+                || item.source_url
+                    == "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json")
             || item.bounty_id.len() != 66
             || item.competition.len() != 42
         {
             return Err("Open Competition V2 public metadata entry is malformed".to_string());
+        }
+        match (&item.epoch_starts_at, &item.epoch_ends_at) {
+            (Some(starts_at), Some(ends_at)) => {
+                let starts_at = DateTime::parse_from_rfc3339(starts_at)
+                    .map_err(|_| "Open Competition V2 metadata start is malformed")?;
+                let ends_at = DateTime::parse_from_rfc3339(ends_at)
+                    .map_err(|_| "Open Competition V2 metadata end is malformed")?;
+                if starts_at >= ends_at
+                    || item
+                        .minimum_score_base_units
+                        .as_deref()
+                        .is_none_or(|value| {
+                            value.parse::<u128>().ok().is_none_or(|value| value == 0)
+                        })
+                {
+                    return Err(
+                        "Open Competition V2 metadata scoring window is malformed".to_string()
+                    );
+                }
+            }
+            (None, None) if item.minimum_score_base_units.is_none() => {}
+            _ => {
+                return Err("Open Competition V2 metadata scoring window is incomplete".to_string())
+            }
         }
         let key = item.competition.to_ascii_lowercase();
         if indexed.insert(key, item).is_some() {
@@ -1104,6 +1138,15 @@ pub fn open_competition_v2_opportunities(
             "verification_policy_hash": projection.verification_policy_hash,
             "settlement_policy_hash": projection.settlement_policy_hash,
             "seed_id": known.map(|item| item.seed_id.clone()),
+            "scoring_window": known.and_then(|item| {
+                item.epoch_starts_at.as_ref().zip(item.epoch_ends_at.as_ref()).map(
+                    |(starts_at, ends_at)| json!({
+                        "starts_at": starts_at,
+                        "ends_at": ends_at,
+                        "minimum_score_base_units": item.minimum_score_base_units.as_deref(),
+                    }),
+                )
+            }),
             "payment_evidence": "CompetitionSettledV2"
         });
         let (categories, skills, keyword_matches) = web_public::discovery_taxonomy_with_matches(
@@ -1970,7 +2013,7 @@ mod tests {
             repository_subject_hash: hash('b'),
             sp1_source_commit: hash('c'),
             sp1_circuit_version: "agent-bounties-sp1-safe-v1".to_string(),
-            factory_contract: "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4".to_string(),
+            factory_contract: "0x29d0e39e0c03797c690633535722e6b34a69a78a".to_string(),
             factory_runtime_code_hash: hash('d'),
             implementation_contract: address('2'),
             implementation_runtime_code_hash: hash('e'),
@@ -1993,9 +2036,9 @@ mod tests {
             metric_programs: vec![program.clone()],
         };
         let projection = OpenCompetitionV2Projection {
-            bounty_id: "0xe5a73bf7669a2c3fa66ae38a47383bfa8f05448ba54e07a9af1a4013deb30f19"
+            bounty_id: "0x6901f3ecf52842689a4209aac6fa7d8af205a6d2a546d567b77705e06c0a8c9a"
                 .to_string(),
-            competition: "0x0618b169c3c878a0386b5da7b54713f60baa1ec2".to_string(),
+            competition: "0x8c494466711c1de316c7e7599f8b0641a30a0c98".to_string(),
             creator: address('8'),
             state: OpenCompetitionV2ProjectedState::Active,
             solver_reward: 3_000_000,
@@ -2068,13 +2111,21 @@ mod tests {
         .remove(0);
         assert_eq!(
             active.title,
-            "Map the shortest discovery path for eight AI-agent channels"
+            "Highest externally funded canonical GMV — daily August 24"
         );
         assert_eq!(active.work_state, "claimable");
         assert_eq!(active.payment_state, "escrowed");
         assert_eq!(active.competition_mode, "first_proven");
         assert_eq!(active.max_entries, None);
         assert_eq!(active.next_action.action, "quote_open_competition_v2_proof");
+        assert_eq!(
+            active.evidence_requirements["scoring_window"]["starts_at"],
+            "2026-08-24T00:00:00Z"
+        );
+        assert_eq!(
+            active.evidence_requirements["scoring_window"]["minimum_score_base_units"],
+            "1"
+        );
         assert_eq!(
             active.cash_economics.unwrap().gross_cash_margin.amount,
             "2890000"
@@ -2115,6 +2166,118 @@ mod tests {
         .remove(0);
         assert_eq!(paid.payment_state, "paid");
         assert_eq!(paid.proof_urls.len(), 1);
+    }
+
+    #[test]
+    fn beta3_stale_optional_metadata_does_not_hide_canonical_inventory() {
+        let (mut release, mut record) = beta3_release_and_record();
+        release.factory_contract = address_for_test('a');
+        record.factory_contract = release.factory_contract.clone();
+        record.projection.bounty_id = format!("0x{}", "b".repeat(64));
+        record.projection.competition = address_for_test('c');
+        let events = vec![beta3_event(
+            &record,
+            OpenCompetitionV2EventKind::CanonicalCompetitionCreated,
+            90,
+        )];
+        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+
+        let item = open_competition_v2_opportunities(
+            &[record],
+            &events,
+            &release,
+            "base-mainnet",
+            "https://api.example",
+            100_000,
+            10_000,
+            now,
+        )
+        .unwrap()
+        .remove(0);
+
+        assert_eq!(item.title, "Open Competition 0xbbbbbbbbbb");
+        assert_eq!(item.work_state, "claimable");
+        assert_eq!(item.payment_state, "escrowed");
+        assert_eq!(item.next_action.action, "quote_open_competition_v2_proof");
+    }
+
+    #[test]
+    fn beta3_live_registry_projects_ten_scanner_ready_opportunities_and_feeds() {
+        let (release, template) = beta3_release_and_record();
+        let metadata = v2_public_metadata(&release).unwrap();
+        assert_eq!(metadata.len(), 10);
+        let mut records = Vec::new();
+        let mut events = Vec::new();
+        for (index, item) in metadata.values().enumerate() {
+            let mut record = template.clone();
+            record.projection.bounty_id = item.bounty_id.clone();
+            record.projection.competition = item.competition.clone();
+            record.projection.last_block = 90 + index as u64;
+            record.safe_block_number = 200;
+            events.push(beta3_event(
+                &record,
+                OpenCompetitionV2EventKind::CanonicalCompetitionCreated,
+                90 + index as u64,
+            ));
+            records.push(record);
+        }
+        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+        let projected = open_competition_v2_opportunities(
+            &records,
+            &events,
+            &release,
+            "base-mainnet",
+            "https://api.example",
+            100_000,
+            10_000,
+            now,
+        )
+        .unwrap();
+        let ready = apply_query(
+            projected,
+            &OpportunityQuery {
+                source_type: Some("canonical_base".to_string()),
+                ..OpportunityQuery::default()
+            },
+            Some(OpportunityView::ReadyToEarn),
+            now,
+        );
+
+        assert_eq!(ready.len(), 10);
+        assert!(ready.iter().all(|item| {
+            item.next_action.action == "quote_open_competition_v2_proof"
+                && item.verification_ready
+                && item.payment_committed
+                && item.evidence_requirements["scoring_window"].is_object()
+                && item
+                    .public_url
+                    .contains("open-competition-v2-forward-gmv-candidate-pool-v2")
+        }));
+        let projection = OpportunityProjectionResponse {
+            schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
+            generated_at: now.to_rfc3339(),
+            network: "base-mainnet".to_string(),
+            applied_view: Some("ready_to_earn".to_string()),
+            degraded: false,
+            source_statuses: vec![OpportunitySourceStatus {
+                source_type: "canonical_base".to_string(),
+                available: true,
+                authoritative_urls: vec!["https://api.example/v1/opportunities".to_string()],
+                item_count: ready.len(),
+                error: None,
+            }],
+            items: ready,
+            evidence_boundary: "test".to_string(),
+        };
+        let feeds = render_opportunity_feeds(&projection, "https://api.example");
+        let json: Value = serde_json::from_str(&feeds.json).unwrap();
+        assert_eq!(json["items"].as_array().unwrap().len(), 10);
+        assert!(feeds
+            .rss
+            .contains("Highest externally funded canonical GMV"));
+        assert!(feeds
+            .atom
+            .contains("Highest externally funded canonical GMV"));
     }
 
     fn address_for_test(digit: char) -> String {

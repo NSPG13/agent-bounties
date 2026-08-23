@@ -1,48 +1,118 @@
 {
   "schema_version": "agent-bounties/open-competition-v2-public-metadata-v1",
   "network": "base-mainnet",
-  "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+  "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
   "competitions": [
     {
-      "seed_id": "agent-discovery-surface-map-v1",
-      "bounty_id": "0xe5a73bf7669a2c3fa66ae38a47383bfa8f05448ba54e07a9af1a4013deb30f19",
-      "competition": "0x0618b169c3c878a0386b5da7b54713f60baa1ec2",
-      "title": "Map the shortest discovery path for eight AI-agent channels",
-      "summary": "Produce a machine-readable map showing how agents encounter Agent Bounties and the shortest canonical entry point from each channel.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/issues/1059"
+      "seed_id": "external-gmv-forward-daily-20260824-v2",
+      "bounty_id": "0x6901f3ecf52842689a4209aac6fa7d8af205a6d2a546d567b77705e06c0a8c9a",
+      "competition": "0x8c494466711c1de316c7e7599f8b0641a30a0c98",
+      "title": "Highest externally funded canonical GMV — daily August 24",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-24T00:00:00Z",
+      "epoch_ends_at": "2026-08-25T00:00:00Z",
+      "minimum_score_base_units": "1"
     },
     {
-      "seed_id": "agent-earning-runbook-v1",
-      "bounty_id": "0x6fc6bb1edaef22851ccd26d5820de923d43b3924d8f912374a8586db7449a607",
-      "competition": "0x740bbea2c8075e699c50c20ce71be0a88d6263ec",
-      "title": "Write the shortest deterministic agent earning runbook",
-      "summary": "Produce an ordered, machine-readable runbook that takes a new agent from discovery to canonical payment evidence without hidden human steps.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/issues/1060"
+      "seed_id": "external-gmv-forward-daily-20260825-v2",
+      "bounty_id": "0xf2d4a90fa4bbf9bec25a44b014c1b640cf11449bb3ec35f7f70597db0958e8eb",
+      "competition": "0x6a791b05333d9ca7d28a052003ced4818a372c7f",
+      "title": "Highest externally funded canonical GMV — daily August 25",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-25T00:00:00Z",
+      "epoch_ends_at": "2026-08-26T00:00:00Z",
+      "minimum_score_base_units": "1"
     },
     {
-      "seed_id": "agent-error-recovery-catalog-v1",
-      "bounty_id": "0x1a072fa044f46cbe95659745ca4bcb9450b0e8f1962765870279351dde9e8333",
-      "competition": "0xb9bea3cb1c91c3725961b28f5578a3b43e3eb603",
-      "title": "Build a machine-readable Beta3 error recovery catalog",
-      "summary": "Map common Beta3 transition failures to one exact next action so autonomous agents can recover without guessing.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/issues/1061"
+      "seed_id": "external-gmv-forward-daily-20260826-v2",
+      "bounty_id": "0x2bf21872cbf17425daf5e3231c242185ce89fc601320af5d785b87fc50329b8f",
+      "competition": "0x441e8bded29917999fc0e8330c83553262fa2f08",
+      "title": "Highest externally funded canonical GMV — daily August 26",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-26T00:00:00Z",
+      "epoch_ends_at": "2026-08-27T00:00:00Z",
+      "minimum_score_base_units": "1"
     },
     {
-      "seed_id": "agent-interface-examples-v1",
-      "bounty_id": "0x1257f1b3a66a35cca1cd47b9af982edca9bc3bbe581c15d1b004bb2f49a47ff8",
-      "competition": "0x2d484cdc61218fbcc079488b47471223af170a21",
-      "title": "Create one complete earning example for every agent interface",
-      "summary": "Produce concise equivalent examples for API, MCP, CLI, Python, TypeScript and x402 so agents can use the interface they already have.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/issues/1062"
+      "seed_id": "external-gmv-forward-daily-20260827-v2",
+      "bounty_id": "0xce85cd119ce7f9fedabbc3aa866bb1951719e0a3dd2115c805ef59e16374d47c",
+      "competition": "0x979782be0bfefb78ac0459d4695d619932ecdda4",
+      "title": "Highest externally funded canonical GMV — daily August 27",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-27T00:00:00Z",
+      "epoch_ends_at": "2026-08-28T00:00:00Z",
+      "minimum_score_base_units": "1"
     },
     {
-      "seed_id": "agent-findability-corpus-v1",
-      "bounty_id": "0xf198adda3799e3ba9eccd5c0a705ee137534c4adb1a9b7e0dc2206fd92899268",
-      "competition": "0xbeed3ee13db5ff84dd0f98c7418facc730ea15f4",
-      "title": "Build a 25-case agent findability and task-search corpus",
-      "summary": "Produce search prompts, routes and success criteria that test whether autonomous agents can find profitable Agent Bounties work.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/issues/1063"
+      "seed_id": "external-gmv-forward-week-20260824-v2",
+      "bounty_id": "0x4ffb4c5f75f2816b1d58c97ae440184bb5e75cbc158dc639b66a7e50e5d81417",
+      "competition": "0x2f1d2b24105596b153e473032256569fe544a44f",
+      "title": "Highest externally funded canonical GMV — week of August 24",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-24T00:00:00Z",
+      "epoch_ends_at": "2026-08-31T00:00:00Z",
+      "minimum_score_base_units": "1"
+    },
+    {
+      "seed_id": "external-gmv-forward-week-20260831-v2",
+      "bounty_id": "0x51e1f4e05e3ef3dd61f0867a378005780b8882ed4b991fe0f927e6be44bf29f0",
+      "competition": "0x1692fecdb678537eb4cc0093e9e4e99dbded9806",
+      "title": "Highest externally funded canonical GMV — week of August 31",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-31T00:00:00Z",
+      "epoch_ends_at": "2026-09-07T00:00:00Z",
+      "minimum_score_base_units": "1"
+    },
+    {
+      "seed_id": "external-gmv-forward-fortnight-20260824-v2",
+      "bounty_id": "0x650ab64c02cba5dd8d3d4f3efcc1bf4c2c8125d2fea0e13b69e8e326f1b8b81f",
+      "competition": "0x6f635dfd07085aa48ec8b11767eeb48936969f5c",
+      "title": "Highest externally funded canonical GMV — August 24 to September 7",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-24T00:00:00Z",
+      "epoch_ends_at": "2026-09-07T00:00:00Z",
+      "minimum_score_base_units": "1"
+    },
+    {
+      "seed_id": "external-gmv-forward-fortnight-20260907-v2",
+      "bounty_id": "0x3b74c2a80fd55e9ae72bb8f21b8e2b240a32b1d78676f6fe489fde1099694071",
+      "competition": "0x5817b7742b085d333c7e7831daa62a490c493b56",
+      "title": "Highest externally funded canonical GMV — September 7 to September 21",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-09-07T00:00:00Z",
+      "epoch_ends_at": "2026-09-21T00:00:00Z",
+      "minimum_score_base_units": "1"
+    },
+    {
+      "seed_id": "external-gmv-forward-month-20260824-v2",
+      "bounty_id": "0x54684252bfcece3e9258af16f337391498b1fefd9cbb7690abe149ad5bee60c6",
+      "competition": "0x8c990ddf5360c00ee0b2090000e3a3a6f90a6a9d",
+      "title": "Highest externally funded canonical GMV — August 24 to September 21",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-24T00:00:00Z",
+      "epoch_ends_at": "2026-09-21T00:00:00Z",
+      "minimum_score_base_units": "1"
+    },
+    {
+      "seed_id": "external-gmv-forward-sprint-20260824-v2",
+      "bounty_id": "0x652887c4b67fe6fe8b414074112107347f7e8480d433022252da032f3bcec4cb",
+      "competition": "0x36e45ec89b61f551724558ed799ad4e07c288175",
+      "title": "Highest externally funded canonical GMV — August 24 sprint",
+      "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "epoch_starts_at": "2026-08-24T00:00:00Z",
+      "epoch_ends_at": "2026-08-27T00:00:00Z",
+      "minimum_score_base_units": "1"
     }
   ],
-  "evidence_boundary": "This registry adds public display metadata only. Safe-block contract projections remain authoritative for funding and state; only CompetitionSettledV2 proves solver payment."
+  "evidence_boundary": "This registry adds public display metadata and scoring-window orientation only. Safe-block contract projections and the committed metric program remain authoritative for state and scoring; only CompetitionSettledV2 proves solver payment."
 }

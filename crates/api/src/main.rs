@@ -5357,20 +5357,38 @@ fn platform_amount(base_units: impl Into<String>) -> Result<PlatformAmountRespon
 fn platform_inventory_response(
     autonomous: Option<AutonomousBountyInventorySummary>,
     competition: Option<OpenCompetitionInventorySummary>,
+    competition_v2: Option<OpenCompetitionInventorySummary>,
 ) -> Result<PlatformInventoryResponse, StatusCode> {
-    match (autonomous, competition) {
-        (Some(autonomous), Some(competition)) => Ok(PlatformInventoryResponse {
+    match (autonomous, competition, competition_v2) {
+        (Some(autonomous), Some(competition), Some(competition_v2)) => {
+            let competition_count = competition
+                .ready_to_earn_count
+                .checked_add(competition_v2.ready_to_earn_count)
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            let competition_funding = add_platform_base_units(
+                &competition.funded_usdc_base_units,
+                &competition_v2.funded_usdc_base_units,
+            )?;
+            let competition_solver_rewards = add_platform_base_units(
+                &competition.solver_reward_usdc_base_units,
+                &competition_v2.solver_reward_usdc_base_units,
+            )?;
+            let competition_verifier_rewards = add_platform_base_units(
+                &competition.verifier_reward_usdc_base_units,
+                &competition_v2.verifier_reward_usdc_base_units,
+            )?;
+            Ok(PlatformInventoryResponse {
             status: "ready".to_string(),
             active_funded_opportunities: Some(
                 autonomous
                     .claimable_bounty_count
-                    .checked_add(competition.ready_to_earn_count)
+                    .checked_add(competition_count)
                     .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?,
             ),
             available_funding_usdc: Some(exact_usdc(
                 add_platform_base_units(
                     &autonomous.funded_usdc_base_units,
-                    &competition.funded_usdc_base_units,
+                    &competition_funding,
                 )?
                 .parse::<u128>()
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
@@ -5378,7 +5396,7 @@ fn platform_inventory_response(
             available_solver_rewards_usdc: Some(exact_usdc(
                 add_platform_base_units(
                     &autonomous.solver_reward_usdc_base_units,
-                    &competition.solver_reward_usdc_base_units,
+                    &competition_solver_rewards,
                 )?
                 .parse::<u128>()
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
@@ -5386,20 +5404,23 @@ fn platform_inventory_response(
             available_verifier_rewards_usdc: Some(exact_usdc(
                 add_platform_base_units(
                     &autonomous.verifier_reward_usdc_base_units,
-                    &competition.verifier_reward_usdc_base_units,
+                    &competition_verifier_rewards,
                 )?
                 .parse::<u128>()
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
             )),
-            generated_at: Some(if autonomous.generated_at <= competition.generated_at {
-                autonomous.generated_at
-            } else {
-                competition.generated_at
-            }),
+            generated_at: [
+                autonomous.generated_at,
+                competition.generated_at,
+                competition_v2.generated_at,
+            ]
+            .into_iter()
+            .min(),
             definition: "Current funded opportunities are reported as one marketplace total. The point-in-time projection is not added to historical payout or conversion cohorts.".to_string(),
-        }),
-        (autonomous, competition) => Ok(PlatformInventoryResponse {
-            status: if autonomous.is_some() || competition.is_some() {
+        })
+        }
+        (autonomous, competition, competition_v2) => Ok(PlatformInventoryResponse {
+            status: if autonomous.is_some() || competition.is_some() || competition_v2.is_some() {
                 "partial"
             } else {
                 "unavailable"
@@ -5434,11 +5455,14 @@ fn platform_metrics_response(
     policy: PublicMetricsPolicy,
     autonomous_inventory: Option<AutonomousBountyInventorySummary>,
     competition_inventory: Option<OpenCompetitionInventorySummary>,
+    competition_v2_inventory: Option<OpenCompetitionInventorySummary>,
     source_freshness: PlatformCanonicalSourceFreshness,
 ) -> Result<PlatformMetricsResponse, StatusCode> {
     let settlement_rate = (stats.claim_cohort.mature > 0)
         .then(|| stats.claim_cohort.settled as f64 / stats.claim_cohort.mature as f64);
-    let inventory_complete = autonomous_inventory.is_some() && competition_inventory.is_some();
+    let inventory_complete = autonomous_inventory.is_some()
+        && competition_inventory.is_some()
+        && competition_v2_inventory.is_some();
     let coverage_status = if inventory_complete
         && source_freshness.complete()
         && stats.coverage.awaiting_block_time_events == 0
@@ -5447,7 +5471,11 @@ fn platform_metrics_response(
     } else {
         "partial"
     };
-    let inventory = platform_inventory_response(autonomous_inventory, competition_inventory)?;
+    let inventory = platform_inventory_response(
+        autonomous_inventory,
+        competition_inventory,
+        competition_v2_inventory,
+    )?;
     let lifetime_canonical_payouts =
         platform_amount(stats.payouts.lifetime_total_base_units.clone())?;
     let total_gmv_28d = growth
@@ -5750,6 +5778,13 @@ async fn platform_metrics(
     } else {
         None
     };
+    let competition_v2_inventory = if source_freshness.open_competition_v2 {
+        build_open_competition_v2_inventory_summary(&state, "base-mainnet")
+            .await
+            .ok()
+    } else {
+        None
+    };
     let response = platform_metrics_response(
         stats,
         growth,
@@ -5757,6 +5792,7 @@ async fn platform_metrics(
         policy,
         autonomous_inventory,
         competition_inventory,
+        competition_v2_inventory,
         source_freshness,
     )?;
     Ok((
@@ -14365,6 +14401,52 @@ async fn build_open_competition_inventory_summary(
     })
 }
 
+async fn build_open_competition_v2_inventory_summary(
+    state: &SharedState,
+    network: &str,
+) -> Result<OpenCompetitionInventorySummary, StatusCode> {
+    let generated_at = Utc::now();
+    let items = load_public_open_competition_v2_opportunities(
+        state,
+        network,
+        state.public_base_url.trim_end_matches('/'),
+        generated_at,
+    )
+    .await?;
+    let ready = items
+        .iter()
+        .filter(|item| {
+            item.work_state == "claimable"
+                && item.payment_state == "escrowed"
+                && item.payment_committed
+                && item.verification_ready
+                && item
+                    .cash_economics
+                    .as_ref()
+                    .is_some_and(|economics| economics.gross_cash_margin_positive)
+        })
+        .collect::<Vec<_>>();
+    let sum = |field: fn(&OpportunityItem) -> &str| {
+        ready.iter().try_fold(0_u128, |total, item| {
+            field(item)
+                .parse::<u128>()
+                .ok()
+                .and_then(|amount| total.checked_add(amount))
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
+        })
+    };
+    Ok(OpenCompetitionInventorySummary {
+        generated_at: generated_at.to_rfc3339(),
+        ready_to_earn_count: ready.len(),
+        funded_usdc_base_units: sum(|item| &item.funded_amount.amount)?.to_string(),
+        solver_reward_usdc_base_units: sum(|item| &item.reward.amount)?.to_string(),
+        // Open Competition V2 reserves a keeper reward rather than a verifier
+        // reward. Keep this existing role-specific public field truthful while
+        // the full escrow remains included in available_funding_usdc.
+        verifier_reward_usdc_base_units: "0".to_string(),
+    })
+}
+
 fn format_usdc_base_units(amount: u128) -> String {
     format!(
         "{}.{:02}",
@@ -19902,6 +19984,7 @@ mod tests {
             policy,
             None,
             None,
+            None,
             PlatformCanonicalSourceFreshness {
                 autonomous: true,
                 open_competition: true,
@@ -19956,7 +20039,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_inventory_combines_protocols_only_when_both_are_available() {
+    fn platform_inventory_combines_all_fresh_sources_without_type_split() {
         let autonomous = AutonomousBountyInventorySummary {
             schema_version: "test".to_string(),
             network: "base-mainnet".to_string(),
@@ -19981,22 +20064,37 @@ mod tests {
             solver_reward_usdc_base_units: "1000000".to_string(),
             verifier_reward_usdc_base_units: "200000".to_string(),
         };
-        let combined =
-            platform_inventory_response(Some(autonomous.clone()), Some(competition)).unwrap();
+        let competition_v2 = OpenCompetitionInventorySummary {
+            generated_at: "2026-08-12T20:02:00+00:00".to_string(),
+            ready_to_earn_count: 10,
+            funded_usdc_base_units: "30400000".to_string(),
+            solver_reward_usdc_base_units: "30000000".to_string(),
+            verifier_reward_usdc_base_units: "0".to_string(),
+        };
+        let combined = platform_inventory_response(
+            Some(autonomous.clone()),
+            Some(competition),
+            Some(competition_v2),
+        )
+        .unwrap();
 
         assert_eq!(combined.status, "ready");
-        assert_eq!(combined.active_funded_opportunities, Some(3));
-        assert_eq!(combined.available_funding_usdc.as_deref(), Some("4.200000"));
+        assert_eq!(combined.active_funded_opportunities, Some(13));
+        assert_eq!(
+            combined.available_funding_usdc.as_deref(),
+            Some("34.600000")
+        );
         assert_eq!(
             combined.available_solver_rewards_usdc.as_deref(),
-            Some("3.400000")
+            Some("33.400000")
         );
         let combined_json = serde_json::to_string(&combined).unwrap();
         assert!(!combined_json.contains("autonomous_claimable_bounties"));
         assert!(!combined_json.contains("open_competitions_ready_to_earn"));
+        assert!(!combined_json.contains("open_competition_v2"));
         assert!(!combined_json.contains("standing_meta_bounties"));
 
-        let partial = platform_inventory_response(Some(autonomous), None).unwrap();
+        let partial = platform_inventory_response(Some(autonomous), None, None).unwrap();
         assert_eq!(partial.status, "partial");
         assert_eq!(partial.active_funded_opportunities, None);
         assert!(partial.available_funding_usdc.is_none());
@@ -20067,6 +20165,7 @@ mod tests {
                 )
                 .unwrap(),
                 public_metrics_policy().unwrap(),
+                None,
                 None,
                 None,
                 PlatformCanonicalSourceFreshness {
