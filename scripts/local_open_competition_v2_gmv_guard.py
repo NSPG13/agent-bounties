@@ -818,7 +818,10 @@ def execute_direct(
     if not accepted:
         # Both endpoints may report an already-known/nonce-used error after accepting
         # the exact raw transaction. Receipt reconciliation decides, never the text.
-        if all(rpc(url, "eth_getTransactionReceipt", [tx_hash], 512) is None for url in (primary, shadow)):
+        if all(
+            rpc(url, "eth_getTransactionReceipt", [tx_hash], 512) is None
+            for url in (receipt_primary, receipt_shadow)
+        ):
             raise GuardError(f"both RPC broadcasts failed before a receipt was visible: {errors}")
     record["status"] = "broadcast"
     save_ledger(state_dir, ledger)
