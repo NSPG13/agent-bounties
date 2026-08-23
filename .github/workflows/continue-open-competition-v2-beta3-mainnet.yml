@@ -475,7 +475,7 @@ jobs:
             cp -aL "$source/mainnet-proofs" target/
             recovery_args+=(--require-pristine-derived-actors)
           else
-            python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
+            python target/continuation-control/scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
               --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
               --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
               --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \
@@ -490,7 +490,7 @@ jobs:
                 --output "target/mainnet-proofs/$proof.json" --log-dir "target/mainnet-proof-logs/$proof"
             done
           fi
-          python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
+          python target/continuation-control/scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle target/mainnet-canary-bundle.json --rpc-url "$BASE_MAINNET_RPC_URL" \
             --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \

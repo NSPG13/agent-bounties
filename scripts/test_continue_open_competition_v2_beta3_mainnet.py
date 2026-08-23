@@ -237,6 +237,12 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("ref: ${{ github.sha }}", self.text)
         self.assertIn("path: target/continuation-control", self.text)
         self.assertIn("--manifest-path target/continuation-control/Cargo.toml", self.text)
+        self.assertEqual(
+            self.text.count(
+                "target/continuation-control/scripts/run_open_competition_v2_sepolia_rehearsal.py"
+            ),
+            2,
+        )
         self.assertIn("target/continuation-build/release/api", self.text)
         self.assertIn("--worker-binary target/continuation-build/release/worker", self.text)
         self.assertEqual(
