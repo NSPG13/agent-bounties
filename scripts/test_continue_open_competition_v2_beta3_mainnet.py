@@ -186,7 +186,7 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertIn("PRESERVED_PLONK_BEST_A_PROOF_HASH", self.text)
         self.assertIn("PRESERVED_PLONK_BEST_B_PROOF_HASH", self.text)
         self.assertIn("--require-pristine-derived-actors", self.text)
-        self.assertGreaterEqual(self.text.count('--shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL"'), 2)
+        self.assertGreaterEqual(self.text.count('--shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL"'), 4)
 
     def test_prover_installs_all_three_reviewed_profiles(self):
         prover = self.text.split("  deploy-production-prover:", 1)[1].split(
