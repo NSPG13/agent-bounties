@@ -96,6 +96,20 @@ class SignedRpc:
                 return receipt
         return None
 
+    def transaction(self, transaction_hash: str) -> dict[str, Any] | None:
+        for endpoint in self.broadcast_urls:
+            try:
+                transaction = rpc(endpoint, "eth_getTransactionByHash", [transaction_hash])
+            except RuntimeError:
+                continue
+            if transaction:
+                require(
+                    transaction.get("hash", "").lower() == transaction_hash.lower(),
+                    "RPC returned an unexpected pending transaction",
+                )
+                return transaction
+        return None
+
     def send(self, *, to: str, data: str = "0x", value: int = 0) -> dict[str, Any]:
         to = signing_address(to)
         nonce = int(rpc(self.url, "eth_getTransactionCount", [self.signer.address, "pending"]), 16)
@@ -145,7 +159,11 @@ class SignedRpc:
             )
             submitted = True
             break
-        if not submitted and self.receipt(expected_hash) is None:
+        if (
+            not submitted
+            and self.receipt(expected_hash) is None
+            and self.transaction(expected_hash) is None
+        ):
             raise BrokerFundingError("raw transaction submission failed on every approved RPC")
         deadline = time.time() + 300
         while time.time() < deadline:
@@ -173,6 +191,7 @@ def fund(
     *,
     network_name: str,
     rpc_url: str,
+    shadow_rpc_url: str | None,
     private_key: str,
     broker: str,
     target_usdc: int,
@@ -181,10 +200,18 @@ def fund(
     require(network_name in NETWORKS, "unsupported broker funding network")
     network = NETWORKS[network_name]
     require(rpc_url.startswith("https://"), "broker funding RPC must use HTTPS")
+    if shadow_rpc_url:
+        require(shadow_rpc_url.startswith("https://"), "shadow broker RPC must use HTTPS")
+        require(shadow_rpc_url != rpc_url, "broker funding RPCs must be distinct")
     require(ADDRESS.fullmatch(broker) is not None, "broker address is invalid")
     signer = Account.from_key(private_key)
     require(signer.address.lower() != broker.lower(), "broker and deployer must be distinct")
-    client = SignedRpc(rpc_url, signer, network["chain_id"])
+    client = SignedRpc(
+        rpc_url,
+        signer,
+        network["chain_id"],
+        broadcast_urls=[shadow_rpc_url] if shadow_rpc_url else None,
+    )
     safe_before = rpc(rpc_url, "eth_getBlockByNumber", ["safe", False])
     require(safe_before and safe_before.get("hash"), "RPC did not return a safe block")
     current_usdc = usdc_balance(rpc_url, network["usdc"], broker, safe_before["number"])
@@ -244,6 +271,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--network", choices=tuple(NETWORKS), default="base-mainnet")
     parser.add_argument("--rpc-url", required=True)
+    parser.add_argument("--shadow-rpc-url")
     parser.add_argument("--private-key-env", default="BASE_MAINNET_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--broker", required=True)
     parser.add_argument("--target-usdc-base-units", type=int)
@@ -258,6 +286,7 @@ def main() -> int:
     result = fund(
         network_name=args.network,
         rpc_url=args.rpc_url,
+        shadow_rpc_url=args.shadow_rpc_url,
         private_key=private_key,
         broker=args.broker,
         target_usdc=target_usdc,

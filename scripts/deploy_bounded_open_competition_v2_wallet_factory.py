@@ -169,11 +169,7 @@ def send_create2(client: SignedRpc, manifest: dict[str, Any]) -> dict[str, Any]:
             "type": 2,
         }
     )
-    transaction_hash = rpc(
-        client.url,
-        "eth_sendRawTransaction",
-        ["0x" + bytes(signed.raw_transaction).hex()],
-    )
+    transaction_hash = client.broadcast(signed)
     return client.wait_receipt(transaction_hash)
 
 
@@ -266,6 +262,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--rpc-url", required=True)
+    parser.add_argument("--shadow-rpc-url")
     parser.add_argument("--private-key-env", default="BASE_MAINNET_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -277,7 +274,12 @@ def main() -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     release = json.loads(args.release.read_text(encoding="utf-8"))
     signer = Account.from_key(private_key)
-    evidence = deploy(manifest, release, SignedRpc(args.rpc_url, signer), args.output)
+    evidence = deploy(
+        manifest,
+        release,
+        SignedRpc(args.rpc_url, signer, args.shadow_rpc_url),
+        args.output,
+    )
     print(
         json.dumps(
             {

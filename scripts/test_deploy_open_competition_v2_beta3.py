@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest import mock
@@ -114,6 +115,144 @@ class DeploymentValidationTests(unittest.TestCase):
         self.assertEqual(result["number"], "0x2a")
         self.assertEqual(rpc_call.call_count, 2)
         sleep.assert_called_once_with(5)
+
+    def test_broadcasts_identical_raw_transaction_to_shadow_after_primary_failure(
+        self,
+    ) -> None:
+        primary = "https://primary.example"
+        shadow = "https://shadow.example"
+        expected_hash = "0x" + "12" * 32
+        raw_transaction = "0xaabb"
+        calls: list[tuple[str, str, list[object]]] = []
+
+        def fake_rpc(url: str, method: str, params: list[object]):
+            calls.append((url, method, params))
+            if method == "eth_chainId":
+                return "0x2105"
+            if method == "eth_sendRawTransaction" and url == primary:
+                raise RuntimeError("HTTP 429")
+            if method == "eth_sendRawTransaction":
+                return expected_hash
+            if method == "eth_getTransactionReceipt" and url == primary:
+                raise RuntimeError("HTTP 429")
+            if method == "eth_getTransactionReceipt":
+                return {
+                    "transactionHash": expected_hash,
+                    "status": "0x1",
+                }
+            raise AssertionError((url, method, params))
+
+        signed = SimpleNamespace(
+            raw_transaction=bytes.fromhex(raw_transaction[2:]),
+            hash=bytes.fromhex(expected_hash[2:]),
+        )
+        with mock.patch.object(deploy, "rpc", side_effect=fake_rpc):
+            client = deploy.SignedRpc(primary, SimpleNamespace(address="0x" + "11" * 20), shadow)
+            self.assertEqual(client.broadcast(signed), expected_hash)
+            self.assertEqual(client.receipt(expected_hash)["status"], "0x1")
+
+        submissions = [
+            (url, params[0])
+            for url, method, params in calls
+            if method == "eth_sendRawTransaction"
+        ]
+        self.assertEqual(
+            submissions,
+            [(primary, raw_transaction), (shadow, raw_transaction)],
+        )
+
+    def test_rejects_rpc_transaction_hash_mismatch(self) -> None:
+        primary = "https://primary.example"
+        expected_hash = "0x" + "12" * 32
+
+        def fake_rpc(_url: str, method: str, _params: list[object]):
+            if method == "eth_chainId":
+                return "0x2105"
+            if method == "eth_sendRawTransaction":
+                return "0x" + "34" * 32
+            raise AssertionError(method)
+
+        signed = SimpleNamespace(
+            raw_transaction=bytes.fromhex("aabb"),
+            hash=bytes.fromhex(expected_hash[2:]),
+        )
+        with mock.patch.object(deploy, "rpc", side_effect=fake_rpc):
+            client = deploy.SignedRpc(primary, SimpleNamespace(address="0x" + "11" * 20))
+            with self.assertRaisesRegex(RuntimeError, "unexpected transaction hash"):
+                client.broadcast(signed)
+
+    def test_accepts_already_mined_transaction_when_broadcast_responses_fail(self) -> None:
+        primary = "https://primary.example"
+        shadow = "https://shadow.example"
+        expected_hash = "0x" + "12" * 32
+
+        def fake_rpc(url: str, method: str, _params: list[object]):
+            if method == "eth_chainId":
+                return "0x2105"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("already known")
+            if method == "eth_getTransactionReceipt" and url == primary:
+                return None
+            if method == "eth_getTransactionReceipt":
+                return {"transactionHash": expected_hash, "status": "0x1"}
+            raise AssertionError((url, method))
+
+        signed = SimpleNamespace(
+            raw_transaction=bytes.fromhex("aabb"),
+            hash=bytes.fromhex(expected_hash[2:]),
+        )
+        with mock.patch.object(deploy, "rpc", side_effect=fake_rpc):
+            client = deploy.SignedRpc(primary, SimpleNamespace(address="0x" + "11" * 20), shadow)
+            self.assertEqual(client.broadcast(signed), expected_hash)
+
+    def test_accepts_pending_transaction_when_broadcast_responses_fail(self) -> None:
+        primary = "https://primary.example"
+        shadow = "https://shadow.example"
+        expected_hash = "0x" + "12" * 32
+
+        def fake_rpc(url: str, method: str, _params: list[object]):
+            if method == "eth_chainId":
+                return "0x2105"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("already known")
+            if method == "eth_getTransactionReceipt":
+                return None
+            if method == "eth_getTransactionByHash" and url == primary:
+                return None
+            if method == "eth_getTransactionByHash":
+                return {"hash": expected_hash, "blockNumber": None}
+            raise AssertionError((url, method))
+
+        signed = SimpleNamespace(
+            raw_transaction=bytes.fromhex("aabb"),
+            hash=bytes.fromhex(expected_hash[2:]),
+        )
+        with mock.patch.object(deploy, "rpc", side_effect=fake_rpc):
+            client = deploy.SignedRpc(primary, SimpleNamespace(address="0x" + "11" * 20), shadow)
+            self.assertEqual(client.broadcast(signed), expected_hash)
+
+    def test_fails_when_every_rpc_rejects_and_transaction_is_absent(self) -> None:
+        primary = "https://primary.example"
+        shadow = "https://shadow.example"
+        expected_hash = "0x" + "12" * 32
+
+        def fake_rpc(_url: str, method: str, _params: list[object]):
+            if method == "eth_chainId":
+                return "0x2105"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("rate limit")
+            if method in {"eth_getTransactionReceipt", "eth_getTransactionByHash"}:
+                return None
+            raise AssertionError(method)
+
+        signed = SimpleNamespace(
+            raw_transaction=bytes.fromhex("aabb"),
+            hash=bytes.fromhex(expected_hash[2:]),
+        )
+        with mock.patch.object(deploy, "rpc", side_effect=fake_rpc):
+            client = deploy.SignedRpc(primary, SimpleNamespace(address="0x" + "11" * 20), shadow)
+            with self.assertRaisesRegex(RuntimeError, "every approved RPC"):
+                client.broadcast(signed)
 
 
 if __name__ == "__main__":
