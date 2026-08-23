@@ -15,6 +15,10 @@ class GmvConfirmationTests(unittest.TestCase):
     def test_wallet_chain_query_fallback_remains_narrow_and_base_bound(self) -> None:
         self.assertIn("code === -32601 || code === 4200", HTML)
         self.assertIn("message.includes('method is not supported')", HTML)
+        self.assertIn(
+            "message.includes('request method') && message.includes('is not supported')",
+            HTML,
+        )
         self.assertIn("if (!methodUnavailable) throw error", HTML)
         self.assertIn("String(chain).toLowerCase() !== '0x2105'", HTML)
         self.assertIn("method: 'eth_signTypedData_v4'", HTML)
