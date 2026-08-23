@@ -56,6 +56,9 @@ STATE_KEY_SCHEMA = "agent-bounties/local-delegate-state-v1"
 MAX_GAS_LIMIT = 2_000_000
 MAX_FEE_PER_GAS_WEI = 2_000_000_000
 MAX_TOTAL_GAS_WEI = 3_000_000_000_000_000
+RPC_MIN_INTERVAL_SECONDS = 0.12
+RPC_RETRY_DELAYS = (0.5, 1.0, 2.0, 4.0)
+_LAST_RPC_REQUEST: dict[str, float] = {}
 
 
 class GuardError(ValueError):
@@ -63,21 +66,42 @@ class GuardError(ValueError):
 
 
 def rpc(url: str, method: str, params: list[object], request_id: int) -> object:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(
-            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-        ).encode(),
-        headers={"content-type": "application/json", "user-agent": "agent-bounties-gmv-guard/1"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
-            payload = json.load(response)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-        raise GuardError(f"RPC {method} failed") from error
-    if not isinstance(payload, dict) or payload.get("error") is not None or "result" not in payload:
-        raise GuardError(f"RPC {method} returned an error")
-    return payload["result"]
+    for attempt in range(len(RPC_RETRY_DELAYS) + 1):
+        now = time.monotonic()
+        wait = _LAST_RPC_REQUEST.get(url, 0.0) + RPC_MIN_INTERVAL_SECONDS - now
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_RPC_REQUEST[url] = time.monotonic()
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            ).encode(),
+            headers={"content-type": "application/json", "user-agent": "agent-bounties-gmv-guard/1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
+                payload = json.load(response)
+        except urllib.error.HTTPError as error:
+            retryable = error.code == 429 or 500 <= error.code < 600
+            if retryable and attempt < len(RPC_RETRY_DELAYS):
+                time.sleep(RPC_RETRY_DELAYS[attempt])
+                continue
+            raise GuardError(f"RPC {method} failed") from error
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+            if attempt < len(RPC_RETRY_DELAYS):
+                time.sleep(RPC_RETRY_DELAYS[attempt])
+                continue
+            raise GuardError(f"RPC {method} failed") from error
+        error = payload.get("error") if isinstance(payload, dict) else None
+        error_message = str(error.get("message") or "").lower() if isinstance(error, dict) else ""
+        if error is not None and "rate limit" in error_message and attempt < len(RPC_RETRY_DELAYS):
+            time.sleep(RPC_RETRY_DELAYS[attempt])
+            continue
+        if not isinstance(payload, dict) or error is not None or "result" not in payload:
+            raise GuardError(f"RPC {method} returned an error")
+        return payload["result"]
+    raise GuardError(f"RPC {method} failed")
 
 
 def require_private_file(path: Path) -> bytes:
