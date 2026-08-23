@@ -61,7 +61,8 @@ HTML = r"""<!doctype html>
       const message = String(error && error.message ? error.message : error).toLowerCase();
       const methodUnavailable = code === -32601 || code === 4200 ||
         message.includes('method not found') || message.includes('method is not supported') ||
-        message.includes('unsupported method');
+        message.includes('unsupported method') ||
+        (message.includes('request method') && message.includes('is not supported'));
       if (!methodUnavailable) throw error;
       return false;
     }
