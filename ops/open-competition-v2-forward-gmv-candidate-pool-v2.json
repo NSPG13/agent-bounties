@@ -2,21 +2,21 @@
   "schema_version": "agent-bounties/open-competition-v2-forward-gmv-meta-candidate-specs-v2",
   "protocol_version": "agent-bounties/open-competition-v2-beta3",
   "network": "base-mainnet",
-  "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
-  "release_hash": "0x0195f28ff1705e7613b55fbe6407092ceaba5c9c6d2b68bbf3f73558192854be",
-  "reserve_wallet": "0x58fc806205b61d03463913f3772f3a6cc96ecfd3",
+  "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+  "release_hash": "0x46008fb819726a43209e55ee7e58c92700a8fc3435f76be282bfdef710ced594",
+  "reserve_wallet": "0x7b0ae568f76d11aa4025e2aa05865a566bbcfc8d",
   "profile_release": {
     "profile_id": "forward-canonical-gmv-attribution-metric-v2",
-    "status": "awaiting_reproduction",
+    "status": "reviewed",
     "metric_program_hash": "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9",
     "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
     "execution_policy_hash": "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a",
     "settlement_policy_hash": "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee",
-    "program_vkey": null,
-    "source_hash": null,
-    "elf_hash": null
+    "program_vkey": "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+    "source_hash": "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+    "elf_hash": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8"
   },
-  "approved_at": "2026-08-22T08:08:47Z",
+  "approved_at": "2026-08-23T08:08:16Z",
   "expires_at": "2026-10-31T23:59:59Z",
   "economics": {
     "solver_reward_base_units": 3000000,
@@ -26,8 +26,8 @@
   "eligibility_policy": {
     "excluded_wallets": [
       "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
-      "0x58fc806205b61d03463913f3772f3a6cc96ecfd3",
       "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0x7b0ae568f76d11aa4025e2aa05865a566bbcfc8d",
       "0x884834e884d6e93462655a2820140ad03e6747bc",
       "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
       "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -70,7 +70,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x09cb186d76393b0dc95cf40a02011a28914c055db05b2db3d6036b18b995b0a9",
+        "verification_policy_hash": "0x6b0eff389c81caf9eac47ab9fb02b3bd6b2f96d9b46cee2e6188e241a7b03314",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -104,7 +104,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xf23b16f1f98bbfc3e3e289b11ca15b9919dcb98e05d42180bfe05f15017ed940",
+        "verification_policy_hash": "0xb0bd2a3747ec68fc7f8a167057be47c418e73b92a306c43c1d215a7f43e34628",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -138,7 +138,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x0b4da970ae11271a01a79155f0c6bd326a3bf5390b9cc36028476a0aa06399c1",
+        "verification_policy_hash": "0x60d885b50422e2cc1c124bfb17a6da32d87ba8c079d79e4bbcb20f43dd6c8da8",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -172,7 +172,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x8df4604b8d5f3d1320547a73937b2f7798b2db74262ae01f8c16bd10c314dcc6",
+        "verification_policy_hash": "0xc4dc744d911cee62de435d2f95e7565642bd3f3fbb475ad27cbc39e217b7e638",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -206,7 +206,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x00ccb9fb11940677634b99e7c86aae0dc06e0a929c9334c24b98d645bf0cae8f",
+        "verification_policy_hash": "0x5b65c649ea434752f38df4e1d9edd39558bc4252fbae655d2413ac60e181a336",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -240,7 +240,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x743ff8886cd87f608df942b6751a84045ae1ae9ef8a7062bb6d19dc8672b5932",
+        "verification_policy_hash": "0xe08ccde7ae923899fa316f87d8cc3fbf84bcff2795ed28ce6ce9407e2254ad8e",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -274,7 +274,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x110575dc0d56dfeebd14d25846a56c55258778685c785acaa291df724a7b1cdd",
+        "verification_policy_hash": "0x990b8dc21ed4b013fe37ef665bd8fc887f3393bd9b0c9448b30cef8ea4c3c170",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -308,7 +308,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xb5292d2717096103e95b27ec7074f26f2343d8b9cc3ce3cc4dd1581adb628286",
+        "verification_policy_hash": "0x0cd654599da0ab28da46e2a6f2b9cfd2f94a7103cf2dbbe4388a0c72372e879f",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -342,7 +342,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xe9cdb85fb5f338c6b0ac83f38e618a9b386fc7dee148944bb41d2a1fc880c37a",
+        "verification_policy_hash": "0x7ac12334e1f2aebf63a4cc959c16ec55dc200055a8142afaf31c5062bb5a7ddf",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -376,7 +376,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x5445c5efaa5b688aca31dac8f0426f0c1d4f8a83bf5ea71eab46f762887c6224",
+        "verification_policy_hash": "0xb3c18ca3c2ae9ef157bbf093295bb11eaf810684ef48920b337d3208a2cbb9db",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -410,7 +410,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xcd86f87ebed1af5b3ba2406db0638909063b5593db673b9f1da5ed9b0c58022b",
+        "verification_policy_hash": "0x9d260c98a35a7480bd3c494546a9e8151741d736282c091804d60f5d59d84da6",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -444,7 +444,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xea929b81d52583840d482930cdf99759c54b6422bfecc6c59d7758558682e185",
+        "verification_policy_hash": "0x8c4abc5cab0e1c20789257bd3ba213538d8bbf6110162716906d46ba261c796a",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -478,7 +478,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x38e073117b9b4597d7701c56de870fd2701ed726ab76f1a03815a314a10c8b99",
+        "verification_policy_hash": "0x76cf973a58427e314883d359dfb08c45949e3027b6b420a370606e07699a8413",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -512,7 +512,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x00591dd69943a9e36629c3239e84c95acb07b833e7affe9ae83646de7a0d9887",
+        "verification_policy_hash": "0x451eb64693d49e9fe5b44240866a796165bea79d6ffed5f6c9e4bcac66378761",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -546,7 +546,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x41632818c697a7e1e08dc4fc6643e4c9f4e03a73dc3105205c911ee58662dbc3",
+        "verification_policy_hash": "0xd47f16cae65f2ea0c8ac09cf1322797272f70e05302938f8c2cc6e4e5b69f2b1",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -580,7 +580,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x9b95ccd2684afb4b10a9795bc7d6577088d857120002d074527a27f1a1f8f862",
+        "verification_policy_hash": "0x2e179c406a3ae3b92c8278d3526a576425048461be88c7685ebf5cca7e6c86d0",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -614,7 +614,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xb3a5ac64f12a818fbf31a47b300d1644616c9d078f4f17f9ba1a6125c10f4a87",
+        "verification_policy_hash": "0x1b477dc1e57e5e60c80d35aa8d8aec44f1aa7a97a626ac4c2b4fca3c244da94f",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -648,7 +648,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0xf9799764f9b1e5e15f749efcf974bf8d0d1c79f42423ab6b1aae9be666eaf6d0",
+        "verification_policy_hash": "0x7225a0bc2c62c0181177d00099d4f8ee783c285b63bb345a3e1618de093f229d",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -682,7 +682,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x4ef2b14f588ee50aad8f846286481ef728e68afca6f76e5a9b1440282b698348",
+        "verification_policy_hash": "0x0754ca9106ec6d525dd633a9aa3f84d0fddee8653b51ab99aacee3a9177bd7fd",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
@@ -716,7 +716,7 @@
       },
       "snapshot": {
         "status": "scheduled",
-        "verification_policy_hash": "0x3c48ccaee1ccd577387d7659fbf9bfa4f2087a2ec4fd56a4b9e1523df311f9ce",
+        "verification_policy_hash": "0x329f4432f932e90964dbcfe5a16b1060b96f4799ee1ac47062c3b1f490c747f1",
         "snapshot_attesters": [
           "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
           "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"

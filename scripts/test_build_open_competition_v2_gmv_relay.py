@@ -24,7 +24,7 @@ class OpenCompetitionV2GmvRelayTests(unittest.TestCase):
         self.account = Account.from_key("0x" + "11" * 32)
         self.reserve = "0x2222222222222222222222222222222222222222"
         self.bundle = {
-            "schema_version": "agent-bounties/open-competition-v2-gmv-meta-activation-v1",
+            "schema_version": MODULE.ACTIVATION_SCHEMA,
             "owner": self.account.address.lower(),
             "reserve_factory": "0x3333333333333333333333333333333333333333",
             "reserve_wallet": self.reserve,
@@ -111,6 +111,14 @@ class OpenCompetitionV2GmvRelayTests(unittest.TestCase):
             MODULE.build_relay(changed, self.signature, now=500)
         with self.assertRaises(MODULE.RelayError):
             MODULE.build_relay(self.bundle, self.signature, now=1000)
+
+    def test_superseded_activation_schema_fails_closed(self) -> None:
+        legacy = copy.deepcopy(self.bundle)
+        legacy["schema_version"] = (
+            "agent-bounties/open-competition-v2-gmv-meta-activation-v1"
+        )
+        with self.assertRaisesRegex(MODULE.RelayError, "schema"):
+            MODULE.build_relay(legacy, self.signature, now=500)
 
 
 if __name__ == "__main__":
