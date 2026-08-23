@@ -81,6 +81,64 @@ class DeploymentValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "another release"):
                 deploy.load_evidence(value, output)
 
+    def test_refreshes_a_reincluded_transaction_to_its_canonical_receipt(self) -> None:
+        transaction_hash = "0x" + "12" * 32
+        contract = "0x" + "34" * 20
+        evidence = {
+            "transactions": [
+                {
+                    "transaction_hash": transaction_hash,
+                    "block_number": 10,
+                    "block_hash": "0x" + "56" * 32,
+                    "contract_address": contract,
+                    "gas_used": 1,
+                },
+                {
+                    "transaction_hash": None,
+                    "block_number": 11,
+                    "block_hash": "0x" + "78" * 32,
+                    "contract_address": "0x" + "90" * 20,
+                    "gas_used": None,
+                },
+            ]
+        }
+        client = SimpleNamespace(
+            receipt=mock.Mock(
+                return_value={
+                    "transactionHash": transaction_hash,
+                    "status": "0x1",
+                    "blockNumber": "0xc",
+                    "blockHash": "0x" + "ab" * 32,
+                    "contractAddress": contract,
+                    "gasUsed": "0x2a",
+                }
+            )
+        )
+
+        deployment_block = deploy.reconcile_canonical_receipts(evidence, client)
+
+        self.assertEqual(deployment_block, 12)
+        self.assertEqual(evidence["transactions"][0]["block_number"], 12)
+        self.assertEqual(evidence["transactions"][0]["block_hash"], "0x" + "ab" * 32)
+        self.assertEqual(evidence["transactions"][0]["gas_used"], 42)
+
+    def test_rejects_a_missing_canonical_receipt(self) -> None:
+        evidence = {
+            "transactions": [
+                {
+                    "transaction_hash": "0x" + "12" * 32,
+                    "block_number": 10,
+                    "block_hash": "0x" + "56" * 32,
+                    "contract_address": "0x" + "34" * 20,
+                    "gas_used": 1,
+                }
+            ]
+        }
+        client = SimpleNamespace(receipt=mock.Mock(return_value=None))
+
+        with self.assertRaisesRegex(RuntimeError, "canonical deployment receipt is absent"):
+            deploy.reconcile_canonical_receipts(evidence, client)
+
     def test_safe_runtime_check_uses_one_canonical_safe_block(self) -> None:
         client = object.__new__(deploy.SignedRpc)
         client.wait_safe = mock.Mock(return_value={"number": "0x2a"})

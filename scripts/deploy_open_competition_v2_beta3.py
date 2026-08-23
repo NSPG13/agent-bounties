@@ -302,6 +302,30 @@ def recovered_component_record(
     raise RuntimeError(f"timed out recovering exact deployment: {component}")
 
 
+def reconcile_canonical_receipts(
+    evidence: dict[str, Any], client: SignedRpc
+) -> int:
+    for item in evidence["transactions"]:
+        transaction_hash = item["transaction_hash"]
+        if transaction_hash is None:
+            continue
+        receipt = client.receipt(transaction_hash)
+        require(receipt is not None, f"canonical deployment receipt is absent: {transaction_hash}")
+        require(
+            int(receipt["status"], 16) == 1,
+            f"canonical deployment reverted: {transaction_hash}",
+        )
+        observed_address = str(receipt.get("contractAddress", "")).lower()
+        require(
+            observed_address == item["contract_address"],
+            "canonical deployment receipt has another contract address",
+        )
+        item["block_number"] = int(receipt["blockNumber"], 16)
+        item["block_hash"] = receipt["blockHash"].lower()
+        item["gas_used"] = int(receipt["gasUsed"], 16)
+    return max(item["block_number"] for item in evidence["transactions"])
+
+
 def deploy(bundle: dict[str, Any], client: SignedRpc, output: Path) -> dict[str, Any]:
     evidence = load_evidence(bundle, output)
     completed = {item["component"]: item for item in evidence["transactions"]}
@@ -347,8 +371,11 @@ def deploy(bundle: dict[str, Any], client: SignedRpc, output: Path) -> dict[str,
             }
         evidence["transactions"].append(record)
         write_evidence(output, evidence)
-    deployment_block = max(item["block_number"] for item in evidence["transactions"])
+    deployment_block = reconcile_canonical_receipts(evidence, client)
+    client.wait_safe(deployment_block)
+    deployment_block = reconcile_canonical_receipts(evidence, client)
     safe = client.wait_safe(deployment_block)
+    write_evidence(output, evidence)
     for item in evidence["transactions"]:
         if item["transaction_hash"] is None:
             continue

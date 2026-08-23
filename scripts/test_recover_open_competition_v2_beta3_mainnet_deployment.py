@@ -30,7 +30,7 @@ class MainnetDeploymentRecoveryWorkflowTests(unittest.TestCase):
         self.assertEqual(environment["RELEASE_SOURCE_COMMIT"], SOURCE_COMMIT)
         self.assertEqual(str(environment["RELEASE_RUN_ID"]), RELEASE_RUN_ID)
         self.assertEqual(environment["EXPECTED_START_NONCE"], "34")
-        self.assertEqual(environment["EXPECTED_OBSERVED_NONCE"], "35")
+        self.assertNotIn("EXPECTED_OBSERVED_NONCE", environment)
         self.assertEqual(
             environment["EXPECTED_GROTH16_VERIFIER"],
             "0x6788e13954e7e27f8d2c62ab8ce86b96b8d9169f",
@@ -68,6 +68,8 @@ class MainnetDeploymentRecoveryWorkflowTests(unittest.TestCase):
 
     def test_recovery_reuses_exact_prefix_and_dual_rpc_submission(self) -> None:
         self.assertIn(".preflight_safe_block.resuming_exact_verifiers == true", self.text)
+        self.assertIn(".preflight_safe_block.observed_deployer_nonce >= 35", self.text)
+        self.assertIn(".preflight_safe_block.observed_deployer_nonce <= 37", self.text)
         self.assertIn(".transactions[0].recovered_exact_deployment == true", self.text)
         self.assertEqual(self.text.count('--shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL"'), 2)
         self.assertIn("deploy_open_competition_v2_beta3.py", self.text)
