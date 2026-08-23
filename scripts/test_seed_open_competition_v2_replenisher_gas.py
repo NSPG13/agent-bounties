@@ -26,6 +26,9 @@ class ReplenisherGasWorkflowTests(unittest.TestCase):
     def test_seeds_only_exact_delegate_eth_and_zero_usdc(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(f"--broker {DELEGATE}", text)
+        self.assertIn('BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}', text)
+        self.assertIn('--shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL"', text)
+        self.assertIn('test "$BASE_MAINNET_RPC_URL" != "$BASE_MAINNET_SHADOW_RPC_URL"', text)
         self.assertIn("--target-usdc-base-units 0", text)
         self.assertIn("--target-eth-wei 100000000000000", text)
         self.assertIn(".funded_usdc_base_units == 0", text)

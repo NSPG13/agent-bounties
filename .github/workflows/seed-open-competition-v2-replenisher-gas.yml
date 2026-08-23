@@ -23,14 +23,18 @@ jobs:
       - name: Seed and reconcile the exact gas-only delegate
         env:
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_SHADOW_RPC_URL"
+          test "$BASE_MAINNET_RPC_URL" != "$BASE_MAINNET_SHADOW_RPC_URL"
+          test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
           python -m pip install -r scripts/requirements-wallet.txt
           python scripts/fund_open_competition_v2_beta3_broker.py \
             --network base-mainnet \
             --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --broker 0xb358898d34c5e907877a1cd7540b234f6851f61b \
             --target-usdc-base-units 0 \
             --target-eth-wei 100000000000000 \
