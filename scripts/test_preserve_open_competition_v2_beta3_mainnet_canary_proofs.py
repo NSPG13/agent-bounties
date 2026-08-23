@@ -37,9 +37,12 @@ class ProofPreservationWorkflowTests(unittest.TestCase):
         self.assertIn(".proof_hash == $proof and .journal_hash == $journal", self.text)
 
     def test_symlinks_are_rejected_and_every_file_is_hashed(self):
+        self.assertIn("Stage the failed-run proof workspace before validation", self.text)
+        self.assertIn('cp -aL "$source/mainnet-proofs" "$stage/"', self.text)
         self.assertIn("-type l -print -quit", self.text)
         self.assertIn("find . -type f ! -name files.sha256 -print0", self.text)
         self.assertIn("xargs -0 sha256sum", self.text)
+        self.assertIn("if: always()", self.text)
         self.assertIn("if-no-files-found: error", self.text)
 
 
