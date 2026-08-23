@@ -156,10 +156,11 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertNotIn("x402_success_and_refund_canaries_complete", workflow)
 
     def test_mainnet_canaries_rebuild_cleaned_contract_artifacts(self):
-        for workflow_path in (
-            ".github/workflows/open-competition-v2-beta3-release.yml",
-            ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml",
-        ):
+        workflows = {
+            ".github/workflows/open-competition-v2-beta3-release.yml": "contracts/base-escrow",
+            ".github/workflows/continue-open-competition-v2-beta3-mainnet.yml": "target/continuation-control/contracts/base-escrow",
+        }
+        for workflow_path, contract_root in workflows.items():
             workflow = (MODULE.ROOT / workflow_path).read_text(encoding="utf-8")
             canary = workflow.split("  mainnet-canaries:", 1)[1].split(
                 "  activate-public-beta:", 1
@@ -169,7 +170,7 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
                 canary,
             )
             self.assertIn(
-                "forge build --root contracts/base-escrow --force --ast",
+                f"forge build --root {contract_root} --force --ast",
                 canary,
             )
 
