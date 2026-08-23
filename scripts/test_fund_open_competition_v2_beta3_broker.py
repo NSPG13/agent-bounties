@@ -36,6 +36,27 @@ class BrokerFundingTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.BrokerFundingError, "are invalid"):
             MODULE.deficits(current_usdc=0, current_eth=0, target_usdc=0, target_eth=0)
 
+    def test_zero_usdc_seed_does_not_require_an_unrelated_usdc_reserve(self):
+        MODULE.require_deployer_capacity(
+            deployer_usdc=0,
+            deployer_eth=300,
+            usdc_deficit=0,
+            eth_deficit=100,
+            minimum_deployer_usdc_after=635_000,
+            minimum_deployer_eth_after=200,
+        )
+
+    def test_positive_usdc_seed_still_preserves_the_canary_reserve(self):
+        with self.assertRaisesRegex(MODULE.BrokerFundingError, "canary budget"):
+            MODULE.require_deployer_capacity(
+                deployer_usdc=635_000,
+                deployer_eth=300,
+                usdc_deficit=1,
+                eth_deficit=100,
+                minimum_deployer_usdc_after=635_000,
+                minimum_deployer_eth_after=200,
+            )
+
     def test_signing_address_accepts_canonical_lowercase_broker(self):
         destination = MODULE.signing_address("0x176f486a724720c4fdfc920d7c17dd1004c2bfb4")
         self.assertEqual(destination, "0x176f486A724720C4FDfc920d7c17Dd1004C2bfb4")
