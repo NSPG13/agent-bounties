@@ -77,18 +77,23 @@ def tmpdir() -> Path:
 def in_parallel(jobs):
     """Run independent subprocess cases concurrently, reporting in stable order.
 
-    Each case spawns the guard (and often the producer), and process creation on
-    Windows is several times more expensive than on Linux. Running the mutually
-    independent cases concurrently keeps the suite comfortably inside the
-    immutable benchmark's subprocess timeout on both platforms. Order-dependent
-    groups -- anything sharing the live HTTP fixture or mutating the workfile --
-    are deliberately NOT batched.
+    Each case spawns the guard, which in turn spawns the state producer, so a
+    single case costs two Python interpreter starts (~0.27s here) and the suite
+    runs ~90 of them. Executed serially that overruns the immutable benchmark's
+    30s subprocess timeout on a loaded machine, so every group of mutually
+    independent cases is batched through here.
+
+    Only genuinely independent cases may be batched. A case belongs here when it
+    mutates nothing another case reads: the guard and the producer are both
+    read-only, each live case gets its own ephemeral HTTP server, and each
+    binding attack writes its own file. Cases that overwrite shared state (the
+    workfile sequence below) are deliberately left serial and in order.
     """
     # Each job blocks on subprocesses rather than doing CPU work here, so the
     # useful width is a little above the core count -- but not far above: every
     # job spawns two Python interpreters, and oversubscribing makes the suite
-    # slower, not faster. This keeps the run inside the immutable benchmark's
-    # 30s subprocess timeout.
+    # slower, not faster. Measured on a 12-core box, raising this cap to 16/20/
+    # 24/32 changed the total runtime by well under a second, so it stays put.
     workers = max(4, min(12, (os.cpu_count() or 2) + 2, len(jobs) or 1))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return list(pool.map(lambda job: job(), jobs))
@@ -258,43 +263,62 @@ def run_guard(state=None, event_payload=None, state_mode="file"):
 
 
 print("\n=== EXIT CONTRACT: 0 allows, 2 blocks ===")
-code, out, _ = run_guard(state=None)
+# The guard is read-only and each case writes its own state file under a private
+# tmpdir, so these cases share nothing and are batched. Assertions stay in
+# source order, and the fail-closed group below is batched with them because it
+# reads no state either group mutates.
+(_g_none, _g_claimed, _g_failing, _g_partial, _g_full, _g_submitted,
+ _g_missing, _g_malformed, _g_no_active, _g_no_claim) = in_parallel([
+    lambda: run_guard(state=None),
+    lambda: run_guard({"claim": CLAIMED}),
+    lambda: run_guard({"claim": CLAIMED, "test": {"command": "pytest", "passed": False}}),
+    lambda: run_guard({"claim": CLAIMED, "test": PASSED,
+                       "evidence": {"repository": "x", "commit": "y"}}),
+    lambda: run_guard({"claim": CLAIMED, "test": PASSED, "evidence": FULL_EVIDENCE}),
+    lambda: run_guard({"claim": CLAIMED, "test": PASSED, "evidence": FULL_EVIDENCE,
+                       "submission": {"submitted_onchain": True}}),
+    lambda: run_guard(state=None, state_mode="missing"),
+    lambda: run_guard("{not valid json", state_mode="file"),
+    lambda: run_guard({"claim": {"bounty_contract": CONTRACT}}),
+    lambda: run_guard({}),
+])
+
+code, out, _ = _g_none
 check("no state source configured -> exit 0", code == 0, f"exit={code}")
 check("  and decision is allow", (out or {}).get("decision") == "allow")
 
-code, out, _ = run_guard({"claim": CLAIMED})
+code, out, _ = _g_claimed
 check("active claim, no test -> exit 2 (BLOCK)", code == 2, f"exit={code}")
 check("  and decision is deny", (out or {}).get("decision") == "deny")
 
-code, out, _ = run_guard({"claim": CLAIMED, "test": {"command": "pytest", "passed": False}})
+code, out, _ = _g_failing
 check("failing test -> exit 2", code == 2, f"exit={code}")
 
-code, out, _ = run_guard({"claim": CLAIMED, "test": PASSED,
-                          "evidence": {"repository": "x", "commit": "y"}})
+code, out, _ = _g_partial
 check("incomplete evidence -> exit 2", code == 2, f"exit={code}")
 check("  reason names a missing field", "test_command" in (out or {}).get("reason", ""))
 
-code, out, _ = run_guard({"claim": CLAIMED, "test": PASSED, "evidence": FULL_EVIDENCE})
+code, out, _ = _g_full
 check("not submitted on-chain -> exit 2", code == 2, f"exit={code}")
 check("  reason names submit(bytes32,bytes32)",
       "submit(bytes32,bytes32)" in (out or {}).get("reason", ""))
 
 SUBMITTED = {"claim": CLAIMED, "test": PASSED, "evidence": FULL_EVIDENCE,
              "submission": {"submitted_onchain": True}}
-code, out, _ = run_guard(SUBMITTED)
+code, out, _ = _g_submitted
 reason = (out or {}).get("reason", "")
 check("submitted, unsettled -> exit 0", code == 0, f"exit={code}")
 check("  reason says payment NOT confirmed", "not confirmed" in reason.lower())
 check("  reason requires reporting $0.00", "$0.00" in reason)
 
 print("\n=== FAIL CLOSED on unreadable configured state ===")
-code, _, _ = run_guard(state=None, state_mode="missing")
+code, _, _ = _g_missing
 check("configured state file missing -> exit 2", code == 2, f"exit={code}")
-code, _, _ = run_guard("{not valid json", state_mode="file")
+code, _, _ = _g_malformed
 check("malformed state file -> exit 2", code == 2, f"exit={code}")
-code, _, _ = run_guard({"claim": {"bounty_contract": CONTRACT}})
+code, _, _ = _g_no_active
 check("claim.active absent -> exit 2", code == 2, f"exit={code}")
-code, _, _ = run_guard({})
+code, _, _ = _g_no_claim
 check("no 'claim' section -> exit 2", code == 2, f"exit={code}")
 
 print("\n=== a receipt only pays when it is LIVE-CANONICAL and BOUND to this claim ===")
@@ -558,37 +582,54 @@ def run_registered(session, extra_env=None, drop=()):
         return done.returncode, {}, done.stderr
 
 
-rc, body, err = run_registered("sess-bounty")
+# These seven cases are mutually independent: the guard and the state producer
+# are both read-only, each case differs only in session id or environment, and
+# none of them mutates the workfile -- the order-dependent workfile cases start
+# further down and are deliberately NOT batched. Assertions are still reported
+# in source order.
+(_reg_active, _reg_free, _reg_undeclared, _reg_no_binding,
+ _reg_producer_rc, _reg_producer_json, _reg_no_feed) = in_parallel([
+    lambda: run_registered("sess-bounty"),
+    lambda: run_registered("sess-unrelated"),
+    lambda: run_registered("sess-never-declared"),
+    lambda: run_registered("sess-bounty", drop=("AGENT_BOUNTIES_BINDING_FILE",)),
+    lambda: run_registered(
+        "sess-bounty",
+        {"AGENT_BOUNTIES_STATE_CMD": state_cmd(sys.executable, "-c",
+                                               "import sys; sys.exit(3)")}),
+    lambda: run_registered(
+        "sess-bounty",
+        {"AGENT_BOUNTIES_STATE_CMD": state_cmd(sys.executable, "-c",
+                                               "print('not json')")}),
+    lambda: run_registered(
+        "sess-bounty", {"AGENT_BOUNTIES_EVENTS_FILE": str(WORLD / "nope.json")}),
+])
+
+rc, body, err = _reg_active
 check("real Stop event on an incomplete active claim -> exit 2 (BLOCK)",
       rc == 2, f"exit={rc} stderr={err[-300:]}")
 check("  and the deny decision is on stdout", body.get("decision") == "deny", f"body={body}")
 
-rc, body, err = run_registered("sess-unrelated")
+rc, body, err = _reg_free
 check("session the operator declared claim-free -> exit 0", rc == 0,
       f"exit={rc} stderr={err[-300:]}")
 check("  and the decision is allow", body.get("decision") == "allow", f"body={body}")
 
-rc, body, err = run_registered("sess-never-declared")
+rc, body, err = _reg_undeclared
 check("session absent from the operator binding -> exit 2 (not assumed idle)", rc == 2,
       f"exit={rc}")
 
-rc, body, err = run_registered("sess-bounty", drop=("AGENT_BOUNTIES_BINDING_FILE",))
+rc, body, err = _reg_no_binding
 check("no operator binding configured -> exit 2 (identity cannot be established)",
       rc == 2, f"exit={rc}")
 
-rc, body, err = run_registered(
-    "sess-bounty",
-    {"AGENT_BOUNTIES_STATE_CMD": state_cmd(sys.executable, "-c",
-                                           "import sys; sys.exit(3)")})
+rc, body, err = _reg_producer_rc
 check("state producer exiting non-zero -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
-rc, body, err = run_registered(
-    "sess-bounty",
-    {"AGENT_BOUNTIES_STATE_CMD": state_cmd(sys.executable, "-c", "print('not json')")})
+rc, body, err = _reg_producer_json
 check("state producer emitting non-JSON -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
-rc, body, err = run_registered(
-    "sess-bounty", {"AGENT_BOUNTIES_EVENTS_FILE": str(WORLD / "nope.json")})
+rc, body, err = _reg_no_feed
 check("canonical feed unusable -> exit 2 (no local-only fallback)", rc == 2, f"exit={rc}")
 
 print("\n=== the session-writable workfile CANNOT disable the guard ===")
@@ -619,7 +660,22 @@ check("  and it certainly does not report the work as paid",
       "work is paid" not in reason.lower(), reason[:250])
 
 print("\n=== offline snapshots are TEST-ONLY and can never settle ===")
-rc, body, err = run_registered("sess-bounty", drop=("AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT",))
+# Both snapshot files are written before any case runs, and the guard only reads
+# them, so these three cases are independent and batched.
+settled_snapshot = WORLD / "settled.json"
+settled_snapshot.write_text(json.dumps([CLAIM_EVENT, SETTLE_EVENT]), encoding="utf-8")
+cross = WORLD / "cross-bounty.json"
+cross.write_text(json.dumps([event("bounty_settled", bounty_id="0x" + "99" * 32)]),
+                 encoding="utf-8")
+
+(_snap_no_optin, _snap_settled, _snap_cross) = in_parallel([
+    lambda: run_registered("sess-bounty", drop=("AGENT_BOUNTIES_ALLOW_TEST_SNAPSHOT",)),
+    lambda: run_registered("sess-bounty",
+                           {"AGENT_BOUNTIES_EVENTS_FILE": str(settled_snapshot)}),
+    lambda: run_registered("sess-bounty", {"AGENT_BOUNTIES_EVENTS_FILE": str(cross)}),
+])
+
+rc, body, err = _snap_no_optin
 check("snapshot without the explicit test opt-in -> exit 2", rc == 2, f"exit={rc}")
 # The producer writes its diagnostic to ITS stderr, which the hook captures and
 # folds into the decision reason -- it is not the hook's own stderr.
@@ -627,16 +683,11 @@ check("  and the decision explains the snapshot is test-only",
       "test-only" in (body.get("reason", "") + err).lower(),
       f"reason={body.get('reason', '')[:300]} stderr={err[-200:]}")
 
-settled_snapshot = WORLD / "settled.json"
-settled_snapshot.write_text(json.dumps([CLAIM_EVENT, SETTLE_EVENT]), encoding="utf-8")
-rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_EVENTS_FILE": str(settled_snapshot)})
+rc, body, err = _snap_settled
 check("a BountySettled inside a test snapshot -> exit 2, never paid", rc == 2, f"exit={rc}")
 check("  and the reason never says paid", "work is paid" not in body.get("reason", "").lower())
 
-cross = WORLD / "cross-bounty.json"
-cross.write_text(json.dumps([event("bounty_settled", bounty_id="0x" + "99" * 32)]),
-                 encoding="utf-8")
-rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_EVENTS_FILE": str(cross)})
+rc, body, err = _snap_cross
 check("a cross-bounty snapshot -> exit 2 (refused, not silently applied)", rc == 2, f"exit={rc}")
 
 # ---------------------------------------------------------------------------
@@ -719,18 +770,24 @@ check("the session process really can write the binding "
 
 signed_body = json.loads(SESSION_TARGET.read_text())
 
+# Each attack gets its OWN session-writable binding file rather than serially
+# overwriting one. That keeps the cases independent so they can run
+# concurrently, and it is the same thing from the guard's point of view: it
+# reads whatever AGENT_BOUNTIES_BINDING_FILE points at. The mode is forced to
+# 0600 exactly as write_binding() does -- otherwise a fresh file could inherit a
+# laxer umask and get refused for being group/world-writable, which would make
+# these assertions pass for the WRONG reason.
+ATTACKS = []
+
 
 def attack(label: str, document, expect_reason: str = "") -> None:
-    """Overwrite the binding as the session would, then re-run the guard."""
-    SESSION_TARGET.write_text(json.dumps(document) if document is not None else "",
-                              encoding="utf-8")
-    rc, body, err = run_registered("sess-bounty",
-                                   {"AGENT_BOUNTIES_BINDING_FILE": str(SESSION_TARGET)})
-    blob = (body.get("reason", "") + err).lower()
-    check(label, rc == 2, f"exit={rc} reason={body.get('reason', '')[:200]}")
-    if expect_reason:
-        check(f"  {label}: refused for the right reason",
-              expect_reason in blob, f"reason={blob[:300]}")
+    """Register an attack: write the binding as the session would."""
+    path = WORLD / f"session-attacked-binding-{len(ATTACKS)}.json"
+    path.write_text(json.dumps(document) if document is not None else "",
+                    encoding="utf-8")
+    if not IS_WINDOWS:
+        path.chmod(0o600)
+    ATTACKS.append((label, expect_reason, path))
 
 
 # EDIT: point the claim at a different bounty the session would rather work on.
@@ -769,10 +826,22 @@ attack("REPLACE the binding, re-signed with the session's OWN key -> exit 2",
 # Truncate to nothing.
 attack("TRUNCATE the binding to empty -> exit 2", None)
 
-# Restore, and prove the boundary is not simply "always block": the legitimate
-# signed document is accepted again afterwards. Without this, a guard that
-# rejected everything unconditionally would pass every assertion above.
-SESSION_TARGET.write_text(json.dumps(signed_body), encoding="utf-8")
+# Every attack is a distinct file and the guard only reads it, so they run
+# concurrently; assertions are still emitted in registration order.
+for (label, expect_reason, _), (rc, body, err) in zip(ATTACKS, in_parallel(
+        [(lambda p=path: run_registered(
+            "sess-bounty", {"AGENT_BOUNTIES_BINDING_FILE": str(p)}))
+         for _, _, path in ATTACKS])):
+    blob = (body.get("reason", "") + err).lower()
+    check(label, rc == 2, f"exit={rc} reason={body.get('reason', '')[:200]}")
+    if expect_reason:
+        check(f"  {label}: refused for the right reason",
+              expect_reason in blob, f"reason={blob[:300]}")
+
+# Prove the boundary is not simply "always block": the legitimate signed
+# document is accepted. Without this, a guard that rejected everything
+# unconditionally would pass every assertion above. SESSION_TARGET still holds
+# the untouched signed binding -- the attacks were written to their own files.
 rc, body, err = run_registered("sess-bounty",
                                {"AGENT_BOUNTIES_BINDING_FILE": str(SESSION_TARGET)})
 check("restoring the operator-signed binding is accepted again "
@@ -792,17 +861,27 @@ check("an UNSIGNED binding outside the session dir with mode 0600 -> exit 2",
 
 # Without a pinned key there is no boundary to enforce, so refuse to proceed
 # rather than silently degrading to the old provenance-by-location behaviour.
-rc, body, err = run_registered("sess-bounty", drop=("AGENT_BOUNTIES_OPERATOR_PUBKEY",))
+# These four differ only in the pinned-key environment variable and share no
+# mutable state, so they run concurrently and are asserted in source order.
+(_key_absent, _key_malformed, _key_short, _key_rogue) = in_parallel([
+    lambda: run_registered("sess-bounty", drop=("AGENT_BOUNTIES_OPERATOR_PUBKEY",)),
+    lambda: run_registered("sess-bounty",
+                           {"AGENT_BOUNTIES_OPERATOR_PUBKEY": "not-base64!!"}),
+    lambda: run_registered(
+        "sess-bounty",
+        {"AGENT_BOUNTIES_OPERATOR_PUBKEY": base64.b64encode(b"short").decode()}),
+    lambda: run_registered("sess-bounty",
+                           {"AGENT_BOUNTIES_OPERATOR_PUBKEY": ROGUE.public_b64}),
+])
+
+rc, body, err = _key_absent
 check("no pinned operator public key -> exit 2 (no silent downgrade)", rc == 2,
       f"exit={rc}")
-rc, body, err = run_registered("sess-bounty",
-                               {"AGENT_BOUNTIES_OPERATOR_PUBKEY": "not-base64!!"})
+rc, body, err = _key_malformed
 check("a malformed pinned operator key -> exit 2", rc == 2, f"exit={rc}")
-rc, body, err = run_registered(
-    "sess-bounty", {"AGENT_BOUNTIES_OPERATOR_PUBKEY": base64.b64encode(b"short").decode()})
+rc, body, err = _key_short
 check("a pinned key of the wrong length -> exit 2", rc == 2, f"exit={rc}")
-rc, body, err = run_registered("sess-bounty",
-                               {"AGENT_BOUNTIES_OPERATOR_PUBKEY": ROGUE.public_b64})
+rc, body, err = _key_rogue
 check("pinning a DIFFERENT key than the signer -> exit 2", rc == 2, f"exit={rc}")
 
 # The signing tool must round-trip with the shipped verifier: a signature the
@@ -938,20 +1017,32 @@ check("  the JSON-array form carries a Windows argv intact through BOTH branches
 # decision as the array form. Use a path with no spaces or backslashes so the
 # string form is unambiguous under either splitter -- the point here is that the
 # two REPRESENTATIONS agree, not that shell quoting is solved.
-array_rc, array_body, _ = run_registered("sess-bounty")
 plain = f"{sys.executable} -B {PRODUCER}"
-if " " in plain:
+_string_form_testable = " " not in plain
+# All four vary only in AGENT_BOUNTIES_STATE_CMD and mutate nothing, so they run
+# concurrently. The baseline (array form) must be in the same batch because the
+# equivalence assertion compares against it.
+(_cmd_array, _cmd_plain, _cmd_nonarray, _cmd_empty) = in_parallel([
+    lambda: run_registered("sess-bounty"),
+    (lambda: run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": plain}))
+    if _string_form_testable else (lambda: None),
+    lambda: run_registered("sess-bounty",
+                           {"AGENT_BOUNTIES_STATE_CMD": json.dumps({"cmd": "nope"})}),
+    lambda: run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": "   "}),
+])
+
+array_rc, array_body, _ = _cmd_array
+if not _string_form_testable:
     print("  SKIP  shell-string equivalence (interpreter or repo path contains a space)")
 else:
-    rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": plain})
+    rc, body, err = _cmd_plain
     check("shell-string state command yields the same decision as the JSON-array form",
           (rc, body.get("decision")) == (array_rc, array_body.get("decision")),
           f"string=({rc}, {body.get('decision')}) array=({array_rc}, "
           f"{array_body.get('decision')}) stderr={err[-200:]}")
-rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": json.dumps(
-    {"cmd": "nope"})})
+rc, body, err = _cmd_nonarray
 check("non-array JSON state command -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
-rc, body, err = run_registered("sess-bounty", {"AGENT_BOUNTIES_STATE_CMD": "   "})
+rc, body, err = _cmd_empty
 check("empty state command -> exit 2 (fail closed)", rc == 2, f"exit={rc}")
 
 # Prove the Windows string-splitting branch keeps backslash paths intact. The
