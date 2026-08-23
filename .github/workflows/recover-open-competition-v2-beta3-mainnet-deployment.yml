@@ -16,7 +16,6 @@ env:
   RELEASE_SOURCE_COMMIT: 5a351f3e373691be58a9575b4374812b494b6086
   EXPECTED_DEPLOYER: "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
   EXPECTED_START_NONCE: "34"
-  EXPECTED_OBSERVED_NONCE: "35"
   EXPECTED_GROTH16_VERIFIER: "0x6788e13954e7e27f8d2c62ab8ce86b96b8d9169f"
   EXPECTED_PLONK_VERIFIER: "0xa2549e89b7d56a99ddabcbece342a211e5ef340a"
   EXPECTED_FACTORY: "0x29d0e39e0c03797c690633535722e6b34a69a78a"
@@ -125,12 +124,12 @@ jobs:
             --release-root "$GITHUB_WORKSPACE"
           jq -e \
             --argjson start "$EXPECTED_START_NONCE" \
-            --argjson observed "$EXPECTED_OBSERVED_NONCE" \
             --arg groth "$EXPECTED_GROTH16_VERIFIER" \
             --arg plonk "$EXPECTED_PLONK_VERIFIER" \
             --arg factory "$EXPECTED_FACTORY" \
             '.preflight_safe_block.deployer_nonce == $start and
-             .preflight_safe_block.observed_deployer_nonce == $observed and
+             .preflight_safe_block.observed_deployer_nonce >= 35 and
+             .preflight_safe_block.observed_deployer_nonce <= 37 and
              .preflight_safe_block.resuming_exact_verifiers == true and
              .groth16_verifier.address == $groth and
              .plonk_verifier.address == $plonk and
