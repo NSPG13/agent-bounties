@@ -10,6 +10,7 @@ import unittest
 import sys
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -82,6 +83,74 @@ class LocalGmvGuardTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in rpc.call_args_list],
             ["https://state-primary.invalid", "https://state-shadow.invalid"],
+        )
+        wait_receipt.assert_called_once_with(
+            "https://receipt-primary.invalid",
+            "https://receipt-shadow.invalid",
+            transaction_hash,
+            guard_module.RECEIPT_TIMEOUT,
+        )
+
+    def test_ambiguous_broadcast_fallback_uses_receipt_rpc_pair(self) -> None:
+        delegate = "0x" + "22" * 20
+        transaction_hash = "0x" + "11" * 32
+        receipt_urls: list[str] = []
+
+        def rpc_result(url, method, _params, _request_id):
+            if method == "eth_call":
+                return "0x"
+            if method == "eth_getTransactionCount":
+                return "0x9"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("ambiguous broadcast response")
+            if method == "eth_getTransactionReceipt":
+                receipt_urls.append(url)
+                return {"status": "0x1"}
+            raise AssertionError(method)
+
+        prepared = {
+            "nonce": 9,
+            "gas": 100_000,
+            "maxFeePerGas": 1_000_000,
+        }
+        evidence = {"transaction_hash": transaction_hash, "receipt_block": 123, "safe_block": {}}
+        signed = SimpleNamespace(
+            hash=bytes.fromhex("11" * 32),
+            raw_transaction=b"\x01",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            with (
+                mock.patch.object(guard_module, "public_address", return_value=delegate),
+                mock.patch.object(
+                    guard_module,
+                    "safe_block",
+                    return_value={"number": 100, "hash": transaction_hash, "timestamp": 1},
+                ),
+                mock.patch.object(
+                    guard_module, "transaction_parameters", return_value=prepared
+                ),
+                mock.patch.object(guard_module, "sign_transaction", return_value=signed),
+                mock.patch.object(guard_module, "rpc", side_effect=rpc_result),
+                mock.patch.object(
+                    guard_module, "wait_canonical_receipt", return_value=evidence
+                ) as wait_receipt,
+            ):
+                result = guard_module.execute_direct(
+                    state_dir,
+                    "https://state-primary.invalid",
+                    "https://state-shadow.invalid",
+                    "https://receipt-primary.invalid",
+                    "https://receipt-shadow.invalid",
+                    {"to": delegate, "data": "0x"},
+                    "create_competition",
+                    "candidate-1-v1",
+                    broadcast=True,
+                )
+        self.assertEqual(result["transaction_hash"], transaction_hash)
+        self.assertEqual(
+            receipt_urls,
+            ["https://receipt-primary.invalid"],
         )
         wait_receipt.assert_called_once_with(
             "https://receipt-primary.invalid",
