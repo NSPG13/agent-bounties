@@ -31,13 +31,13 @@ jobs:
           python scripts/fund_open_competition_v2_beta3_broker.py \
             --network base-mainnet \
             --rpc-url "$BASE_MAINNET_RPC_URL" \
-            --broker 0xfb58949365e3a30fd62e86edb0daffccf4ef7477 \
+            --broker 0xb358898d34c5e907877a1cd7540b234f6851f61b \
             --target-usdc-base-units 0 \
             --target-eth-wei 100000000000000 \
             --output target/open-competition-v2-replenisher-gas.json
           jq -e '
             .passed == true and
-            .broker == "0xfb58949365e3a30fd62e86edb0daffccf4ef7477" and
+            .broker == "0xb358898d34c5e907877a1cd7540b234f6851f61b" and
             .target_usdc_base_units == 0 and
             .funded_usdc_base_units == 0 and
             .target_eth_wei == 100000000000000 and

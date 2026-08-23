@@ -16,6 +16,7 @@ on:
       - "scripts/build_open_competition_v2_gmv_activation.py"
       - "scripts/build_open_competition_v2_gmv_relay.py"
       - "scripts/serve_open_competition_v2_gmv_confirmation.py"
+      - "scripts/local_open_competition_v2_gmv_guard.py"
       - "scripts/build_open_competition_v2_gmv_snapshots.py"
       - "scripts/forward_canonical_gmv.py"
       - "scripts/build_forward_open_competition_v2_gmv_candidate_pool.py"
@@ -25,6 +26,8 @@ on:
       - "scripts/test_build_bounded_open_competition_v2_wallet_bundle.py"
       - "scripts/test_build_open_competition_v2_gmv_activation.py"
       - "scripts/test_build_open_competition_v2_gmv_relay.py"
+      - "scripts/test_serve_open_competition_v2_gmv_confirmation.py"
+      - "scripts/test_local_open_competition_v2_gmv_guard.py"
       - "scripts/test_build_open_competition_v2_gmv_snapshots.py"
       - "scripts/test_forward_canonical_gmv.py"
       - "scripts/test_build_forward_open_competition_v2_gmv_candidate_pool.py"
@@ -57,6 +60,8 @@ jobs:
             scripts.test_materialize_open_competition_v2_replenishment \
             scripts.test_build_open_competition_v2_gmv_activation \
             scripts.test_build_open_competition_v2_gmv_relay \
+            scripts.test_serve_open_competition_v2_gmv_confirmation \
+            scripts.test_local_open_competition_v2_gmv_guard \
             scripts.test_build_open_competition_v2_gmv_snapshots \
             scripts.test_forward_canonical_gmv \
             scripts.test_build_forward_open_competition_v2_gmv_candidate_pool \

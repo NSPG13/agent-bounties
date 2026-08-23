@@ -16,11 +16,11 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import plan_open_competition_v2_replenishment as PLANNER
+import plan_open_competition_v2_replenishment as PLANNER  # noqa: E402
 
 SPECS_PATH = ROOT / "ops" / "open-competition-v2-forward-gmv-candidate-pool-v2.json"
 LEDGER_PATH = ROOT / "ops" / "open-competition-v2-replenishment-ledger-v1.example.json"
-NOW = datetime(2026, 8, 23, 8, 10, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 23, 8, 30, tzinfo=timezone.utc)
 RELEASE_HASH = "0x46008fb819726a43209e55ee7e58c92700a8fc3435f76be282bfdef710ced594"
 FACTORY = "0x29d0e39e0c03797c690633535722e6b34a69a78a"
 
@@ -29,7 +29,7 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def inventory(active: int, *, observed_at: str = "2026-08-23T08:09:00Z") -> dict:
+def inventory(active: int, *, observed_at: str = "2026-08-23T08:29:00Z") -> dict:
     return {
         "inventory_evidence_valid": True,
         "private_gmv_meta_floor": 5,
@@ -83,7 +83,7 @@ def execution(
     index: int,
     *,
     status: str = "planned",
-    occurred_at: str = "2026-08-23T08:05:00Z",
+    occurred_at: str = "2026-08-23T08:25:00Z",
     candidate_id: str | None = None,
     amount: int | float = PLANNER.TOTAL_PER_COMPETITION_BASE_UNITS,
 ) -> dict:
@@ -155,8 +155,8 @@ class ReplenishmentPlannerTests(unittest.TestCase):
 
     def test_checked_in_ready_pool_restores_target_when_every_live_gate_matches(self) -> None:
         specs = reviewed_specs(load_json(SPECS_PATH))
-        current = datetime(2026, 8, 23, 8, 15, tzinfo=timezone.utc)
-        report = inventory(0, observed_at="2026-08-23T08:14:00Z")
+        current = datetime(2026, 8, 23, 8, 30, tzinfo=timezone.utc)
+        report = inventory(0, observed_at="2026-08-23T08:29:00Z")
         plan = PLANNER.build_plan(
             report,
             specs,
@@ -197,7 +197,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
                 self.assertIn("not live", plan["blockers"][0])
 
     def test_stale_and_future_inventory_fail_closed(self) -> None:
-        for observed_at in ("2026-08-23T07:54:59Z", "2026-08-23T08:11:01Z"):
+        for observed_at in ("2026-08-23T08:14:59Z", "2026-08-23T08:31:01Z"):
             with self.subTest(observed_at=observed_at):
                 plan = self.plan(4, inventory_report=inventory(4, observed_at=observed_at))
                 self.assertEqual(plan["status"], "blocked")
@@ -304,7 +304,7 @@ class ReplenishmentPlannerTests(unittest.TestCase):
         cases = [
             [base, duplicate_key],
             [base, execution(2, candidate_id=base["candidate_id"])],
-            [execution(3, occurred_at="2026-08-23T08:10:01Z")],
+            [execution(3, occurred_at="2026-08-23T08:30:01Z")],
             [execution(4, amount=3_040_000.0)],
             [execution(5, amount=3_040_001)],
         ]
