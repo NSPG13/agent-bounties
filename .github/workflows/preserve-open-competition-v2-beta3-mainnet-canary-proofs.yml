@@ -1,0 +1,96 @@
+name: Preserve Open Competition V2 Beta3 mainnet canary proofs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-mainnet-canary-proof-preservation
+  cancel-in-progress: false
+
+env:
+  SOURCE_RUN_ID: "32623224167"
+  SOURCE_RUN_ATTEMPT: "1"
+  RELEASE_SOURCE_COMMIT: 5a351f3e373691be58a9575b4374812b494b6086
+  PROOF_CONTEXT_HASH: "0x9fab869a09818ded5b5b066489ed8732bdd5ae0fffbbe3172f72c11de44b9640"
+  PLONK_BEST_A_PROOF_HASH: "0xf2b2dc02af5c30b66f45dd14389aac1b7716fe6534da242525da965fb0f916be"
+  PLONK_BEST_A_JOURNAL_HASH: "0xd42664c3b36ed9639b48d9fd15b765b1837b7cd0c865c29da637731403727645"
+  PLONK_BEST_B_PROOF_HASH: "0x2a0d37fba6bc77bcf75cfd4c821dcc0e538bdf87fe32ec826cc47d3aa4ed9b54"
+  PLONK_BEST_B_JOURNAL_HASH: "0x1ab38e9a9a1094a8d7a75ad605c2ea0927dc5dd7f6676795581e15cdcd447f8b"
+
+jobs:
+  preserve:
+    if: github.ref == 'refs/heads/main'
+    environment: v2-beta2-mainnet
+    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    timeout-minutes: 10
+    steps:
+      - name: Validate and stage the exact failed-run proof workspace
+        run: |
+          set -euo pipefail
+          source="$GITHUB_WORKSPACE/target"
+          stage="$RUNNER_TEMP/open-competition-v2-beta3-mainnet-canary-proofs"
+          test -f "$source/mainnet-canary-bundle.json"
+          test -f "$source/mainnet-canary-preparation.json"
+          test -d "$source/mainnet-proof-inputs"
+          test -f "$source/mainnet-proofs/plonk_best_a.json"
+          test -f "$source/mainnet-proofs/plonk_best_b.json"
+          test -z "$(find "$source/mainnet-proof-inputs" "$source/mainnet-proofs" -type l -print -quit)"
+          jq -e --arg context "$PROOF_CONTEXT_HASH" \
+            '.passed == true and .proof_context_hash == $context' \
+            "$source/mainnet-canary-preparation.json" >/dev/null
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
+            '.network == "base-mainnet" and .source_commit == $commit' \
+            "$source/mainnet-canary-bundle.json" >/dev/null
+          jq -e --arg proof "$PLONK_BEST_A_PROOF_HASH" --arg journal "$PLONK_BEST_A_JOURNAL_HASH" \
+            '.proof_name == "plonk_best_a" and .mode == "plonk" and
+             .proof_hash == $proof and .journal_hash == $journal' \
+            "$source/mainnet-proofs/plonk_best_a.json" >/dev/null
+          jq -e --arg proof "$PLONK_BEST_B_PROOF_HASH" --arg journal "$PLONK_BEST_B_JOURNAL_HASH" \
+            '.proof_name == "plonk_best_b" and .mode == "plonk" and
+             .proof_hash == $proof and .journal_hash == $journal' \
+            "$source/mainnet-proofs/plonk_best_b.json" >/dev/null
+          install -d -m 0700 "$stage"
+          cp -a "$source/mainnet-canary-bundle.json" "$stage/"
+          cp -a "$source/mainnet-canary-preparation.json" "$stage/"
+          cp -a "$source/mainnet-proof-inputs" "$stage/"
+          cp -a "$source/mainnet-proofs" "$stage/"
+          STAGE="$stage" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          stage = Path(os.environ["STAGE"])
+          evidence = {
+              "schema_version": "agent-bounties/open-competition-v2-beta3-mainnet-canary-proof-preservation-v1",
+              "source_run_id": os.environ["SOURCE_RUN_ID"],
+              "source_run_attempt": os.environ["SOURCE_RUN_ATTEMPT"],
+              "source_commit": os.environ["RELEASE_SOURCE_COMMIT"],
+              "actor_derivation_salt": f'{os.environ["SOURCE_RUN_ID"]}:{os.environ["SOURCE_RUN_ATTEMPT"]}:mainnet',
+              "proof_context_hash": os.environ["PROOF_CONTEXT_HASH"],
+              "proof_hashes": {
+                  "plonk_best_a": os.environ["PLONK_BEST_A_PROOF_HASH"],
+                  "plonk_best_b": os.environ["PLONK_BEST_B_PROOF_HASH"],
+              },
+              "money_moved_by_preservation": False,
+          }
+          (stage / "preservation-evidence.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
+          (
+            cd "$stage"
+            find . -type f ! -name files.sha256 -print0 \
+              | sort -z \
+              | xargs -0 sha256sum \
+              > files.sha256
+          )
+      - name: Upload exact preserved proof evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: open-competition-v2-beta3-mainnet-canary-proofs-32623224167-1
+          path: ${{ runner.temp }}/open-competition-v2-beta3-mainnet-canary-proofs
+          if-no-files-found: error
+          retention-days: 365
