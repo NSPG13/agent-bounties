@@ -15,7 +15,7 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_utils import keccak, to_checksum_address
 
-from build_open_competition_v2_gmv_activation import POLICY_TYPE
+from build_open_competition_v2_gmv_activation import ACTIVATION_SCHEMA, POLICY_TYPE
 
 
 SIGNATURE = re.compile(r"^0x[0-9a-fA-F]{130}$")
@@ -34,7 +34,7 @@ def raw_hash(value: object, field: str) -> bytes:
 
 
 def build_relay(bundle: dict[str, Any], signature: str, now: int | None = None) -> dict[str, Any]:
-    if bundle.get("schema_version") != "agent-bounties/open-competition-v2-gmv-meta-activation-v1":
+    if bundle.get("schema_version") != ACTIVATION_SCHEMA:
         raise RelayError("activation bundle schema is invalid")
     if not SIGNATURE.fullmatch(signature):
         raise RelayError("signature must be 65-byte hex")

@@ -102,7 +102,7 @@ class ReplenishmentMaterializerTests(unittest.TestCase):
             specs,
             synthetic_private_ranking(specs),
             load_json(LEDGER_PATH),
-            now=datetime(2026, 8, 22, 4, 35, tzinfo=timezone.utc),
+            now=NOW,
         )
         with self.assertRaises(MATERIALIZER.MaterializeError):
             MATERIALIZER.materialize(plan)

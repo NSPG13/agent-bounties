@@ -31,6 +31,14 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
                 / "bounded-open-competition-v2-wallet-base-mainnet.json"
             ).read_text()
         )
+        cls.reserve["canonical"]["competition_factory"] = cls.pool["factory_contract"]
+        cls.reserve["canonical"]["release_hash"] = cls.pool["release_hash"]
+        cls.reserve["reserve_factory"]["address"] = (
+            "0xad0765eac772ff6cf696f2416751269d97a5419f"
+        )
+        cls.reserve["reserve_factory"]["implementation"] = (
+            "0x9c62e1ab727909a18a830744eb244645ee91b0eb"
+        )
         profile = cls.pool["profile_release"]
         profile["status"] = "reviewed"
         profile["program_vkey"] = "0x" + "31" * 32
@@ -61,7 +69,7 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
                 }
             ],
         }
-        cls.now = datetime(2026, 8, 22, 8, 30, tzinfo=timezone.utc)
+        cls.now = datetime(2026, 8, 23, 8, 30, tzinfo=timezone.utc)
 
     def build(self, **changes: object) -> dict:
         release = copy.deepcopy(self.release)
@@ -75,6 +83,7 @@ class OpenCompetitionV2GmvActivationTests(unittest.TestCase):
 
     def test_bundle_is_exact_recoverable_and_v2_only(self) -> None:
         value = self.build()
+        self.assertEqual(value["schema_version"], MODULE.ACTIVATION_SCHEMA)
         self.assertEqual(value["owner"], MODULE.OWNER)
         self.assertEqual(value["delegate"], MODULE.DELEGATE)
         self.assertEqual(value["initial_funding_base_units"], 77_668_098)

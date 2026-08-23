@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHAIN_ID = 8453
 PROTOCOL = "agent-bounties/open-competition-v2-beta3"
 PROFILE_ID = "forward-canonical-gmv-attribution-metric-v2"
+ACTIVATION_SCHEMA = "agent-bounties/open-competition-v2-forward-gmv-meta-activation-v2"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 OWNER = "0x884834e884d6e93462655a2820140ad03e6747bc"
 DELEGATE = "0xfb58949365e3a30fd62e86edb0daffccf4ef7477"
@@ -393,7 +394,7 @@ def build_activation(
         "gmv_journal_schema_hash": hash32(profile.get("journal_schema_hash"), "journal schema"),
     }
     return {
-        "schema_version": "agent-bounties/open-competition-v2-forward-gmv-meta-activation-v2",
+        "schema_version": ACTIVATION_SCHEMA,
         "network": "base-mainnet",
         "chain_id": CHAIN_ID,
         "protocol_version": PROTOCOL,
@@ -452,7 +453,12 @@ def build_activation(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", type=Path, required=True)
-    parser.add_argument("--reserve-deployment", type=Path, required=True)
+    parser.add_argument(
+        "--reserve-deployment",
+        type=Path,
+        required=True,
+        help="Exact protected-release bounded reserve deployment artifact",
+    )
     parser.add_argument(
         "--candidate-pool",
         type=Path,

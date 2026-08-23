@@ -243,7 +243,8 @@ def main() -> int:
     parser.add_argument(
         "--reserve-deployment",
         type=Path,
-        default=ROOT / "deployments/bounded-open-competition-v2-wallet-base-mainnet.json",
+        required=True,
+        help="Exact protected-release bounded reserve deployment artifact",
     )
     parser.add_argument(
         "--identity",
