@@ -129,7 +129,7 @@ jobs:
             --arg factory "$EXPECTED_FACTORY" \
             '.preflight_safe_block.deployer_nonce == $start and
              .preflight_safe_block.observed_deployer_nonce >= 35 and
-             .preflight_safe_block.observed_deployer_nonce <= 37 and
+             .preflight_safe_block.observed_deployer_nonce <= 38 and
              .preflight_safe_block.resuming_exact_verifiers == true and
              .groth16_verifier.address == $groth and
              .plonk_verifier.address == $plonk and
@@ -163,6 +163,7 @@ jobs:
             --manifest target/bounded-open-competition-v2-wallet-base-mainnet.json \
             --release target/mainnet-exact.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
             --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --maximum-new-deployment-nonce 37 \
             --output target/bounded-open-competition-v2-wallet-deployment-evidence.json
           jq -e '.complete == true and (.safe_block.number > 0)' \
             target/bounded-open-competition-v2-wallet-deployment-evidence.json >/dev/null

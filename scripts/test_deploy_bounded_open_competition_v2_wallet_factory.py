@@ -115,6 +115,48 @@ class ReserveFactoryDeploymentTests(unittest.TestCase):
         client.broadcast.assert_called_once()
         client.wait_receipt.assert_called_once_with("0x" + "12" * 32)
 
+    def test_new_deployment_fails_when_the_bounded_nonce_has_moved(self) -> None:
+        manifest, _release = fixture()
+        client = SimpleNamespace(pending_nonce=mock.Mock(return_value=38))
+
+        with self.assertRaisesRegex(
+            RuntimeError, "nonce moved without the exact reserve factory"
+        ):
+            deploy.send_create2(
+                client,
+                manifest,
+                maximum_new_deployment_nonce=37,
+            )
+
+    def test_refreshes_reincluded_reserve_receipt(self) -> None:
+        transaction_hash = "0x" + "12" * 32
+        evidence = {
+            "transaction": {
+                "transaction_hash": transaction_hash,
+                "block_number": 10,
+                "block_hash": "0x" + "34" * 32,
+                "gas_used": 1,
+            }
+        }
+        client = SimpleNamespace(
+            receipt=mock.Mock(
+                return_value={
+                    "transactionHash": transaction_hash,
+                    "status": "0x1",
+                    "blockNumber": "0xc",
+                    "blockHash": "0x" + "56" * 32,
+                    "gasUsed": "0x2a",
+                }
+            )
+        )
+
+        deployment_block = deploy.reconcile_canonical_receipt(evidence, client)
+
+        self.assertEqual(deployment_block, 12)
+        self.assertEqual(evidence["transaction"]["block_number"], 12)
+        self.assertEqual(evidence["transaction"]["block_hash"], "0x" + "56" * 32)
+        self.assertEqual(evidence["transaction"]["gas_used"], 42)
+
     @mock.patch.object(deploy, "rpc")
     def test_exact_existing_deployment_is_recovered_without_broadcast(self, rpc_call: mock.Mock) -> None:
         manifest, release = fixture()
@@ -173,13 +215,15 @@ class ReserveFactoryDeploymentTests(unittest.TestCase):
             "blockNumber": "0x29",
             "blockHash": "0x" + "ff" * 32,
             "gasUsed": "0x100",
+            "status": "0x1",
         }
+        client.receipt.return_value = send.return_value
         rpc_call.return_value = {"hash": "0x" + "ff" * 32}
         with tempfile.TemporaryDirectory() as directory:
             evidence = deploy.deploy(manifest, release, client, Path(directory) / "evidence.json")
         self.assertTrue(evidence["complete"])
         self.assertFalse(evidence["transaction"]["recovered_exact_deployment"])
-        send.assert_called_once_with(client, manifest)
+        send.assert_called_once_with(client, manifest, None)
 
 
 if __name__ == "__main__":

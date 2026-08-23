@@ -69,7 +69,8 @@ class MainnetDeploymentRecoveryWorkflowTests(unittest.TestCase):
     def test_recovery_reuses_exact_prefix_and_dual_rpc_submission(self) -> None:
         self.assertIn(".preflight_safe_block.resuming_exact_verifiers == true", self.text)
         self.assertIn(".preflight_safe_block.observed_deployer_nonce >= 35", self.text)
-        self.assertIn(".preflight_safe_block.observed_deployer_nonce <= 37", self.text)
+        self.assertIn(".preflight_safe_block.observed_deployer_nonce <= 38", self.text)
+        self.assertIn("--maximum-new-deployment-nonce 37", self.text)
         self.assertIn(".transactions[0].recovered_exact_deployment == true", self.text)
         self.assertEqual(self.text.count('--shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL"'), 2)
         self.assertIn("deploy_open_competition_v2_beta3.py", self.text)
