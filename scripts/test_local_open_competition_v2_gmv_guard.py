@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
 import sys
 import urllib.error
@@ -43,6 +44,52 @@ def guard_state(active: int, used: int, *, period_spent: int = 0, lifetime_spent
 
 
 class LocalGmvGuardTests(unittest.TestCase):
+    def test_pending_recovery_uses_separate_receipt_rpc_pair(self) -> None:
+        delegate = "0x" + "22" * 20
+        transaction_hash = "0x" + "11" * 32
+        ledger = {
+            "schema": guard_module.LEDGER_SCHEMA,
+            "transactions": [
+                {
+                    "kind": "create_competition",
+                    "candidate_id": "candidate-1-v1",
+                    "raw_transaction": "0x01",
+                    "status": "broadcast",
+                    "transaction_hash": transaction_hash,
+                }
+            ],
+        }
+        evidence = {"transaction_hash": transaction_hash, "receipt_block": 123, "safe_block": {}}
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            (state_dir / guard_module.LEDGER_FILE).write_text(json.dumps(ledger), encoding="utf-8")
+            with (
+                mock.patch.object(guard_module, "public_address", return_value=delegate),
+                mock.patch.object(guard_module.Account, "recover_transaction", return_value=delegate),
+                mock.patch.object(guard_module, "rpc", return_value=transaction_hash) as rpc,
+                mock.patch.object(
+                    guard_module, "wait_canonical_receipt", return_value=evidence
+                ) as wait_receipt,
+            ):
+                resumed = guard_module.resume_pending(
+                    state_dir,
+                    "https://state-primary.invalid",
+                    "https://state-shadow.invalid",
+                    "https://receipt-primary.invalid",
+                    "https://receipt-shadow.invalid",
+                )
+        self.assertEqual(resumed, [evidence])
+        self.assertEqual(
+            [call.args[0] for call in rpc.call_args_list],
+            ["https://state-primary.invalid", "https://state-shadow.invalid"],
+        )
+        wait_receipt.assert_called_once_with(
+            "https://receipt-primary.invalid",
+            "https://receipt-shadow.invalid",
+            transaction_hash,
+            guard_module.RECEIPT_TIMEOUT,
+        )
+
     def test_default_rpc_pacing_stays_below_public_quota_bursts(self) -> None:
         self.assertGreaterEqual(guard_module.RPC_MIN_INTERVAL_SECONDS, 1.0)
 

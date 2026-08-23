@@ -706,7 +706,13 @@ def wait_canonical_receipt(primary: str, shadow: str, tx_hash: str, timeout: int
     raise GuardError(f"transaction canonical reconciliation timed out{boundary}; inspect by hash {tx_hash}")
 
 
-def resume_pending(state_dir: Path, primary: str, shadow: str) -> list[dict[str, Any]]:
+def resume_pending(
+    state_dir: Path,
+    primary: str,
+    shadow: str,
+    receipt_primary: str,
+    receipt_shadow: str,
+) -> list[dict[str, Any]]:
     """Rebroadcast the exact persisted raw transaction before planning new work."""
     ledger = load_ledger(state_dir)
     resumed = []
@@ -730,7 +736,9 @@ def resume_pending(state_dir: Path, primary: str, shadow: str) -> list[dict[str,
                 # Exact raw rebroadcast is idempotent. Canonical receipt evidence below
                 # determines whether an already-known/nonce-used response is acceptable.
                 pass
-        evidence = wait_canonical_receipt(primary, shadow, tx_hash, RECEIPT_TIMEOUT)
+        evidence = wait_canonical_receipt(
+            receipt_primary, receipt_shadow, tx_hash, RECEIPT_TIMEOUT
+        )
         record.update({"status": "canonically_confirmed", **evidence})
         record.pop("raw_transaction", None)
         resumed.append(evidence)
@@ -744,6 +752,8 @@ def execute_direct(
     state_dir: Path,
     primary: str,
     shadow: str,
+    receipt_primary: str,
+    receipt_shadow: str,
     direct: dict[str, Any],
     kind: str,
     candidate_id: str | None,
@@ -812,7 +822,9 @@ def execute_direct(
             raise GuardError(f"both RPC broadcasts failed before a receipt was visible: {errors}")
     record["status"] = "broadcast"
     save_ledger(state_dir, ledger)
-    evidence = wait_canonical_receipt(primary, shadow, tx_hash, RECEIPT_TIMEOUT)
+    evidence = wait_canonical_receipt(
+        receipt_primary, receipt_shadow, tx_hash, RECEIPT_TIMEOUT
+    )
     record.update({"status": "canonically_confirmed", **evidence})
     record.pop("raw_transaction", None)
     save_ledger(state_dir, ledger)
@@ -828,6 +840,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activation-bundle", type=Path, required=True)
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--shadow-rpc-url", required=True)
+    parser.add_argument("--receipt-rpc-url")
+    parser.add_argument("--shadow-receipt-rpc-url")
     parser.add_argument("--json-out", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
@@ -845,9 +859,17 @@ def main(argv: list[str] | None = None) -> int:
         reserve_deployment = load_object(args.reserve_deployment)
         pool = load_object(args.candidate_pool)
         bundle = load_object(args.activation_bundle)
+        receipt_rpc_url = args.receipt_rpc_url or args.rpc_url
+        shadow_receipt_rpc_url = args.shadow_receipt_rpc_url or args.shadow_rpc_url
         validate_reviewed_inputs(release, reserve_deployment, pool, bundle, delegate)
         with exclusive_guard(state_dir):
-            resumed = resume_pending(state_dir, args.rpc_url, args.shadow_rpc_url)
+            resumed = resume_pending(
+                state_dir,
+                args.rpc_url,
+                args.shadow_rpc_url,
+                receipt_rpc_url,
+                shadow_receipt_rpc_url,
+            )
             state = inspect_state(
                 args.rpc_url,
                 args.shadow_rpc_url,
@@ -870,6 +892,8 @@ def main(argv: list[str] | None = None) -> int:
                     state_dir,
                     args.rpc_url,
                     args.shadow_rpc_url,
+                    receipt_rpc_url,
+                    shadow_receipt_rpc_url,
                     direct,
                     "reserve_funding",
                     None,
@@ -921,6 +945,8 @@ def main(argv: list[str] | None = None) -> int:
                             state_dir,
                             args.rpc_url,
                             args.shadow_rpc_url,
+                            receipt_rpc_url,
+                            shadow_receipt_rpc_url,
                             creation["delegate_transaction"],
                             "create_competition",
                             creation["candidate_id"],
