@@ -49,6 +49,24 @@ HTML = r"""<!doctype html>
 </article></main>
 <script>
 (async () => {
+  async function assertBaseMainnetWhenQueryable(provider) {
+    try {
+      const chain = await provider.request({method: 'eth_chainId'});
+      if (String(chain).toLowerCase() !== '0x2105') {
+        throw new Error('Switch the wallet to Base mainnet, then retry.');
+      }
+      return true;
+    } catch (error) {
+      const code = Number(error && error.code);
+      const message = String(error && error.message ? error.message : error).toLowerCase();
+      const methodUnavailable = code === -32601 || code === 4200 ||
+        message.includes('method not found') || message.includes('method is not supported') ||
+        message.includes('unsupported method');
+      if (!methodUnavailable) throw error;
+      return false;
+    }
+  }
+
   const bundle = await fetch('/bundle', {cache: 'no-store'}).then(r => r.json());
   const summary = bundle.confirmation_summary;
   const facts = [
@@ -68,13 +86,16 @@ HTML = r"""<!doctype html>
     button.disabled = true;
     try {
       if (!window.ethereum) throw new Error('No injected wallet is available in this browser.');
-      const chain = await ethereum.request({method: 'eth_chainId'});
-      if (String(chain).toLowerCase() !== '0x2105') throw new Error('Switch the wallet to Base mainnet, then retry.');
-      const accounts = await ethereum.request({method: 'eth_requestAccounts'});
+      const provider = window.ethereum;
+      const chainWasChecked = await assertBaseMainnetWhenQueryable(provider);
+      if (!chainWasChecked) {
+        status.textContent = 'This wallet cannot report its selected chain. The signature request itself remains locked to Base mainnet.';
+      }
+      const accounts = await provider.request({method: 'eth_requestAccounts'});
       const account = String(accounts[0] || '').toLowerCase();
       if (account !== bundle.owner.toLowerCase()) throw new Error(`Select ${bundle.owner} in the wallet, then retry.`);
       status.textContent = 'Review the exact 77.668098-USDC authorization in your wallet.';
-      const signature = await ethereum.request({
+      const signature = await provider.request({
         method: 'eth_signTypedData_v4',
         params: [account, JSON.stringify(bundle.owner_authorization.typed_data)],
       });
