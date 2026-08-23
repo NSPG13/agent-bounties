@@ -422,7 +422,7 @@ jobs:
           KEEPER="${BASE_KEEPER_ADDRESS,,}"
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
           chmod 0755 "$OPEN_COMPETITION_V2_PROVER_BINARY"
-          forge build --root contracts/base-escrow --force --ast
+          forge build --root target/continuation-control/contracts/base-escrow --force --ast
           cargo build --manifest-path target/continuation-control/Cargo.toml \
             --target-dir target/continuation-build --locked --release -p api -p worker
           bundle=target/mainnet-deployment/mainnet-exact.json

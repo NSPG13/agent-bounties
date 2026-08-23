@@ -236,6 +236,11 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
     def test_canaries_use_current_control_binaries_with_frozen_release_assets(self):
         self.assertIn("ref: ${{ github.sha }}", self.text)
         self.assertIn("path: target/continuation-control", self.text)
+        self.assertIn(
+            "forge build --root target/continuation-control/contracts/base-escrow --force --ast",
+            self.text,
+        )
+        self.assertNotIn("forge build --root contracts/base-escrow --force --ast", self.text)
         self.assertIn("--manifest-path target/continuation-control/Cargo.toml", self.text)
         self.assertEqual(
             self.text.count(
