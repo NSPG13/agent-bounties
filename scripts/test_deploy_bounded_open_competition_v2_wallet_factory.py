@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -80,6 +81,39 @@ class ReserveFactoryDeploymentTests(unittest.TestCase):
             changed["reserve_factory"]["deployment_transaction"] += "00"
             with self.assertRaisesRegex(RuntimeError, "manifest_hash"):
                 deploy.load_evidence(output, changed, release, signer)
+
+    @mock.patch.object(deploy, "rpc")
+    def test_create2_signing_checksums_the_lowercase_deployer(
+        self, rpc_call: mock.Mock
+    ) -> None:
+        manifest, _release = fixture()
+        manifest["deterministic_deployer"][
+            "address"
+        ] = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
+        signer = deploy.Account.from_key("0x" + "01".zfill(64))
+        client = SimpleNamespace(
+            url="https://primary.example",
+            signer=signer,
+            pending_nonce=mock.Mock(return_value=0),
+            broadcast=mock.Mock(return_value="0x" + "12" * 32),
+            wait_receipt=mock.Mock(return_value={"status": "0x1"}),
+        )
+
+        def fake_rpc(_url: str, method: str, _params: list[object]):
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0xf4240"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            self.fail(f"unexpected RPC call: {method}")
+
+        rpc_call.side_effect = fake_rpc
+        receipt = deploy.send_create2(client, manifest)
+
+        self.assertEqual(receipt, {"status": "0x1"})
+        client.broadcast.assert_called_once()
+        client.wait_receipt.assert_called_once_with("0x" + "12" * 32)
 
     @mock.patch.object(deploy, "rpc")
     def test_exact_existing_deployment_is_recovered_without_broadcast(self, rpc_call: mock.Mock) -> None:

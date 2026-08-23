@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from eth_account import Account
+from eth_utils import to_checksum_address
 
 from _shared.evm import keccak256
 from _shared.rpc import rpc
@@ -135,7 +136,9 @@ def write_evidence(output: Path, evidence: dict[str, Any]) -> None:
 
 
 def send_create2(client: SignedRpc, manifest: dict[str, Any]) -> dict[str, Any]:
-    deterministic = manifest["deterministic_deployer"]["address"]
+    deterministic = to_checksum_address(
+        manifest["deterministic_deployer"]["address"]
+    )
     data = manifest["reserve_factory"]["deployment_transaction"]
     nonce = client.pending_nonce()
     latest = rpc(client.url, "eth_getBlockByNumber", ["latest", False])
