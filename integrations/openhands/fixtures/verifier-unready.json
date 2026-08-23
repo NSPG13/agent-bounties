@@ -1,0 +1,45 @@
+{
+  "description": "Funded but verifier not ready: correct work still cannot settle -> skip.",
+  "expected_action": "skip",
+  "age_seconds": 60,
+  "bounty": {
+    "bounty_id": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "bounty_contract": "0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+    "work_state": "open",
+    "funded": true,
+    "funding_complete": true,
+    "verifier": {
+      "ready": false,
+      "mode": "signed_quorum",
+      "reason": "precommitted signer set incomplete"
+    },
+    "reward": {
+      "amount": "2000000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "bond": {
+      "amount": "10000",
+      "currency": "USDC",
+      "decimals": 6
+    },
+    "cash_economics": {
+      "solver_reward": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "required_external_spend": {
+        "amount": "0",
+        "currency": "USDC",
+        "decimals": 6
+      },
+      "gross_cash_margin": {
+        "amount": "2000000",
+        "currency": "USDC",
+        "decimals": 6
+      }
+    }
+  },
+  "next_action": "Skip: the verifier is not ready, so a passing submission could not settle."
+}
