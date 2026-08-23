@@ -11,7 +11,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "seed-open-competition-v2-replenisher-gas.yml"
-DELEGATE = "0xfb58949365e3a30fd62e86edb0daffccf4ef7477"
+DELEGATE = "0xb358898d34c5e907877a1cd7540b234f6851f61b"
 
 
 class ReplenisherGasWorkflowTests(unittest.TestCase):

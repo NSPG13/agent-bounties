@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -95,10 +97,31 @@ HTML = r"""<!doctype html>
 </html>"""
 
 
+def store_verified_signature(path: Path, owner: str, signature: str) -> str:
+    """Persist the verified signature once without exposing it in process output."""
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps({"owner": owner, "signature": signature}) + "\n").encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("signature output write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return "0x" + hashlib.sha256(signature.lower().encode()).hexdigest()
+
+
 class ConfirmationServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], bundle: dict) -> None:
+    def __init__(self, address: tuple[str, int], bundle: dict, signature_output: Path) -> None:
         super().__init__(address, ConfirmationHandler)
         self.bundle = bundle
+        self.signature_output = signature_output
 
 
 class ConfirmationHandler(BaseHTTPRequestHandler):
@@ -154,17 +177,34 @@ class ConfirmationHandler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, json.JSONDecodeError) as error:
             self.send(400, "application/json", json.dumps({"error": str(error)}).encode())
             return
-        print(json.dumps({"status": "signature_verified", "owner": recovered, "signature": signature}), flush=True)
+        try:
+            signature_hash = store_verified_signature(
+                self.server.signature_output, recovered, signature
+            )
+        except OSError as error:
+            self.send(409, "application/json", json.dumps({"error": str(error)}).encode())
+            return
+        print(
+            json.dumps(
+                {
+                    "status": "signature_verified",
+                    "owner": recovered,
+                    "signature_sha256": signature_hash,
+                }
+            ),
+            flush=True,
+        )
         self.send(200, "application/json", b'{"status":"signature_verified"}')
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--signature-output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args()
     bundle = json.loads(args.bundle.read_text(encoding="utf-8-sig"))
-    server = ConfirmationServer(("127.0.0.1", args.port), bundle)
+    server = ConfirmationServer(("127.0.0.1", args.port), bundle, args.signature_output)
     print(f"confirmation_url=http://127.0.0.1:{args.port}/", flush=True)
     server.serve_forever()
 
