@@ -43,6 +43,9 @@ def guard_state(active: int, used: int, *, period_spent: int = 0, lifetime_spent
 
 
 class LocalGmvGuardTests(unittest.TestCase):
+    def test_default_rpc_pacing_stays_below_public_quota_bursts(self) -> None:
+        self.assertGreaterEqual(guard_module.RPC_MIN_INTERVAL_SECONDS, 1.0)
+
     def test_rpc_retries_http_rate_limit_with_bounded_backoff(self) -> None:
         rate_limit = urllib.error.HTTPError(
             "https://primary.invalid", 429, "rate limited", {}, None
