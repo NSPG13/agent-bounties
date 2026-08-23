@@ -135,12 +135,21 @@ def write_evidence(output: Path, evidence: dict[str, Any]) -> None:
     output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
 
 
-def send_create2(client: SignedRpc, manifest: dict[str, Any]) -> dict[str, Any]:
+def send_create2(
+    client: SignedRpc,
+    manifest: dict[str, Any],
+    maximum_new_deployment_nonce: int | None = None,
+) -> dict[str, Any]:
     deterministic = to_checksum_address(
         manifest["deterministic_deployer"]["address"]
     )
     data = manifest["reserve_factory"]["deployment_transaction"]
     nonce = client.pending_nonce()
+    if maximum_new_deployment_nonce is not None:
+        require(
+            nonce <= maximum_new_deployment_nonce,
+            "deployer nonce moved without the exact reserve factory",
+        )
     latest = rpc(client.url, "eth_getBlockByNumber", ["latest", False])
     base_fee = int(latest.get("baseFeePerGas", "0x0"), 16)
     try:
@@ -176,11 +185,31 @@ def send_create2(client: SignedRpc, manifest: dict[str, Any]) -> dict[str, Any]:
     return client.wait_receipt(transaction_hash)
 
 
+def reconcile_canonical_receipt(
+    evidence: dict[str, Any], client: SignedRpc
+) -> int:
+    transaction = evidence["transaction"]
+    transaction_hash = transaction["transaction_hash"]
+    if transaction_hash is None:
+        return int(transaction["block_number"])
+    receipt = client.receipt(transaction_hash)
+    require(receipt is not None, "canonical reserve deployment receipt is absent")
+    require(
+        int(receipt["status"], 16) == 1,
+        f"canonical reserve deployment reverted: {transaction_hash}",
+    )
+    transaction["block_number"] = int(receipt["blockNumber"], 16)
+    transaction["block_hash"] = receipt["blockHash"].lower()
+    transaction["gas_used"] = int(receipt["gasUsed"], 16)
+    return int(transaction["block_number"])
+
+
 def deploy(
     manifest: dict[str, Any],
     release: dict[str, Any],
     client: SignedRpc,
     output: Path,
+    maximum_new_deployment_nonce: int | None = None,
 ) -> dict[str, Any]:
     validate_manifest(manifest, release)
     evidence = load_evidence(output, manifest, release, client.signer.address)
@@ -199,7 +228,7 @@ def deploy(
     implementation_hash = client.code_hash(reserve["implementation"])
     if factory_hash is None:
         require(implementation_hash is None, "reserve implementation address is unexpectedly occupied")
-        receipt = send_create2(client, manifest)
+        receipt = send_create2(client, manifest, maximum_new_deployment_nonce)
         deployment_block = int(receipt["blockNumber"], 16)
         evidence["transaction"] = {
             "transaction_hash": receipt["transactionHash"].lower(),
@@ -231,7 +260,10 @@ def deploy(
             }
             write_evidence(output, evidence)
 
+    client.wait_safe(deployment_block)
+    deployment_block = reconcile_canonical_receipt(evidence, client)
     safe = client.wait_safe(deployment_block)
+    write_evidence(output, evidence)
     safe_tag = safe["number"]
     expected = {
         deterministic["address"]: deterministic["runtime_code_hash"],
@@ -266,6 +298,7 @@ def main() -> int:
     parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--shadow-rpc-url")
+    parser.add_argument("--maximum-new-deployment-nonce", type=int)
     parser.add_argument("--private-key-env", default="BASE_MAINNET_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -282,6 +315,7 @@ def main() -> int:
         release,
         SignedRpc(args.rpc_url, signer, args.shadow_rpc_url),
         args.output,
+        args.maximum_new_deployment_nonce,
     )
     print(
         json.dumps(
