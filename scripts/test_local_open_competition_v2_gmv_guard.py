@@ -4,8 +4,14 @@
 from __future__ import annotations
 
 import unittest
+import sys
+from pathlib import Path
 
-from scripts.local_open_competition_v2_gmv_guard import (
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from local_open_competition_v2_gmv_guard import (  # noqa: E402
     DAILY_CAP,
     INITIAL_FUNDING,
     PER_COMPETITION,
