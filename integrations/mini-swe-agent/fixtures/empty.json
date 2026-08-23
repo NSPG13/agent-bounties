@@ -1,0 +1,22 @@
+{
+  "schema_version": "agent-bounties/opportunity-projection-v1",
+  "generated_at": "2026-08-21T06:00:00Z",
+  "network": "base-mainnet",
+  "applied_view": "ready_to_earn",
+  "degraded": false,
+  "source_statuses": [
+    {
+      "source_type": "canonical_base",
+      "available": true,
+      "authoritative_urls": [
+        "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base"
+      ],
+      "item_count": 0,
+      "error": null
+    }
+  ],
+  "evidence_boundary": "Projection only. Listing is not funding, claim, verification, or settlement; only a confirmed canonical BountySettled event proves payment.",
+  "age_seconds": 60,
+  "staleness_seconds": 900,
+  "items": []
+}

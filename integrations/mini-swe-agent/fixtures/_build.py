@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""Regenerate the selector fixtures from one canonical, contract-complete shape.
+
+WHY THIS EXISTS. Every fixture used to be hand-written, and they had drifted
+away from the real `OpportunityItem` contract: several omitted
+`verification_ready`, `payment_state`, `payment_committed`, `funded_amount`,
+`funding_target` or `bond` entirely. Fixtures that are not shaped like real
+responses cannot falsify anything, and they are how a fail-open selector passes
+its own tests -- exactly the defect maintainer review caught.
+
+So the base item here mirrors crates/api/src/opportunities.rs::OpportunityItem
+field for field, and every adversarial fixture is derived from it by changing
+ONE thing. That keeps each case isolated: if it refuses, the reason is the one
+mutation, not an accidental second defect.
+
+Run:  python3 -B integrations/mini-swe-agent/fixtures/_build.py
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+# Deadline fixtures use FIXED timestamps so rebuilding is deterministic and
+# produces no git churn. They must not be near-future dates: a "live claim"
+# case pinned a few hours out silently becomes an "expired" one once that time
+# passes, inverting what the fixture tests long after anyone is watching. These
+# two are far enough apart that the meaning cannot drift, and the suite asserts
+# at run time that FUTURE_DEADLINE really is still in the future, so the day
+# that stops being true the tests fail loudly instead of quietly flipping.
+FUTURE_DEADLINE = "2099-01-01T00:00:00Z"
+PAST_DEADLINE = "2020-01-01T00:00:00Z"
+
+SCHEMA = "agent-bounties/opportunity-projection-v1"
+FEED = ("https://api.agentbounties.app/v1/opportunities"
+        "?network=base-mainnet&view=ready_to_earn&source_type=canonical_base")
+ENVELOPE_BOUNDARY = (
+    "Projection only. Listing is not funding, claim, verification, or settlement; "
+    "only a confirmed canonical BountySettled event proves payment."
+)
+ITEM_BOUNDARY = (
+    "Canonical lifecycle and payment language require confirmed factory/bounty "
+    "events. Payment is `paid` only after confirmed BountySettled; a plan, "
+    "signature, transaction hash, hosted row, or AI analysis is not payment evidence."
+)
+
+
+def usdc(amount: str) -> dict:
+    """An upstream OpportunityAmount. All four fields are non-optional."""
+    return {"amount": amount, "currency": "USDC", "unit": "base_units", "decimals": 6}
+
+
+def item(
+    *,
+    oid: str,
+    contract: str,
+    title: str,
+    goal: str,
+    categories: list,
+    reward: str,
+    bond: str,
+    spend: str = "0",
+    funded: str | None = None,
+    work_state: str = "claimable",
+) -> dict:
+    """A complete canonical OpportunityItem, ready to earn."""
+    target = funded if funded is not None else str(int(reward) + int(bond))
+    margin = str(int(reward) - int(spend))
+    return {
+        "opportunity_id": oid,
+        "source_type": "canonical_base",
+        "source_id": contract,
+        "source_status": "claimable",
+        "title": title,
+        "goal": goal,
+        "categories": categories,
+        "skills": ["python", "rust"],
+        "public_url": f"https://agentbounties.app/bounties/{oid}",
+        "network": "base-mainnet",
+        "work_state": work_state,
+        "payment_state": "escrowed",
+        "payment_committed": True,
+        "competition_mode": "exclusive_claim",
+        "standing_meta_bounty": False,
+        "decision_authority": (
+            f"The immutable canonical verification mode/module configured on {contract} "
+            "decides the submission result."
+        ),
+        "payment_authority": (
+            f"The exact canonical bounty contract {contract} controls escrow; only its "
+            "confirmed BountySettled event proves payment."
+        ),
+        "reward": usdc(reward),
+        "completion_bonus": usdc("0"),
+        "funded_amount": usdc(target),
+        "funding_target": usdc(target),
+        "bond": usdc(bond),
+        "verification_method": "signed_quorum",
+        "verification_ready": True,
+        "evidence_requirements": {"required": ["repository", "commit", "test_command"]},
+        "terms_hash": "0x" + "ab" * 32,
+        "proof_urls": [],
+        "cash_economics": {
+            "solver_reward": usdc(reward),
+            "refundable_claim_bond": usdc(bond),
+            "required_external_spend": usdc(spend),
+            "gross_cash_margin": usdc(margin),
+            "gross_cash_margin_positive": int(margin) > 0,
+            "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk.",
+        },
+        "discovery_factors": [
+            "source_type=canonical_base",
+            "work_state=claimable",
+            "payment_state=escrowed",
+            "view:ready_to_earn;factors=claimable+escrowed+verification_ready"
+            "+positive_gross_cash_margin",
+        ],
+        "created_at": "2026-08-20T00:00:00+00:00",
+        "updated_at": "2026-08-21T05:55:00+00:00",
+        "evidence_boundary": ITEM_BOUNDARY,
+    }
+
+
+CHECKER = item(
+    oid="canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    contract="0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    title="Add a deterministic MCP discovery checker",
+    goal="Implement a deterministic checker for MCP discovery.",
+    categories=["coding"],
+    reward="990000", bond="10000",
+)
+FAILOVER = item(
+    oid="canonical:base-mainnet:0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+    contract="0xa2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+    title="Add retry-safe Base RPC failover for CLI tooling",
+    goal="Implement deterministic RPC failover for the CLI.",
+    categories=["coding"],
+    reward="2000000", bond="10000",
+)
+# A complete, valid canonical record that simply is not coding work. This is a
+# legitimate `skip`, not a data fault, so it must be contract-complete too.
+MARKETING = item(
+    oid="canonical:base-mainnet:0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+    contract="0xa3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+    title="Write launch marketing copy",
+    goal="Draft promotional copy for the launch announcement.",
+    categories=["marketing"],
+    reward="5000000", bond="10000",
+)
+MARKETING["skills"] = ["copywriting"]
+
+
+def envelope(items, *, declared=None, age=60, **overrides) -> dict:
+    body = {
+        "schema_version": SCHEMA,
+        "generated_at": "2026-08-21T06:00:00Z",
+        "network": "base-mainnet",
+        "applied_view": "ready_to_earn",
+        "degraded": False,
+        "source_statuses": [{
+            "source_type": "canonical_base",
+            "available": True,
+            "authoritative_urls": [FEED],
+            "item_count": len(items) if declared is None else declared,
+            "error": None,
+        }],
+        "evidence_boundary": ENVELOPE_BOUNDARY,
+        "age_seconds": age,
+        "staleness_seconds": 900,
+        "items": items,
+    }
+    body.update(overrides)
+    return body
+
+
+def mutate(base: dict, **changes) -> dict:
+    """Copy an item and apply one targeted change. `None` deletes the key."""
+    out = copy.deepcopy(base)
+    for key, value in changes.items():
+        if value is None:
+            out.pop(key, None)
+        else:
+            out[key] = value
+    return out
+
+
+def solo(base: dict, **changes) -> dict:
+    """A one-item ready-to-earn envelope around a mutated CHECKER-like record."""
+    return envelope([mutate(base, **changes)])
+
+
+THREE = [CHECKER, FAILOVER, MARKETING]
+
+FIXTURES: dict[str, dict] = {}
+
+# ---------------------------------------------------------------- happy paths
+FIXTURES["multiple.json"] = envelope(THREE, declared=3)
+FIXTURES["empty.json"] = envelope([], declared=0)
+# A view filter can only REMOVE items, so a healthy response normally delivers
+# fewer than the pre-filter item_count. Declared 9 > delivered 3.
+FIXTURES["view-filtered-subset.json"] = envelope(THREE, declared=9)
+
+# ---------------------------------------------------------------- envelope
+FIXTURES["stale.json"] = envelope([CHECKER], age=5400)
+FIXTURES["adversarial-future-timestamp.json"] = envelope(
+    [CHECKER], age=-3600, generated_at="2099-01-01T00:00:00Z")
+_missing_fresh = envelope([CHECKER])
+del _missing_fresh["age_seconds"]
+# `generated_at` is non-optional upstream, so the envelope check requires a
+# non-empty string. The freshness fault this exercises is therefore an
+# UNPARSEABLE stamp: the field is there, but its age cannot be computed, and an
+# age that cannot be computed must never be treated as fresh.
+_missing_fresh["generated_at"] = "recently"
+FIXTURES["adversarial-missing-freshness.json"] = _missing_fresh
+FIXTURES["adversarial-envelope-bad-schema.json"] = envelope(
+    THREE, declared=3, schema_version="agent-bounties/opportunity-projection-v99")
+FIXTURES["adversarial-envelope-wrong-network.json"] = envelope(
+    THREE, declared=3, network="ethereum-mainnet")
+FIXTURES["adversarial-envelope-wrong-view.json"] = envelope(
+    THREE, declared=3, applied_view=None)
+FIXTURES["adversarial-envelope-degraded.json"] = envelope(THREE, declared=3, degraded=True)
+FIXTURES["adversarial-envelope-source-error.json"] = envelope(
+    THREE, declared=3, source_statuses=[{
+        "source_type": "canonical_base", "available": True,
+        "authoritative_urls": [FEED], "item_count": 3,
+        "error": "base rpc timeout after 3 attempts"}])
+FIXTURES["adversarial-envelope-source-unavailable.json"] = envelope(
+    THREE, declared=3, source_statuses=[{
+        "source_type": "canonical_base", "available": False,
+        "authoritative_urls": [FEED], "item_count": 0, "error": None}])
+# Delivering MORE canonical items than were read is incoherent: a filter removes.
+FIXTURES["adversarial-envelope-incoherent-coverage.json"] = envelope(THREE, declared=1)
+_no_statuses = envelope(THREE, declared=3)
+_no_statuses["source_statuses"] = []
+FIXTURES["adversarial-envelope-no-source-statuses.json"] = _no_statuses
+
+# An empty list is only "no work" when the response itself is trustworthy.
+FIXTURES["adversarial-empty-with-broken-source.json"] = envelope(
+    [], source_statuses=[{
+        "source_type": "canonical_base", "available": False,
+        "authoritative_urls": [FEED], "item_count": 0,
+        "error": "indexer unreachable"}])
+FIXTURES["adversarial-empty-degraded.json"] = envelope([], degraded=True)
+FIXTURES["adversarial-empty-stale.json"] = envelope([], age=7200)
+
+# ------------------------------------------------- item: well-formed refusals
+# These records satisfy the OpportunityItem contract completely. They are
+# refused on their MERITS, so the correct action is `skip`, not `refresh`.
+FIXTURES["adversarial-non-canonical-source.json"] = solo(
+    CHECKER, source_type="third_party_registry", network="ethereum-mainnet",
+    discovery_factors=["source_type=third_party_registry"])
+# The spoof: everything screams canonical -- Base network, a real 20-byte
+# address, discovery_factors ASSERTING canonical_base -- but source_type, the
+# one authoritative marker, says otherwise. source_type wins.
+FIXTURES["adversarial-item-spoofed-canonicity.json"] = envelope(
+    [mutate(CHECKER, source_type="github_discovery")], declared=0)
+FIXTURES["adversarial-verifier-unready.json"] = solo(CHECKER, verification_ready=False)
+FIXTURES["adversarial-underfunded.json"] = solo(
+    CHECKER, funded_amount=usdc("500000"), funding_target=usdc("2010000"))
+FIXTURES["adversarial-item-not-escrowed.json"] = solo(
+    CHECKER, payment_state="seeking_funding")
+FIXTURES["adversarial-item-payment-uncommitted.json"] = solo(
+    CHECKER, payment_committed=False)
+# A COHERENT zero-bond record: upstream builds `bond` and
+# `cash_economics.refundable_claim_bond` from the same `item.claim_bond` value
+# (opportunities.rs:796 and :848), so a record whose bond is genuinely zero has
+# zero in BOTH places. Building it through `item(bond="0")` keeps the pair --
+# and the derived funding target -- consistent, so the record breaches no
+# contract and is refused purely on its merits: `skip`.
+FIXTURES["adversarial-item-zero-bond.json"] = envelope([item(
+    oid="canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    contract="0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    title="Add a deterministic MCP discovery checker",
+    goal="Implement a deterministic checker for MCP discovery.",
+    categories=["coding"], reward="990000", bond="0")])
+# Zeroing ONLY the top-level bond leaves it disagreeing with
+# `refundable_claim_bond`, which upstream cannot produce. That is a data fault,
+# not a cheap bounty, so it must `refresh` rather than be judged on merits.
+FIXTURES["adversarial-item-bond-disagrees-with-economics.json"] = solo(
+    CHECKER, bond=usdc("0"))
+FIXTURES["adversarial-item-work-state-open.json"] = solo(CHECKER, work_state="open")
+FIXTURES["no-margin.json"] = envelope([item(
+    oid="canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    contract="0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    title="Seed a paid API child bounty",
+    goal="Create and fully fund a coding bounty another participant completes.",
+    categories=["coding"], reward="900000", bond="100000", spend="900000")])
+
+# ---------------------------------------------------------- item: data faults
+# These BREACH the contract, so nothing can be concluded and the action is
+# `refresh`. Each deletes or corrupts exactly one required thing.
+FIXTURES["adversarial-item-no-verification-ready.json"] = solo(
+    CHECKER, verification_ready=None)
+FIXTURES["adversarial-item-verification-ready-not-boolean.json"] = solo(
+    CHECKER, verification_ready="true")
+FIXTURES["adversarial-item-no-escrow-fields.json"] = solo(
+    CHECKER, payment_state=None, payment_committed=None,
+    funded_amount=None, funding_target=None)
+FIXTURES["adversarial-item-no-bond.json"] = solo(CHECKER, bond=None)
+FIXTURES["adversarial-item-bad-contract-address.json"] = solo(
+    CHECKER, source_id="0x" + "z" * 40)
+FIXTURES["adversarial-item-short-contract-address.json"] = solo(
+    CHECKER, source_id="0xa1a1a1")
+FIXTURES["adversarial-malformed-money.json"] = solo(
+    CHECKER, reward={"amount": "lots"})
+FIXTURES["adversarial-item-amount-no-unit.json"] = solo(
+    CHECKER, reward={"amount": "990000", "currency": "USDC", "decimals": 6})
+FIXTURES["adversarial-unit-mismatch.json"] = solo(CHECKER, cash_economics={
+    "solver_reward": usdc("990000"),
+    "refundable_claim_bond": usdc("10000"),
+    "required_external_spend": {"amount": "1000000", "currency": "DAI",
+                                "unit": "base_units", "decimals": 18},
+    "gross_cash_margin_positive": True,
+    "scope_disclaimer": "x",
+})
+# The server's precomputed margin contradicts its own components.
+FIXTURES["adversarial-item-contradictory-economics.json"] = solo(
+    CHECKER, cash_economics={
+        "solver_reward": usdc("990000"),
+        "refundable_claim_bond": usdc("10000"),
+        "required_external_spend": usdc("980000"),
+        "gross_cash_margin": usdc("990000"),
+        "gross_cash_margin_positive": True,
+        "scope_disclaimer": "x",
+    })
+FIXTURES["adversarial-item-funding-decimal-mismatch.json"] = solo(
+    CHECKER, funding_target={"amount": "1000000", "currency": "USDC",
+                             "unit": "base_units", "decimals": 18})
+
+# ------------------------------------------------ item: partial cash_economics
+# `OpportunityCashEconomics` (opportunities.rs:87-95) has SIX non-optional
+# members. The object as a whole is `Option<...>` on the item, but a canonical
+# record always carries it, and a PARTIAL object is corrupt data rather than a
+# projection that politely told us less. The dangerous case is the one the
+# review reproduced: drop `required_external_spend` and the advertised margin
+# describes work whose real cost is unknown.
+FIXTURES["adversarial-item-economics-only-margin.json"] = solo(
+    CHECKER, cash_economics={"gross_cash_margin": usdc("990000")})
+FIXTURES["adversarial-item-economics-no-external-spend.json"] = solo(
+    CHECKER, cash_economics={
+        "solver_reward": usdc("990000"),
+        "refundable_claim_bond": usdc("10000"),
+        "gross_cash_margin": usdc("990000"),
+        "gross_cash_margin_positive": True,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk.",
+    })
+FIXTURES["adversarial-item-economics-empty.json"] = solo(
+    CHECKER, cash_economics={})
+# A canonical record with the object DELETED. Both canonical constructors
+# (:832, :1094) emit `Some(...)`, so its absence contradicts source_type.
+FIXTURES["adversarial-item-economics-absent.json"] = solo(
+    CHECKER, cash_economics=None)
+# The flag a careless consumer reads instead of doing the arithmetic, lying.
+FIXTURES["adversarial-item-economics-flag-lies.json"] = solo(
+    CHECKER, cash_economics={
+        "solver_reward": usdc("990000"),
+        "refundable_claim_bond": usdc("10000"),
+        "required_external_spend": usdc("1990000"),
+        "gross_cash_margin": usdc("-1000000"),
+        "gross_cash_margin_positive": True,
+        "scope_disclaimer": "Gross cash margin excludes gas, taxes and failure risk.",
+    })
+
+# --------------------------------------------------------------- claim status
+#
+# These two fixtures previously used `exclusive_claimant`, `active_claimant` and
+# a numeric `claim_expires_at`. None of those fields exist on `OpportunityItem`,
+# so the fixtures were testing a schema the API has never emitted -- and while
+# they were green, injecting `claim_expires_at` into a genuinely occupied record
+# flipped the selector from `skip` to `claim`. The FIXTURES were wrong, not the
+# intent: occupancy is `work_state`, and expiry is the `deadline` /
+# `deadline_kind` pair (web-public/src/lib.rs:464-502), where `deadline_kind`
+# is what makes the timestamp mean "claim expiry" rather than a funding date.
+_live = mutate(CHECKER, work_state="in_progress",
+               deadline=FUTURE_DEADLINE,
+               deadline_kind="claim_expires_at")
+FIXTURES["exclusive-claimant.json"] = envelope([_live])
+# A lapsed claim is reclaimable even though the row still reads in_progress:
+# the deadline has passed and the kind says it is the CLAIM deadline.
+_expired = mutate(CHECKER, work_state="in_progress",
+                  deadline=PAST_DEADLINE,
+                  deadline_kind="claim_expires_at")
+FIXTURES["adversarial-expired-claim.json"] = envelope([_expired])
+# A past deadline whose kind is NOT claim expiry must not be read as one. This
+# record is occupied and stays occupied; only `deadline_kind` decides meaning.
+_funding_past = mutate(CHECKER, work_state="in_progress",
+                       deadline=PAST_DEADLINE,
+                       deadline_kind="funding_deadline")
+FIXTURES["adversarial-past-funding-deadline.json"] = envelope([_funding_past])
+# `deadline` and `deadline_kind` are set together or not at all.
+FIXTURES["adversarial-item-deadline-without-kind.json"] = solo(
+    CHECKER, deadline=PAST_DEADLINE)
+FIXTURES["adversarial-item-deadline-kind-unknown.json"] = solo(
+    CHECKER, deadline=PAST_DEADLINE, deadline_kind="whenever")
+# Each field the real schema does not define, injected on an otherwise valid
+# claimable record. Every one must be refused as malformed.
+for _ghost, _value in (
+    ("claim_expires_at", 1700000000),
+    ("claim_expired", True),
+    ("reclaimable", True),
+    ("exclusive_claimant", "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e"),
+    ("active_claimant", "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e"),
+    ("terms", {"terms_hash": "0x"}),
+    ("verifier", {"ready": True}),
+    ("verifier_ready", True),
+    ("ready_to_earn", True),
+):
+    FIXTURES[f"adversarial-item-ghost-field-{_ghost.replace('_', '-')}.json"] = solo(
+        CHECKER, **{_ghost: _value})
+
+
+def main() -> int:
+    for name, body in sorted(FIXTURES.items()):
+        (HERE / name).write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {len(FIXTURES)} fixtures to {HERE}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
