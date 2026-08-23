@@ -46,6 +46,14 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.workflow["env"]["RELEASE_SOURCE_COMMIT"], RELEASE_SOURCE_COMMIT
         )
+        for name, expected in (
+            ("RELEASE_HASH", "0x46008fb819726a43209e55ee7e58c92700a8fc3435f76be282bfdef710ced594"),
+            ("COMPETITION_FACTORY", "0x29d0e39e0c03797c690633535722e6b34a69a78a"),
+            ("BOUNDED_RESERVE_FACTORY", "0xad0765eac772ff6cf696f2416751269d97a5419f"),
+            ("BOUNDED_RESERVE_IMPLEMENTATION", "0x9c62e1ab727909a18a830744eb244645ee91b0eb"),
+        ):
+            self.assertIsInstance(self.workflow["env"][name], str)
+            self.assertEqual(self.workflow["env"][name], expected)
         self.assertEqual(self.workflow["permissions"]["actions"], "read")
         for job in self.workflow["jobs"].values():
             self.assertEqual(job["environment"], "v2-beta2-mainnet")
