@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 PATH = Path(__file__).with_name("fund_open_competition_v2_beta3_broker.py")
@@ -55,6 +57,197 @@ class BrokerFundingTests(unittest.TestCase):
     def test_signing_address_rejects_malformed_destination(self):
         with self.assertRaisesRegex(MODULE.BrokerFundingError, "destination is invalid"):
             MODULE.signing_address("0x1234")
+
+    def test_signed_rpc_falls_back_with_the_identical_raw_transaction(self):
+        expected_hash = "0x" + "ab" * 32
+        calls = []
+
+        class Signer:
+            address = "0x0000000000000000000000000000000000000001"
+
+            @staticmethod
+            def sign_transaction(_transaction):
+                return SimpleNamespace(
+                    raw_transaction=bytes.fromhex("1234"),
+                    hash=bytes.fromhex("ab" * 32),
+                )
+
+        def fake_rpc(url, method, params):
+            calls.append((url, method, params))
+            if method == "eth_chainId":
+                return hex(8453)
+            if method == "eth_getTransactionCount":
+                return "0x18"
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0xf4240"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            if method == "eth_sendRawTransaction" and url == "https://primary.invalid":
+                raise RuntimeError("rate limit exceeded")
+            if method == "eth_sendRawTransaction":
+                return expected_hash
+            if method == "eth_getTransactionReceipt" and url == "https://shadow.invalid":
+                return {
+                    "transactionHash": expected_hash,
+                    "blockNumber": "0x2",
+                    "status": "0x1",
+                }
+            if method == "eth_getTransactionReceipt":
+                return None
+            self.fail(f"unexpected RPC call: {url} {method} {params}")
+
+        with patch.object(MODULE, "rpc", side_effect=fake_rpc):
+            client = MODULE.SignedRpc(
+                "https://primary.invalid",
+                Signer(),
+                8453,
+                broadcast_urls=["https://shadow.invalid"],
+            )
+            receipt = client.send(
+                to="0x0000000000000000000000000000000000000002"
+            )
+
+        self.assertEqual(receipt["transactionHash"], expected_hash)
+        submissions = [call for call in calls if call[1] == "eth_sendRawTransaction"]
+        self.assertEqual(
+            submissions,
+            [
+                (
+                    "https://primary.invalid",
+                    "eth_sendRawTransaction",
+                    ["0x1234"],
+                ),
+                (
+                    "https://shadow.invalid",
+                    "eth_sendRawTransaction",
+                    ["0x1234"],
+                ),
+            ],
+        )
+
+    def test_signed_rpc_rejects_a_mismatched_transaction_hash(self):
+        class Signer:
+            address = "0x0000000000000000000000000000000000000001"
+
+            @staticmethod
+            def sign_transaction(_transaction):
+                return SimpleNamespace(
+                    raw_transaction=bytes.fromhex("1234"),
+                    hash=bytes.fromhex("ab" * 32),
+                )
+
+        def fake_rpc(_url, method, _params):
+            if method == "eth_chainId":
+                return hex(8453)
+            if method == "eth_getTransactionCount":
+                return "0x18"
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0xf4240"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            if method == "eth_sendRawTransaction":
+                return "0x" + "cd" * 32
+            self.fail(f"unexpected RPC call: {method}")
+
+        with patch.object(MODULE, "rpc", side_effect=fake_rpc):
+            client = MODULE.SignedRpc("https://primary.invalid", Signer(), 8453)
+            with self.assertRaisesRegex(
+                MODULE.BrokerFundingError,
+                "unexpected transaction hash",
+            ):
+                client.send(to="0x0000000000000000000000000000000000000002")
+
+    def test_signed_rpc_accepts_an_already_known_receipt(self):
+        expected_hash = "0x" + "ab" * 32
+
+        class Signer:
+            address = "0x0000000000000000000000000000000000000001"
+
+            @staticmethod
+            def sign_transaction(_transaction):
+                return SimpleNamespace(
+                    raw_transaction=bytes.fromhex("1234"),
+                    hash=bytes.fromhex("ab" * 32),
+                )
+
+        def fake_rpc(_url, method, _params):
+            if method == "eth_chainId":
+                return hex(8453)
+            if method == "eth_getTransactionCount":
+                return "0x18"
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0xf4240"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("already known")
+            if method == "eth_getTransactionReceipt":
+                return {
+                    "transactionHash": expected_hash,
+                    "blockNumber": "0x2",
+                    "status": "0x1",
+                }
+            self.fail(f"unexpected RPC call: {method}")
+
+        with patch.object(MODULE, "rpc", side_effect=fake_rpc):
+            client = MODULE.SignedRpc(
+                "https://primary.invalid",
+                Signer(),
+                8453,
+                broadcast_urls=["https://shadow.invalid"],
+            )
+            receipt = client.send(
+                to="0x0000000000000000000000000000000000000002"
+            )
+
+        self.assertEqual(receipt["transactionHash"], expected_hash)
+
+    def test_signed_rpc_fails_when_every_endpoint_rejects_without_a_receipt(self):
+        class Signer:
+            address = "0x0000000000000000000000000000000000000001"
+
+            @staticmethod
+            def sign_transaction(_transaction):
+                return SimpleNamespace(
+                    raw_transaction=bytes.fromhex("1234"),
+                    hash=bytes.fromhex("ab" * 32),
+                )
+
+        def fake_rpc(_url, method, _params):
+            if method == "eth_chainId":
+                return hex(8453)
+            if method == "eth_getTransactionCount":
+                return "0x18"
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0xf4240"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("rate limit exceeded")
+            if method == "eth_getTransactionReceipt":
+                return None
+            self.fail(f"unexpected RPC call: {method}")
+
+        with patch.object(MODULE, "rpc", side_effect=fake_rpc):
+            client = MODULE.SignedRpc(
+                "https://primary.invalid",
+                Signer(),
+                8453,
+                broadcast_urls=["https://shadow.invalid"],
+            )
+            with self.assertRaisesRegex(
+                MODULE.BrokerFundingError,
+                "every approved RPC",
+            ):
+                client.send(to="0x0000000000000000000000000000000000000002")
 
 
 if __name__ == "__main__":

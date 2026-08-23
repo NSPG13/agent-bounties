@@ -154,7 +154,12 @@ def rebalance(
     transaction_hash = None
     transaction_block = safe_before["number"]
     if amount:
-        client = SignedRpc(primary_url, signer, CHAIN_ID)
+        client = SignedRpc(
+            primary_url,
+            signer,
+            CHAIN_ID,
+            broadcast_urls=[shadow_url],
+        )
         receipt = client.send(
             to=USDC,
             data="0x"

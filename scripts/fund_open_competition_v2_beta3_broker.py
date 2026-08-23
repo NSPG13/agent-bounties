@@ -64,11 +64,37 @@ def signing_address(address: str) -> str:
 
 
 class SignedRpc:
-    def __init__(self, url: str, signer: Any, chain_id: int) -> None:
+    def __init__(
+        self,
+        url: str,
+        signer: Any,
+        chain_id: int,
+        broadcast_urls: list[str] | None = None,
+    ) -> None:
         self.url = url
         self.signer = signer
         self.chain_id = chain_id
-        require(int(rpc(url, "eth_chainId", []), 16) == chain_id, "RPC chain ID mismatch")
+        self.broadcast_urls = tuple(dict.fromkeys([url, *(broadcast_urls or [])]))
+        for endpoint in self.broadcast_urls:
+            require(
+                int(rpc(endpoint, "eth_chainId", []), 16) == chain_id,
+                "RPC chain ID mismatch",
+            )
+
+    def receipt(self, transaction_hash: str) -> dict[str, Any] | None:
+        for endpoint in self.broadcast_urls:
+            try:
+                receipt = rpc(endpoint, "eth_getTransactionReceipt", [transaction_hash])
+            except RuntimeError:
+                continue
+            if receipt:
+                require(
+                    receipt.get("transactionHash", "").lower()
+                    == transaction_hash.lower(),
+                    "RPC returned a receipt for an unexpected transaction",
+                )
+                return receipt
+        return None
 
     def send(self, *, to: str, data: str = "0x", value: int = 0) -> dict[str, Any]:
         to = signing_address(to)
@@ -105,19 +131,33 @@ class SignedRpc:
                 "type": 2,
             }
         )
-        tx_hash = rpc(
-            self.url,
-            "eth_sendRawTransaction",
-            ["0x" + bytes(signed.raw_transaction).hex()],
-        )
+        raw_transaction = "0x" + bytes(signed.raw_transaction).hex()
+        expected_hash = "0x" + bytes(signed.hash).hex()
+        submitted = False
+        for endpoint in self.broadcast_urls:
+            try:
+                tx_hash = rpc(endpoint, "eth_sendRawTransaction", [raw_transaction])
+            except RuntimeError:
+                continue
+            require(
+                tx_hash.lower() == expected_hash.lower(),
+                "RPC returned an unexpected transaction hash",
+            )
+            submitted = True
+            break
+        if not submitted and self.receipt(expected_hash) is None:
+            raise BrokerFundingError("raw transaction submission failed on every approved RPC")
         deadline = time.time() + 300
         while time.time() < deadline:
-            receipt = rpc(self.url, "eth_getTransactionReceipt", [tx_hash])
+            receipt = self.receipt(expected_hash)
             if receipt:
-                require(int(receipt["status"], 16) == 1, f"reserve transfer reverted: {tx_hash}")
+                require(
+                    int(receipt["status"], 16) == 1,
+                    f"reserve transfer reverted: {expected_hash}",
+                )
                 return receipt
             time.sleep(2)
-        raise BrokerFundingError(f"reserve transfer timed out: {tx_hash}")
+        raise BrokerFundingError(f"reserve transfer timed out: {expected_hash}")
 
     def wait_safe(self, block_number: int) -> dict[str, Any]:
         deadline = time.time() + 1_800
