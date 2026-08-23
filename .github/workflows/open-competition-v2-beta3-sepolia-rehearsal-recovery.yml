@@ -26,12 +26,25 @@ jobs:
           BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL }}
           BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY }}
           BASE_DEPLOYER_ADDRESS: ${{ vars.BASE_DEPLOYER_ADDRESS }}
+          OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY: ${{ secrets.OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY }}
+          OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
         run: |
           set -euo pipefail
           test -n "$BASE_SEPOLIA_RPC_URL" && test -n "$BASE_SEPOLIA_DEPLOYER_PRIVATE_KEY"
           test "${BASE_DEPLOYER_ADDRESS,,}" = "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+          test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
+          test "${OPEN_COMPETITION_V2_BROKER_ADDRESS,,}" = "0x176f486a724720c4fdfc920d7c17dd1004c2bfb4"
           python -m pip install -r scripts/requirements-wallet.txt
           python scripts/test_recover_open_competition_v2_rehearsal_funds.py
+          python scripts/recover_open_competition_v2_x402_charge.py \
+            --network base-sepolia \
+            --rpc-url "$BASE_SEPOLIA_RPC_URL" \
+            --payment-transaction 0xe8c661ecb109910de75cd0391c4dc3d07a3a769d5174328a54fe3221cc5aca90 \
+            --asset 0x036cbd53842c5426634e7929541ec2318f3dcf7e \
+            --payer 0xa4b3e826aaa584a45f47906b7b202f695b6640bd \
+            --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --amount 110000 \
+            --output target/beta3-sepolia-x402-charge-recovery-32596784971.json
           python scripts/recover_open_competition_v2_rehearsal_funds.py \
             --rpc-url "$BASE_SEPOLIA_RPC_URL" \
             --deployer "$BASE_DEPLOYER_ADDRESS" \
@@ -41,10 +54,12 @@ jobs:
             --additional-actor-scope b1ce5c176a3cf6d4e3d4240b0a2fdf1359a3a8c5:32122203861:1 \
             --additional-actor-scope 0bb9692d0804f72f7735fa5577ecb5c0340ee7b0:32563353721:5 \
             --additional-actor-scope 3bab67ff077a02cd45fd3577a7312d9aad4a3a4e:32588509604:1 \
+            --additional-actor-scope 5dbdb1938bcdae0ce43349597973f43d0978909b:32596784971:1 \
             --competition 0x5e87358743dd4dcefc1a71ce9663ccf229ba7559 \
             --expired-competition 0x569fc0c653c81dfaca73467a7496c098a620f501 \
             --expired-competition 0x611aec6ef897f6cfe20afe70daabc4153b16435e \
             --expired-competition 0x41fe1ba2f2fe4615ff205268dcdb7a49c7105bae \
+            --expired-competition 0x2e749dd59cb50e14b61d9bf0d40dd1a012b62efa \
             --funding-competition 0x702b2be0254b7a363d4bfb4e9b72d9424bbe4a8e \
             --funding-competition 0x23cec46243ad1b849086f3af78744bb2654e6800 \
             --required-actor 0xf723d4ac02331707f39bc9416b11ec25a73743f1 \
@@ -66,6 +81,8 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: open-competition-v2-beta3-sepolia-rehearsal-recovery-${{ github.sha }}-${{ github.run_attempt }}
-          path: target/beta3-sepolia-rehearsal-recovery.json
+          path: |
+            target/beta3-sepolia-rehearsal-recovery.json
+            target/beta3-sepolia-x402-charge-recovery-32596784971.json
           if-no-files-found: error
           retention-days: 365
