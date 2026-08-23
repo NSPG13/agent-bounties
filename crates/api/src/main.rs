@@ -131,9 +131,10 @@ use github_discovery::{
 };
 use hmac::{Hmac, Mac};
 use opportunities::{
-    apply_query as apply_opportunity_query, canonical_opportunity, inventory_state_breakdown_v1,
-    legacy_opportunity, open_competition_opportunities, render_opportunity_feeds,
-    unfunded_opportunity, InventorySnapshotMetadata, InventoryStateBreakdownV1, OpportunityItem,
+    aggregate_canonical_inventory, apply_query as apply_opportunity_query, canonical_opportunity,
+    inventory_state_breakdown_v1, legacy_opportunity, open_competition_opportunities,
+    render_opportunity_feeds, unfunded_opportunity, CanonicalSourceContribution,
+    InventorySnapshotMetadata, InventoryStateBreakdownV1, OpportunityItem,
     OpportunityProjectionResponse, OpportunityQuery, OpportunitySourceStatus, OpportunityView,
     OPPORTUNITY_PROJECTION_SCHEMA,
 };
@@ -4328,7 +4329,7 @@ async fn build_opportunity_projection(
     });
     items.extend(legacy_items);
 
-    let (mut canonical_items, autonomous_error) =
+    let (autonomous_items, autonomous_load_error) =
         match load_autonomous_bounty_feed(state, network, false).await {
             Ok(feed) => (
                 feed.iter()
@@ -4341,34 +4342,38 @@ async fn build_opportunity_projection(
                 Some("canonical_read_model_unavailable".to_string()),
             ),
         };
-    let (open_competition_items, open_competition_error) =
+    let (open_competition_items, open_competition_snapshot, open_competition_load_error) =
         match load_public_open_competition_opportunities(state, network, api, now).await {
-            Ok(items) => (items, None),
+            Ok((items, snapshot)) => (items, snapshot, None),
             Err(_) => (
                 Vec::new(),
+                None,
                 Some("open_competition_read_model_unavailable".to_string()),
             ),
         };
-    canonical_items.extend(open_competition_items);
-    let canonical_error = match (autonomous_error, open_competition_error) {
-        (None, None) => None,
-        (Some(error), None) | (None, Some(error)) => Some(error),
-        (Some(left), Some(right)) => Some(format!("{left}+{right}")),
-    };
-    let inventory_state_breakdown = inventory_state_breakdown_v1(
-        &canonical_items,
-        InventorySnapshotMetadata {
-            generated_at: canonical_snapshot_metadata.generated_at,
-            source_available: canonical_error.is_none()
-                && canonical_snapshot_metadata.source_available,
-            source_error: canonical_error
-                .clone()
-                .or(canonical_snapshot_metadata.source_error),
-        },
-        now,
-    );
-    let canonical_source_available = inventory_state_breakdown.source_available;
-    let canonical_source_error = inventory_state_breakdown.source_error.clone();
+    let (canonical_items, aggregate_snapshot_metadata, canonical_exclusion_errors) =
+        aggregate_canonical_inventory(
+            vec![
+                CanonicalSourceContribution {
+                    items: autonomous_items,
+                    metadata: Some(canonical_snapshot_metadata),
+                    load_error: autonomous_load_error,
+                },
+                CanonicalSourceContribution {
+                    items: open_competition_items,
+                    metadata: open_competition_snapshot,
+                    load_error: open_competition_load_error,
+                },
+            ],
+            now,
+        );
+    let inventory_state_breakdown =
+        inventory_state_breakdown_v1(&canonical_items, aggregate_snapshot_metadata, now);
+    let canonical_source_available =
+        inventory_state_breakdown.source_available && canonical_exclusion_errors.is_empty();
+    let canonical_source_error = inventory_state_breakdown.source_error.clone().or_else(|| {
+        (!canonical_exclusion_errors.is_empty()).then(|| canonical_exclusion_errors.join("+"))
+    });
     source_statuses.push(OpportunitySourceStatus {
         source_type: "canonical_base".to_string(),
         available: canonical_source_available,
@@ -4444,13 +4449,13 @@ async fn load_public_open_competition_opportunities(
     network: &str,
     api_base_url: &str,
     now: DateTime<Utc>,
-) -> Result<Vec<OpportunityItem>, StatusCode> {
+) -> Result<(Vec<OpportunityItem>, Option<InventorySnapshotMetadata>), StatusCode> {
     let release = match open_competition_release_from_environment(network) {
         Ok(release) => release,
-        Err(_) => return Ok(Vec::new()),
+        Err(_) => return Ok((Vec::new(), None)),
     };
     if release.deployment_state != OpenCompetitionDeploymentState::ActiveReadyToEarn {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     let prefix = open_competition_environment_prefix(network)?;
     let public_activation_block = env::var(format!("{prefix}_PUBLIC_ACTIVATION_BLOCK"))
@@ -4515,13 +4520,18 @@ async fn load_public_open_competition_opportunities(
     if !open_competition_monitoring_is_fresh(&heartbeat, safe_block.number, now) {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
+    let snapshot_metadata = InventorySnapshotMetadata {
+        generated_at: heartbeat.completed_at.unwrap_or(now),
+        source_available: true,
+        source_error: None,
+    };
     let events: Vec<OpenCompetitionEvent> = store
         .list_open_competition_events(network, &release.factory_contract)
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let website_base_url =
         legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url);
-    open_competition_opportunities(
+    let items = open_competition_opportunities(
         &events,
         profile,
         network,
@@ -4530,7 +4540,8 @@ async fn load_public_open_competition_opportunities(
         public_activation_block,
         now,
     )
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((items, Some(snapshot_metadata)))
 }
 
 #[utoipa::path(

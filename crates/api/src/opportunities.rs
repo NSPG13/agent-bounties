@@ -1234,15 +1234,87 @@ fn json_u64(value: &Value, field: &str) -> Result<u64, String> {
 /// A missing, degraded, future-dated, or stale source fails closed: the
 /// response retains explicit source status but does not advertise partial
 /// inventory as current.
+pub fn inventory_snapshot_metadata_is_current(
+    metadata: &InventorySnapshotMetadata,
+    observed_at: DateTime<Utc>,
+) -> bool {
+    if !metadata.source_available {
+        return false;
+    }
+    let age_seconds = observed_at
+        .signed_duration_since(metadata.generated_at)
+        .num_seconds();
+    (0..=INVENTORY_SNAPSHOT_MAX_AGE_SECONDS).contains(&age_seconds)
+}
+
+#[derive(Debug, Clone)]
+pub struct CanonicalSourceContribution {
+    pub items: Vec<OpportunityItem>,
+    pub metadata: Option<InventorySnapshotMetadata>,
+    pub load_error: Option<String>,
+}
+
+/// Aggregates per-source canonical health into one snapshot for the shared
+/// inventory-state breakdown. A source contributes to the count only when its
+/// own snapshot is healthy and fresh; unhealthy, stale, or failed sources are
+/// excluded with an error so they cannot zero or mask otherwise healthy
+/// canonical inventory. Aggregate freshness is the oldest included snapshot.
+pub fn aggregate_canonical_inventory(
+    sources: Vec<CanonicalSourceContribution>,
+    observed_at: DateTime<Utc>,
+) -> (Vec<OpportunityItem>, InventorySnapshotMetadata, Vec<String>) {
+    let mut included_items = Vec::new();
+    let mut included_generated_at = Vec::new();
+    let mut exclusion_errors = Vec::new();
+    for source in sources {
+        let CanonicalSourceContribution {
+            items,
+            metadata,
+            load_error,
+        } = source;
+        let error = match (load_error, metadata) {
+            (Some(load_error), _) => Some(load_error),
+            (None, None) => None,
+            (None, Some(metadata)) => {
+                if inventory_snapshot_metadata_is_current(&metadata, observed_at) {
+                    included_generated_at.push(metadata.generated_at);
+                    included_items.extend(items);
+                    None
+                } else {
+                    Some(
+                        metadata
+                            .source_error
+                            .clone()
+                            .unwrap_or_else(|| "canonical_source_stale".to_string()),
+                    )
+                }
+            }
+        };
+        if let Some(error) = error {
+            exclusion_errors.push(error);
+        }
+    }
+    let aggregate = match included_generated_at.iter().copied().min() {
+        Some(generated_at) => InventorySnapshotMetadata {
+            generated_at,
+            source_available: true,
+            source_error: None,
+        },
+        None => InventorySnapshotMetadata {
+            generated_at: observed_at,
+            source_available: false,
+            source_error: (!exclusion_errors.is_empty()).then(|| exclusion_errors.join("+")),
+        },
+    };
+    (included_items, aggregate, exclusion_errors)
+}
+
 pub fn inventory_state_breakdown_v1(
     items: &[OpportunityItem],
     metadata: InventorySnapshotMetadata,
     observed_at: DateTime<Utc>,
 ) -> InventoryStateBreakdownV1 {
-    let age_seconds = observed_at
-        .signed_duration_since(metadata.generated_at)
-        .num_seconds();
-    let snapshot_fresh = (0..=INVENTORY_SNAPSHOT_MAX_AGE_SECONDS).contains(&age_seconds);
+    let snapshot_fresh = inventory_snapshot_metadata_is_current(&metadata, observed_at);
     let source_available = metadata.source_available && snapshot_fresh;
     let source_status = if !metadata.source_available {
         "degraded"
@@ -2016,6 +2088,130 @@ mod tests {
                 assert_eq!(actual.ready_to_earn, ready_items.len());
             }
         }
+    }
+
+    #[test]
+    fn aggregate_canonical_inventory_counts_only_current_per_source_snapshots() {
+        let observed_at = DateTime::<Utc>::from_timestamp(1_800_000_300, 0).unwrap();
+        let fresh_generated_at = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+        let stale_generated_at = DateTime::<Utc>::from_timestamp(1_799_990_000, 0).unwrap();
+        let healthy_open_competition = {
+            let (events, profile) = open_competition_fixture();
+            open_competition_opportunities(
+                &events,
+                &profile,
+                "base-mainnet",
+                "https://api.example",
+                "https://www.example",
+                100,
+                observed_at,
+            )
+            .unwrap()
+            .remove(0)
+        };
+
+        let (included, aggregate, errors) = aggregate_canonical_inventory(
+            vec![
+                CanonicalSourceContribution {
+                    items: vec![canonical_opportunity(
+                        &canonical("claimable", "1000000", true),
+                        "base-mainnet",
+                        "https://api.example",
+                    )
+                    .unwrap()],
+                    metadata: Some(InventorySnapshotMetadata {
+                        generated_at: stale_generated_at,
+                        source_available: false,
+                        source_error: Some("autonomous_indexer_heartbeat_unhealthy".to_string()),
+                    }),
+                    load_error: None,
+                },
+                CanonicalSourceContribution {
+                    items: vec![healthy_open_competition],
+                    metadata: Some(InventorySnapshotMetadata {
+                        generated_at: fresh_generated_at,
+                        source_available: true,
+                        source_error: None,
+                    }),
+                    load_error: None,
+                },
+            ],
+            observed_at,
+        );
+        assert_eq!(errors, vec!["autonomous_indexer_heartbeat_unhealthy"]);
+        assert!(aggregate.source_available);
+        assert_eq!(aggregate.generated_at, fresh_generated_at);
+        assert_eq!(included.len(), 1);
+        let breakdown = inventory_state_breakdown_v1(&included, aggregate, observed_at);
+        assert!(breakdown.source_available);
+    }
+
+    #[test]
+    fn aggregate_canonical_inventory_reports_joined_errors_when_no_source_is_current() {
+        let observed_at = DateTime::<Utc>::from_timestamp(1_800_000_300, 0).unwrap();
+        let (included, aggregate, errors) = aggregate_canonical_inventory(
+            vec![
+                CanonicalSourceContribution {
+                    items: Vec::new(),
+                    metadata: Some(InventorySnapshotMetadata {
+                        generated_at: observed_at,
+                        source_available: false,
+                        source_error: Some("autonomous_indexer_heartbeat_unhealthy".to_string()),
+                    }),
+                    load_error: None,
+                },
+                CanonicalSourceContribution {
+                    items: Vec::new(),
+                    metadata: None,
+                    load_error: Some("open_competition_read_model_unavailable".to_string()),
+                },
+            ],
+            observed_at,
+        );
+        assert!(included.is_empty());
+        assert!(!aggregate.source_available);
+        assert_eq!(
+            aggregate.source_error.as_deref(),
+            Some("autonomous_indexer_heartbeat_unhealthy+open_competition_read_model_unavailable")
+        );
+        assert_eq!(errors.len(), 2);
+        let breakdown = inventory_state_breakdown_v1(&included, aggregate, observed_at);
+        assert!(!breakdown.source_available);
+        assert_eq!(breakdown.ready_to_earn, 0);
+    }
+
+    #[test]
+    fn aggregate_canonical_inventory_skips_disabled_sources_without_masking_health() {
+        let observed_at = DateTime::<Utc>::from_timestamp(1_800_000_300, 0).unwrap();
+        let generated_at = DateTime::<Utc>::from_timestamp(1_800_000_250, 0).unwrap();
+        let (included, aggregate, errors) = aggregate_canonical_inventory(
+            vec![
+                CanonicalSourceContribution {
+                    items: vec![canonical_opportunity(
+                        &canonical("claimable", "1000000", true),
+                        "base-mainnet",
+                        "https://api.example",
+                    )
+                    .unwrap()],
+                    metadata: Some(InventorySnapshotMetadata {
+                        generated_at,
+                        source_available: true,
+                        source_error: None,
+                    }),
+                    load_error: None,
+                },
+                CanonicalSourceContribution {
+                    items: Vec::new(),
+                    metadata: None,
+                    load_error: None,
+                },
+            ],
+            observed_at,
+        );
+        assert!(errors.is_empty());
+        assert!(aggregate.source_available);
+        assert_eq!(aggregate.generated_at, generated_at);
+        assert_eq!(included.len(), 1);
     }
 
     #[test]
