@@ -58,6 +58,26 @@ def usdc_balance(url: str, token: str, address: str, block: str) -> int:
     return int(rpc(url, "eth_call", [{"to": token, "data": data}, block]), 16)
 
 
+def require_deployer_capacity(
+    *,
+    deployer_usdc: int,
+    deployer_eth: int,
+    usdc_deficit: int,
+    eth_deficit: int,
+    minimum_deployer_usdc_after: int,
+    minimum_deployer_eth_after: int,
+) -> None:
+    if usdc_deficit:
+        require(
+            deployer_usdc >= usdc_deficit + minimum_deployer_usdc_after,
+            "deployer USDC cannot seed broker and retain the canary budget",
+        )
+    require(
+        deployer_eth >= eth_deficit + minimum_deployer_eth_after,
+        "deployer ETH cannot seed broker and retain deployment gas",
+    )
+
+
 def signing_address(address: str) -> str:
     require(ADDRESS.fullmatch(address) is not None, "transaction destination is invalid")
     return to_checksum_address(address)
@@ -224,13 +244,13 @@ def fund(
     )
     deployer_usdc = usdc_balance(rpc_url, network["usdc"], signer.address, "latest")
     deployer_eth = int(rpc(rpc_url, "eth_getBalance", [signer.address, "latest"]), 16)
-    require(
-        deployer_usdc >= usdc_deficit + network["minimum_deployer_usdc_after"],
-        "deployer USDC cannot seed broker and retain the canary budget",
-    )
-    require(
-        deployer_eth >= eth_deficit + network["minimum_deployer_eth_after"],
-        "deployer ETH cannot seed broker and retain deployment gas",
+    require_deployer_capacity(
+        deployer_usdc=deployer_usdc,
+        deployer_eth=deployer_eth,
+        usdc_deficit=usdc_deficit,
+        eth_deficit=eth_deficit,
+        minimum_deployer_usdc_after=network["minimum_deployer_usdc_after"],
+        minimum_deployer_eth_after=network["minimum_deployer_eth_after"],
     )
 
     receipts: list[dict[str, Any]] = []
