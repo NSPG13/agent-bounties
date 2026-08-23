@@ -23,6 +23,15 @@ class GmvConfirmationTests(unittest.TestCase):
         self.assertIn("String(chain).toLowerCase() !== '0x2105'", HTML)
         self.assertIn("method: 'eth_signTypedData_v4'", HTML)
 
+    def test_wallet_selector_prefers_metamask_without_mislabeling_other_wallets(self) -> None:
+        self.assertIn("eip6963:announceProvider", HTML)
+        self.assertIn("eip6963:requestProvider", HTML)
+        self.assertIn("!isCoinbase && !isBrave", HTML)
+        self.assertIn("rdns === 'io.metamask'", HTML)
+        self.assertIn("option.textContent", HTML)
+        self.assertIn("const provider = selection.provider", HTML)
+        self.assertNotIn("const provider = window.ethereum;", HTML)
+
     def test_signature_is_written_once_and_not_returned(self) -> None:
         signature = "0x" + "11" * 65
         with tempfile.TemporaryDirectory() as temporary:

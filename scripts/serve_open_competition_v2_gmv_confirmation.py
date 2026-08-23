@@ -33,6 +33,8 @@ HTML = r"""<!doctype html>
   dl { display: grid; grid-template-columns: 1fr 2fr; gap: 12px 18px; margin: 26px 0; }
   dt { color: #8da8c4; } dd { margin: 0; overflow-wrap: anywhere; font-weight: 650; }
   .good { color: #7ff5b0; } .warn { color: #ffd580; }
+  .wallet-picker { display: grid; gap: 8px; margin: 22px 0 14px; color: #b8cbe0; }
+  select { width: 100%; border: 1px solid #466987; border-radius: 12px; padding: 13px 14px; background: #07111f; color: #eef5ff; font: inherit; }
   button { width: 100%; border: 0; border-radius: 14px; padding: 16px 20px; font: inherit; font-weight: 800; background: #67f0a5; color: #06120b; cursor: pointer; }
   button:disabled { opacity: .55; cursor: wait; }
   #status { min-height: 24px; }
@@ -44,11 +46,63 @@ HTML = r"""<!doctype html>
   <p>This authorizes native USDC from the displayed owner wallet into an owner-recoverable bounded reserve. The delegate cannot transfer or withdraw USDC; it can only create the twenty preapproved Open Competition V2 highest-GMV contests under the caps below.</p>
   <dl id="facts"></dl>
   <p class="warn">This signature authorizes 77.668098 USDC. It is not an email login and does not transfer funds to the delegate wallet.</p>
-  <button id="authorize">Connect and authorize exact amount</button>
+  <label class="wallet-picker" for="wallet-provider">Wallet
+    <select id="wallet-provider"><option value="">Discovering installed wallets…</option></select>
+  </label>
+  <button id="authorize">Authorize exact amount with selected wallet</button>
   <p id="status" aria-live="polite"></p>
 </article></main>
 <script>
 (async () => {
+  const wallets = [];
+  const seenProviders = new Set();
+  const walletSelect = document.querySelector('#wallet-provider');
+  let userSelectedWallet = false;
+  walletSelect.addEventListener('change', () => { userSelectedWallet = true; });
+
+  function addWallet(provider, info = {}) {
+    if (!provider || seenProviders.has(provider)) return;
+    seenProviders.add(provider);
+    const rdns = String(info.rdns || '').toLowerCase();
+    const isCoinbase = rdns.includes('coinbase') || Boolean(provider.isCoinbaseWallet);
+    const isBrave = rdns.includes('brave') || Boolean(provider.isBraveWallet);
+    const isMetaMask = !isCoinbase && !isBrave &&
+      (rdns === 'io.metamask' || Boolean(provider.isMetaMask));
+    const name = String(info.name || (isMetaMask ? 'MetaMask' :
+      isCoinbase ? 'Coinbase Wallet' : isBrave ? 'Brave Wallet' : 'Injected wallet'));
+    wallets.push({provider, name, rdns, isMetaMask, isCoinbase, isBrave});
+    renderWallets();
+  }
+
+  function renderWallets() {
+    const previouslySelected = userSelectedWallet ? wallets[Number(walletSelect.value)]?.provider : null;
+    wallets.sort((a, b) => Number(b.isMetaMask) - Number(a.isMetaMask) || a.name.localeCompare(b.name));
+    walletSelect.replaceChildren();
+    if (!wallets.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No injected wallet detected';
+      walletSelect.append(option);
+    }
+    wallets.forEach((wallet, index) => {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = `${wallet.name}${wallet.isMetaMask ? ' (recommended)' : ''}`;
+      walletSelect.append(option);
+    });
+    const previousIndex = wallets.findIndex(wallet => wallet.provider === previouslySelected);
+    const metaMaskIndex = wallets.findIndex(wallet => wallet.isMetaMask);
+    walletSelect.value = String(previousIndex >= 0 ? previousIndex : metaMaskIndex >= 0 ? metaMaskIndex : 0);
+  }
+
+  window.addEventListener('eip6963:announceProvider', event => {
+    addWallet(event.detail && event.detail.provider, event.detail && event.detail.info);
+  });
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  const legacyProviders = Array.isArray(window.ethereum && window.ethereum.providers)
+    ? window.ethereum.providers : window.ethereum ? [window.ethereum] : [];
+  legacyProviders.forEach(provider => addWallet(provider));
+
   async function assertBaseMainnetWhenQueryable(provider) {
     try {
       const chain = await provider.request({method: 'eth_chainId'});
@@ -86,8 +140,9 @@ HTML = r"""<!doctype html>
   button.addEventListener('click', async () => {
     button.disabled = true;
     try {
-      if (!window.ethereum) throw new Error('No injected wallet is available in this browser.');
-      const provider = window.ethereum;
+      const selection = wallets[Number(walletSelect.value)];
+      if (!selection) throw new Error('No injected wallet is available. Enable MetaMask for this site, then retry.');
+      const provider = selection.provider;
       const chainWasChecked = await assertBaseMainnetWhenQueryable(provider);
       if (!chainWasChecked) {
         status.textContent = 'This wallet cannot report its selected chain. The signature request itself remains locked to Base mainnet.';
