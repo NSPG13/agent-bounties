@@ -120,8 +120,8 @@
       "created_at": "2026-08-20T00:00:00+00:00",
       "updated_at": "2026-08-21T05:55:00+00:00",
       "evidence_boundary": "Canonical lifecycle and payment language require confirmed factory/bounty events. Payment is `paid` only after confirmed BountySettled; a plan, signature, transaction hash, hosted row, or AI analysis is not payment evidence.",
-      "active_claimant": "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e",
-      "claim_expires_at": 1700000000
+      "deadline": "2020-01-01T00:00:00Z",
+      "deadline_kind": "claim_expires_at"
     }
   ]
 }

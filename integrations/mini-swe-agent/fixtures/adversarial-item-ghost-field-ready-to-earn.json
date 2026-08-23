@@ -35,7 +35,7 @@
       ],
       "public_url": "https://agentbounties.app/bounties/canonical:base-mainnet:0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "network": "base-mainnet",
-      "work_state": "in_progress",
+      "work_state": "claimable",
       "payment_state": "escrowed",
       "payment_committed": true,
       "competition_mode": "exclusive_claim",
@@ -120,8 +120,7 @@
       "created_at": "2026-08-20T00:00:00+00:00",
       "updated_at": "2026-08-21T05:55:00+00:00",
       "evidence_boundary": "Canonical lifecycle and payment language require confirmed factory/bounty events. Payment is `paid` only after confirmed BountySettled; a plan, signature, transaction hash, hosted row, or AI analysis is not payment evidence.",
-      "deadline": "2099-01-01T00:00:00Z",
-      "deadline_kind": "claim_expires_at"
+      "ready_to_earn": true
     }
   ]
 }

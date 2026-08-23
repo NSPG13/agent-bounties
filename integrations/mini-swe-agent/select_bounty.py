@@ -166,6 +166,24 @@ def money(obj, field):
     return amount, currency, decimals, str(obj["unit"])
 
 
+def _parse_rfc3339(stamp):
+    """Return an aware datetime, or None if `stamp` is not RFC 3339.
+
+    The projection emits `DateTime::<Utc>::to_rfc3339()` (web-public/src/lib.rs
+    :498), which `fromisoformat` accepts. A naive value is read as UTC, matching
+    how the API serialises.
+    """
+    if not isinstance(stamp, str):
+        return None
+    try:
+        parsed = _dt.datetime.fromisoformat(stamp.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    return parsed
+
+
 def snapshot_age(inv):
     """Age in seconds. Raises Invalid when absent, unparseable, or in the future."""
     for key in ("age_seconds", "snapshot_age_seconds"):
@@ -183,12 +201,9 @@ def snapshot_age(inv):
     if isinstance(stamp, (int, float)):
         age = time.time() - float(stamp)
     elif isinstance(stamp, str):
-        try:
-            parsed = _dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise Invalid(f"freshness not ISO-8601: {stamp!r}") from exc
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+        parsed = _parse_rfc3339(stamp)
+        if parsed is None:
+            raise Invalid(f"freshness not ISO-8601: {stamp!r}")
         age = time.time() - parsed.timestamp()
     else:
         raise Invalid("freshness field has an unsupported type")
@@ -341,6 +356,56 @@ REQUIRED_ITEM_FIELDS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Fields a genuine `OpportunityItem` can NEVER carry.
+#
+# This is the third instance of one bug class, so it is now closed structurally
+# rather than one field at a time. Twice already this selector read a key that
+# production does not emit -- `?ready_to_earn=true` (ignored by the server, so
+# the "filtered" request silently returned unfiltered inventory) and
+# `verifier_ready` (the real field is `verification_ready`, so the check could
+# never fire). Both were invisible against real data and both were fail-open.
+#
+# The same defect was live again in occupancy and terms. `claim_status` read
+# `claim_expires_at`, `claim_expired`, `reclaimable`, `exclusive_claimant` and
+# `active_claimant`; `terms_valid` read a nested `terms` object; `verifier_ready`
+# read a nested `verifier` block. NONE of these exist on `OpportunityItem`
+# (opportunities.rs:160-213) and none appear anywhere in `crates/`. Because they
+# were consulted BEFORE the honest `work_state`/`terms_hash` checks, injecting
+# one did not merely add noise -- it OVERRODE the real signal:
+#
+#   every item work_state=claimed            -> skip  (correct)
+#   ... plus an injected past claim_expires_at -> claim (guard defeated)
+#   every item terms_hash="0xdead"           -> skip  (correct)
+#   ... plus an injected terms{}             -> claim (guard defeated)
+#
+# An attacker did not need to forge a plausible record; they only had to append
+# a key the real schema has never heard of. So an unrecognised field is now a
+# hard refusal. On a genuine response this set is always empty, and if upstream
+# ever does add one of these names, the selector fails loudly with a refresh
+# instead of silently trusting it.
+# ---------------------------------------------------------------------------
+FORBIDDEN_ITEM_FIELDS = (
+    "claim_expires_at",
+    "claim_expired",
+    "reclaimable",
+    "exclusive_claimant",
+    "active_claimant",
+    "terms",
+    "verifier",
+    "verifier_ready",
+    "ready_to_earn",
+)
+
+# `deadline_kind` is set by canonical_opportunity_deadline (web-public/src/lib.rs
+# :464-502) and is the ONLY authority on what `deadline` means. It is
+# "claim_expires_at" only for a `claimed` bounty, "verification_expires_at" for
+# a `submitted` one, and "funding_deadline" otherwise -- so a funding deadline in
+# the past says nothing whatsoever about whether a claim has lapsed.
+CLAIM_DEADLINE_KIND = "claim_expires_at"
+DEADLINE_KINDS = (CLAIM_DEADLINE_KIND, "verification_expires_at", "funding_deadline")
+
+
 class Malformed(Invalid):
     """The record breaches the OpportunityItem contract: refresh, never skip."""
 
@@ -377,6 +442,39 @@ def validate_item_schema(item):
         raise Malformed(
             f"source_id {contract!r} is not a 20-byte hexadecimal contract address"
         )
+
+    # A key the real schema does not have means this is not a real projection
+    # item, whatever else about it looks right. Refuse before any decision logic
+    # can consult it. See FORBIDDEN_ITEM_FIELDS for why this is a hard error.
+    intruders = [f for f in FORBIDDEN_ITEM_FIELDS if f in item]
+    if intruders:
+        raise Malformed(
+            "record carries field(s) that OpportunityItem does not define: "
+            + ", ".join(intruders)
+            + ". A genuine projection never emits these, so this record is "
+            "not what it claims to be"
+        )
+
+    # `deadline` / `deadline_kind` are Option<String> and are set together --
+    # canonical_opportunity_deadline returns Some for both or None for both
+    # (web-public/src/lib.rs:493-501). One without the other is incoherent, and
+    # an unrecognised kind means we cannot tell what the timestamp measures.
+    deadline = item.get("deadline")
+    kind = item.get("deadline_kind")
+    if (deadline is None) != (kind is None):
+        raise Malformed(
+            f"deadline={deadline!r} and deadline_kind={kind!r} disagree; the "
+            "projection always sets both or neither"
+        )
+    if kind is not None:
+        if kind not in DEADLINE_KINDS:
+            raise Malformed(
+                f"deadline_kind {kind!r} is not one of {DEADLINE_KINDS}"
+            )
+        if not isinstance(deadline, str) or _parse_rfc3339(deadline) is None:
+            raise Malformed(
+                f"deadline {deadline!r} is not an RFC 3339 timestamp"
+            )
 
     # Every amount must be a well-formed OpportunityAmount. `money` raises
     # Invalid; re-raise as Malformed so a broken amount is a data fault.
@@ -572,11 +670,6 @@ def verifier_ready(item):
         return False, "no verification_method declared"
     if not item["decision_authority"].strip():
         return False, "no decision authority declared"
-    # A nested advisory `verifier` block, when a deployment adds one, may only
-    # ever narrow the decision -- it can veto, never overrule verification_ready.
-    verifier = item.get("verifier")
-    if isinstance(verifier, dict) and verifier.get("ready") is False:
-        return False, f"verifier vetoed ({verifier.get('reason') or 'unspecified'})"
     return True, item["verification_method"]
 
 
@@ -597,17 +690,20 @@ def funding_ok(item, amounts):
 
 
 def terms_valid(item):
-    """Require content-addressed terms, or an explicit evidence contract."""
+    """Require content-addressed terms, or an explicit evidence contract.
+
+    `terms_hash: Option<String>` is the only terms field on `OpportunityItem`.
+    An earlier version also accepted a nested `terms` object as an alternative
+    route, which the API never emits -- so appending `{"terms": {"terms_hash":
+    "0x"}}` to a record whose real `terms_hash` was malformed made it pass.
+    That path is gone; an injected `terms` key is now refused upstream by
+    `validate_item_schema`.
+    """
     terms_hash = item.get("terms_hash")
     if terms_hash is not None:
         if not (isinstance(terms_hash, str) and terms_hash.startswith("0x")
                 and len(terms_hash) == 66):
             return False, f"terms_hash {terms_hash!r} is not a 32-byte hash"
-        return True, ""
-    terms = item.get("terms")
-    if isinstance(terms, dict):
-        if not str(terms.get("terms_hash") or "").startswith("0x"):
-            return False, "terms present but terms_hash is not a hash"
         return True, ""
     if not item["evidence_boundary"].strip():
         return False, "no terms and no evidence boundary declared"
@@ -617,17 +713,39 @@ def terms_valid(item):
 
 
 def claim_status(item):
-    """(occupied, reclaimable, note) — expiry is evaluated BEFORE occupancy."""
-    now = time.time()
-    expires = item.get("claim_expires_at")
-    if isinstance(expires, (int, float)) and not isinstance(expires, bool) and expires > 0:
-        if expires <= now:
-            return False, True, f"claim lapsed {int(now - expires)}s ago"
-        return True, False, f"claim live for {int(expires - now)}s"
-    if item.get("claim_expired") is True or item.get("reclaimable") is True:
-        return False, True, "record marks the claim expired"
-    if item.get("exclusive_claimant") or item.get("active_claimant"):
-        return True, False, "exclusive claimant present with no expiry data"
+    """(occupied, reclaimable, note) -- decided from the real schema only.
+
+    `work_state` is the authoritative occupancy signal
+    (web-public/src/lib.rs:357-363). Expiry is expressed by the
+    `deadline`/`deadline_kind` pair, and `deadline_kind` is the only thing that
+    says what `deadline` measures: it is `claim_expires_at` ONLY for a claimed
+    bounty, `verification_expires_at` for a submitted one, and
+    `funding_deadline` otherwise. A past funding deadline says nothing about
+    whether a claim has lapsed, so the kind must be checked before the value.
+
+    The previous version consulted five keys that do not exist on
+    `OpportunityItem` -- `claim_expires_at`, `claim_expired`, `reclaimable`,
+    `exclusive_claimant`, `active_claimant` -- and consulted them BEFORE
+    `work_state`. Injecting a past `claim_expires_at` therefore turned an
+    occupied record into a reclaimable one and the selector emitted `claim`.
+    Those keys are now rejected as malformed input rather than read.
+    """
+    kind = item.get("deadline_kind")
+    if kind == CLAIM_DEADLINE_KIND:
+        expires = _parse_rfc3339(item.get("deadline"))
+        if expires is None:
+            # validate_item_schema proves this parses, so reaching here means
+            # claim_status was called on an unvalidated record. Fail closed
+            # rather than fall through to work_state with expiry unknown.
+            raise Malformed(
+                f"deadline_kind is {CLAIM_DEADLINE_KIND!r} but deadline "
+                f"{item.get('deadline')!r} is unparseable"
+            )
+        remaining = expires.timestamp() - time.time()
+        if remaining <= 0:
+            return False, True, f"claim lapsed {int(-remaining)}s ago"
+        return True, False, f"claim live for {int(remaining)}s"
+
     state = item["work_state"].lower()
     if state in OCCUPIED_STATES:
         return True, False, f"work_state={state}"

@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -86,8 +87,45 @@ EXPECTATIONS = {
     ),
     "adversarial-expired-claim.json": (
         "claim",
-        "expiry is evaluated before occupancy, so this is reclaimable",
+        "a lapsed claim_expires_at deadline makes the row reclaimable",
     ),
+    # `deadline_kind` is what makes a timestamp mean "claim expiry". A past
+    # FUNDING deadline says nothing about occupancy, so this record stays
+    # occupied. Without this case, reading `deadline` and ignoring its kind
+    # would pass.
+    "adversarial-past-funding-deadline.json": (
+        "skip",
+        "a past funding_deadline is not a lapsed claim; only deadline_kind decides",
+    ),
+    "adversarial-item-deadline-without-kind.json": (
+        "refresh",
+        "the projection sets deadline and deadline_kind together or not at all",
+    ),
+    "adversarial-item-deadline-kind-unknown.json": (
+        "refresh",
+        "an unrecognised deadline_kind leaves the timestamp's meaning unknown",
+    ),
+    # One fixture per field the real schema does not define. These run through
+    # the CLI, so they cover the shipped end-to-end path as well as the
+    # in-process probes further down.
+    "adversarial-item-ghost-field-claim-expires-at.json": (
+        "refresh", "claim_expires_at is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-claim-expired.json": (
+        "refresh", "claim_expired is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-reclaimable.json": (
+        "refresh", "reclaimable is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-exclusive-claimant.json": (
+        "refresh", "exclusive_claimant is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-active-claimant.json": (
+        "refresh", "active_claimant is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-terms.json": (
+        "refresh", "a nested terms object is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-verifier.json": (
+        "refresh", "a nested verifier block is not an OpportunityItem field"),
+    "adversarial-item-ghost-field-verifier-ready.json": (
+        "refresh", "verifier_ready was always a misspelling of verification_ready"),
+    "adversarial-item-ghost-field-ready-to-earn.json": (
+        "refresh", "ready_to_earn is not an OpportunityItem field"),
     # response-level production contract (OpportunityProjectionResponse)
     "adversarial-envelope-bad-schema.json": (
         "refresh", "an unknown schema_version cannot be interpreted safely"),
@@ -522,6 +560,104 @@ probe("coherent economics with a smaller positive margin", {"claim"},
           gross_cash_margin_positive=True))
 
 print()
+print("=== fields OpportunityItem does not define are refused outright ===")
+# THE BUG THIS BLOCK EXISTS FOR. `claim_status`, `terms_valid` and
+# `verifier_ready` all read keys production has never emitted, and read them
+# BEFORE the honest signal. So an attacker did not need to forge a plausible
+# record -- appending one unknown key OVERRODE the real one:
+#
+#   work_state=in_progress                      -> skip   (correct)
+#   work_state=in_progress + claim_expires_at   -> claim   (guard defeated)
+#   terms_hash="0xdead"                         -> skip   (correct)
+#   terms_hash="0xdead" + terms={...}           -> claim   (guard defeated)
+#
+# This is the third time this selector has read a non-existent field
+# (?ready_to_earn=true, then verifier_ready), so it is now closed as a class:
+# any unknown key from FORBIDDEN_ITEM_FIELDS is malformed data.
+_forbidden = getattr(selector_mod, "FORBIDDEN_ITEM_FIELDS", ())
+_required = getattr(selector_mod, "REQUIRED_ITEM_FIELDS", {}) or {}
+check(bool(_forbidden), "selector exports FORBIDDEN_ITEM_FIELDS")
+for _name in ("claim_expires_at", "claim_expired", "reclaimable",
+              "exclusive_claimant", "active_claimant", "terms", "verifier",
+              "verifier_ready", "ready_to_earn"):
+    check(_name in _forbidden, f"{_name} is refused as a non-schema field")
+    # Cross-check the claim against upstream rather than trusting the list:
+    # every one of these must be absent from the real REQUIRED_ITEM_FIELDS.
+    check(_name not in _required,
+          f"  {_name} is not simultaneously required and forbidden")
+
+# Each ghost field injected on a record that otherwise CLAIMS, so the refusal
+# is caused by the injection alone (the baseline above proves it claims).
+probe("ghost claim_expires_at cannot resurrect an occupied record",
+      {"refresh"}, work_state="in_progress", claim_expires_at=1)
+probe("ghost claim_expired", {"refresh"}, claim_expired=True)
+probe("ghost reclaimable", {"refresh"}, reclaimable=True)
+probe("ghost exclusive_claimant", {"refresh"},
+      exclusive_claimant="0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e")
+probe("ghost active_claimant", {"refresh"},
+      active_claimant="0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e")
+probe("ghost terms cannot substitute for a bad terms_hash",
+      {"refresh"}, terms_hash="0xdead", terms={"terms_hash": "0xabc"})
+probe("ghost verifier block", {"refresh"}, verifier={"ready": True})
+probe("ghost verifier_ready (the old misspelling)", {"refresh"},
+      verifier_ready=True)
+probe("ghost ready_to_earn", {"refresh"}, ready_to_earn=True)
+
+# The exploits exactly as reproduced, asserted end to end: the honest record
+# refuses, and the injected one must NOT become claimable. Both halves matter --
+# without the honest baseline the second assertion could pass vacuously.
+probe("occupied record, honestly", REFUSE, work_state="in_progress")
+probe("bad terms_hash, honestly", REFUSE, terms_hash="0xdead")
+
+print()
+print("=== deadline_kind, not deadline, decides what a timestamp means ===")
+# claim_status must not read a bare `deadline`. Only `deadline_kind ==
+# "claim_expires_at"` makes it a claim expiry (web-public/src/lib.rs:464-502);
+# a past funding_deadline on an occupied row is not a lapsed claim.
+_claim_status = selector_mod.claim_status
+_occupied = json.loads(json.dumps(GOOD_ITEM))
+_occupied["work_state"] = "in_progress"
+
+_o = json.loads(json.dumps(_occupied))
+check(_claim_status(_o)[:2] == (True, False),
+      "occupied with no deadline is occupied and not reclaimable")
+
+_o = json.loads(json.dumps(_occupied))
+_o["deadline"], _o["deadline_kind"] = "2020-01-01T00:00:00Z", "funding_deadline"
+check(_claim_status(_o)[:2] == (True, False),
+      "a PAST funding_deadline leaves an occupied row occupied")
+
+_o = json.loads(json.dumps(_occupied))
+_o["deadline"], _o["deadline_kind"] = "2020-01-01T00:00:00Z", "verification_expires_at"
+check(_claim_status(_o)[:2] == (True, False),
+      "a PAST verification_expires_at is not a lapsed CLAIM either")
+
+_o = json.loads(json.dumps(_occupied))
+_o["deadline"], _o["deadline_kind"] = "2020-01-01T00:00:00Z", "claim_expires_at"
+check(_claim_status(_o)[:2] == (False, True),
+      "a PAST claim_expires_at makes the row reclaimable")
+
+_o = json.loads(json.dumps(_occupied))
+_o["deadline"], _o["deadline_kind"] = "2099-01-01T00:00:00Z", "claim_expires_at"
+check(_claim_status(_o)[:2] == (True, False),
+      "a FUTURE claim_expires_at means the claim is still live")
+
+# The fixtures pin 2099 as "future". Assert that is still true rather than
+# letting these cases silently invert on some far-future run.
+check(selector_mod._parse_rfc3339("2099-01-01T00:00:00Z").timestamp() > time.time(),
+      "the fixture FUTURE_DEADLINE is genuinely still in the future")
+
+# An unparseable claim deadline must fail closed, not fall through to
+# work_state with expiry unknown.
+_o = json.loads(json.dumps(_occupied))
+_o["deadline"], _o["deadline_kind"] = "not-a-date", "claim_expires_at"
+try:
+    _claim_status(_o)
+    check(False, "an unparseable claim deadline raises rather than guessing")
+except selector_mod.Malformed:
+    check(True, "an unparseable claim deadline raises rather than guessing")
+
+print()
 print("=== a malformed record poisons the WHOLE response, not just itself ===")
 # One item in a genuine response is built by the same constructor as every
 # other, so a single contract breach means the payload is not what it claims to
@@ -566,6 +702,16 @@ for name, (expected, _why) in sorted(EXPECTATIONS.items()):
 
 builder = FIXTURES / "_build.py"
 check(builder.is_file(), "fixtures/_build.py regenerates every fixture deterministically")
+
+# Every shipped fixture must be claimed by an expectation. Without this, adding
+# a fixture and forgetting to assert on it leaves a file that looks like
+# coverage but tests nothing -- the same "green suite proving nothing" failure
+# mode that let the fail-open defects through.
+_shipped = {p.name for p in FIXTURES.glob("*.json")}
+_orphans = sorted(_shipped - set(EXPECTATIONS) - {"view-filtered-subset.json"})
+check(not _orphans, f"every fixture is asserted by EXPECTATIONS (orphans={_orphans})")
+_missing = sorted(set(EXPECTATIONS) - _shipped)
+check(not _missing, f"every expectation has a fixture on disk (missing={_missing})")
 
 print()
 print("=== canonical ready-to-earn feed uses only real query parameters ===")

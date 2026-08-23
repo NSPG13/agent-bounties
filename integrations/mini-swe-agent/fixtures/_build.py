@@ -24,6 +24,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+# Deadline fixtures use FIXED timestamps so rebuilding is deterministic and
+# produces no git churn. They must not be near-future dates: a "live claim"
+# case pinned a few hours out silently becomes an "expired" one once that time
+# passes, inverting what the fixture tests long after anyone is watching. These
+# two are far enough apart that the meaning cannot drift, and the suite asserts
+# at run time that FUTURE_DEADLINE really is still in the future, so the day
+# that stops being true the tests fail loudly instead of quietly flipping.
+FUTURE_DEADLINE = "2099-01-01T00:00:00Z"
+PAST_DEADLINE = "2020-01-01T00:00:00Z"
+
 SCHEMA = "agent-bounties/opportunity-projection-v1"
 FEED = ("https://api.agentbounties.app/v1/opportunities"
         "?network=base-mainnet&view=ready_to_earn&source_type=canonical_base")
@@ -355,15 +365,51 @@ FIXTURES["adversarial-item-economics-flag-lies.json"] = solo(
     })
 
 # --------------------------------------------------------------- claim status
+#
+# These two fixtures previously used `exclusive_claimant`, `active_claimant` and
+# a numeric `claim_expires_at`. None of those fields exist on `OpportunityItem`,
+# so the fixtures were testing a schema the API has never emitted -- and while
+# they were green, injecting `claim_expires_at` into a genuinely occupied record
+# flipped the selector from `skip` to `claim`. The FIXTURES were wrong, not the
+# intent: occupancy is `work_state`, and expiry is the `deadline` /
+# `deadline_kind` pair (web-public/src/lib.rs:464-502), where `deadline_kind`
+# is what makes the timestamp mean "claim expiry" rather than a funding date.
 _live = mutate(CHECKER, work_state="in_progress",
-               exclusive_claimant="0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e")
+               deadline=FUTURE_DEADLINE,
+               deadline_kind="claim_expires_at")
 FIXTURES["exclusive-claimant.json"] = envelope([_live])
-# Expiry is evaluated BEFORE occupancy, so a lapsed claim is reclaimable even
-# though a claimant address is still recorded on the row.
+# A lapsed claim is reclaimable even though the row still reads in_progress:
+# the deadline has passed and the kind says it is the CLAIM deadline.
 _expired = mutate(CHECKER, work_state="in_progress",
-                  active_claimant="0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e",
-                  claim_expires_at=1700000000)
+                  deadline=PAST_DEADLINE,
+                  deadline_kind="claim_expires_at")
 FIXTURES["adversarial-expired-claim.json"] = envelope([_expired])
+# A past deadline whose kind is NOT claim expiry must not be read as one. This
+# record is occupied and stays occupied; only `deadline_kind` decides meaning.
+_funding_past = mutate(CHECKER, work_state="in_progress",
+                       deadline=PAST_DEADLINE,
+                       deadline_kind="funding_deadline")
+FIXTURES["adversarial-past-funding-deadline.json"] = envelope([_funding_past])
+# `deadline` and `deadline_kind` are set together or not at all.
+FIXTURES["adversarial-item-deadline-without-kind.json"] = solo(
+    CHECKER, deadline=PAST_DEADLINE)
+FIXTURES["adversarial-item-deadline-kind-unknown.json"] = solo(
+    CHECKER, deadline=PAST_DEADLINE, deadline_kind="whenever")
+# Each field the real schema does not define, injected on an otherwise valid
+# claimable record. Every one must be refused as malformed.
+for _ghost, _value in (
+    ("claim_expires_at", 1700000000),
+    ("claim_expired", True),
+    ("reclaimable", True),
+    ("exclusive_claimant", "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e"),
+    ("active_claimant", "0x8cfb0c37af0c40f96c44fd45fdec30b430bc6a6e"),
+    ("terms", {"terms_hash": "0x"}),
+    ("verifier", {"ready": True}),
+    ("verifier_ready", True),
+    ("ready_to_earn", True),
+):
+    FIXTURES[f"adversarial-item-ghost-field-{_ghost.replace('_', '-')}.json"] = solo(
+        CHECKER, **{_ghost: _value})
 
 
 def main() -> int:
