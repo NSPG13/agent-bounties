@@ -6,13 +6,80 @@ from unittest.mock import patch
 
 
 PATH = Path(__file__).with_name("run_open_competition_v2_sepolia_rehearsal.py")
-SPEC = importlib.util.spec_from_file_location("open_competition_v2_sepolia_rehearsal", PATH)
+SPEC = importlib.util.spec_from_file_location(
+    "open_competition_v2_sepolia_rehearsal", PATH
+)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 
 class SepoliaRehearsalTests(unittest.TestCase):
+    def test_signed_rpc_rebroadcasts_the_identical_payload_after_rate_limit(self):
+        primary = "https://primary.invalid"
+        shadow = "https://shadow.invalid"
+        raw_transaction = b"signed"
+        expected_hash = MODULE.keccak256(raw_transaction)
+        broadcasts = []
+
+        class Actor:
+            address = "0xfd7bE4C69541aB297aEcE2a674fc1418b898cC0a"
+
+            def sign_transaction(self, _transaction):
+                return SimpleNamespace(raw_transaction=raw_transaction)
+
+        def rpc_response(url, method, params):
+            if method == "eth_chainId":
+                return hex(MODULE.CHAIN_ID)
+            if method == "eth_getTransactionCount":
+                return "0x0"
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0x1"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            if method == "eth_sendRawTransaction":
+                broadcasts.append((url, params[0]))
+                if url == primary:
+                    raise MODULE.RpcError(
+                        'RPC eth_sendRawTransaction failed: {"code": -32005, "message": "rate limit exceeded"}'
+                    )
+                return expected_hash
+            raise AssertionError(method)
+
+        with patch.object(MODULE, "rpc", side_effect=rpc_response):
+            client = MODULE.SignedRpc(primary, shadow)
+            with patch.object(client, "wait_receipt", return_value={"status": "0x1"}):
+                client.send(Actor(), to="0x" + "11" * 20)
+
+        self.assertEqual(
+            broadcasts,
+            [
+                (primary, "0x" + raw_transaction.hex()),
+                (shadow, "0x" + raw_transaction.hex()),
+            ],
+        )
+
+    def test_signed_rpc_does_not_shadow_retry_a_nonretryable_revert(self):
+        primary = "https://primary.invalid"
+        shadow = "https://shadow.invalid"
+        calls = []
+
+        def rpc_response(url, method, _params):
+            calls.append((url, method))
+            if method == "eth_chainId":
+                return hex(MODULE.CHAIN_ID)
+            if method == "eth_getTransactionCount":
+                raise MODULE.RpcError("execution reverted")
+            raise AssertionError(method)
+
+        with patch.object(MODULE, "rpc", side_effect=rpc_response):
+            client = MODULE.SignedRpc(primary, shadow)
+            with self.assertRaisesRegex(MODULE.RpcError, "execution reverted"):
+                client.send(SimpleNamespace(address="0x" + "11" * 20))
+        self.assertNotIn((shadow, "eth_getTransactionCount"), calls)
+
     def test_signed_rpc_checksummed_lowercase_contract_destination(self):
         destination = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
 
@@ -30,7 +97,7 @@ class SepoliaRehearsalTests(unittest.TestCase):
                 "eth_getBlockByNumber": {"baseFeePerGas": "0x1"},
                 "eth_maxPriorityFeePerGas": "0x1",
                 "eth_estimateGas": "0x5208",
-                "eth_sendRawTransaction": "0x" + "44" * 32,
+                "eth_sendRawTransaction": MODULE.keccak256(b"signed"),
             }[method]
 
         actor = Actor()
@@ -111,9 +178,11 @@ class SepoliaRehearsalTests(unittest.TestCase):
 
         signer = type("Signer", (), {"address": deployer})()
         client = Client()
-        with patch.object(MODULE, "rpc", return_value=hex(9)), patch.object(
-            MODULE, "runtime_hash", return_value=("0x" + "00" * 32, 0)
-        ), patch.object(MODULE, "bundle_for_nonce", side_effect=rebuild):
+        with (
+            patch.object(MODULE, "rpc", return_value=hex(9)),
+            patch.object(MODULE, "runtime_hash", return_value=("0x" + "00" * 32, 0)),
+            patch.object(MODULE, "bundle_for_nonce", side_effect=rebuild),
+        ):
             resolved, receipts = MODULE.resolve_or_deploy_factory(
                 client, signer, raw_bundle, {"pinned": True}
             )
@@ -141,7 +210,9 @@ class SepoliaRehearsalTests(unittest.TestCase):
         }
 
         def observed(_url, address):
-            item = next(value for value in bundle.values() if value["address"] == address)
+            item = next(
+                value for value in bundle.values() if value["address"] == address
+            )
             return item["runtime_code_hash"], item["runtime_code_bytes"]
 
         with patch.object(MODULE, "runtime_hash", side_effect=observed):
@@ -178,11 +249,14 @@ class SepoliaRehearsalTests(unittest.TestCase):
         verifier_assets = {"proof_systems": {"pinned": True}}
         rebuilt = {"factory": {"from_nonce": 11}}
 
-        with patch.object(
-            MODULE.release,
-            "load_verifier_assets",
-            side_effect=AssertionError("filesystem fallback"),
-        ), patch.object(MODULE.release, "build_bundle", return_value=rebuilt) as build:
+        with (
+            patch.object(
+                MODULE.release,
+                "load_verifier_assets",
+                side_effect=AssertionError("filesystem fallback"),
+            ),
+            patch.object(MODULE.release, "build_bundle", return_value=rebuilt) as build,
+        ):
             self.assertIs(MODULE.bundle_for_nonce(bundle, 9, verifier_assets), rebuilt)
 
         self.assertEqual(build.call_args.kwargs["preflight"]["deployer_nonce"], 9)
@@ -237,7 +311,45 @@ class SepoliaRehearsalTests(unittest.TestCase):
         self.assertNotEqual(cases["payload_mutation"][-1], proof[-1])
         self.assertEqual(cases["zeroed_payload"][4:], bytes(len(proof) - 4))
 
-    def test_proof_rejection_consensus_requires_valid_acceptance_and_all_rejections(self):
+    def test_pristine_recovery_requires_identical_zero_state_from_both_rpcs(self):
+        actors = (
+            SimpleNamespace(address="0x" + "11" * 20),
+            SimpleNamespace(address="0x" + "22" * 20),
+        )
+
+        def rpc_response(_url, method, _params):
+            return (
+                "0x0"
+                if method in ("eth_getTransactionCount", "eth_getBalance")
+                else None
+            )
+
+        with (
+            patch.object(MODULE, "rpc", side_effect=rpc_response),
+            patch.object(MODULE.rehearsal, "token_balance", return_value=0),
+        ):
+            MODULE.require_pristine_derived_actors(
+                "https://primary.invalid",
+                "https://shadow.invalid",
+                "0x" + "33" * 20,
+                actors,
+            )
+
+        with (
+            patch.object(MODULE, "rpc", side_effect=rpc_response),
+            patch.object(MODULE.rehearsal, "token_balance", return_value=1),
+        ):
+            with self.assertRaisesRegex(MODULE.SepoliaRehearsalError, "not pristine"):
+                MODULE.require_pristine_derived_actors(
+                    "https://primary.invalid",
+                    "https://shadow.invalid",
+                    "0x" + "33" * 20,
+                    actors,
+                )
+
+    def test_proof_rejection_consensus_requires_valid_acceptance_and_all_rejections(
+        self,
+    ):
         proof = bytes(range(32))
         calls = []
 
@@ -278,7 +390,9 @@ class SepoliaRehearsalTests(unittest.TestCase):
                 ("https://same.invalid", "https://same.invalid"), **arguments
             )
         with patch.object(MODULE, "rpc", return_value="0x"):
-            with self.assertRaisesRegex(MODULE.SepoliaRehearsalError, "was not rejected"):
+            with self.assertRaisesRegex(
+                MODULE.SepoliaRehearsalError, "was not rejected"
+            ):
                 MODULE.proof_rejection_consensus(
                     ("https://primary.invalid", "https://shadow.invalid"), **arguments
                 )
@@ -294,7 +408,9 @@ class SepoliaRehearsalTests(unittest.TestCase):
                 MODULE.normalized_key(value)
 
     def test_configure_network_accepts_legacy_namespace_without_shadow_rpc_field(self):
-        args = SimpleNamespace(network="base-sepolia", rpc_url="https://primary.invalid")
+        args = SimpleNamespace(
+            network="base-sepolia", rpc_url="https://primary.invalid"
+        )
         with patch.dict(
             MODULE.os.environ,
             {"BASE_SEPOLIA_SHADOW_RPC_URL": "https://shadow.invalid"},

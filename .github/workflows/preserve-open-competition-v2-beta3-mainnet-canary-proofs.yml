@@ -2,6 +2,12 @@ name: Preserve Open Competition V2 Beta3 mainnet canary proofs
 
 on:
   workflow_dispatch:
+    inputs:
+      quarantine_run_id:
+        description: Run containing the quarantined exact proof workspace artifact
+        required: true
+        default: "32625773419"
+        type: string
 
 permissions:
   contents: read
@@ -19,29 +25,22 @@ env:
   PLONK_BEST_A_JOURNAL_HASH: "0xd42664c3b36ed9639b48d9fd15b765b1837b7cd0c865c29da637731403727645"
   PLONK_BEST_B_PROOF_HASH: "0x2a0d37fba6bc77bcf75cfd4c821dcc0e538bdf87fe32ec826cc47d3aa4ed9b54"
   PLONK_BEST_B_JOURNAL_HASH: "0x1ab38e9a9a1094a8d7a75ad605c2ea0927dc5dd7f6676795581e15cdcd447f8b"
+  PLONK_BEST_A_FILE_SHA256: deab624396414fb95e958ed01d91745cb12b9bda2c85ffdd9d25763316167537
+  PLONK_BEST_B_FILE_SHA256: e278f6d3d17b8c8e385accb3f2c5b9e7d967be3485b36c537a91cb1f60964191
 
 jobs:
   preserve:
     if: github.ref == 'refs/heads/main'
-    environment: v2-beta2-mainnet
-    runs-on: [self-hosted, linux, x64, ram-256gb, open-competition-v2-prover]
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Stage the failed-run proof workspace before validation
-        run: |
-          set -euo pipefail
-          source="$GITHUB_WORKSPACE/target"
-          stage="$RUNNER_TEMP/open-competition-v2-beta3-mainnet-canary-proofs"
-          test -f "$source/mainnet-canary-bundle.json"
-          test -f "$source/mainnet-canary-preparation.json"
-          test -d "$source/mainnet-proof-inputs"
-          test -f "$source/mainnet-proofs/plonk_best_a.json"
-          test -f "$source/mainnet-proofs/plonk_best_b.json"
-          install -d -m 0700 "$stage"
-          cp -aL "$source/mainnet-canary-bundle.json" "$stage/"
-          cp -aL "$source/mainnet-canary-preparation.json" "$stage/"
-          cp -aL "$source/mainnet-proof-inputs" "$stage/"
-          cp -aL "$source/mainnet-proofs" "$stage/"
+      - name: Download the isolated quarantine artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-canary-proofs-32623224167-1
+          path: ${{ runner.temp }}/open-competition-v2-beta3-mainnet-canary-proofs
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.quarantine_run_id }}
       - name: Validate and hash the isolated proof copy
         run: |
           set -euxo pipefail
@@ -54,14 +53,15 @@ jobs:
           jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
             '.network == "base-mainnet" and .source_commit == $commit' \
             "$source/mainnet-canary-bundle.json" >/dev/null
-          jq -e --arg proof "$PLONK_BEST_A_PROOF_HASH" --arg journal "$PLONK_BEST_A_JOURNAL_HASH" \
-            '.proof_name == "plonk_best_a" and .mode == "plonk" and
-             .proof_hash == $proof and .journal_hash == $journal' \
-            "$source/mainnet-proofs/plonk_best_a.json" >/dev/null
-          jq -e --arg proof "$PLONK_BEST_B_PROOF_HASH" --arg journal "$PLONK_BEST_B_JOURNAL_HASH" \
-            '.proof_name == "plonk_best_b" and .mode == "plonk" and
-             .proof_hash == $proof and .journal_hash == $journal' \
-            "$source/mainnet-proofs/plonk_best_b.json" >/dev/null
+          printf '%s  %s\n' \
+            "$PLONK_BEST_A_FILE_SHA256" "$source/mainnet-proofs/plonk_best_a.json" \
+            "$PLONK_BEST_B_FILE_SHA256" "$source/mainnet-proofs/plonk_best_b.json" \
+            | sha256sum --check --strict -
+          for proof in plonk_best_a plonk_best_b; do
+            jq -e '.mode == "plonk" and .self_verified == true and
+              (.proof_hex | startswith("0x")) and (.journal_hex | startswith("0x"))' \
+              "$source/mainnet-proofs/$proof.json" >/dev/null
+          done
           STAGE="$stage" python3 - <<'PY'
           import json
           import os

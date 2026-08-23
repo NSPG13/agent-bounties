@@ -34,11 +34,20 @@ class ProofPreservationWorkflowTests(unittest.TestCase):
         ):
             self.assertIsInstance(env[name], str)
             self.assertTrue(env[name].startswith("0x"))
-        self.assertIn(".proof_hash == $proof and .journal_hash == $journal", self.text)
+        self.assertEqual(
+            env["PLONK_BEST_A_FILE_SHA256"],
+            "deab624396414fb95e958ed01d91745cb12b9bda2c85ffdd9d25763316167537",
+        )
+        self.assertEqual(
+            env["PLONK_BEST_B_FILE_SHA256"],
+            "e278f6d3d17b8c8e385accb3f2c5b9e7d967be3485b36c537a91cb1f60964191",
+        )
+        self.assertIn("sha256sum --check --strict", self.text)
+        self.assertIn('.self_verified == true', self.text)
 
     def test_symlinks_are_rejected_and_every_file_is_hashed(self):
-        self.assertIn("Stage the failed-run proof workspace before validation", self.text)
-        self.assertIn('cp -aL "$source/mainnet-proofs" "$stage/"', self.text)
+        self.assertIn("Download the isolated quarantine artifact", self.text)
+        self.assertIn("run-id: ${{ inputs.quarantine_run_id }}", self.text)
         self.assertIn("-type l -print -quit", self.text)
         self.assertIn("find . -type f ! -name files.sha256 -print0", self.text)
         self.assertIn("xargs -0 sha256sum", self.text)
