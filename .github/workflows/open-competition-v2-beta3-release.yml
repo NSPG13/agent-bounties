@@ -841,15 +841,17 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
           BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
           BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
           OPEN_COMPETITION_V2_BROKER_ADDRESS: ${{ vars.OPEN_COMPETITION_V2_BROKER_ADDRESS }}
         run: |
           set -euo pipefail
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
-          test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
+          test -n "$BASE_MAINNET_SHADOW_RPC_URL" && test -n "$OPEN_COMPETITION_V2_BROKER_ADDRESS"
           python -m pip install -r scripts/requirements-wallet.txt
           python scripts/fund_open_competition_v2_beta3_broker.py \
-            --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
+            --rpc-url "$BASE_MAINNET_RPC_URL" --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --broker "$OPEN_COMPETITION_V2_BROKER_ADDRESS" \
             --output target/mainnet-broker-seed.json
           forge build --root contracts/base-escrow --force --ast
           DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
@@ -868,6 +870,7 @@ jobs:
             --output target/mainnet-exact.json
           python scripts/deploy_open_competition_v2_beta3.py \
             --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --output target/mainnet-deployment-evidence.json
           FACTORY="$(python -c 'import json; print(json.load(open("target/mainnet-exact.runtime.json"))["factory_contract"])')"
           RELEASE_HASH="$(python -c 'import json; print(json.load(open("target/mainnet-exact.runtime.json"))["release_hash"])')"
@@ -877,6 +880,7 @@ jobs:
           python scripts/deploy_bounded_open_competition_v2_wallet_factory.py \
             --manifest target/bounded-open-competition-v2-wallet-base-mainnet.json \
             --release target/mainnet-exact.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --output target/bounded-open-competition-v2-wallet-deployment-evidence.json
           python scripts/record_open_competition_v2_beta3_gate.py \
             --manifest target/release-gates.json --gate mainnet_verifiers_factory_deployed \

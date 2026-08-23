@@ -1,0 +1,188 @@
+name: Recover Open Competition V2 Beta3 mainnet deployment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: open-competition-v2-beta3-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_RUN_ID: "32606926043"
+  RELEASE_SOURCE_COMMIT: 5a351f3e373691be58a9575b4374812b494b6086
+  EXPECTED_DEPLOYER: "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+  EXPECTED_START_NONCE: "34"
+  EXPECTED_OBSERVED_NONCE: "35"
+  EXPECTED_GROTH16_VERIFIER: "0x6788e13954e7e27f8d2c62ab8ce86b96b8d9169f"
+  EXPECTED_PLONK_VERIFIER: "0xa2549e89b7d56a99ddabcbece342a211e5ef340a"
+  EXPECTED_FACTORY: "0x29d0e39e0c03797c690633535722e6b34a69a78a"
+
+jobs:
+  recover-mainnet-deployment:
+    if: github.ref == 'refs/heads/main'
+    environment: v2-beta2-mainnet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out the exact frozen release
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ env.RELEASE_SOURCE_COMMIT }}
+      - name: Check out current fail-closed recovery controls
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          ref: ${{ github.sha }}
+          path: .release-control
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Download the exact reviewed verifier assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-release-assets-${{ env.RELEASE_SOURCE_COMMIT }}
+          path: target/release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ env.RELEASE_RUN_ID }}
+      - name: Download the exact successful Sepolia evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-live-sepolia-${{ env.RELEASE_SOURCE_COMMIT }}
+          path: target/live-sepolia
+          github-token: ${{ github.token }}
+          run-id: ${{ env.RELEASE_RUN_ID }}
+      - name: Recover only the missing exact deployments
+        env:
+          BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
+          BASE_MAINNET_SHADOW_RPC_URL: ${{ vars.BASE_MAINNET_SHADOW_RPC_URL }}
+          BASE_MAINNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.BASE_MAINNET_DEPLOYER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$BASE_MAINNET_RPC_URL"
+          test -n "$BASE_MAINNET_SHADOW_RPC_URL"
+          test "$BASE_MAINNET_RPC_URL" != "$BASE_MAINNET_SHADOW_RPC_URL"
+          test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_COMMIT"
+          test "$(git -C .release-control rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD:contracts/base-escrow)" = \
+            "$(git -C .release-control rev-parse HEAD:contracts/base-escrow)"
+          test -f target/release-assets/verifier-assets.json
+          test -f target/live-sepolia/release-gates.json
+          test -f target/live-sepolia/sepolia-rehearsal.json
+          test -f target/live-sepolia/sepolia-x402-rehearsal.json
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
+            '.passed == true and .source_commit == $commit' \
+            target/live-sepolia/sepolia-rehearsal.json >/dev/null
+          jq -e --arg commit "$RELEASE_SOURCE_COMMIT" \
+            '.passed == true and .source_commit == $commit and (.settlement_event_id | length > 0)' \
+            target/live-sepolia/sepolia-x402-rehearsal.json >/dev/null
+          jq -e '.asset_state == "self_verified" and
+                 .setup_provenance.mainnet_eligible == true and
+                 (.proof_evidence.groth16_self_verified | length > 0) and
+                 (.proof_evidence.plonk_self_verified_1 | length > 0) and
+                 (.proof_evidence.plonk_self_verified_2 | length > 0)' \
+            target/release-assets/verifier-assets.json >/dev/null
+          python -m pip install -r .release-control/scripts/requirements-wallet.txt
+          forge build --root contracts/base-escrow --force --ast
+          DEPLOYER="$(python -c 'import os; from eth_account import Account; print(Account.from_key(os.environ["BASE_MAINNET_DEPLOYER_PRIVATE_KEY"]).address.lower())')"
+          test "$DEPLOYER" = "$EXPECTED_DEPLOYER"
+          cp target/live-sepolia/release-gates.json target/release-gates.json
+          export RISK_HASH="$(PYTHONPATH="$GITHUB_WORKSPACE/scripts" python -c 'import json; from eth_utils import keccak; value=json.load(open("target/release-gates.json")); print("0x" + keccak(text=value["beta_risk_preimage"]).hex())')"
+          python - <<'PY'
+          import json
+          import os
+
+          json.dump(
+              {
+                  "schema_version": "agent-bounties/open-competition-v2-beta3-mainnet-deployment-recovery-approval-v1",
+                  "environment": "v2-beta2-mainnet",
+                  "run_id": os.environ["GITHUB_RUN_ID"],
+                  "source_commit": os.environ["RELEASE_SOURCE_COMMIT"],
+                  "risk_hash": os.environ["RISK_HASH"],
+                  "release_run_id": os.environ["RELEASE_RUN_ID"],
+                  "approval_scope": "recover only the original nonce-34 exact release deployment",
+                  "evidence_boundary": "This environment approval authorizes exact deployment recovery. It does not authorize owner USDC or bounty settlement.",
+              },
+              open("target/owner-mainnet-deployment-recovery-approval.json", "w"),
+              indent=2,
+          )
+          PY
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate owner_mainnet_deployment_approved \
+            --evidence target/owner-mainnet-deployment-recovery-approval.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$RELEASE_SOURCE_COMMIT" --owner-risk-hash "$RISK_HASH"
+          PYTHONPATH="$GITHUB_WORKSPACE/.release-control/scripts" \
+            python .release-control/scripts/build_open_competition_v2_beta3_release.py \
+            --network base-mainnet --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --deployer "$DEPLOYER" --source-commit "$RELEASE_SOURCE_COMMIT" \
+            --verifier-assets target/release-assets/verifier-assets.json \
+            --gates target/release-gates.json --output target/mainnet-exact.json \
+            --release-root "$GITHUB_WORKSPACE"
+          jq -e \
+            --argjson start "$EXPECTED_START_NONCE" \
+            --argjson observed "$EXPECTED_OBSERVED_NONCE" \
+            --arg groth "$EXPECTED_GROTH16_VERIFIER" \
+            --arg plonk "$EXPECTED_PLONK_VERIFIER" \
+            --arg factory "$EXPECTED_FACTORY" \
+            '.preflight_safe_block.deployer_nonce == $start and
+             .preflight_safe_block.observed_deployer_nonce == $observed and
+             .preflight_safe_block.resuming_exact_verifiers == true and
+             .groth16_verifier.address == $groth and
+             .plonk_verifier.address == $plonk and
+             .factory.address == $factory and
+             [.deployment_transactions[].from_nonce] == [$start, ($start + 1), ($start + 2)]' \
+            target/mainnet-exact.json >/dev/null
+          PYTHONPATH="$GITHUB_WORKSPACE/.release-control/scripts" \
+            python .release-control/scripts/deploy_open_competition_v2_beta3.py \
+            --bundle target/mainnet-exact.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --output target/mainnet-deployment-evidence.json
+          jq -e \
+            --arg groth "$EXPECTED_GROTH16_VERIFIER" \
+            --arg plonk "$EXPECTED_PLONK_VERIFIER" \
+            --arg factory "$EXPECTED_FACTORY" \
+            '.complete == true and
+             .transactions[0].contract_address == $groth and
+             .transactions[0].recovered_exact_deployment == true and
+             .transactions[1].contract_address == $plonk and
+             .transactions[2].contract_address == $factory and
+             (.safe_block.number > 0)' \
+            target/mainnet-deployment-evidence.json >/dev/null
+          FACTORY="$(jq -r .factory_contract target/mainnet-exact.runtime.json)"
+          RELEASE_HASH="$(jq -r .release_hash target/mainnet-exact.runtime.json)"
+          PYTHONPATH="$GITHUB_WORKSPACE/.release-control/scripts" \
+            python .release-control/scripts/build_bounded_open_competition_v2_wallet_bundle.py \
+            --competition-factory "$FACTORY" --release-hash "$RELEASE_HASH" \
+            --output target/bounded-open-competition-v2-wallet-base-mainnet.json
+          PYTHONPATH="$GITHUB_WORKSPACE/.release-control/scripts" \
+            python .release-control/scripts/deploy_bounded_open_competition_v2_wallet_factory.py \
+            --manifest target/bounded-open-competition-v2-wallet-base-mainnet.json \
+            --release target/mainnet-exact.runtime.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+            --output target/bounded-open-competition-v2-wallet-deployment-evidence.json
+          jq -e '.complete == true and (.safe_block.number > 0)' \
+            target/bounded-open-competition-v2-wallet-deployment-evidence.json >/dev/null
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python scripts/record_open_competition_v2_beta3_gate.py \
+            --manifest target/release-gates.json --gate mainnet_verifiers_factory_deployed \
+            --evidence target/mainnet-deployment-evidence.json \
+            --uri "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --source-commit "$RELEASE_SOURCE_COMMIT"
+      - name: Preserve canonical recovery evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: open-competition-v2-beta3-mainnet-deployment-recovery-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            target/mainnet-exact.json
+            target/mainnet-exact.runtime.json
+            target/mainnet-deployment-evidence.json
+            target/bounded-open-competition-v2-wallet-base-mainnet.json
+            target/bounded-open-competition-v2-wallet-deployment-evidence.json
+            target/owner-mainnet-deployment-recovery-approval.json
+            target/release-gates.json
+          if-no-files-found: error
+          retention-days: 365

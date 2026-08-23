@@ -68,10 +68,73 @@ def validate_bundle(bundle: dict[str, Any], signer_address: str) -> None:
 
 
 class SignedRpc:
-    def __init__(self, url: str, signer: Any) -> None:
+    def __init__(self, url: str, signer: Any, shadow_url: str | None = None) -> None:
         self.url = url
         self.signer = signer
-        require(int(rpc(url, "eth_chainId", []), 16) == 8453, "RPC is not Base mainnet")
+        self.broadcast_urls = tuple(
+            dict.fromkeys([url, *([shadow_url] if shadow_url else [])])
+        )
+        for endpoint in self.broadcast_urls:
+            require(
+                int(rpc(endpoint, "eth_chainId", []), 16) == 8453,
+                "RPC is not Base mainnet",
+            )
+
+    def receipt(self, transaction_hash: str) -> dict[str, Any] | None:
+        for endpoint in self.broadcast_urls:
+            try:
+                receipt = rpc(endpoint, "eth_getTransactionReceipt", [transaction_hash])
+            except RuntimeError:
+                continue
+            if receipt:
+                require(
+                    receipt.get("transactionHash", "").lower()
+                    == transaction_hash.lower(),
+                    "RPC returned a receipt for an unexpected transaction",
+                )
+                return receipt
+        return None
+
+    def transaction(self, transaction_hash: str) -> dict[str, Any] | None:
+        for endpoint in self.broadcast_urls:
+            try:
+                transaction = rpc(endpoint, "eth_getTransactionByHash", [transaction_hash])
+            except RuntimeError:
+                continue
+            if transaction:
+                require(
+                    transaction.get("hash", "").lower() == transaction_hash.lower(),
+                    "RPC returned an unexpected pending transaction",
+                )
+                return transaction
+        return None
+
+    def broadcast(self, signed: Any) -> str:
+        raw_transaction = "0x" + bytes(signed.raw_transaction).hex()
+        expected_hash = "0x" + bytes(signed.hash).hex()
+        submitted = False
+        for endpoint in self.broadcast_urls:
+            try:
+                transaction_hash = rpc(
+                    endpoint,
+                    "eth_sendRawTransaction",
+                    [raw_transaction],
+                )
+            except RuntimeError:
+                continue
+            require(
+                transaction_hash.lower() == expected_hash.lower(),
+                "RPC returned an unexpected transaction hash",
+            )
+            submitted = True
+            break
+        if (
+            not submitted
+            and self.receipt(expected_hash) is None
+            and self.transaction(expected_hash) is None
+        ):
+            raise RuntimeError("raw deployment submission failed on every approved RPC")
+        return expected_hash
 
     def code_hash(self, address: str, block: str = "latest") -> str | None:
         deadline = time.time() + 120
@@ -124,17 +187,13 @@ class SignedRpc:
                 "type": 2,
             }
         )
-        transaction_hash = rpc(
-            self.url,
-            "eth_sendRawTransaction",
-            ["0x" + bytes(signed.raw_transaction).hex()],
-        )
+        transaction_hash = self.broadcast(signed)
         return self.wait_receipt(transaction_hash)
 
     def wait_receipt(self, transaction_hash: str, timeout_seconds: int = 600) -> dict[str, Any]:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            receipt = rpc(self.url, "eth_getTransactionReceipt", [transaction_hash])
+            receipt = self.receipt(transaction_hash)
             if receipt:
                 require(int(receipt["status"], 16) == 1, f"deployment reverted: {transaction_hash}")
                 return receipt
@@ -316,6 +375,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--rpc-url", required=True)
+    parser.add_argument("--shadow-rpc-url")
     parser.add_argument("--private-key-env", default="BASE_MAINNET_DEPLOYER_PRIVATE_KEY")
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -328,7 +388,11 @@ def main() -> int:
     signer = Account.from_key(private_key)
     bundle = json.loads(args.bundle.read_text(encoding="utf-8"))
     validate_bundle(bundle, signer.address)
-    evidence = deploy(bundle, SignedRpc(args.rpc_url, signer), args.output)
+    evidence = deploy(
+        bundle,
+        SignedRpc(args.rpc_url, signer, args.shadow_rpc_url),
+        args.output,
+    )
     print(json.dumps({"output": str(args.output), "factory": bundle["factory"]["address"], "safe_block": evidence["safe_block"]["number"]}))
     return 0
 

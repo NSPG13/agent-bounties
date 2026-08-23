@@ -540,7 +540,17 @@ def resume_exact_verifier_pair(
     groth16_runtime_hash: str,
     plonk_runtime_hash: str,
 ) -> int:
-    """Reuse an exact verifier pair when a prior factory deployment was interrupted."""
+    """Reuse an exact verifier prefix when a prior deployment was interrupted."""
+    if observed_nonce < 1:
+        return observed_nonce
+    single_start = observed_nonce - 1
+    single_groth16 = create_address(deployer, single_start)
+    single_plonk = create_address(deployer, single_start + 1)
+    if (
+        code_hash(single_groth16) == groth16_runtime_hash
+        and code_hash(single_plonk) is None
+    ):
+        return single_start
     if observed_nonce < 2:
         return observed_nonce
     minimum_nonce = max(0, observed_nonce - 16)

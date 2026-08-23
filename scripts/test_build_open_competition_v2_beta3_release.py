@@ -38,6 +38,23 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
 
         self.assertEqual(start, 2)
 
+    def test_resumes_one_exact_verifier_after_lost_submission_response(self):
+        deployer = MODULE.DEFAULT_DEPLOYER
+        start_nonce = 34
+        expected = {
+            MODULE.create_address(deployer, start_nonce): "groth16",
+        }
+
+        start = MODULE.resume_exact_verifier_pair(
+            deployer=deployer,
+            observed_nonce=start_nonce + 1,
+            code_hash=lambda address: expected.get(address),
+            groth16_runtime_hash="groth16",
+            plonk_runtime_hash="plonk",
+        )
+
+        self.assertEqual(start, start_nonce)
+
     def test_does_not_resume_inexact_partial_deployment(self):
         deployer = MODULE.DEFAULT_DEPLOYER
         groth16 = MODULE.create_address(deployer, 2)

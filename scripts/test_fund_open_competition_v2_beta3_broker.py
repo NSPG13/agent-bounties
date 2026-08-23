@@ -208,6 +208,65 @@ class BrokerFundingTests(unittest.TestCase):
 
         self.assertEqual(receipt["transactionHash"], expected_hash)
 
+    def test_signed_rpc_accepts_an_already_known_pending_transaction(self):
+        expected_hash = "0x" + "ab" * 32
+
+        class Signer:
+            address = "0x0000000000000000000000000000000000000001"
+
+            @staticmethod
+            def sign_transaction(_transaction):
+                return SimpleNamespace(
+                    raw_transaction=bytes.fromhex("1234"),
+                    hash=bytes.fromhex("ab" * 32),
+                )
+
+        receipt_calls = 0
+
+        def fake_rpc(url, method, _params):
+            nonlocal receipt_calls
+            if method == "eth_chainId":
+                return hex(8453)
+            if method == "eth_getTransactionCount":
+                return "0x18"
+            if method == "eth_getBlockByNumber":
+                return {"baseFeePerGas": "0x1"}
+            if method == "eth_maxPriorityFeePerGas":
+                return "0xf4240"
+            if method == "eth_estimateGas":
+                return "0x5208"
+            if method == "eth_sendRawTransaction":
+                raise RuntimeError("already known")
+            if method == "eth_getTransactionReceipt":
+                receipt_calls += 1
+                if receipt_calls <= 2:
+                    return None
+                return {
+                    "transactionHash": expected_hash,
+                    "blockNumber": "0x2",
+                    "status": "0x1",
+                }
+            if method == "eth_getTransactionByHash" and url == "https://primary.invalid":
+                return None
+            if method == "eth_getTransactionByHash":
+                return {"hash": expected_hash, "blockNumber": None}
+            self.fail(f"unexpected RPC call: {url} {method}")
+
+        with patch.object(MODULE, "rpc", side_effect=fake_rpc), patch.object(
+            MODULE.time, "sleep"
+        ):
+            client = MODULE.SignedRpc(
+                "https://primary.invalid",
+                Signer(),
+                8453,
+                broadcast_urls=["https://shadow.invalid"],
+            )
+            receipt = client.send(
+                to="0x0000000000000000000000000000000000000002"
+            )
+
+        self.assertEqual(receipt["transactionHash"], expected_hash)
+
     def test_signed_rpc_fails_when_every_endpoint_rejects_without_a_receipt(self):
         class Signer:
             address = "0x0000000000000000000000000000000000000001"
@@ -233,6 +292,8 @@ class BrokerFundingTests(unittest.TestCase):
             if method == "eth_sendRawTransaction":
                 raise RuntimeError("rate limit exceeded")
             if method == "eth_getTransactionReceipt":
+                return None
+            if method == "eth_getTransactionByHash":
                 return None
             self.fail(f"unexpected RPC call: {method}")
 
