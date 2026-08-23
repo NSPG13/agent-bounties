@@ -149,7 +149,7 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         triggers = self.workflow.get("on", self.workflow.get(True))
         self.assertEqual(
             set(triggers["workflow_dispatch"]["inputs"].keys()),
-            {"release_run_id"},
+            {"release_run_id", "preserved_canary_proof_run_id"},
         )
         self.assertEqual(self.text.count("run-id: ${{ inputs.release_run_id }}"), 2)
         self.assertIn(
@@ -173,6 +173,20 @@ class MainnetContinuationWorkflowTests(unittest.TestCase):
         self.assertNotIn("BASE_MAINNET_DEPLOYER_PRIVATE_KEY", self.text.split(
             "  deploy-production-prover:", 1
         )[0])
+
+    def test_exact_preserved_proofs_can_resume_only_with_pristine_actors(self):
+        self.assertIn(
+            "open-competition-v2-beta3-mainnet-canary-proofs-32623224167-1",
+            self.text,
+        )
+        self.assertIn(
+            'BETA3_ACTOR_DERIVATION_SALT="$PRESERVED_CANARY_SOURCE_RUN_ID:$PRESERVED_CANARY_SOURCE_RUN_ATTEMPT:mainnet"',
+            self.text,
+        )
+        self.assertIn("PRESERVED_PLONK_BEST_A_PROOF_HASH", self.text)
+        self.assertIn("PRESERVED_PLONK_BEST_B_PROOF_HASH", self.text)
+        self.assertIn("--require-pristine-derived-actors", self.text)
+        self.assertGreaterEqual(self.text.count('--shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL"'), 2)
 
     def test_prover_installs_all_three_reviewed_profiles(self):
         prover = self.text.split("  deploy-production-prover:", 1)[1].split(

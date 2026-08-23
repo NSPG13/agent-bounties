@@ -7,6 +7,11 @@ on:
         description: Successful frozen release run containing the reviewed release and exact mainnet artifacts
         required: true
         type: string
+      preserved_canary_proof_run_id:
+        description: Optional quarantined artifact run containing the exact prior canary proofs
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -35,6 +40,14 @@ env:
   SP1_GNARK_RUNTIME_IMAGE: ghcr.io/succinctlabs/sp1-gnark:agent-bounties-sp1-safe-v5
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
   OPEN_COMPETITION_V2_RUNTIME_READINESS_URL: https://agent-bounties-api.onrender.com/v1/base/open-competition-v2-beta3/release
+  PRESERVED_CANARY_SOURCE_RUN_ID: "32623224167"
+  PRESERVED_CANARY_SOURCE_RUN_ATTEMPT: "1"
+  PRESERVED_CANARY_PROOF_CONTEXT_HASH: "0x9fab869a09818ded5b5b066489ed8732bdd5ae0fffbbe3172f72c11de44b9640"
+  PRESERVED_CANARY_ACTOR_DERIVATION_ID: "0xdfbd50bb2384dba5e1a2957e1e51e86e43b085be1c6117dac91a8ff11a8d4dbf"
+  PRESERVED_PLONK_BEST_A_PROOF_HASH: "0xf2b2dc02af5c30b66f45dd14389aac1b7716fe6534da242525da965fb0f916be"
+  PRESERVED_PLONK_BEST_A_JOURNAL_HASH: "0xd42664c3b36ed9639b48d9fd15b765b1837b7cd0c865c29da637731403727645"
+  PRESERVED_PLONK_BEST_B_PROOF_HASH: "0x2a0d37fba6bc77bcf75cfd4c821dcc0e538bdf87fe32ec826cc47d3aa4ed9b54"
+  PRESERVED_PLONK_BEST_B_JOURNAL_HASH: "0x1ab38e9a9a1094a8d7a75ad605c2ea0927dc5dd7f6676795581e15cdcd447f8b"
 
 jobs:
   deploy-mainnet:
@@ -370,6 +383,14 @@ jobs:
         with:
           name: open-competition-v2-beta3-production-control-plane-continuation
           path: target/production-control-plane
+      - name: Download the exact quarantined proof workspace for recovery
+        if: inputs.preserved_canary_proof_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: open-competition-v2-beta3-mainnet-canary-proofs-32623224167-1
+          path: target/preserved-mainnet-canary-proofs
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.preserved_canary_proof_run_id }}
       - name: Run both mainnet canaries and reconcile at a safe block
         env:
           PYTHONPATH: ${{ github.workspace }}/scripts
@@ -386,7 +407,11 @@ jobs:
           set -euo pipefail
           export SP1_GROTH16_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/groth16"
           export SP1_PLONK_CIRCUIT_PATH="$HOME/.cache/agent-bounties/$SP1_SAFE_CIRCUIT_VERSION/plonk"
-          export BETA3_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:mainnet"
+          if [ -n "${{ inputs.preserved_canary_proof_run_id }}" ]; then
+            export BETA3_ACTOR_DERIVATION_SALT="$PRESERVED_CANARY_SOURCE_RUN_ID:$PRESERVED_CANARY_SOURCE_RUN_ATTEMPT:mainnet"
+          else
+            export BETA3_ACTOR_DERIVATION_SALT="$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:mainnet"
+          fi
           test -n "$BASE_MAINNET_RPC_URL" && test -n "$BASE_MAINNET_DEPLOYER_PRIVATE_KEY"
           test -n "$BASE_KEEPER_ADDRESS" && test -n "$OPEN_COMPETITION_V2_BROKER_PRIVATE_KEY"
           test -f "$SP1_GROTH16_CIRCUIT_PATH/.complete" && test -f "$SP1_PLONK_CIRCUIT_PATH/.complete"
@@ -406,27 +431,74 @@ jobs:
             --rpc-url "$BASE_MAINNET_RPC_URL" --broker "$BROKER" \
             --keeper "$KEEPER" --deployer "$DEPLOYER" \
             --output target/mainnet-broker-reserve-before.json
-          python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
-            --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
-            --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \
-            --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
-            --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
-            --prepare-proof-fixtures target/mainnet-proof-inputs \
-            --resolved-bundle-output target/mainnet-canary-bundle.json \
-            --output target/mainnet-canary-preparation.json --skip-expiry-refund
-          for proof in plonk_best_a plonk_best_b; do
-            python scripts/generate_open_competition_v2_proof.py --bundle target/mainnet-canary-bundle.json \
-              --prepared-dir target/mainnet-proof-inputs --proof-name "$proof" \
-              --output "target/mainnet-proofs/$proof.json" --log-dir "target/mainnet-proof-logs/$proof"
-          done
+          recovery_args=()
+          if [ -n "${{ inputs.preserved_canary_proof_run_id }}" ]; then
+            source=target/preserved-mainnet-canary-proofs
+            test -z "$(find "$source/mainnet-proof-inputs" "$source/mainnet-proofs" -type l -print -quit)"
+            PRESERVED_SOURCE="$source" EXACT_BUNDLE="$bundle" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from _shared.evm import keccak256
+
+          source = Path(os.environ["PRESERVED_SOURCE"])
+          exact = json.loads(Path(os.environ["EXACT_BUNDLE"]).read_text(encoding="utf-8"))
+          preserved = json.loads((source / "mainnet-canary-bundle.json").read_text(encoding="utf-8"))
+          preparation = json.loads((source / "mainnet-canary-preparation.json").read_text(encoding="utf-8"))
+          assert preserved["network"] == "base-mainnet"
+          assert preserved["source_commit"] == exact["source_commit"] == os.environ["RELEASE_SOURCE_COMMIT"]
+          for component in ("factory", "groth16_verifier", "plonk_verifier", "groth16_adapter", "plonk_adapter", "implementation"):
+              assert preserved[component]["address"].lower() == exact[component]["address"].lower()
+              assert preserved[component]["runtime_code_hash"].lower() == exact[component]["runtime_code_hash"].lower()
+          assert preparation["passed"] is True and preparation["funds_moved"] is False
+          assert preparation["proof_context_hash"] == os.environ["PRESERVED_CANARY_PROOF_CONTEXT_HASH"]
+          assert preparation["actor_derivation_id"] == os.environ["PRESERVED_CANARY_ACTOR_DERIVATION_ID"]
+          expected = {
+              "plonk_best_a": (
+                  os.environ["PRESERVED_PLONK_BEST_A_PROOF_HASH"],
+                  os.environ["PRESERVED_PLONK_BEST_A_JOURNAL_HASH"],
+              ),
+              "plonk_best_b": (
+                  os.environ["PRESERVED_PLONK_BEST_B_PROOF_HASH"],
+                  os.environ["PRESERVED_PLONK_BEST_B_JOURNAL_HASH"],
+              ),
+          }
+          for name, (proof_hash, journal_hash) in expected.items():
+              evidence = json.loads((source / "mainnet-proofs" / f"{name}.json").read_text(encoding="utf-8"))
+              assert evidence["mode"] == "plonk" and evidence["self_verified"] is True
+              assert keccak256(bytes.fromhex(evidence["proof_hex"].removeprefix("0x"))) == proof_hash
+              assert keccak256(bytes.fromhex(evidence["journal_hex"].removeprefix("0x"))) == journal_hash
+          PY
+            cp -aL "$source/mainnet-canary-bundle.json" target/
+            cp -aL "$source/mainnet-canary-preparation.json" target/
+            cp -aL "$source/mainnet-proof-inputs" target/
+            cp -aL "$source/mainnet-proofs" target/
+            recovery_args+=(--require-pristine-derived-actors)
+          else
+            python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
+              --bundle "$bundle" --rpc-url "$BASE_MAINNET_RPC_URL" \
+              --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
+              --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \
+              --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
+              --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
+              --prepare-proof-fixtures target/mainnet-proof-inputs \
+              --resolved-bundle-output target/mainnet-canary-bundle.json \
+              --output target/mainnet-canary-preparation.json --skip-expiry-refund
+            for proof in plonk_best_a plonk_best_b; do
+              python scripts/generate_open_competition_v2_proof.py --bundle target/mainnet-canary-bundle.json \
+                --prepared-dir target/mainnet-proof-inputs --proof-name "$proof" \
+                --output "target/mainnet-proofs/$proof.json" --log-dir "target/mainnet-proof-logs/$proof"
+            done
+          fi
           python scripts/run_open_competition_v2_sepolia_rehearsal.py --network base-mainnet \
             --bundle target/mainnet-canary-bundle.json --rpc-url "$BASE_MAINNET_RPC_URL" \
+            --shadow-rpc-url "$BASE_MAINNET_SHADOW_RPC_URL" \
             --verifier-assets target/mainnet-deployment/release-assets/verifier-assets.json \
             --private-key-env BASE_MAINNET_DEPLOYER_PRIVATE_KEY \
             --actor-derivation-salt "$BETA3_ACTOR_DERIVATION_SALT" \
             --prepared-proof-dir target/mainnet-proof-inputs --proof-evidence-dir target/mainnet-proofs \
             --output target/mainnet-canaries.json --skip-expiry-refund \
-            --prepare-x402-canary --x402-replaces-first-proven
+            --prepare-x402-canary --x402-replaces-first-proven "${recovery_args[@]}"
           export BASE_MAINNET_OPEN_COMPETITION_V2_BETA3_RELEASE_MANIFEST_JSON="$(jq -c . target/production-control-plane/mainnet-broker.runtime.json)"
           export OPEN_COMPETITION_V2_FACTORY_CONTRACT="$(jq -r .factory_contract target/production-control-plane/mainnet-broker.runtime.json)"
           export OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK="$(jq -r .deployment_block target/production-control-plane/mainnet-broker.runtime.json)"
