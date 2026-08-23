@@ -14,14 +14,18 @@ import contextlib
 import json
 import os
 import re
+import stat
+import tempfile
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from eth_abi import decode, encode
 from eth_account import Account
-from eth_utils import keccak
+from eth_utils import keccak, to_checksum_address
 
 from build_open_competition_v2_gmv_activation import (
     ACTIVATION_SCHEMA,
@@ -33,21 +37,6 @@ from build_open_competition_v2_gmv_activation import (
     build_activation,
 )
 from build_open_competition_v2_gmv_relay import build_relay
-from local_delegate_wallet import (
-    DPAPI_BLOB,
-    KEYSTORE,
-    json_bytes,
-    public_address,
-    read_json,
-    require_private_file,
-    rpc,
-    rpc_hex,
-    transaction_parameters,
-    unprotect_secret,
-    write_atomic,
-)
-
-
 TARGET = 10
 FLOOR = 5
 CONFIRMATIONS = 2
@@ -59,10 +48,132 @@ LOCK_FILE = "gmv-guard.lock"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 ZERO_HASH = "0x" + "00" * 32
 HASH = re.compile(r"^0x[0-9a-f]{64}$")
+ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
+KEYSTORE = "keystore.json"
+DPAPI_BLOB = "credential.dpapi"
+METADATA = "state.json"
+STATE_KEY_SCHEMA = "agent-bounties/local-delegate-state-v1"
+MAX_GAS_LIMIT = 2_000_000
+MAX_FEE_PER_GAS_WEI = 2_000_000_000
+MAX_TOTAL_GAS_WEI = 3_000_000_000_000_000
 
 
 class GuardError(ValueError):
     pass
+
+
+def rpc(url: str, method: str, params: list[object], request_id: int) -> object:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        ).encode(),
+        headers={"content-type": "application/json", "user-agent": "agent-bounties-gmv-guard/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
+            payload = json.load(response)
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        raise GuardError(f"RPC {method} failed") from error
+    if not isinstance(payload, dict) or payload.get("error") is not None or "result" not in payload:
+        raise GuardError(f"RPC {method} returned an error")
+    return payload["result"]
+
+
+def require_private_file(path: Path) -> bytes:
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise GuardError(f"private state file {path.name} is unsafe")
+    return path.read_bytes()
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    value = json.loads(require_private_file(path).decode())
+    if not isinstance(value, dict):
+        raise GuardError(f"private state file {path.name} must contain an object")
+    return value
+
+
+def json_bytes(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def write_atomic(path: Path, data: bytes) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise GuardError("private state write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary, path)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def public_address(state_dir: Path) -> str:
+    metadata = read_json(state_dir / METADATA)
+    delegate = normalized(metadata.get("delegate"))
+    keystore = read_json(state_dir / KEYSTORE)
+    stored = "0x" + normalized(keystore.get("address")).removeprefix("0x")
+    if (
+        metadata.get("schema") != STATE_KEY_SCHEMA
+        or not ADDRESS.fullmatch(delegate)
+        or stored != delegate
+    ):
+        raise GuardError("protected delegate metadata and keystore do not agree")
+    return delegate
+
+
+def rpc_hex(value: bytes) -> str:
+    encoded = value.hex()
+    return encoded if encoded.startswith("0x") else f"0x{encoded}"
+
+
+def transaction_parameters(rpc_url: str, transaction: dict[str, Any]) -> dict[str, Any]:
+    delegate = transaction["from"]
+    simulation = rpc(rpc_url, "eth_call", [transaction, "latest"], 490)
+    if not isinstance(simulation, str) or not simulation.startswith("0x"):
+        raise GuardError("transaction simulation returned invalid data")
+    estimated = int(str(rpc(rpc_url, "eth_estimateGas", [transaction], 491)), 16)
+    gas = estimated + max(estimated // 5, 10_000)
+    if gas > MAX_GAS_LIMIT:
+        raise GuardError("estimated gas exceeds the local delegate cap")
+    latest = rpc(rpc_url, "eth_getBlockByNumber", ["latest", False], 492)
+    if not isinstance(latest, dict) or "baseFeePerGas" not in latest:
+        raise GuardError("Base RPC omitted the latest base fee")
+    base_fee = int(str(latest["baseFeePerGas"]), 16)
+    try:
+        priority_fee = int(str(rpc(rpc_url, "eth_maxPriorityFeePerGas", [], 493)), 16)
+    except GuardError:
+        gas_price = int(str(rpc(rpc_url, "eth_gasPrice", [], 494)), 16)
+        priority_fee = max(gas_price - base_fee, 100_000)
+    max_fee = base_fee * 2 + priority_fee
+    if max_fee > MAX_FEE_PER_GAS_WEI or gas * max_fee > MAX_TOTAL_GAS_WEI:
+        raise GuardError("estimated Base gas cost exceeds the local delegate cap")
+    balance = int(str(rpc(rpc_url, "eth_getBalance", [delegate, "latest"], 495)), 16)
+    if balance < gas * max_fee:
+        raise GuardError("delegate needs more Base ETH for gas")
+    nonce = int(str(rpc(rpc_url, "eth_getTransactionCount", [delegate, "pending"], 496)), 16)
+    return {
+        "chainId": CHAIN_ID,
+        "from": to_checksum_address(delegate),
+        "to": to_checksum_address(transaction["to"]),
+        "data": transaction["data"],
+        "value": 0,
+        "nonce": nonce,
+        "gas": gas,
+        "maxFeePerGas": max_fee,
+        "maxPriorityFeePerGas": priority_fee,
+        "type": 2,
+    }
 
 
 def load_object(path: Path) -> dict[str, Any]:
@@ -526,6 +637,10 @@ def exclusive_guard(state_dir: Path) -> Iterator[None]:
 
 
 def sign_transaction(state_dir: Path, delegate: str, prepared: dict[str, Any]):
+    # Import only at execution time: this helper owns the reviewed Windows-DPAPI
+    # implementation, while pure policy tests remain platform independent.
+    from local_delegate_wallet import unprotect_secret
+
     keystore = read_json(state_dir / KEYSTORE)
     password = bytearray(unprotect_secret(require_private_file(state_dir / DPAPI_BLOB)))
     private_key = bytearray()
