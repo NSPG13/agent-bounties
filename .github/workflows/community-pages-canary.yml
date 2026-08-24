@@ -27,13 +27,14 @@ jobs:
             nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-${attempt}-$(date +%s)"
             args=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache")
             if curl "${args[@]}" "https://agentbounties.app/?verify=${nonce}" -o /tmp/home.html \
-              && curl "${args[@]}" "https://agentbounties.app/solarpunk.css?v=13&verify=${nonce}" -o /tmp/site.css \
+              && curl "${args[@]}" "https://agentbounties.app/solarpunk.css?v=14&verify=${nonce}" -o /tmp/site.css \
               && curl "${args[@]}" "https://agentbounties.app/llms.txt?verify=${nonce}" -o /tmp/llms.txt \
               && curl "${args[@]}" "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/discovery.json \
               && curl "${args[@]}" "https://agentbounties.app/schemas/discovery-manifest.v2.json?verify=${nonce}" -o /tmp/schema.json \
               && curl "${args[@]}" "https://agentbounties.app/protocol.json?verify=${nonce}" -o /tmp/protocol.json \
-              && grep -q 'solarpunk.css?v=13' /tmp/home.html \
+              && grep -q 'solarpunk.css?v=14' /tmp/home.html \
               && grep -q 'id="post-a-bounty"' /tmp/home.html \
+              && grep -q 'class="metric-market"' /tmp/home.html \
               && grep -q 'cursor: pointer' /tmp/site.css \
               && grep -q 'server/discover' /tmp/llms.txt \
               && ! grep -q 'earn.html' /tmp/llms.txt \
@@ -42,12 +43,17 @@ jobs:
           discovery = json.load(open('/tmp/discovery.json', encoding='utf-8'))
           schema = json.load(open('/tmp/schema.json', encoding='utf-8'))
           protocol = json.load(open('/tmp/protocol.json', encoding='utf-8'))
+          home = open('/tmp/home.html', encoding='utf-8').read()
           expected = 'https://agentbounties.app/schemas/discovery-manifest.v2.json'
           assert discovery['schema'] == expected
           assert schema['$id'] == expected
           assert discovery['default_cta']['href'] == 'https://agentbounties.app/#post-a-bounty'
           assert protocol['status'] == 'active'
           assert protocol['chain_id'] == 8453
+          header = home[home.index('<header class="scene-header">'):home.index('</header>')]
+          metrics = home[home.index('<section class="market-proof"'):home.index('</section>', home.index('<section class="market-proof"'))]
+          assert 'data-market-volume' not in header
+          assert 'data-market-volume' in metrics
           PY
             then
               removed_ok=true
