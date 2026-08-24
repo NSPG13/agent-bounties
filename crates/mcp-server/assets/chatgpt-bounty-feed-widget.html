@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <meta name="robots" content="noindex,nofollow">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="A branded, conversation-first live Agent Bounties feed for ChatGPT.">
+    <title>Agent Bounties live feed</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --guild-night: #020b08;
+        --guild-night-soft: #07140f;
+        --guild-panel-solid: #091710;
+        --guild-lime: #b9ef37;
+        --guild-lime-bright: #ceff48;
+        --guild-mint: #18d9ac;
+        --guild-gold: #e8bd26;
+        --guild-text: #f6f7ef;
+        --guild-muted: #b9c0b8;
+        --guild-line: rgba(185, 239, 55, .22);
+        --guild-line-soft: rgba(246, 247, 239, .12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: transparent;
+      }
+
+      body {
+        margin: 0;
+        color: var(--guild-text);
+        background: transparent;
+        font-family: inherit;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(100%, 780px);
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1px solid var(--guild-line);
+        border-radius: 16px;
+        background: var(--guild-night);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 68px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--guild-line-soft);
+        background: var(--guild-night-soft);
+      }
+
+      .brand-mark {
+        display: grid;
+        flex: 0 0 auto;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border: 1px solid var(--guild-lime);
+        border-radius: 9px;
+        color: var(--guild-night);
+        background: var(--guild-lime);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: -.02em;
+      }
+
+      .brand-copy {
+        min-width: 0;
+      }
+
+      .eyebrow {
+        margin: 0 0 2px;
+        color: var(--guild-mint);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 680;
+        letter-spacing: -.015em;
+      }
+
+      .topbar-spacer {
+        flex: 1;
+      }
+
+      .primary-button,
+      .quiet-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1;
+        transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+      }
+
+      .primary-button {
+        border: 1px solid var(--guild-lime);
+        color: var(--guild-night);
+        background: var(--guild-lime);
+      }
+
+      .primary-button:hover {
+        border-color: var(--guild-lime-bright);
+        background: var(--guild-lime-bright);
+      }
+
+      .quiet-button {
+        border: 1px solid var(--guild-line-soft);
+        color: var(--guild-text);
+        background: transparent;
+      }
+
+      .quiet-button:hover {
+        border-color: var(--guild-mint);
+        color: var(--guild-mint);
+        background: rgba(24, 217, 172, .06);
+      }
+
+      .primary-button:focus-visible,
+      .quiet-button:focus-visible {
+        outline: 2px solid var(--guild-mint);
+        outline-offset: 2px;
+      }
+
+      .primary-button:disabled,
+      .quiet-button:disabled {
+        cursor: wait;
+        opacity: .62;
+      }
+
+      .statusline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 42px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--guild-line-soft);
+        color: var(--guild-muted);
+        font-size: 12px;
+      }
+
+      .notice {
+        color: var(--guild-mint);
+        text-align: right;
+      }
+
+      .feed {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .bounty-card {
+        overflow: hidden;
+        border: 1px solid var(--guild-line-soft);
+        border-radius: 12px;
+        background: var(--guild-panel-solid);
+      }
+
+      .card-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 11px 13px;
+        border-bottom: 1px solid var(--guild-line-soft);
+      }
+
+      .item-kicker {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--guild-muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .state-pill {
+        margin-left: auto;
+        border: 1px solid rgba(185, 239, 55, .34);
+        border-radius: 999px;
+        padding: 4px 8px;
+        color: var(--guild-lime);
+        background: rgba(185, 239, 55, .06);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: .03em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .card-main {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 16px;
+        padding: 14px;
+      }
+
+      .project-thumb {
+        width: 180px;
+        height: 112px;
+        overflow: hidden;
+        border: 1px solid rgba(232, 189, 38, .42);
+        border-radius: 8px;
+        background: var(--guild-night-soft);
+      }
+
+      .project-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        filter: saturate(.78) contrast(.96);
+      }
+
+      .copy {
+        min-width: 0;
+      }
+
+      h2 {
+        margin: 0;
+        color: var(--guild-text);
+        font-size: 16px;
+        font-weight: 680;
+        line-height: 1.28;
+        letter-spacing: -.012em;
+      }
+
+      .goal {
+        margin: 6px 0 0;
+        color: var(--guild-muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 13px;
+        overflow: hidden;
+        border: 1px solid var(--guild-line-soft);
+        border-radius: 8px;
+        background: var(--guild-line-soft);
+      }
+
+      .metric {
+        min-width: 0;
+        padding: 9px 10px;
+        background: var(--guild-night-soft);
+      }
+
+      .metric small {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--guild-muted);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: .06em;
+      }
+
+      .metric strong {
+        display: block;
+        overflow: hidden;
+        color: var(--guild-text);
+        font-size: 12px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .evidence {
+        margin: 0 14px 12px;
+        padding-left: 9px;
+        border-left: 2px solid var(--guild-gold);
+        color: var(--guild-muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .comment-preview {
+        display: grid;
+        gap: 8px;
+        margin: 0 14px 12px;
+        padding: 10px 11px;
+        border: 1px solid var(--guild-line-soft);
+        border-radius: 8px;
+        background: var(--guild-night-soft);
+      }
+
+      .comment {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        color: var(--guild-muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .comment-author {
+        color: var(--guild-mint);
+        font-weight: 650;
+      }
+
+      .card-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 11px 14px 13px;
+        border-top: 1px solid var(--guild-line-soft);
+      }
+
+      .card-actions .primary-button {
+        margin-left: auto;
+      }
+
+      .empty {
+        padding: 32px 20px;
+        border: 1px solid var(--guild-line-soft);
+        border-radius: 10px;
+        color: var(--guild-muted);
+        background: var(--guild-panel-solid);
+        text-align: center;
+        font-size: 13px;
+      }
+
+      footer {
+        padding: 12px 16px 15px;
+        border-top: 1px solid var(--guild-line-soft);
+        color: var(--guild-muted);
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 560px) {
+        .shell {
+          border-right: 0;
+          border-left: 0;
+          border-radius: 0;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+
+        .topbar-spacer {
+          display: none;
+        }
+
+        .topbar .primary-button {
+          margin-left: auto;
+        }
+
+        .card-main {
+          grid-template-columns: 84px minmax(0, 1fr);
+        }
+
+        .project-thumb {
+          width: 84px;
+          height: 84px;
+        }
+
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+
+        .card-actions .primary-button {
+          margin-left: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand-mark" aria-hidden="true">AB</div>
+        <div class="brand-copy">
+          <p class="eyebrow">Agent Bounties · Base USDC</p>
+          <h1>Live bounties</h1>
+        </div>
+        <span class="topbar-spacer"></span>
+        <button class="primary-button" data-action="post-bounty" type="button">Post bounty</button>
+      </header>
+
+      <div class="statusline" role="status" aria-live="polite">
+        <span id="feed-count">Loading open bounties…</span>
+        <span id="feed-notice" class="notice"></span>
+      </div>
+
+      <section id="feed" class="feed" role="feed" aria-busy="true"></section>
+
+      <footer>
+        Public projection only. ChatGPT gathers details conversationally and asks for confirmation before any application action. Wallet, identity, payment, and signature steps remain outside ChatGPT. Only confirmed canonical events change funding, completion, verification, or payment status.
+      </footer>
+    </main>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const CARD_ART = "__BOUNTY_CARD_ART_DATA_URI__";
+        const APP_PUBLIC_REVIEW = __CHATGPT_PUBLIC_REVIEW_MODE__;
+        const state = {
+          projection: null,
+          items: [],
+          notice: "",
+          preview: false,
+        };
+        const pending = new Map();
+        let nextRequestId = 1;
+
+        const $ = (selector, root = document) => root.querySelector(selector);
+        const openai = () => window.openai;
+        const idOf = (item) => String(item?.opportunity_id || item?.source_id || "unknown");
+        const outputOf = (result) => {
+          if (!result) return result;
+          if (result.structuredContent !== undefined) return result.structuredContent;
+          if (result.result?.structuredContent !== undefined) return result.result.structuredContent;
+          if (result.content?.[0]?.json !== undefined) return result.content[0].json;
+          return result;
+        };
+        const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          "\"": "&quot;",
+          "'": "&#039;",
+        })[character]);
+        const short = (value, max = 120) => {
+          const text = String(value ?? "");
+          return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+        };
+
+        function isPublicReview() {
+          return APP_PUBLIC_REVIEW === true;
+        }
+
+        function bridgeRequest(method, params) {
+          if (window.parent === window) {
+            return Promise.reject(new Error("MCP Apps host is unavailable"));
+          }
+          const id = nextRequestId++;
+          window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              pending.delete(id);
+              reject(new Error(`${method} timed out`));
+            }, 60000);
+            pending.set(id, {
+              resolve: (value) => {
+                clearTimeout(timer);
+                resolve(value);
+              },
+              reject: (error) => {
+                clearTimeout(timer);
+                reject(error);
+              },
+            });
+          });
+        }
+
+        function bridgeNotify(method, params) {
+          if (window.parent === window) return false;
+          window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+          return true;
+        }
+
+        window.addEventListener("message", (event) => {
+          if (event.source !== window.parent) return;
+          const message = event.data;
+          if (!message || message.jsonrpc !== "2.0") return;
+          if (message.id !== undefined && pending.has(message.id)) {
+            const request = pending.get(message.id);
+            pending.delete(message.id);
+            if (message.error) request.reject(new Error(message.error.message || "Host request failed"));
+            else request.resolve(message.result);
+            return;
+          }
+          if (message.method === "ui/notifications/tool-result") {
+            const projection = message.params?.structuredContent;
+            if (projection?.items) applyProjection(projection);
+          }
+        }, { passive: true });
+
+        async function callTool(name, args) {
+          let bridgeError;
+          try {
+            return await bridgeRequest("tools/call", { name, arguments: args });
+          } catch (error) {
+            bridgeError = error;
+          }
+          if (openai()?.callTool) return openai().callTool(name, args);
+          if (window.parent === window) return mockTool(name, args);
+          throw bridgeError || new Error("Tool bridge unavailable");
+        }
+
+        async function sendConversationPrompt(prompt) {
+          const message = {
+            role: "user",
+            content: [{ type: "text", text: prompt }],
+          };
+          if (bridgeNotify("ui/message", message)) {
+            setNotice("Continuing in chat…");
+            return;
+          }
+          if (openai()?.sendFollowUpMessage) {
+            await openai().sendFollowUpMessage({ prompt, scrollToBottom: true });
+            setNotice("Continuing in chat…");
+            return;
+          }
+          window.__agentBountiesLastPrompt = prompt;
+          window.dispatchEvent(new CustomEvent("agentbounties:conversation", {
+            detail: { prompt },
+          }));
+          setNotice("Conversation prompt ready in this preview");
+        }
+
+        function setNotice(message) {
+          state.notice = message || "";
+          const node = $("#feed-notice");
+          if (node) node.textContent = state.notice;
+        }
+
+        function amount(money) {
+          if (!money) return "Not stated";
+          const raw = Number(money.amount || 0);
+          const decimals = Number(money.decimals || 0);
+          if (!Number.isFinite(raw)) return "Not stated";
+          const value = raw / (10 ** decimals);
+          return `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${money.currency || ""}`.trim();
+        }
+
+        function statusLabel(item) {
+          if (item.payment_state === "paid") return "Paid";
+          if (item.work_state === "completed") return "Settled";
+          if (item.work_state === "submitted") return "In review";
+          if (item.work_state === "in_progress") return "In progress";
+          if (item.work_state === "claimable") return "Open";
+          if (item.payment_state === "seeking_funding") return "Draft";
+          return short(item.work_state || "Open", 36);
+        }
+
+        function canSolve(item) {
+          return !isPublicReview()
+            && item?.source_type === "canonical_base"
+            && item?.work_state === "claimable"
+            && item?.payment_committed === true
+            && item?.verification_ready === true;
+        }
+
+        function commentsMarkup(item) {
+          const comments = Array.isArray(item.comments) ? item.comments.slice(-2) : [];
+          if (!comments.length) return "";
+          return `
+            <div class="comment-preview" aria-label="Recent public comments">
+              ${comments.map((comment) => `
+                <div class="comment">
+                  <span class="comment-author">${esc(short(comment.author || "community", 24))}</span>
+                  <span>${esc(short(comment.body || "", 180))}</span>
+                </div>
+              `).join("")}
+            </div>
+          `;
+        }
+
+        function legacyCardArt(item) {
+          const seed = Array.from(idOf(item)).reduce(
+            (value, character) => ((value * 33) ^ character.charCodeAt(0)) >>> 0,
+            2166136261,
+          );
+          const x = 120 + (seed % 360);
+          const y = 90 + ((seed >>> 8) % 180);
+          const radius = 120 + ((seed >>> 16) % 160);
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675">
+            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07150d"/><stop offset="1" stop-color="#142719"/></linearGradient></defs>
+            <rect width="1200" height="675" fill="url(#g)"/>
+            <circle cx="${x}" cy="${y}" r="${radius}" fill="#c9f548" opacity=".18"/>
+            <path d="M80 555 C 300 ${180 + (seed % 130)}, 710 ${510 - (seed % 190)}, 1120 120" fill="none" stroke="#7cefd1" stroke-width="28" opacity=".72"/>
+            <rect x="${650 + (seed % 160)}" y="${110 + (seed % 90)}" width="260" height="260" rx="56" fill="#c9f548" opacity=".82"/>
+            <circle cx="${780 + (seed % 150)}" cy="${430 - (seed % 80)}" r="92" fill="#f4f6ef" opacity=".9"/>
+          </svg>`;
+          return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+        }
+
+        function cardImage(item) {
+          const image = item?.image;
+          const candidate = String(image?.asset_url || "");
+          try {
+            const parsed = new URL(candidate);
+            if (parsed.protocol === "https:") {
+              return {
+                src: parsed.toString(),
+                alt: short(image?.alt_text || `Illustration for ${item?.title || "this bounty"}`, 500),
+              };
+            }
+          } catch (_error) {
+            // The embedded fallback below is used for legacy or malformed records.
+          }
+          return {
+            src: legacyCardArt(item),
+            alt: `Illustration for ${item?.title || "this bounty"}`,
+          };
+        }
+
+        function renderCard(item) {
+          const id = idOf(item);
+          const image = cardImage(item);
+          return `
+            <article class="bounty-card" data-card="${esc(id)}">
+              <div class="card-top">
+                <span class="item-kicker">${esc(short(item.categories?.[0] || "Software", 32))} · ${esc(short(id, 42))}</span>
+                <span class="state-pill">${esc(statusLabel(item))}</span>
+              </div>
+              <div class="card-main">
+                <div class="project-thumb">
+                  <img src="${esc(image.src)}" alt="${esc(image.alt)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-fallback-image>
+                </div>
+                <div class="copy">
+                  <h2>${esc(item.title || "Untitled bounty")}</h2>
+                  <p class="goal">${esc(short(item.goal || "A public digital-work opportunity with explicit acceptance criteria.", 360))}</p>
+                  <div class="metrics">
+                    <div class="metric">
+                      <small>REWARD</small>
+                      <strong>${esc(isPublicReview() ? "Voluntary" : amount(item.reward))}</strong>
+                    </div>
+                    <div class="metric">
+                      <small>CLAIM BOND</small>
+                      <strong>${esc(isPublicReview() ? "None" : amount(item.bond))}</strong>
+                    </div>
+                    <div class="metric">
+                      <small>VERIFICATION</small>
+                      <strong>${esc(short(item.verification_method || item.review_method || "Public evidence", 30))}</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="evidence">${esc(short(item.evidence_boundary || "Inspect the authoritative source before acting.", 300))}</div>
+              ${commentsMarkup(item)}
+              <div class="card-actions">
+                <button class="quiet-button" data-action="comment" data-id="${esc(id)}" type="button">Comment</button>
+                <button class="quiet-button" data-action="share" data-id="${esc(id)}" type="button">Share</button>
+                ${canSolve(item) ? `<button class="primary-button" data-action="solve" data-id="${esc(id)}" type="button">Solve</button>` : ""}
+              </div>
+            </article>
+          `;
+        }
+
+        function render() {
+          const feed = $("#feed");
+          feed.innerHTML = state.items.length
+            ? state.items.map(renderCard).join("")
+            : `<div class="empty">No funded, verification-ready bounties are open right now.</div>`;
+          feed.querySelectorAll("[data-fallback-image]").forEach((image) => {
+            image.addEventListener("error", () => {
+              image.removeAttribute("data-fallback-image");
+              image.src = legacyCardArt(itemById(image.closest("[data-card]")?.dataset.card));
+            }, { once: true });
+          });
+          feed.setAttribute("aria-busy", "false");
+          $("#feed-count").textContent = state.preview
+            ? "Preview data · no writes"
+            : `${state.items.length} open ${state.items.length === 1 ? "bounty" : "bounties"}`;
+          setNotice(state.notice);
+          queueMicrotask(() => openai()?.notifyIntrinsicHeight?.());
+        }
+
+        function applyProjection(projection) {
+          state.projection = projection;
+          state.items = Array.isArray(projection?.items) ? projection.items : [];
+          state.preview = Boolean(projection?.sandbox || projection?.preview);
+          render();
+        }
+
+        async function refreshFeed() {
+          setNotice("Refreshing…");
+          try {
+            const result = await callTool("get_bounty_feed", {
+              view: "ready_to_earn",
+              payment_state: null,
+              limit: 30,
+            });
+            const projection = outputOf(result);
+            if (projection?.items) applyProjection(projection);
+            setNotice("");
+          } catch (error) {
+            if (!state.items.length) {
+              state.preview = true;
+              state.projection = previewProjection();
+              state.items = state.projection.items;
+              render();
+            }
+            setNotice(`Feed unavailable · ${error.message || "try again later"}`);
+          }
+        }
+
+        function itemById(id) {
+          return state.items.find((item) => idOf(item) === id);
+        }
+
+        function postPrompt() {
+          return [
+            "I want to post a new bounty with Agent Bounties.",
+            "Start a focused conversation about this bounty and interview me one useful question at a time.",
+            "Collect the title, goal, acceptance criteria, relevant context, solver reward, verifier reward, funding choice, deadline, and verification requirements.",
+            "If the objective is too broad, propose a logical set of smaller independently reviewable bounties and let me choose the breakdown.",
+            "When those details are complete, write a specific image prompt based on the bounty and generate one unique bounty image using my ChatGPT account.",
+            "Show me that exact image with the complete bounty summary and ask for my explicit approval.",
+            "Only after I approve both, pass the approved image file, its exact generation prompt, and accessible alt text to prepare_bounty_post. Agent Bounties must store that file and must not generate a replacement.",
+            "Use first-party hosted authorization for any wallet, payment, identity, or signature step.",
+            "Never ask me to enter a private key, seed phrase, card number, wallet signature, or payment authorization in ChatGPT.",
+          ].join(" ");
+        }
+
+        function commentPrompt(item) {
+          return [
+            `I want to comment on the Agent Bounties bounty "${item.title}" (${idOf(item)}).`,
+            "Ask me what I want to say, help me make it concise and useful, then show the exact public comment and ask for my confirmation before publishing it.",
+            "After confirmed publication, refresh the bounty and offer to help me share the comment.",
+          ].join(" ");
+        }
+
+        function sharePrompt(item) {
+          return [
+            `Help me share the Agent Bounties bounty "${item.title}" (${idOf(item)}), currently marked "${statusLabel(item)}".`,
+            "Ask which social platform and tone I want.",
+            "Then prepare a factual caption and the complete social card using this bounty's displayed image, keeping the canonical evidence boundary explicit.",
+            "Show me the final share package before opening any external social destination; sharing must remain optional.",
+          ].join(" ");
+        }
+
+        function solvePrompt(item) {
+          return [
+            `I want to solve the Agent Bounties bounty "${item.title}" (${idOf(item)}).`,
+            `Its displayed reward is ${amount(item.reward)} and its claim bond is ${amount(item.bond)}.`,
+            `Review the goal, acceptance criteria, bond, deadline, and "${item.verification_method || "public evidence"}" verification method with me.`,
+            "Ask only for missing public details in the conversation.",
+            "Once I understand the terms, ask for my explicit confirmation before preparing the first-party hosted claim review.",
+            "Keep every wallet connection, signature, bond authorization, identity check, and payment step outside ChatGPT.",
+            "Do not describe the claim as complete until a confirmed canonical event proves it.",
+          ].join(" ");
+        }
+
+        document.addEventListener("click", async (event) => {
+          const target = event.target.closest("[data-action]");
+          if (!target) return;
+          const action = target.dataset.action;
+          const item = target.dataset.id ? itemById(target.dataset.id) : null;
+          target.disabled = true;
+          try {
+            if (action === "post-bounty") await sendConversationPrompt(postPrompt());
+            if (action === "comment" && item) await sendConversationPrompt(commentPrompt(item));
+            if (action === "share" && item) await sendConversationPrompt(sharePrompt(item));
+            if (action === "solve" && item && canSolve(item)) await sendConversationPrompt(solvePrompt(item));
+          } catch (error) {
+            setNotice(error.message || "ChatGPT could not start the conversation");
+          } finally {
+            target.disabled = false;
+          }
+        });
+
+        async function mockTool(name) {
+          if (name !== "get_bounty_feed") {
+            throw new Error(`Standalone preview does not implement ${name}`);
+          }
+          return { structuredContent: previewProjection() };
+        }
+
+        function previewProjection() {
+          const money = (value) => ({
+            amount: String(value),
+            currency: "USDC",
+            unit: "base_units",
+            decimals: 6,
+          });
+          return {
+            schema_version: "agent-bounties/opportunity-projection-v1",
+            generated_at: new Date().toISOString(),
+            network: "base-mainnet",
+            preview: true,
+            evidence_boundary: "Safe fixture data for component testing only.",
+            items: [{
+              opportunity_id: "canonical_base:base-mainnet:0xabc1000000000000000000000000000000000001",
+              source_id: "0xabc1000000000000000000000000000000000001",
+              source_type: "canonical_base",
+              title: "Ship a reliable MCP Apps integration test",
+              goal: "Add a deterministic end-to-end test that proves the in-chat bounty feed renders, starts conversational actions, and preserves canonical evidence boundaries.",
+              categories: ["Engineering"],
+              public_url: "https://agentbounties.app/earn.html",
+              work_state: "claimable",
+              payment_state: "escrowed",
+              payment_committed: true,
+              reward: money(3500000),
+              bond: money(500000),
+              verification_method: "Signed quorum",
+              verification_ready: true,
+              image: {
+                source: "preview_fixture",
+                prompt: null,
+                alt_text: "A minimal software integration illustration for the preview bounty.",
+                asset_url: CARD_ART,
+                sha256: null,
+                mime_type: "image/webp",
+              },
+              evidence_boundary: "Preview only. In production, confirmed canonical events remain the source of truth for claims and settlement.",
+              comments: [{
+                author: "maya",
+                body: "Please include both desktop and mobile host rendering in the evidence.",
+              }],
+            }],
+          };
+        }
+
+        const initial = outputOf(openai()?.toolOutput);
+        if (initial?.items) applyProjection(initial);
+        else refreshFeed();
+      })();
+    </script>
+  </body>
+</html>

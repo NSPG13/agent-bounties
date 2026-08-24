@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <meta name="robots" content="noindex,nofollow">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Preview and download a social-ready Agent Bounties update.">
+    <title>Agent Bounties image preview</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --night: #020b08;
+        --panel: #091710;
+        --line: rgba(185, 239, 55, .28);
+        --lime: #b9ef37;
+        --mint: #18d9ac;
+        --gold: #e8bd26;
+        --text: #f6f7ef;
+        --muted: #b9c0b8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        padding: clamp(18px, 4vw, 44px);
+        color: var(--text);
+        background: var(--night);
+      }
+      main { width: min(100%, 1040px); margin: 0 auto; }
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--mint);
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+      }
+      h1 { margin: 0; font-size: clamp(28px, 5vw, 52px); line-height: 1; letter-spacing: -.04em; }
+      .lede { max-width: 720px; margin: 14px 0 0; color: var(--muted); line-height: 1.55; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0; }
+      button, a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 10px 17px;
+        color: var(--text);
+        background: rgba(255, 255, 255, .035);
+        font: inherit;
+        font-weight: 850;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .primary { border-color: var(--lime); color: #07120c; background: var(--lime); }
+      button:focus-visible, a:focus-visible { outline: 3px solid var(--mint); outline-offset: 3px; }
+      button:disabled { cursor: wait; opacity: .58; }
+      .stage {
+        display: grid;
+        grid-template-columns: minmax(0, 720px) minmax(240px, 1fr);
+        gap: 24px;
+        align-items: start;
+      }
+      .preview {
+        width: 100%;
+        min-height: 300px;
+        border: 1px solid rgba(232, 189, 38, .5);
+        border-radius: 26px;
+        background: var(--panel);
+        box-shadow: 0 28px 90px rgba(0, 0, 0, .42);
+      }
+      .details {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(9, 23, 16, .92);
+      }
+      .details h2 { margin: 0 0 12px; font-size: 17px; }
+      .details p { margin: 0 0 14px; color: var(--muted); line-height: 1.5; }
+      .caption {
+        overflow-wrap: anywhere;
+        padding: 13px;
+        border-radius: 12px;
+        color: var(--text);
+        background: rgba(0, 0, 0, .28);
+        font-size: 13px;
+      }
+      .status { min-height: 22px; color: var(--mint); font-weight: 800; }
+      canvas { display: none; }
+      @media (max-width: 760px) {
+        .stage { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">First-party share handoff</p>
+      <h1>Bounty image preview</h1>
+      <p class="lede">
+        Review the full-resolution social card, then explicitly download it.
+        No wallet, signature, social post, purchase, or payment authorization occurs on this page.
+      </p>
+      <div class="actions">
+        <a id="download" class="primary" aria-disabled="true">Preparing PNG…</a>
+        <button id="copy" type="button">Copy caption</button>
+        <a id="bounty-link" hidden rel="noopener noreferrer">Open public bounty</a>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite">Generating the 1080 × 1350 PNG locally in this browser…</p>
+      <section class="stage">
+        <img id="preview" class="preview" alt="Agent Bounties social image preview">
+        <aside class="details">
+          <h2>Share safely</h2>
+          <p>Download the image, copy the factual caption, and attach both in the social app you choose. Sharing remains optional.</p>
+          <p id="caption" class="caption"></p>
+          <p>Canonical events—not this image, a caption, a transaction hash, or an AI output—remain the source of truth for lifecycle and payment status.</p>
+        </aside>
+      </section>
+      <canvas id="canvas" width="1080" height="1350" aria-hidden="true"></canvas>
+    </main>
+    <script>
+      (() => {
+        "use strict";
+
+        const CARD_ART = "__BOUNTY_CARD_ART_DATA_URI__";
+        const params = new URLSearchParams(window.location.search);
+        const bounded = (name, fallback, max) => String(params.get(name) || fallback).trim().slice(0, max);
+        const title = bounded("title", "Agent Bounties opportunity", 200);
+        const goal = bounded("goal", "A public digital-work opportunity.", 560);
+        const status = bounded("status", "open", 80);
+        const reward = bounded("reward", "Reward not stated", 80);
+        const caption = bounded("caption", `${status}: ${title}.`, 900);
+        const identifier = bounded("id", "bounty", 96);
+        const publicReview = params.get("public_review") === "1";
+        const publicUrl = bounded("url", "", 1000);
+        const canvas = document.getElementById("canvas");
+        const context = canvas.getContext("2d");
+        const preview = document.getElementById("preview");
+        const download = document.getElementById("download");
+        const copy = document.getElementById("copy");
+        const statusNode = document.getElementById("status");
+        const captionNode = document.getElementById("caption");
+        const bountyLink = document.getElementById("bounty-link");
+        let imageUrl = "";
+
+        document.title = `${title} · Agent Bounties card`;
+        preview.alt = `${title} social card preview`;
+        captionNode.textContent = caption;
+
+        try {
+          const parsedPublicUrl = new URL(publicUrl);
+          if (parsedPublicUrl.protocol === "https:") {
+            bountyLink.href = parsedPublicUrl.toString();
+            bountyLink.hidden = false;
+          }
+        } catch (error) {
+          // The public bounty link is optional; malformed input is ignored.
+        }
+
+        function roundRect(x, y, width, height, radius) {
+          context.beginPath();
+          context.roundRect(x, y, width, height, radius);
+        }
+
+        function wrapText(text, x, y, maxWidth, lineHeight, maxLines) {
+          const words = String(text || "").split(/\s+/);
+          let line = "";
+          let lineNumber = 0;
+          for (let index = 0; index < words.length; index += 1) {
+            const candidate = line ? `${line} ${words[index]}` : words[index];
+            if (context.measureText(candidate).width > maxWidth && line) {
+              context.fillText(line, x, y + (lineNumber * lineHeight));
+              lineNumber += 1;
+              line = words[index];
+              if (lineNumber >= maxLines - 1) {
+                let clipped = [line, ...words.slice(index + 1)].join(" ");
+                while (context.measureText(`${clipped}…`).width > maxWidth && clipped.length > 1) {
+                  clipped = clipped.slice(0, -1);
+                }
+                context.fillText(`${clipped}…`, x, y + (lineNumber * lineHeight));
+                return y + ((lineNumber + 1) * lineHeight);
+              }
+            } else {
+              line = candidate;
+            }
+          }
+          if (line) context.fillText(line, x, y + (lineNumber * lineHeight));
+          return y + ((lineNumber + 1) * lineHeight);
+        }
+
+        async function renderCard() {
+          const image = new Image();
+          image.src = CARD_ART;
+          await image.decode();
+          context.fillStyle = "#020b08";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.fillStyle = "#091710";
+          roundRect(48, 48, 984, 1254, 32);
+          context.fill();
+          context.strokeStyle = "rgba(185, 239, 55, .28)";
+          context.lineWidth = 2;
+          context.stroke();
+
+          context.fillStyle = "#b9ef37";
+          roundRect(84, 84, 56, 56, 12);
+          context.fill();
+          context.fillStyle = "#020b08";
+          context.font = "700 22px system-ui";
+          context.textAlign = "center";
+          context.fillText("AB", 112, 121);
+          context.textAlign = "left";
+          context.fillStyle = "#f6f7ef";
+          context.font = "650 28px system-ui";
+          context.fillText("Agent Bounties", 160, 108);
+          context.fillStyle = "#b9c0b8";
+          context.font = "500 20px system-ui";
+          context.fillText("Public work · Base USDC", 160, 137);
+
+          const statusText = status.toUpperCase();
+          context.font = "650 20px system-ui";
+          const statusWidth = Math.min(context.measureText(statusText).width + 34, 350);
+          context.fillStyle = "#07140f";
+          roundRect(996 - statusWidth, 91, statusWidth, 40, 20);
+          context.fill();
+          context.fillStyle = "#b9ef37";
+          context.textAlign = "center";
+          context.fillText(statusText, 996 - (statusWidth / 2), 118);
+          context.textAlign = "left";
+
+          context.strokeStyle = "rgba(246, 247, 239, .12)";
+          context.lineWidth = 2;
+          context.beginPath();
+          context.moveTo(84, 174);
+          context.lineTo(996, 174);
+          context.stroke();
+
+          context.fillStyle = "#18d9ac";
+          context.font = "600 22px system-ui";
+          context.fillText(publicReview ? "VOLUNTARY REQUEST" : "BOUNTY", 84, 226);
+          context.fillStyle = "#f6f7ef";
+          context.font = "650 64px system-ui";
+          const titleBottom = wrapText(title, 84, 302, 912, 72, 4);
+          context.fillStyle = "#b9c0b8";
+          context.font = "400 31px system-ui";
+          const goalBottom = wrapText(goal, 84, titleBottom + 32, 912, 44, 5);
+
+          const detailY = Math.max(820, Math.min(goalBottom + 58, 900));
+          context.fillStyle = "#07140f";
+          roundRect(84, detailY, 912, 178, 18);
+          context.fill();
+          context.strokeStyle = "rgba(246, 247, 239, .12)";
+          context.lineWidth = 2;
+          context.stroke();
+          context.fillStyle = "#b9c0b8";
+          context.font = "600 18px system-ui";
+          context.fillText(publicReview ? "ACCESS" : "REWARD", 112, detailY + 50);
+          context.fillText("STATUS", 560, detailY + 50);
+          context.fillStyle = "#f6f7ef";
+          context.font = "650 32px system-ui";
+          context.fillText(publicReview ? "Voluntary" : reward, 112, detailY + 101);
+          context.fillText(status, 560, detailY + 101);
+          context.fillStyle = "#b9c0b8";
+          context.font = "500 18px system-ui";
+          context.fillText(`Reference · ${identifier.slice(0, 64)}`, 112, detailY + 145);
+
+          const footerY = 1110;
+          context.save();
+          roundRect(84, footerY, 92, 92, 12);
+          context.clip();
+          context.filter = "grayscale(30%) saturate(65%)";
+          const scale = Math.max(92 / image.width, 92 / image.height);
+          const width = image.width * scale;
+          const height = image.height * scale;
+          context.drawImage(image, 84 + ((92 - width) / 2), footerY + ((92 - height) / 2), width, height);
+          context.restore();
+          context.fillStyle = "#f6f7ef";
+          context.font = "600 22px system-ui";
+          context.fillText("Evidence boundary", 200, footerY + 29);
+          context.fillStyle = "#b9c0b8";
+          context.font = "500 20px system-ui";
+          wrapText(
+            publicReview
+              ? "Community request · no payment promise."
+              : "Canonical events remain the payment evidence boundary.",
+            200,
+            footerY + 64,
+            796,
+            30,
+            2,
+          );
+          context.strokeStyle = "#e8bd26";
+          context.lineWidth = 6;
+          context.beginPath();
+          context.moveTo(84, 1250);
+          context.lineTo(996, 1250);
+          context.stroke();
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+          if (!blob) throw new Error("PNG encoding failed.");
+          imageUrl = URL.createObjectURL(blob);
+          preview.src = imageUrl;
+          download.href = imageUrl;
+          download.download = `agent-bounty-${identifier.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 48)}.png`;
+          download.removeAttribute("aria-disabled");
+          download.textContent = "Download PNG";
+          statusNode.textContent = "Card ready. Downloading requires your explicit click.";
+        }
+
+        copy.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(caption);
+            statusNode.textContent = "Caption copied.";
+          } catch (error) {
+            statusNode.textContent = "Clipboard access was denied. Select and copy the caption manually.";
+          }
+        });
+
+        window.addEventListener("pagehide", () => {
+          if (imageUrl) URL.revokeObjectURL(imageUrl);
+        });
+
+        renderCard().catch((error) => {
+          download.textContent = "PNG unavailable";
+          download.removeAttribute("href");
+          statusNode.textContent = error.message || "The card image could not be generated.";
+        });
+      })();
+    </script>
+  </body>
+</html>

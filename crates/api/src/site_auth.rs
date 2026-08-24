@@ -1098,7 +1098,7 @@ fn build_linked_account_dashboard(
         let settled = events
             .iter()
             .filter(|event| event_kind(event) == settled_kind)
-            .map(|event| bounty_id(event))
+            .map(bounty_id)
             .collect::<BTreeSet<_>>();
         for event in events {
             let id = bounty_id(event);
@@ -1132,7 +1132,7 @@ fn build_linked_account_dashboard(
                     &addresses,
                 )
             })
-            .map(|event| bounty_id(event))
+            .map(bounty_id)
             .collect::<BTreeSet<_>>();
         for event in events
             .iter()
