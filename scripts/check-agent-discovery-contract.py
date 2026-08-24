@@ -45,7 +45,11 @@ ENTRYPOINT_CONTRACTS = {
     "site/llms.txt": (
         140,
         13_000,
-        ("server/discover", "get_bounty_feed", "Only `BountySettled` proves payment."),
+        (
+            "server/discover",
+            "get_bounty_feed",
+            "Only a confirmed canonical `BountySettled` or `CompetitionSettledV2` event",
+        ),
     ),
     "site/agent/index.md": (
         90,
@@ -151,22 +155,6 @@ def validate_agent_discovery_contract(root: Path) -> None:
     quickstart = (root / "docs" / "agent-quickstart.md").read_text(encoding="utf-8")
     status = (root / "docs" / "a2a-status.md").read_text(encoding="utf-8")
 
-    forbidden = {
-        "API well-known A2A route": "/.well-known/agent-card.json",
-        "API A2A handler": "async fn agent_card",
-    }
-    for label, marker in forbidden.items():
-        if marker in api:
-            raise SystemExit(
-                f"{label} is advertised without a conforming A2A server; "
-                "implement and test every required A2A core operation before restoring it"
-            )
-
-    if "pub agent_card" in public or "/.well-known/agent-card.json" in public:
-        raise SystemExit("public discovery manifest advertises an unsupported A2A Agent Card")
-    if "A2A Agent Card" in quickstart or "/.well-known/agent-card.json" in quickstart:
-        raise SystemExit("agent quickstart advertises an unsupported A2A Agent Card")
-
     retired_artifacts = (
         root / "fixtures" / "a2a-agent-card.json",
         root / "docs" / "a2a-direct-api-binding-v1.md",
@@ -178,10 +166,29 @@ def validate_agent_discovery_contract(root: Path) -> None:
                 f"retired unsupported A2A artifact remains: {path.relative_to(root)}"
             )
 
-    if "does not currently implement the Agent2Agent (A2A) protocol" not in status:
-        raise SystemExit("A2A status must state that the protocol is not implemented")
     if "a2aproject/A2A/blob/main/docs/specification.md" not in status:
         raise SystemExit("A2A status must link the current primary specification")
+
+    a2a_source_path = root / "crates" / "api" / "src" / "a2a.rs"
+    api_advertises_a2a = (
+        "/.well-known/agent-card.json" in api
+        or "mod a2a;" in api
+        or a2a_source_path.exists()
+    )
+    other_a2a_advertising = any(
+        (
+            "A2A Agent Card" in quickstart,
+            "/.well-known/agent-card.json" in quickstart,
+            "pub agent_card" in public,
+            "/.well-known/agent-card.json" in public,
+            (root / "crates/api/fixtures/agent-card.json").exists(),
+            (root / "site/.well-known/agent-card.json").exists(),
+        )
+    )
+    if api_advertises_a2a or other_a2a_advertising:
+        validate_a2a_implementation(root, api, status)
+    elif "does not currently implement the Agent2Agent (A2A) protocol" not in status:
+        raise SystemExit("A2A status must state that the protocol is not implemented")
 
     required = {
         "API generic discovery route": "/.well-known/agent-bounties.json",
@@ -192,6 +199,77 @@ def validate_agent_discovery_contract(root: Path) -> None:
             raise SystemExit(f"missing {label}")
     if "/.well-known/agent-bounties.json" not in quickstart:
         raise SystemExit("agent quickstart must retain the generic discovery manifest")
+
+
+def validate_a2a_implementation(root: Path, api: str, status: str) -> None:
+    source_path = root / "crates/api/src/a2a.rs"
+    api_card_path = root / "crates/api/fixtures/agent-card.json"
+    site_card_path = root / "site/.well-known/agent-card.json"
+    docs_path = root / "docs/a2a.md"
+    required_paths = (source_path, api_card_path, site_card_path, docs_path)
+    missing = [str(path.relative_to(root)) for path in required_paths if not path.exists()]
+    if missing:
+        raise SystemExit(
+            "A2A is advertised without a conforming A2A server; missing "
+            + ", ".join(missing)
+        )
+
+    source = source_path.read_text(encoding="utf-8")
+    source_markers = {
+        "well-known Agent Card route": "/.well-known/agent-card.json",
+        "SendMessage route": "/a2a/v1/message:send",
+        "GetTask/ListTasks routes": "/a2a/v1/tasks",
+        "Agent Card handler": "fn agent_card",
+        "SendMessage handler": "fn send_message",
+        "GetTask handler": "fn get_task",
+        "ListTasks handler": "fn list_tasks",
+        "CancelTask handler": "fn cancel_task",
+        "A2A response media type": "application/a2a+json",
+        "A2A Major.Minor version": 'A2A_PROTOCOL_VERSION: &str = "1.0"',
+        "bounded request body": "DefaultBodyLimit::max",
+    }
+    missing_markers = [label for label, marker in source_markers.items() if marker not in source]
+    if missing_markers:
+        raise SystemExit(
+            "A2A is advertised without a conforming A2A server; missing core operations: "
+            + ", ".join(missing_markers)
+        )
+
+    api_markers = (
+        "mod a2a;",
+        ".merge(a2a::router())",
+        "a2a_router_serves_card_and_core_task_operations",
+    )
+    for marker in api_markers:
+        if marker not in api:
+            raise SystemExit(f"A2A API integration is missing required marker {marker!r}")
+
+    if api_card_path.read_bytes() != site_card_path.read_bytes():
+        raise SystemExit("API and website A2A Agent Cards must be byte-for-byte identical")
+    try:
+        card = json.loads(api_card_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"A2A Agent Card is not valid JSON: {error}") from error
+    interfaces = card.get("supportedInterfaces")
+    expected_interface = {
+        "url": "https://api.agentbounties.app/a2a/v1",
+        "protocolBinding": "HTTP+JSON",
+        "protocolVersion": "1.0",
+    }
+    if not isinstance(interfaces, list) or expected_interface not in interfaces:
+        raise SystemExit("A2A Agent Card must advertise the implemented HTTP+JSON 1.0 interface")
+    if not isinstance(card.get("skills"), list) or not card["skills"]:
+        raise SystemExit("A2A Agent Card must declare at least one implemented skill")
+    capabilities = card.get("capabilities")
+    if not isinstance(capabilities, dict):
+        raise SystemExit("A2A Agent Card capabilities must be an object")
+    for unsupported in ("streaming", "pushNotifications", "extendedAgentCard"):
+        if capabilities.get(unsupported) is not False:
+            raise SystemExit(f"A2A Agent Card must truthfully declare {unsupported}=false")
+
+    normalized_status = " ".join(status.split())
+    if "implements a public, read-only Agent2Agent (A2A) 1.0 HTTP+JSON interface" not in normalized_status:
+        raise SystemExit("A2A status must describe the implemented read-only HTTP+JSON interface")
 
 
 def main() -> int:
