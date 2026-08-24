@@ -80,6 +80,18 @@ def validate_entrypoint_text(
             raise SystemExit(f"{label} uses retired domain {retired_domain}")
 
 
+def validate_static_discovery_urls(discovery: dict[str, object]) -> None:
+    endpoints = discovery.get("endpoints")
+    if not isinstance(endpoints, dict):
+        raise SystemExit("static discovery endpoints must be an object")
+    agent_mode = endpoints.get("agent_mode")
+    agent_markdown = endpoints.get("agent_mode_markdown")
+    if agent_mode != agent_markdown:
+        raise SystemExit(
+            "static discovery agent_mode must resolve to the retained Markdown entrypoint"
+        )
+
+
 def validate_public_agent_entrypoints(root: Path) -> None:
     for relative, (max_lines, max_chars, required) in ENTRYPOINT_CONTRACTS.items():
         path = root / relative
@@ -123,6 +135,7 @@ def validate_public_agent_entrypoints(root: Path) -> None:
             raise SystemExit(f"static discovery advertises removed route {route}")
     if discovery.get("website") != "https://agentbounties.app/":
         raise SystemExit("static discovery website must be https://agentbounties.app/")
+    validate_static_discovery_urls(discovery)
 
     protocol = json.loads((root / "site/protocol.json").read_text(encoding="utf-8"))
     if protocol.get("protocol_version") != "agent-bounties/autonomous-v1":

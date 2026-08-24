@@ -113,6 +113,22 @@ class AgentDiscoveryContractTests(unittest.TestCase):
                 required=(),
             )
 
+    def test_static_agent_entrypoint_must_resolve(self) -> None:
+        discovery = {
+            "endpoints": {
+                "agent_mode": "https://agentbounties.app/agent/",
+                "agent_mode_markdown": "https://agentbounties.app/agent/index.md",
+            }
+        }
+        with self.assertRaisesRegex(SystemExit, "retained Markdown entrypoint"):
+            guard.validate_static_discovery_urls(discovery)
+
+    def test_static_agent_entrypoint_alignment_passes(self) -> None:
+        endpoint = "https://agentbounties.app/agent/index.md"
+        guard.validate_static_discovery_urls(
+            {"endpoints": {"agent_mode": endpoint, "agent_mode_markdown": endpoint}}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
