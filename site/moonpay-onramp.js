@@ -466,6 +466,7 @@
     for (const link of selectAll("[data-onramp-provider]")) {
       link.addEventListener("click", () => {
         const provider = link.dataset.onrampProvider;
+        if (provider === "moonpay") track("onramp_moonpay_started");
         if (provider === "metamask") track("onramp_metamask_started");
         if (provider === "coinbase") track("onramp_coinbase_started");
       });

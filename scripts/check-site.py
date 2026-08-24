@@ -774,6 +774,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
         [
             "New-bounty creation cannot proceed",
             'asset === "eth" ? "https://www.moonpay.com/buy/eth"',
+            'if (provider === "moonpay") track("onramp_moonpay_started")',
         ],
     )
     require_phrases(
