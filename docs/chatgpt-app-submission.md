@@ -78,7 +78,7 @@ New ChatGPT scans advertise exactly these ten non-overlapping tools:
 | `get_bounty_feed` | Reads the unified live bounty projection | read-only, closed-world, idempotent |
 | `render_bounty_feed` | Mounts the branded conversation-first live feed | read-only, closed-world, idempotent |
 | `prepare_moonpay_onramp` | Formats one first-party Base-USDC top-up handoff; creates no checkout or purchase | read-only, closed-world, idempotent |
-| `prepare_bounty_post` | Stores the exact user-approved image generated in the poster's ChatGPT account and prepares the first-party review handoff | non-read-only, open-world, destructive, idempotent |
+| `prepare_bounty_post` | Prepares the exact approved terms and, when supplied, stores the matching user-approved image for the first-party review handoff | non-read-only, open-world, destructive, idempotent |
 | `prepare_bounty_action` | Creates one opaque, expiring, idempotent first-party lifecycle-review intent | non-read-only, closed-world, non-destructive, idempotent |
 | `get_bounty_action_status` | Reconciles one intent against indexed canonical events | non-read-only, closed-world, non-destructive, idempotent |
 | `compile_objective_with_cloud_agent` | Produces bounded child-bounty drafts | non-read-only, open-world, non-destructive, non-idempotent |
@@ -101,17 +101,17 @@ from breaking while removing an overlapping choice from new ChatGPT
 registrations.
 
 `prepare_bounty_post` declares
-`_meta["openai/fileParams"]=["bounty_image"]`. ChatGPT gathers the terms,
-writes an image prompt from the completed bounty, generates the image with the
-poster's own ChatGPT account, displays that exact image, and obtains explicit
-approval before calling the tool. The tool downloads only the temporary
+`_meta["openai/fileParams"]=["bounty_image"]` for hosts that support approved
+file inputs. ChatGPT can gather the terms, generate an image with the poster's
+own account, display that exact image, and obtain explicit approval before
+calling the tool. In that variation the tool downloads only the temporary
 OpenAI-hosted file URL, validates a PNG/JPEG/WebP payload of at most 5 MiB,
-stores it by SHA-256, and returns a first-party review URL. The private
-ChatGPT `file_id` is never placed in public terms. Agent Bounties has no
-OpenAI image-generation key in this flow and never generates or substitutes
-the bounty artwork. The review URL renders the completed terms and approved
-image as a read-only card; it does not expose a second composer or editable
-bounty form.
+stores it by SHA-256, and returns a first-party review URL. The private ChatGPT
+`file_id` is never placed in public terms. Provider-neutral clients may omit
+the image, prompt, and alt text together; partial image metadata is rejected.
+Agent Bounties never generates or substitutes bounty artwork. The review URL
+renders the completed approved terms and optional image; it does not publish or
+move funds without the separate wallet-reviewed flow.
 
 Lower-level funding, wallet, claim, submission, and settlement tools are not
 exposed to the ChatGPT app. The model receives only hosted preparation and
@@ -124,13 +124,14 @@ repository:
 
 1. `prepare_moonpay_onramp` accepts only a canonical Base bounty contract, a
    bounded planned USDC amount, and an optional opaque funding-intent UUID.
-2. The tool contract retains a first-party
-   `https://agentbounties.app/onramp.html` handoff, but the redesigned site does
-   not mount that page; do not offer this action until a replacement funding UI
-   is reviewed.
+2. The tool returns the reviewed first-party
+   `https://agentbounties.app/onramp.html` handoff. That page keeps MoonPay,
+   MetaMask Portfolio, and Coinbase wallet top-up variations separate from the
+   later bounty-funding authorization.
 3. It does not call MoonPay, create checkout, connect a wallet, or move money.
-4. A future replacement page must connect the user's selected Base wallet and
-   check the destination, planned amount, USDC balance, and optional gas balance.
+4. The page connects an injected Base wallet or accepts a manually verified
+   public address, then shows the destination, planned amount, USDC balance,
+   and optional gas balance.
 5. The browser requests a device-bound signed MoonPay URL from
    `/v1/onramps/moonpay/checkout`.
 6. MoonPay handles its purchase, payment methods, eligibility, identity checks,

@@ -532,9 +532,9 @@ tool_args! {
         #[serde(default)]
         crowdfund: bool,
         discovery_source: Option<String>,
-        image_prompt: String,
-        image_alt_text: String,
-        bounty_image: ChatgptFileInput,
+        image_prompt: Option<String>,
+        image_alt_text: Option<String>,
+        bounty_image: Option<ChatgptFileInput>,
     }
     schema object_tool_schema(
         json!({
@@ -551,11 +551,11 @@ tool_args! {
             "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
             "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
             "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties."),
-            "image_prompt": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "The exact prompt used in this ChatGPT conversation to generate the user-approved bounty image."},
-            "image_alt_text": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Concise accessible description of the approved image."},
+            "image_prompt": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "Optional exact prompt used to generate a user-approved bounty image. Supply this, image_alt_text, and bounty_image together, or omit all three to use the deterministic fallback visual."},
+            "image_alt_text": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Optional accessible description of the approved image. Supply this, image_prompt, and bounty_image together."},
             "bounty_image": {
                 "type": "object",
-                "description": "The approved image generated from the poster's own ChatGPT account. Agent Bounties stores this exact file; it does not generate another image.",
+                "description": "Optional approved image generated in a compatible AI conversation. Agent Bounties stores this exact file; omit it and both image text fields to use the deterministic fallback visual.",
                 "properties": {
                     "download_url": {"type": "string"},
                     "file_id": {"type": "string"},
@@ -571,10 +571,7 @@ tool_args! {
             "goal",
             "acceptance_criteria",
             "solver_reward_usdc",
-            "verifier_reward_usdc",
-            "image_prompt",
-            "image_alt_text",
-            "bounty_image"
+            "verifier_reward_usdc"
         ],
     );
 }

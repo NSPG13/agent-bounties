@@ -5055,6 +5055,19 @@ fn validated_site_analytics_event(
             | "competition_feedback_submitted"
             | "canonical_post_started"
             | "canonical_post_confirmed"
+            | "auth_completed"
+            | "wallet_link_started"
+            | "wallet_link_confirmed"
+            | "wallet_missing_detected"
+            | "wallet_connected"
+            | "wallet_unfunded_detected"
+            | "wallet_funded_observed"
+            | "canonical_post_handoff_viewed"
+            | "onramp_viewed"
+            | "onramp_moonpay_started"
+            | "onramp_metamask_started"
+            | "onramp_coinbase_started"
+            | "onramp_returned"
     ) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -5181,82 +5194,46 @@ fn site_analytics_response(
     window_started_at: DateTime<Utc>,
     generated_at: DateTime<Utc>,
 ) -> SiteAnalyticsResponse {
-    let session_count = |event_name: &str| {
-        stats
-            .event_counts
-            .iter()
-            .find(|count| count.event_name == event_name)
-            .map(|count| count.sessions)
-            .unwrap_or(0)
-    };
-    let rate = |metric: &str, numerator: &str, denominator: &str, cohort: &str| {
-        let numerator_sessions = session_count(numerator);
-        let denominator_sessions = session_count(denominator);
-        SiteAnalyticsRateResponse {
-            metric: metric.to_string(),
-            numerator_sessions,
-            denominator_sessions,
-            value: (denominator_sessions > 0)
-                .then(|| numerator_sessions as f64 / denominator_sessions as f64),
-            cohort: cohort.to_string(),
+    let cohort = |metric: &str| match metric {
+        "market_to_funded_bounty_click" | "market_to_funding_start" => {
+            "sessions that loaded live market inventory"
         }
+        "canonical_post_completion" => "sessions that began the wallet-backed canonical post flow",
+        "claim_confirmation" => "sessions that began a claim flow",
+        "auth_to_post_handoff" => "sessions that completed first-party authentication",
+        "wallet_link_completion" => "sessions that began linking a wallet to an account",
+        "no_wallet_to_connected" => "sessions where the posting flow detected no wallet",
+        "unfunded_wallet_to_funded" => {
+            "sessions where the posting flow observed an unfunded wallet"
+        }
+        "onramp_return"
+        | "onramp_moonpay_start"
+        | "onramp_metamask_start"
+        | "onramp_coinbase_start" => "sessions that viewed the first-party on-ramp",
+        "funded_click_to_competition_view" => {
+            "sessions that opened a funded competition from the unified market"
+        }
+        "competition_instruction_engagement" | "competition_child_post_start" => {
+            "sessions that loaded a contract-specific competition workspace"
+        }
+        "competition_feedback_completion" => {
+            "sessions that began the public competition feedback form"
+        }
+        "competition_entry_confirmation" => "sessions that began an Open Competition entry flow",
+        _ => "sessions in the named funnel",
     };
-    let rates = vec![
-        rate(
-            "market_to_funded_bounty_click",
-            "funded_bounty_click",
-            "market_view",
-            "sessions that loaded live market inventory",
-        ),
-        rate(
-            "canonical_post_completion",
-            "canonical_post_confirmed",
-            "canonical_post_started",
-            "sessions that began the wallet-backed canonical post flow",
-        ),
-        rate(
-            "market_to_funding_start",
-            "funding_started",
-            "market_view",
-            "sessions that loaded live market inventory",
-        ),
-        rate(
-            "claim_confirmation",
-            "claim_confirmed",
-            "claim_started",
-            "sessions that began a claim flow",
-        ),
-        rate(
-            "funded_click_to_competition_view",
-            "competition_view",
-            "funded_bounty_click",
-            "sessions that opened a funded competition from the unified market",
-        ),
-        rate(
-            "competition_instruction_engagement",
-            "competition_instructions_copied",
-            "competition_view",
-            "sessions that loaded a contract-specific competition workspace",
-        ),
-        rate(
-            "competition_child_post_start",
-            "competition_child_post_started",
-            "competition_view",
-            "sessions that loaded a contract-specific competition workspace",
-        ),
-        rate(
-            "competition_feedback_completion",
-            "competition_feedback_submitted",
-            "competition_feedback_started",
-            "sessions that began the public competition feedback form",
-        ),
-        rate(
-            "competition_entry_confirmation",
-            "competition_entry_confirmed",
-            "competition_entry_started",
-            "sessions that began an Open Competition entry flow",
-        ),
-    ];
+    let rates = stats
+        .funnel_counts
+        .into_iter()
+        .map(|count| SiteAnalyticsRateResponse {
+            cohort: cohort(&count.metric).to_string(),
+            value: (count.denominator_sessions > 0)
+                .then(|| count.numerator_sessions as f64 / count.denominator_sessions as f64),
+            metric: count.metric,
+            numerator_sessions: count.numerator_sessions,
+            denominator_sessions: count.denominator_sessions,
+        })
+        .collect();
     SiteAnalyticsResponse {
         schema_version: "agent-bounties/site-analytics-v2".to_string(),
         window_hours,
@@ -5331,6 +5308,7 @@ fn site_analytics_response(
             "External interface usage is an hourly aggregate of observed requests, not unique people, agents, clients, or sessions; partial boundary hours are included.".to_string(),
             "Requests bearing a server-verified analytics exclusion or operator credential are omitted before aggregation; no operator identifier is stored.".to_string(),
             "API and CLI attribution is self-declared through x-agent-bounties-interface; MCP protocol era is observed by the MCP service.".to_string(),
+            "Funnel numerators count only sessions that recorded the denominator first and the numerator later in the selected window.".to_string(),
         ],
         evidence_boundary: "Collection begins only after each feature is deployed and has no historical backfill. External interface counting restarts at the operator-exclusion release; the earlier launch aggregate is retained outside this public response because it contains maintainer validation traffic that cannot be separated retrospectively. Cleared storage, private browsing, multiple devices, disabled analytics, Global Privacy Control, and Do Not Track affect browser coverage. Interface counters cannot deduplicate users or prove preference, and self-declared API or CLI attribution can be absent or spoofed. No IP address, user agent, full referrer URL, wallet, client identifier, request body, prompt, tool arguments, or operator identity is stored. Client conversion events describe observed interface actions; canonical lifecycle and payment claims remain authoritative only in confirmed canonical events, and only BountySettled proves solver payment.".to_string(),
     }
@@ -17443,6 +17421,46 @@ mod tests {
             now,
         )
         .is_err());
+    }
+
+    #[test]
+    fn site_analytics_accepts_the_privacy_minimized_onboarding_funnel() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 24, 18, 0, 0).unwrap();
+        for event_name in [
+            "auth_completed",
+            "wallet_link_started",
+            "wallet_link_confirmed",
+            "wallet_missing_detected",
+            "wallet_connected",
+            "wallet_unfunded_detected",
+            "wallet_funded_observed",
+            "canonical_post_handoff_viewed",
+            "onramp_viewed",
+            "onramp_moonpay_started",
+            "onramp_metamask_started",
+            "onramp_coinbase_started",
+            "onramp_returned",
+        ] {
+            let event = validated_site_analytics_event(
+                SiteAnalyticsEventRequest {
+                    event_id: Uuid::new_v4(),
+                    visitor_id: Uuid::new_v4(),
+                    session_id: Uuid::new_v4(),
+                    event_name: event_name.to_string(),
+                    page_path: "/onramp.html".to_string(),
+                    source: None,
+                    campaign: None,
+                    referrer_host: None,
+                    opportunity_id: None,
+                    bounty_contract: None,
+                    occurred_at: now,
+                },
+                now,
+            )
+            .unwrap();
+            assert_eq!(event.event_name, event_name);
+            assert_eq!(event.page_path, "/onramp.html");
+        }
     }
 
     #[test]

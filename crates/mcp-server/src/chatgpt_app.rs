@@ -47,7 +47,7 @@ const MCP_NAME_HEADER: &str = "mcp-name";
 const MCP_ALLOWED_ORIGINS_ENV: &str = "MCP_ALLOWED_ORIGINS";
 const CHATGPT_SANDBOX_ENV: &str = "CHATGPT_APP_SANDBOX_MODE";
 const FEED_WIDGET_URI: &str = "ui://agent-bounties/live-feed-v4.html";
-const POST_PAGE_URL: &str = "https://agentbounties.app/#post-a-bounty";
+const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
 const FEED_WIDGET_HTML: &str = include_str!("../assets/chatgpt-bounty-feed-widget.html");
 const BOUNTY_CARD_PREVIEW_HTML: &str = include_str!("../assets/chatgpt-bounty-card-preview.html");
 const FEED_CARD_ART: &[u8] =
@@ -278,17 +278,20 @@ pub(super) async fn prepare_bounty_post_handoff(
     state: &SharedState,
     args: &PrepareBountyPostArgs,
 ) -> Result<Value, String> {
-    // Fail closed on every non-file field before downloading or persisting the
-    // approved image.
+    // Fail closed on every non-file field before downloading or persisting an
+    // optional approved image.
     let validation_image = sandbox_bounty_image_reference(args)?;
-    build_bounty_post_handoff(args, &validation_image)?;
+    let validation_handoff = build_bounty_post_handoff(args, validation_image.as_ref())?;
+    if validation_image.is_none() {
+        return Ok(validation_handoff);
+    }
     let image = persist_chatgpt_bounty_image(state, args).await?;
-    build_bounty_post_handoff(args, &image)
+    build_bounty_post_handoff(args, Some(&image))
 }
 
 pub(super) fn build_bounty_post_handoff(
     args: &PrepareBountyPostArgs,
-    image: &BountyImageReference,
+    image: Option<&BountyImageReference>,
 ) -> Result<Value, String> {
     let title = bounded_text(&args.title, "title", 200)?;
     let goal = bounded_text(&args.goal, "goal", 4_000)?;
@@ -315,22 +318,38 @@ pub(super) fn build_bounty_post_handoff(
         .as_deref()
         .map(|value| bounded_text(value, "discovery_source", 500))
         .transpose()?;
-    let image_prompt = bounded_text(&args.image_prompt, "image_prompt", 4_000)?;
-    let image_alt_text = bounded_text(&args.image_alt_text, "image_alt_text", 500)?;
-    if image.source != "chatgpt_user_generated"
-        || image.prompt != image_prompt
-        || image.alt_text != image_alt_text
-    {
-        return Err(
-            "the stored bounty image must match the prompt and alt text approved in ChatGPT"
-                .to_string(),
-        );
+    match (
+        image,
+        args.image_prompt.as_deref(),
+        args.image_alt_text.as_deref(),
+        args.bounty_image.as_ref(),
+    ) {
+        (None, None, None, None) => {}
+        (Some(image), Some(prompt), Some(alt_text), Some(_)) => {
+            let image_prompt = bounded_text(prompt, "image_prompt", 4_000)?;
+            let image_alt_text = bounded_text(alt_text, "image_alt_text", 500)?;
+            if image.source != "chatgpt_user_generated"
+                || image.prompt != image_prompt
+                || image.alt_text != image_alt_text
+            {
+                return Err(
+                    "the stored bounty image must match the prompt and alt text approved in the AI conversation"
+                        .to_string(),
+                );
+            }
+        }
+        _ => {
+            return Err(
+                "bounty_image, image_prompt, and image_alt_text must be supplied together or all omitted"
+                    .to_string(),
+            );
+        }
     }
 
     let mut post_url = Url::parse(POST_PAGE_URL).expect("static post URL is valid");
     {
         let mut query = post_url.query_pairs_mut();
-        query.append_pair("from", "chatgpt-app");
+        query.append_pair("from", "ai-app");
         query.append_pair("title", &title);
         query.append_pair("goal", &goal);
         for criterion in &acceptance_criteria {
@@ -345,13 +364,17 @@ pub(super) fn build_bounty_post_handoff(
         }
         query.append_pair(
             "discoverySource",
-            discovery_source.as_deref().unwrap_or("ChatGPT app"),
+            discovery_source
+                .as_deref()
+                .unwrap_or("AI assistant via MCP"),
         );
-        query.append_pair("imageUrl", &image.asset_url);
-        query.append_pair("imageSha256", &image.sha256);
-        query.append_pair("imageMimeType", &image.mime_type);
-        query.append_pair("imagePrompt", &image.prompt);
-        query.append_pair("imageAlt", &image.alt_text);
+        if let Some(image) = image {
+            query.append_pair("imageUrl", &image.asset_url);
+            query.append_pair("imageSha256", &image.sha256);
+            query.append_pair("imageMimeType", &image.mime_type);
+            query.append_pair("imagePrompt", &image.prompt);
+            query.append_pair("imageAlt", &image.alt_text);
+        }
     }
     if post_url.as_str().len() > 12_000 {
         return Err(
@@ -386,15 +409,30 @@ async fn persist_chatgpt_bounty_image(
     state: &SharedState,
     args: &PrepareBountyPostArgs,
 ) -> Result<BountyImageReference, String> {
-    let prompt = bounded_text(&args.image_prompt, "image_prompt", 4_000)?;
-    let alt_text = bounded_text(&args.image_alt_text, "image_alt_text", 500)?;
-    let file_id = bounded_text(&args.bounty_image.file_id, "bounty_image.file_id", 512)?;
-    let download_url = validate_chatgpt_download_url(&args.bounty_image.download_url)?;
+    let prompt = bounded_text(
+        args.image_prompt
+            .as_deref()
+            .ok_or_else(|| "image_prompt is required when bounty_image is supplied".to_string())?,
+        "image_prompt",
+        4_000,
+    )?;
+    let alt_text = bounded_text(
+        args.image_alt_text.as_deref().ok_or_else(|| {
+            "image_alt_text is required when bounty_image is supplied".to_string()
+        })?,
+        "image_alt_text",
+        500,
+    )?;
+    let bounty_image = args
+        .bounty_image
+        .as_ref()
+        .ok_or_else(|| "bounty_image is required when image text is supplied".to_string())?;
+    let file_id = bounded_text(&bounty_image.file_id, "bounty_image.file_id", 512)?;
+    let download_url = validate_chatgpt_download_url(&bounty_image.download_url)?;
     let bytes = download_chatgpt_image(&download_url).await?;
     let mime_type = detect_bounty_image_mime(&bytes)
         .ok_or_else(|| "bounty_image must be a valid PNG, JPEG, or WebP file".to_string())?;
-    if let Some(declared) = args
-        .bounty_image
+    if let Some(declared) = bounty_image
         .mime_type
         .as_deref()
         .map(str::trim)
@@ -406,7 +444,7 @@ async fn persist_chatgpt_bounty_image(
             ));
         }
     }
-    if let Some(file_name) = args.bounty_image.file_name.as_deref() {
+    if let Some(file_name) = bounty_image.file_name.as_deref() {
         bounded_text(file_name, "bounty_image.file_name", 255)?;
     }
     let sha256 = Sha256::digest(&bytes)
@@ -535,15 +573,27 @@ fn detect_bounty_image_mime(bytes: &[u8]) -> Option<&'static str> {
 
 fn sandbox_bounty_image_reference(
     args: &PrepareBountyPostArgs,
-) -> Result<BountyImageReference, String> {
-    Ok(BountyImageReference {
-        source: "chatgpt_user_generated".to_string(),
-        prompt: bounded_text(&args.image_prompt, "image_prompt", 4_000)?,
-        alt_text: bounded_text(&args.image_alt_text, "image_alt_text", 500)?,
-        asset_url: "https://agentbounties.app/assets/solarpunk/characters-helping.webp".to_string(),
-        sha256: "0".repeat(64),
-        mime_type: "image/webp".to_string(),
-    })
+) -> Result<Option<BountyImageReference>, String> {
+    match (
+        args.image_prompt.as_deref(),
+        args.image_alt_text.as_deref(),
+        args.bounty_image.as_ref(),
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(prompt), Some(alt_text), Some(_)) => Ok(Some(BountyImageReference {
+            source: "chatgpt_user_generated".to_string(),
+            prompt: bounded_text(prompt, "image_prompt", 4_000)?,
+            alt_text: bounded_text(alt_text, "image_alt_text", 500)?,
+            asset_url: "https://agentbounties.app/assets/solarpunk/characters-helping.webp"
+                .to_string(),
+            sha256: "0".repeat(64),
+            mime_type: "image/webp".to_string(),
+        })),
+        _ => Err(
+            "bounty_image, image_prompt, and image_alt_text must be supplied together or all omitted"
+                .to_string(),
+        ),
+    }
 }
 
 pub(super) async fn mcp_post(
@@ -1024,7 +1074,7 @@ fn mcp_server_instructions() -> &'static str {
     } else if public_review {
         "Public review mode is active. Show only voluntary, unfunded community requests with no payment promise. Use render_bounty_feed for the compact in-chat work queue, publish_unfunded_bounty only when the user explicitly asks to publish a voluntary request, compile_objective_with_cloud_agent only for non-economic task decomposition, and the comment and share tools for public collaboration. Funding, claiming, completion, verification, wallet, settlement, token, and payment actions are unavailable in this app configuration. Never imply otherwise or direct a user around this boundary."
     } else {
-        "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms and image direction are complete, generate a unique bounty image in their ChatGPT account, show it for approval, summarize the complete bounty, and obtain explicit confirmation. Then call prepare_bounty_post with that approved ChatGPT image file; Agent Bounties stores the exact file and never generates a replacement. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; MoonPay purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use compile_objective_with_cloud_agent to break a broad objective into smaller reviewable child bounties. Use create_share_bundle after every meaningful step."
+        "Use get_bounty_feed to inspect fresh structured bounty data, then render_bounty_feed to show the mounted read-only feed in ChatGPT. The widget has only Post bounty, Comment, Share, and Solve actions; each action starts a conversation. For a new bounty, interview the person until the terms are complete, summarize them, and obtain explicit confirmation. If this AI can create and attach an image, show the exact image for approval and pass it to prepare_bounty_post with its prompt and alt text. Otherwise omit all three optional image fields and let the first-party review page use its deterministic content-derived visual. Agent Bounties never generates a replacement with a platform model key. For fund, solve or claim, complete, or verify, call prepare_bounty_action and open only its first-party HTTPS authorization URL. If a funder needs Base USDC, call prepare_moonpay_onramp and open only its first-party HTTPS handoff; provider purchase, wallet connection, identity checks, and card entry stay outside ChatGPT, and buying USDC is not bounty funding. Never request or accept a wallet signature, private key, seed phrase, payment authorization, verifier signature, or card data in ChatGPT. Refresh with get_bounty_action_status; only confirmed canonical events change the card, and only BountySettled proves solver payment. Use compile_objective_with_cloud_agent to break a broad objective into smaller reviewable child bounties. Use create_share_bundle after every meaningful step."
     }
 }
 
@@ -1706,7 +1756,7 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
             let value = prepare_bounty_post_handoff(&state, &args).await?;
             return Ok(tool_result(
                 value,
-                "Stored the image generated and approved in the poster's ChatGPT account, then prepared a reviewable wallet handoff. No bounty has been published or created yet.",
+                "Prepared a reviewable wallet handoff, preserving the exact approved AI-generated image when one was supplied. No bounty has been published or created yet.",
                 true,
             ));
         }
@@ -2303,7 +2353,7 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
             let args: PrepareBountyPostArgs = serde_json::from_value(arguments.clone())
                 .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
             let image = sandbox_bounty_image_reference(&args)?;
-            let mut value = build_bounty_post_handoff(&args, &image)?;
+            let mut value = build_bounty_post_handoff(&args, image.as_ref())?;
             mark_sandbox(
                 &mut value,
                 "The handoff is a sandbox fixture. No bounty was published, created, signed, or funded.",
@@ -3447,17 +3497,22 @@ fn post_handoff_output_schema() -> Value {
             "crowdfund": {"type": "boolean"},
             "source_url": {"type": ["string", "null"]},
             "image": {
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "const": "chatgpt_user_generated"},
-                    "prompt": {"type": "string"},
-                    "alt_text": {"type": "string"},
-                    "asset_url": {"type": "string"},
-                    "sha256": {"type": "string"},
-                    "mime_type": {"type": "string"}
-                },
-                "required": ["source", "prompt", "alt_text", "asset_url", "sha256", "mime_type"],
-                "additionalProperties": false
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string", "const": "chatgpt_user_generated"},
+                            "prompt": {"type": "string"},
+                            "alt_text": {"type": "string"},
+                            "asset_url": {"type": "string"},
+                            "sha256": {"type": "string"},
+                            "mime_type": {"type": "string"}
+                        },
+                        "required": ["source", "prompt", "alt_text", "asset_url", "sha256", "mime_type"],
+                        "additionalProperties": false
+                    },
+                    {"type": "null"}
+                ]
             },
             "post_url": {"type": "string"},
             "bounty_created": {"type": "boolean"},
@@ -3958,7 +4013,7 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "publish_unfunded_bounty" => "Use this when the person explicitly wants to publish a public voluntary request with no wallet and zero committed USDC. It is not canonical, funded, claimable, or guaranteed to pay.",
         "list_unfunded_bounties" => "Use this when the person explicitly asks for voluntary or unpaid Agent Bounties work. Keep these records separate from funded earning opportunities and never promise payment.",
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
-        "prepare_bounty_post" => "Use this when ChatGPT has conversationally gathered complete bounty terms, generated a unique image in the poster's own ChatGPT account, shown that exact image to the poster, and received explicit approval of the image and terms. Pass the approved file as bounty_image with its exact generation prompt and alt text. Agent Bounties stores that file and prepares a reviewable wallet handoff; it does not generate an image, move funds, request a secret, or prove that a bounty exists.",
+        "prepare_bounty_post" => "Use this when the person's AI has conversationally gathered complete bounty terms and received explicit approval. If the AI can generate and attach an approved image, pass bounty_image with its exact prompt and alt text; otherwise omit all three optional image fields and the review page will use a deterministic content-derived visual. Agent Bounties prepares a reviewable wallet handoff; it does not generate an image with a platform model key, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
         "inspect_open_competition_v2" => "New users start with operation=guide. Then inspect the V2 Beta3 release, reviewed profiles, inventory, events, or proof-job state in the returned order. Treat only CompetitionSettledV2 as payment evidence.",
         "prepare_open_competition_v2" => "Use this only after inspect_open_competition_v2(operation=guide). Match arguments to the selected operation's exact schema. Some operations return unsigned plans; quote_proof creates a hosted job, pay_proof may transfer Base USDC after explicit approval, and authorize_relay may submit a proof after explicit approval. Follow next_action and treat only CompetitionSettledV2 as payment evidence.",
@@ -4145,23 +4200,27 @@ mod tests {
             crowdfund: false,
             task_window_days: None,
             discovery_source: Some("ChatGPT user feedback".to_string()),
-            image_prompt: "Minimal editorial illustration of a reconciliation test becoming green."
-                .to_string(),
-            image_alt_text: "A clean code diff with a passing reconciliation check.".to_string(),
-            bounty_image: super::ChatgptFileInput {
+            image_prompt: Some(
+                "Minimal editorial illustration of a reconciliation test becoming green."
+                    .to_string(),
+            ),
+            image_alt_text: Some(
+                "A clean code diff with a passing reconciliation check.".to_string(),
+            ),
+            bounty_image: Some(super::ChatgptFileInput {
                 download_url: "https://files.oaiusercontent.com/example".to_string(),
                 file_id: "file-example".to_string(),
                 mime_type: Some("image/webp".to_string()),
                 file_name: Some("reconciliation-bounty.webp".to_string()),
-            },
+            }),
         }
     }
 
     #[test]
     fn handoff_is_prefilled_but_never_claims_creation_or_signature() {
         let args = valid_args();
-        let image = sandbox_bounty_image_reference(&args).unwrap();
-        let handoff = build_bounty_post_handoff(&args, &image).unwrap();
+        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
+        let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
         let post_url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
         let pairs = post_url.query_pairs().collect::<Vec<_>>();
 
@@ -4173,11 +4232,45 @@ mod tests {
         assert_eq!(handoff["image"]["source"], "chatgpt_user_generated");
         assert!(pairs
             .iter()
+            .any(|(key, value)| key == "from" && value == "ai-app"));
+        assert!(pairs
+            .iter()
             .any(|(key, value)| key == "title" && value == "Fix the reconciliation regression"));
         assert_eq!(
             pairs.iter().filter(|(key, _)| key == "criterion").count(),
             2
         );
+    }
+
+    #[test]
+    fn provider_neutral_handoff_allows_an_approved_bounty_without_an_image() {
+        let mut args = valid_args();
+        args.image_prompt = None;
+        args.image_alt_text = None;
+        args.bounty_image = None;
+
+        assert!(sandbox_bounty_image_reference(&args).unwrap().is_none());
+        let handoff = build_bounty_post_handoff(&args, None).unwrap();
+        let post_url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
+        let pairs = post_url.query_pairs().collect::<Vec<_>>();
+
+        assert!(handoff["image"].is_null());
+        assert_eq!(handoff["state"], "review_required_not_published");
+        assert_eq!(handoff["bounty_created"], false);
+        assert_eq!(handoff["wallet_signature_requested"], false);
+        assert!(pairs
+            .iter()
+            .any(|(key, value)| key == "from" && value == "ai-app"));
+        assert!(!pairs.iter().any(|(key, _)| key.starts_with("image")));
+    }
+
+    #[test]
+    fn provider_neutral_handoff_rejects_partial_image_metadata() {
+        let mut args = valid_args();
+        args.bounty_image = None;
+        assert!(sandbox_bounty_image_reference(&args)
+            .unwrap_err()
+            .contains("supplied together"));
     }
 
     #[test]
@@ -4247,15 +4340,15 @@ mod tests {
     #[test]
     fn handoff_rejects_non_https_sources_and_invalid_money() {
         let mut args = valid_args();
-        let image = sandbox_bounty_image_reference(&args).unwrap();
+        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
         args.source_url = Some("http://example.com/private".to_string());
-        assert!(build_bounty_post_handoff(&args, &image)
+        assert!(build_bounty_post_handoff(&args, Some(&image))
             .unwrap_err()
             .contains("HTTPS"));
 
         args.source_url = None;
         args.solver_reward_usdc = "0".to_string();
-        assert!(build_bounty_post_handoff(&args, &image)
+        assert!(build_bounty_post_handoff(&args, Some(&image))
             .unwrap_err()
             .contains("greater than zero"));
     }
@@ -4456,11 +4549,16 @@ mod tests {
             .expect("ChatGPT-account image handoff tool");
         assert_eq!(post["_meta"]["openai/fileParams"], json!(["bounty_image"]));
         assert!(post["_meta"]["ui"].get("resourceUri").is_none());
-        assert!(post["inputSchema"]["required"]
+        assert!(!post["inputSchema"]["required"]
             .as_array()
             .unwrap()
             .iter()
             .any(|field| field == "bounty_image"));
+        assert!(post["outputSchema"]["properties"]["image"]["anyOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|variant| variant["type"] == "null"));
     }
 
     #[test]

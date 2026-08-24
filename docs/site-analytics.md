@@ -122,6 +122,13 @@ The collector accepts only:
 - `unfunded_post_started` and `unfunded_post_completed` for compatible future
   first-party no-wallet publishing interfaces
 - `canonical_post_started` and `canonical_post_confirmed`
+- `auth_completed`, `wallet_link_started`, and `wallet_link_confirmed`
+- `wallet_missing_detected`, `wallet_connected`,
+  `wallet_unfunded_detected`, and `wallet_funded_observed`
+- `canonical_post_handoff_viewed`
+- `onramp_viewed`, `onramp_moonpay_started`,
+  `onramp_metamask_started`, `onramp_coinbase_started`, and
+  `onramp_returned`
 - `funding_started`
 - `claim_started` and `claim_confirmed`
 - `competition_entry_started`, `competition_entry_confirmed`,
@@ -154,6 +161,17 @@ but the canonical event index remains authoritative. Only confirmed
 - **Canonical-post completion:** distinct sessions with
   `canonical_post_confirmed` divided by distinct sessions with
   `canonical_post_started`.
+- **No-wallet recovery:** distinct sessions with `wallet_connected` divided by
+  distinct sessions with `wallet_missing_detected`.
+- **Unfunded-wallet recovery:** distinct sessions with `wallet_funded_observed`
+  divided by distinct sessions with `wallet_unfunded_detected`.
+- **On-ramp provider start:** distinct sessions for each of
+  `onramp_moonpay_started`, `onramp_metamask_started`, and
+  `onramp_coinbase_started`, reported separately; these are provider exits,
+  not purchases or funding.
+- **On-ramp return:** distinct sessions with `onramp_returned` divided by
+  distinct sessions with `onramp_viewed`. This remains directional because a
+  provider may complete in another browser or device.
 - **Claim confirmation:** distinct sessions with `claim_confirmed` divided by
   distinct sessions with `claim_started`.
 - **Funded-click to competition view:** distinct sessions with
@@ -172,6 +190,10 @@ Competition events report interface transitions only. A copied template does
 not prove a post, an entry-start event does not prove entry, and a feedback
 event is not the feedback body. Canonical contracts and structured opportunity
 comments remain the evidence sources for lifecycle and user direction.
+
+For every rate, the numerator includes only a session that recorded the named
+denominator event first and the numerator event later within the selected
+window. This avoids treating unrelated sessions as conversions.
 
 Do not sum channel-level visitor counts to estimate people. One browser can be
 used by several people, one person can use several browsers or devices, and
@@ -204,6 +226,7 @@ Not Track, explicit opt-out, or `?analytics=off` prevents GA4 from loading.
 ```bash
 python scripts/check-migration-history.py
 python scripts/check-site.py
+python scripts/check-public-handoffs.py
 cargo test -p db site_analytics_migration_is_privacy_minimized_and_idempotent
 cargo test -p db external_interface_usage_migration_starts_a_clean_privacy_minimized_epoch
 cargo test -p api site_analytics

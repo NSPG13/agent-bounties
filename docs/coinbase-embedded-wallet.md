@@ -23,12 +23,12 @@ A future smart-account adapter may be added independently, but it must not silen
 
 ## Preserved adapter design
 
-The from-scratch public-site redesign does not mount this adapter. Its source and
-locked dependencies remain available for a future reviewed wallet surface, but
-the homepage must not imply that Coinbase wallet authentication or sponsored
-funding is active today.
+The public on-ramp page links to Coinbase's own Base wallet surface as one of
+three external wallet/top-up variations. It does not load the embedded-wallet
+adapter or claim sponsored funding. The adapter source and locked dependencies
+remain available for a future separately reviewed first-party wallet surface.
 
-The intended future user experience remains:
+The intended embedded-adapter user experience remains:
 
 1. A user may browse, draft, and inspect bounties without a wallet.
 2. At the first action requiring an onchain identity, the wallet selector includes **Agent Bounties embedded wallet** beside injected wallets.
@@ -90,10 +90,11 @@ SMS is convenient but is more exposed to SIM-swap attacks. The linking screen st
 
 ## ChatGPT action continuity
 
-The deleted `authorize.html`, `funding.html`, and `earn.html` browser flow is not
-part of the redesigned public site. A future funding interface must preserve the
-same durable action-intent identifier and canonical `FundingAdded` evidence
-boundary; no wallet credential or signature may enter ChatGPT.
+The restored `authorize.html` review handoff preserves the durable action-intent
+identifier and canonical evidence boundary. The current Coinbase variation
+opens Coinbase's maintained public wallet surface and then returns to the
+provider-neutral on-ramp/posting flow; it does not mount the embedded adapter.
+No wallet credential or signature may enter ChatGPT.
 
 ## Gas sponsorship
 
@@ -183,7 +184,7 @@ python scripts/test_configure_wallet_providers.py
 npm run check --prefix tools/coinbase-embedded-wallet
 ```
 
-8. Add a reviewed public wallet surface and its page-specific tests before deploying the adapter. The current redesign intentionally has no Coinbase live-browser canary.
+8. Add a reviewed first-party embedded-wallet surface and its page-specific tests before deploying the adapter. The external Coinbase on-ramp link is not an embedded-wallet live-browser canary.
 9. Human-test one account for every enabled authentication method. Verify that each intended linked method restores the same wallet and that unlinked methods are clearly distinguished.
 10. Buy a bounded amount of Base USDC through MoonPay to the embedded EOA.
 11. Fund an existing bounty through the gas-only x402 relay.

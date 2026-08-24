@@ -391,9 +391,10 @@ def main() -> int:
         )
         require(
             post_descriptor["_meta"]["openai/fileParams"] == ["bounty_image"]
-            and "bounty_image"
-            in post_descriptor["inputSchema"]["required"],
-            "ChatGPT file handoff metadata drifted",
+            and "bounty_image" not in post_descriptor["inputSchema"]["required"]
+            and "image_prompt" not in post_descriptor["inputSchema"]["required"]
+            and "image_alt_text" not in post_descriptor["inputSchema"]["required"],
+            "provider-neutral optional file handoff metadata drifted",
         )
 
         resources = rpc("resources/list")["resources"]

@@ -915,6 +915,9 @@ ${competitionChildBrief(item)}`;
           const payload = await response.json();
           if (requestId !== accountLoadId || !currentUser) return null;
           renderAccountDashboard(payload);
+          if (Array.isArray(payload.wallets) && payload.wallets.length === 0) {
+            win.agentBountiesAnalytics?.track("wallet_missing_detected");
+          }
           return payload;
         } catch (error) {
           if (requestId === accountLoadId && currentUser) renderAccountDashboard(null);
@@ -984,6 +987,7 @@ ${competitionChildBrief(item)}`;
           return;
         }
         walletLinkButton.disabled = true;
+        win.agentBountiesAnalytics?.track("wallet_link_started");
         setWalletStatus("Choose the wallet address you want to link…");
         try {
           const accounts = await win.ethereum.request({ method: "eth_requestAccounts" });
@@ -1002,6 +1006,7 @@ ${competitionChildBrief(item)}`;
           });
           await loadAccount();
           setWalletStatus(`${shortWalletAddress(address)} is verified and linked.`);
+          win.agentBountiesAnalytics?.track("wallet_link_confirmed");
         } catch (error) {
           setWalletStatus(walletLinkErrorMessage(error));
         } finally {
@@ -1079,6 +1084,7 @@ ${competitionChildBrief(item)}`;
       loadSession().then(() => {
         if (authResult !== "success" && authResult !== "error") return;
         setStatus(authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
+        if (authResult === "success") win.agentBountiesAnalytics?.track("auth_completed");
         showDialog();
         authParams.delete("auth");
         authParams.delete("provider");
