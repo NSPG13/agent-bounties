@@ -67,6 +67,43 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(home.bountyAssistantLinks("unknown"), null);
 });
 
+test("competition posting handoffs preserve only live canonical context", () => {
+  const contract = "0x1111111111111111111111111111111111111111";
+  const request = home.parseCompetitionPostingRequest(`?parentCompetition=${contract}&network=base-mainnet`);
+  assert.deepEqual(request, { requested: true, valid: true, contract, network: "base-mainnet" });
+  assert.equal(home.parseCompetitionPostingRequest("").requested, false);
+  assert.equal(home.parseCompetitionPostingRequest(`?parentCompetition=${contract}&network=base-sepolia`).valid, false);
+
+  const item = {
+    opportunity_id: `open-competition-v2:base-mainnet:${contract}`,
+    source_id: contract,
+    network: "base-mainnet",
+    source_status: "active",
+    work_state: "claimable",
+    payment_state: "escrowed",
+    payment_committed: true,
+    verification_ready: true,
+    competition_mode: "best_score",
+    evidence_requirements: {
+      program_profile: "forward-canonical-gmv-attribution-metric-v2",
+      scoring_window: {
+        starts_at: "2026-08-24T00:00:00Z",
+        ends_at: "2026-08-31T00:00:00Z",
+      },
+    },
+  };
+  assert.equal(home.competitionPostingItem({ schema_version: "agent-bounties/opportunity-projection-v1", items: [item] }, request), item);
+  assert.throws(() => home.competitionPostingItem({ schema_version: "agent-bounties/opportunity-projection-v1", items: [{ ...item, verification_ready: false }] }, request));
+
+  const prompt = home.competitionPostingPrompt(item);
+  assert.match(prompt, new RegExp(contract));
+  assert.match(prompt, /2026-08-24T00:00:00Z through 2026-08-31T00:00:00Z/);
+  assert.match(prompt, /ask me to fill only its bracketed placeholders/i);
+  assert.match(prompt, /complete win, loss, and expected economics/i);
+  assert.doesNotMatch(prompt, /Begin by asking/);
+  assert.equal(new URL(home.bountyAssistantLinks("gpt", prompt).webUrl).searchParams.get("prompt"), prompt);
+});
+
 test("wallet linking helpers encode exact EIP-191 input without exposing raw errors", () => {
   assert.equal(
     home.shortWalletAddress("0x1234567890abcdef1234567890abcdef12345678"),
