@@ -20748,8 +20748,8 @@ mod tests {
         assert!(text.contains("# Agent Bounties"));
         assert!(text.contains("/.well-known/agent-bounties.json"));
         assert!(text.contains("http://127.0.0.1:8090/tools"));
-        assert!(text.contains("Do not skip steps"));
-        assert!(text.contains("get_solver_leaderboard"));
+        assert!(text.contains("server/discover"));
+        assert!(text.contains("plan_autonomous_bounty_creation"));
         assert!(text.contains("agent_native_claim"));
         assert!(text.contains("BountySettled"));
         assert!(!text.contains("createEscrow"));
