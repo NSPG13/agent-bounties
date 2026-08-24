@@ -31,8 +31,7 @@ class ProfitableInventoryContractTests(unittest.TestCase):
         mcp = (ROOT / "crates" / "mcp-server" / "src" / "main.rs").read_text(
             encoding="utf-8"
         )
-        home = (ROOT / "site" / "home.js").read_text(encoding="utf-8")
-        board = (ROOT / "site" / "bounty-board.js").read_text(encoding="utf-8")
+        home = (ROOT / "site" / "solarpunk-home.js").read_text(encoding="utf-8")
 
         for field in (
             "cash_economics",
@@ -44,10 +43,14 @@ class ProfitableInventoryContractTests(unittest.TestCase):
             self.assertIn(field, api)
         self.assertIn("/v1/opportunities", mcp)
         self.assertIn("list_autonomous_bounties", mcp)
-        for public_surface in (home, board):
-            self.assertIn("cash_economics", public_surface)
-            self.assertIn("gross_cash_margin", public_surface)
-            self.assertIn("not net profit", public_surface)
+        for marker in (
+            'item.source_type === "canonical_base"',
+            'item.work_state === "claimable"',
+            'item.payment_state === "escrowed"',
+            "item.payment_committed === true",
+            "item.verification_ready === true",
+        ):
+            self.assertIn(marker, home)
 
     def test_claimed_fixture_leaves_claimable_only_without_corruption_claim(self) -> None:
         item = json.loads(FIXTURE.read_text(encoding="utf-8"))

@@ -56,6 +56,9 @@
       <section>
         <h2>AI assistant handoffs</h2>
         <p>The Post a Bounty launcher prepares an initialization message for the assistant you choose. The browser opens the selected app or website, or copies the message at your request. Agent Bounties does not automatically submit that message and does not receive your conversation from the AI provider. Review every proposed write, signature, funding amount, network, and destination before approving it.</p>
+        <p>In the Agent Bounties ChatGPT app, the public and developer-installed experiences use the same hosted-action flow. ChatGPT hosted action intents may contain bounded public draft fields, public wallet addresses, exact review amounts, and an opaque one-hour identifier. They must never contain passwords, private keys, seed phrases, payment-card data, one-time codes, or wallet signatures. ChatGPT hosted action intents are deleted within 24 hours after expiry.</p>
+        <p>For ChatGPT-generated bounty images, ChatGPT uses the person's own ChatGPT account and supplies the approved file for content-addressed public storage. Agent Bounties does not use its own OpenAI API key to generate or replace that image.</p>
+        <p>When a future reviewed funding interface offers MoonPay, MoonPay handles the purchase, payment methods, eligibility, identity checks, provider credentials, fees, and delivery under its own terms. Buying Base USDC is separate from funding a bounty, and only matching canonical evidence changes bounty funding.</p>
       </section>
 
       <section>
