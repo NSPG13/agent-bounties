@@ -145,7 +145,7 @@ html[data-scene-ready="false"] .scene-plate {
   z-index: 20;
   top: 0;
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto minmax(360px, 1fr);
+  grid-template-columns: minmax(220px, 1fr) minmax(360px, auto);
   align-items: center;
   gap: 24px;
   height: var(--header-height);
@@ -202,49 +202,6 @@ html[data-scene-ready="false"] .scene-plate {
   font-size: .55rem;
   font-weight: 800;
   letter-spacing: .18em;
-}
-
-.market-volume {
-  display: grid;
-  min-width: 178px;
-  padding: 8px 19px 9px;
-  border: 1px solid rgba(201, 225, 182, 0.28);
-  border-radius: 3px 18px 3px 18px;
-  background:
-    linear-gradient(110deg, rgba(15, 32, 23, .76), rgba(5, 17, 12, .68)),
-    repeating-linear-gradient(92deg, rgba(255, 255, 255, .025) 0 1px, transparent 1px 7px);
-  text-decoration: none;
-  box-shadow: inset 0 0 26px rgba(89, 216, 211, .04), 0 14px 30px rgba(0, 0, 0, .18);
-  transition: border-color 180ms ease, transform 180ms ease, background 180ms ease;
-}
-
-.market-volume:hover {
-  border-color: rgba(213, 241, 120, .68);
-  background-color: rgba(18, 40, 27, .76);
-  transform: translateY(-1px);
-}
-
-.market-volume > span {
-  color: #aeb9ad;
-  font-size: .63rem;
-  font-weight: 800;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-}
-
-.market-volume strong {
-  color: #f2f3e7;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 1.1rem;
-  font-weight: 600;
-  letter-spacing: .03em;
-}
-
-.market-volume small {
-  color: var(--rune);
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: .58rem;
-  letter-spacing: .11em;
 }
 
 .scene-nav {
@@ -438,8 +395,9 @@ html[data-scene-ready="false"] .scene-plate {
 .metric-pair {
   display: grid;
   grid-template-columns: 1fr 1px 1fr;
+  grid-template-rows: auto auto;
   align-items: center;
-  min-height: 118px;
+  min-height: 166px;
   padding: 17px 26px 18px;
   border-block: 1px solid rgba(214, 229, 197, .24);
   background:
@@ -487,6 +445,35 @@ html[data-scene-ready="false"] .scene-plate {
 
 .metric-pair output[data-loaded="true"] {
   animation: metric-live 900ms ease both;
+}
+
+.metric-market {
+  grid-column: 1 / -1;
+  padding-top: 11px;
+  border-top: 1px solid rgba(190, 213, 169, .22);
+}
+
+.metric-market-value {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 7px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 180ms ease, filter 180ms ease;
+}
+
+.metric-market-value b {
+  color: var(--rune);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: .64rem;
+  letter-spacing: .12em;
+}
+
+.metric-market-value:hover {
+  color: #f5fadf;
+  filter: drop-shadow(0 0 10px rgba(213, 241, 120, .2));
 }
 
 .hero-action {
@@ -2031,7 +2018,7 @@ html[data-scene-ready="false"] .scene-plate {
   }
 
   .scene-header {
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: 1fr auto;
     gap: 14px;
     padding-inline: 20px;
   }
@@ -2067,7 +2054,7 @@ html[data-scene-ready="false"] .scene-plate {
   }
 
   .scene-header {
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto;
   }
 
   .scene-nav button:not(.login-preview) {
@@ -2149,19 +2136,6 @@ html[data-scene-ready="false"] .scene-plate {
     font-size: .92rem;
   }
 
-  .market-volume {
-    min-width: 112px;
-    padding: 6px 10px 7px;
-  }
-
-  .market-volume > span {
-    font-size: .52rem;
-  }
-
-  .market-volume strong {
-    font-size: .83rem;
-  }
-
   .login-preview {
     min-width: 58px !important;
     min-height: 36px !important;
@@ -2212,7 +2186,7 @@ html[data-scene-ready="false"] .scene-plate {
   }
 
   .metric-pair {
-    min-height: 102px;
+    min-height: 142px;
     padding: 12px 6px 13px;
     backdrop-filter: blur(3px);
   }
@@ -2232,6 +2206,18 @@ html[data-scene-ready="false"] .scene-plate {
 
   .metric-pair > i {
     height: 65px;
+  }
+
+  .metric-market {
+    padding-top: 8px;
+  }
+
+  .metric-market-value {
+    gap: 5px;
+  }
+
+  .metric-market-value b {
+    font-size: .52rem;
   }
 
   .hero-action {
