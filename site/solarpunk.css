@@ -1810,6 +1810,31 @@ html[data-scene-ready="false"] .scene-plate {
   box-shadow: inset 0 0 16px rgba(178, 222, 91, .035);
 }
 
+.assistant-mark img {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  opacity: .92;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.assistant-mark--claude img {
+  width: 23px;
+  height: 23px;
+}
+
+.assistant-mark--cursor img {
+  width: 20px;
+  height: 23px;
+}
+
+.bounty-assistant-list > button:hover .assistant-mark img,
+.bounty-assistant-list > button:focus-visible .assistant-mark img {
+  opacity: 1;
+  transform: scale(1.06);
+}
+
 .bounty-assistant-list strong,
 .bounty-assistant-list small {
   display: block;
@@ -1990,6 +2015,12 @@ html[data-scene-ready="false"] .scene-plate {
   15%, 76% { opacity: .5; }
   52% { transform: translate3d(-2vw, -3px, 0) scale(.96); }
   100% { opacity: 0; transform: translate3d(-9vw, 3px, 0) scale(.94); }
+}
+
+@media (min-width: 821px) {
+  .stone-title {
+    line-height: 1;
+  }
 }
 
 @media (max-width: 1080px) {

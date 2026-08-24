@@ -322,7 +322,7 @@ def check_homepage(site_dir: Path) -> None:
     if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
         fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
     stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
-    if not stylesheet_version or int(stylesheet_version.group(1)) < 11:
+    if not stylesheet_version or int(stylesheet_version.group(1)) < 12:
         fail("the homepage must load the flow-layout stylesheet through a cache-busted URL")
     require_phrases(
         "index.html bounty assistant launcher",
@@ -334,9 +334,15 @@ def check_homepage(site_dir: Path) -> None:
             'data-bounty-assistant="claude"',
             'data-bounty-assistant="cursor"',
             'data-bounty-assistant="custom"',
+            'assets/solarpunk/provider-openai.svg',
+            'assets/solarpunk/provider-claude.svg',
+            'assets/solarpunk/provider-cursor.svg',
             "The prompt is never submitted automatically.",
         ],
     )
+    for placeholder in ('class="assistant-mark" aria-hidden="true">G<', 'class="assistant-mark" aria-hidden="true">C<', '>⌁</span>'):
+        if placeholder in page:
+            fail("the bounty assistant chooser must use provider vector marks, not letter placeholders")
     require_phrases(
         "index.html login dialog",
         page,
@@ -412,6 +418,9 @@ def check_homepage(site_dir: Path) -> None:
         fail("the homepage CTA must not use independent absolute positioning")
     if "margin-top: clamp(32px, 4vh, 40px)" not in hero_action_css.group("body"):
         fail("the desktop bounty CTA must retain breathing room below the headline")
+    desktop_title_css = re.search(r"@media\s*\(min-width:\s*821px\)\s*\{\s*\.stone-title\s*\{(?P<body>[^}]*)\}", css)
+    if not desktop_title_css or "line-height: 1" not in desktop_title_css.group("body"):
+        fail("the desktop hero title must retain its increased line spacing")
     scene_header_css = re.search(r"\.scene-header\s*\{(?P<body>[^}]*)\}", css)
     if not scene_header_css or "position: sticky" not in scene_header_css.group("body") or "top: 0" not in scene_header_css.group("body"):
         fail("the homepage navigation must remain sticky at the top of the viewport")
@@ -419,6 +428,14 @@ def check_homepage(site_dir: Path) -> None:
         match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
         if not match or "font-size: inherit" not in match.group("body"):
             fail("every hero headline phrase must inherit one shared font size")
+    for relative in (
+        "assets/solarpunk/provider-openai.svg",
+        "assets/solarpunk/provider-claude.svg",
+        "assets/solarpunk/provider-cursor.svg",
+    ):
+        provider_svg = (site_dir / relative).read_text(encoding="utf-8")
+        if "<svg" not in provider_svg or "<path" not in provider_svg:
+            fail(f"provider logo is not a usable vector asset: {relative}")
     structured = re.search(r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>', page, re.DOTALL)
     if not structured:
         fail("homepage must expose JSON-LD identity")
