@@ -14,6 +14,16 @@ The initial owner is
 delegate holds no reserve USDC and cannot withdraw, transfer, settle, verify, or
 change policy.
 
+A prepared reward experiment first uses owner-only zero-value revocation and
+safe-block balance/spend reconciliation, then an owner-only zero-value policy
+replacement with five exact 6.04-USDC creation commitments. This closes the
+race in which the old delegate could consume a prior commitment before the
+replacement was mined. It does not increase the
+30.40-USDC daily cap or 77.668098-USDC lifetime cap and reserves 15.20 USDC for
+a later five-item baseline floor. The configure transaction invalidates unused
+commitments from the prior policy version; this is disclosed and reviewed, not
+an implicit delegate capability.
+
 ## Trust boundaries
 
 - The owner approves deployment, initial funding, policy changes, revocation,
@@ -41,7 +51,7 @@ change policy.
 | Delegate funds a general artifact or first-proven bounty | Wallet independently requires `BestScore`, `HigherIsBetter`, positive threshold, and exact canonical-GMV metric/journal hashes before charging spend | A defect in the approved GMV program remains an R4 profile-review risk |
 | Fabricated or selectively omitted GMV | Full closed-epoch snapshot is content-addressed; primary and shadow projections must match; the proof derives score from the exact frozen snapshot | Indexer agreement is not proof of organizational independence; the public snapshot must remain reproducible from canonical events |
 | Self-funded or circular volume | Operator/reserve funding, excluded reward contracts, creator-equals-solver, and entrant-equals-solver rows score zero | Different wallets can share beneficial control; v1 does not claim person-level sybil resistance |
-| Allowance theft | Wallet approves only the predicted competition for exactly 3.04 USDC and resets allowance to zero after canonical activation | A defective approved factory release remains a release-review risk |
+| Allowance theft | Wallet approves only the predicted competition for the exact current policy amount (3.04 USDC baseline or 6.04 USDC treatment) and resets allowance to zero after canonical activation | A defective approved factory release remains a release-review risk |
 | Fake or partially funded activation | Post-call checks require predicted address, canonical-factory registration, owner identity, token, target, funded amount, active status, and zero allowance | Canonical factory or token defects require migration |
 | Front-run deterministic wallet deployment | Unfunded deployment requires `msg.sender == owner`; funded EIP-3009 execution sends funds only to the owner/policy-bound predicted wallet | A copied valid authorization may be relayed first, but cannot redirect funds |
 | Duplicate initial funding | Funded factory paths reject an already deployed wallet and token balance deltas must match exactly | Owner can still intentionally transfer tokens directly; UI must warn against bypassing the reviewed flow |

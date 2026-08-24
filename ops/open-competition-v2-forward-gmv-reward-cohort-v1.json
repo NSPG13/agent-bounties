@@ -1,0 +1,316 @@
+{
+  "schema_version": "agent-bounties/open-competition-v2-forward-gmv-reward-cohort-v1",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
+  "network": "base-mainnet",
+  "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+  "release_hash": "0x46008fb819726a43209e55ee7e58c92700a8fc3435f76be282bfdef710ced594",
+  "reserve_wallet": "0x7b0ae568f76d11aa4025e2aa05865a566bbcfc8d",
+  "profile_release": {
+    "profile_id": "forward-canonical-gmv-attribution-metric-v2",
+    "status": "reviewed",
+    "metric_program_hash": "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9",
+    "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+    "execution_policy_hash": "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a",
+    "settlement_policy_hash": "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee",
+    "program_vkey": "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+    "source_hash": "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+    "elf_hash": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8"
+  },
+  "approved_at": "2026-08-24T10:09:53Z",
+  "expires_at": "2026-10-31T23:59:59Z",
+  "economics": {
+    "solver_reward_base_units": 6000000,
+    "keeper_reward_base_units": 40000,
+    "total_per_competition_base_units": 6040000
+  },
+  "experiment": {
+    "hypothesis": "A prize that leaves a positive cash result after a 3-USDC child settlement will increase qualified starts and canonical entries.",
+    "treatment": "6-USDC solver prize with the same scoring profile, instructions, child template, and matched UTC window.",
+    "control": "The already active 3-USDC solver-prize competition with the matched UTC window.",
+    "primary_metric": "competition_entry_confirmed per qualified competition_view session",
+    "leading_metrics": [
+      "funded_bounty_click",
+      "competition_instructions_copied",
+      "competition_child_post_started",
+      "competition_feedback_submitted"
+    ],
+    "outcomes": [
+      "externally funded canonical GMV",
+      "CompetitionSettledV2"
+    ],
+    "minimum_qualified_starts": 10,
+    "decision_rule": "Do not promote from traffic alone; require at least ten qualified starts and no reduction in canonical GMV or payment integrity."
+  },
+  "eligibility_policy": {
+    "excluded_wallets": [
+      "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0x7b0ae568f76d11aa4025e2aa05865a566bbcfc8d",
+      "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "0xb358898d34c5e907877a1cd7540b234f6851f61b",
+      "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "excluded_bounty_contracts": [
+      "0x1692fecdb678537eb4cc0093e9e4e99dbded9806",
+      "0x2f1d2b24105596b153e473032256569fe544a44f",
+      "0x36e45ec89b61f551724558ed799ad4e07c288175",
+      "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "0x441e8bded29917999fc0e8330c83553262fa2f08",
+      "0x5817b7742b085d333c7e7831daa62a490c493b56",
+      "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "0x6a791b05333d9ca7d28a052003ced4818a372c7f",
+      "0x6f635dfd07085aa48ec8b11767eeb48936969f5c",
+      "0x8c494466711c1de316c7e7599f8b0641a30a0c98",
+      "0x8c990ddf5360c00ee0b2090000e3a3a6f90a6a9d",
+      "0x979782be0bfefb78ac0459d4695d619932ecdda4",
+      "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+      "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+    ],
+    "wallet_boundary": "Known owner, reserve, delegate, deployer, and snapshot-attester wallets are ineligible. Wallets are not inferred to be unique people.",
+    "contract_boundary": "All reward contracts active when this cohort was reviewed are excluded, together with the baseline exclusions."
+  },
+  "attestation_policy": {
+    "attesters": [
+      "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "threshold": 2,
+    "purpose": "Two deterministic signers attest the exact dual-indexer safe-block snapshot; neither signer nor AI selects the winner."
+  },
+  "scoring_policy": {
+    "score_unit": "usdc_base_units",
+    "winner_mode": "best_score",
+    "score_direction": "higher_is_better",
+    "attribution": "settlement_gmv_times_entrant_funding_divided_by_total_funding",
+    "tie_break": "earliest qualifying proof sequence"
+  },
+  "candidates": [
+    {
+      "candidate_id": "external-gmv-reward-6usdc-daily-20260825-v1",
+      "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 daily 20260825",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-25T00:00:00Z",
+        "ends_at": "2026-08-26T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x170f7705d98a3116c6e7bb2c6c49ece365eda281ca2be2033f8d4e40a6c6f289"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xa81438779807146f343271f1350d2e2bb811e61c617d95978f0c883de6a3cebc",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-26T00:00:00Z"
+      },
+      "matched_control": {
+        "candidate_id": "external-gmv-forward-daily-20260825-v2",
+        "solver_reward_base_units": 3000000,
+        "starts_at": "2026-08-25T00:00:00Z",
+        "ends_at": "2026-08-26T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        },
+        {
+          "kind": "privacy_safe_funnel_metric",
+          "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "observable_public_participation_behavior",
+          "url": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300",
+          "observation": "The reviewed 3-USDC controls had zero accepted entries at cohort review time."
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-reward-6usdc-daily-20260826-v1",
+      "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 daily 20260826",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-26T00:00:00Z",
+        "ends_at": "2026-08-27T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x66ea8b217cc2cc08c45382405d7bae18cbd9eebc96e3745c8d928562254c68df"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x6ead994859b7e72db2f9d621a03aa0c2d685d20573f56b326717b33a3ce93e23",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-27T00:00:00Z"
+      },
+      "matched_control": {
+        "candidate_id": "external-gmv-forward-daily-20260826-v2",
+        "solver_reward_base_units": 3000000,
+        "starts_at": "2026-08-26T00:00:00Z",
+        "ends_at": "2026-08-27T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        },
+        {
+          "kind": "privacy_safe_funnel_metric",
+          "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "observable_public_participation_behavior",
+          "url": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300",
+          "observation": "The reviewed 3-USDC controls had zero accepted entries at cohort review time."
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-reward-6usdc-daily-20260827-v1",
+      "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 daily 20260827",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-27T00:00:00Z",
+        "ends_at": "2026-08-28T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x8ea3eec80412bbe126fad9e043c1d40e41adaeeff13017947e5877484db173fe"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x438a46f8103de81b96fe48de248c8908f509b21fa8254a5355e8a04c94277528",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-08-28T00:00:00Z"
+      },
+      "matched_control": {
+        "candidate_id": "external-gmv-forward-daily-20260827-v2",
+        "solver_reward_base_units": 3000000,
+        "starts_at": "2026-08-27T00:00:00Z",
+        "ends_at": "2026-08-28T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        },
+        {
+          "kind": "privacy_safe_funnel_metric",
+          "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "observable_public_participation_behavior",
+          "url": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300",
+          "observation": "The reviewed 3-USDC controls had zero accepted entries at cohort review time."
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-reward-6usdc-week-20260831-v1",
+      "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 week 20260831",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-08-31T00:00:00Z",
+        "ends_at": "2026-09-07T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0xb2f9f8ba04bfcbcf4858ccf32338f9f807a5fa57e37d31d3fd0d46b60a8fef3f"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0xbf60c6e630dc123f02115765623bb882f661a9b8594448678b39e774b2c9831a",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-07T00:00:00Z"
+      },
+      "matched_control": {
+        "candidate_id": "external-gmv-forward-week-20260831-v2",
+        "solver_reward_base_units": 3000000,
+        "starts_at": "2026-08-31T00:00:00Z",
+        "ends_at": "2026-09-07T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        },
+        {
+          "kind": "privacy_safe_funnel_metric",
+          "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "observable_public_participation_behavior",
+          "url": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300",
+          "observation": "The reviewed 3-USDC controls had zero accepted entries at cohort review time."
+        }
+      ]
+    },
+    {
+      "candidate_id": "external-gmv-reward-6usdc-fortnight-20260907-v1",
+      "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 fortnight 20260907",
+      "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
+      "gmv_lane": "external_supply",
+      "epoch": {
+        "starts_at": "2026-09-07T00:00:00Z",
+        "ends_at": "2026-09-21T00:00:00Z",
+        "minimum_score_base_units": 1,
+        "epoch_id": "0x34750799f9f543ea8b35feaceb2b50b248ce358b3aad071f482900399c394b8c"
+      },
+      "snapshot": {
+        "status": "scheduled",
+        "verification_policy_hash": "0x617eb9935be1dd5d7287068ec5a9ce3e15b92851a84ec8633813199863b05e73",
+        "snapshot_attesters": [
+          "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+          "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+        ],
+        "snapshot_attestation_threshold": 2,
+        "canonical_snapshot_due_after": "2026-09-21T00:00:00Z"
+      },
+      "matched_control": {
+        "candidate_id": "external-gmv-forward-fortnight-20260907-v2",
+        "solver_reward_base_units": 3000000,
+        "starts_at": "2026-09-07T00:00:00Z",
+        "ends_at": "2026-09-21T00:00:00Z"
+      },
+      "analysis_sources": [
+        {
+          "kind": "canonical_platform_metric",
+          "url": "https://api.agentbounties.app/v1/metrics/platform?period=28d"
+        },
+        {
+          "kind": "privacy_safe_funnel_metric",
+          "url": "https://api.agentbounties.app/v1/analytics/site?window_hours=720"
+        }
+      ],
+      "feedback_sources": [
+        {
+          "kind": "observable_public_participation_behavior",
+          "url": "https://api.agentbounties.app/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&limit=300",
+          "observation": "The reviewed 3-USDC controls had zero accepted entries at cohort review time."
+        }
+      ]
+    }
+  ],
+  "evidence_boundary": "This reviewed cohort specification is not a policy change, activation, GMV event, entry, payout, or settlement."
+}

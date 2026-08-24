@@ -34,13 +34,26 @@ public APIs.
 
 The GitHub workflow contains no spending key. A separately isolated delegate
 submits calls, but never owns the reserve. The bounded on-chain wallet is owned
-by the operator funding address and independently enforces exact 3.04-USDC
-creations, `best_score`/`higher_is_better` GMV profile hashes, a 30.40-USDC
+by the operator funding address and independently enforces the exact
+owner-approved policy-epoch amount (3.04 USDC in the baseline epoch),
+`best_score`/`higher_is_better` GMV profile hashes, a 30.40-USDC
 UTC-day cap, a 77.668098-USDC lifetime cap, the reviewed factory, deterministic
 candidate commitments and nonces, exact allowance
 consumption, revocation, and owner-only recovery. A planned or broadcast
 execution blocks new planning until the delegate reconciles it to canonical
 activation or rejection.
+
+A reward-size experiment may replace the baseline epoch only after an
+owner-signed zero-value `revokePolicy` transaction reaches a safe block with
+unchanged spend and balance, followed by a zero-value `configurePolicy`
+transaction. The reviewed treatment
+contains five exact 6.04-USDC commitments matched to already active 3-USDC
+solver-prize windows. It leaves the UTC-day and lifetime caps unchanged,
+preserves at least 15.20 USDC for a later five-item baseline floor, and does not
+move USDC in either owner transaction. The treatment is not active until the
+exact policy version and hash are reconciled at a Base safe block; a source
+artifact, simulation, signature, transaction hash, or receipt alone is not
+activation evidence.
 
 The owner can revoke the delegate and recover all uncommitted USDC without the
 delegate's cooperation. Active escrow is not clawbackable while competitors

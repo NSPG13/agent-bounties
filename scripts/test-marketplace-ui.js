@@ -87,6 +87,21 @@ test("economics includes child capital and the complete losing exposure", () => 
   assert.equal(result.totalCost, 3.11);
 });
 
+test("the unified card shows complete variable-cost and losing-exposure formulas", () => {
+  const item = v2Opportunity();
+  const context = marketplace.decisionContext(item);
+  const card = marketplace.renderOpportunity(item, 0, Date.parse("2026-08-26T00:00:00Z"));
+
+  assert.deepEqual(context, {
+    win: "If you win: 2.89 USDC minus child funding and labor",
+    loss: "If you lose: child funding plus 0.11 USDC hosted costs and labor",
+  });
+  assert.match(card, /If you win: 2\.89 USDC minus child funding and labor/);
+  assert.match(card, /If you lose: child funding plus 0\.11 USDC hosted costs and labor/);
+  assert.match(card, /Calculate and participate/);
+  assert.doesNotMatch(card, /published margin if you win/);
+});
+
 test("the participation manifest and prefilled child brief are contract-specific", () => {
   const item = v2Opportunity();
   const timing = marketplace.timingState(item, Date.parse("2026-08-26T00:00:00Z"));
