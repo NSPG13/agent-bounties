@@ -316,6 +316,11 @@ def check_homepage(site_dir: Path) -> None:
     )
     if page.count("<button type=\"button\" disabled>") < 2:
         fail("unfinished About and Find controls must remain native disabled buttons")
+    hero_start = page.find('<section class="hero"')
+    hero_end = page.find("</section>", hero_start)
+    hero_action = page.find('<div class="hero-action">', hero_start)
+    if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
+        fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
     require_phrases(
         "index.html bounty assistant launcher",
         page,
@@ -388,6 +393,9 @@ def check_homepage(site_dir: Path) -> None:
         css,
         [
             ".stone-title",
+            ".stone-title span:nth-child(1) {\n  font-size: inherit;",
+            ".stone-title span:nth-child(3) {",
+            ".stone-title em {",
             ".vine-column",
             ".fire-aura",
             ".auth-dialog::backdrop",
@@ -396,6 +404,13 @@ def check_homepage(site_dir: Path) -> None:
             "@media (max-width: 560px)",
         ],
     )
+    hero_action_css = re.search(r"\.hero-action\s*\{(?P<body>[^}]*)\}", css)
+    if not hero_action_css or re.search(r"(?<![-\w])(?:position|top|left|transform)\s*:", hero_action_css.group("body")):
+        fail("the homepage CTA must not use independent absolute positioning")
+    for selector in (r"\.stone-title span:nth-child\(1\)", r"\.stone-title span:nth-child\(3\)", r"\.stone-title em"):
+        match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
+        if not match or "font-size: inherit" not in match.group("body"):
+            fail("every hero headline phrase must inherit one shared font size")
     structured = re.search(r'<script\s+type="application/ld\+json">\s*(\{.*?\})\s*</script>', page, re.DOTALL)
     if not structured:
         fail("homepage must expose JSON-LD identity")
