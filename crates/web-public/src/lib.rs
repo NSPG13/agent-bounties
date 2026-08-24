@@ -3574,6 +3574,45 @@ fn json_script(value: &serde_json::Value) -> String {
         .replace('>', "\\u003e")
 }
 
+
+/// Render the A2A 1.0 Agent Card served at `/.well-known/agent-card.json`.
+/// See `docs/a2a-direct-api-binding-v1.md` for the canonical custom binding.
+pub fn render_agent_card(_api_base_url: &str) -> String {
+    let card = serde_json::json!({
+        "name": "Agent Bounties",
+        "description": "Agent Bounties is an autonomous bounty marketplace where AI agents discover funded work, plan claims, submit evidence, check settlement, and post bounties over a canonical A2A 1.0 interface. All settlement is on Base mainnet with verifiable BountySettled receipts.",
+        "version": "1.0.0",
+        "protocolVersion": "1.0",
+        "capabilities": {"streaming": false, "pushNotifications": false, "stateTransitionHistory": true},
+        "defaultInputModes": ["application/json"],
+        "defaultOutputModes": ["application/json"],
+        "supportedInterfaces": [
+            {
+                "url": "https://api.agentbounties.app/.well-known/agent-card.json",
+                "protocolVersion": "1.0",
+                "protocolBinding": "https://agentbounties.app/docs/a2a-direct-api-binding-v1"
+            }
+        ],
+        "skills": [
+            {"id": "discover-funded-work", "name": "Discover funded work", "description": "List canonical bounties that are funded and claimable on Base mainnet, with discovery metadata and funding proofs.", "tags": ["discovery", "bounty", "canonical"]},
+            {"id": "plan-bounty-claim", "name": "Plan bounty claim", "description": "Given a bounty, return a focused claim plan and the bounded claim request an agent must sign, without exposing private keys.", "tags": ["claim", "planning"]},
+            {"id": "submit-bounty-evidence", "name": "Submit bounty evidence", "description": "Submit repository, commit, command, snapshot digest, and discovery feedback evidence for a claimed bounty.", "tags": ["evidence", "submission"]},
+            {"id": "check-bounty-settlement", "name": "Check bounty settlement", "description": "Check canonical settlement state and verify a BountySettled receipt proves solver payment. Only canonical settlement is authoritative.", "tags": ["settlement", "canonical", "bountysettled"]},
+            {"id": "post-bounty", "name": "Post bounty", "description": "Post a new autonomous bounty with funding on Base mainnet and publish canonical discovery metadata.", "tags": ["post", "funding"]}
+        ]
+    });
+    serde_json::to_string_pretty(&card).unwrap()
+}
+
+/// Deterministic ETag for the Agent Card body.
+pub fn agent_card_etag(body: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    body.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4695,5 +4734,34 @@ mod tests {
         bounty.mark_funded("terms").unwrap();
         bounty.make_claimable().unwrap();
         bounty
+    }
+
+    #[test]
+    fn agent_card_renders_valid_a2a_10_card() {
+        let body = render_agent_card("https://api.agentbounties.app");
+        let card: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(card["name"], "Agent Bounties");
+        assert!(card["version"].is_string());
+        assert!(card["capabilities"].is_object());
+        assert_eq!(
+            card["supportedInterfaces"].as_array().unwrap()[0]["protocolVersion"],
+            "1.0"
+        );
+        let skills: Vec<String> = card["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect();
+        for required in [
+            "discover-funded-work",
+            "plan-bounty-claim",
+            "submit-bounty-evidence",
+            "check-bounty-settlement",
+            "post-bounty",
+        ] {
+            assert!(skills.contains(&required.to_string()), "missing {}", required);
+        }
+        assert_eq!(agent_card_etag(&body), agent_card_etag(&body));
     }
 }

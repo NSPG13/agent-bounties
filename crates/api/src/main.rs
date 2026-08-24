@@ -2168,6 +2168,7 @@ async fn main() -> anyhow::Result<()> {
     let public_app = Router::new()
         .route("/health", get(health))
         .route("/llms.txt", get(llms_txt))
+        .route("/.well-known/agent-card.json", get(agent_card))
         .route("/v1/legal/policy", get(legal_policy))
         .route("/v1/legal/acceptances", post(record_legal_acceptance))
         .route(
@@ -2817,6 +2818,27 @@ fn health_response(revision: &str) -> impl IntoResponse {
 #[utoipa::path(get, path = "/llms.txt", responses((status = 200, body = String)))]
 async fn llms_txt(State(state): State<SharedState>) -> String {
     web_public::render_llms_txt(&state.public_base_url, &state.mcp_base_url)
+}
+
+/// A2A 1.0 Agent Card served at `/.well-known/agent-card.json`.
+/// The response sets an `ETag` and `Cache-Control` header so A2A clients cache the card.
+/// See `docs/a2a-direct-api-binding-v1.md` for the canonical binding.
+async fn agent_card(State(state): State<SharedState>) -> Response {
+    use axum::http::header;
+    let body = web_public::render_agent_card(&state.public_base_url);
+    let etag = format!("\"{}\"", web_public::agent_card_etag(&body));
+    (
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=300"),
+            ),
+            (header::ETAG, HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"\""))),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -20735,6 +20757,21 @@ mod tests {
         assert!(text.contains("agent_native_claim"));
         assert!(text.contains("BountySettled"));
         assert!(!text.contains("createEscrow"));
+    }
+
+    #[tokio::test]
+    async fn agent_card_is_served_with_cache_headers_and_etag() {
+        let state = test_state(BountyNetwork::default());
+        let response = agent_card(State(state)).await;
+        let (parts, _body) = response.into_response().into_parts();
+        let headers = parts.headers;
+        assert!(headers.contains_key(axum::http::header::ETAG));
+        assert!(headers.contains_key(axum::http::header::CACHE_CONTROL));
+        let ct = headers.get(axum::http::header::CONTENT_TYPE);
+        assert_eq!(
+            ct.and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
     }
 
     #[test]
