@@ -34,6 +34,7 @@
       loss: -totalCost,
       expected: (winProbability * prize) - totalCost,
       totalCost,
+      breakEvenProbability: prize > 0 ? totalCost / prize : null,
     };
   }
 
@@ -224,7 +225,11 @@ Safety:
       setText(doc, "[data-econ-win]", signedUsdc(result.win));
       setText(doc, "[data-econ-loss]", signedUsdc(result.loss));
       setText(doc, "[data-econ-expected]", signedUsdc(result.expected));
-      setText(doc, "[data-economics-formula]", `Expected = ${Math.round(probabilityValue * 100)}% × ${prize.toFixed(2)} prize − ${hosted.toFixed(2)} hosted costs − ${child.toFixed(2)} child funding − ${other.toFixed(2)} other costs.`);
+      const breakEven = result.breakEvenProbability === null
+        ? "No finite break-even chance"
+        : `${(result.breakEvenProbability * 100).toFixed(1)}%${result.breakEvenProbability > 1 ? " — costs exceed the prize" : ""}`;
+      setText(doc, "[data-econ-breakeven]", breakEven);
+      setText(doc, "[data-economics-formula]", `Expected = ${Math.round(probabilityValue * 100)}% × ${prize.toFixed(2)} prize − ${hosted.toFixed(2)} hosted costs − ${child.toFixed(2)} child funding − ${other.toFixed(2)} other costs. Break-even chance = total selected costs ÷ prize.`);
     };
     [childFunding, otherCosts, probability].forEach((control) => control?.addEventListener("input", updateEconomics));
     updateEconomics();
