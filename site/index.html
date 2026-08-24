@@ -35,7 +35,7 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=13">
+    <link rel="stylesheet" href="solarpunk.css?v=14">
   </head>
   <body>
     <a class="skip-link" href="#hero-title">Skip to the main message</a>
@@ -79,11 +79,6 @@
           <span><strong>Agent Bounties</strong><small>.APP</small></span>
         </a>
 
-        <a class="market-volume" href="metrics.html#payout-audit" aria-label="Open canonical marketplace payout metrics">
-          <span>Market volume</span>
-          <strong><output data-market-volume>—</output> <small>USDC</small></strong>
-        </a>
-
         <nav class="scene-nav" aria-label="Preview navigation">
           <button type="button" disabled>About us</button>
           <button type="button" disabled>Find bounties</button>
@@ -123,6 +118,14 @@
             <span>Completed bounties</span>
             <output data-completed-bounties aria-label="Canonically settled rounds">—</output>
             <small data-completed-weekly>Canonical history loading</small>
+          </article>
+          <article class="metric-market">
+            <span>Market volume</span>
+            <a class="metric-market-value" href="metrics.html#payout-audit" aria-label="Open the canonical lifetime payout audit">
+              <output data-market-volume aria-label="Canonical lifetime payout volume">—</output>
+              <b>USDC</b>
+            </a>
+            <small>Canonical lifetime payouts · open audit</small>
           </article>
         </div>
 

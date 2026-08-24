@@ -322,8 +322,21 @@ def check_homepage(site_dir: Path) -> None:
     if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
         fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
     stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
-    if not stylesheet_version or int(stylesheet_version.group(1)) < 13:
+    if not stylesheet_version or int(stylesheet_version.group(1)) < 14:
         fail("the homepage must load the flow-layout stylesheet through a cache-busted URL")
+    header_start = page.find('<header class="scene-header">')
+    header_end = page.find("</header>", header_start)
+    market_volume = page.find("data-market-volume")
+    metrics_start = page.find('<section class="market-proof"')
+    metrics_end = page.find("</section>", metrics_start)
+    if min(header_start, header_end, market_volume, metrics_start, metrics_end) < 0:
+        fail("the homepage must retain its header and marketplace metric structure")
+    if header_start < market_volume < header_end:
+        fail("market volume must not be displayed in the navigation header")
+    if not metrics_start < market_volume < metrics_end:
+        fail("market volume must be displayed in the marketplace metrics panel")
+    if 'class="metric-market"' not in page:
+        fail("market volume must occupy the full-width third metric row")
     require_phrases(
         "index.html bounty assistant launcher",
         page,
