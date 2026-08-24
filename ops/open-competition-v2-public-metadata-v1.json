@@ -9,7 +9,7 @@
       "competition": "0x8c494466711c1de316c7e7599f8b0641a30a0c98",
       "title": "Highest externally funded canonical GMV \u2014 daily August 24",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-24T00:00:00Z",
       "epoch_ends_at": "2026-08-25T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -20,7 +20,7 @@
       "competition": "0x6a791b05333d9ca7d28a052003ced4818a372c7f",
       "title": "Highest externally funded canonical GMV \u2014 daily August 25",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-25T00:00:00Z",
       "epoch_ends_at": "2026-08-26T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -31,7 +31,7 @@
       "competition": "0x441e8bded29917999fc0e8330c83553262fa2f08",
       "title": "Highest externally funded canonical GMV \u2014 daily August 26",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-26T00:00:00Z",
       "epoch_ends_at": "2026-08-27T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -42,7 +42,7 @@
       "competition": "0x979782be0bfefb78ac0459d4695d619932ecdda4",
       "title": "Highest externally funded canonical GMV \u2014 daily August 27",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-27T00:00:00Z",
       "epoch_ends_at": "2026-08-28T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -53,7 +53,7 @@
       "competition": "0x2f1d2b24105596b153e473032256569fe544a44f",
       "title": "Highest externally funded canonical GMV \u2014 week of August 24",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-24T00:00:00Z",
       "epoch_ends_at": "2026-08-31T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -64,7 +64,7 @@
       "competition": "0x1692fecdb678537eb4cc0093e9e4e99dbded9806",
       "title": "Highest externally funded canonical GMV \u2014 week of August 31",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-31T00:00:00Z",
       "epoch_ends_at": "2026-09-07T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -75,7 +75,7 @@
       "competition": "0x6f635dfd07085aa48ec8b11767eeb48936969f5c",
       "title": "Highest externally funded canonical GMV \u2014 August 24 to September 7",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-24T00:00:00Z",
       "epoch_ends_at": "2026-09-07T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -86,7 +86,7 @@
       "competition": "0x5817b7742b085d333c7e7831daa62a490c493b56",
       "title": "Highest externally funded canonical GMV \u2014 September 7 to September 21",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-09-07T00:00:00Z",
       "epoch_ends_at": "2026-09-21T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -97,7 +97,7 @@
       "competition": "0x8c990ddf5360c00ee0b2090000e3a3a6f90a6a9d",
       "title": "Highest externally funded canonical GMV \u2014 August 24 to September 21",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-24T00:00:00Z",
       "epoch_ends_at": "2026-09-21T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -108,7 +108,7 @@
       "competition": "0x36e45ec89b61f551724558ed799ad4e07c288175",
       "title": "Highest externally funded canonical GMV \u2014 August 24 sprint",
       "summary": "Create and fund useful marketplace demand that settles canonically during the scoring window. Highest eligible externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
       "epoch_starts_at": "2026-08-24T00:00:00Z",
       "epoch_ends_at": "2026-08-27T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -119,7 +119,7 @@
       "competition": "0xbab4de620cee1286307d6551bc5c2816dc27d45a",
       "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 daily 20260825",
       "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
       "epoch_starts_at": "2026-08-25T00:00:00Z",
       "epoch_ends_at": "2026-08-26T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -130,7 +130,7 @@
       "competition": "0x5a096ba0dc8f647cc499d14cd82ff49eef05b828",
       "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 daily 20260826",
       "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
       "epoch_starts_at": "2026-08-26T00:00:00Z",
       "epoch_ends_at": "2026-08-27T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -141,7 +141,7 @@
       "competition": "0xee01479015026afc2b09dea37d2ed805926c3c0d",
       "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 daily 20260827",
       "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
       "epoch_starts_at": "2026-08-27T00:00:00Z",
       "epoch_ends_at": "2026-08-28T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -152,7 +152,7 @@
       "competition": "0xdc1bbcbcb149b07262565c8b9caa1ae5e2058f76",
       "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 week 20260831",
       "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
       "epoch_starts_at": "2026-08-31T00:00:00Z",
       "epoch_ends_at": "2026-09-07T00:00:00Z",
       "minimum_score_base_units": "1"
@@ -163,7 +163,7 @@
       "competition": "0x81f0dd1f7da5f53ab6317e27131f9af45392b84c",
       "title": "6 USDC prize \u2014 Highest externally funded canonical GMV \u2014 fortnight 20260907",
       "summary": "Compete to create and fund marketplace demand that settles canonically during the announced forward window. Highest pro-rata externally funded GMV wins.",
-      "source_url": "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+      "source_url": "https://github.com/NSPG13/agent-bounties/blob/b600500a0ba25babe5bf9d262472ef4f701b480a/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
       "epoch_starts_at": "2026-09-07T00:00:00Z",
       "epoch_ends_at": "2026-09-21T00:00:00Z",
       "minimum_score_base_units": "1"

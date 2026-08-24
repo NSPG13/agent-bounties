@@ -18,8 +18,9 @@ REGISTRY_SCHEMA = "agent-bounties/open-competition-v2-public-metadata-v1"
 COHORT_SCHEMA = "agent-bounties/open-competition-v2-forward-gmv-reward-cohort-v1"
 BUNDLE_SCHEMA = "agent-bounties/open-competition-v2-reward-policy-rotation-v1"
 RESULT_SCHEMA = "agent-bounties/open-competition-v2-reward-execution-v1"
+SOURCE_COMMIT = "b600500a0ba25babe5bf9d262472ef4f701b480a"
 SOURCE_URL = (
-    "https://github.com/NSPG13/agent-bounties/blob/main/ops/"
+    f"https://github.com/NSPG13/agent-bounties/blob/{SOURCE_COMMIT}/ops/"
     "open-competition-v2-forward-gmv-reward-cohort-v1.json"
 )
 ADDRESS = re.compile(r"^0x[0-9a-f]{40}$")
