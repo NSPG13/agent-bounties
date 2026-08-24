@@ -51,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pinned snapshot and wallet dependencies
-        run: python -m pip install -r scripts/requirements-attest.txt -r scripts/requirements-wallet.txt
+        run: python -m pip install -r scripts/requirements-attest.txt -r scripts/requirements-wallet.txt -r scripts/requirements-site.txt
       - name: Test private guard, deterministic planning, and materialization
         run: |
           python -m unittest \

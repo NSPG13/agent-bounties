@@ -57,6 +57,7 @@ class ReplenishmentWorkflowContractTests(unittest.TestCase):
             "python -m pip install -r scripts/requirements-attest.txt",
             self.text,
         )
+        self.assertIn("-r scripts/requirements-site.txt", self.text)
 
 
 if __name__ == "__main__":
