@@ -116,16 +116,33 @@
     });
   }
 
+  function decisionContext(item) {
+    const reward = amountNumber(item?.reward);
+    const hosted = amountNumber(item?.cash_economics?.required_external_spend);
+    if (!Number.isFinite(reward) || !Number.isFinite(hosted)) return null;
+    const publishedWinBeforeVariableCosts = reward - hosted;
+    if (isV2(item) && item?.evidence_requirements?.qualifying_action?.entrant_binding) {
+      return {
+        win: `If you win: ${formatUsdc(publishedWinBeforeVariableCosts)} minus child funding and labor`,
+        loss: `If you lose: child funding plus ${formatUsdc(hosted)} hosted costs and labor`,
+      };
+    }
+    return {
+      win: `Published win result: ${formatUsdc(publishedWinBeforeVariableCosts)} before bond, gas, and labor`,
+      loss: "Review the contract-specific downside before participating",
+    };
+  }
+
   function renderOpportunity(item, index, nowMs) {
     const timing = timingState(item, nowMs);
     const reward = formatUsdc(item.reward);
-    const margin = item.cash_economics ? formatUsdc(item.cash_economics.gross_cash_margin) : null;
+    const decision = decisionContext(item);
     const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : "Open participation";
     const categories = Array.isArray(item.categories) ? item.categories.slice(0, 3) : [];
     return `<article class="opportunity-row" data-phase="${timing.phase}" style="animation-delay:${Math.min(index * 45, 360)}ms">
       <div class="opportunity-timing" data-phase="${timing.phase}"><strong>${text(timing.label)}</strong><time>${text(timing.detail)}</time></div>
       <div class="opportunity-main"><h2>${text(item.title)}</h2><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
-      <div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))} <small>USDC prize</small></span>${margin ? `<span class="opportunity-margin">${text(margin)} published margin if you win<br>before task capital and labor</span>` : ""}<a class="market-button market-button-primary" href="${text(detailUrl(item))}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">Review and participate</a></div>
+      <div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))} <small>USDC prize</small></span>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}<a class="market-button market-button-primary" href="${text(detailUrl(item))}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">Calculate and participate</a></div>
     </article>`;
   }
 
@@ -183,5 +200,5 @@
     win.setInterval(render, 60_000);
   }
 
-  return { amountNumber, apiBase, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, scoringWindow, startBoard, timingState, windowLabel };
+  return { amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
 });

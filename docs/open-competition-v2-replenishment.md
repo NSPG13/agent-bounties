@@ -18,6 +18,9 @@ continues to show one unified marketplace.
   competition fixes its scoring window, exclusions, and 2-of-2 deterministic
   snapshot-attester quorum before funding. The file contains no operational
   scores or private replenishment ranking.
+- `ops/open-competition-v2-forward-gmv-reward-cohort-v1.json` contains five
+  matched-window 6-USDC solver-prize treatments. It is a reviewed experiment
+  specification, not an active reserve policy or spending authorization.
 - `BoundedOpenCompetitionV2Wallet` holds the USDC reserve under the operator
   owner's on-chain control. Its delegate can create only reviewed, exact-value
   competitions; it cannot transfer or withdraw USDC.
@@ -54,7 +57,10 @@ The on-chain reserve independently requires:
 1. Base mainnet, the reviewed factory/release and independently reproduced
    `forward-canonical-gmv-attribution-metric-v2` profile, plus fresh safe-block evidence
    with primary/shadow agreement.
-2. Exactly 3.00 USDC solver reward and 0.04 USDC keeper reward per creation.
+2. The exact economics pinned by the current owner-approved policy epoch:
+   3.00 USDC solver plus 0.04 USDC keeper in the baseline epoch, or 6.00 USDC
+   solver plus 0.04 USDC keeper in the reviewed five-item reward treatment.
+   A single policy version cannot mix the two amounts.
 3. No more than 30.40 USDC per UTC day or 77.668098 USDC lifetime. The initial
    policy cannot spend more than the exact owner-authorized reserve.
 4. A candidate in the private ranking whose ID and public spec hash match and
@@ -81,6 +87,61 @@ competition's own payout is excluded from the snapshot used to score it.
 The owner remains `0x884834E884d6e93462655A2820140aD03E6747bC` for the
 initial rollout. The delegate is not the owner and receives no reserve USDC; it
 needs only enough Base ETH to submit authorized creation calls.
+
+## Prepared reward-size cohort
+
+The initial ten 3-USDC solver-prize competitions produced zero accepted entries
+at review time. The public competition workspace shows why this can be rational:
+with a 3-USDC child bounty and 0.11 USDC hosted proof/relay cost, winning returns
+-0.11 USDC and losing returns -3.11 USDC before gas or labor. The reviewed
+comparison doubles the solver prize while holding the scoring profile,
+instructions, child template, exclusions, and five UTC windows constant.
+
+Build and inspect the treatment without changing on-chain state:
+
+```powershell
+python scripts/build_open_competition_v2_reward_cohort.py `
+  --approved-at <actual-UTC-review-time> `
+  --active-reward-contract <repeat-for-the-exact-ten-live-contracts>
+python scripts/inspect_open_competition_v2_reward_policy.py `
+  --output <private-safe-state.json>
+python scripts/build_open_competition_v2_reward_policy.py `
+  --safe-state <private-safe-state.json> `
+  --output <private-policy-bundle.json>
+```
+
+The builder fails closed unless safe-block policy version 1 still has exactly
+30.40 USDC lifetime spend, 47.268098 USDC uncommitted balance, the reviewed
+factory/profile hashes, and the unchanged 30.40-USDC day and 77.668098-USDC
+lifetime caps. Five 6.04-USDC creations consume 30.20 USDC and leave 17.068098
+USDC, of which 15.20 USDC is reserved for a later five-item 3.04-USDC floor.
+
+After tests and review, serve the exact owner transactions:
+
+```powershell
+python scripts/serve_open_competition_v2_reward_policy_confirmation.py `
+  --bundle <private-policy-bundle.json> `
+  --result-output <private-policy-result.json>
+```
+
+The page selects MetaMask explicitly when available, requires Base mainnet and
+the exact owner, and requests two zero-value confirmations. First it revokes
+policy version 1 and verifies the unchanged lifetime spend and reserve balance
+at a safe block, closing the old-delegate race. It then simulates and submits
+the exact `configurePolicy` call and checks the sender, destination, value,
+calldata, receipt, safe-block policy version/hash, unchanged lifetime spend,
+and unchanged reserve balance again. Only after that evidence may the delegate submit
+the five preapproved creation calls. Each creation still requires separate
+canonical activation evidence; policy confirmation is not competition funding
+or GMV. The server persists the safe revocation result separately so a process
+restart between the two owner confirmations resumes at configuration instead
+of asking the owner to repeat or bypass the revocation boundary.
+
+Do not promote the reward treatment from clicks alone. Require at least ten
+qualified starts, compare confirmed entry and child-post conversion with the
+matched controls, and require improvement in externally funded canonical GMV
+without weakening payment integrity. Public feedback and observable
+participation are evidence; an AI-generated opinion is not real user feedback.
 
 ## Recovery
 
