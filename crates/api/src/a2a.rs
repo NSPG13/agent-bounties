@@ -27,6 +27,7 @@ const AGENT_CARD_JSON: &str = include_str!("../fixtures/agent-card.json");
 const PAYMENT_BOUNDARY: &str = "Only a confirmed canonical BountySettled event proves autonomous-v1 solver payment, and only a confirmed canonical CompetitionSettledV2 event proves Open Competition V2 solver payment.";
 
 type TaskStore = Arc<Mutex<A2aTaskStore>>;
+type A2aResult<T> = Result<T, Box<Response>>;
 
 pub(crate) fn router() -> Router<SharedState> {
     Router::new()
@@ -348,10 +349,10 @@ pub(crate) async fn send_message(
     request: Result<Json<A2aSendMessageRequest>, JsonRejection>,
 ) -> Response {
     if let Err(response) = validate_version(&headers) {
-        return response;
+        return *response;
     }
     if let Err(response) = validate_content_type(&headers) {
-        return response;
+        return *response;
     }
     let Json(request) = match request {
         Ok(request) => request,
@@ -373,7 +374,7 @@ pub(crate) async fn send_message(
         }
     };
     if let Err(response) = validate_message(&request) {
-        return response;
+        return *response;
     }
 
     let fingerprint = serde_json::to_string(&request).unwrap_or_default();
@@ -407,7 +408,7 @@ pub(crate) async fn send_message(
 
     let context_id = match resolve_context_id(&request.message, &store) {
         Ok(context_id) => context_id,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let invocation = invocation_from_message(&request.message);
     let outcome = execute_skill(&state, invocation).await;
@@ -446,7 +447,7 @@ pub(crate) async fn get_task(
     query: Result<Query<A2aGetTaskQuery>, QueryRejection>,
 ) -> Response {
     if let Err(response) = validate_version(&headers) {
-        return response;
+        return *response;
     }
     let Query(query) = match query {
         Ok(query) => query,
@@ -500,7 +501,7 @@ pub(crate) async fn list_tasks(
     query: Result<Query<A2aListTasksQuery>, QueryRejection>,
 ) -> Response {
     if let Err(response) = validate_version(&headers) {
-        return response;
+        return *response;
     }
     let Query(query) = match query {
         Ok(query) => query,
@@ -561,7 +562,7 @@ pub(crate) async fn list_tasks(
                 && query
                     .status
                     .as_ref()
-                    .map_or(true, |status| stored.task.status.state == *status)
+                    .is_none_or(|status| stored.task.status.state == *status)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -633,7 +634,7 @@ pub(crate) async fn cancel_task(
     Path(task_action): Path<String>,
 ) -> Response {
     if let Err(response) = validate_version(&headers) {
-        return response;
+        return *response;
     }
     let Some(id) = task_action.strip_suffix(":cancel") else {
         return problem(
@@ -684,7 +685,7 @@ pub(crate) async fn cancel_task(
     a2a_json(StatusCode::OK, &stored.task)
 }
 
-fn validate_version(headers: &HeaderMap) -> Result<(), Response> {
+fn validate_version(headers: &HeaderMap) -> A2aResult<()> {
     let Some(version) = headers.get("a2a-version") else {
         return Ok(());
     };
@@ -692,16 +693,16 @@ fn validate_version(headers: &HeaderMap) -> Result<(), Response> {
     if version == "1.0" {
         Ok(())
     } else {
-        Err(problem_with_versions(
+        Err(Box::new(problem_with_versions(
             StatusCode::BAD_REQUEST,
             "version-not-supported",
             "Protocol version not supported",
             format!("A2A protocol version {version:?} is not supported by this agent."),
-        ))
+        )))
     }
 }
 
-fn validate_content_type(headers: &HeaderMap) -> Result<(), Response> {
+fn validate_content_type(headers: &HeaderMap) -> A2aResult<()> {
     let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
         return Ok(());
     };
@@ -712,53 +713,53 @@ fn validate_content_type(headers: &HeaderMap) -> Result<(), Response> {
     if content_type.starts_with(A2A_MEDIA_TYPE) || content_type.starts_with("application/json") {
         Ok(())
     } else {
-        Err(a2a_protocol_error(
+        Err(Box::new(a2a_protocol_error(
             StatusCode::BAD_REQUEST,
             "INVALID_ARGUMENT",
             "CONTENT_TYPE_NOT_SUPPORTED",
             "Use application/a2a+json. application/json is also accepted for compatibility.",
             BTreeMap::new(),
-        ))
+        )))
     }
 }
 
-fn validate_message(request: &A2aSendMessageRequest) -> Result<(), Response> {
+fn validate_message(request: &A2aSendMessageRequest) -> A2aResult<()> {
     let message = &request.message;
     if message.message_id.trim().is_empty() || message.message_id.len() > 128 {
-        return Err(problem(
+        return Err(Box::new(problem(
             StatusCode::BAD_REQUEST,
             "invalid-parameters",
             "Invalid message",
             "message.messageId must contain 1 through 128 characters.",
-        ));
+        )));
     }
     if message.role != "ROLE_USER" {
-        return Err(problem(
+        return Err(Box::new(problem(
             StatusCode::BAD_REQUEST,
             "invalid-parameters",
             "Invalid message",
             "message.role must be ROLE_USER.",
-        ));
+        )));
     }
     if message.parts.is_empty() || message.parts.len() > 16 {
-        return Err(problem(
+        return Err(Box::new(problem(
             StatusCode::BAD_REQUEST,
             "invalid-parameters",
             "Invalid message",
             "message.parts must contain 1 through 16 parts.",
-        ));
+        )));
     }
     if message
         .parts
         .iter()
         .any(|part| part.text.as_ref().is_some_and(|text| text.len() > 8_000))
     {
-        return Err(problem(
+        return Err(Box::new(problem(
             StatusCode::PAYLOAD_TOO_LARGE,
             "invalid-parameters",
             "Message part too large",
             "Each text part is limited to 8,000 UTF-8 bytes.",
-        ));
+        )));
     }
     if message.parts.iter().any(|part| {
         part.data
@@ -766,64 +767,64 @@ fn validate_message(request: &A2aSendMessageRequest) -> Result<(), Response> {
             .and_then(|data| serde_json::to_vec(data).ok())
             .is_some_and(|data| data.len() > 32_768)
     }) {
-        return Err(problem(
+        return Err(Box::new(problem(
             StatusCode::PAYLOAD_TOO_LARGE,
             "invalid-parameters",
             "Data part too large",
             "Each structured data part is limited to 32 KiB.",
-        ));
+        )));
     }
     if message
         .parts
         .iter()
         .any(|part| part.text.is_some() == part.data.is_some())
     {
-        return Err(problem(
+        return Err(Box::new(problem(
             StatusCode::BAD_REQUEST,
             "invalid-parameters",
             "Invalid message",
             "Each part must contain exactly one supported content field: text or data.",
-        ));
+        )));
     }
     if request
         .configuration
         .as_ref()
         .is_some_and(|configuration| configuration.get("taskPushNotificationConfig").is_some())
     {
-        return Err(a2a_protocol_error(
+        return Err(Box::new(a2a_protocol_error(
             StatusCode::BAD_REQUEST,
             "FAILED_PRECONDITION",
             "PUSH_NOTIFICATION_NOT_SUPPORTED",
             "The public Agent Card declares pushNotifications=false. Use the Agent Bounties signed discovery webhook API separately.",
             BTreeMap::new(),
-        ));
+        )));
     }
     Ok(())
 }
 
-fn resolve_context_id(message: &A2aMessage, store: &TaskStore) -> Result<String, Response> {
+fn resolve_context_id(message: &A2aMessage, store: &TaskStore) -> A2aResult<String> {
     if let Some(task_id) = message.task_id.as_deref() {
         let guard = store.lock().map_err(|_| {
-            problem(
+            Box::new(problem(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "task-store-unavailable",
                 "Task store unavailable",
                 "The bounded A2A task store is temporarily unavailable.",
-            )
+            ))
         })?;
         let Some(stored) = guard.tasks.get(task_id) else {
-            return Err(task_not_found(task_id));
+            return Err(Box::new(task_not_found(task_id)));
         };
         if stored.task.status.state.is_terminal() {
             let mut metadata = BTreeMap::new();
             metadata.insert("taskId".to_string(), task_id.to_string());
-            return Err(a2a_protocol_error(
+            return Err(Box::new(a2a_protocol_error(
                 StatusCode::BAD_REQUEST,
                 "FAILED_PRECONDITION",
                 "UNSUPPORTED_OPERATION",
                 "Messages cannot be sent to a completed, failed, or canceled task. Start a new task and reuse the contextId if the conversation should continue.",
                 metadata,
-            ));
+            )));
         }
         return Ok(stored.task.context_id.clone());
     }
@@ -861,13 +862,13 @@ fn invocation_from_message(message: &A2aMessage) -> SkillInvocation {
             parameters: json!({"text": text}),
         };
     }
-    if lowered.contains("find") || lowered.contains("list") || lowered.contains("discover") {
-        if lowered.contains("bount") || lowered.contains("work") {
-            return SkillInvocation {
-                skill: "discover-ready-to-earn-bounties".to_string(),
-                parameters: json!({"text": text}),
-            };
-        }
+    if (lowered.contains("find") || lowered.contains("list") || lowered.contains("discover"))
+        && (lowered.contains("bount") || lowered.contains("work"))
+    {
+        return SkillInvocation {
+            skill: "discover-ready-to-earn-bounties".to_string(),
+            parameters: json!({"text": text}),
+        };
     }
     for prefix in ["explain bounty ", "show bounty ", "inspect bounty "] {
         if let Some(position) = lowered.find(prefix) {
@@ -968,7 +969,7 @@ async fn discover_bounties(state: &SharedState, parameters: &Value) -> Execution
     projection.items.retain(|item| {
         let reward_matches = item.reward.currency.eq_ignore_ascii_case("USDC")
             && item.reward.amount.parse::<u128>().unwrap_or_default() >= min_reward;
-        let category_matches = category.as_ref().map_or(true, |category| {
+        let category_matches = category.as_ref().is_none_or(|category| {
             item.categories
                 .iter()
                 .any(|candidate| candidate.eq_ignore_ascii_case(category))
