@@ -63,7 +63,7 @@
     requiredUsdc: document.querySelector("[data-wallet-required]"),
     fundingHelp: document.querySelector("[data-funding-help]"),
     missingUsdc: document.querySelector("[data-missing-usdc]"),
-    onramp: document.querySelector("[data-onramp-link]"),
+    onramps: [...document.querySelectorAll("[data-onramp-link]")],
     watchUsdc: document.querySelector("[data-watch-usdc]"),
     copyUsdc: document.querySelector("[data-copy-usdc]"),
     recheck: document.querySelector("[data-recheck-balance]"),
@@ -1223,7 +1223,7 @@
     onrampUrl.searchParams.set("purpose", "post");
     onrampUrl.searchParams.set("amount", formatUsdc(state.fundingUsdc));
     onrampUrl.searchParams.set("return", window.location.href);
-    ui.onramp.href = onrampUrl.href;
+    for (const link of ui.onramps) link.href = onrampUrl.href;
     ui.dialog.showModal();
     setPaymentStatus("Choose a detected wallet or open the Base USDC handoff in a separate tab.");
     ui.walletPanel.hidden = false;
@@ -1256,7 +1256,7 @@
     ui.walletOptions.textContent="";
     ui.walletMessage.textContent="Looking for wallets on this device…";
     const providers=await discoverWallets();
-    if(!providers.length){ui.walletMessage.textContent="No compatible browser wallet was detected. Create or fund a wallet with the Base USDC handoff, then reopen this review in a browser where that wallet can sign. Never enter a recovery phrase on this website.";track("wallet_missing_detected");return;}
+    if(!providers.length){ui.walletMessage.textContent="No compatible browser wallet was detected. Use the Base USDC handoff below to create or fund a wallet, then reopen this review in a browser where that wallet can sign. Never enter a recovery phrase on this website.";track("wallet_missing_detected");return;}
     ui.walletMessage.textContent=providers.length===1?"One wallet is available.":`${providers.length} wallets are available. Choose which one to use.`;
     for(const item of providers){const button=document.createElement("button");button.type="button";button.className="wallet-option";const name=document.createElement("strong");name.textContent=providerName(item);const note=document.createElement("small");note.textContent="Connect and check Base USDC";button.append(name,note);button.addEventListener("click",()=>connectWallet(item));ui.walletOptions.append(button);}
   }

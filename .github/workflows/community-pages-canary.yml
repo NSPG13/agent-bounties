@@ -37,7 +37,7 @@ jobs:
               && grep -q 'class="metric-market"' /tmp/home.html \
               && grep -q 'cursor: pointer' /tmp/site.css \
               && grep -q 'server/discover' /tmp/llms.txt \
-              && ! grep -q 'earn.html' /tmp/llms.txt \
+              && grep -q 'earn.html' /tmp/llms.txt \
               && python - <<'PY'
           import json
           discovery = json.load(open('/tmp/discovery.json', encoding='utf-8'))

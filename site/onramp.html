@@ -41,7 +41,7 @@
         <div>
           <p class="eyebrow">Two separate decisions</p>
           <h2 id="boundary-title">Buying USDC does not fund the bounty.</h2>
-          <!-- Stable evidence-boundary marker: Buying crypto does not fund the bounty. The supported UI is Base-USDC-only because Agent Bounties sponsors gas. -->
+          <!-- Stable evidence-boundary marker: Buying crypto does not fund the bounty. Existing-bounty actions may use gas sponsorship; new-bounty creation still needs Base ETH. -->
         </div>
         <ol>
           <li><strong>Provider purchase:</strong> Base USDC is delivered to the public wallet address you verify below.</li>
@@ -78,6 +78,7 @@
             What do you need?
             <select data-onramp-asset>
               <option value="usdc">Base USDC for the bounty</option>
+              <option value="eth">Base ETH for new-bounty gas</option>
             </select>
           </label>
           <p class="fine" data-asset-help>Buy USDC into your wallet, then return to approve the contribution.</p>
@@ -117,7 +118,7 @@
             <div><dt>Base USDC balance</dt><dd><strong data-usdc-balance>—</strong></dd></div>
             <div><dt>Base ETH balance</dt><dd><strong data-eth-balance>—</strong></dd></div>
           </dl>
-          <p class="fine" data-balance-guidance>Agent Bounties sponsors gas for existing-bounty funding and claims. Buy only Base USDC for these supported actions; no ETH purchase is required.</p>
+          <p class="fine" data-balance-guidance>New-bounty creation is not gas-sponsored. This wallet needs a small amount of Base ETH as well as the planned USDC; existing-bounty funding and claims may use sponsorship.</p>
         </article>
       </section>
 
@@ -128,7 +129,7 @@
           <p>MoonPay is a separate provider with its own eligibility, terms, fees, identity checks, and support. Agent Bounties does not decide whether MoonPay approves a purchase.</p>
           <label class="onramp-acknowledgement">
             <input type="checkbox" data-onramp-ack>
-            <span>I understand that this purchases Base USDC into my wallet and does not yet fund the bounty.</span>
+            <span data-onramp-ack-copy>I understand that this purchases Base USDC into my wallet and does not yet fund the bounty.</span>
           </label>
         </div>
         <div class="onramp-action-buttons">
@@ -151,7 +152,7 @@
           </dl>
           <ol>
             <li>Copy the connected wallet address below.</li>
-            <li>Inside MoonPay, choose USDC on Base and enter the starting amount.</li>
+            <li>Inside MoonPay, choose <span data-direct-asset-instruction>USDC on Base</span> and enter the starting amount.</li>
             <li>Paste the wallet address and stop if MoonPay's final review shows another network or address.</li>
             <li>After delivery, return here and refresh balances before separately funding the bounty.</li>
           </ol>
@@ -181,7 +182,7 @@
     <script src="analytics-config.js?v=2"></script>
     <script src="analytics.js?v=3"></script>
     <script src="guild-shell.js?v=3"></script>
-    <script src="moonpay-onramp.js?v=1"></script>
-    <script src="moonpay-direct-fallback.js?v=1"></script>
+    <script src="moonpay-onramp.js?v=2"></script>
+    <script src="moonpay-direct-fallback.js?v=2"></script>
   </body>
 </html>

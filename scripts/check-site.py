@@ -763,6 +763,18 @@ def check_transactional_handoffs(site_dir: Path) -> None:
             "MetaMask Portfolio",
             "Coinbase Base wallet",
             "MoonPay top-up ≠ bounty funding",
+            "Base ETH for new-bounty gas",
+            "New-bounty creation is not gas-sponsored",
+        ],
+    )
+    onramp_js = (site_dir / "moonpay-onramp.js").read_text(encoding="utf-8")
+    require_phrases(
+        "moonpay-onramp.js",
+        onramp_js,
+        [
+            "New-bounty creation cannot proceed",
+            'asset === "eth" ? "https://www.moonpay.com/buy/eth"',
+            'if (provider === "moonpay") track("onramp_moonpay_started")',
         ],
     )
     require_phrases(

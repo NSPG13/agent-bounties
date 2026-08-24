@@ -19,7 +19,7 @@ HANDOFF_BOUNDARIES = {
     "authorize.html": ("Canonical evidence required", "BountySettled"),
     "cancel.html": ("not canonical funding evidence",),
     "onramp.html": ("FundingAdded", "MoonPay top-up ≠ bounty funding"),
-    "post.html": ("canonical creation and funding events",),
+    "post.html": ("canonical creation and funding events", "data-walletless-onramp-link"),
     "success.html": ("does not prove funding", "FundingAdded"),
 }
 URL_PATTERN = re.compile(r"https://agentbounties\.app/(?P<path>[A-Za-z0-9_./-]+\.html)")

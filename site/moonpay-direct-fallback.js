@@ -69,6 +69,7 @@
     const copy = select("[data-copy-direct-wallet]");
 
     select("[data-direct-asset]").textContent = assetLabel(asset);
+    select("[data-direct-asset-instruction]").textContent = asset === "eth" ? "ETH on Base" : "USDC on Base";
     select("[data-direct-amount]").textContent = startingAmount();
     select("[data-direct-wallet]").textContent = wallet || "Connect a Base wallet above";
 
