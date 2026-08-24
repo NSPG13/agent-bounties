@@ -949,9 +949,9 @@ fn v2_public_metadata(
     if registry.schema_version != "agent-bounties/open-competition-v2-public-metadata-v1" {
         return Err("Open Competition V2 public metadata schema mismatch".to_string());
     }
-    // Display metadata is optional enrichment, not canonical inventory evidence.
-    // A release rotation must not hide otherwise valid safe-block records while
-    // its reviewed metadata registry is being updated.
+    // Display metadata is not canonical inventory evidence. It remains optional
+    // for ordinary contracts, but forward-GMV competitions are not participation
+    // ready without their exact scoring window and public terms.
     if registry.network != release.network
         || !registry
             .factory_contract
@@ -968,7 +968,9 @@ fn v2_public_metadata(
                 .source_url
                 .starts_with("https://github.com/NSPG13/agent-bounties/issues/")
                 || item.source_url
-                    == "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json")
+                    == "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json"
+                || item.source_url
+                    == "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json")
             || item.bounty_id.len() != 66
             || item.competition.len() != 42
         {
@@ -1152,6 +1154,7 @@ pub fn open_competition_v2_opportunities(
         let source_url = known.map(|item| item.source_url.clone());
         let is_forward_gmv = profile
             .is_some_and(|item| item.profile_id == "forward-canonical-gmv-attribution-metric-v2");
+        let participation_metadata_ready = !is_forward_gmv || known.is_some();
         let participation_phase = is_forward_gmv
             .then(|| v2_scoring_phase(known, now))
             .flatten();
@@ -1188,6 +1191,7 @@ pub fn open_competition_v2_opportunities(
             }),
             "scoring_formula": is_forward_gmv.then_some("sum(settlement_gmv * entrant_funding / total_funding)"),
             "participation_phase": participation_phase,
+            "participation_metadata_ready": participation_metadata_ready,
             "qualifying_action": is_forward_gmv.then(|| json!({
                 "objective": "Post or fund useful marketplace demand that reaches canonical settlement inside the scoring window.",
                 "entrant_binding": "Only funding from the competition solver wallet is attributed to that entrant.",
@@ -1233,6 +1237,13 @@ pub fn open_competition_v2_opportunities(
                     "acknowledged_risk_hash": release.beta_risk_hash
                 })),
                 instructions: "Fund the exact contract, then wait for safe-block CompetitionActivatedV2.".to_string(),
+            },
+            "active" if is_forward_gmv && !participation_metadata_ready => OpportunityNextAction {
+                action: "await_open_competition_v2_participation_metadata".to_string(),
+                method: "GET".to_string(),
+                url: public_url.clone(),
+                body_template: None,
+                instructions: "Do not generate score or buy a proof quote. The exact scoring window and public participation terms have not joined the canonical contract yet.".to_string(),
             },
             "active" if participation_phase == Some("upcoming") => OpportunityNextAction {
                 action: "prepare_open_competition_v2_score".to_string(),
@@ -1351,7 +1362,7 @@ pub fn open_competition_v2_opportunities(
                 "sp1_{}",
                 projection.proof_system.as_deref().unwrap_or("unknown")
             ),
-            verification_ready,
+            verification_ready: verification_ready && participation_metadata_ready,
             evidence_requirements,
             terms_hash: None,
             proof_urls,
@@ -2356,12 +2367,60 @@ mod tests {
     }
 
     #[test]
-    fn beta3_live_registry_projects_ten_scanner_ready_opportunities_and_feeds() {
+    fn beta3_forward_gmv_without_metadata_fails_closed_for_participation() {
+        let (mut release, mut record) = beta3_release_and_record();
+        release.metric_programs[0].profile_id =
+            "forward-canonical-gmv-attribution-metric-v2".to_string();
+        release.factory_contract = address_for_test('a');
+        record.factory_contract = release.factory_contract.clone();
+        record.projection.bounty_id = format!("0x{}", "b".repeat(64));
+        record.projection.competition = address_for_test('c');
+        let events = vec![beta3_event(
+            &record,
+            OpenCompetitionV2EventKind::CanonicalCompetitionCreated,
+            90,
+        )];
+        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+
+        let item = open_competition_v2_opportunities(
+            &[record],
+            &events,
+            &release,
+            "base-mainnet",
+            "https://api.example",
+            "https://site.example",
+            OpenCompetitionV2HostedCosts {
+                proof_fee: 100_000,
+                relay_fee: 10_000,
+            },
+            now,
+        )
+        .unwrap()
+        .remove(0);
+
+        assert!(!item.verification_ready);
+        assert_eq!(
+            item.evidence_requirements["participation_metadata_ready"],
+            false
+        );
+        assert!(item.evidence_requirements["scoring_window"].is_null());
+        assert_eq!(
+            item.next_action.action,
+            "await_open_competition_v2_participation_metadata"
+        );
+        assert!(item
+            .next_action
+            .instructions
+            .contains("Do not generate score"));
+    }
+
+    #[test]
+    fn beta3_live_registry_projects_fifteen_scanner_ready_opportunities_and_feeds() {
         let (mut release, template) = beta3_release_and_record();
         release.metric_programs[0].profile_id =
             "forward-canonical-gmv-attribution-metric-v2".to_string();
         let metadata = v2_public_metadata(&release).unwrap();
-        assert_eq!(metadata.len(), 10);
+        assert_eq!(metadata.len(), 15);
         let mut records = Vec::new();
         let mut events = Vec::new();
         for (index, item) in metadata.values().enumerate() {
@@ -2404,7 +2463,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(ready.len(), 10);
+        assert_eq!(ready.len(), 15);
         assert!(ready.iter().all(|item| {
             item.verification_ready
                 && item.payment_committed
@@ -2435,7 +2494,7 @@ mod tests {
                         && item.next_action.url == item.public_url
                 })
                 .count(),
-            5
+            10
         );
         let projection = OpportunityProjectionResponse {
             schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
@@ -2455,7 +2514,7 @@ mod tests {
         };
         let feeds = render_opportunity_feeds(&projection, "https://api.example");
         let json: Value = serde_json::from_str(&feeds.json).unwrap();
-        assert_eq!(json["items"].as_array().unwrap().len(), 10);
+        assert_eq!(json["items"].as_array().unwrap().len(), 15);
         assert!(feeds
             .rss
             .contains("Highest externally funded canonical GMV"));
