@@ -1006,6 +1006,26 @@ fn v2_public_metadata(
     Ok(indexed)
 }
 
+fn v2_scoring_phase(
+    metadata: Option<&OpenCompetitionV2PublicMetadata>,
+    now: DateTime<Utc>,
+) -> Option<&'static str> {
+    let item = metadata?;
+    let starts_at = DateTime::parse_from_rfc3339(item.epoch_starts_at.as_deref()?)
+        .ok()?
+        .with_timezone(&Utc);
+    let ends_at = DateTime::parse_from_rfc3339(item.epoch_ends_at.as_deref()?)
+        .ok()?
+        .with_timezone(&Utc);
+    Some(if now < starts_at {
+        "upcoming"
+    } else if now < ends_at {
+        "scoring"
+    } else {
+        "proof"
+    })
+}
+
 pub fn open_competition_v2_opportunities(
     records: &[OpenCompetitionV2StoredProjection],
     events: &[OpenCompetitionV2Event],
@@ -1132,10 +1152,18 @@ pub fn open_competition_v2_opportunities(
         let source_url = known.map(|item| item.source_url.clone());
         let is_forward_gmv = profile
             .is_some_and(|item| item.profile_id == "forward-canonical-gmv-attribution-metric-v2");
+        let participation_phase = is_forward_gmv
+            .then(|| v2_scoring_phase(known, now))
+            .flatten();
         let public_url = format!(
             "{website}/competition.html?bountyContract={}&network={network}",
             projection.competition
         );
+        let snapshot_url = is_forward_gmv
+            .then(|| {
+                known.map(|item| format!("{website}/generated/gmv-snapshots/{}.json", item.seed_id))
+            })
+            .flatten();
         let winner_mode = projection
             .winner_mode
             .clone()
@@ -1159,6 +1187,7 @@ pub fn open_competition_v2_opportunities(
                 )
             }),
             "scoring_formula": is_forward_gmv.then_some("sum(settlement_gmv * entrant_funding / total_funding)"),
+            "participation_phase": participation_phase,
             "qualifying_action": is_forward_gmv.then(|| json!({
                 "objective": "Post or fund useful marketplace demand that reaches canonical settlement inside the scoring window.",
                 "entrant_binding": "Only funding from the competition solver wallet is attributed to that entrant.",
@@ -1169,11 +1198,7 @@ pub fn open_competition_v2_opportunities(
                     "entrant-equals-solver settlements"
                 ]
             })),
-            "snapshot_url": is_forward_gmv.then(|| known.map(|item| format!(
-                    "{website}/generated/gmv-snapshots/{}.json",
-                    item.seed_id
-                )))
-                .flatten(),
+            "snapshot_url": snapshot_url.clone(),
             "payment_evidence": "CompetitionSettledV2"
         });
         let (categories, skills, keyword_matches) = web_public::discovery_taxonomy_with_matches(
@@ -1208,6 +1233,27 @@ pub fn open_competition_v2_opportunities(
                     "acknowledged_risk_hash": release.beta_risk_hash
                 })),
                 instructions: "Fund the exact contract, then wait for safe-block CompetitionActivatedV2.".to_string(),
+            },
+            "active" if participation_phase == Some("upcoming") => OpportunityNextAction {
+                action: "prepare_open_competition_v2_score".to_string(),
+                method: "GET".to_string(),
+                url: public_url.clone(),
+                body_template: None,
+                instructions: "Prepare the contract-bound child-bounty brief now. Do not count or fund score before the displayed UTC scoring window starts.".to_string(),
+            },
+            "active" if participation_phase == Some("scoring") => OpportunityNextAction {
+                action: "generate_open_competition_v2_score".to_string(),
+                method: "GET".to_string(),
+                url: public_url.clone(),
+                body_template: None,
+                instructions: "Post and fund useful marketplace demand from the entrant wallet, have a different eligible wallet complete it, and reach canonical child settlement before the scoring window closes. Do not request a proof quote yet.".to_string(),
+            },
+            "active" if participation_phase == Some("proof") => OpportunityNextAction {
+                action: "inspect_open_competition_v2_snapshot".to_string(),
+                method: "GET".to_string(),
+                url: snapshot_url.clone().unwrap_or_else(|| public_url.clone()),
+                body_template: None,
+                instructions: "Scoring is closed. Require the exact frozen snapshot and dual-attester quorum before requesting a solver-bound proof quote; fail closed while that evidence is unavailable.".to_string(),
             },
             "active" => OpportunityNextAction {
                 action: "quote_open_competition_v2_proof".to_string(),
@@ -2205,6 +2251,75 @@ mod tests {
     }
 
     #[test]
+    fn beta3_forward_gmv_next_action_follows_the_scoring_phase() {
+        let (mut release, record) = beta3_release_and_record();
+        release.metric_programs[0].profile_id =
+            "forward-canonical-gmv-attribution-metric-v2".to_string();
+        let events = vec![beta3_event(
+            &record,
+            OpenCompetitionV2EventKind::CanonicalCompetitionCreated,
+            90,
+        )];
+        let project = |now: &str| {
+            open_competition_v2_opportunities(
+                std::slice::from_ref(&record),
+                &events,
+                &release,
+                "base-mainnet",
+                "https://api.example",
+                "https://site.example",
+                OpenCompetitionV2HostedCosts {
+                    proof_fee: 100_000,
+                    relay_fee: 10_000,
+                },
+                DateTime::parse_from_rfc3339(now)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            )
+            .unwrap()
+            .remove(0)
+        };
+
+        let upcoming = project("2026-08-23T12:00:00Z");
+        assert_eq!(
+            upcoming.next_action.action,
+            "prepare_open_competition_v2_score"
+        );
+        assert_eq!(
+            upcoming.evidence_requirements["participation_phase"],
+            "upcoming"
+        );
+
+        let scoring = project("2026-08-24T12:00:00Z");
+        assert_eq!(
+            scoring.next_action.action,
+            "generate_open_competition_v2_score"
+        );
+        assert_eq!(scoring.next_action.method, "GET");
+        assert_eq!(scoring.next_action.url, scoring.public_url);
+        assert!(scoring.next_action.body_template.is_none());
+        assert_eq!(
+            scoring.evidence_requirements["participation_phase"],
+            "scoring"
+        );
+        assert!(scoring
+            .next_action
+            .instructions
+            .contains("Do not request a proof quote yet"));
+
+        let proof = project("2026-08-25T00:00:01Z");
+        assert_eq!(
+            proof.next_action.action,
+            "inspect_open_competition_v2_snapshot"
+        );
+        assert_eq!(proof.evidence_requirements["participation_phase"], "proof");
+        assert_eq!(
+            proof.next_action.url,
+            proof.evidence_requirements["snapshot_url"]
+        );
+    }
+
+    #[test]
     fn beta3_stale_optional_metadata_does_not_hide_canonical_inventory() {
         let (mut release, mut record) = beta3_release_and_record();
         release.factory_contract = address_for_test('a');
@@ -2242,7 +2357,9 @@ mod tests {
 
     #[test]
     fn beta3_live_registry_projects_ten_scanner_ready_opportunities_and_feeds() {
-        let (release, template) = beta3_release_and_record();
+        let (mut release, template) = beta3_release_and_record();
+        release.metric_programs[0].profile_id =
+            "forward-canonical-gmv-attribution-metric-v2".to_string();
         let metadata = v2_public_metadata(&release).unwrap();
         assert_eq!(metadata.len(), 10);
         let mut records = Vec::new();
@@ -2260,7 +2377,9 @@ mod tests {
             ));
             records.push(record);
         }
-        let now = DateTime::<Utc>::from_timestamp(1_800_000_100, 0).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let projected = open_competition_v2_opportunities(
             &records,
             &events,
@@ -2287,14 +2406,37 @@ mod tests {
 
         assert_eq!(ready.len(), 10);
         assert!(ready.iter().all(|item| {
-            item.next_action.action == "quote_open_competition_v2_proof"
-                && item.verification_ready
+            item.verification_ready
                 && item.payment_committed
                 && item.evidence_requirements["scoring_window"].is_object()
                 && item
                     .public_url
                     .starts_with("https://site.example/competition.html?bountyContract=")
         }));
+        assert_eq!(
+            ready
+                .iter()
+                .filter(|item| {
+                    item.evidence_requirements["participation_phase"] == "scoring"
+                        && item.next_action.action == "generate_open_competition_v2_score"
+                        && item.next_action.method == "GET"
+                        && item.next_action.url == item.public_url
+                })
+                .count(),
+            5
+        );
+        assert_eq!(
+            ready
+                .iter()
+                .filter(|item| {
+                    item.evidence_requirements["participation_phase"] == "upcoming"
+                        && item.next_action.action == "prepare_open_competition_v2_score"
+                        && item.next_action.method == "GET"
+                        && item.next_action.url == item.public_url
+                })
+                .count(),
+            5
+        );
         let projection = OpportunityProjectionResponse {
             schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
             generated_at: now.to_rfc3339(),

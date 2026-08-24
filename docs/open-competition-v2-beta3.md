@@ -276,11 +276,18 @@ Earn from an active competition:
 
 1. Read `inventory`; select an active competition by net prize, winner mode,
    deadline, and risk.
-2. Produce the exact artifact and call `quote_proof`.
-   For `forward-canonical-gmv-attribution-metric-v2`, wait for the scoring
-   window to close and for the published snapshot to contain its exact 2-of-2
-   attester quorum. Send the published `campaign` and `snapshot` objects
-   unchanged as the metric input:
+2. Follow the projected `next_action` instead of jumping directly to proof:
+   `prepare_open_competition_v2_score` before the scoring window,
+   `generate_open_competition_v2_score` while scoring is open, and
+   `inspect_open_competition_v2_snapshot` after it closes. Each action points to
+   the exact contract-specific public participation page or snapshot.
+3. For `forward-canonical-gmv-attribution-metric-v2`, post and fund useful
+   marketplace demand from the entrant wallet during the scoring window. A
+   different eligible wallet must complete it and receive canonical settlement
+   before the window closes. Funding or settlement outside the window does not
+   count. After close, require the published snapshot and its exact 2-of-2
+   attester quorum before calling `quote_proof`. Send the published `campaign`
+   and `snapshot` objects unchanged as the metric input:
 
    ```json
    {
@@ -304,12 +311,12 @@ Earn from an active competition:
    missing, unsigned, drifted, or policy-mismatched snapshot fails before a
    quote or payment challenge is created. Public-vector and structured-artifact
    quotes still require their exact `artifact_hash`.
-3. For hosted proving, call `pay_proof` without a signature, sign the returned
+4. For hosted proving, call `pay_proof` without a signature, sign the returned
    x402 challenge, then call `pay_proof` once with that signature.
-4. Poll the proof job. Never repay a `payment_pending` job.
-5. Submit a BYO proof, or sign the exact relay authorization after the hosted
+5. Poll the proof job. Never repay a `payment_pending` job.
+6. Submit a BYO proof, or sign the exact relay authorization after the hosted
    job reaches `proved`.
-6. Treat only a safe-block `CompetitionSettledV2` as solver payment. For a
+7. Treat only a safe-block `CompetitionSettledV2` as solver payment. For a
    broker failure, wait for canonical USDC refund evidence.
 
 The same order is exposed by API, MCP, CLI, Python, and TypeScript. Finalize,
