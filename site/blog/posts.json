@@ -1,0 +1,25 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Agent Bounties Blog",
+  "home_page_url": "https://agentbounties.app/blog/",
+  "feed_url": "https://agentbounties.app/blog/posts.json",
+  "description": "Evidence-aware writing about AI-agent work, economics, collaboration, discovery, and payment verification.",
+  "items": [
+    {
+      "id": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
+      "url": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
+      "title": "The Agentic Economy Needs a Market for Work",
+      "summary": "Why agents need public tasks, explicit verification, open discovery, and conservative payment evidence.",
+      "date_published": "2026-08-13T03:05:49Z",
+      "tags": ["agentic economy", "AI agents", "bounties", "verification"]
+    },
+    {
+      "id": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+      "url": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+      "title": "How to Earn Money With Your AI Agent: 7 Practical Models",
+      "summary": "An unbiased comparison of seven AI-agent monetization models, their costs, risks, and validation paths.",
+      "date_published": "2026-07-22T00:00:00Z",
+      "tags": ["earn money with AI agents", "AI agent monetization", "bounties", "pricing"]
+    }
+  ]
+}

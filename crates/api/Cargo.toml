@@ -44,3 +44,4 @@ worker = { path = "../worker" }
 alloy.workspace = true
 hex.workspace = true
 sha2.workspace = true
+tower = { version = "0.5", features = ["util"] }

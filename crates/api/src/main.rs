@@ -1,3 +1,4 @@
+mod a2a;
 mod github_discovery;
 mod open_competition_v2_api;
 mod opportunities;
@@ -180,6 +181,11 @@ use worker::{
 #[openapi(
     paths(
         health,
+        a2a::agent_card,
+        a2a::send_message,
+        a2a::get_task,
+        a2a::list_tasks,
+        a2a::cancel_task,
         llms_txt,
         legal_policy,
         record_legal_acceptance,
@@ -487,6 +493,20 @@ use worker::{
         ,github_discovery::GitHubDiscoverySafeBlock
         ,github_discovery::GitHubDiscoverySourceStatus
         ,github_discovery::GitHubSettlementEvidence
+        ,a2a::A2aAgentCard
+        ,a2a::A2aSendMessageRequest
+        ,a2a::A2aSendMessageResponse
+        ,a2a::A2aMessage
+        ,a2a::A2aPart
+        ,a2a::A2aTaskState
+        ,a2a::A2aTaskStatus
+        ,a2a::A2aArtifact
+        ,a2a::A2aTask
+        ,a2a::A2aListTasksResponse
+        ,a2a::A2aProblem
+        ,a2a::A2aHttpErrorEnvelope
+        ,a2a::A2aHttpError
+        ,a2a::A2aErrorInfo
     )),
     modifiers(&SecurityAddon)
 )]
@@ -2167,6 +2187,7 @@ async fn main() -> anyhow::Result<()> {
     });
     let public_app = Router::new()
         .route("/health", get(health))
+        .merge(a2a::router())
         .route("/llms.txt", get(llms_txt))
         .route("/v1/legal/policy", get(legal_policy))
         .route("/v1/legal/acceptances", post(record_legal_acceptance))
@@ -16611,6 +16632,7 @@ mod tests {
         str::FromStr,
         thread,
     };
+    use tower::ServiceExt;
 
     type TestHmacSha256 = Hmac<Sha256>;
 
@@ -20254,6 +20276,11 @@ mod tests {
         let paths = value["paths"].as_object().unwrap();
 
         assert!(paths.contains_key("/v1/route-blocked-goal"));
+        assert!(paths.contains_key("/.well-known/agent-card.json"));
+        assert!(paths.contains_key("/a2a/v1/message:send"));
+        assert!(paths.contains_key("/a2a/v1/tasks"));
+        assert!(paths.contains_key("/a2a/v1/tasks/{id}"));
+        assert!(paths.contains_key("/a2a/v1/tasks/{id}:cancel"));
         assert!(paths.contains_key("/llms.txt"));
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
         assert!(paths.contains_key("/v1/risk/policy"));
@@ -20486,6 +20513,201 @@ mod tests {
             "Stripe checkout webhook must remain callable by Stripe without operator auth"
         );
         assert!(paths["/v1/stripe/checkout-webhooks"]["post"]["responses"]["503"].is_object());
+    }
+
+    #[tokio::test]
+    async fn a2a_router_serves_card_and_core_task_operations() {
+        let app = a2a::router().with_state(test_state(BountyNetwork::default()));
+
+        let card = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/.well-known/agent-card.json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(card.status(), StatusCode::OK);
+        assert_eq!(
+            card.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+
+        let request_body = serde_json::json!({
+            "message": {
+                "messageId": "router-interoperability-1",
+                "role": "ROLE_USER",
+                "parts": [{"data": {"skill": "unsupported"}}]
+            }
+        })
+        .to_string();
+        let send = |body: String| {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/a2a/v1/message:send")
+                .header("a2a-version", "1.0")
+                .header(header::CONTENT_TYPE, "application/a2a+json")
+                .body(axum::body::Body::from(body))
+                .unwrap()
+        };
+        let first = app
+            .clone()
+            .oneshot(send(request_body.clone()))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(
+            first.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/a2a+json"
+        );
+        let first_body = axum::body::to_bytes(first.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+        assert_eq!(
+            first_json["task"]["status"]["state"],
+            "TASK_STATE_INPUT_REQUIRED"
+        );
+        assert!(first_json["task"]["status"]["timestamp"]
+            .as_str()
+            .is_some_and(|timestamp| timestamp.ends_with('Z') && timestamp.contains('.')));
+        let task_id = first_json["task"]["id"].as_str().unwrap().to_string();
+        let context_id = first_json["task"]["contextId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let retry = app.clone().oneshot(send(request_body)).await.unwrap();
+        let retry_body = axum::body::to_bytes(retry.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let retry_json: serde_json::Value = serde_json::from_slice(&retry_body).unwrap();
+        assert_eq!(retry_json["task"]["id"], task_id);
+
+        let get_response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/a2a/v1/tasks/{task_id}?historyLength=1"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_response.status(), StatusCode::OK);
+
+        let cancel_response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/a2a/v1/tasks/{task_id}:cancel"))
+                    .header("a2a-version", "1.0")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cancel_response.status(), StatusCode::OK);
+        let cancel_body = axum::body::to_bytes(cancel_response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let cancel_json: serde_json::Value = serde_json::from_slice(&cancel_body).unwrap();
+        assert_eq!(cancel_json["status"]["state"], "TASK_STATE_CANCELED");
+
+        let repeated_cancel = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/a2a/v1/tasks/{task_id}:cancel"))
+                    .header("a2a-version", "1.0")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(repeated_cancel.status(), StatusCode::OK);
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/a2a/v1/tasks?contextId={context_id}&pageSize=10&historyLength=0"
+                    ))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = axum::body::to_bytes(list_response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let list_json: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+        assert_eq!(list_json["totalSize"], 1);
+
+        let missing_task = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/a2a/v1/tasks/missing-task")
+                    .header("a2a-version", "1.0")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_task.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            missing_task.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/a2a+json"
+        );
+        assert_eq!(missing_task.headers().get("a2a-version").unwrap(), "1.0");
+        let missing_body = axum::body::to_bytes(missing_task.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let missing_json: serde_json::Value = serde_json::from_slice(&missing_body).unwrap();
+        assert_eq!(missing_json["error"]["status"], "NOT_FOUND");
+        assert_eq!(
+            missing_json["error"]["details"][0]["reason"],
+            "TASK_NOT_FOUND"
+        );
+
+        let patch_version = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/a2a/v1/tasks/missing-task")
+                    .header("a2a-version", "1.0.0")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(patch_version.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            patch_version.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+
+        let anonymous_list = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/a2a/v1/tasks?pageSize=10")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let anonymous_body = axum::body::to_bytes(anonymous_list.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let anonymous_json: serde_json::Value = serde_json::from_slice(&anonymous_body).unwrap();
+        assert_eq!(anonymous_json["totalSize"], 0);
     }
 
     #[tokio::test]
