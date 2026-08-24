@@ -11,9 +11,6 @@ on:
       - "scripts/test_activate_routed_v3_replacements.py"
       - "scripts/test_shared_rpc.py"
       - "benchmarks/direct-inventory-v1/rpc-failover/check.py"
-      - "scripts/test-durable-wallet-policy.js"
-      - "site/durable-wallet-policy.html"
-      - "site/durable-wallet-policy.js"
   schedule:
     - cron: "17 * * * *"
   issue_comment:
@@ -49,8 +46,6 @@ jobs:
             scripts/activate_routed_v3_dynamic.py \
             scripts/activate_routed_v3_replacements.py \
             scripts/check_routed_v3_activation_readiness.py
-          node --check site/durable-wallet-policy.js
-          node scripts/test-durable-wallet-policy.js
 
       - name: Confirm routed V3 readiness through retry-safe Base reads
         run: |

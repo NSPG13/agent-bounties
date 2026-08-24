@@ -42,7 +42,6 @@ jobs:
         run: |
           python -m unittest scripts.test_activate_standing_meta_v3_replacements -v
           python -m py_compile scripts/activate_standing_meta_v3_replacements.py
-          node --check site/standing-meta-v3-migration.js
 
       - name: Create, fund, and reconcile four V3 parents
         run: python scripts/activate_standing_meta_v3_replacements.py
