@@ -561,9 +561,17 @@ pub struct InterfaceUsageStats {
 pub struct SiteAnalyticsStats {
     pub overview: SiteAnalyticsOverview,
     pub event_counts: Vec<SiteAnalyticsEventCount>,
+    pub funnel_counts: Vec<SiteAnalyticsFunnelCount>,
     pub daily: Vec<SiteAnalyticsDailyStats>,
     pub channels: Vec<SiteAnalyticsChannelStats>,
     pub interfaces: Vec<InterfaceUsageStats>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SiteAnalyticsFunnelCount {
+    pub metric: String,
+    pub numerator_sessions: u64,
+    pub denominator_sessions: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1999,6 +2007,50 @@ impl PostgresStore {
         .fetch_all(&self.pool)
         .await?;
 
+        let funnel_rows = sqlx::query(
+            r#"
+            WITH window_events AS (
+              SELECT session_id, event_name, occurred_at
+              FROM site_analytics_events
+              WHERE occurred_at >= $1 AND occurred_at <= NOW()
+            ), definitions(metric, numerator, denominator) AS (
+              VALUES
+                ('market_to_funded_bounty_click', 'funded_bounty_click', 'market_view'),
+                ('canonical_post_completion', 'canonical_post_confirmed', 'canonical_post_started'),
+                ('market_to_funding_start', 'funding_started', 'market_view'),
+                ('claim_confirmation', 'claim_confirmed', 'claim_started'),
+                ('auth_to_post_handoff', 'canonical_post_handoff_viewed', 'auth_completed'),
+                ('wallet_link_completion', 'wallet_link_confirmed', 'wallet_link_started'),
+                ('no_wallet_to_connected', 'wallet_connected', 'wallet_missing_detected'),
+                ('unfunded_wallet_to_funded', 'wallet_funded_observed', 'wallet_unfunded_detected'),
+                ('onramp_return', 'onramp_returned', 'onramp_viewed'),
+                ('onramp_moonpay_start', 'onramp_moonpay_started', 'onramp_viewed'),
+                ('onramp_metamask_start', 'onramp_metamask_started', 'onramp_viewed'),
+                ('onramp_coinbase_start', 'onramp_coinbase_started', 'onramp_viewed'),
+                ('funded_click_to_competition_view', 'competition_view', 'funded_bounty_click'),
+                ('competition_instruction_engagement', 'competition_instructions_copied', 'competition_view'),
+                ('competition_child_post_start', 'competition_child_post_started', 'competition_view'),
+                ('competition_feedback_completion', 'competition_feedback_submitted', 'competition_feedback_started'),
+                ('competition_entry_confirmation', 'competition_entry_confirmed', 'competition_entry_started')
+            )
+            SELECT definitions.metric,
+                   COUNT(DISTINCT numerator.session_id) AS numerator_sessions,
+                   COUNT(DISTINCT denominator.session_id) AS denominator_sessions
+            FROM definitions
+            LEFT JOIN window_events AS denominator
+              ON denominator.event_name = definitions.denominator
+            LEFT JOIN window_events AS numerator
+              ON numerator.session_id = denominator.session_id
+             AND numerator.event_name = definitions.numerator
+             AND numerator.occurred_at >= denominator.occurred_at
+            GROUP BY definitions.metric
+            ORDER BY definitions.metric
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+
         let daily_rows = sqlx::query(
             r#"
             SELECT to_char(occurred_at::date, 'YYYY-MM-DD') AS day,
@@ -2092,6 +2144,16 @@ impl PostgresStore {
                         events: u64_from_i64(row.try_get("events")?)?,
                         sessions: u64_from_i64(row.try_get("sessions")?)?,
                         visitors: u64_from_i64(row.try_get("visitors")?)?,
+                    })
+                })
+                .collect::<DbResult<Vec<_>>>()?,
+            funnel_counts: funnel_rows
+                .into_iter()
+                .map(|row| {
+                    Ok(SiteAnalyticsFunnelCount {
+                        metric: row.try_get("metric")?,
+                        numerator_sessions: u64_from_i64(row.try_get("numerator_sessions")?)?,
+                        denominator_sessions: u64_from_i64(row.try_get("denominator_sessions")?)?,
                     })
                 })
                 .collect::<DbResult<Vec<_>>>()?,
@@ -10677,7 +10739,7 @@ mod tests {
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
 
-        let now = Utc::now();
+        let now = Utc::now() - chrono::Duration::seconds(3);
         let event = NewSiteAnalyticsEvent {
             event_id: Uuid::new_v4(),
             visitor_id: Uuid::new_v4(),
@@ -10693,6 +10755,26 @@ mod tests {
         };
         assert!(store.record_site_analytics_event(&event).await.unwrap());
         assert!(!store.record_site_analytics_event(&event).await.unwrap());
+        let wallet_missing = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            event_name: "wallet_missing_detected".to_string(),
+            occurred_at: now + chrono::Duration::seconds(1),
+            ..event.clone()
+        };
+        let wallet_connected = NewSiteAnalyticsEvent {
+            event_id: Uuid::new_v4(),
+            event_name: "wallet_connected".to_string(),
+            occurred_at: now + chrono::Duration::seconds(2),
+            ..event.clone()
+        };
+        assert!(store
+            .record_site_analytics_event(&wallet_missing)
+            .await
+            .unwrap());
+        assert!(store
+            .record_site_analytics_event(&wallet_connected)
+            .await
+            .unwrap());
         let before = store
             .site_analytics_stats(now - chrono::Duration::minutes(1))
             .await
@@ -10747,6 +10829,13 @@ mod tests {
             .unwrap();
         assert!(stats.overview.unique_visitors >= 1);
         assert!(stats.overview.page_views >= 1);
+        let no_wallet_funnel = stats
+            .funnel_counts
+            .iter()
+            .find(|count| count.metric == "no_wallet_to_connected")
+            .expect("no-wallet funnel is aggregated");
+        assert!(no_wallet_funnel.denominator_sessions >= 1);
+        assert!(no_wallet_funnel.numerator_sessions >= 1);
         assert!(stats
             .channels
             .iter()

@@ -1,0 +1,113 @@
+.mission-context {
+  margin: 0 0 22px;
+  border: 1px solid rgba(124, 239, 209, 0.2);
+  border-radius: 17px;
+  padding: 16px;
+  background: rgba(124, 239, 209, 0.045);
+}
+
+.mission-context[hidden] { display: none; }
+
+.mission-context-kicker {
+  margin: 0 0 5px;
+  color: var(--composer-mint);
+  font-size: 0.7rem;
+  font-weight: 850;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.mission-context h3 {
+  margin: 0;
+  color: var(--composer-text);
+  font-size: 1.15rem;
+}
+
+.mission-context > p {
+  margin: 7px 0 0;
+  color: var(--composer-muted);
+  line-height: 1.48;
+}
+
+.mission-horizon {
+  display: inline-flex;
+  margin-top: 10px;
+  border: 1px solid rgba(201, 245, 72, 0.22);
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--composer-lime);
+  font-size: 0.72rem;
+  font-weight: 780;
+}
+
+.mission-task-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 15px;
+}
+
+.mission-task-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 13px;
+  padding: 12px;
+  color: var(--composer-text);
+  background: rgba(0, 8, 4, 0.35);
+  cursor: pointer;
+}
+
+.mission-task-option:has(input:checked) {
+  border-color: rgba(201, 245, 72, 0.65);
+  background: rgba(201, 245, 72, 0.075);
+}
+
+.mission-task-option input {
+  margin-top: 3px;
+  accent-color: var(--composer-lime);
+}
+
+.mission-task-option strong,
+.mission-task-option small {
+  display: block;
+}
+
+.mission-task-option small {
+  margin-top: 4px;
+  color: var(--composer-muted);
+  line-height: 1.4;
+}
+
+.image-generation-status {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: rgba(255,255,255,.78);
+  background: rgba(1, 10, 6, .68);
+  backdrop-filter: blur(9px);
+  font-size: .65rem;
+  font-weight: 760;
+}
+
+.image-generation-status[data-tone="ai"] {
+  color: var(--composer-mint);
+  border-color: rgba(124, 239, 209, .35);
+}
+
+.composer-scope-note {
+  max-width: 720px;
+  margin: 12px auto 0;
+  color: #849088;
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 700px) {
+  .mission-task-option { padding: 11px; }
+  .image-generation-status { right: 10px; bottom: 10px; }
+}

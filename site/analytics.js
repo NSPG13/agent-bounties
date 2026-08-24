@@ -35,6 +35,19 @@
     "competition_feedback_submitted",
     "canonical_post_started",
     "canonical_post_confirmed",
+    "auth_completed",
+    "wallet_link_started",
+    "wallet_link_confirmed",
+    "wallet_missing_detected",
+    "wallet_connected",
+    "wallet_unfunded_detected",
+    "wallet_funded_observed",
+    "canonical_post_handoff_viewed",
+    "onramp_viewed",
+    "onramp_moonpay_started",
+    "onramp_metamask_started",
+    "onramp_coinbase_started",
+    "onramp_returned",
   ]);
 
   function storage(kind) {

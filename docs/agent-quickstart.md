@@ -121,8 +121,10 @@ credits as money.
 
 ## Post a bounty
 
-The human entry is <https://agentbounties.app/#post-a-bounty>. MCP clients may
-call `prepare_bounty_post` when that tool appears in their session.
+The human review entry is <https://agentbounties.app/post.html>. MCP clients may
+call `prepare_bounty_post` when that tool appears in their session. The image
+fields are an optional all-or-none group: clients that cannot supply an
+approved image can still prepare a complete provider-neutral posting handoff.
 
 Advanced flow:
 

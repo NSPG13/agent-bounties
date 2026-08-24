@@ -1,9 +1,8 @@
 # MoonPay wallet on-ramp
 
-> Public UI status: dormant. The from-scratch site redesign intentionally
-> removed the former `onramp.html` browser surface. Server-side checkout
-> planning, signing, deployment configuration, and canonical payment-evidence
-> rules remain preserved, but no public page currently offers this flow.
+> Public UI status: active after deployment at
+> `https://agentbounties.app/onramp.html`. The page offers the signed MoonPay
+> path when configured and the bounded public-consumer fallback otherwise.
 
 This integration adds a bounded MoonPay wallet-top-up step without changing the autonomous bounty protocol. The ChatGPT app exposes only a first-party handoff planner; provider checkout and every wallet or purchase step remain outside ChatGPT.
 
@@ -53,7 +52,7 @@ The fallback is not equivalent to the signed integration. It cannot cryptographi
 
 ## Architecture
 
-- Browser page and controllers: intentionally not mounted in the redesigned site
+- Browser page and controllers: `site/onramp.html`, `site/moonpay-onramp.js`, and `site/moonpay-direct-fallback.js`
 - ChatGPT handoff planner and in-chat funding control: `crates/mcp-server/src/chatgpt_app.rs`
 - Server route: the MoonPay checkout endpoint on the configured MCP origin
 - Server implementation: `crates/mcp-server/src/moonpay.rs`
@@ -119,6 +118,7 @@ Run:
 cargo test -p mcp-server moonpay
 cargo test -p mcp-server moonpay -- --nocapture
 python scripts/check-site.py
+python scripts/check-public-handoffs.py
 ```
 
 The Rust tests include MoonPay's published URL-signing test vector, verify that live URLs are IP-bound and signed with `signature` appended last, verify that the secret never appears in the checkout URL, and assert that every checkout plan reports `bounty_funded: false` with no canonical event.

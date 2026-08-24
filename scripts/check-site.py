@@ -16,9 +16,26 @@ CANONICAL_PAGES = {
     "blog/index.html": "https://agentbounties.app/blog/",
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
     "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+    "authorize.html": "https://agentbounties.app/authorize.html",
+    "cancel.html": "https://agentbounties.app/cancel.html",
     "metrics.html": "https://agentbounties.app/metrics.html",
+    "onramp.html": "https://agentbounties.app/onramp.html",
+    "post.html": "https://agentbounties.app/post.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
+    "success.html": "https://agentbounties.app/success.html",
     "terms.html": "https://agentbounties.app/terms.html",
+}
+INDEXABLE_PAGES = {
+    "about.html",
+    "blog/agentic-economy-needs-a-market-for-work.html",
+    "blog/index.html",
+    "competition.html",
+    "earn.html",
+    "how-to-earn-money-with-my-ai-agent.html",
+    "index.html",
+    "metrics.html",
+    "privacy.html",
+    "terms.html",
 }
 REQUIRED_FILES = {
     ".nojekyll",
@@ -37,41 +54,82 @@ REQUIRED_FILES = {
     "blog/feed.xml",
     "blog/index.html",
     "blog/posts.json",
+    "ai-bounty-handoff.css",
+    "ai-bounty-handoff.js",
+    "authorize.html",
+    "authorize.js",
+    "bounty-chat-controls.css",
+    "bounty-chat-ui.js",
+    "bounty-chat.css",
+    "bounty-composer-v2.css",
+    "bounty-composer-v2.js",
+    "bounty-composer.css",
+    "bounty-entry.js",
+    "cancel.html",
+    "evm.js",
     "favicon.svg",
     "generated/github-participation.json",
     "generated/public-metrics-policy.json",
     "index.html",
     "how-to-earn-money-with-my-ai-agent.html",
+    "legal-consent.js",
     "llms.txt",
     "metrics.css",
     "metrics.html",
     "metrics.js",
     "marketplace.css",
     "marketplace.js",
+    "moonpay-direct-fallback.js",
+    "moonpay-onramp.js",
+    "onramp.css",
+    "onramp.html",
+    "post.html",
     "privacy.html",
     "protocol.json",
     "robots.txt",
     "sitemap.xml",
     "solarpunk-home.js",
     "solarpunk.css",
+    "simple-ux.css",
     "styles.css",
+    "success.html",
     "terms.html",
     "guild-pages.css",
+    "guild-shell.js",
+    "wallet-adapters.css",
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
     "about.css",
+    "ai-bounty-handoff.css",
+    "ai-bounty-handoff.js",
     "analytics-config.js",
     "analytics.js",
+    "authorize.js",
+    "bounty-chat-controls.css",
+    "bounty-chat-ui.js",
+    "bounty-chat.css",
+    "bounty-composer-v2.css",
+    "bounty-composer-v2.js",
+    "bounty-composer.css",
+    "bounty-entry.js",
     "competition.js",
+    "evm.js",
     "guild-pages.css",
+    "guild-shell.js",
+    "legal-consent.js",
     "metrics.css",
     "metrics.js",
     "marketplace.css",
     "marketplace.js",
+    "moonpay-direct-fallback.js",
+    "moonpay-onramp.js",
+    "onramp.css",
+    "simple-ux.css",
     "solarpunk-home.js",
     "solarpunk.css",
     "styles.css",
+    "wallet-adapters.css",
 }
 EXPECTED_SCENE_ASSETS = {
     "assets/solarpunk/characters-helping.webp",
@@ -694,6 +752,29 @@ def check_marketplace(site_dir: Path) -> None:
     )
 
 
+def check_transactional_handoffs(site_dir: Path) -> None:
+    onramp = (site_dir / "onramp.html").read_text(encoding="utf-8")
+    shell = (site_dir / "guild-shell.js").read_text(encoding="utf-8")
+    require_phrases(
+        "onramp.html",
+        onramp,
+        [
+            "Three measured variations",
+            "MetaMask Portfolio",
+            "Coinbase Base wallet",
+            "MoonPay top-up ≠ bounty funding",
+        ],
+    )
+    require_phrases(
+        "guild-shell.js",
+        shell,
+        ['["post.html", "Post"]', '["onramp.html", "Add Base USDC"]', '["metrics.html", "Metrics"]'],
+    )
+    for removed in ("how-it-works.html",):
+        if removed in shell:
+            fail(f"guild-shell.js rewrites navigation to removed page {removed}")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     site_dir = repo_root / "site"
@@ -733,14 +814,17 @@ def main() -> int:
         )
         if text.index(f'src="{prefix}analytics-config.js?v=2"') > text.index(f'src="{prefix}analytics.js?v=3"'):
             fail(f"{relative}: analytics config must load before analytics.js")
+        if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
+            fail(f"{relative}: transactional handoffs must remain noindex, nofollow")
         for link in parser.links:
             check_internal_link(site_dir, path, link, parser.ids)
 
     sitemap = ET.parse(site_dir / "sitemap.xml").getroot()
     namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     urls = {item.text.strip() for item in sitemap.findall("sm:url/sm:loc", namespace) if item.text}
-    if urls != set(CANONICAL_PAGES.values()):
-        fail(f"sitemap must list every canonical website page exactly once; found {sorted(urls)}")
+    expected_urls = {CANONICAL_PAGES[relative] for relative in INDEXABLE_PAGES}
+    if urls != expected_urls:
+        fail(f"sitemap must list every indexable canonical website page exactly once; found {sorted(urls)}")
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
     require_phrases("robots.txt", robots, ["User-agent: OAI-SearchBot", "Sitemap: https://agentbounties.app/sitemap.xml"])
 
@@ -759,6 +843,7 @@ def main() -> int:
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
     check_marketplace(site_dir)
+    check_transactional_handoffs(site_dir)
     check_metrics(site_dir)
     check_blog(site_dir)
     privacy = (site_dir / "privacy.html").read_text(encoding="utf-8")
@@ -781,7 +866,7 @@ def main() -> int:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
         ],
     )
-    print("site checks passed: Home, unified market, competition, A2A, blog, Metrics, legal pages, protocol, evidence, analytics, and asset budgets intact")
+    print("site checks passed: Home, market, competition, transactional handoffs, A2A, blog, Metrics, legal, protocol, evidence, analytics, and asset budgets intact")
     return 0
 
 

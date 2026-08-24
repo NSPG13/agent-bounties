@@ -1,0 +1,158 @@
+.wallet-auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(4px);
+}
+.wallet-auth-panel {
+  width: min(100%, 36rem);
+  display: grid;
+  gap: 1rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(201, 245, 72, 0.28);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  color: #f4f6ef;
+  background: #06140d;
+  box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.55);
+}
+
+.wallet-auth-panel > p,
+.wallet-auth-linked > p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.wallet-auth-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.wallet-auth-head h2,
+.wallet-auth-head p {
+  margin: 0;
+}
+
+.wallet-auth-close {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.35rem;
+}
+
+.wallet-auth-method-warning,
+.wallet-auth-boundary,
+.wallet-auth-notice,
+.wallet-auth-account,
+.wallet-auth-linked {
+  padding: 0.85rem;
+  border-radius: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.wallet-auth-method-warning {
+  color: #dfd4b1;
+  background: rgba(255, 211, 105, 0.08);
+}
+
+.wallet-auth-boundary {
+  color: #bdc8c0;
+  background: rgba(124, 239, 209, 0.08);
+}
+
+.wallet-auth-notice {
+  margin: 0;
+  color: #dff5ad;
+  background: rgba(201, 245, 72, 0.1);
+}
+
+.wallet-auth-account,
+.wallet-auth-linked {
+  display: grid;
+  gap: 0.45rem;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.wallet-auth-account span,
+.wallet-auth-linked > strong {
+  color: #9eaba2;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wallet-auth-account strong {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.wallet-auth-chips,
+.wallet-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.wallet-auth-chips span {
+  border: 1px solid rgba(124, 239, 209, 0.22);
+  border-radius: 999px;
+  padding: 0.38rem 0.68rem;
+  color: #d7fff5;
+  background: rgba(124, 239, 209, 0.08);
+}
+
+.wallet-auth-actions > * {
+  flex: 1 1 12rem;
+}
+
+.wallet-auth-back,
+.wallet-auth-signout {
+  justify-self: start;
+}
+
+.wallet-auth-signout {
+  border: 0;
+  padding: 0;
+  color: #aeb8b1;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.2rem;
+}
+
+[data-agent-bounties-coinbase-auth-root="true"]:empty {
+  display: none;
+}
+
+@media (max-width: 34rem) {
+  .wallet-auth-overlay {
+    align-items: end;
+    padding: 0;
+  }
+
+  .wallet-auth-panel {
+    max-height: 92vh;
+    overflow: auto;
+    border-radius: 1rem 1rem 0 0;
+  }
+}
+
+.wallet-auth-link-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
