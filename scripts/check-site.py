@@ -321,6 +321,9 @@ def check_homepage(site_dir: Path) -> None:
     hero_action = page.find('<div class="hero-action">', hero_start)
     if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
         fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
+    stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
+    if not stylesheet_version or int(stylesheet_version.group(1)) < 10:
+        fail("the homepage must load the flow-layout stylesheet through a cache-busted URL")
     require_phrases(
         "index.html bounty assistant launcher",
         page,
