@@ -1006,6 +1006,7 @@ pub fn open_competition_v2_opportunities(
     release: &OpenCompetitionV2Release,
     network: &str,
     api_base_url: &str,
+    website_base_url: &str,
     proof_fee: u128,
     relay_fee: u128,
     now: DateTime<Utc>,
@@ -1017,6 +1018,7 @@ pub fn open_competition_v2_opportunities(
         return Ok(Vec::new());
     }
     let api = api_base_url.trim_end_matches('/');
+    let website = website_base_url.trim_end_matches('/');
     let metadata = v2_public_metadata(release)?;
     let external_spend = proof_fee
         .checked_add(relay_fee)
@@ -1122,9 +1124,12 @@ pub fn open_competition_v2_opportunities(
         );
         let goal = known.map(|item| item.summary.clone());
         let source_url = known.map(|item| item.source_url.clone());
-        let public_url = source_url.clone().unwrap_or_else(|| {
-            format!("{api}/v1/base/open-competition-v2-beta3/inventory?network={network}")
-        });
+        let is_forward_gmv = profile
+            .is_some_and(|item| item.profile_id == "forward-canonical-gmv-attribution-metric-v2");
+        let public_url = format!(
+            "{website}/competition.html?bountyContract={}&network={network}",
+            projection.competition
+        );
         let winner_mode = projection
             .winner_mode
             .clone()
@@ -1147,6 +1152,22 @@ pub fn open_competition_v2_opportunities(
                     }),
                 )
             }),
+            "scoring_formula": is_forward_gmv.then_some("sum(settlement_gmv * entrant_funding / total_funding)"),
+            "qualifying_action": is_forward_gmv.then(|| json!({
+                "objective": "Post or fund useful marketplace demand that reaches canonical settlement inside the scoring window.",
+                "entrant_binding": "Only funding from the competition solver wallet is attributed to that entrant.",
+                "excluded": [
+                    "operator or reserve wallets",
+                    "excluded reward contracts",
+                    "creator-equals-solver settlements",
+                    "entrant-equals-solver settlements"
+                ]
+            })),
+            "snapshot_url": is_forward_gmv.then(|| known.map(|item| format!(
+                    "{website}/generated/gmv-snapshots/{}.json",
+                    item.seed_id
+                )))
+                .flatten(),
             "payment_evidence": "CompetitionSettledV2"
         });
         let (categories, skills, keyword_matches) = web_public::discovery_taxonomy_with_matches(
@@ -2103,6 +2124,7 @@ mod tests {
             &release,
             "base-mainnet",
             "https://api.example",
+            "https://site.example",
             100_000,
             10_000,
             now,
@@ -2141,6 +2163,7 @@ mod tests {
             &release,
             "base-mainnet",
             "https://api.example",
+            "https://site.example",
             100_000,
             10_000,
             now,
@@ -2158,6 +2181,7 @@ mod tests {
             &release,
             "base-mainnet",
             "https://api.example",
+            "https://site.example",
             100_000,
             10_000,
             now,
@@ -2188,6 +2212,7 @@ mod tests {
             &release,
             "base-mainnet",
             "https://api.example",
+            "https://site.example",
             100_000,
             10_000,
             now,
@@ -2228,6 +2253,7 @@ mod tests {
             &release,
             "base-mainnet",
             "https://api.example",
+            "https://site.example",
             100_000,
             10_000,
             now,
@@ -2251,7 +2277,7 @@ mod tests {
                 && item.evidence_requirements["scoring_window"].is_object()
                 && item
                     .public_url
-                    .contains("open-competition-v2-forward-gmv-candidate-pool-v2")
+                    .starts_with("https://site.example/competition.html?bountyContract=")
         }));
         let projection = OpportunityProjectionResponse {
             schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),

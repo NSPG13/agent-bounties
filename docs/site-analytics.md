@@ -124,6 +124,13 @@ The collector accepts only:
 - `canonical_post_started` and `canonical_post_confirmed`
 - `funding_started`
 - `claim_started` and `claim_confirmed`
+- `competition_entry_started`, `competition_entry_confirmed`,
+  `competition_reveal_started`, and `competition_reveal_confirmed`
+- `competition_view` after a contract-specific workspace loads from the
+  canonical unified projection
+- `competition_instructions_copied` and `competition_template_copied`
+- `competition_child_post_started`
+- `competition_feedback_started` and `competition_feedback_submitted`
 
 `canonical_post_confirmed` is emitted only after indexed
 `CanonicalBountyCreated`. `claim_confirmed` is emitted only after indexed
@@ -149,6 +156,22 @@ but the canonical event index remains authoritative. Only confirmed
   `canonical_post_started`.
 - **Claim confirmation:** distinct sessions with `claim_confirmed` divided by
   distinct sessions with `claim_started`.
+- **Funded-click to competition view:** distinct sessions with
+  `competition_view` divided by sessions with `funded_bounty_click`.
+- **Competition instruction engagement:** distinct sessions with
+  `competition_instructions_copied` divided by sessions with
+  `competition_view`.
+- **Competition child-post start:** distinct sessions with
+  `competition_child_post_started` divided by sessions with
+  `competition_view`.
+- **Competition feedback completion:** distinct sessions with
+  `competition_feedback_submitted` divided by sessions with
+  `competition_feedback_started`.
+
+Competition events report interface transitions only. A copied template does
+not prove a post, an entry-start event does not prove entry, and a feedback
+event is not the feedback body. Canonical contracts and structured opportunity
+comments remain the evidence sources for lifecycle and user direction.
 
 Do not sum channel-level visitor counts to estimate people. One browser can be
 used by several people, one person can use several browsers or devices, and

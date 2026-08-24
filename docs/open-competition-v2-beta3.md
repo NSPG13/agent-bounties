@@ -277,6 +277,33 @@ Earn from an active competition:
 1. Read `inventory`; select an active competition by net prize, winner mode,
    deadline, and risk.
 2. Produce the exact artifact and call `quote_proof`.
+   For `forward-canonical-gmv-attribution-metric-v2`, wait for the scoring
+   window to close and for the published snapshot to contain its exact 2-of-2
+   attester quorum. Send the published `campaign` and `snapshot` objects
+   unchanged as the metric input:
+
+   ```json
+   {
+     "network": "base-mainnet",
+     "competition_contract": "0x...",
+     "solver": "0x...",
+     "solver_nonce": "0",
+     "relay": true,
+     "metric": {
+       "profile_id": "forward-canonical-gmv-attribution-metric-v2",
+       "campaign": { "...": "copy the exact published campaign object" },
+       "snapshot": { "...": "copy the exact published snapshot object" }
+     }
+   }
+   ```
+
+   Do not supply `artifact_hash` for this profile. The API reconstructs the
+   chain, competition, bounty, solver, nonce, proof-system, and release scope;
+   executes the reviewed metric; verifies the immutable policy hash and both
+   snapshot signatures; and derives the solver-bound submission hash. A
+   missing, unsigned, drifted, or policy-mismatched snapshot fails before a
+   quote or payment challenge is created. Public-vector and structured-artifact
+   quotes still require their exact `artifact_hash`.
 3. For hosted proving, call `pay_proof` without a signature, sign the returned
    x402 challenge, then call `pay_proof` once with that signature.
 4. Poll the proof job. Never repay a `payment_pending` job.

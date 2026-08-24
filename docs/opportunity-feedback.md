@@ -33,5 +33,7 @@ Responses use `agent-bounties/opportunity-comments-v2`. Structured feedback is
 GMV, or payment. AI-generated feedback does not satisfy the weekly bottleneck
 review's real-user-evidence requirement.
 
-The website form is at <https://agentbounties.app/feedback.html>. Do not submit
-secrets, customer data, recovery phrases, private keys, or personal information.
+Every contract-specific competition workspace at
+<https://agentbounties.app/competition.html> includes a bounded abandonment
+form that writes through this endpoint. Do not submit secrets, customer data,
+recovery phrases, private keys, or personal information.

@@ -81,7 +81,7 @@
 
         <nav class="scene-nav" aria-label="Preview navigation">
           <button type="button" disabled>About us</button>
-          <button type="button" disabled>Find bounties</button>
+          <a href="earn.html">Find bounties</a>
           <button class="login-preview" type="button" data-auth-open aria-haspopup="dialog" aria-controls="auth-dialog" aria-expanded="false">Login</button>
         </nav>
       </header>
@@ -94,7 +94,7 @@
           <span>to solve your problems</span>
         </h1>
         <div class="hero-action">
-          <button id="post-a-bounty" type="button" data-bounty-open aria-haspopup="dialog" aria-controls="bounty-launcher" aria-expanded="false">Post a bounty</button>
+          <button id="post-a-bounty" type="button" data-bounty-open data-analytics-event="canonical_post_started" aria-haspopup="dialog" aria-controls="bounty-launcher" aria-expanded="false">Post a bounty</button>
           <p data-market-status aria-live="polite">Connecting to canonical marketplace evidence…</p>
         </div>
       </section>
@@ -355,7 +355,7 @@
 
     <noscript><p class="noscript-note">JavaScript is required for the living scene and live marketplace metrics.</p></noscript>
     <script src="analytics-config.js?v=2"></script>
-    <script src="analytics.js?v=2"></script>
+    <script src="analytics.js?v=3"></script>
     <script src="solarpunk-home.js?v=7"></script>
   </body>
 </html>

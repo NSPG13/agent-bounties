@@ -3954,6 +3954,110 @@ fn open_competition_v2_mutation_schema() -> Value {
         }),
         &["profile_id", "threshold", "artifact_utf8", "requirements"],
     );
+    let fixed_wire_bytes = |length: usize| {
+        json!({
+            "type": "array",
+            "minItems": length,
+            "maxItems": length,
+            "items": {"type": "integer", "minimum": 0, "maximum": 255}
+        })
+    };
+    let wire_address = fixed_wire_bytes(20);
+    let wire_bytes32 = fixed_wire_bytes(32);
+    let wire_unsigned = json!({"type": "integer", "minimum": 0});
+    let forward_funding = object_tool_schema(
+        json!({
+            "contributor": wire_address.clone(),
+            "amount_base_units": wire_unsigned.clone()
+        }),
+        &["contributor", "amount_base_units"],
+    );
+    let forward_settlement = object_tool_schema(
+        json!({
+            "protocol": {"type": "string", "enum": ["autonomous", "open_competition_v1", "open_competition_v2"]},
+            "bounty_contract": wire_address.clone(),
+            "bounty_id": wire_bytes32.clone(),
+            "creator": wire_address.clone(),
+            "solver": wire_address.clone(),
+            "settled_at": wire_unsigned.clone(),
+            "block_number": wire_unsigned.clone(),
+            "transaction_hash": wire_bytes32.clone(),
+            "log_index": wire_unsigned.clone(),
+            "gmv_base_units": wire_unsigned.clone(),
+            "funding": {"type": "array", "minItems": 1, "maxItems": 256, "items": forward_funding}
+        }),
+        &[
+            "protocol",
+            "bounty_contract",
+            "bounty_id",
+            "creator",
+            "solver",
+            "settled_at",
+            "block_number",
+            "transaction_hash",
+            "log_index",
+            "gmv_base_units",
+            "funding",
+        ],
+    );
+    let forward_campaign = object_tool_schema(
+        json!({
+            "epoch_id": wire_bytes32.clone(),
+            "starts_at": wire_unsigned.clone(),
+            "ends_at": wire_unsigned.clone(),
+            "minimum_score_base_units": wire_unsigned.clone(),
+            "excluded_wallets": {"type": "array", "maxItems": 4096, "items": wire_address.clone()},
+            "excluded_bounty_contracts": {"type": "array", "maxItems": 4096, "items": wire_address.clone()},
+            "snapshot_attesters": {"type": "array", "minItems": 2, "maxItems": 255, "items": wire_address.clone()},
+            "snapshot_attestation_threshold": {"type": "integer", "minimum": 2, "maximum": 255}
+        }),
+        &[
+            "epoch_id",
+            "starts_at",
+            "ends_at",
+            "minimum_score_base_units",
+            "excluded_wallets",
+            "excluded_bounty_contracts",
+            "snapshot_attesters",
+            "snapshot_attestation_threshold",
+        ],
+    );
+    let forward_attestation = object_tool_schema(
+        json!({
+            "signer": wire_address,
+            "signature": {
+                "type": "array",
+                "minItems": 65,
+                "maxItems": 65,
+                "items": {"type": "integer", "minimum": 0, "maximum": 255}
+            }
+        }),
+        &["signer", "signature"],
+    );
+    let forward_snapshot = object_tool_schema(
+        json!({
+            "start_block": wire_unsigned.clone(),
+            "end_safe_block": wire_unsigned.clone(),
+            "end_block_hash": wire_bytes32,
+            "settlements": {"type": "array", "maxItems": 4096, "items": forward_settlement},
+            "attestations": {"type": "array", "minItems": 2, "maxItems": 255, "items": forward_attestation}
+        }),
+        &[
+            "start_block",
+            "end_safe_block",
+            "end_block_hash",
+            "settlements",
+            "attestations",
+        ],
+    );
+    let forward_gmv_metric = object_tool_schema(
+        json!({
+            "profile_id": {"const": "forward-canonical-gmv-attribution-metric-v2"},
+            "campaign": forward_campaign,
+            "snapshot": forward_snapshot
+        }),
+        &["profile_id", "campaign", "snapshot"],
+    );
     let structured_artifact_profile = object_tool_schema(
         json!({
             "profile_id": {"const": "structured-artifact-metric-v1"},
@@ -4005,10 +4109,10 @@ fn open_competition_v2_mutation_schema() -> Value {
             "competition_contract": address.clone(),
             "solver": address.clone(),
             "solver_nonce": unsigned_decimal.clone(),
-            "artifact_hash": bytes32.clone(),
+            "artifact_hash": described_bytes32("Required for public-vector and structured-artifact metrics. Omit for forward GMV; the API derives and binds the solver-specific submission hash from the attested snapshot."),
             "relay": {"type": "boolean"},
-            "metric": {"oneOf": [public_vector_metric, structured_artifact_metric]}
-        }), &["competition_contract", "solver", "solver_nonce", "artifact_hash", "relay", "metric"]),
+            "metric": {"oneOf": [public_vector_metric, structured_artifact_metric, forward_gmv_metric]}
+        }), &["competition_contract", "solver", "solver_nonce", "relay", "metric"]),
         "pay_proof": object_tool_schema(json!({
             "proof_job_id": {"type": "string", "format": "uuid"},
             "payment_signature": {"type": ["string", "null"], "minLength": 1, "description": "Omit on the first call to receive the exact x402 challenge; include only after explicit approval and signing."}
@@ -5936,7 +6040,8 @@ fn open_competition_v2_mcp_guide() -> Value {
         "operations": ["prepare_profile", "prepare_policies", "validate", "create", "fund", "quote_proof", "pay_proof", "prepare_proof", "authorize_relay", "prepare_action"],
         "profile_support": {
             "structured-artifact-metric-v1": "prepare_profile accepts threshold and deterministic artifact requirements.",
-            "public-vector-metric-v1": "prepare_profile accepts mode, threshold, and expected/weight policy vectors; quote_proof later adds each observed value. Copy the matching reviewed profile fields from profiles into validate."
+            "public-vector-metric-v1": "prepare_profile accepts mode, threshold, and expected/weight policy vectors; quote_proof later adds each observed value. Copy the matching reviewed profile fields from profiles into validate.",
+            "forward-canonical-gmv-attribution-metric-v2": "After the forward window closes, quote_proof accepts the exact published campaign and dual-attested safe-block snapshot. The API reconstructs the contract and solver scope and rejects unsigned, drifted, or policy-mismatched evidence."
         },
         "side_effects": {
             "quote_proof": "Creates one hosted proof-job record.",

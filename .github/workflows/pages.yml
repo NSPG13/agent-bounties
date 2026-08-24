@@ -10,6 +10,7 @@ on:
       - "scripts/check-site.py"
       - "scripts/test-solarpunk-home.js"
       - "scripts/test-metrics-dashboard.js"
+      - "scripts/test-marketplace-ui.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -24,6 +25,7 @@ on:
       - "scripts/check-site.py"
       - "scripts/test-solarpunk-home.js"
       - "scripts/test-metrics-dashboard.js"
+      - "scripts/test-marketplace-ui.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -59,10 +61,14 @@ jobs:
           node --check site/analytics.js
           node --check site/solarpunk-home.js
           node --check site/metrics.js
+          node --check site/marketplace.js
+          node --check site/competition.js
       - name: Test the living scene and marketplace evidence states
         run: node --test scripts/test-solarpunk-home.js
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
+      - name: Test unified marketplace readiness, timing, and economics
+        run: node --test scripts/test-marketplace-ui.js
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v
@@ -166,23 +172,27 @@ jobs:
           include-hidden-files: true
       - id: deployment
         uses: actions/deploy-pages@v5
-      - name: Verify Home, Metrics, legal pages, discovery, and removed-route 404s
+      - name: Verify Home, unified marketplace, competition workspace, Metrics, legal pages, and discovery
         if: github.event_name != 'schedule'
         run: |
           set -euo pipefail
           nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
           curl --fail --silent --show-error --location "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/competition.html?verify=${nonce}" -o /tmp/live-competition.html
           curl --fail --silent --show-error --location "https://agentbounties.app/metrics.html?verify=${nonce}" -o /tmp/live-metrics.html
           curl --fail --silent --show-error --location "https://agentbounties.app/privacy.html?verify=${nonce}" -o /tmp/live-privacy.html
           curl --fail --silent --show-error --location "https://agentbounties.app/terms.html?verify=${nonce}" -o /tmp/live-terms.html
           curl --fail --silent --show-error --location "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-discovery.json
           grep -q 'data-scene-root' /tmp/live-index.html
           grep -q 'Rather pay for results than tokens?' /tmp/live-index.html
+          grep -q 'All ready opportunities' /tmp/live-earn.html
+          grep -q 'Decision-grade economics' /tmp/live-competition.html
           grep -q 'id="payout-audit"' /tmp/live-metrics.html
           grep -q '<h1>Privacy policy</h1>' /tmp/live-privacy.html
           grep -q '<h1>Terms of use</h1>' /tmp/live-terms.html
           grep -q 'discovery-manifest.v2.json' /tmp/live-discovery.json
-          for route in earn.html objective.html funding.html post.html; do
+          for route in objective.html funding.html post.html; do
             status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://agentbounties.app/${route}?verify=${nonce}")"
             [[ "${status}" == "404" ]]
           done
