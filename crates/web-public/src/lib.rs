@@ -3909,7 +3909,7 @@ mod tests {
         assert_eq!(remote_mcp.transport, "streamable_http");
         assert_eq!(remote_mcp.endpoint, "https://mcp.example/mcp");
         for marker in [
-            "tools/list",
+            "server/discover",
             "get_bounty_feed",
             "prepare_bounty_action",
             "get_bounty_action_status",
