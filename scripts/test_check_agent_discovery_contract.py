@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,9 @@ SPEC.loader.exec_module(guard)
 
 
 class AgentDiscoveryContractTests(unittest.TestCase):
-    def create_repository(self, root: Path, *, advertise_a2a: bool) -> None:
+    def create_repository(
+        self, root: Path, *, advertise_a2a: bool, conforming_a2a: bool = False
+    ) -> None:
         api = root / "crates" / "api" / "src" / "main.rs"
         api.parent.mkdir(parents=True)
         api.write_text(
@@ -55,11 +58,59 @@ class AgentDiscoveryContractTests(unittest.TestCase):
         )
         status = root / "docs" / "a2a-status.md"
         status.write_text(
-            "Agent Bounties does not currently implement the Agent2Agent (A2A) "
-            "protocol.\n"
-            "https://github.com/a2aproject/A2A/blob/main/docs/specification.md\n",
+            (
+                "Agent Bounties implements a public, read-only Agent2Agent (A2A) "
+                "1.0 HTTP+JSON interface.\n"
+                if conforming_a2a
+                else "Agent Bounties does not currently implement the Agent2Agent "
+                "(A2A) protocol.\n"
+            )
+            + "https://github.com/a2aproject/A2A/blob/main/docs/specification.md\n",
             encoding="utf-8",
         )
+        if conforming_a2a:
+            a2a = root / "crates" / "api" / "src" / "a2a.rs"
+            a2a.write_text(
+                'const A2A_PROTOCOL_VERSION: &str = "1.0";\n'
+                'const MEDIA: &str = "application/a2a+json";\n'
+                'route("/.well-known/agent-card.json", get(agent_card));\n'
+                'route("/a2a/v1/message:send", post(send_message));\n'
+                'route("/a2a/v1/tasks", get(list_tasks));\n'
+                "DefaultBodyLimit::max(65536);\n"
+                "fn agent_card() {}\nfn send_message() {}\nfn get_task() {}\n"
+                "fn list_tasks() {}\nfn cancel_task() {}\n",
+                encoding="utf-8",
+            )
+            with api.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    "mod a2a;\n.merge(a2a::router())\n"
+                    "fn a2a_router_serves_card_and_core_task_operations() {}\n"
+                )
+            card = {
+                "supportedInterfaces": [
+                    {
+                        "url": "https://api.agentbounties.app/a2a/v1",
+                        "protocolBinding": "HTTP+JSON",
+                        "protocolVersion": "1.0",
+                    }
+                ],
+                "capabilities": {
+                    "streaming": False,
+                    "pushNotifications": False,
+                    "extendedAgentCard": False,
+                },
+                "skills": [{"id": "discover"}],
+            }
+            card_bytes = (json.dumps(card, indent=2) + "\n").encode()
+            for relative in (
+                "crates/api/fixtures/agent-card.json",
+                "site/.well-known/agent-card.json",
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(card_bytes)
+            docs = root / "docs" / "a2a.md"
+            docs.write_text("# A2A\n", encoding="utf-8")
 
     def test_generic_discovery_without_a2a_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -73,6 +124,12 @@ class AgentDiscoveryContractTests(unittest.TestCase):
             self.create_repository(root, advertise_a2a=True)
             with self.assertRaisesRegex(SystemExit, "without a conforming A2A server"):
                 guard.validate_agent_discovery_contract(root)
+
+    def test_conforming_a2a_advertisement_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_repository(root, advertise_a2a=True, conforming_a2a=True)
+            guard.validate_agent_discovery_contract(root)
 
     def test_retired_agent_card_fixture_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
