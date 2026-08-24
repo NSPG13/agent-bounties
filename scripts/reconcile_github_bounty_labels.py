@@ -1333,6 +1333,24 @@ def replace_managed_block(body: str, managed: str) -> str:
     return f"{body[:start]}{managed}{body[end:]}"
 
 
+def has_current_discovery_block(body: str) -> bool:
+    """Return whether an existing managed block already uses the current layout."""
+    starts = body.count(MANAGED_START)
+    ends = body.count(MANAGED_END)
+    if starts != ends or starts > 1:
+        raise LabelReconciliationError("cannot inspect malformed managed issue body")
+    if starts == 0:
+        return False
+    start = body.index(MANAGED_START)
+    end = body.index(MANAGED_END, start) + len(MANAGED_END)
+    managed = body[start:end]
+    return (
+        "- **Current work state:**" in managed
+        and "- **Current payment state:**" in managed
+        and "- **Current competition state:**" in managed
+    )
+
+
 def trial_claimable_enabled(policy: Mapping[str, Any], generated_at: datetime) -> bool:
     trial = policy["open_competition_compatibility_trial"]
     ends_at = parse_instant(trial["ends_at"], "trial.ends_at")
@@ -1446,6 +1464,15 @@ def build_settlement_receipt(item: Mapping[str, Any]) -> SettlementReceipt:
     return SettlementReceipt(fingerprint=fingerprint, body=body)
 
 
+def created_after_activation(item: Mapping[str, Any], policy: Mapping[str, Any]) -> bool:
+    activation = policy["activation"]
+    return require_unsigned(item["created_block"], "created_block") >= require_unsigned(
+        activation["safe_block"], "activation.safe_block"
+    ) and parse_instant(item["created_at"], "created_at") >= parse_instant(
+        activation["timestamp"], "activation.timestamp"
+    )
+
+
 def create_allowed(item: Mapping[str, Any], policy: Mapping[str, Any]) -> tuple[bool, str]:
     identity = str(item["discovery_id"])
     if identity in policy["required_backfill_discovery_ids"]:
@@ -1453,13 +1480,7 @@ def create_allowed(item: Mapping[str, Any], policy: Mapping[str, Any]) -> tuple[
     state = str(item["lifecycle_state"])
     if state in NONTERMINAL_STATES or item.get("recovery_action_available") is True:
         return True, "current_nonterminal_backfill"
-    activation = policy["activation"]
-    created_after = require_unsigned(item["created_block"], "created_block") >= require_unsigned(
-        activation["safe_block"], "activation.safe_block"
-    ) and parse_instant(item["created_at"], "created_at") >= parse_instant(
-        activation["timestamp"], "activation.timestamp"
-    )
-    if created_after:
+    if created_after_activation(item, policy):
         return True, "post_activation_record"
     return False, "historical_terminal_without_existing_issue"
 
@@ -1554,9 +1575,29 @@ def build_plans(
             eligible = False
             mapping_action = "preserve_closed_historical"
 
-        managed = render_managed_block(item)
         original_body = str(issue.get("body") or "") if issue else ""
-        desired_body = replace_managed_block(original_body, managed) if eligible else original_body
+        post_activation_source = bool(
+            issue
+            and issue_marker(issue) is None
+            and created_after_activation(item, policy)
+        )
+        content_reformat_allowed = bool(
+            issue is None
+            or lifecycle_state == "ready_to_earn"
+            or has_current_discovery_block(original_body)
+            or post_activation_source
+        )
+        title_reformat_allowed = bool(
+            issue is None
+            or lifecycle_state == "ready_to_earn"
+            or post_activation_source
+        )
+        managed = render_managed_block(item)
+        desired_body = (
+            replace_managed_block(original_body, managed)
+            if eligible and content_reformat_allowed
+            else original_body
+        )
         desired = desired_labels(item, policy, generated_at) if eligible else set()
         current_all = label_names(issue) if issue else set()
         current_managed = current_all & MANAGED_LABELS
@@ -1599,7 +1640,12 @@ def build_plans(
         landing = item.get("_landing")
         desired_title = (
             str(issue.get("title") or item["title"])
-            if issue and (preserve_closed_historical or item.get("_landing_action_required"))
+            if issue
+            and (
+                preserve_closed_historical
+                or item.get("_landing_action_required")
+                or not title_reformat_allowed
+            )
             else str(landing["outcome_title"])
             if isinstance(landing, dict)
             else f"[Bounty] {str(item['title']).strip()}"

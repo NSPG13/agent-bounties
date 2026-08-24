@@ -12,6 +12,7 @@ from unittest.mock import patch
 from reconcile_github_bounty_labels import (
     BETA3_PROTOCOL,
     LABEL_DEFINITIONS,
+    MANAGED_END,
     MANAGED_START,
     HttpResult,
     LabelReconciliationError,
@@ -460,6 +461,63 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertTrue(plan.desired_body.startswith("Keep this human section."))
         self.assertIn(MANAGED_START, plan.desired_body)
         self.assertNotIn("help wanted", plan.remove_labels)
+
+    def test_legacy_non_ready_issue_reconciles_labels_without_reformatting_content(self) -> None:
+        record = item(
+            96,
+            state="unavailable",
+            source_url=f"https://github.com/{REPOSITORY}/issues/96",
+            verifier_ready=False,
+        )
+        legacy_body = (
+            "Human-authored context.\n\n"
+            f"{MANAGED_START}\n"
+            f'<!-- agent-bounties/github-discovery-v1 {{"discovery_id":"{record["discovery_id"]}"}} -->\n'
+            "## Canonical bounty discovery\n\n"
+            "- **Mode:** Exclusive claim\n"
+            "- **Lifecycle:** `ready_to_earn`\n"
+            f"{MANAGED_END}\n"
+        )
+        source = issue(
+            96,
+            body=legacy_body,
+            labels=["bounty", "payments", "ai-agent-welcome", "ready-to-earn"],
+        )
+        plan = build_plans(projection(record), [source], policy(), REPOSITORY)[0]
+        self.assertEqual(plan.original_title, plan.title)
+        self.assertEqual(plan.original_body, plan.desired_body)
+        self.assertIn("ai-agent-welcome", plan.remove_labels)
+        self.assertIn("ready-to-earn", plan.remove_labels)
+        self.assertIn("verification-unavailable", plan.add_labels)
+        self.assertTrue(plan_has_write(plan))
+
+    def test_current_discovery_block_keeps_reconciling_after_work_starts(self) -> None:
+        ready = item(97, source_url=f"https://github.com/{REPOSITORY}/issues/97")
+        source = issue(97, body="Human-authored context.", labels=["bounty"])
+        ready_plan = build_plans(
+            projection(ready),
+            [source],
+            policy(),
+            REPOSITORY,
+            landing_entries=landing(ready, issue_number=97),
+        )[0]
+        active = item(
+            97,
+            state="in_progress",
+            source_url=f"https://github.com/{REPOSITORY}/issues/97",
+        )
+        upgraded = issue(
+            97,
+            body=ready_plan.desired_body,
+            labels=ready_plan.desired_managed_labels,
+        )
+        upgraded["title"] = ready_plan.title
+        active_plan = build_plans(projection(active), [upgraded], policy(), REPOSITORY)[0]
+        self.assertEqual(active_plan.title, ready_plan.title)
+        self.assertNotEqual(active_plan.original_body, active_plan.desired_body)
+        self.assertIn("- **Current work state:** `in_progress`", active_plan.desired_body)
+        self.assertNotIn("ready-to-earn", active_plan.desired_managed_labels)
+        self.assertIn("claimed-live", active_plan.desired_managed_labels)
 
     def test_external_source_creates_central_mirror_and_source_collision_is_unambiguous(self) -> None:
         external = item(3, source_url="https://github.com/external/project/issues/7")
