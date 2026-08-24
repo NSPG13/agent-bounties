@@ -56,8 +56,12 @@ jobs:
           assert 'data-market-volume' in metrics
           PY
             then
+              if ! python scripts/check-public-handoffs.py --base-url https://agentbounties.app; then
+                sleep 5
+                continue
+              fi
               removed_ok=true
-              for route in earn.html post.html objective.html funding.html; do
+              for route in objective.html funding.html; do
                 status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://agentbounties.app/${route}?verify=${nonce}")"
                 if [[ "$status" != "404" ]]; then
                   removed_ok=false
