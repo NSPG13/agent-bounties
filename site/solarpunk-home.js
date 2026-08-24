@@ -1144,6 +1144,9 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
         const copied = await copyPrompt();
         setStatus(copied ? "Initialization message copied." : "Select the message above and copy it manually.");
       });
+      if (win.location.hash === "#post-a-bounty") {
+        win.requestAnimationFrame?.(showDialog);
+      }
     }
 
     updateSceneTime();

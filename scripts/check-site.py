@@ -10,6 +10,8 @@ from urllib.parse import urldefrag, urlparse
 
 CANONICAL_PAGES = {
     "index.html": "https://agentbounties.app/",
+    "earn.html": "https://agentbounties.app/earn.html",
+    "competition.html": "https://agentbounties.app/competition.html",
     "metrics.html": "https://agentbounties.app/metrics.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "terms.html": "https://agentbounties.app/terms.html",
@@ -21,6 +23,9 @@ REQUIRED_FILES = {
     "agent/index.md",
     "analytics-config.js",
     "analytics.js",
+    "competition.html",
+    "competition.js",
+    "earn.html",
     "favicon.svg",
     "generated/github-participation.json",
     "generated/public-metrics-policy.json",
@@ -29,6 +34,8 @@ REQUIRED_FILES = {
     "metrics.css",
     "metrics.html",
     "metrics.js",
+    "marketplace.css",
+    "marketplace.js",
     "privacy.html",
     "protocol.json",
     "robots.txt",
@@ -43,9 +50,12 @@ REQUIRED_FILES = {
 ALLOWED_UI_CODE = {
     "analytics-config.js",
     "analytics.js",
+    "competition.js",
     "guild-pages.css",
     "metrics.css",
     "metrics.js",
+    "marketplace.css",
+    "marketplace.js",
     "solarpunk-home.js",
     "solarpunk.css",
     "styles.css",
@@ -314,8 +324,10 @@ def check_homepage(site_dir: Path) -> None:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment.",
         ],
     )
-    if page.count("<button type=\"button\" disabled>") < 2:
-        fail("unfinished About and Find controls must remain native disabled buttons")
+    if page.count("<button type=\"button\" disabled>") < 1:
+        fail("the unfinished About control must remain a native disabled button")
+    if '<a href="earn.html">Find bounties</a>' not in page:
+        fail("the homepage must route Find bounties to the unified market")
     hero_start = page.find('<section class="hero"')
     hero_end = page.find("</section>", hero_start)
     hero_action = page.find('<div class="hero-action">', hero_start)
@@ -341,7 +353,8 @@ def check_homepage(site_dir: Path) -> None:
         "index.html bounty assistant launcher",
         page,
         [
-            'data-bounty-open aria-haspopup="dialog"',
+            'data-bounty-open',
+            'aria-controls="bounty-launcher"',
             'data-bounty-launcher aria-labelledby="bounty-launcher-title"',
             'data-bounty-assistant="gpt"',
             'data-bounty-assistant="claude"',
@@ -372,7 +385,7 @@ def check_homepage(site_dir: Path) -> None:
     )
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
-    for removed in ("earn.html", "post.html", "how-it-works.html"):
+    for removed in ("post.html", "how-it-works.html"):
         if removed in page:
             fail(f"homepage links to removed page {removed}")
     require_phrases(
@@ -473,6 +486,93 @@ def check_homepage(site_dir: Path) -> None:
             fail(f"{label} adjacent scene plates exceed the visible-art budget: {pair_max} bytes")
 
 
+def check_marketplace(site_dir: Path) -> None:
+    board = (site_dir / "earn.html").read_text(encoding="utf-8")
+    competition = (site_dir / "competition.html").read_text(encoding="utf-8")
+    marketplace = (site_dir / "marketplace.js").read_text(encoding="utf-8")
+    detail = (site_dir / "competition.js").read_text(encoding="utf-8")
+    css = (site_dir / "marketplace.css").read_text(encoding="utf-8")
+    require_phrases(
+        "earn.html",
+        board,
+        [
+            "Funded work,<br>one market.",
+            "Every visible opportunity passes the readiness rules for its own settlement mechanism.",
+            "data-opportunity-list",
+            "data-market-timing",
+            "All ready opportunities",
+            "Starts later",
+            "CompetitionSettledV2",
+        ],
+    )
+    require_phrases(
+        "competition.html",
+        competition,
+        [
+            "data-competition-app",
+            "Decision-grade economics",
+            "Your child-bounty funding",
+            "If you lose",
+            "Expected cash result",
+            "Copy prefilled child-bounty brief",
+            "One contract-bound machine handoff.",
+            "Not entering?",
+            "data-abandonment-form",
+        ],
+    )
+    require_phrases(
+        "marketplace.js",
+        marketplace,
+        [
+            'item.source_status === "active"',
+            '["best_score", "first_proven"]',
+            "Boolean(item.evidence_requirements?.verification_policy_hash)",
+            'item.source_status === "claimable" && Boolean(item.terms_hash)',
+            "Scoring now",
+            "Starts in",
+            "competition.html?bountyContract=",
+            'track("market_view")',
+        ],
+    )
+    require_phrases(
+        "competition.js",
+        detail,
+        [
+            "agent-bounties/competition-participation-manifest-v1",
+            "competition_view",
+            "competition_instructions_copied",
+            "competition_template_copied",
+            "competition_child_post_started",
+            "competition_feedback_started",
+            "competition_feedback_submitted",
+            "/comments",
+            "Expected =",
+            "CompetitionSettledV2",
+            "hosted_proof_quote",
+            "forward-canonical-gmv-attribution-metric-v2",
+        ],
+    )
+    for forbidden in (
+        "Open Competition V2 count",
+        "V2 market share",
+        "autonomous bounty count",
+        "bounty type breakdown",
+    ):
+        if forbidden.lower() in (board + competition + marketplace + detail).lower():
+            fail(f"public marketplace exposes an internal type split: {forbidden}")
+    require_phrases(
+        "marketplace.css",
+        css,
+        [
+            ".opportunity-row",
+            ".competition-workspace",
+            ".competition-instructions, .economics { min-width: 0; }",
+            ".economics-ledger .loss",
+            "@media (prefers-reduced-motion: reduce)",
+        ],
+    )
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     site_dir = repo_root / "site"
@@ -482,7 +582,7 @@ def main() -> int:
 
     html_files = {path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*.html")}
     if html_files != set(CANONICAL_PAGES):
-        fail(f"site must expose only Home, Metrics, and required legal HTML; found {sorted(html_files)}")
+        fail(f"site HTML contract differs from the approved public pages; found {sorted(html_files)}")
     ui_code = {path.relative_to(site_dir).as_posix() for pattern in ("*.js", "*.css") for path in site_dir.rglob(pattern)}
     if ui_code != ALLOWED_UI_CODE:
         fail(f"orphaned or missing UI code: extra={sorted(ui_code - ALLOWED_UI_CODE)} missing={sorted(ALLOWED_UI_CODE - ui_code)}")
@@ -506,10 +606,10 @@ def main() -> int:
                 '<link rel="icon" href="favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
                 '<script src="analytics-config.js?v=2"></script>',
-                '<script src="analytics.js?v=2"></script>',
+                '<script src="analytics.js?v=3"></script>',
             ],
         )
-        if text.index('src="analytics-config.js?v=2"') > text.index('src="analytics.js?v=2"'):
+        if text.index('src="analytics-config.js?v=2"') > text.index('src="analytics.js?v=3"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         for link in parser.links:
             check_internal_link(site_dir, path, link, parser.ids)
@@ -518,7 +618,7 @@ def main() -> int:
     namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     urls = {item.text.strip() for item in sitemap.findall("sm:url/sm:loc", namespace) if item.text}
     if urls != set(CANONICAL_PAGES.values()):
-        fail(f"sitemap must list only Home, Metrics, and required legal pages; found {sorted(urls)}")
+        fail(f"sitemap must list exactly the approved public pages; found {sorted(urls)}")
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
     require_phrases("robots.txt", robots, ["User-agent: OAI-SearchBot", "Sitemap: https://agentbounties.app/sitemap.xml"])
 
@@ -535,6 +635,7 @@ def main() -> int:
     check_discovery(site_dir, repo_root, protocol)
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
+    check_marketplace(site_dir)
     check_metrics(site_dir)
     privacy = (site_dir / "privacy.html").read_text(encoding="utf-8")
     terms = (site_dir / "terms.html").read_text(encoding="utf-8")
@@ -556,7 +657,7 @@ def main() -> int:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
         ],
     )
-    print("site checks passed: Home + Metrics + required legal pages; protocol, evidence, analytics, and asset budgets intact")
+    print("site checks passed: Home + unified market + competition workspace + Metrics + required legal pages; protocol, evidence, analytics, and asset budgets intact")
     return 0
 
 

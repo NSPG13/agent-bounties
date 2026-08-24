@@ -74,6 +74,8 @@ pub const OPPORTUNITY_FEEDBACK_MIGRATION: &str =
     include_str!("../../../migrations/0025_opportunity_feedback.sql");
 pub const SITE_AUTH_ACCOUNTS_MIGRATION: &str =
     include_str!("../../../migrations/0026_site_auth_accounts.sql");
+pub const COMPETITION_ACTIVATION_ANALYTICS_MIGRATION: &str =
+    include_str!("../../../migrations/0027_competition_activation_analytics.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1197,6 +1199,7 @@ impl PostgresStore {
                 OPEN_COMPETITION_V2_BETA3_MIGRATION,
                 OPPORTUNITY_FEEDBACK_MIGRATION,
                 SITE_AUTH_ACCOUNTS_MIGRATION,
+                COMPETITION_ACTIVATION_ANALYTICS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -10081,6 +10084,25 @@ mod tests {
             assert!(
                 !SITE_ANALYTICS_MIGRATION.contains(forbidden),
                 "site analytics must not persist {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn competition_activation_analytics_migration_matches_the_api_allowlist() {
+        for invariant in [
+            "DROP CONSTRAINT IF EXISTS site_analytics_event_name_check",
+            "competition_view",
+            "competition_instructions_copied",
+            "competition_template_copied",
+            "competition_child_post_started",
+            "competition_feedback_started",
+            "competition_feedback_submitted",
+            "competition_entry_confirmed",
+        ] {
+            assert!(
+                COMPETITION_ACTIVATION_ANALYTICS_MIGRATION.contains(invariant),
+                "missing competition activation analytics invariant {invariant}"
             );
         }
     }

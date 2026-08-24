@@ -211,7 +211,11 @@ html[data-scene-ready="false"] .scene-plate {
   gap: 12px;
 }
 
-.scene-nav button {
+.scene-nav button,
+.scene-nav a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 42px;
   padding: 0 10px;
   border: 0;
@@ -221,7 +225,12 @@ html[data-scene-ready="false"] .scene-plate {
   font-size: .83rem;
   font-weight: 720;
   letter-spacing: .02em;
+  text-decoration: none;
 }
+
+.scene-nav a { cursor: pointer; }
+
+.scene-nav a:hover { color: #eff8d7; border-bottom-color: rgba(213, 241, 120, .72); }
 
 .scene-nav button:disabled,
 .hero-action button:disabled {
@@ -2031,7 +2040,8 @@ html[data-scene-ready="false"] .scene-plate {
     gap: 6px;
   }
 
-  .scene-nav button {
+  .scene-nav button,
+  .scene-nav a {
     padding-inline: 7px;
   }
 

@@ -21,11 +21,14 @@ use chain_base::{
 };
 use chrono::{DateTime, Utc};
 use competition_metric_core::{
-    execute_public_vector_program, execute_structured_artifact_program,
-    structured_artifact_policy_hash_for, ArtifactRequirement, JournalScopeV2, PublicVectorCase,
-    PublicVectorMode, PublicVectorProgramInput, StructuredArtifactProgramInput,
-    GROTH16_PROOF_SYSTEM, JOURNAL_SCHEMA_HASH, METRIC_PROGRAM_HASH, PLONK_PROOF_SYSTEM,
-    STRUCTURED_ARTIFACT_JOURNAL_SCHEMA_HASH, STRUCTURED_ARTIFACT_METRIC_PROGRAM_HASH,
+    execute_forward_canonical_gmv_program, execute_public_vector_program,
+    execute_structured_artifact_program, structured_artifact_policy_hash_for, ArtifactRequirement,
+    ForwardCanonicalGmvCampaign, ForwardCanonicalGmvProgramInput, ForwardCanonicalGmvSnapshot,
+    JournalScopeV2, PublicVectorCase, PublicVectorMode, PublicVectorProgramInput,
+    StructuredArtifactProgramInput, CANONICAL_GMV_JOURNAL_SCHEMA_HASH,
+    FORWARD_CANONICAL_GMV_METRIC_PROGRAM_HASH, GROTH16_PROOF_SYSTEM, JOURNAL_SCHEMA_HASH,
+    METRIC_PROGRAM_HASH, PLONK_PROOF_SYSTEM, STRUCTURED_ARTIFACT_JOURNAL_SCHEMA_HASH,
+    STRUCTURED_ARTIFACT_METRIC_PROGRAM_HASH,
 };
 use db::{
     OpenCompetitionV2ProofJob, OpenCompetitionV2ProofJobState, OpenCompetitionV2ProofJobUpdate,
@@ -209,7 +212,7 @@ pub(crate) struct ProofQuoteBody {
     competition_contract: String,
     solver: String,
     solver_nonce: String,
-    artifact_hash: String,
+    artifact_hash: Option<String>,
     relay: bool,
     metric: ProofMetricBody,
 }
@@ -239,10 +242,19 @@ struct StructuredArtifactMetricBody {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForwardCanonicalGmvMetricBody {
+    profile_id: String,
+    campaign: ForwardCanonicalGmvCampaign,
+    snapshot: ForwardCanonicalGmvSnapshot,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum ProofMetricBody {
     PublicVector(PublicVectorMetricBody),
     StructuredArtifact(StructuredArtifactMetricBody),
+    ForwardCanonicalGmv(ForwardCanonicalGmvMetricBody),
 }
 
 #[derive(Debug, Deserialize)]
@@ -651,7 +663,7 @@ pub(crate) async fn create_proof_quote(
             ))
         }
     };
-    let (program_input, expected_public_values) =
+    let (program_input, expected_public_values, artifact_hash) =
         build_metric_proof_input(&network, &record.projection, &body)?;
     let now = u64::try_from(Utc::now().timestamp()).map_err(|_| {
         service_error(
@@ -685,7 +697,7 @@ pub(crate) async fn create_proof_quote(
         competition_contract: record.projection.competition.clone(),
         solver: body.solver.clone(),
         solver_nonce: body.solver_nonce.clone(),
-        artifact_hash: body.artifact_hash.clone(),
+        artifact_hash,
         proof_system: proof_system.to_string(),
         gross_prize: record.projection.solver_reward.to_string(),
         proof_fee_quote: proof_fee.to_string(),
@@ -1771,13 +1783,16 @@ fn build_metric_proof_input(
     network: &str,
     projection: &chain_base::OpenCompetitionV2Projection,
     body: &ProofQuoteBody,
-) -> Result<(Value, String), (StatusCode, Json<Value>)> {
+) -> Result<(Value, String, String), (StatusCode, Json<Value>)> {
     match &body.metric {
         ProofMetricBody::PublicVector(metric) => {
             build_public_vector_proof_input(network, projection, body, metric)
         }
         ProofMetricBody::StructuredArtifact(metric) => {
             build_structured_artifact_proof_input(network, projection, body, metric)
+        }
+        ProofMetricBody::ForwardCanonicalGmv(metric) => {
+            build_forward_canonical_gmv_proof_input(network, projection, body, metric)
         }
     }
 }
@@ -1787,7 +1802,7 @@ fn build_public_vector_proof_input(
     projection: &chain_base::OpenCompetitionV2Projection,
     body: &ProofQuoteBody,
     metric: &PublicVectorMetricBody,
-) -> Result<(Value, String), (StatusCode, Json<Value>)> {
+) -> Result<(Value, String, String), (StatusCode, Json<Value>)> {
     let required = |value: &Option<String>, field: &str| {
         value.clone().ok_or_else(|| {
             conflict(
@@ -1942,9 +1957,11 @@ fn build_public_vector_proof_input(
             "Expected vectors, weights, mode, or threshold do not match the immutable verification policy.",
         ));
     }
+    let expected_artifact_hash = bytes32_hex(output.submission_hash);
     if !body
         .artifact_hash
-        .eq_ignore_ascii_case(&bytes32_hex(output.submission_hash))
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case(&expected_artifact_hash))
     {
         return Err(bad_request(
             "quote_proof",
@@ -1961,6 +1978,7 @@ fn build_public_vector_proof_input(
             )
         })?,
         format!("0x{}", hex::encode(output.journal)),
+        expected_artifact_hash,
     ))
 }
 
@@ -1969,7 +1987,7 @@ fn build_structured_artifact_proof_input(
     projection: &chain_base::OpenCompetitionV2Projection,
     body: &ProofQuoteBody,
     metric: &StructuredArtifactMetricBody,
-) -> Result<(Value, String), (StatusCode, Json<Value>)> {
+) -> Result<(Value, String, String), (StatusCode, Json<Value>)> {
     if metric.profile_id != "structured-artifact-metric-v1" {
         return Err(bad_request(
             "quote_proof",
@@ -2097,9 +2115,11 @@ fn build_structured_artifact_proof_input(
             "The artifact requirements or threshold do not match the immutable verification policy.",
         ));
     }
+    let expected_artifact_hash = bytes32_hex(output.submission_hash);
     if !body
         .artifact_hash
-        .eq_ignore_ascii_case(&bytes32_hex(output.submission_hash))
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case(&expected_artifact_hash))
     {
         return Err(bad_request(
             "quote_proof",
@@ -2121,7 +2141,175 @@ fn build_structured_artifact_proof_input(
             "_profile_id".to_string(),
             Value::String("structured-artifact-metric-v1".to_string()),
         );
-    Ok((program_input, format!("0x{}", hex::encode(output.journal))))
+    Ok((
+        program_input,
+        format!("0x{}", hex::encode(output.journal)),
+        expected_artifact_hash,
+    ))
+}
+
+fn build_forward_canonical_gmv_proof_input(
+    network: &str,
+    projection: &chain_base::OpenCompetitionV2Projection,
+    body: &ProofQuoteBody,
+    metric: &ForwardCanonicalGmvMetricBody,
+) -> Result<(Value, String, String), (StatusCode, Json<Value>)> {
+    if metric.profile_id != "forward-canonical-gmv-attribution-metric-v2" {
+        return Err(bad_request(
+            "quote_proof",
+            "unsupported_metric_profile",
+            "Use profile_id=forward-canonical-gmv-attribution-metric-v2.",
+        ));
+    }
+    let required = |value: &Option<String>, field: &str| {
+        value.clone().ok_or_else(|| {
+            conflict(
+                "quote_proof",
+                "competition_profile_incomplete",
+                format!("Safe-block projection is missing {field}; wait for index reconciliation."),
+            )
+        })
+    };
+    let contract_threshold = required(&projection.score_threshold, "score_threshold")?
+        .parse::<u128>()
+        .map_err(|_| {
+            service_error(
+                "quote_proof",
+                "invalid_indexed_threshold",
+                "Indexed competition score threshold is invalid.",
+            )
+        })?;
+    if metric.campaign.minimum_score_base_units != contract_threshold {
+        return Err(bad_request(
+            "quote_proof",
+            "metric_threshold_mismatch",
+            "campaign.minimum_score_base_units must equal the competition's immutable score threshold",
+        ));
+    }
+    if projection.score_direction.as_deref() != Some("higher_is_better") {
+        return Err(bad_request(
+            "quote_proof",
+            "metric_direction_mismatch",
+            "forward-canonical-gmv-attribution-metric-v2 requires score_direction=higher_is_better",
+        ));
+    }
+    let proof_system = match projection.proof_system.as_deref() {
+        Some("groth16") => GROTH16_PROOF_SYSTEM,
+        Some("plonk") => PLONK_PROOF_SYSTEM,
+        _ => {
+            return Err(conflict(
+                "quote_proof",
+                "proof_system_unknown",
+                "Wait for index reconciliation.",
+            ))
+        }
+    };
+    if !required(&projection.metric_program_hash, "metric_program_hash")?
+        .eq_ignore_ascii_case(&bytes32_hex(FORWARD_CANONICAL_GMV_METRIC_PROGRAM_HASH))
+    {
+        return Err(conflict(
+            "quote_proof",
+            "unsupported_metric_program",
+            "The competition is not pinned to forward-canonical-gmv-attribution-metric-v2.",
+        ));
+    }
+    if !required(&projection.journal_schema_hash, "journal_schema_hash")?
+        .eq_ignore_ascii_case(&bytes32_hex(CANONICAL_GMV_JOURNAL_SCHEMA_HASH))
+    {
+        return Err(conflict(
+            "quote_proof",
+            "unsupported_journal_schema",
+            "The competition journal schema is not forward-canonical-gmv-attribution-metric-v2.",
+        ));
+    }
+    let input = ForwardCanonicalGmvProgramInput {
+        scope: JournalScopeV2 {
+            chain_id: network_chain_id(network).map_err(|_| {
+                bad_request(
+                    "quote_proof",
+                    "unknown_network",
+                    "Use base-mainnet or base-sepolia.",
+                )
+            })?,
+            competition: fixed_hex(&projection.competition, "competition_contract")?,
+            bounty_id: fixed_hex(&projection.bounty_id, "bounty_id")?,
+            solver: fixed_hex(&body.solver, "solver")?,
+            solver_nonce: decimal_u128(&body.solver_nonce, "solver_nonce")?,
+            proof_system,
+            program_vkey: fixed_hex(
+                &required(&projection.program_vkey, "program_vkey")?,
+                "program_vkey",
+            )?,
+            source_hash: fixed_hex(
+                &required(&projection.source_hash, "source_hash")?,
+                "source_hash",
+            )?,
+            elf_hash: fixed_hex(&required(&projection.elf_hash, "elf_hash")?, "elf_hash")?,
+            execution_policy_hash: fixed_hex(
+                &required(&projection.execution_policy_hash, "execution_policy_hash")?,
+                "execution_policy_hash",
+            )?,
+            settlement_policy_hash: fixed_hex(
+                &required(&projection.settlement_policy_hash, "settlement_policy_hash")?,
+                "settlement_policy_hash",
+            )?,
+            beta_risk_hash: fixed_hex(
+                &required(&projection.beta_risk_hash, "beta_risk_hash")?,
+                "beta_risk_hash",
+            )?,
+        },
+        campaign: metric.campaign.clone(),
+        snapshot: metric.snapshot.clone(),
+    };
+    let output = execute_forward_canonical_gmv_program(&input).map_err(|error| {
+        bad_request(
+            "quote_proof",
+            "invalid_metric_input",
+            format!("forward-canonical-gmv-attribution-metric-v2 rejected the input: {error:?}"),
+        )
+    })?;
+    let verification_policy = required(
+        &projection.verification_policy_hash,
+        "verification_policy_hash",
+    )?;
+    if !verification_policy.eq_ignore_ascii_case(&bytes32_hex(output.verification_policy_hash)) {
+        return Err(bad_request(
+            "quote_proof",
+            "verification_policy_mismatch",
+            "The campaign, exclusions, epoch, attester set, or threshold do not match the immutable verification policy.",
+        ));
+    }
+    let expected_artifact_hash = bytes32_hex(output.submission_hash);
+    if body
+        .artifact_hash
+        .as_deref()
+        .is_some_and(|value| !value.eq_ignore_ascii_case(&expected_artifact_hash))
+    {
+        return Err(bad_request(
+            "quote_proof",
+            "artifact_hash_mismatch",
+            "artifact_hash must equal the solver-bound forward-GMV submission hash",
+        ));
+    }
+    let mut program_input = serde_json::to_value(input).map_err(|error| {
+        service_error(
+            "quote_proof",
+            "metric_serialization_failed",
+            error.to_string(),
+        )
+    })?;
+    program_input
+        .as_object_mut()
+        .expect("forward GMV input serializes as an object")
+        .insert(
+            "_profile_id".to_string(),
+            Value::String("forward-canonical-gmv-attribution-metric-v2".to_string()),
+        );
+    Ok((
+        program_input,
+        format!("0x{}", hex::encode(output.journal)),
+        expected_artifact_hash,
+    ))
 }
 
 fn metric_mode_name(mode: PublicVectorMode) -> &'static str {
@@ -2744,7 +2932,7 @@ mod tests {
             competition_contract: projection.competition.clone(),
             solver: "0x3333333333333333333333333333333333333333".to_string(),
             solver_nonce: "7".to_string(),
-            artifact_hash: bytes32_hex(expected.submission_hash),
+            artifact_hash: Some(bytes32_hex(expected.submission_hash)),
             relay: true,
             metric: ProofMetricBody::StructuredArtifact(StructuredArtifactMetricBody {
                 profile_id: "structured-artifact-metric-v1".to_string(),
@@ -2753,13 +2941,70 @@ mod tests {
                 requirements,
             }),
         };
-        let (program_input, journal) =
+        let (program_input, journal, artifact_hash) =
             build_metric_proof_input("base-sepolia", &projection, &body).unwrap();
         assert_eq!(
             program_input["_profile_id"],
             "structured-artifact-metric-v1"
         );
         assert_eq!(journal, format!("0x{}", hex::encode(expected.journal)));
+        assert_eq!(artifact_hash, bytes32_hex(expected.submission_hash));
+    }
+
+    #[test]
+    fn forward_gmv_quote_requires_the_exact_attested_snapshot_and_solver_binding() {
+        let input: ForwardCanonicalGmvProgramInput = serde_json::from_str(include_str!(
+            "../../../programs/forward-canonical-gmv-attribution-metric-v2/fixtures/golden-v1.json"
+        ))
+        .unwrap();
+        let expected = execute_forward_canonical_gmv_program(&input).unwrap();
+        let projection = OpenCompetitionV2Projection {
+            competition: format!("0x{}", hex::encode(input.scope.competition)),
+            bounty_id: bytes32_hex(input.scope.bounty_id),
+            score_threshold: Some(input.campaign.minimum_score_base_units.to_string()),
+            score_direction: Some("higher_is_better".to_string()),
+            proof_system: Some("groth16".to_string()),
+            program_vkey: Some(bytes32_hex(input.scope.program_vkey)),
+            source_hash: Some(bytes32_hex(input.scope.source_hash)),
+            elf_hash: Some(bytes32_hex(input.scope.elf_hash)),
+            journal_schema_hash: Some(bytes32_hex(CANONICAL_GMV_JOURNAL_SCHEMA_HASH)),
+            metric_program_hash: Some(bytes32_hex(FORWARD_CANONICAL_GMV_METRIC_PROGRAM_HASH)),
+            execution_policy_hash: Some(bytes32_hex(input.scope.execution_policy_hash)),
+            verification_policy_hash: Some(bytes32_hex(expected.verification_policy_hash)),
+            settlement_policy_hash: Some(bytes32_hex(input.scope.settlement_policy_hash)),
+            beta_risk_hash: Some(bytes32_hex(input.scope.beta_risk_hash)),
+            ..Default::default()
+        };
+        let mut body = ProofQuoteBody {
+            network: Some("base-mainnet".to_string()),
+            competition_contract: projection.competition.clone(),
+            solver: format!("0x{}", hex::encode(input.scope.solver)),
+            solver_nonce: input.scope.solver_nonce.to_string(),
+            artifact_hash: None,
+            relay: true,
+            metric: ProofMetricBody::ForwardCanonicalGmv(ForwardCanonicalGmvMetricBody {
+                profile_id: "forward-canonical-gmv-attribution-metric-v2".to_string(),
+                campaign: input.campaign,
+                snapshot: input.snapshot,
+            }),
+        };
+        let (program_input, journal, artifact_hash) =
+            build_metric_proof_input("base-mainnet", &projection, &body).unwrap();
+        assert_eq!(
+            program_input["_profile_id"],
+            "forward-canonical-gmv-attribution-metric-v2"
+        );
+        assert_eq!(journal, format!("0x{}", hex::encode(expected.journal)));
+        assert_eq!(artifact_hash, bytes32_hex(expected.submission_hash));
+
+        body.artifact_hash = Some(hash(0x99));
+        assert!(build_metric_proof_input("base-mainnet", &projection, &body).is_err());
+        body.artifact_hash = None;
+        let ProofMetricBody::ForwardCanonicalGmv(metric) = &mut body.metric else {
+            unreachable!();
+        };
+        metric.snapshot.attestations[0].signature[0] ^= 1;
+        assert!(build_metric_proof_input("base-mainnet", &projection, &body).is_err());
     }
 
     #[test]

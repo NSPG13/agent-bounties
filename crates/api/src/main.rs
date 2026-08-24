@@ -4610,8 +4610,11 @@ async fn load_public_open_competition_v2_opportunities(
         &release,
         network,
         api_base_url,
-        proof_fee,
-        relay_fee,
+        &legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url),
+        opportunities::OpenCompetitionV2HostedCosts {
+            proof_fee,
+            relay_fee,
+        },
         now,
     )
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
@@ -5023,6 +5026,12 @@ fn validated_site_analytics_event(
             | "competition_entry_confirmed"
             | "competition_reveal_started"
             | "competition_reveal_confirmed"
+            | "competition_view"
+            | "competition_instructions_copied"
+            | "competition_template_copied"
+            | "competition_child_post_started"
+            | "competition_feedback_started"
+            | "competition_feedback_submitted"
             | "canonical_post_started"
             | "canonical_post_confirmed"
     ) {
@@ -5195,6 +5204,36 @@ fn site_analytics_response(
             "claim_confirmed",
             "claim_started",
             "sessions that began a claim flow",
+        ),
+        rate(
+            "funded_click_to_competition_view",
+            "competition_view",
+            "funded_bounty_click",
+            "sessions that opened a funded competition from the unified market",
+        ),
+        rate(
+            "competition_instruction_engagement",
+            "competition_instructions_copied",
+            "competition_view",
+            "sessions that loaded a contract-specific competition workspace",
+        ),
+        rate(
+            "competition_child_post_start",
+            "competition_child_post_started",
+            "competition_view",
+            "sessions that loaded a contract-specific competition workspace",
+        ),
+        rate(
+            "competition_feedback_completion",
+            "competition_feedback_submitted",
+            "competition_feedback_started",
+            "sessions that began the public competition feedback form",
+        ),
+        rate(
+            "competition_entry_confirmation",
+            "competition_entry_confirmed",
+            "competition_entry_started",
+            "sessions that began an Open Competition entry flow",
         ),
     ];
     SiteAnalyticsResponse {
