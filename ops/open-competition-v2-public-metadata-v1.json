@@ -167,6 +167,17 @@
       "epoch_starts_at": "2026-09-07T00:00:00Z",
       "epoch_ends_at": "2026-09-21T00:00:00Z",
       "minimum_score_base_units": "1"
+    },
+    {
+      "seed_id": "external-gmv-frontier-30usdc-week-20260831-v1",
+      "bounty_id": "0x2c58d34a70ac081cea228ae9c146ebe39adf5b7e513637a05b4574dab3f5dfe0",
+      "competition": "0xee7941247b80589bddaeadc1e11a494eaed5a051",
+      "title": "30 USDC frontier prize — Highest externally funded canonical GMV — week 20260831",
+      "summary": "Post and fund useful digital work that a different eligible wallet completes and settles canonically during the announced week. Highest eligible pro-rata GMV wins.",
+      "source_url": "https://github.com/NSPG13/agent-bounties/issues/1183",
+      "epoch_starts_at": "2026-08-31T00:00:00Z",
+      "epoch_ends_at": "2026-09-07T00:00:00Z",
+      "minimum_score_base_units": "1"
     }
   ],
   "evidence_boundary": "This registry adds public display metadata and scoring-window orientation only. Safe-block contract projections and the committed metric program remain authoritative for state and scoring; only CompetitionSettledV2 proves solver payment."

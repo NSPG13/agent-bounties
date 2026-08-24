@@ -2445,12 +2445,12 @@ mod tests {
     }
 
     #[test]
-    fn beta3_live_registry_projects_fifteen_scanner_ready_opportunities_and_feeds() {
+    fn beta3_live_registry_projects_sixteen_scanner_ready_opportunities_and_feeds() {
         let (mut release, template) = beta3_release_and_record();
         release.metric_programs[0].profile_id =
             "forward-canonical-gmv-attribution-metric-v2".to_string();
         let metadata = v2_public_metadata(&release).unwrap();
-        assert_eq!(metadata.len(), 15);
+        assert_eq!(metadata.len(), 16);
         let mut records = Vec::new();
         let mut events = Vec::new();
         for (index, item) in metadata.values().enumerate() {
@@ -2493,7 +2493,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(ready.len(), 15);
+        assert_eq!(ready.len(), 16);
         assert!(ready.iter().all(|item| {
             item.verification_ready
                 && item.payment_committed
@@ -2524,7 +2524,7 @@ mod tests {
                         && item.next_action.url == item.public_url
                 })
                 .count(),
-            10
+            11
         );
         let projection = OpportunityProjectionResponse {
             schema_version: OPPORTUNITY_PROJECTION_SCHEMA.to_string(),
@@ -2544,7 +2544,7 @@ mod tests {
         };
         let feeds = render_opportunity_feeds(&projection, "https://api.example");
         let json: Value = serde_json::from_str(&feeds.json).unwrap();
-        assert_eq!(json["items"].as_array().unwrap().len(), 15);
+        assert_eq!(json["items"].as_array().unwrap().len(), 16);
         assert!(feeds
             .rss
             .contains("Highest externally funded canonical GMV"));
