@@ -4611,8 +4611,10 @@ async fn load_public_open_competition_v2_opportunities(
         network,
         api_base_url,
         &legal_website_base_url(env::var("WEBSITE_BASE_URL").ok(), &state.public_base_url),
-        proof_fee,
-        relay_fee,
+        opportunities::OpenCompetitionV2HostedCosts {
+            proof_fee,
+            relay_fee,
+        },
         now,
     )
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)

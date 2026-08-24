@@ -20,6 +20,12 @@ pub const OPPORTUNITY_PROJECTION_SCHEMA: &str = "agent-bounties/opportunity-proj
 const OPEN_COMPETITION_V2_METADATA_JSON: &str =
     include_str!("../../../ops/open-competition-v2-public-metadata-v1.json");
 
+#[derive(Debug, Clone, Copy)]
+pub struct OpenCompetitionV2HostedCosts {
+    pub proof_fee: u128,
+    pub relay_fee: u128,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct OpenCompetitionV2PublicMetadataRegistry {
     schema_version: String,
@@ -1007,8 +1013,7 @@ pub fn open_competition_v2_opportunities(
     network: &str,
     api_base_url: &str,
     website_base_url: &str,
-    proof_fee: u128,
-    relay_fee: u128,
+    hosted_costs: OpenCompetitionV2HostedCosts,
     now: DateTime<Utc>,
 ) -> Result<Vec<OpportunityItem>, String> {
     if release.protocol_version != "agent-bounties/open-competition-v2-beta3"
@@ -1020,8 +1025,9 @@ pub fn open_competition_v2_opportunities(
     let api = api_base_url.trim_end_matches('/');
     let website = website_base_url.trim_end_matches('/');
     let metadata = v2_public_metadata(release)?;
-    let external_spend = proof_fee
-        .checked_add(relay_fee)
+    let external_spend = hosted_costs
+        .proof_fee
+        .checked_add(hosted_costs.relay_fee)
         .ok_or_else(|| "Open Competition V2 hosted costs overflow".to_string())?;
     let mut opportunities = Vec::new();
 
@@ -2125,8 +2131,10 @@ mod tests {
             "base-mainnet",
             "https://api.example",
             "https://site.example",
-            100_000,
-            10_000,
+            OpenCompetitionV2HostedCosts {
+                proof_fee: 100_000,
+                relay_fee: 10_000,
+            },
             now,
         )
         .unwrap()
@@ -2164,8 +2172,10 @@ mod tests {
             "base-mainnet",
             "https://api.example",
             "https://site.example",
-            100_000,
-            10_000,
+            OpenCompetitionV2HostedCosts {
+                proof_fee: 100_000,
+                relay_fee: 10_000,
+            },
             now,
         )
         .is_err());
@@ -2182,8 +2192,10 @@ mod tests {
             "base-mainnet",
             "https://api.example",
             "https://site.example",
-            100_000,
-            10_000,
+            OpenCompetitionV2HostedCosts {
+                proof_fee: 100_000,
+                relay_fee: 10_000,
+            },
             now,
         )
         .unwrap()
@@ -2213,8 +2225,10 @@ mod tests {
             "base-mainnet",
             "https://api.example",
             "https://site.example",
-            100_000,
-            10_000,
+            OpenCompetitionV2HostedCosts {
+                proof_fee: 100_000,
+                relay_fee: 10_000,
+            },
             now,
         )
         .unwrap()
@@ -2254,8 +2268,10 @@ mod tests {
             "base-mainnet",
             "https://api.example",
             "https://site.example",
-            100_000,
-            10_000,
+            OpenCompetitionV2HostedCosts {
+                proof_fee: 100_000,
+                relay_fee: 10_000,
+            },
             now,
         )
         .unwrap();
