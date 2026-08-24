@@ -929,6 +929,23 @@ html[data-scene-ready="false"] .scene-plate {
   color: #dff09b;
 }
 
+.auth-legal {
+  margin: 13px 0 0;
+  color: #7f8d82;
+  font-size: .65rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.auth-legal a {
+  color: #b9d578;
+  text-underline-offset: 3px;
+}
+
+.auth-legal a:hover {
+  color: #e1f2ad;
+}
+
 .auth-submit {
   min-height: 58px;
   border: 1px solid rgba(226, 244, 190, .48);
@@ -1023,6 +1040,200 @@ html[data-scene-ready="false"] .scene-plate {
 .provider-microsoft path:nth-child(4) { fill: #ffb900; }
 .provider-github { fill: currentColor; }
 .provider-amazon { fill: #f5a623; }
+
+/* Legal pages keep the approved palette without loading the animated scene. */
+.legal-body {
+  min-height: 100svh;
+  background:
+    radial-gradient(circle at 50% -12%, rgba(80, 152, 116, .18), transparent 34rem),
+    linear-gradient(180deg, #08140f 0, #030906 50%, #020604 100%);
+}
+
+.legal-header,
+.legal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: min(1100px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.legal-header {
+  min-height: 82px;
+  border-bottom: 1px solid rgba(215, 233, 196, .14);
+}
+
+.legal-header nav,
+.legal-footer nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  color: #b7c0b4;
+  font-size: .78rem;
+}
+
+.legal-header nav a,
+.legal-footer nav a {
+  text-decoration: none;
+}
+
+.legal-header nav a:hover,
+.legal-footer nav a:hover {
+  color: #d7ee90;
+}
+
+.legal-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  color: #edf1e8;
+  font-family: "Iowan Old Style", Baskerville, Georgia, serif;
+  font-size: 1.12rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.legal-brand svg {
+  width: 38px;
+  color: #d5ef86;
+  filter: drop-shadow(0 0 12px rgba(89, 216, 211, .2));
+}
+
+.legal-brand path:first-child {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.7;
+}
+
+.legal-brand path:nth-child(2),
+.legal-brand circle {
+  fill: currentColor;
+}
+
+.legal-main {
+  width: min(780px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: clamp(62px, 9vw, 116px) 0 96px;
+}
+
+.legal-main::before {
+  display: block;
+  width: 84px;
+  height: 2px;
+  margin-bottom: 28px;
+  background: linear-gradient(90deg, #b7dd58, #59d8d3, transparent);
+  content: "";
+}
+
+.legal-eyebrow {
+  margin: 0 0 14px;
+  color: #a7cc5c;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.legal-main h1 {
+  max-width: 720px;
+  margin: 0;
+  color: #f1f1e6;
+  font-family: "Iowan Old Style", Baskerville, Georgia, serif;
+  font-size: clamp(3rem, 8vw, 5.4rem);
+  font-weight: 600;
+  line-height: .94;
+  letter-spacing: -.045em;
+}
+
+.legal-main .legal-lede {
+  max-width: 700px;
+  margin: 27px 0 18px;
+  color: #ced7c9;
+  font-family: "Iowan Old Style", Baskerville, Georgia, serif;
+  font-size: clamp(1.22rem, 3vw, 1.55rem);
+  line-height: 1.5;
+}
+
+.legal-main section {
+  margin-top: 48px;
+  padding-top: 32px;
+  border-top: 1px solid rgba(210, 231, 193, .12);
+}
+
+.legal-main h2 {
+  margin: 0 0 13px;
+  color: #e5eadc;
+  font-family: "Iowan Old Style", Baskerville, Georgia, serif;
+  font-size: clamp(1.42rem, 3vw, 1.9rem);
+  font-weight: 600;
+}
+
+.legal-main p,
+.legal-main li {
+  color: #aeb9ad;
+  font-size: .96rem;
+  line-height: 1.82;
+}
+
+.legal-main strong,
+.legal-main code {
+  color: #dbe5d5;
+}
+
+.legal-main a {
+  color: #bdda73;
+  text-underline-offset: 3px;
+}
+
+.legal-main ul {
+  padding-left: 1.2rem;
+}
+
+.legal-summary {
+  border-top-color: rgba(183, 221, 88, .36) !important;
+}
+
+.legal-action {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid rgba(183, 221, 88, .42);
+  border-radius: 2px 15px 2px 15px;
+  background: rgba(134, 177, 64, .08);
+  color: #dbeaa5;
+  cursor: pointer;
+}
+
+.legal-action:hover {
+  background: rgba(134, 177, 64, .17);
+}
+
+.legal-footer {
+  min-height: 86px;
+  border-top: 1px solid rgba(215, 233, 196, .12);
+  color: #77857b;
+  font-size: .72rem;
+}
+
+@media (max-width: 640px) {
+  .legal-header,
+  .legal-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+    padding: 18px 0;
+  }
+
+  .legal-header nav,
+  .legal-footer nav {
+    flex-wrap: wrap;
+    gap: 12px 18px;
+  }
+
+  .legal-main {
+    padding-top: 58px;
+  }
+}
 
 .account-dashboard {
   margin-top: 26px;

@@ -1,6 +1,7 @@
 mod github_discovery;
 mod open_competition_v2_api;
 mod opportunities;
+mod site_auth;
 
 use app::{
     build_audience_report, build_live_money_readiness_report, build_objective_canonical_evidence,
@@ -2100,6 +2101,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Vec::new()
     };
+    let site_auth = site_auth::SiteAuthService::from_env(store.clone())?;
     let x402_relayer = X402HostedRelayerConfig::from_env()?;
     let bond_sponsor = BondSponsorConfig::from_env()?;
     if x402_relayer.enabled && store.is_none() {
@@ -2163,7 +2165,7 @@ async fn main() -> anyhow::Result<()> {
         discovery_webhooks,
         neynar_social,
     });
-    let app = Router::new()
+    let public_app = Router::new()
         .route("/health", get(health))
         .route("/llms.txt", get(llms_txt))
         .route("/v1/legal/policy", get(legal_policy))
@@ -2674,6 +2676,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive())
         .layer(middleware::from_fn(redirect_marketing_domain))
         .with_state(state);
+    let app = public_app.merge(site_auth::router(site_auth));
 
     let bind_addr = service_bind_addr(
         env::var("API_BIND_ADDR").ok().as_deref(),

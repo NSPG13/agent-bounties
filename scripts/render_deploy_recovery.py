@@ -150,6 +150,18 @@ MOONPAY_ENVIRONMENTS = {
     "live": ("live", "pk_live_", "sk_live_"),
     "production": ("live", "pk_live_", "sk_live_"),
 }
+SITE_AUTH_INPUT_KEYS = (
+    "AUTH_SESSION_SECRET",
+    "AUTH_WALLET_LINK_SECRET",
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "MICROSOFT_OAUTH_CLIENT_ID",
+    "MICROSOFT_OAUTH_CLIENT_SECRET",
+    "GITHUB_OAUTH_CLIENT_ID",
+    "GITHUB_OAUTH_CLIENT_SECRET",
+    "AMAZON_OAUTH_CLIENT_ID",
+    "AMAZON_OAUTH_CLIENT_SECRET",
+)
 
 
 class RecoveryError(RuntimeError):
@@ -2180,6 +2192,101 @@ def reconcile_moonpay_environment(
     return evidence, changed
 
 
+def normalize_site_auth_environment(
+    supplied: dict[str, str | None] | None,
+    *,
+    public_base_url: str,
+    website_base_url: str,
+) -> dict[str, str]:
+    values = {
+        key: str((supplied or {}).get(key) or "").strip()
+        for key in SITE_AUTH_INPUT_KEYS
+    }
+    if not any(values.values()):
+        return {}
+    if len(values["AUTH_SESSION_SECRET"]) < 32:
+        raise RecoveryError("site auth requires an AUTH_SESSION_SECRET of at least 32 characters")
+    if not values["AUTH_WALLET_LINK_SECRET"]:
+        values["AUTH_WALLET_LINK_SECRET"] = values["AUTH_SESSION_SECRET"]
+    if len(values["AUTH_WALLET_LINK_SECRET"]) < 32:
+        raise RecoveryError("site auth requires an AUTH_WALLET_LINK_SECRET of at least 32 characters")
+    for provider in ("GOOGLE", "MICROSOFT", "GITHUB", "AMAZON"):
+        client_id = values[f"{provider}_OAUTH_CLIENT_ID"]
+        client_secret = values[f"{provider}_OAUTH_CLIENT_SECRET"]
+        if not client_id or not client_secret:
+            raise RecoveryError(f"site auth requires the {provider.title()} OAuth client id and secret")
+    api = public_base_url.rstrip("/")
+    values.update(
+        {
+            "SITE_AUTH_ALLOWED_ORIGINS": website_base_url.rstrip("/"),
+            "GOOGLE_OAUTH_REDIRECT_URI": f"{api}/v1/site-auth/callback/google",
+            "MICROSOFT_OAUTH_TENANT": "common",
+            "MICROSOFT_OAUTH_REDIRECT_URI": f"{api}/v1/site-auth/callback/microsoft",
+            "GITHUB_OAUTH_REDIRECT_URI": f"{api}/v1/site-auth/callback/github",
+            "AMAZON_OAUTH_REDIRECT_URI": f"{api}/v1/site-auth/callback/amazon",
+        }
+    )
+    return values
+
+
+def reconcile_site_auth_environment(
+    client: RenderClient,
+    service: dict[str, Any],
+    supplied: dict[str, str | None] | None,
+    *,
+    public_base_url: str,
+    website_base_url: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    normalized = normalize_site_auth_environment(
+        supplied,
+        public_base_url=public_base_url,
+        website_base_url=website_base_url,
+    )
+    if not normalized:
+        return [], False
+    public_keys = {
+        "SITE_AUTH_ALLOWED_ORIGINS",
+        "GOOGLE_OAUTH_REDIRECT_URI",
+        "MICROSOFT_OAUTH_TENANT",
+        "MICROSOFT_OAUTH_REDIRECT_URI",
+        "GITHUB_OAUTH_REDIRECT_URI",
+        "AMAZON_OAUTH_REDIRECT_URI",
+    }
+    evidence = []
+    changed = False
+    for key, value in normalized.items():
+        record = client.ensure_env_var(service, key, value)
+        changed |= record["changed"]
+        item = {
+            "service": service["name"],
+            "key": key,
+            "configured": True,
+            "changed": record["changed"],
+        }
+        if key in public_keys:
+            item["value"] = value
+        evidence.append(item)
+    return evidence, changed
+
+
+def validate_site_auth_readiness(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        raise RecoveryError("site auth readiness is not healthy")
+    providers = payload.get("providers")
+    if not isinstance(providers, dict):
+        raise RecoveryError("site auth readiness provider map is invalid")
+    for provider in ("google", "microsoft", "github", "amazon"):
+        if providers.get(provider) is not True:
+            raise RecoveryError(f"site auth readiness reports {provider}=false")
+    if payload.get("storage") != "postgres":
+        raise RecoveryError("site auth readiness storage is not postgres")
+    return {
+        "ok": True,
+        "providers": sorted(provider for provider, ready in providers.items() if ready),
+        "storage": "postgres",
+    }
+
+
 def rotate_operator_token(
     client: RenderClient,
     group: dict[str, Any],
@@ -2515,6 +2622,7 @@ def deploy(
     mcp_base_url: str = "https://mcp.agentbounties.app",
     website_base_url: str = "https://agentbounties.app",
     cloud_agent_api_key: str | None = None,
+    site_auth_environment: dict[str, str | None] | None = None,
     moonpay_publishable_key: str | None = None,
     moonpay_secret_key: str | None = None,
     moonpay_environment: str | None = "sandbox",
@@ -2692,6 +2800,16 @@ def deploy(
         reconcile_cloud_agent_environment(client, api_service, cloud_agent_api_key)
     )
     public_environment_changed[CLOUD_AGENT_API_SERVICE_NAME] |= cloud_environment_changed
+    site_auth_environment_evidence, site_auth_environment_changed = (
+        reconcile_site_auth_environment(
+            client,
+            api_service,
+            site_auth_environment,
+            public_base_url=public_base_url,
+            website_base_url=website_base_url,
+        )
+    )
+    public_environment_changed[CLOUD_AGENT_API_SERVICE_NAME] |= site_auth_environment_changed
     mcp_service = next(
         service for spec, service in services if spec.name == MOONPAY_MCP_SERVICE_NAME
     )
@@ -2846,6 +2964,14 @@ def deploy(
                 20,
             )
         )
+    site_auth_readiness = {}
+    if site_auth_environment_evidence:
+        site_auth_readiness = validate_site_auth_readiness(
+            fetch_json(
+                f"{public_base_url.rstrip('/')}/v1/site-auth/healthz",
+                20,
+            )
+        )
     service_evidence = []
     for spec, service in services:
         deployed = completed[spec.name]
@@ -2883,6 +3009,8 @@ def deploy(
         "open_competition_environment": reconciled_open_competition_environment,
         "cloud_environment": cloud_environment,
         "secret_environment": secret_environment,
+        "site_auth_environment": site_auth_environment_evidence,
+        "site_auth_readiness": site_auth_readiness,
         "moonpay_environment": moonpay_evidence,
         "social_environment": social_environment,
         "social_webhook": social_webhook,
@@ -2964,6 +3092,8 @@ def main() -> int:
         "public_environment": [],
         "cloud_environment": [],
         "secret_environment": [],
+        "site_auth_environment": [],
+        "site_auth_readiness": {},
         "moonpay_environment": [],
         "social_environment": [],
         "social_webhook": {},
@@ -2994,6 +3124,15 @@ def main() -> int:
             mcp_base_url=args.mcp_base_url,
             website_base_url=args.website_base_url,
             cloud_agent_api_key=os.environ.get("CLOUD_AGENT_API_KEY"),
+            site_auth_environment={
+                key: os.environ.get(
+                    {
+                        "GITHUB_OAUTH_CLIENT_ID": "GH_OAUTH_CLIENT_ID",
+                        "GITHUB_OAUTH_CLIENT_SECRET": "GH_OAUTH_CLIENT_SECRET",
+                    }.get(key, key)
+                )
+                for key in SITE_AUTH_INPUT_KEYS
+            },
             moonpay_publishable_key=os.environ.get("MOONPAY_PUBLISHABLE_KEY"),
             moonpay_secret_key=os.environ.get("MOONPAY_SECRET_KEY"),
             moonpay_environment=os.environ.get("MOONPAY_ENVIRONMENT", "sandbox"),

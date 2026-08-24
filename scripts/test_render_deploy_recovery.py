@@ -1372,6 +1372,69 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         self.assertEqual(secrets, [])
         self.assertNotIn("CLOUD_AGENT_API_KEY", [key for _, key, _ in client.calls])
 
+    def test_site_auth_environment_is_complete_and_secret_free_in_evidence(self) -> None:
+        client = EnvironmentClient()
+        supplied = {
+            "AUTH_SESSION_SECRET": "s" * 40,
+            "AUTH_WALLET_LINK_SECRET": "w" * 40,
+            "GOOGLE_OAUTH_CLIENT_ID": "google-client",
+            "GOOGLE_OAUTH_CLIENT_SECRET": "google-secret",
+            "MICROSOFT_OAUTH_CLIENT_ID": "microsoft-client",
+            "MICROSOFT_OAUTH_CLIENT_SECRET": "microsoft-secret",
+            "GITHUB_OAUTH_CLIENT_ID": "github-client",
+            "GITHUB_OAUTH_CLIENT_SECRET": "github-secret",
+            "AMAZON_OAUTH_CLIENT_ID": "amazon-client",
+            "AMAZON_OAUTH_CLIENT_SECRET": "amazon-secret",
+        }
+        evidence, changed = recovery.reconcile_site_auth_environment(
+            client,
+            {"id": "srv-api", "name": "agent-bounties-api"},
+            supplied,
+            public_base_url="https://api.agentbounties.app",
+            website_base_url="https://agentbounties.app",
+        )
+        self.assertTrue(changed)
+        self.assertEqual(len(evidence), 16)
+        self.assertIn(
+            (
+                "agent-bounties-api",
+                "GITHUB_OAUTH_REDIRECT_URI",
+                "https://api.agentbounties.app/v1/site-auth/callback/github",
+            ),
+            client.calls,
+        )
+        serialized = recovery.json.dumps(evidence)
+        for secret in ("s" * 40, "w" * 40, "google-secret", "github-secret"):
+            self.assertNotIn(secret, serialized)
+
+    def test_site_auth_partial_provider_configuration_fails_closed(self) -> None:
+        with self.assertRaisesRegex(recovery.RecoveryError, "Google OAuth"):
+            recovery.normalize_site_auth_environment(
+                {
+                    "AUTH_SESSION_SECRET": "s" * 40,
+                    "GOOGLE_OAUTH_CLIENT_ID": "google-client",
+                },
+                public_base_url="https://api.agentbounties.app",
+                website_base_url="https://agentbounties.app",
+            )
+
+    def test_site_auth_readiness_requires_all_public_providers_and_postgres(self) -> None:
+        payload = {
+            "ok": True,
+            "storage": "postgres",
+            "providers": {
+                "google": True,
+                "microsoft": True,
+                "github": True,
+                "amazon": True,
+                "enterprise": False,
+            },
+        }
+        self.assertTrue(recovery.validate_site_auth_readiness(payload)["ok"])
+        payload["providers"]["amazon"] = False
+        with self.assertRaisesRegex(recovery.RecoveryError, "amazon=false"):
+            recovery.validate_site_auth_readiness(payload)
+
     def test_moonpay_environment_is_all_or_none_and_evidence_is_redacted(self) -> None:
         client = EnvironmentClient()
         service = {"id": "srv-mcp", "name": "agent-bounties-mcp"}

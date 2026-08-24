@@ -698,6 +698,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower-http 0.7.0",
+ "url",
  "utoipa",
  "uuid",
  "web-public",

@@ -71,9 +71,19 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
     return LOCAL_HOSTS.has(String(hostname || "").toLowerCase());
   }
 
-  function authProviderPath(provider) {
+  function authApiPath(path, locationLike) {
+    const suffix = String(path || "").startsWith("/") ? String(path || "") : `/${path || ""}`;
+    const location = locationLike || (typeof window !== "undefined" ? window.location : null);
+    return !location || isLocalHost(location.hostname)
+      ? `/auth${suffix}`
+      : `https://api.agentbounties.app/v1/site-auth${suffix}`;
+  }
+
+  function authProviderPath(provider, locationLike) {
     const key = String(provider || "").trim().toLowerCase();
-    return Object.hasOwn(AUTH_PROVIDER_LABELS, key) ? `/auth/login/${key}` : null;
+    return Object.hasOwn(AUTH_PROVIDER_LABELS, key)
+      ? authApiPath(`/login/${key}`, locationLike)
+      : null;
   }
 
   function authResultMessage(result, provider, reason) {
@@ -86,7 +96,8 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       expired_state: "The sign-in request expired. Please try again.",
       invalid_state: "The sign-in response could not be verified. Please try again.",
       provider_exchange_failed: "The provider could not complete sign-in. Please try again.",
-      provider_not_configured: "That sign-in provider is not configured on this local server.",
+      provider_not_configured: "That sign-in provider is not configured on the authentication service.",
+      account_service_unavailable: "The account service is temporarily unavailable. Please try again.",
     };
     return messages[reason] || "Sign-in could not be completed. Please try again.";
   }
@@ -110,8 +121,8 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       cursor: {
         label: "Cursor",
         desktopUrl: `cursor://anysphere.cursor-deeplink/prompt?text=${encoded}`,
-        webUrl: "https://cursor.com/agents",
-        webPrefillsPrompt: false,
+        webUrl: `https://cursor.com/link/prompt?text=${encoded}`,
+        webPrefillsPrompt: true,
       },
       custom: {
         label: "Custom",
@@ -136,11 +147,11 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
     const reason = typeof error === "string" ? error : error?.reason || error?.code;
     const messages = {
       4001: "Wallet connection or signature was cancelled.",
-      invalid_origin: "Wallet linking is available only from this local preview.",
+      invalid_origin: "Wallet linking is available only from an approved Agent Bounties site.",
       invalid_wallet_address: "The wallet did not return a valid EVM address.",
-      signature_verifier_unavailable: "The local signature verifier is unavailable.",
+      signature_verifier_unavailable: "The wallet signature verifier is unavailable.",
       wallet_challenge_invalid: "The ownership request expired. Please try linking again.",
-      wallet_link_store_unavailable: "The verified wallet could not be saved locally.",
+      wallet_link_store_unavailable: "The verified wallet could not be saved right now.",
       wallet_linked_to_another_account: "That wallet is already linked to another account.",
       wallet_limit_reached: "This account has reached its linked-wallet limit.",
       wallet_signature_invalid: "The signature did not prove control of that wallet.",
@@ -733,7 +744,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
           button.setAttribute("aria-disabled", String(!configured));
           button.title = configured
             ? `Continue with ${label}`
-            : `${label} sign-in is awaiting local OAuth credentials`;
+            : `${label} sign-in is not available right now`;
         });
       };
 
@@ -790,9 +801,9 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       };
 
       const postAccountJson = async (path, body) => {
-        const response = await win.fetch(path, {
+        const response = await win.fetch(authApiPath(path, win.location), {
           method: "POST",
-          credentials: "same-origin",
+          credentials: "include",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -806,8 +817,8 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
         const requestId = ++accountLoadId;
         renderAccountLoading();
         try {
-          const response = await win.fetch("/auth/account", {
-            credentials: "same-origin",
+          const response = await win.fetch(authApiPath("/account", win.location), {
+            credentials: "include",
             headers: { Accept: "application/json" },
           });
           if (!response.ok) throw new Error(`account ${response.status}`);
@@ -823,8 +834,8 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
 
       const loadSession = async () => {
         try {
-          const response = await win.fetch("/auth/session", {
-            credentials: "same-origin",
+          const response = await win.fetch(authApiPath("/session", win.location), {
+            credentials: "include",
             headers: { Accept: "application/json" },
           });
           if (!response.ok) throw new Error(`session ${response.status}`);
@@ -879,7 +890,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       walletLinkButton?.addEventListener("click", async () => {
         if (!currentUser) return;
         if (!win.ethereum || typeof win.ethereum.request !== "function") {
-          setWalletStatus("No browser wallet was detected. Open this localhost page in a browser with an EVM wallet extension.");
+          setWalletStatus("No browser wallet was detected. Open this page in a browser with an EVM wallet extension.");
           return;
         }
         walletLinkButton.disabled = true;
@@ -888,13 +899,13 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
           const accounts = await win.ethereum.request({ method: "eth_requestAccounts" });
           const address = String(Array.isArray(accounts) ? accounts[0] : "").trim();
           if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw { reason: "invalid_wallet_address" };
-          const challenge = await postAccountJson("/auth/wallet/challenge", { address });
+          const challenge = await postAccountJson("/wallet/challenge", { address });
           setWalletStatus("Review the ownership-only message in your wallet. It cannot move funds or approve tokens.");
           const signature = await win.ethereum.request({
             method: "personal_sign",
             params: [utf8Hex(challenge.message), address],
           });
-          await postAccountJson("/auth/wallet/verify", {
+          await postAccountJson("/wallet/verify", {
             challenge_id: challenge.challenge_id,
             address,
             signature,
@@ -923,7 +934,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
         }
         button.disabled = true;
         try {
-          await postAccountJson("/auth/wallet/unlink", { address: button.dataset.walletUnlink });
+          await postAccountJson("/wallet/unlink", { address: button.dataset.walletUnlink });
           await loadAccount();
           setWalletStatus("Wallet unlinked from this account. No onchain state changed.");
         } catch (error) {
@@ -935,9 +946,9 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
         button.addEventListener("click", () => {
           const key = String(button.dataset.authProvider || "").toLowerCase();
           const label = AUTH_PROVIDER_LABELS[key] || "That provider";
-          const path = authProviderPath(key);
+          const path = authProviderPath(key, win.location);
           if (!authServerReady) {
-            setStatus("The local authentication server is not running.");
+            setStatus("The authentication service is temporarily unavailable.");
             return;
           }
           if (!path || !providerAvailability[key]) {
@@ -953,12 +964,15 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
         logoutButton.disabled = true;
         setStatus("Signing out…");
         try {
-          const response = await win.fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
+          const response = await win.fetch(authApiPath("/logout", win.location), {
+            method: "POST",
+            credentials: "include",
+          });
           if (!response.ok) throw new Error(`logout ${response.status}`);
           renderSession({ authenticated: false, user: null, providers: providerAvailability });
-          setStatus("Signed out from this local session.");
+          setStatus("Signed out from this session.");
         } catch (error) {
-          setStatus("The local session could not be signed out. Please try again.");
+          setStatus("The session could not be signed out. Please try again.");
         } finally {
           logoutButton.disabled = false;
         }
@@ -1051,16 +1065,6 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
           return copied;
         }
       };
-      const openWeb = (url) => {
-        const anchor = doc.createElement("a");
-        anchor.href = url;
-        anchor.target = "_blank";
-        anchor.rel = "noopener noreferrer";
-        anchor.hidden = true;
-        doc.body.append(anchor);
-        anchor.click();
-        anchor.remove();
-      };
       const attemptDesktop = (links) => {
         clearLaunchProbe();
         appHandoffObserved = false;
@@ -1111,7 +1115,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
             return;
           }
 
-          void copyPrompt();
+          const promptCopy = copyPrompt();
           if (webFallback) {
             webFallback.href = links.webUrl;
             webFallback.textContent = links.webPrefillsPrompt
@@ -1120,12 +1124,20 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
             webFallback.hidden = !links.desktopUrl;
           }
           if (!links.desktopUrl) {
-            setStatus(`Opening ${links.label} in this browser with the posting instructions prefilled…`);
-            openWeb(links.webUrl);
+            if (!links.webPrefillsPrompt) {
+              const copied = await promptCopy;
+              setStatus(copied
+                ? `Opening your signed-in ${links.label} session. The posting instructions are copied and ready to paste.`
+                : `Opening ${links.label}. Copy the initialization message above before continuing.`);
+            } else {
+              setStatus(`Opening ${links.label} in this browser with the posting instructions prefilled…`);
+            }
+            win.location.assign(links.webUrl);
             return;
           }
           setStatus(`Opening ${links.label} desktop with the posting instructions prefilled…`);
           attemptDesktop(links);
+          void promptCopy;
         });
       });
       copyButton?.addEventListener("click", async () => {
@@ -1178,6 +1190,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
   return {
     BOUNTY_POSTING_PROMPT,
     accountDashboardView,
+    authApiPath,
     authProviderPath,
     authResultMessage,
     bountyAssistantLinks,

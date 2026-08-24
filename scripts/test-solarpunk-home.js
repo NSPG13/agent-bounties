@@ -26,6 +26,14 @@ test("OAuth provider routes and callback messages are bounded", () => {
   assert.equal(home.authProviderPath("Google"), "/auth/login/google");
   assert.equal(home.authProviderPath("github"), "/auth/login/github");
   assert.equal(home.authProviderPath("unknown"), null);
+  assert.equal(
+    home.authProviderPath("microsoft", { hostname: "agentbounties.app" }),
+    "https://api.agentbounties.app/v1/site-auth/login/microsoft",
+  );
+  assert.equal(
+    home.authApiPath("/session", { hostname: "agentbounties.app" }),
+    "https://api.agentbounties.app/v1/site-auth/session",
+  );
   assert.equal(home.authResultMessage("success", "github"), "Signed in with GitHub.");
   assert.match(home.authResultMessage("error", null, "invalid_state"), /could not be verified/i);
   assert.doesNotMatch(home.authResultMessage("error", null, "unexpected-secret"), /unexpected-secret/);
@@ -47,11 +55,14 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(gpt.desktopUrl, null);
   assert.equal(new URL(gpt.webUrl).origin, "https://chatgpt.com");
   assert.equal(new URL(gpt.webUrl).searchParams.get("prompt"), prompt);
+  assert.equal(gpt.webPrefillsPrompt, true);
   assert.equal(claude.desktopUrl, `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`);
   assert.equal(new URL(claude.webUrl).origin, "https://claude.ai");
   assert.equal(cursor.desktopUrl, `cursor://anysphere.cursor-deeplink/prompt?text=${encodeURIComponent(prompt)}`);
-  assert.equal(cursor.webUrl, "https://cursor.com/agents");
-  assert.equal(cursor.webPrefillsPrompt, false);
+  assert.equal(new URL(cursor.webUrl).origin, "https://cursor.com");
+  assert.equal(new URL(cursor.webUrl).pathname, "/link/prompt");
+  assert.equal(new URL(cursor.webUrl).searchParams.get("text"), prompt);
+  assert.equal(cursor.webPrefillsPrompt, true);
   assert.equal(custom.webUrl, null);
   assert.equal(home.bountyAssistantLinks("unknown"), null);
 });

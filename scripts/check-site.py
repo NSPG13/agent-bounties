@@ -11,6 +11,8 @@ from urllib.parse import urldefrag, urlparse
 CANONICAL_PAGES = {
     "index.html": "https://agentbounties.app/",
     "metrics.html": "https://agentbounties.app/metrics.html",
+    "privacy.html": "https://agentbounties.app/privacy.html",
+    "terms.html": "https://agentbounties.app/terms.html",
 }
 REQUIRED_FILES = {
     ".nojekyll",
@@ -27,12 +29,14 @@ REQUIRED_FILES = {
     "metrics.css",
     "metrics.html",
     "metrics.js",
+    "privacy.html",
     "protocol.json",
     "robots.txt",
     "sitemap.xml",
     "solarpunk-home.js",
     "solarpunk.css",
     "styles.css",
+    "terms.html",
     "guild-pages.css",
     "x402-test-vectors.json",
 }
@@ -254,7 +258,7 @@ def check_metrics(site_dir: Path) -> None:
             '<a href="./">Home</a><a href="metrics.html" aria-current="page">Metrics</a>',
         ],
     )
-    for removed in ("earn.html", "how-it-works.html", "privacy.html"):
+    for removed in ("earn.html", "how-it-works.html"):
         if removed in page:
             fail(f"metrics.html still links to removed page {removed}")
     require_phrases(
@@ -341,7 +345,7 @@ def check_homepage(site_dir: Path) -> None:
     )
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
-    for removed in ("privacy.html", "earn.html", "post.html", "how-it-works.html"):
+    for removed in ("earn.html", "post.html", "how-it-works.html"):
         if removed in page:
             fail(f"homepage links to removed page {removed}")
     require_phrases(
@@ -363,13 +367,15 @@ def check_homepage(site_dir: Path) -> None:
             'doc.hidden',
             "setupAuthDialog",
             "setupBountyLauncher",
+            "authApiPath",
             "authProviderPath",
             "bountyAssistantLinks",
             "https://chatgpt.com/?prompt=",
+            "https://cursor.com/link/prompt?text=",
             "claude://claude.ai/new?q=",
             "cursor://anysphere.cursor-deeplink/prompt?text=",
-            'win.fetch("/auth/session"',
-            'win.fetch("/auth/logout"',
+            'authApiPath("/session", win.location)',
+            'authApiPath("/logout", win.location)',
             'dialog.showModal()',
             'passwordToggle.setAttribute("aria-pressed"',
         ],
@@ -416,7 +422,7 @@ def main() -> int:
 
     html_files = {path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*.html")}
     if html_files != set(CANONICAL_PAGES):
-        fail(f"site must expose only Home and Metrics HTML; found {sorted(html_files)}")
+        fail(f"site must expose only Home, Metrics, and required legal HTML; found {sorted(html_files)}")
     ui_code = {path.relative_to(site_dir).as_posix() for pattern in ("*.js", "*.css") for path in site_dir.rglob(pattern)}
     if ui_code != ALLOWED_UI_CODE:
         fail(f"orphaned or missing UI code: extra={sorted(ui_code - ALLOWED_UI_CODE)} missing={sorted(ALLOWED_UI_CODE - ui_code)}")
@@ -452,7 +458,7 @@ def main() -> int:
     namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     urls = {item.text.strip() for item in sitemap.findall("sm:url/sm:loc", namespace) if item.text}
     if urls != set(CANONICAL_PAGES.values()):
-        fail(f"sitemap must list only Home and Metrics; found {sorted(urls)}")
+        fail(f"sitemap must list only Home, Metrics, and required legal pages; found {sorted(urls)}")
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
     require_phrases("robots.txt", robots, ["User-agent: OAI-SearchBot", "Sitemap: https://agentbounties.app/sitemap.xml"])
 
@@ -470,7 +476,27 @@ def main() -> int:
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
     check_metrics(site_dir)
-    print("site checks passed: Home + Metrics only; protocol, evidence, analytics, and asset budgets intact")
+    privacy = (site_dir / "privacy.html").read_text(encoding="utf-8")
+    terms = (site_dir / "terms.html").read_text(encoding="utf-8")
+    require_phrases(
+        "privacy.html",
+        privacy,
+        [
+            "Provider access tokens and client secrets are never exposed to the browser",
+            "The challenge expires after five minutes and cannot be reused.",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
+        ],
+    )
+    require_phrases(
+        "terms.html",
+        terms,
+        [
+            "it does not approve a transaction or move funds",
+            "The initialization message is not submitted automatically.",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
+        ],
+    )
+    print("site checks passed: Home + Metrics + required legal pages; protocol, evidence, analytics, and asset budgets intact")
     return 0
 
 
