@@ -1,4 +1,4 @@
-name: Community Pages Canary
+name: Public Site Canary
 
 on:
   workflow_run:
@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   verify:
@@ -20,83 +19,50 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-      - name: Verify live mobile navigation and community pages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LIVE_CANARY_ISSUE: "499"
+      - name: Verify the retained site and agent entrypoints
         run: |
           set -euo pipefail
-          expected_build="$(head -n 1 site/live-guild-build.txt | tr -d '\r\n')"
           success=false
-          attempts=0
-          failure_detail="deployment has not propagated"
-
-          for attempt in $(seq 1 60); do
-            attempts="$attempt"
+          for attempt in $(seq 1 30); do
             nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-${attempt}-$(date +%s)"
-            curl_args=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache" --header "Pragma: no-cache")
-
-            if curl "${curl_args[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/community-build.txt \
-              && curl "${curl_args[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/community-home.js \
-              && curl "${curl_args[@]}" "https://agentbounties.app/home-navigation-v2.css?verify=${nonce}" -o /tmp/community-nav.css \
-              && curl "${curl_args[@]}" "https://agentbounties.app/leaderboard.html?verify=${nonce}" -o /tmp/community-leaderboard.html \
-              && curl "${curl_args[@]}" "https://agentbounties.app/news.html?verify=${nonce}" -o /tmp/community-news.html \
-              && curl "${curl_args[@]}" "https://agentbounties.app/contact.html?verify=${nonce}" -o /tmp/community-contact.html \
-              && curl "${curl_args[@]}" "https://agentbounties.app/community-pages.js?verify=${nonce}" -o /tmp/community-pages.js; then
-              actual_build="$(head -n 1 /tmp/community-build.txt | tr -d '\r\n')"
-              if [[ "$actual_build" == "$expected_build" ]] \
-                && grep -q '\["earn.html", "Bounty Board"\]' /tmp/community-home.js \
-                && grep -q '\["how-it-works.html", "How It Works"\]' /tmp/community-home.js \
-                && grep -q '\["leaderboard.html", "Leaderboard"\]' /tmp/community-home.js \
-                && grep -q '\["news.html", "News"\]' /tmp/community-home.js \
-                && grep -q '\["contact.html", "Contact Us"\]' /tmp/community-home.js \
-                && grep -q 'grid-template-rows: 62px 44px' /tmp/community-nav.css \
-                && grep -q 'home-secondary-navigation' /tmp/community-nav.css \
-                && grep -q 'data-live-leaderboard' /tmp/community-leaderboard.html \
-                && grep -q 'Trust score' /tmp/community-leaderboard.html \
-                && grep -q 'data-weekly-story' /tmp/community-news.html \
-                && grep -q 'mcpmarket.com/server/agent-bounties' /tmp/community-news.html \
-                && grep -q 'https://t.me/nspg13' /tmp/community-contact.html \
-                && grep -q 'zeroismmexico@gmail.com' /tmp/community-contact.html \
-                && grep -q 'v1/base/autonomous-bounties/leaderboard' /tmp/community-pages.js; then
+            args=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache")
+            if curl "${args[@]}" "https://agentbounties.app/?verify=${nonce}" -o /tmp/home.html \
+              && curl "${args[@]}" "https://agentbounties.app/solarpunk.css?v=13&verify=${nonce}" -o /tmp/site.css \
+              && curl "${args[@]}" "https://agentbounties.app/llms.txt?verify=${nonce}" -o /tmp/llms.txt \
+              && curl "${args[@]}" "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/discovery.json \
+              && curl "${args[@]}" "https://agentbounties.app/schemas/discovery-manifest.v2.json?verify=${nonce}" -o /tmp/schema.json \
+              && curl "${args[@]}" "https://agentbounties.app/protocol.json?verify=${nonce}" -o /tmp/protocol.json \
+              && grep -q 'solarpunk.css?v=13' /tmp/home.html \
+              && grep -q 'id="post-a-bounty"' /tmp/home.html \
+              && grep -q 'cursor: pointer' /tmp/site.css \
+              && grep -q 'server/discover' /tmp/llms.txt \
+              && ! grep -q 'earn.html' /tmp/llms.txt \
+              && python - <<'PY'
+          import json
+          discovery = json.load(open('/tmp/discovery.json', encoding='utf-8'))
+          schema = json.load(open('/tmp/schema.json', encoding='utf-8'))
+          protocol = json.load(open('/tmp/protocol.json', encoding='utf-8'))
+          expected = 'https://agentbounties.app/schemas/discovery-manifest.v2.json'
+          assert discovery['schema'] == expected
+          assert schema['$id'] == expected
+          assert discovery['default_cta']['href'] == 'https://agentbounties.app/#post-a-bounty'
+          assert protocol['status'] == 'active'
+          assert protocol['chain_id'] == 8453
+          PY
+            then
+              removed_ok=true
+              for route in earn.html post.html objective.html funding.html; do
+                status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://agentbounties.app/${route}?verify=${nonce}")"
+                if [[ "$status" != "404" ]]; then
+                  removed_ok=false
+                  break
+                fi
+              done
+              if [[ "$removed_ok" == "true" ]]; then
                 success=true
-                failure_detail=""
                 break
               fi
-              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or community navigation/page markers were missing"
-            else
-              failure_detail="one or more community URLs returned a non-success response"
             fi
             sleep 5
           done
-
-          verified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          if [[ "$success" == "true" ]]; then
-            cat > /tmp/community-proof.md <<EOF
-          ✅ **Community navigation production canary passed**
-
-          - Commit: \`${GITHUB_SHA}\`
-          - Expected and live build: \`${expected_build}\`
-          - Attempts: ${attempts}
-          - Verified at: ${verified_at}
-          - Mobile primary navigation keeps **Bounty Board** and **How It Works** visible.
-          - The hamburger menu assets contain **Leaderboard**, **News**, and **Contact Us**.
-          - Live Leaderboard, News, Contact Us, navigation CSS, and community JavaScript all returned the expected production markers.
-          - Workflow: ${run_url}
-          EOF
-          else
-            cat > /tmp/community-proof.md <<EOF
-          ❌ **Community navigation production canary failed**
-
-          - Commit: \`${GITHUB_SHA}\`
-          - Expected build: \`${expected_build}\`
-          - Attempts: ${attempts}
-          - Last failure: ${failure_detail}
-          - Checked at: ${verified_at}
-          - Workflow: ${run_url}
-          EOF
-          fi
-
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${LIVE_CANARY_ISSUE}/comments" --raw-field body="$(cat /tmp/community-proof.md)"
           [[ "$success" == "true" ]]

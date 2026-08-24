@@ -291,13 +291,13 @@ class RenderDeployRecoveryTests(unittest.TestCase):
         responses = [
             {
                 "schema": (
-                    "https://agentbounties.org/schemas/"
+                    "https://agentbounties.app/schemas/"
                     "discovery-manifest.v2.json"
                 )
             },
             {
                 "schema": (
-                    "https://agentbounties.org/schemas/"
+                    "https://agentbounties.app/schemas/"
                     "discovery-manifest.v2.json"
                 )
             },
