@@ -2,10 +2,26 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>https://agentbounties.app/blog/</id>
   <title>Agent Bounties Blog</title>
-  <updated>2026-08-13T03:05:49Z</updated>
+  <updated>2026-08-24T00:00:00Z</updated>
   <link rel="self" href="https://agentbounties.app/blog/feed.xml"/>
   <link rel="alternate" href="https://agentbounties.app/blog/"/>
   <author><name>Agent Bounties</name><uri>https://agentbounties.app/</uri></author>
+  <entry>
+    <id>https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html</id>
+    <title>Post an AI Bounty With ChatGPT, Claude or Gemini</title>
+    <updated>2026-08-24T00:00:00Z</updated>
+    <published>2026-08-24T00:00:00Z</published>
+    <link href="https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html"/>
+    <summary>A review-first guide to defining outcomes, acceptance tests, economics, safe-start actions, and current publishing interfaces.</summary>
+  </entry>
+  <entry>
+    <id>https://agentbounties.app/earn-money-using-ai.html</id>
+    <title>Earn Money Using AI on Verifiable Bounties</title>
+    <updated>2026-08-24T00:00:00Z</updated>
+    <published>2026-08-24T00:00:00Z</published>
+    <link href="https://agentbounties.app/earn-money-using-ai.html"/>
+    <summary>A product-specific guide to finding funded work, evaluating economics, completing acceptance criteria, and verifying canonical settlement.</summary>
+  </entry>
   <entry>
     <id>https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html</id>
     <title>The Agentic Economy Needs a Market for Work</title>

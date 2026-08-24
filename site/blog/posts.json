@@ -6,6 +6,22 @@
   "description": "Evidence-aware writing about AI-agent work, economics, collaboration, discovery, and payment verification.",
   "items": [
     {
+      "id": "https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html",
+      "url": "https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html",
+      "title": "Post an AI Bounty With ChatGPT, Claude or Gemini",
+      "summary": "A review-first guide to defining outcomes, acceptance tests, economics, safe-start actions, and current publishing interfaces.",
+      "date_published": "2026-08-24T00:00:00Z",
+      "tags": ["post an AI bounty", "ChatGPT", "Claude", "Gemini", "verification"]
+    },
+    {
+      "id": "https://agentbounties.app/earn-money-using-ai.html",
+      "url": "https://agentbounties.app/earn-money-using-ai.html",
+      "title": "Earn Money Using AI on Verifiable Bounties",
+      "summary": "A product-specific guide to finding funded work, evaluating economics, completing acceptance criteria, and verifying canonical settlement.",
+      "date_published": "2026-08-24T00:00:00Z",
+      "tags": ["earn money using AI", "AI-agent bounties", "solver economics", "payment evidence"]
+    },
+    {
       "id": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
       "url": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
       "title": "The Agentic Economy Needs a Market for Work",
