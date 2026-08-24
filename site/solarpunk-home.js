@@ -334,6 +334,10 @@ ${competitionChildBrief(item)}`;
     return parseSceneTime(new URLSearchParams(String(search || "")).get("sceneTime"));
   }
 
+  function sceneInsectKind(minute) {
+    return sceneBlend(minute).phase === "day" ? "dragonfly" : "firefly";
+  }
+
   function hashSeed(value) {
     let hash = 2166136261;
     for (const character of String(value)) {
@@ -423,7 +427,8 @@ ${competitionChildBrief(item)}`;
     const canvas = doc.querySelector("[data-scene-canvas]");
     const context = canvas?.getContext("2d", { alpha: true });
     let blend = sceneBlend(0);
-    let particles = [];
+    let fireflies = [];
+    let dragonflies = [];
     let flameTongues = [];
     let frame = 0;
     let visible = !doc.hidden;
@@ -455,6 +460,7 @@ ${competitionChildBrief(item)}`;
         plate.style.opacity = String(blend.weights[phase]);
       });
       root.dataset.scenePhase = blend.phase;
+      root.dataset.sceneInsects = sceneInsectKind(blend.minute);
       if (firstPaint) {
         win.requestAnimationFrame(() => {
           doc.documentElement.dataset.sceneReady = "true";
@@ -470,14 +476,25 @@ ${competitionChildBrief(item)}`;
       canvas.width = Math.max(1, Math.round(bounds.width * density));
       canvas.height = Math.max(1, Math.round(bounds.height * density));
       context.setTransform(density, 0, 0, density, 0, 0);
-      const count = win.innerWidth <= 720 ? 20 : 44;
-      particles = Array.from({ length: count }, () => ({
+      const fireflyCount = win.innerWidth <= 720 ? 20 : 44;
+      fireflies = Array.from({ length: fireflyCount }, () => ({
         x: random() * bounds.width,
         y: (.07 + (random() * .82)) * bounds.height,
         radius: .55 + (random() * 1.55),
         phase: random() * Math.PI * 2,
         speed: .18 + (random() * .5),
         drift: random() > .5 ? 1 : -1,
+      }));
+      const dragonflyCount = win.innerWidth <= 720 ? 6 : 12;
+      dragonflies = Array.from({ length: dragonflyCount }, () => ({
+        originX: random() * bounds.width,
+        baseY: (.12 + (random() * .66)) * bounds.height,
+        direction: random() > .5 ? 1 : -1,
+        speed: 17 + (random() * 25),
+        size: 1.08 + (random() * .68),
+        phase: random() * Math.PI * 2,
+        bob: 2 + (random() * 7),
+        flutter: random() * Math.PI * 2,
       }));
       const tongueCount = win.innerWidth <= 720 ? 8 : 13;
       flameTongues = Array.from({ length: tongueCount }, (_, index) => {
@@ -565,6 +582,106 @@ ${competitionChildBrief(item)}`;
       context.restore();
     }
 
+    function drawFireflies(width, height, seconds) {
+      context.save();
+      context.globalCompositeOperation = "lighter";
+      fireflies.forEach((firefly) => {
+        firefly.phase += .008 * firefly.speed;
+        firefly.x += Math.sin(firefly.phase) * .13 * firefly.drift;
+        firefly.y += Math.cos(firefly.phase * .7) * .055;
+        if (firefly.x < -5) firefly.x = width + 5;
+        if (firefly.x > width + 5) firefly.x = -5;
+        if (firefly.y < height * .06) firefly.y = height * .89;
+        if (firefly.y > height * .9) firefly.y = height * .07;
+        const pulse = .35 + (.65 * ((Math.sin(seconds * firefly.speed * 2 + firefly.phase) + 1) / 2));
+        const alpha = (.22 + (.64 * blend.nightStrength)) * pulse;
+        context.beginPath();
+        context.fillStyle = `rgba(105, 255, 112, ${alpha})`;
+        context.shadowBlur = 8;
+        context.shadowColor = "#63ff74";
+        context.arc(firefly.x, firefly.y, firefly.radius, 0, Math.PI * 2);
+        context.fill();
+      });
+      context.restore();
+    }
+
+    function drawDragonfly(dragonfly, width, height, seconds) {
+      const travel = width + 120;
+      const travelled = dragonfly.originX + (seconds * dragonfly.speed * dragonfly.direction) + 60;
+      const x = ((travelled % travel) + travel) % travel - 60;
+      const wave = (seconds * .72) + dragonfly.phase;
+      const y = clamp(
+        dragonfly.baseY + (Math.sin(wave) * dragonfly.bob) + (Math.sin((wave * 1.83) + 1.4) * 1.8),
+        height * .08,
+        height * .84,
+      );
+      const incline = Math.cos(wave) * .06 * dragonfly.direction;
+      const heading = dragonfly.direction > 0 ? incline : Math.PI - incline;
+      const wingBeat = .62 + (.38 * Math.abs(Math.sin((seconds * 25) + dragonfly.flutter)));
+
+      context.save();
+      context.translate(x, y);
+      context.rotate(heading);
+      context.scale(dragonfly.size, dragonfly.size);
+      context.lineCap = "round";
+
+      const wings = [
+        { x: -.2, y: -3.7 * wingBeat, rx: 7.3, ry: 1.22, rotation: -.92 },
+        { x: -.2, y: 3.7 * wingBeat, rx: 7.3, ry: 1.22, rotation: .92 },
+        { x: -3.5, y: -3.1 * wingBeat, rx: 6.1, ry: 1.12, rotation: -1.15 },
+        { x: -3.5, y: 3.1 * wingBeat, rx: 6.1, ry: 1.12, rotation: 1.15 },
+      ];
+      wings.forEach((wing) => {
+        context.beginPath();
+        context.fillStyle = "rgba(218, 255, 246, .32)";
+        context.strokeStyle = "rgba(105, 220, 198, .76)";
+        context.lineWidth = .64;
+        context.ellipse(wing.x, wing.y, wing.rx, wing.ry, wing.rotation, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+      });
+
+      const body = context.createLinearGradient(-10, 0, 5, 0);
+      body.addColorStop(0, "#286f68");
+      body.addColorStop(.58, "#62c985");
+      body.addColorStop(1, "#b9e55b");
+      context.strokeStyle = body;
+      context.lineWidth = 1.6;
+      context.beginPath();
+      context.moveTo(-11.5, 0);
+      context.quadraticCurveTo(-3, .3, 2.8, 0);
+      context.stroke();
+      context.strokeStyle = "rgba(10, 72, 66, .72)";
+      context.lineWidth = .45;
+      [-7.5, -4.8, -2.2].forEach((segment) => {
+        context.beginPath();
+        context.moveTo(segment, -1);
+        context.lineTo(segment, 1);
+        context.stroke();
+      });
+      context.fillStyle = "#4aa97d";
+      context.beginPath();
+      context.ellipse(1, 0, 2.45, 1.55, 0, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#b7df55";
+      context.beginPath();
+      context.arc(4.15, 0, 1.45, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "rgba(9, 56, 51, .88)";
+      context.beginPath();
+      context.arc(4.55, -.52, .31, 0, Math.PI * 2);
+      context.arc(4.55, .52, .31, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+    }
+
+    function drawDragonflies(width, height, seconds) {
+      context.save();
+      context.globalCompositeOperation = "source-over";
+      dragonflies.forEach((dragonfly) => drawDragonfly(dragonfly, width, height, seconds));
+      context.restore();
+    }
+
     function drawScene(time) {
       if (!visible || !context || !canvas) return;
       const width = canvas.clientWidth;
@@ -583,24 +700,8 @@ ${competitionChildBrief(item)}`;
 
       drawProceduralFire(width, height, seconds);
 
-      particles.forEach((particle) => {
-        particle.phase += .008 * particle.speed;
-        particle.x += Math.sin(particle.phase) * .13 * particle.drift;
-        particle.y += Math.cos(particle.phase * .7) * .055;
-        if (particle.x < -5) particle.x = width + 5;
-        if (particle.x > width + 5) particle.x = -5;
-        if (particle.y < height * .06) particle.y = height * .89;
-        if (particle.y > height * .9) particle.y = height * .07;
-        const pulse = .35 + (.65 * ((Math.sin(seconds * particle.speed * 2 + particle.phase) + 1) / 2));
-        const alpha = (.22 + (.64 * blend.nightStrength)) * pulse;
-        context.beginPath();
-        context.fillStyle = `rgba(105, 255, 112, ${alpha})`;
-        context.shadowBlur = 8;
-        context.shadowColor = "#63ff74";
-        context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2);
-        context.fill();
-      });
-      context.shadowBlur = 0;
+      if (sceneInsectKind(blend.minute) === "dragonfly") drawDragonflies(width, height, seconds);
+      else drawFireflies(width, height, seconds);
       frame = win.requestAnimationFrame(drawScene);
     }
 
@@ -1482,6 +1583,7 @@ ${competitionChildBrief(item)}`;
     parseSceneTime,
     parseCompetitionPostingRequest,
     sceneBlend,
+    sceneInsectKind,
     sceneTimeOverride,
     seededRandom,
     shortWalletAddress,
