@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Sequence
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,11 +13,13 @@ import re
 import threading
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from eth_abi import decode, encode
 from eth_utils import to_checksum_address
+from requests.exceptions import HTTPError, RequestException
 from web3 import Web3
-from web3.exceptions import TransactionNotFound
+from web3.exceptions import ProviderConnectionError, TransactionNotFound, Web3RPCError
 
 from build_open_competition_v2_reward_policy import (
     EXPECTED_LIFETIME_SPENT,
@@ -34,6 +37,12 @@ from inspect_open_competition_v2_reward_policy import (
 
 TRANSACTION_HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
 HEX_DATA = re.compile(r"^0x(?:[0-9a-fA-F]{2})+$")
+DEFAULT_RPC_URLS = (
+    "https://base-rpc.publicnode.com",
+    "https://mainnet.base.org",
+    "https://base-mainnet.public.blastapi.io",
+    "https://1rpc.io/base",
+)
 
 
 HTML = r"""<!doctype html>
@@ -221,6 +230,84 @@ class ConfirmationError(ValueError):
     pass
 
 
+def rpc_endpoint_label(rpc_url: str) -> str:
+    parsed = urlsplit(rpc_url)
+    return parsed.hostname or "configured Base RPC"
+
+
+def normalized_rpc_urls(values: Sequence[str] | None) -> tuple[str, ...]:
+    selected = tuple(values or DEFAULT_RPC_URLS)
+    if not selected:
+        raise ConfirmationError("at least one Base RPC is required")
+    normalized: list[str] = []
+    for value in selected:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ConfirmationError("Base RPC URLs must be credential-free HTTPS URLs")
+        if value not in normalized:
+            normalized.append(value)
+    return tuple(normalized)
+
+
+def retryable_provider_error(error: Exception) -> bool:
+    if isinstance(error, Web3RPCError):
+        return False
+    if isinstance(error, HTTPError):
+        status = getattr(error.response, "status_code", None)
+        return status in {403, 408, 425, 429} or (
+            isinstance(status, int) and 500 <= status <= 599
+        )
+    return isinstance(
+        error,
+        (RequestException, ProviderConnectionError, ConnectionError, TimeoutError),
+    )
+
+
+def base_rpc_call(
+    rpc_urls: Sequence[str],
+    operation: Callable[[Web3], Any],
+    label: str,
+    *,
+    transaction_not_found_is_none: bool = False,
+    web3_factory: Callable[[str], Web3] | None = None,
+) -> Any:
+    if not rpc_urls:
+        raise ConfirmationError("at least one Base RPC is required")
+    make_web3 = web3_factory or (lambda rpc_url: Web3(Web3.HTTPProvider(rpc_url)))
+    failures: list[str] = []
+    not_found = False
+    for rpc_url in rpc_urls:
+        endpoint = rpc_endpoint_label(rpc_url)
+        try:
+            w3 = make_web3(rpc_url)
+            if not w3.is_connected():
+                failures.append(f"{endpoint}: unavailable")
+                continue
+            chain_id = int(w3.eth.chain_id)
+            if chain_id != 8453:
+                failures.append(f"{endpoint}: wrong chain {chain_id}")
+                continue
+            return operation(w3)
+        except TransactionNotFound:
+            if not transaction_not_found_is_none:
+                raise
+            not_found = True
+            failures.append(f"{endpoint}: transaction not found")
+        except Exception as error:
+            if not retryable_provider_error(error):
+                raise
+            failures.append(f"{endpoint}: {type(error).__name__}")
+    if transaction_not_found_is_none and not_found:
+        return None
+    detail = "; ".join(failures) or "no endpoint returned evidence"
+    raise ConfirmationError(f"{label} unavailable across Base RPCs ({detail})")
+
+
 def validate_bundle(bundle: dict[str, Any]) -> None:
     if bundle.get("schema_version") != SCHEMA or bundle.get("chain_id") != 8453:
         raise ConfirmationError("policy bundle schema or chain is invalid")
@@ -323,6 +410,68 @@ def revocation_result_path(result_output: Path) -> Path:
     return result_output.with_name(f"{result_output.name}.revoked")
 
 
+def submission_result_path(result_output: Path, stage: str) -> Path:
+    if stage not in {"revoke", "configure"}:
+        raise ConfirmationError("transaction stage is invalid")
+    return result_output.with_name(f"{result_output.name}.submitted-{stage}")
+
+
+def load_submission_result(
+    result_output: Path, bundle: dict[str, Any], stage: str
+) -> dict[str, Any] | None:
+    path = submission_result_path(result_output, stage)
+    if not path.exists():
+        return None
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    expected_policy = (
+        bundle["current_policy"] if stage == "revoke" else bundle["next_policy"]
+    )
+    if (
+        value.get("status") != "submitted"
+        or value.get("stage") != stage
+        or not TRANSACTION_HASH.fullmatch(str(value.get("transaction_hash") or ""))
+        or str(value.get("owner") or "").lower() != str(bundle["owner"]).lower()
+        or str(value.get("reserve") or "").lower()
+        != str(bundle["reserve_wallet"]).lower()
+        or int(value.get("policy_version", -1)) != int(expected_policy["version"])
+        or str(value.get("policy_hash") or "").lower()
+        != str(expected_policy["hash"]).lower()
+    ):
+        raise ConfirmationError(f"stored {stage} submission differs from the bundle")
+    return value
+
+
+def store_submission_result(
+    result_output: Path,
+    bundle: dict[str, Any],
+    stage: str,
+    transaction_hash: str,
+) -> dict[str, Any]:
+    prior = load_submission_result(result_output, bundle, stage)
+    if prior:
+        if str(prior["transaction_hash"]).lower() != transaction_hash.lower():
+            raise ConfirmationError(
+                f"a different {stage} transaction was already submitted"
+            )
+        return prior
+    expected_policy = (
+        bundle["current_policy"] if stage == "revoke" else bundle["next_policy"]
+    )
+    value = {
+        "status": "submitted",
+        "stage": stage,
+        "transaction_hash": transaction_hash,
+        "owner": bundle["owner"],
+        "reserve": bundle["reserve_wallet"],
+        "policy_version": expected_policy["version"],
+        "policy_hash": expected_policy["hash"],
+        "recorded_at": int(time.time()),
+        "evidence_boundary": "This records only the exact owner-submitted transaction hash. It is not canonical confirmation, competition activation, GMV, entry, payout, or settlement evidence.",
+    }
+    store_result(submission_result_path(result_output, stage), value)
+    return value
+
+
 def load_revocation_result(
     result_output: Path, bundle: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -355,44 +504,50 @@ class ConfirmationServer(ThreadingHTTPServer):
         self,
         address: tuple[str, int],
         bundle: dict[str, Any],
-        rpc_url: str,
+        rpc_urls: Sequence[str],
         result_output: Path,
     ) -> None:
         super().__init__(address, ConfirmationHandler)
         self.bundle = bundle
-        self.rpc_url = rpc_url
+        self.rpc_urls = tuple(rpc_urls)
+        if not self.rpc_urls:
+            raise ConfirmationError("at least one Base RPC is required")
         self.result_output = result_output
         self.lock = threading.Lock()
         self.transaction_hashes: dict[str, str] = {}
+        self.reconciling_stages: set[str] = set()
+        resume: tuple[str, str] | None = None
         prior_revocation = load_revocation_result(result_output, bundle)
         if prior_revocation:
             self.status = prior_revocation
             self.transaction_hashes["revoke"] = str(
                 prior_revocation["revoke_transaction_hash"]
             )
+            pending_configure = load_submission_result(
+                result_output, bundle, "configure"
+            )
+            if pending_configure:
+                transaction_hash = str(pending_configure["transaction_hash"])
+                self.transaction_hashes["configure"] = transaction_hash
+                resume = ("configure", transaction_hash)
         else:
             self.status = {
                 "status": "ready",
                 "message": "Ready for the exact owner confirmation.",
             }
+            pending_revoke = load_submission_result(result_output, bundle, "revoke")
+            if pending_revoke:
+                transaction_hash = str(pending_revoke["transaction_hash"])
+                self.transaction_hashes["revoke"] = transaction_hash
+                resume = ("revoke", transaction_hash)
+        if resume:
+            self._launch_reconciliation(*resume)
 
-    def begin_reconciliation(self, stage: str, transaction_hash: str) -> None:
-        if stage not in {"revoke", "configure"}:
-            raise ConfirmationError("transaction stage is invalid")
-        ensure_confirmation_open(self.bundle)
+    def _launch_reconciliation(self, stage: str, transaction_hash: str) -> None:
         with self.lock:
-            if stage == "configure" and self.status.get("status") != "revoked":
-                raise ConfirmationError(
-                    "the old policy is not safely revoked and reconciled"
-                )
-            existing = self.transaction_hashes.get(stage)
-            if existing and existing.lower() != transaction_hash.lower():
-                raise ConfirmationError(
-                    f"a different {stage} transaction is already being reconciled"
-                )
-            if existing:
+            if stage in self.reconciling_stages:
                 return
-            self.transaction_hashes[stage] = transaction_hash
+            self.reconciling_stages.add(stage)
             self.status = {
                 "status": "pending",
                 "stage": stage,
@@ -402,31 +557,65 @@ class ConfirmationServer(ThreadingHTTPServer):
             target=self.reconcile, args=(stage, transaction_hash), daemon=True
         ).start()
 
+    def begin_reconciliation(self, stage: str, transaction_hash: str) -> None:
+        if stage not in {"revoke", "configure"}:
+            raise ConfirmationError("transaction stage is invalid")
+        ensure_confirmation_open(self.bundle)
+        if stage == "configure" and not load_revocation_result(
+            self.result_output, self.bundle
+        ):
+            raise ConfirmationError(
+                "the old policy is not safely revoked and reconciled"
+            )
+        store_submission_result(
+            self.result_output, self.bundle, stage, transaction_hash
+        )
+        with self.lock:
+            existing = self.transaction_hashes.get(stage)
+            if existing and existing.lower() != transaction_hash.lower():
+                raise ConfirmationError(
+                    f"a different {stage} transaction is already being reconciled"
+                )
+            self.transaction_hashes[stage] = transaction_hash
+        self._launch_reconciliation(stage, transaction_hash)
+
     def reconcile(self, stage: str, transaction_hash: str) -> None:
         try:
-            w3 = Web3(Web3.HTTPProvider(self.rpc_url))
-            if not w3.is_connected() or int(w3.eth.chain_id) != 8453:
-                raise ConfirmationError("canonical Base RPC is unavailable")
             receipt = None
+            receipt_error: ConfirmationError | None = None
             for _ in range(120):
                 try:
-                    receipt = w3.eth.get_transaction_receipt(transaction_hash)
-                except TransactionNotFound:
-                    receipt = None
+                    receipt = base_rpc_call(
+                        self.rpc_urls,
+                        lambda w3: w3.eth.get_transaction_receipt(transaction_hash),
+                        "transaction receipt",
+                        transaction_not_found_is_none=True,
+                    )
+                except ConfirmationError as error:
+                    receipt_error = error
                 if receipt is not None:
                     break
                 time.sleep(2)
             if receipt is None:
-                raise ConfirmationError("transaction receipt did not arrive")
+                detail = f": {receipt_error}" if receipt_error else ""
+                raise ConfirmationError(f"transaction receipt did not arrive{detail}")
             if int(receipt["status"]) != 1:
                 raise ConfirmationError(f"{stage} transaction reverted")
-            transaction = w3.eth.get_transaction(transaction_hash)
+            transaction = base_rpc_call(
+                self.rpc_urls,
+                lambda w3: w3.eth.get_transaction(transaction_hash),
+                "confirmed transaction",
+            )
             transaction_matches(self.bundle, stage, transaction)
             receipt_block = int(receipt["blockNumber"])
             safe_block = 0
             for _ in range(120):
-                response = w3.provider.make_request(
-                    "eth_getBlockByNumber", ["safe", False]
+                response = base_rpc_call(
+                    self.rpc_urls,
+                    lambda w3: w3.provider.make_request(
+                        "eth_getBlockByNumber", ["safe", False]
+                    ),
+                    "Base safe block",
                 )
                 value = response.get("result") if isinstance(response, dict) else None
                 safe_block = (
@@ -446,30 +635,53 @@ class ConfirmationServer(ThreadingHTTPServer):
             if safe_block < receipt_block:
                 raise ConfirmationError("transaction did not reach the Base safe block")
             reserve = str(self.bundle["reserve_wallet"])
-            version = int(
-                call_one(w3, reserve, "policyVersion()", "uint64", safe_block)
-            )
-            policy_hash = (
-                "0x"
-                + call_one(
-                    w3, reserve, "activePolicyHash()", "bytes32", safe_block
-                ).hex()
-            )
-            lifetime_spent = int(
-                call_one(w3, reserve, "lifetimeSpent()", "uint256", safe_block)
-            )
-            balance_arguments = encode(["address"], [to_checksum_address(reserve)])
-            balance = int(
-                decode(
-                    ["uint256"],
-                    call_raw(
-                        w3, USDC, "balanceOf(address)", safe_block, balance_arguments
+
+            def read_evidence(w3: Web3) -> dict[str, Any]:
+                balance_arguments = encode(["address"], [to_checksum_address(reserve)])
+                return {
+                    "version": int(
+                        call_one(w3, reserve, "policyVersion()", "uint64", safe_block)
                     ),
-                )[0]
+                    "policy_hash": "0x"
+                    + call_one(
+                        w3,
+                        reserve,
+                        "activePolicyHash()",
+                        "bytes32",
+                        safe_block,
+                    ).hex(),
+                    "lifetime_spent": int(
+                        call_one(w3, reserve, "lifetimeSpent()", "uint256", safe_block)
+                    ),
+                    "balance": int(
+                        decode(
+                            ["uint256"],
+                            call_raw(
+                                w3,
+                                USDC,
+                                "balanceOf(address)",
+                                safe_block,
+                                balance_arguments,
+                            ),
+                        )[0]
+                    ),
+                    "policy": decode(
+                        POLICY_OUTPUTS,
+                        call_raw(w3, reserve, "policy()", safe_block),
+                    ),
+                    "revoked": bool(
+                        call_one(w3, reserve, "revoked()", "bool", safe_block)
+                    ),
+                }
+
+            evidence = base_rpc_call(
+                self.rpc_urls, read_evidence, "safe-block policy evidence"
             )
-            policy = decode(
-                POLICY_OUTPUTS, call_raw(w3, reserve, "policy()", safe_block)
-            )
+            version = evidence["version"]
+            policy_hash = evidence["policy_hash"]
+            lifetime_spent = evidence["lifetime_spent"]
+            balance = evidence["balance"]
+            policy = evidence["policy"]
             if (
                 lifetime_spent != EXPECTED_LIFETIME_SPENT
                 or balance != EXPECTED_RESERVE_BALANCE
@@ -477,7 +689,7 @@ class ConfirmationServer(ThreadingHTTPServer):
                 raise ConfirmationError(
                     f"{stage} confirmation unexpectedly moved or spent USDC"
                 )
-            revoked = bool(call_one(w3, reserve, "revoked()", "bool", safe_block))
+            revoked = evidence["revoked"]
             if stage == "revoke":
                 current = self.bundle["current_policy"]
                 if (
@@ -499,7 +711,11 @@ class ConfirmationServer(ThreadingHTTPServer):
                     "reserve_balance": balance,
                     "message": "Old policy safely revoked with unchanged USDC and lifetime spend.",
                 }
-                store_result(revocation_result_path(self.result_output), result)
+                prior = load_revocation_result(self.result_output, self.bundle)
+                if prior:
+                    result = prior
+                else:
+                    store_result(revocation_result_path(self.result_output), result)
                 with self.lock:
                     self.status = result
                 return
@@ -536,7 +752,15 @@ class ConfirmationServer(ThreadingHTTPServer):
             Exception
         ) as error:  # reconciliation must surface every fail-closed reason
             with self.lock:
-                self.status = {"status": "failed", "error": str(error)}
+                self.status = {
+                    "status": "failed",
+                    "stage": stage,
+                    "error": str(error),
+                    "message": "The exact submitted transaction is durably recorded and may be reconciled again without rebroadcasting it.",
+                }
+        finally:
+            with self.lock:
+                self.reconciling_stages.discard(stage)
 
 
 class ConfirmationHandler(BaseHTTPRequestHandler):
@@ -602,7 +826,12 @@ class ConfirmationHandler(BaseHTTPRequestHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
-    parser.add_argument("--rpc-url", default="https://base-rpc.publicnode.com")
+    parser.add_argument(
+        "--rpc-url",
+        action="append",
+        dest="rpc_urls",
+        help="ordered credential-free Base RPC URL; repeat for failover",
+    )
     parser.add_argument("--result-output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8791)
     args = parser.parse_args()
@@ -610,6 +839,7 @@ def main() -> int:
         bundle = json.loads(args.bundle.read_text(encoding="utf-8-sig"))
         validate_bundle(bundle)
         ensure_confirmation_open(bundle)
+        rpc_urls = normalized_rpc_urls(args.rpc_urls)
         if args.result_output.exists():
             raise ConfirmationError("result output already exists")
     except (
@@ -622,7 +852,7 @@ def main() -> int:
         print(f"confirmation server blocked: {error}")
         return 2
     server = ConfirmationServer(
-        ("127.0.0.1", args.port), bundle, args.rpc_url, args.result_output
+        ("127.0.0.1", args.port), bundle, rpc_urls, args.result_output
     )
     print(f"confirmation_url=http://127.0.0.1:{args.port}/", flush=True)
     server.serve_forever()

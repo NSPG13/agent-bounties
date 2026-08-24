@@ -7,6 +7,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from requests.exceptions import HTTPError
+from web3.exceptions import Web3RPCError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,6 +129,109 @@ class RewardPolicyConfirmationTests(unittest.TestCase):
             )
             with self.assertRaises(MODULE.ConfirmationError):
                 MODULE.load_revocation_result(result_output, self.bundle)
+
+    def test_rpc_failover_skips_blocked_and_wrong_chain_endpoints(self) -> None:
+        class FakeWeb3:
+            def __init__(self, name: str, chain_id: int = 8453) -> None:
+                self.name = name
+                self.eth = SimpleNamespace(chain_id=chain_id)
+
+            def is_connected(self) -> bool:
+                return True
+
+        endpoints = {
+            "https://blocked.example": FakeWeb3("blocked"),
+            "https://wrong.example": FakeWeb3("wrong", 1),
+            "https://base.example": FakeWeb3("base"),
+        }
+
+        def operation(w3: FakeWeb3) -> str:
+            if w3.name == "blocked":
+                raise HTTPError(response=SimpleNamespace(status_code=403))
+            return w3.name
+
+        self.assertEqual(
+            MODULE.base_rpc_call(
+                tuple(endpoints),
+                operation,
+                "test evidence",
+                web3_factory=endpoints.__getitem__,
+            ),
+            "base",
+        )
+
+    def test_json_rpc_execution_error_does_not_fail_over(self) -> None:
+        class FakeWeb3:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.eth = SimpleNamespace(chain_id=8453)
+
+            def is_connected(self) -> bool:
+                return True
+
+        endpoints = {
+            "https://first.example": FakeWeb3("first"),
+            "https://second.example": FakeWeb3("second"),
+        }
+        called: list[str] = []
+
+        def operation(w3: FakeWeb3) -> str:
+            called.append(w3.name)
+            if w3.name == "first":
+                raise Web3RPCError("execution reverted")
+            return w3.name
+
+        with self.assertRaises(Web3RPCError):
+            MODULE.base_rpc_call(
+                tuple(endpoints),
+                operation,
+                "test execution",
+                web3_factory=endpoints.__getitem__,
+            )
+        self.assertEqual(called, ["first"])
+
+    def test_submitted_hash_is_durable_and_restarts_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result_output = Path(directory) / "final.json"
+            transaction_hash = "0x" + "cd" * 32
+            stored = MODULE.store_submission_result(
+                result_output, self.bundle, "revoke", transaction_hash
+            )
+            self.assertEqual(stored["transaction_hash"], transaction_hash)
+            self.assertEqual(
+                MODULE.load_submission_result(result_output, self.bundle, "revoke"),
+                stored,
+            )
+
+            with patch.object(
+                MODULE.ConfirmationServer, "_launch_reconciliation"
+            ) as launch:
+                server = MODULE.ConfirmationServer(
+                    ("127.0.0.1", 0),
+                    self.bundle,
+                    ("https://base.example",),
+                    result_output,
+                )
+                try:
+                    launch.assert_called_once_with("revoke", transaction_hash)
+                finally:
+                    server.server_close()
+
+            with self.assertRaises(MODULE.ConfirmationError):
+                MODULE.store_submission_result(
+                    result_output, self.bundle, "revoke", "0x" + "ef" * 32
+                )
+
+    def test_rpc_urls_are_https_credential_free_and_deduplicated(self) -> None:
+        self.assertEqual(
+            MODULE.normalized_rpc_urls(
+                ["https://base.example", "https://base.example"]
+            ),
+            ("https://base.example",),
+        )
+        for value in ("http://base.example", "https://user:secret@base.example"):
+            with self.subTest(value=value), self.assertRaises(MODULE.ConfirmationError):
+                MODULE.normalized_rpc_urls([value])
 
 
 if __name__ == "__main__":
