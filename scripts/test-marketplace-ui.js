@@ -85,6 +85,11 @@ test("economics includes child capital and the complete losing exposure", () => 
   assert.ok(Math.abs(result.loss - (-3.11)) < 1e-9);
   assert.ok(Math.abs(result.expected - (-2.36)) < 1e-9);
   assert.equal(result.totalCost, 3.11);
+  assert.ok(Math.abs(result.breakEvenProbability - (3.11 / 3)) < 1e-9);
+
+  const treatment = competition.economics(6, 0.11, 3, 0, 0.25);
+  assert.ok(Math.abs(treatment.breakEvenProbability - (3.11 / 6)) < 1e-9);
+  assert.ok(Math.abs(treatment.expected - (-1.61)) < 1e-9);
 });
 
 test("the unified card shows complete variable-cost and losing-exposure formulas", () => {
