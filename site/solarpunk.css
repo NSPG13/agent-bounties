@@ -73,6 +73,7 @@ a:focus-visible {
   isolation: isolate;
   min-height: max(720px, 100svh);
   overflow: hidden;
+  overflow: clip;
   background: #06100c;
 }
 
@@ -140,8 +141,9 @@ html[data-scene-ready="false"] .scene-plate {
 }
 
 .scene-header {
-  position: relative;
+  position: sticky;
   z-index: 20;
+  top: 0;
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto minmax(360px, 1fr);
   align-items: center;
@@ -391,7 +393,7 @@ html[data-scene-ready="false"] .scene-plate {
 .market-proof {
   position: absolute;
   z-index: 13;
-  top: 57.5%;
+  top: 59%;
   left: 50%;
   display: grid;
   grid-template-columns: 78px minmax(430px, 610px) 78px;
@@ -490,7 +492,7 @@ html[data-scene-ready="false"] .scene-plate {
   display: grid;
   justify-items: center;
   gap: 8px;
-  margin-top: clamp(20px, 2.4vh, 28px);
+  margin-top: clamp(32px, 4vh, 40px);
 }
 
 .hero-action button {

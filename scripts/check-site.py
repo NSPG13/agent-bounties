@@ -322,7 +322,7 @@ def check_homepage(site_dir: Path) -> None:
     if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
         fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
     stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
-    if not stylesheet_version or int(stylesheet_version.group(1)) < 10:
+    if not stylesheet_version or int(stylesheet_version.group(1)) < 11:
         fail("the homepage must load the flow-layout stylesheet through a cache-busted URL")
     require_phrases(
         "index.html bounty assistant launcher",
@@ -410,6 +410,11 @@ def check_homepage(site_dir: Path) -> None:
     hero_action_css = re.search(r"\.hero-action\s*\{(?P<body>[^}]*)\}", css)
     if not hero_action_css or re.search(r"(?<![-\w])(?:position|top|left|transform)\s*:", hero_action_css.group("body")):
         fail("the homepage CTA must not use independent absolute positioning")
+    if "margin-top: clamp(32px, 4vh, 40px)" not in hero_action_css.group("body"):
+        fail("the desktop bounty CTA must retain breathing room below the headline")
+    scene_header_css = re.search(r"\.scene-header\s*\{(?P<body>[^}]*)\}", css)
+    if not scene_header_css or "position: sticky" not in scene_header_css.group("body") or "top: 0" not in scene_header_css.group("body"):
+        fail("the homepage navigation must remain sticky at the top of the viewport")
     for selector in (r"\.stone-title span:nth-child\(1\)", r"\.stone-title span:nth-child\(3\)", r"\.stone-title em"):
         match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
         if not match or "font-size: inherit" not in match.group("body"):
