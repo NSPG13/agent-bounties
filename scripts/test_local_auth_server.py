@@ -314,7 +314,8 @@ class LocalAuthTests(unittest.TestCase):
                 session_body = session_response.read().decode("utf-8")
                 self.assertEqual(session_response.status, 200)
                 self.assertIn('"authenticated":true', session_body)
-                self.assertIn('"provider":"google"', session_body)
+                self.assertIn('"sign_in_method":"google"', session_body)
+                self.assertNotIn('"sub":', session_body)
                 self.assertNotIn("provider-token", session_body)
 
                 connection.request("GET", "/auth/account", headers={"Cookie": session_cookie})
@@ -381,6 +382,121 @@ class LocalAuthTests(unittest.TestCase):
                 self.assertEqual(replay_response.getheader("Location"), "/?auth=error&reason=invalid_state")
                 connection.close()
             finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+    def test_captured_password_registration_login_and_reset_revoke_old_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site = Path(temp_dir)
+            (site / "index.html").write_text("ok", encoding="utf-8")
+            handler = functools.partial(auth.LocalAuthHandler, directory=str(site))
+            server = auth.LocalAuthServer(
+                ("127.0.0.1", 0), handler, self.env, site / "wallet-links.json"
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            origin = f"http://127.0.0.1:{server.server_address[1]}"
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=8)
+
+            def post(path: str, payload: dict[str, object], cookie: str = "") -> tuple[int, dict[str, object], str]:
+                body = json.dumps(payload)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                    "Origin": origin,
+                }
+                if cookie:
+                    headers["Cookie"] = cookie
+                connection.request("POST", path, body=body, headers=headers)
+                response = connection.getresponse()
+                response_body = json.loads(response.read().decode("utf-8"))
+                return response.status, response_body, response.getheader("Set-Cookie") or ""
+
+            try:
+                status, payload, _ = post(
+                    "/auth/password/registration",
+                    {"email": "ZeroismMexico+local@gmail.com"},
+                )
+                self.assertEqual(status, 202)
+                self.assertTrue(payload["accepted"])
+                connection.request("GET", "/auth/dev/captured-mail")
+                mailbox = json.loads(connection.getresponse().read().decode("utf-8"))
+                registration_url = mailbox["messages"][-1]["action_url"]
+                registration_token = urllib.parse.parse_qs(
+                    urllib.parse.urlsplit(registration_url).fragment
+                )["token"][0]
+
+                status, payload, setup_header = post(
+                    "/auth/password/verification", {"token": registration_token}
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["purpose"], "registration")
+                setup_cookie = setup_header.split(";", 1)[0]
+                status, payload, session_header = post(
+                    "/auth/password/complete",
+                    {"name": "Local Tester", "password": "a luminous moss local passphrase"},
+                    setup_cookie,
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["authenticated"])
+                original_session = session_header.split(";", 1)[0]
+
+                status, payload, login_header = post(
+                    "/auth/password/login",
+                    {
+                        "email": "zeroismmexico+LOCAL@gmail.com",
+                        "password": "a luminous moss local passphrase",
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["authenticated"])
+                self.assertIn(auth.SESSION_COOKIE, login_header)
+
+                status, payload, _ = post(
+                    "/auth/password/reset",
+                    {"email": "zeroismmexico+local@gmail.com"},
+                )
+                self.assertEqual(status, 202)
+                connection.request("GET", "/auth/dev/captured-mail")
+                mailbox = json.loads(connection.getresponse().read().decode("utf-8"))
+                reset_token = urllib.parse.parse_qs(
+                    urllib.parse.urlsplit(mailbox["messages"][-1]["action_url"]).fragment
+                )["token"][0]
+                status, _, reset_setup_header = post(
+                    "/auth/password/reset-verification", {"token": reset_token}
+                )
+                self.assertEqual(status, 200)
+                status, _, _ = post(
+                    "/auth/password/reset-complete",
+                    {"password": "a newer luminous moss passphrase"},
+                    reset_setup_header.split(";", 1)[0],
+                )
+                self.assertEqual(status, 200)
+
+                connection.request("GET", "/auth/session", headers={"Cookie": original_session})
+                revoked = json.loads(connection.getresponse().read().decode("utf-8"))
+                self.assertFalse(revoked["authenticated"])
+                status, payload, _ = post(
+                    "/auth/password/login",
+                    {
+                        "email": "zeroismmexico+local@gmail.com",
+                        "password": "a luminous moss local passphrase",
+                    },
+                )
+                self.assertEqual(status, 401)
+                self.assertEqual(payload["error"], "invalid_credentials")
+                status, payload, _ = post(
+                    "/auth/password/login",
+                    {
+                        "email": "zeroismmexico+local@gmail.com",
+                        "password": "a newer luminous moss passphrase",
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertTrue(payload["authenticated"])
+            finally:
+                connection.close()
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)

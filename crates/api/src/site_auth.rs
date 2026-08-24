@@ -1,4 +1,8 @@
 use alloy::primitives::Signature;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Algorithm, Argon2, Params, Version,
+};
 use axum::{
     extract::{Extension, Path, Query},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
@@ -7,18 +11,20 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use db::{DbError, PostgresStore, SiteAuthWallet};
+use db::{DbError, PostgresStore, SiteAuthPrincipal, SiteAuthWallet};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     env,
     str::FromStr,
     sync::{Arc, Mutex},
 };
+use tokio::sync::Semaphore;
 use tower_http::cors::CorsLayer;
+use unicode_normalization::UnicodeNormalization;
 use url::Url;
 use uuid::Uuid;
 
@@ -28,6 +34,12 @@ const SESSION_MAX_AGE_SECONDS: i64 = 8 * 60 * 60;
 const OAUTH_STATE_MAX_AGE_SECONDS: i64 = 10 * 60;
 const WALLET_CHALLENGE_MAX_AGE_SECONDS: i64 = 5 * 60;
 const BASE_CHAIN_ID: i64 = 8453;
+const REGISTRATION_MAX_AGE_SECONDS: i64 = 8 * 60 * 60;
+const RESET_MAX_AGE_SECONDS: i64 = 30 * 60;
+const PASSWORD_SETUP_COOKIE: &str = "agent_bounties_password_setup";
+const PASSWORD_GENERIC_MESSAGE: &str =
+    "If this address can continue, an email with the next step will arrive shortly.";
+const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2l0ZS1hdXRoLWR1bW15$cLepORJVkx96P2dP2GczibNUEcWPNbFfcbQhTIiUjLA";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -46,6 +58,45 @@ struct SiteAuthInner {
     store: Option<PostgresStore>,
     client: reqwest::Client,
     wallet_challenges: Mutex<HashMap<String, WalletChallenge>>,
+    password: PasswordAuthConfig,
+    captured_mail: Mutex<Vec<CapturedMail>>,
+    password_work: Semaphore,
+}
+
+#[derive(Clone)]
+struct PasswordAuthConfig {
+    enabled: bool,
+    email_mode: EmailMode,
+    resend_api_key: Option<String>,
+    from: String,
+    attempt_window_seconds: i64,
+    attempt_limit: i32,
+    attempt_block_seconds: i64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmailMode {
+    Disabled,
+    Capture,
+    Resend,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CapturedMail {
+    to: String,
+    purpose: String,
+    action_url: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct AuthenticatedUser {
+    account_key: String,
+    name: String,
+    email: String,
+    avatar: String,
+    sign_in_method: String,
+    linked_methods: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -94,6 +145,29 @@ struct WalletVerifyRequest {
     challenge_id: String,
     address: String,
     signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmailRequest {
+    email: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmailTokenRequest {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PasswordCompleteRequest {
+    #[serde(default)]
+    name: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PasswordLoginRequest {
+    email: String,
+    password: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +242,55 @@ impl SiteAuthService {
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("AgentBounties-SiteAuth/1.0")
             .build()?;
+        let password_enabled = env_flag("SITE_PASSWORD_AUTH_ENABLED");
+        let email_mode = match env::var("AUTH_EMAIL_MODE")
+            .unwrap_or_else(|_| "disabled".to_string())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "capture" => {
+                if !is_loopback_origin(&api_origin) {
+                    anyhow::bail!(
+                        "AUTH_EMAIL_MODE=capture is only allowed on a loopback API origin"
+                    );
+                }
+                EmailMode::Capture
+            }
+            "resend" => EmailMode::Resend,
+            "disabled" | "" => EmailMode::Disabled,
+            _ => anyhow::bail!("AUTH_EMAIL_MODE must be disabled, capture, or resend"),
+        };
+        let resend_api_key = env::var("RESEND_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let password = PasswordAuthConfig {
+            enabled: password_enabled,
+            email_mode,
+            resend_api_key,
+            from: env::var("AUTH_EMAIL_FROM")
+                .unwrap_or_else(|_| "Agent Bounties <no-reply@auth.agentbounties.app>".to_string()),
+            attempt_window_seconds: if password_enabled {
+                private_positive_i64("SITE_AUTH_ATTEMPT_WINDOW_SECONDS")?
+            } else {
+                1
+            },
+            attempt_limit: if password_enabled {
+                private_positive_i32("SITE_AUTH_ATTEMPT_LIMIT")?
+            } else {
+                1
+            },
+            attempt_block_seconds: if password_enabled {
+                private_positive_i64("SITE_AUTH_ATTEMPT_BLOCK_SECONDS")?
+            } else {
+                1
+            },
+        };
+        let password_workers = if password_enabled {
+            private_positive_i32("SITE_AUTH_PASSWORD_WORKERS")?
+        } else {
+            1
+        } as usize;
         Ok(Self {
             inner: Arc::new(SiteAuthInner {
                 session_secret: session_secret.map(String::into_bytes),
@@ -179,6 +302,9 @@ impl SiteAuthService {
                 store,
                 client,
                 wallet_challenges: Mutex::new(HashMap::new()),
+                password,
+                captured_mail: Mutex::new(Vec::new()),
+                password_work: Semaphore::new(password_workers),
             }),
         })
     }
@@ -200,6 +326,14 @@ impl SiteAuthService {
             .collect()
     }
 
+    fn password_ready(&self) -> bool {
+        self.inner.password.enabled
+            && self.enabled()
+            && self.inner.password.email_mode != EmailMode::Disabled
+            && (self.inner.password.email_mode != EmailMode::Resend
+                || self.inner.password.resend_api_key.is_some())
+    }
+
     fn account_id(&self, user: &SessionUser) -> Option<String> {
         let secret = self.inner.wallet_secret.as_deref()?;
         Some(hmac_hex(
@@ -208,9 +342,24 @@ impl SiteAuthService {
         ))
     }
 
-    fn current_user(&self, headers: &HeaderMap) -> Option<SessionUser> {
+    async fn current_user(&self, headers: &HeaderMap) -> Option<AuthenticatedUser> {
         let token = cookie_value(headers, SESSION_COOKIE)?;
-        verify_session(&token, self.inner.session_secret.as_deref()?, Utc::now())
+        let store = self.inner.store.as_ref()?;
+        if let Ok(Some(principal)) = store
+            .site_auth_principal_for_session(&sha256_hex(token.as_bytes()))
+            .await
+        {
+            return Some(authenticated_user(principal));
+        }
+        let legacy = verify_session(&token, self.inner.session_secret.as_deref()?, Utc::now())?;
+        Some(AuthenticatedUser {
+            account_key: self.account_id(&legacy)?,
+            name: legacy.name,
+            email: legacy.email,
+            avatar: legacy.avatar,
+            sign_in_method: legacy.provider.clone(),
+            linked_methods: vec![legacy.provider],
+        })
     }
 
     fn origin_is_allowed(&self, headers: &HeaderMap) -> bool {
@@ -237,6 +386,29 @@ pub fn router(service: SiteAuthService) -> Router {
         .route("/v1/site-auth/login/:provider", get(begin_oauth))
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
         .route("/v1/site-auth/logout", post(logout))
+        .route(
+            "/v1/site-auth/password/registration",
+            post(begin_password_registration),
+        )
+        .route(
+            "/v1/site-auth/password/verification",
+            post(verify_password_registration),
+        )
+        .route(
+            "/v1/site-auth/password/complete",
+            post(complete_password_registration),
+        )
+        .route("/v1/site-auth/password/login", post(password_login))
+        .route("/v1/site-auth/password/reset", post(begin_password_reset))
+        .route(
+            "/v1/site-auth/password/reset-verification",
+            post(verify_password_reset),
+        )
+        .route(
+            "/v1/site-auth/password/reset-complete",
+            post(complete_password_reset),
+        )
+        .route("/v1/site-auth/dev/captured-mail", get(captured_mailbox))
         .route("/v1/site-auth/wallet/challenge", post(begin_wallet_link))
         .route("/v1/site-auth/wallet/verify", post(finish_wallet_link))
         .route("/v1/site-auth/wallet/unlink", post(unlink_wallet))
@@ -251,32 +423,37 @@ async fn healthz(Extension(service): Extension<SiteAuthService>) -> Response {
             "ok": service.enabled(),
             "providers": service.configured_providers(),
             "storage": if service.inner.store.is_some() { "postgres" } else { "unavailable" },
+            "password": service.password_ready(),
+            "email_delivery": match service.inner.password.email_mode {
+                EmailMode::Capture if service.password_ready() => "capture",
+                EmailMode::Resend if service.password_ready() => "resend",
+                _ => "unavailable",
+            },
+            "durable_sessions": service.inner.store.is_some(),
         }),
     )
 }
 
 async fn session(Extension(service): Extension<SiteAuthService>, headers: HeaderMap) -> Response {
-    let user = service.current_user(&headers);
+    let user = service.current_user(&headers).await;
     no_store_json(
         StatusCode::OK,
         json!({
             "authenticated": user.is_some(),
-            "user": user,
+            "user": user.as_ref().map(browser_user),
+            "sign_in_method": user.as_ref().map(|user| user.sign_in_method.clone()),
+            "linked_methods": user.as_ref().map(|user| user.linked_methods.clone()).unwrap_or_default(),
             "providers": service.configured_providers(),
+            "password": service.password_ready(),
         }),
     )
 }
 
 async fn account(Extension(service): Extension<SiteAuthService>, headers: HeaderMap) -> Response {
-    let Some(user) = service.current_user(&headers) else {
+    let Some(user) = service.current_user(&headers).await else {
         return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
     };
-    let Some(account_id) = service.account_id(&user) else {
-        return no_store_json(
-            StatusCode::OK,
-            unavailable_account_dashboard("account_service_unavailable", Vec::new()),
-        );
-    };
+    let account_id = user.account_key;
     let Some(store) = service.inner.store.as_ref() else {
         return no_store_json(
             StatusCode::OK,
@@ -438,14 +615,45 @@ async fn finish_oauth(
             Some(clear_state_cookie()),
         );
     };
-    if store
-        .upsert_site_auth_account(
+    let verified_email = matches!(provider.as_str(), "google" | "github")
+        .then(|| {
+            normalize_email(&profile.email)
+                .ok()
+                .map(|key| (profile.email.clone(), key))
+        })
+        .flatten();
+    let account_id = match store
+        .upsert_site_auth_identity(
             &account_id,
             &profile.provider,
             &profile.sub,
             &profile.name,
             &profile.email,
             &profile.avatar,
+            verified_email
+                .as_ref()
+                .map(|(email, key)| (email.as_str(), key.as_str())),
+        )
+        .await
+    {
+        Ok(account_id) => account_id,
+        Err(_) => {
+            return auth_redirect(
+                &service,
+                "error",
+                None,
+                Some("account_service_unavailable"),
+                Some(clear_state_cookie()),
+            )
+        }
+    };
+    let (token, token_hash) = new_opaque_token();
+    if store
+        .create_site_auth_session(
+            &token_hash,
+            &account_id,
+            &provider,
+            Utc::now() + ChronoDuration::seconds(SESSION_MAX_AGE_SECONDS),
         )
         .await
         .is_err()
@@ -458,16 +666,6 @@ async fn finish_oauth(
             Some(clear_state_cookie()),
         );
     }
-    let Some(secret) = service.inner.session_secret.as_deref() else {
-        return auth_redirect(
-            &service,
-            "error",
-            None,
-            Some("account_service_unavailable"),
-            Some(clear_state_cookie()),
-        );
-    };
-    let token = sign_session(profile, secret, Utc::now());
     let session_cookie = format!(
         "{SESSION_COOKIE}={token}; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECONDS}"
     );
@@ -484,6 +682,14 @@ async fn logout(Extension(service): Extension<SiteAuthService>, headers: HeaderM
     if !service.origin_is_allowed(&headers) {
         return error_json(StatusCode::FORBIDDEN, "invalid_origin");
     }
+    if let (Some(store), Some(token)) = (
+        service.inner.store.as_ref(),
+        cookie_value(&headers, SESSION_COOKIE),
+    ) {
+        let _ = store
+            .revoke_site_auth_session(&sha256_hex(token.as_bytes()))
+            .await;
+    }
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
@@ -497,24 +703,354 @@ async fn logout(Extension(service): Extension<SiteAuthService>, headers: HeaderM
     response
 }
 
+async fn begin_password_registration(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<EmailRequest>,
+) -> Response {
+    begin_password_action(&service, &headers, &request.email, "registration").await
+}
+
+async fn begin_password_reset(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<EmailRequest>,
+) -> Response {
+    begin_password_action(&service, &headers, &request.email, "reset").await
+}
+
+async fn begin_password_action(
+    service: &SiteAuthService,
+    headers: &HeaderMap,
+    email: &str,
+    purpose: &str,
+) -> Response {
+    if !service.origin_is_allowed(headers) {
+        return error_json(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if !service.password_ready() {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    }
+    let email = email.nfc().collect::<String>().trim().to_string();
+    let email_key = match normalize_email(&email) {
+        Ok(email_key) => email_key,
+        Err(error) => return error_json(StatusCode::BAD_REQUEST, error),
+    };
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    };
+    let attempt_subject = rate_limit_subject(service, purpose, &email_key);
+    let allowed = store
+        .site_auth_attempt_allowed(
+            purpose,
+            &attempt_subject,
+            service.inner.password.attempt_window_seconds,
+            service.inner.password.attempt_limit,
+            service.inner.password.attempt_block_seconds,
+        )
+        .await
+        .unwrap_or(false);
+    if !allowed {
+        return password_generic_response();
+    }
+    let account_key = store
+        .site_auth_account_for_verified_email(&email_key)
+        .await
+        .ok()
+        .flatten();
+    let should_send = if purpose == "reset" {
+        store
+            .site_auth_password_record(&email_key)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|record| record.enabled)
+    } else {
+        store
+            .site_auth_password_record(&email_key)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+    };
+    if !should_send {
+        return password_generic_response();
+    }
+    let (token, token_hash) = new_opaque_token();
+    let lifetime = if purpose == "reset" {
+        RESET_MAX_AGE_SECONDS
+    } else {
+        REGISTRATION_MAX_AGE_SECONDS
+    };
+    let idempotency_key = format!("site-auth-{purpose}-{}", Uuid::new_v4().simple());
+    if store
+        .insert_site_auth_email_action(
+            &token_hash,
+            purpose,
+            &email,
+            &email_key,
+            account_key.as_deref(),
+            Utc::now() + ChronoDuration::seconds(lifetime),
+            &idempotency_key,
+        )
+        .await
+        .is_ok()
+    {
+        let service = service.clone();
+        let store = store.clone();
+        let email = email.clone();
+        let purpose = purpose.to_string();
+        tokio::spawn(async move {
+            let _ = deliver_auth_email(
+                &service,
+                &store,
+                &email,
+                &purpose,
+                &token,
+                &token_hash,
+                &idempotency_key,
+            )
+            .await;
+        });
+    }
+    password_generic_response()
+}
+
+async fn verify_password_registration(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<EmailTokenRequest>,
+) -> Response {
+    verify_password_action(&service, &headers, &request.token, "registration").await
+}
+
+async fn verify_password_reset(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<EmailTokenRequest>,
+) -> Response {
+    verify_password_action(&service, &headers, &request.token, "reset").await
+}
+
+async fn verify_password_action(
+    service: &SiteAuthService,
+    headers: &HeaderMap,
+    token: &str,
+    purpose: &str,
+) -> Response {
+    if !service.origin_is_allowed(headers) {
+        return error_json(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if !service.password_ready() {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    }
+    if token.len() != 64 || !token.chars().all(|character| character.is_ascii_hexdigit()) {
+        return error_json(StatusCode::BAD_REQUEST, "email_action_invalid");
+    }
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    };
+    let (setup, setup_hash) = new_opaque_token();
+    let action = store
+        .verify_site_auth_email_action(&sha256_hex(token.as_bytes()), purpose, &setup_hash)
+        .await
+        .ok()
+        .flatten();
+    let Some(action) = action else {
+        return error_json(StatusCode::BAD_REQUEST, "email_action_invalid");
+    };
+    let max_age = (action.expires_at - Utc::now()).num_seconds().max(1);
+    let cookie = password_setup_cookie(&setup, max_age);
+    let mut response = no_store_json(
+        StatusCode::OK,
+        json!({
+            "verified": true,
+            "purpose": purpose,
+            "email": action.email,
+        }),
+    );
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).expect("valid password setup cookie"),
+    );
+    response
+}
+
+async fn complete_password_registration(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<PasswordCompleteRequest>,
+) -> Response {
+    complete_password_action(&service, &headers, request, "registration").await
+}
+
+async fn complete_password_reset(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<PasswordCompleteRequest>,
+) -> Response {
+    complete_password_action(&service, &headers, request, "reset").await
+}
+
+async fn complete_password_action(
+    service: &SiteAuthService,
+    headers: &HeaderMap,
+    request: PasswordCompleteRequest,
+    purpose: &str,
+) -> Response {
+    if !service.origin_is_allowed(headers) {
+        return error_json(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if !service.password_ready() {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    }
+    let setup = match cookie_value(headers, PASSWORD_SETUP_COOKIE) {
+        Some(setup) => setup,
+        None => return error_json(StatusCode::BAD_REQUEST, "email_action_invalid"),
+    };
+    let name = request.name.nfc().collect::<String>().trim().to_string();
+    if purpose == "registration" && (name.is_empty() || name.chars().count() > 160) {
+        return error_json(StatusCode::BAD_REQUEST, "name_invalid");
+    }
+    let password = match normalized_password(&request.password) {
+        Ok(password) => password,
+        Err(error) => return error_json(StatusCode::BAD_REQUEST, error),
+    };
+    let password_phc = match hash_password_async(service, password).await {
+        Ok(password_phc) => password_phc,
+        Err(_) => return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable"),
+    };
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    };
+    let proposed_account_key =
+        sha256_hex(format!("password-account\0{}", Uuid::new_v4().simple()).as_bytes());
+    let account_key = store
+        .complete_site_auth_password_action(
+            &sha256_hex(setup.as_bytes()),
+            purpose,
+            &proposed_account_key,
+            &name,
+            &password_phc,
+        )
+        .await
+        .ok()
+        .flatten();
+    let Some(account_key) = account_key else {
+        return error_json(StatusCode::BAD_REQUEST, "email_action_invalid");
+    };
+    session_success_response(service, store, &account_key, "password", true).await
+}
+
+async fn password_login(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Json(request): Json<PasswordLoginRequest>,
+) -> Response {
+    if !service.origin_is_allowed(&headers) {
+        return error_json(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    if !service.password_ready() {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    }
+    let email_key = normalize_email(&request.email).unwrap_or_else(|_| "invalid".to_string());
+    let password = request.password.nfc().collect::<String>();
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    };
+    let subject = rate_limit_subject(&service, "login", &email_key);
+    let allowed = store
+        .site_auth_attempt_allowed(
+            "login",
+            &subject,
+            service.inner.password.attempt_window_seconds,
+            service.inner.password.attempt_limit,
+            service.inner.password.attempt_block_seconds,
+        )
+        .await
+        .unwrap_or(false);
+    let record = store
+        .site_auth_password_record(&email_key)
+        .await
+        .ok()
+        .flatten();
+    let candidate_hash = record
+        .as_ref()
+        .map(|record| record.password_phc.as_str())
+        .unwrap_or(DUMMY_PASSWORD_HASH)
+        .to_string();
+    let verified = verify_password_async(&service, candidate_hash, password).await;
+    let valid = allowed && verified && record.as_ref().is_some_and(|record| record.enabled);
+    let Some(record) = record.filter(|_| valid) else {
+        return error_json(StatusCode::UNAUTHORIZED, "invalid_credentials");
+    };
+    session_success_response(&service, store, &record.account_key, "password", false).await
+}
+
+async fn session_success_response(
+    service: &SiteAuthService,
+    store: &PostgresStore,
+    account_key: &str,
+    method: &str,
+    clear_setup: bool,
+) -> Response {
+    let (token, token_hash) = new_opaque_token();
+    if store
+        .create_site_auth_session(
+            &token_hash,
+            account_key,
+            method,
+            Utc::now() + ChronoDuration::seconds(SESSION_MAX_AGE_SECONDS),
+        )
+        .await
+        .is_err()
+    {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "password_auth_unavailable");
+    }
+    let mut response = no_store_json(StatusCode::OK, json!({ "authenticated": true }));
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&session_cookie(&token)).expect("valid session cookie"),
+    );
+    if clear_setup {
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&clear_password_setup_cookie())
+                .expect("valid password setup cookie"),
+        );
+    }
+    let _ = service;
+    response
+}
+
+async fn captured_mailbox(Extension(service): Extension<SiteAuthService>) -> Response {
+    if service.inner.password.email_mode != EmailMode::Capture
+        || !is_loopback_origin(&service.inner.api_origin)
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let messages = service
+        .inner
+        .captured_mail
+        .lock()
+        .expect("captured mail lock")
+        .clone();
+    no_store_json(StatusCode::OK, json!({ "messages": messages }))
+}
+
 async fn begin_wallet_link(
     Extension(service): Extension<SiteAuthService>,
     headers: HeaderMap,
     Json(request): Json<WalletAddressRequest>,
 ) -> Response {
-    let Some((user, origin)) = wallet_request_context(&service, &headers) else {
+    let Some((user, origin)) = wallet_request_context(&service, &headers).await else {
         return wallet_context_error(&service, &headers);
     };
     let address = match normalize_wallet_address(&request.address) {
         Ok(address) => address,
         Err(error) => return error_json(StatusCode::BAD_REQUEST, error),
     };
-    let Some(account_id) = service.account_id(&user) else {
-        return error_json(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "account_service_unavailable",
-        );
-    };
+    let account_id = user.account_key;
     let now = Utc::now();
     let expires_at = now + ChronoDuration::seconds(WALLET_CHALLENGE_MAX_AGE_SECONDS);
     let challenge_id = Uuid::new_v4().simple().to_string();
@@ -553,19 +1089,14 @@ async fn finish_wallet_link(
     headers: HeaderMap,
     Json(request): Json<WalletVerifyRequest>,
 ) -> Response {
-    let Some((user, _origin)) = wallet_request_context(&service, &headers) else {
+    let Some((user, _origin)) = wallet_request_context(&service, &headers).await else {
         return wallet_context_error(&service, &headers);
     };
     let address = match normalize_wallet_address(&request.address) {
         Ok(address) => address,
         Err(error) => return error_json(StatusCode::BAD_REQUEST, error),
     };
-    let Some(account_id) = service.account_id(&user) else {
-        return error_json(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "account_service_unavailable",
-        );
-    };
+    let account_id = user.account_key;
     let challenge = service
         .inner
         .wallet_challenges
@@ -614,19 +1145,14 @@ async fn unlink_wallet(
     headers: HeaderMap,
     Json(request): Json<WalletAddressRequest>,
 ) -> Response {
-    let Some((user, _origin)) = wallet_request_context(&service, &headers) else {
+    let Some((user, _origin)) = wallet_request_context(&service, &headers).await else {
         return wallet_context_error(&service, &headers);
     };
     let address = match normalize_wallet_address(&request.address) {
         Ok(address) => address,
         Err(error) => return error_json(StatusCode::BAD_REQUEST, error),
     };
-    let Some(account_id) = service.account_id(&user) else {
-        return error_json(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "account_service_unavailable",
-        );
-    };
+    let account_id = user.account_key;
     let Some(store) = service.inner.store.as_ref() else {
         return error_json(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -648,14 +1174,14 @@ async fn unlink_wallet(
     }
 }
 
-fn wallet_request_context(
+async fn wallet_request_context(
     service: &SiteAuthService,
     headers: &HeaderMap,
-) -> Option<(SessionUser, String)> {
+) -> Option<(AuthenticatedUser, String)> {
     if !service.origin_is_allowed(headers) {
         return None;
     }
-    let user = service.current_user(headers)?;
+    let user = service.current_user(headers).await?;
     let origin = headers.get(header::ORIGIN)?.to_str().ok()?.to_string();
     Some((user, origin))
 }
@@ -876,21 +1402,21 @@ async fn provider_profile(
                 })
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("GitHub id missing"))?;
-            let mut email = value_string(&profile, "email");
-            if email.is_empty() {
-                let emails: Value = service
-                    .inner
-                    .client
-                    .get("https://api.github.com/user/emails")
-                    .bearer_auth(access_token)
-                    .header(header::ACCEPT, "application/json")
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
-                if let Some(entries) = emails.as_array() {
-                    email = entries
+            let emails: Value = service
+                .inner
+                .client
+                .get("https://api.github.com/user/emails")
+                .bearer_auth(access_token)
+                .header(header::ACCEPT, "application/json")
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let email = emails
+                .as_array()
+                .and_then(|entries| {
+                    entries
                         .iter()
                         .find(|entry| {
                             entry.get("verified").and_then(Value::as_bool) == Some(true)
@@ -901,10 +1427,10 @@ async fn provider_profile(
                                 entry.get("verified").and_then(Value::as_bool) == Some(true)
                             })
                         })
-                        .map(|entry| value_string(entry, "email"))
-                        .unwrap_or_default();
-                }
-            }
+                })
+                .map(|entry| value_string(entry, "email"))
+                .filter(|email| !email.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("GitHub has no verified email"))?;
             (
                 sub,
                 first_non_empty(
@@ -1224,6 +1750,7 @@ fn unavailable_account_dashboard(reason: &str, wallets: Vec<BrowserWallet>) -> V
     })
 }
 
+#[cfg(test)]
 fn sign_session(mut user: SessionUser, secret: &[u8], now: DateTime<Utc>) -> String {
     user.iat = now.timestamp();
     user.exp = now.timestamp() + SESSION_MAX_AGE_SECONDS;
@@ -1328,6 +1855,299 @@ fn browser_wallet(wallet: SiteAuthWallet) -> BrowserWallet {
         linked_at: wallet.linked_at,
         proof: wallet.proof,
     }
+}
+
+fn authenticated_user(principal: SiteAuthPrincipal) -> AuthenticatedUser {
+    AuthenticatedUser {
+        account_key: principal.account_key,
+        name: principal.display_name,
+        email: principal.email,
+        avatar: principal.avatar_url,
+        sign_in_method: principal.sign_in_method,
+        linked_methods: principal.linked_methods,
+    }
+}
+
+fn browser_user(user: &AuthenticatedUser) -> Value {
+    json!({
+        "name": user.name,
+        "email": user.email,
+        "avatar": user.avatar,
+    })
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn private_positive_i64(name: &str) -> anyhow::Result<i64> {
+    let value = env::var(name)?.parse::<i64>()?;
+    if value <= 0 {
+        anyhow::bail!("{name} must be positive");
+    }
+    Ok(value)
+}
+
+fn private_positive_i32(name: &str) -> anyhow::Result<i32> {
+    let value = env::var(name)?.parse::<i32>()?;
+    if value <= 0 {
+        anyhow::bail!("{name} must be positive");
+    }
+    Ok(value)
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    Url::parse(origin).ok().is_some_and(|url| {
+        matches!(
+            url.host_str(),
+            Some("127.0.0.1") | Some("localhost") | Some("::1")
+        )
+    })
+}
+
+fn normalize_email(value: &str) -> Result<String, &'static str> {
+    let normalized = value.nfc().collect::<String>().trim().to_lowercase();
+    let valid = normalized.len() <= 320
+        && !normalized.chars().any(char::is_whitespace)
+        && normalized.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && local.len() <= 64
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        });
+    valid.then_some(normalized).ok_or("email_invalid")
+}
+
+fn normalized_password(value: &str) -> Result<String, &'static str> {
+    let password = value.nfc().collect::<String>();
+    let length = password.chars().count();
+    if !(15..=128).contains(&length) {
+        return Err("password_length_invalid");
+    }
+    let comparison = password.trim().to_lowercase();
+    const DENYLIST: &[&str] = &[
+        "passwordpassword",
+        "password123456",
+        "123456789012345",
+        "qwertyuiopasdfgh",
+        "letmeinletmein",
+        "correcthorsebatterystaple",
+        "correct horse battery staple",
+        "agentbounties",
+        "agentbounties.app",
+    ];
+    if DENYLIST.contains(&comparison.as_str()) {
+        return Err("password_common");
+    }
+    Ok(password)
+}
+
+fn password_argon2() -> anyhow::Result<Argon2<'static>> {
+    let params = Params::new(19 * 1024, 2, 1, Some(32))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+}
+
+fn hash_password(password: &str) -> anyhow::Result<String> {
+    let salt = SaltString::encode_b64(Uuid::new_v4().as_bytes())?;
+    Ok(password_argon2()?
+        .hash_password(password.as_bytes(), &salt)?
+        .to_string())
+}
+
+fn verify_password(password_phc: &str, password: &str) -> bool {
+    PasswordHash::new(password_phc)
+        .ok()
+        .and_then(|parsed| {
+            password_argon2()
+                .ok()
+                .map(|argon| argon.verify_password(password.as_bytes(), &parsed).is_ok())
+        })
+        .unwrap_or(false)
+}
+
+async fn hash_password_async(
+    service: &SiteAuthService,
+    password: String,
+) -> anyhow::Result<String> {
+    let permit = service.inner.password_work.acquire().await?;
+    let result = tokio::task::spawn_blocking(move || hash_password(&password)).await?;
+    drop(permit);
+    result
+}
+
+async fn verify_password_async(
+    service: &SiteAuthService,
+    password_phc: String,
+    password: String,
+) -> bool {
+    let Ok(permit) = service.inner.password_work.acquire().await else {
+        return false;
+    };
+    let verified = tokio::task::spawn_blocking(move || verify_password(&password_phc, &password))
+        .await
+        .unwrap_or(false);
+    drop(permit);
+    verified
+}
+
+fn new_opaque_token() -> (String, String) {
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let hash = sha256_hex(token.as_bytes());
+    (token, hash)
+}
+
+fn sha256_hex(value: &[u8]) -> String {
+    hex::encode(Sha256::digest(value))
+}
+
+fn rate_limit_subject(service: &SiteAuthService, scope: &str, email_key: &str) -> String {
+    let secret = service
+        .inner
+        .session_secret
+        .as_deref()
+        .unwrap_or(b"site-auth-unavailable");
+    hmac_hex(
+        secret,
+        format!("credential-attempt\0{scope}\0{email_key}").as_bytes(),
+    )
+}
+
+fn session_cookie(token: &str) -> String {
+    format!(
+        "{SESSION_COOKIE}={token}; Path=/v1/site-auth; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_MAX_AGE_SECONDS}"
+    )
+}
+
+fn password_setup_cookie(token: &str, max_age: i64) -> String {
+    format!(
+        "{PASSWORD_SETUP_COOKIE}={token}; Path=/v1/site-auth/password; HttpOnly; Secure; SameSite=Strict; Max-Age={max_age}"
+    )
+}
+
+fn clear_password_setup_cookie() -> String {
+    format!(
+        "{PASSWORD_SETUP_COOKIE}=; Path=/v1/site-auth/password; HttpOnly; Secure; SameSite=Strict; Max-Age=0"
+    )
+}
+
+fn password_generic_response() -> Response {
+    no_store_json(
+        StatusCode::ACCEPTED,
+        json!({ "accepted": true, "message": PASSWORD_GENERIC_MESSAGE }),
+    )
+}
+
+async fn deliver_auth_email(
+    service: &SiteAuthService,
+    store: &PostgresStore,
+    recipient: &str,
+    purpose: &str,
+    token: &str,
+    token_hash: &str,
+    idempotency_key: &str,
+) -> anyhow::Result<()> {
+    let action = if purpose == "reset" {
+        "reset"
+    } else {
+        "register"
+    };
+    let action_url = format!(
+        "{}/#auth={action}&token={token}",
+        service.inner.web_origin.trim_end_matches('/')
+    );
+    if service.inner.password.email_mode == EmailMode::Capture {
+        service
+            .inner
+            .captured_mail
+            .lock()
+            .expect("captured mail lock")
+            .push(CapturedMail {
+                to: recipient.to_string(),
+                purpose: purpose.to_string(),
+                action_url,
+                created_at: Utc::now(),
+            });
+        store
+            .mark_site_auth_email_delivered(token_hash, "captured")
+            .await?;
+        return Ok(());
+    }
+    let api_key = service
+        .inner
+        .password
+        .resend_api_key
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("email delivery unavailable"))?;
+    let (subject, heading, instruction) = if purpose == "reset" {
+        (
+            "Reset your Agent Bounties password",
+            "Reset your password",
+            "Use this private link within 30 minutes to choose a replacement password. All existing sessions will be revoked.",
+        )
+    } else {
+        (
+            "Verify your Agent Bounties email",
+            "Verify your email",
+            "Use this private link within eight hours to verify your mailbox, then choose your name and password.",
+        )
+    };
+    let text_body = format!(
+        "{heading}\n\n{instruction}\n\n{action_url}\n\nIf you did not request this, you can ignore this message."
+    );
+    let html_body = format!(
+        "<!doctype html><html><body style=\"margin:0;background:#07110d;color:#eef2e8;font-family:Arial,sans-serif\"><div style=\"max-width:560px;margin:0 auto;padding:40px 24px\"><p style=\"color:#b7e34b;font-size:12px;font-weight:700;letter-spacing:.14em\">AGENT BOUNTIES ACCESS</p><h1 style=\"font-family:Georgia,serif;font-size:34px;margin:12px 0\">{heading}</h1><p style=\"color:#b8c5bb;line-height:1.6\">{instruction}</p><p style=\"margin:30px 0\"><a href=\"{action_url}\" style=\"display:inline-block;background:#a8d43f;color:#07110d;padding:15px 22px;border-radius:8px;font-weight:700;text-decoration:none\">Continue securely</a></p><p style=\"color:#7f9184;font-size:13px;line-height:1.5\">If you did not request this, you can ignore this message. This link works once.</p></div></body></html>"
+    );
+    let response = resend_email_request(
+        &service.inner.client,
+        api_key,
+        &service.inner.password.from,
+        recipient,
+        idempotency_key,
+        subject,
+        &text_body,
+        &html_body,
+    )
+    .send()
+    .await?
+    .error_for_status()?;
+    let delivery: Value = response.json().await?;
+    if let Some(delivery_id) = delivery.get("id").and_then(Value::as_str) {
+        store
+            .mark_site_auth_email_delivered(token_hash, delivery_id)
+            .await?;
+    }
+    Ok(())
+}
+
+fn resend_email_request(
+    client: &reqwest::Client,
+    api_key: &str,
+    from: &str,
+    recipient: &str,
+    idempotency_key: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+) -> reqwest::RequestBuilder {
+    client
+        .post("https://api.resend.com/emails")
+        .bearer_auth(api_key)
+        .header(header::USER_AGENT, "AgentBounties-SiteAuth/1.0")
+        .header("Idempotency-Key", idempotency_key)
+        .header(header::ACCEPT, "application/json")
+        .json(&json!({
+            "from": from,
+            "to": [recipient],
+            "subject": subject,
+            "text": text_body,
+            "html": html_body,
+        }))
 }
 
 fn short_wallet_address(address: &str) -> String {
@@ -1651,5 +2471,123 @@ mod tests {
         assert_eq!(usdc_from_base_units(0), "0");
         assert_eq!(usdc_from_base_units(1), "0.000001");
         assert_eq!(usdc_from_base_units(2_200_000), "2.2");
+    }
+
+    #[test]
+    fn email_normalization_is_nfc_trimmed_and_case_insensitive() {
+        assert_eq!(
+            normalize_email("  U\u{308}ser@Example.COM  ").unwrap(),
+            "üser@example.com"
+        );
+        assert_eq!(normalize_email("missing-at.example"), Err("email_invalid"));
+        assert_eq!(normalize_email("a@localhost"), Err("email_invalid"));
+    }
+
+    #[test]
+    fn password_policy_accepts_unicode_spaces_and_rejects_weak_choices() {
+        assert!(normalized_password("luminous moss grows nightly 🌿").is_ok());
+        assert_eq!(
+            normalized_password("short password"),
+            Err("password_length_invalid")
+        );
+        assert_eq!(
+            normalized_password("correct horse battery staple"),
+            Err("password_common")
+        );
+    }
+
+    #[test]
+    fn argon2id_hash_uses_the_owasp_baseline_and_verifies() {
+        let password = "a distinct local test passphrase";
+        let phc = hash_password(password).unwrap();
+        let parsed = PasswordHash::new(&phc).unwrap();
+        assert_eq!(parsed.algorithm.as_str(), "argon2id");
+        assert_eq!(parsed.version, Some(19));
+        assert_eq!(
+            parsed.params.get("m").unwrap().decimal().unwrap(),
+            19 * 1024
+        );
+        assert_eq!(parsed.params.get("t").unwrap().decimal().unwrap(), 2);
+        assert_eq!(parsed.params.get("p").unwrap().decimal().unwrap(), 1);
+        assert!(verify_password(&phc, password));
+        assert!(!verify_password(&phc, "a different local test passphrase"));
+    }
+
+    #[test]
+    fn opaque_tokens_expose_no_identity_and_hash_deterministically() {
+        let (token, hash) = new_opaque_token();
+        assert_eq!(token.len(), 64);
+        assert_eq!(hash.len(), 64);
+        assert_eq!(hash, sha256_hex(token.as_bytes()));
+        assert_ne!(token, hash);
+    }
+
+    #[test]
+    fn dummy_hash_is_valid_and_runs_the_same_verifier() {
+        assert!(PasswordHash::new(DUMMY_PASSWORD_HASH).is_ok());
+        assert!(!verify_password(
+            DUMMY_PASSWORD_HASH,
+            "not the dummy password"
+        ));
+    }
+
+    #[tokio::test]
+    async fn credential_request_responses_are_generic_and_identical() {
+        let first = password_generic_response();
+        let second = password_generic_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+        let first_body = axum::body::to_bytes(first.into_body(), 4096).await.unwrap();
+        let second_body = axum::body::to_bytes(second.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(first_body, second_body);
+        let body = String::from_utf8(first_body.to_vec()).unwrap();
+        assert!(!body.contains("exists"));
+        assert!(!body.contains("missing"));
+    }
+
+    #[test]
+    fn resend_request_has_stable_idempotency_and_keeps_secret_out_of_body() {
+        let client = reqwest::Client::builder()
+            .user_agent("AgentBounties-SiteAuth/1.0")
+            .build()
+            .unwrap();
+        let api_key = "re_test_secret_that_must_not_enter_the_body";
+        let idempotency_key = "site-auth-registration-fixed-action";
+        let build = || {
+            resend_email_request(
+                &client,
+                api_key,
+                "Agent Bounties <no-reply@auth.agentbounties.app>",
+                "recipient@example.com",
+                idempotency_key,
+                "Verify your email",
+                "Plain-text action message",
+                "<p>Branded action message</p>",
+            )
+            .build()
+            .unwrap()
+        };
+        let first = build();
+        let second = build();
+        assert_eq!(first.url().as_str(), "https://api.resend.com/emails");
+        assert_eq!(
+            first.headers().get(header::USER_AGENT).unwrap(),
+            "AgentBounties-SiteAuth/1.0"
+        );
+        assert_eq!(
+            first.headers().get("Idempotency-Key").unwrap(),
+            idempotency_key
+        );
+        assert_eq!(
+            second.headers().get("Idempotency-Key").unwrap(),
+            idempotency_key
+        );
+        assert!(first.headers().contains_key(header::AUTHORIZATION));
+        let body = std::str::from_utf8(first.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert!(!body.contains(api_key));
+        assert!(body.contains("Plain-text action message"));
+        assert!(body.contains("Branded action message"));
     }
 }

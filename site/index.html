@@ -37,7 +37,7 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=14">
+    <link rel="stylesheet" href="solarpunk.css?v=15">
   </head>
   <body>
     <a class="skip-link" href="#hero-title">Skip to the main message</a>
@@ -242,8 +242,10 @@
         <p class="account-evidence" data-account-evidence aria-live="polite">Verifying marketplace activity…</p>
       </section>
 
-      <form class="auth-form" data-auth-form novalidate>
-        <label class="auth-field">
+      <form class="auth-form" data-auth-form data-auth-state="login" novalidate>
+        <p class="auth-task-note" data-auth-task-note hidden></p>
+
+        <label class="auth-field" data-auth-field="email">
           <span>Email address</span>
           <span class="auth-input-shell">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h17v11h-17zM4 7l8 6 8-6"></path></svg>
@@ -251,7 +253,15 @@
           </span>
         </label>
 
-        <label class="auth-field">
+        <label class="auth-field" data-auth-field="name" hidden>
+          <span>Your name</span>
+          <span class="auth-input-shell">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20c.4-4 2.7-6 6.5-6s6.1 2 6.5 6"></path></svg>
+            <input type="text" name="name" autocomplete="name" maxlength="160" placeholder="How your name should appear">
+          </span>
+        </label>
+
+        <label class="auth-field" data-auth-field="password">
           <span>Password</span>
           <span class="auth-input-shell">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10h12v9H6zM8.5 10V7.5a3.5 3.5 0 0 1 7 0V10"></path></svg>
@@ -262,12 +272,19 @@
           </span>
         </label>
 
-        <button class="auth-recovery" type="button" data-auth-unavailable>Forgot your password?</button>
-        <button class="auth-submit" type="submit">Sign in</button>
+        <button class="auth-recovery" type="button" data-auth-recovery>Forgot your password?</button>
+        <button class="auth-submit" type="submit" data-auth-submit>Sign in</button>
 
-        <div class="auth-divider"><span>or continue with</span></div>
+        <section class="auth-inbox" data-auth-inbox hidden aria-label="Check your inbox">
+          <span aria-hidden="true">✦</span>
+          <strong>Check your inbox</strong>
+          <p>The private link works once. You can close this dialog and return from the email.</p>
+          <button type="button" data-auth-back>Back to sign in</button>
+        </section>
 
-        <div class="auth-providers" aria-label="Social sign in options">
+        <div class="auth-divider" data-auth-social><span>or continue with</span></div>
+
+        <div class="auth-providers" data-auth-social aria-label="Social sign in options">
           <button type="button" data-auth-provider="google" aria-label="Continue with Google">
             <svg class="provider-google" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.6 12.23c0-.71-.06-1.39-.18-2.05H12v3.87h5.38a4.6 4.6 0 0 1-2 3.02v2.51h3.24c1.9-1.75 2.98-4.33 2.98-7.35Z"></path><path d="M12 22c2.7 0 4.98-.9 6.63-2.42l-3.24-2.51c-.9.6-2.05.96-3.39.96-2.61 0-4.82-1.76-5.61-4.13H3.04v2.59A10 10 0 0 0 12 22Z"></path><path d="M6.39 13.9A6.03 6.03 0 0 1 6.08 12c0-.66.11-1.3.31-1.9V7.51H3.04A10 10 0 0 0 2 12c0 1.61.38 3.14 1.04 4.49l3.35-2.59Z"></path><path d="M12 5.97c1.47 0 2.79.51 3.83 1.5l2.87-2.88A9.63 9.63 0 0 0 12 2a10 10 0 0 0-8.96 5.51l3.35 2.59C7.18 7.73 9.39 5.97 12 5.97Z"></path></svg>
           </button>
@@ -282,7 +299,7 @@
           </button>
         </div>
 
-        <p class="auth-switch">New to Agent Bounties? <button type="button" data-auth-unavailable>Create an account</button></p>
+        <p class="auth-switch" data-auth-switch>New to Agent Bounties? <button type="button" data-auth-register>Create an account</button></p>
         <p class="auth-legal">By continuing, you agree to the <a href="terms.html">Terms</a> and acknowledge the <a href="privacy.html">Privacy Policy</a>.</p>
       </form>
       <p class="auth-status" data-auth-status aria-live="polite"></p>

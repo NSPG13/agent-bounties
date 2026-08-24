@@ -76,6 +76,8 @@ pub const SITE_AUTH_ACCOUNTS_MIGRATION: &str =
     include_str!("../../../migrations/0026_site_auth_accounts.sql");
 pub const COMPETITION_ACTIVATION_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0027_competition_activation_analytics.sql");
+pub const SITE_AUTH_PASSWORD_ACCOUNTS_MIGRATION: &str =
+    include_str!("../../../migrations/0028_site_auth_password_accounts.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1138,6 +1140,35 @@ pub struct SiteAuthWallet {
     pub proof: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteAuthPrincipal {
+    pub account_key: String,
+    pub display_name: String,
+    pub email: String,
+    pub avatar_url: String,
+    pub sign_in_method: String,
+    pub linked_methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteAuthPasswordRecord {
+    pub account_key: String,
+    pub password_phc: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteAuthEmailAction {
+    pub token_hash: String,
+    pub purpose: String,
+    pub email: String,
+    pub email_key: String,
+    pub account_key: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub verified_at: Option<DateTime<Utc>>,
+    pub consumed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenCompetitionV2IndexerAgreement {
     pub network: String,
@@ -1153,6 +1184,70 @@ pub struct OpenCompetitionV2IndexerAgreement {
     pub agrees: bool,
     pub failure_code: Option<String>,
     pub observed_at: DateTime<Utc>,
+}
+
+fn site_auth_email_action_from_row(row: PgRow) -> DbResult<SiteAuthEmailAction> {
+    Ok(SiteAuthEmailAction {
+        token_hash: row.try_get("token_hash")?,
+        purpose: row.try_get("purpose")?,
+        email: row.try_get("email")?,
+        email_key: row.try_get("email_key")?,
+        account_key: row.try_get("account_key")?,
+        expires_at: row.try_get("expires_at")?,
+        verified_at: row.try_get("verified_at")?,
+        consumed_at: row.try_get("consumed_at")?,
+    })
+}
+
+async fn merge_site_auth_accounts(
+    transaction: &mut Transaction<'_, Postgres>,
+    source: &str,
+    target: &str,
+) -> DbResult<()> {
+    sqlx::query(
+        "DELETE FROM site_auth_password_credentials WHERE account_key = $1 AND EXISTS (SELECT 1 FROM site_auth_password_credentials WHERE account_key = $2)",
+    )
+    .bind(source)
+    .bind(target)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE site_auth_password_credentials SET account_key = $2 WHERE account_key = $1",
+    )
+    .bind(source)
+    .bind(target)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query("UPDATE site_auth_wallets SET account_key = $2 WHERE account_key = $1")
+        .bind(source)
+        .bind(target)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("UPDATE site_auth_sessions SET account_key = $2 WHERE account_key = $1")
+        .bind(source)
+        .bind(target)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("UPDATE site_auth_email_actions SET account_key = $2 WHERE account_key = $1")
+        .bind(source)
+        .bind(target)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("UPDATE site_auth_verified_emails SET account_key = $2 WHERE account_key = $1")
+        .bind(source)
+        .bind(target)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("UPDATE site_auth_identities SET account_key = $2 WHERE account_key = $1")
+        .bind(source)
+        .bind(target)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM site_auth_accounts WHERE account_key = $1")
+        .bind(source)
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 impl PostgresStore {
@@ -1200,6 +1295,7 @@ impl PostgresStore {
                 OPPORTUNITY_FEEDBACK_MIGRATION,
                 SITE_AUTH_ACCOUNTS_MIGRATION,
                 COMPETITION_ACTIVATION_ANALYTICS_MIGRATION,
+                SITE_AUTH_PASSWORD_ACCOUNTS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1289,6 +1385,460 @@ impl PostgresStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn upsert_site_auth_identity(
+        &self,
+        proposed_account_key: &str,
+        provider: &str,
+        provider_subject: &str,
+        display_name: &str,
+        email: &str,
+        avatar_url: &str,
+        verified_email: Option<(&str, &str)>,
+    ) -> DbResult<String> {
+        let mut transaction = self.pool.begin().await?;
+        let existing_account: Option<String> = sqlx::query_scalar(
+            "SELECT account_key FROM site_auth_identities WHERE provider = $1 AND provider_subject = $2 FOR UPDATE",
+        )
+        .bind(provider)
+        .bind(provider_subject)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let verified_owner = if let Some((_, email_key)) = verified_email {
+            sqlx::query_scalar::<_, String>(
+                "SELECT account_key FROM site_auth_verified_emails WHERE email_key = $1 FOR UPDATE",
+            )
+            .bind(email_key)
+            .fetch_optional(&mut *transaction)
+            .await?
+        } else {
+            None
+        };
+        let target = verified_owner
+            .or_else(|| existing_account.clone())
+            .unwrap_or_else(|| proposed_account_key.to_string());
+
+        if let Some(source) = existing_account
+            .as_ref()
+            .filter(|source| *source != &target)
+        {
+            merge_site_auth_accounts(&mut transaction, source, &target).await?;
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_accounts
+              (account_key, provider, provider_subject, display_name, email, avatar_url)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (account_key) DO UPDATE SET
+              display_name = EXCLUDED.display_name,
+              email = CASE WHEN EXCLUDED.email = '' THEN site_auth_accounts.email ELSE EXCLUDED.email END,
+              avatar_url = CASE WHEN EXCLUDED.avatar_url = '' THEN site_auth_accounts.avatar_url ELSE EXCLUDED.avatar_url END,
+              last_signed_in_at = NOW()
+            "#,
+        )
+        .bind(&target)
+        .bind(provider)
+        .bind(provider_subject)
+        .bind(display_name)
+        .bind(email)
+        .bind(avatar_url)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_identities
+              (provider, provider_subject, account_key, verified_email, verified_email_key, email_verified_at)
+            VALUES ($1, $2, $3, $4, $5, CASE WHEN $5 IS NULL THEN NULL ELSE NOW() END)
+            ON CONFLICT (provider, provider_subject) DO UPDATE SET
+              account_key = EXCLUDED.account_key,
+              verified_email = COALESCE(EXCLUDED.verified_email, site_auth_identities.verified_email),
+              verified_email_key = COALESCE(EXCLUDED.verified_email_key, site_auth_identities.verified_email_key),
+              email_verified_at = COALESCE(EXCLUDED.email_verified_at, site_auth_identities.email_verified_at),
+              last_signed_in_at = NOW()
+            "#,
+        )
+        .bind(provider)
+        .bind(provider_subject)
+        .bind(&target)
+        .bind(verified_email.map(|value| value.0))
+        .bind(verified_email.map(|value| value.1))
+        .execute(&mut *transaction)
+        .await?;
+        if let Some((email, email_key)) = verified_email {
+            sqlx::query(
+                r#"
+                INSERT INTO site_auth_verified_emails (email_key, email, account_key)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (email_key) DO UPDATE SET email = EXCLUDED.email
+                "#,
+            )
+            .bind(email_key)
+            .bind(email)
+            .bind(&target)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(target)
+    }
+
+    pub async fn create_site_auth_session(
+        &self,
+        token_hash: &str,
+        account_key: &str,
+        sign_in_method: &str,
+        expires_at: DateTime<Utc>,
+    ) -> DbResult<()> {
+        sqlx::query(
+            "INSERT INTO site_auth_sessions (token_hash, account_key, sign_in_method, expires_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(token_hash)
+        .bind(account_key)
+        .bind(sign_in_method)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn site_auth_principal_for_session(
+        &self,
+        token_hash: &str,
+    ) -> DbResult<Option<SiteAuthPrincipal>> {
+        let row = sqlx::query(
+            r#"
+            SELECT s.account_key, a.display_name, a.email, a.avatar_url, s.sign_in_method
+            FROM site_auth_sessions s
+            JOIN site_auth_accounts a ON a.account_key = s.account_key
+            WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
+            "#,
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let account_key: String = row.try_get("account_key")?;
+        sqlx::query(
+            "UPDATE site_auth_sessions SET last_seen_at = NOW() WHERE token_hash = $1 AND last_seen_at < NOW() - INTERVAL '5 minutes'",
+        )
+        .bind(token_hash)
+        .execute(&self.pool)
+        .await?;
+        let linked_methods = sqlx::query_scalar::<_, String>(
+            "SELECT provider FROM site_auth_identities WHERE account_key = $1 UNION SELECT 'password' FROM site_auth_password_credentials WHERE account_key = $1 AND enabled ORDER BY 1",
+        )
+        .bind(&account_key)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(Some(SiteAuthPrincipal {
+            account_key,
+            display_name: row.try_get("display_name")?,
+            email: row.try_get("email")?,
+            avatar_url: row.try_get("avatar_url")?,
+            sign_in_method: row.try_get("sign_in_method")?,
+            linked_methods,
+        }))
+    }
+
+    pub async fn revoke_site_auth_session(&self, token_hash: &str) -> DbResult<()> {
+        sqlx::query("UPDATE site_auth_sessions SET revoked_at = NOW() WHERE token_hash = $1")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn site_auth_attempt_allowed(
+        &self,
+        scope: &str,
+        subject_hash: &str,
+        window_seconds: i64,
+        maximum_attempts: i32,
+        block_seconds: i64,
+    ) -> DbResult<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT window_started_at, attempts, blocked_until FROM site_auth_attempts WHERE scope = $1 AND subject_hash = $2 FOR UPDATE",
+        )
+        .bind(scope)
+        .bind(subject_hash)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let now = Utc::now();
+        let allowed = match row {
+            None => {
+                sqlx::query("INSERT INTO site_auth_attempts (scope, subject_hash, window_started_at, attempts) VALUES ($1, $2, $3, 1)")
+                    .bind(scope)
+                    .bind(subject_hash)
+                    .bind(now)
+                    .execute(&mut *transaction)
+                    .await?;
+                true
+            }
+            Some(row) => {
+                let window_started_at: DateTime<Utc> = row.try_get("window_started_at")?;
+                let attempts: i32 = row.try_get("attempts")?;
+                let blocked_until: Option<DateTime<Utc>> = row.try_get("blocked_until")?;
+                if blocked_until.is_some_and(|until| until > now) {
+                    false
+                } else if window_started_at + chrono::Duration::seconds(window_seconds) <= now {
+                    sqlx::query("UPDATE site_auth_attempts SET window_started_at = $3, attempts = 1, blocked_until = NULL, updated_at = $3 WHERE scope = $1 AND subject_hash = $2")
+                        .bind(scope)
+                        .bind(subject_hash)
+                        .bind(now)
+                        .execute(&mut *transaction)
+                        .await?;
+                    true
+                } else if attempts >= maximum_attempts {
+                    sqlx::query("UPDATE site_auth_attempts SET attempts = attempts + 1, blocked_until = $3, updated_at = $4 WHERE scope = $1 AND subject_hash = $2")
+                        .bind(scope)
+                        .bind(subject_hash)
+                        .bind(now + chrono::Duration::seconds(block_seconds))
+                        .bind(now)
+                        .execute(&mut *transaction)
+                        .await?;
+                    false
+                } else {
+                    sqlx::query("UPDATE site_auth_attempts SET attempts = attempts + 1, updated_at = $3 WHERE scope = $1 AND subject_hash = $2")
+                        .bind(scope)
+                        .bind(subject_hash)
+                        .bind(now)
+                        .execute(&mut *transaction)
+                        .await?;
+                    true
+                }
+            }
+        };
+        transaction.commit().await?;
+        Ok(allowed)
+    }
+
+    pub async fn insert_site_auth_email_action(
+        &self,
+        token_hash: &str,
+        purpose: &str,
+        email: &str,
+        email_key: &str,
+        account_key: Option<&str>,
+        expires_at: DateTime<Utc>,
+        idempotency_key: &str,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_email_actions
+              (token_hash, purpose, email, email_key, account_key, expires_at, idempotency_key)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(token_hash)
+        .bind(purpose)
+        .bind(email)
+        .bind(email_key)
+        .bind(account_key)
+        .bind(expires_at)
+        .bind(idempotency_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_site_auth_email_delivered(
+        &self,
+        token_hash: &str,
+        delivery_id: &str,
+    ) -> DbResult<()> {
+        sqlx::query("UPDATE site_auth_email_actions SET delivery_id = $2 WHERE token_hash = $1")
+            .bind(token_hash)
+            .bind(delivery_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn verify_site_auth_email_action(
+        &self,
+        token_hash: &str,
+        purpose: &str,
+        setup_hash: &str,
+    ) -> DbResult<Option<SiteAuthEmailAction>> {
+        let row = sqlx::query(
+            r#"
+            UPDATE site_auth_email_actions SET verified_at = NOW(), setup_hash = $3
+            WHERE token_hash = $1 AND purpose = $2 AND expires_at > NOW()
+              AND verified_at IS NULL AND consumed_at IS NULL
+            RETURNING token_hash, purpose, email, email_key, account_key, expires_at, verified_at, consumed_at
+            "#,
+        )
+        .bind(token_hash)
+        .bind(purpose)
+        .bind(setup_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(site_auth_email_action_from_row).transpose()
+    }
+
+    pub async fn site_auth_password_record(
+        &self,
+        email_key: &str,
+    ) -> DbResult<Option<SiteAuthPasswordRecord>> {
+        let row = sqlx::query(
+            r#"
+            SELECT c.account_key, c.password_phc, c.enabled
+            FROM site_auth_verified_emails e
+            JOIN site_auth_password_credentials c ON c.account_key = e.account_key
+            WHERE e.email_key = $1
+            "#,
+        )
+        .bind(email_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(SiteAuthPasswordRecord {
+                account_key: row.try_get("account_key")?,
+                password_phc: row.try_get("password_phc")?,
+                enabled: row.try_get("enabled")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn site_auth_account_for_verified_email(
+        &self,
+        email_key: &str,
+    ) -> DbResult<Option<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT account_key FROM site_auth_verified_emails WHERE email_key = $1",
+        )
+        .bind(email_key)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    pub async fn complete_site_auth_password_action(
+        &self,
+        setup_hash: &str,
+        purpose: &str,
+        proposed_account_key: &str,
+        display_name: &str,
+        password_phc: &str,
+    ) -> DbResult<Option<String>> {
+        let mut transaction = self.pool.begin().await?;
+        let action = sqlx::query(
+            r#"
+            SELECT email, email_key, account_key
+            FROM site_auth_email_actions
+            WHERE setup_hash = $1 AND purpose = $2 AND verified_at IS NOT NULL
+              AND consumed_at IS NULL AND expires_at > NOW()
+            FOR UPDATE
+            "#,
+        )
+        .bind(setup_hash)
+        .bind(purpose)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(action) = action else {
+            transaction.rollback().await?;
+            return Ok(None);
+        };
+        let email: String = action.try_get("email")?;
+        let email_key: String = action.try_get("email_key")?;
+        let action_account: Option<String> = action.try_get("account_key")?;
+        let verified_owner: Option<String> = sqlx::query_scalar(
+            "SELECT account_key FROM site_auth_verified_emails WHERE email_key = $1 FOR UPDATE",
+        )
+        .bind(&email_key)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let account_key = action_account
+            .or(verified_owner)
+            .unwrap_or_else(|| proposed_account_key.to_string());
+        let insert_display_name = if display_name.is_empty() {
+            "Agent Bounties account"
+        } else {
+            display_name
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_accounts
+              (account_key, provider, provider_subject, display_name, email, avatar_url)
+            VALUES ($1, 'password', $2, $3, $4, '')
+            ON CONFLICT (account_key) DO UPDATE SET
+              display_name = CASE WHEN $5 THEN site_auth_accounts.display_name ELSE EXCLUDED.display_name END,
+              email = $4,
+              last_signed_in_at = NOW()
+            "#,
+        )
+        .bind(&account_key)
+        .bind(&email_key)
+        .bind(insert_display_name)
+        .bind(&email)
+        .bind(display_name.is_empty())
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_verified_emails (email_key, email, account_key)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (email_key) DO UPDATE SET email = EXCLUDED.email
+            "#,
+        )
+        .bind(&email_key)
+        .bind(&email)
+        .bind(&account_key)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_password_credentials (account_key, password_phc)
+            VALUES ($1, $2)
+            ON CONFLICT (account_key) DO UPDATE SET
+              password_phc = EXCLUDED.password_phc, enabled = TRUE, changed_at = NOW()
+            "#,
+        )
+        .bind(&account_key)
+        .bind(password_phc)
+        .execute(&mut *transaction)
+        .await?;
+        if purpose == "registration" {
+            sqlx::query(
+                r#"
+                INSERT INTO site_auth_identities
+                  (provider, provider_subject, account_key, verified_email, verified_email_key, email_verified_at)
+                VALUES ('password', $1, $2, $3, $1, NOW())
+                ON CONFLICT (provider, provider_subject) DO UPDATE SET
+                  account_key = EXCLUDED.account_key, verified_email = EXCLUDED.verified_email,
+                  verified_email_key = EXCLUDED.verified_email_key,
+                  email_verified_at = EXCLUDED.email_verified_at, last_signed_in_at = NOW()
+                "#,
+            )
+            .bind(&email_key)
+            .bind(&account_key)
+            .bind(&email)
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE site_auth_sessions SET revoked_at = NOW() WHERE account_key = $1 AND revoked_at IS NULL",
+            )
+            .bind(&account_key)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE site_auth_email_actions SET consumed_at = NOW(), account_key = $2 WHERE setup_hash = $1",
+        )
+        .bind(setup_hash)
+        .bind(&account_key)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(Some(account_key))
     }
 
     pub async fn list_site_auth_wallets(&self, account_key: &str) -> DbResult<Vec<SiteAuthWallet>> {
@@ -10356,6 +10906,7 @@ mod tests {
         let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
+        store.migrate().await.unwrap();
 
         let signer: PrivateKeySigner =
             "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
@@ -12189,5 +12740,311 @@ mod tests {
         assert!(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("WHERE id = $1"));
         assert!(UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("RETURNING id"));
         assert!(!UPDATE_GITHUB_ISSUE_SYNC_BOUNTY_SQL.contains("created_at ="));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn site_auth_verified_merge_actions_and_reset_are_transactional() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let unique = Uuid::new_v4().simple().to_string();
+        let email = format!("auth-{unique}@example.com");
+        let account_a = hex::encode(Sha256::digest(format!("a-{unique}").as_bytes()));
+        let account_b = hex::encode(Sha256::digest(format!("b-{unique}").as_bytes()));
+        let account_c = hex::encode(Sha256::digest(format!("c-{unique}").as_bytes()));
+        let account_d = hex::encode(Sha256::digest(format!("d-{unique}").as_bytes()));
+
+        let google_account = store
+            .upsert_site_auth_identity(
+                &account_a,
+                "google",
+                &format!("google-{unique}"),
+                "Verified Owner",
+                &email,
+                "",
+                Some((&email, &email)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(google_account, account_a);
+        let wallet = format!("0x{:0>40}", unique);
+        store
+            .link_site_auth_wallet(&account_a, &wallet, 8453)
+            .await
+            .unwrap();
+
+        let microsoft_account = store
+            .upsert_site_auth_identity(
+                &account_b,
+                "microsoft",
+                &format!("microsoft-{unique}"),
+                "Unverified Claim",
+                &email,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(microsoft_account, account_b);
+        let github_subject = format!("github-{unique}");
+        let unverified_github = store
+            .upsert_site_auth_identity(
+                &account_c,
+                "github",
+                &github_subject,
+                "Pending GitHub Owner",
+                &email,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(unverified_github, account_c);
+        let merged_wallet = format!("0x{:0>40}", format!("c{unique}"));
+        store
+            .link_site_auth_wallet(&account_c, &merged_wallet, 8453)
+            .await
+            .unwrap();
+        let merged_session = hex::encode(Sha256::digest(format!("merged-session-{unique}")));
+        store
+            .create_site_auth_session(
+                &merged_session,
+                &account_c,
+                "github",
+                Utc::now() + chrono::Duration::hours(8),
+            )
+            .await
+            .unwrap();
+
+        let merged = store
+            .upsert_site_auth_identity(
+                &account_c,
+                "github",
+                &github_subject,
+                "Verified Owner",
+                &email,
+                "",
+                Some((&email, &email)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(merged, account_a);
+        assert_eq!(
+            store
+                .list_site_auth_wallets(&account_a)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .site_auth_principal_for_session(&merged_session)
+                .await
+                .unwrap()
+                .unwrap()
+                .account_key,
+            account_a
+        );
+        assert_eq!(
+            store
+                .upsert_site_auth_identity(
+                    &account_c,
+                    "github",
+                    &github_subject,
+                    "Verified Owner",
+                    &email,
+                    "",
+                    Some((&email, &email)),
+                )
+                .await
+                .unwrap(),
+            account_a
+        );
+
+        let expired_token = hex::encode(Sha256::digest(format!("expired-{unique}")));
+        store
+            .insert_site_auth_email_action(
+                &expired_token,
+                "registration",
+                &email,
+                &email,
+                Some(&account_a),
+                Utc::now() + chrono::Duration::minutes(1),
+                &format!("expired-{unique}"),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE site_auth_email_actions SET created_at = NOW() - INTERVAL '2 seconds', expires_at = NOW() - INTERVAL '1 second' WHERE token_hash = $1",
+        )
+        .bind(&expired_token)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        assert!(store
+            .verify_site_auth_email_action(
+                &expired_token,
+                "registration",
+                &hex::encode(Sha256::digest(format!("expired-setup-{unique}"))),
+            )
+            .await
+            .unwrap()
+            .is_none());
+
+        let expired_session = hex::encode(Sha256::digest(format!("expired-session-{unique}")));
+        store
+            .create_site_auth_session(
+                &expired_session,
+                &account_a,
+                "password",
+                Utc::now() + chrono::Duration::minutes(1),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE site_auth_sessions SET created_at = NOW() - INTERVAL '2 seconds', expires_at = NOW() - INTERVAL '1 second', last_seen_at = NOW() - INTERVAL '2 seconds' WHERE token_hash = $1",
+        )
+        .bind(&expired_session)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        assert!(store
+            .site_auth_principal_for_session(&expired_session)
+            .await
+            .unwrap()
+            .is_none());
+
+        let rollback_subject = format!("rollback-{unique}");
+        store
+            .upsert_site_auth_identity(
+                &account_d,
+                "microsoft",
+                &rollback_subject,
+                "Rollback Owner",
+                "rollback@example.com",
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        let mut failed_merge = store.pool.begin().await.unwrap();
+        assert!(
+            merge_site_auth_accounts(&mut failed_merge, &account_d, &"f".repeat(64),)
+                .await
+                .is_err()
+        );
+        failed_merge.rollback().await.unwrap();
+        let rollback_owner: String = sqlx::query_scalar(
+            "SELECT account_key FROM site_auth_identities WHERE provider = 'microsoft' AND provider_subject = $1",
+        )
+        .bind(&rollback_subject)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(rollback_owner, account_d);
+
+        let registration_token = hex::encode(Sha256::digest(format!("registration-{unique}")));
+        store
+            .insert_site_auth_email_action(
+                &registration_token,
+                "registration",
+                &email,
+                &email,
+                Some(&account_a),
+                Utc::now() + chrono::Duration::hours(8),
+                &format!("registration-{unique}"),
+            )
+            .await
+            .unwrap();
+        let registration_setup = hex::encode(Sha256::digest(format!("setup-{unique}")));
+        assert!(
+            store
+                .verify_site_auth_email_action(
+                    &registration_token,
+                    "registration",
+                    &registration_setup,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(store
+            .verify_site_auth_email_action(
+                &registration_token,
+                "registration",
+                &hex::encode(Sha256::digest(format!("replay-{unique}"))),
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .complete_site_auth_password_action(
+                    &registration_setup,
+                    "registration",
+                    &account_c,
+                    "Verified Owner",
+                    "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+                .await
+                .unwrap(),
+            Some(account_a.clone())
+        );
+
+        let old_session = hex::encode(Sha256::digest(format!("session-{unique}")));
+        store
+            .create_site_auth_session(
+                &old_session,
+                &account_a,
+                "password",
+                Utc::now() + chrono::Duration::hours(8),
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .site_auth_principal_for_session(&old_session)
+            .await
+            .unwrap()
+            .is_some());
+
+        let reset_token = hex::encode(Sha256::digest(format!("reset-{unique}")));
+        let reset_setup = hex::encode(Sha256::digest(format!("reset-setup-{unique}")));
+        store
+            .insert_site_auth_email_action(
+                &reset_token,
+                "reset",
+                &email,
+                &email,
+                Some(&account_a),
+                Utc::now() + chrono::Duration::minutes(30),
+                &format!("reset-{unique}"),
+            )
+            .await
+            .unwrap();
+        store
+            .verify_site_auth_email_action(&reset_token, "reset", &reset_setup)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store
+                .complete_site_auth_password_action(
+                    &reset_setup,
+                    "reset",
+                    &account_c,
+                    "",
+                    "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .await
+                .unwrap(),
+            Some(account_a)
+        );
+        assert!(store
+            .site_auth_principal_for_session(&old_session)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

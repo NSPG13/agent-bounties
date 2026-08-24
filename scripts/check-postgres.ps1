@@ -43,6 +43,9 @@ try {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db tests::site_auth_verified_merge_actions_and_reset_are_transactional -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
             cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture
         }
         Invoke-Checked {

@@ -707,14 +707,29 @@ ${competitionChildBrief(item)}`;
       const heading = dialog.querySelector("#auth-title");
       const description = dialog.querySelector("#auth-description");
       const email = form?.elements.email;
+      const name = form?.elements.name;
       const password = form?.elements.password;
       const passwordToggle = dialog.querySelector("[data-password-toggle]");
+      const emailField = dialog.querySelector('[data-auth-field="email"]');
+      const nameField = dialog.querySelector('[data-auth-field="name"]');
+      const passwordField = dialog.querySelector('[data-auth-field="password"]');
+      const recoveryButton = dialog.querySelector("[data-auth-recovery]");
+      const registerButton = dialog.querySelector("[data-auth-register]");
+      const backButton = dialog.querySelector("[data-auth-back]");
+      const inbox = dialog.querySelector("[data-auth-inbox]");
+      const submitButton = dialog.querySelector("[data-auth-submit]");
+      const taskNote = dialog.querySelector("[data-auth-task-note]");
+      const socialSections = Array.from(dialog.querySelectorAll("[data-auth-social]"));
+      const switchLine = dialog.querySelector("[data-auth-switch]");
       const status = dialog.querySelector("[data-auth-status]");
       const providerButtons = Array.from(dialog.querySelectorAll("[data-auth-provider]"));
       let authServerReady = false;
+      let passwordAuthReady = false;
       let providerAvailability = {};
       let currentUser = null;
       let accountLoadId = 0;
+      let authView = "login";
+      let pendingEmail = "";
 
       const setStatus = (message) => {
         if (status) status.textContent = message;
@@ -728,6 +743,77 @@ ${competitionChildBrief(item)}`;
       };
       const closeDialog = () => {
         if (dialog.open) dialog.close();
+      };
+
+      const setBusy = (busy) => {
+        if (submitButton) submitButton.disabled = busy;
+        if (form) form.setAttribute("aria-busy", String(busy));
+      };
+
+      const setAuthView = (view, message = "") => {
+        authView = view;
+        if (form) form.dataset.authState = view;
+        const login = view === "login";
+        const registration = view === "registration";
+        const reset = view === "reset";
+        const registrationPassword = view === "registration-password";
+        const resetPassword = view === "reset-password";
+        const inboxView = view === "inbox";
+        if (heading) {
+          heading.textContent = login ? "Sign in"
+            : registration ? "Create your account"
+              : reset ? "Reset your password"
+                : inboxView ? "Check your inbox"
+                  : registrationPassword ? "Choose your password" : "Set a new password";
+        }
+        if (description) {
+          description.textContent = login
+            ? "Sign in to manage bounties, evidence, and collaboration."
+            : registration
+              ? "First, verify the mailbox you want connected to your account."
+              : reset
+                ? "We’ll send one private recovery link if this account can continue."
+                : inboxView
+                  ? "A private, single-use link is on its way."
+                  : registrationPassword
+                    ? "Your email is verified. Choose the name and passphrase for this account."
+                    : "Your email is verified. This change signs out every other session.";
+        }
+        if (emailField) emailField.hidden = !(login || registration || reset);
+        if (nameField) nameField.hidden = !registrationPassword;
+        if (passwordField) passwordField.hidden = !(login || registrationPassword || resetPassword);
+        if (recoveryButton) recoveryButton.hidden = !login;
+        if (submitButton) {
+          submitButton.hidden = inboxView;
+          submitButton.textContent = login ? "Sign in"
+            : registration ? "Send verification email"
+              : reset ? "Send recovery email"
+                : registrationPassword ? "Create account" : "Save new password";
+        }
+        if (inbox) inbox.hidden = !inboxView;
+        socialSections.forEach((section) => { section.hidden = !login; });
+        if (switchLine) switchLine.hidden = !login;
+        if (taskNote) {
+          taskNote.hidden = !(registrationPassword || resetPassword);
+          taskNote.textContent = registrationPassword || resetPassword
+            ? "Use 15–128 characters. Spaces and Unicode are welcome; common passphrases are refused."
+            : "";
+        }
+        if (email) email.required = login || registration || reset;
+        if (name) name.required = registrationPassword;
+        if (password) {
+          password.required = login || registrationPassword || resetPassword;
+          password.autocomplete = login ? "current-password" : "new-password";
+          if (!login) password.value = "";
+        }
+        setBusy(false);
+        setStatus(message);
+        win.requestAnimationFrame(() => {
+          if (inboxView) backButton?.focus();
+          else if (registrationPassword) name?.focus();
+          else if (resetPassword) password?.focus();
+          else email?.focus();
+        });
       };
 
       const replaceActivityList = (list, items, emptyMessage) => {
@@ -840,7 +926,10 @@ ${competitionChildBrief(item)}`;
 
       const renderSession = (payload) => {
         providerAvailability = payload?.providers || providerAvailability;
-        const user = payload?.authenticated ? payload.user : null;
+        passwordAuthReady = Boolean(payload?.password);
+        const user = payload?.authenticated
+          ? { ...payload.user, provider: payload.sign_in_method, linkedMethods: payload.linked_methods || [] }
+          : null;
         currentUser = user;
         dialog.dataset.view = user ? "account" : "login";
         if (form) form.hidden = Boolean(user);
@@ -858,6 +947,7 @@ ${competitionChildBrief(item)}`;
           renderWallets([]);
           setWalletStatus("");
           renderProviderAvailability();
+          setAuthView(authView === "account" ? "login" : authView);
           return;
         }
         renderAccountLoading();
@@ -868,7 +958,10 @@ ${competitionChildBrief(item)}`;
         }
         if (sessionProvider) {
           const label = AUTH_PROVIDER_LABELS[user.provider] || user.provider || "OAuth";
-          sessionProvider.textContent = `Connected with ${label}`;
+          const linked = (user.linkedMethods || [])
+            .map((method) => AUTH_PROVIDER_LABELS[method] || (method === "password" ? "Email" : method))
+            .join(", ");
+          sessionProvider.textContent = linked ? `Connected methods: ${linked}` : `Signed in with ${label}`;
         }
         if (sessionAvatar) {
           const avatar = String(user.avatar || "");
@@ -949,6 +1042,8 @@ ${competitionChildBrief(item)}`;
         if (currentUser) loadAccount();
         win.requestAnimationFrame(() => {
           if (currentUser) closeButton?.focus();
+          else if (authView === "registration-password") name?.focus();
+          else if (authView === "reset-password") password?.focus();
           else email?.focus();
         });
       });
@@ -972,11 +1067,55 @@ ${competitionChildBrief(item)}`;
         passwordToggle.setAttribute("aria-label", visiblePassword ? "Show password" : "Hide password");
         password.focus();
       });
-      form?.addEventListener("submit", (event) => {
+      form?.addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!form.reportValidity()) return;
-        setStatus("Email and password accounts are not configured yet. Use a connected provider.");
+        if (!passwordAuthReady) {
+          setStatus("Email and password sign-in is temporarily unavailable. You can still use a connected provider.");
+          return;
+        }
+        setBusy(true);
+        setStatus(authView === "login" ? "Checking your credentials…" : "Securing the next step…");
+        try {
+          if (authView === "login") {
+            await postAccountJson("/password/login", { email: email.value, password: password.value });
+            const payload = await loadSession();
+            if (!payload?.authenticated) throw { reason: "session_unavailable" };
+            setStatus("Signed in securely.");
+            closeButton?.focus();
+          } else if (authView === "registration" || authView === "reset") {
+            pendingEmail = email.value.trim();
+            const endpoint = authView === "registration" ? "/password/registration" : "/password/reset";
+            const payload = await postAccountJson(endpoint, { email: pendingEmail });
+            setAuthView("inbox", payload.message || "If this address can continue, an email is on its way.");
+          } else if (authView === "registration-password" || authView === "reset-password") {
+            const endpoint = authView === "registration-password"
+              ? "/password/complete"
+              : "/password/reset-complete";
+            await postAccountJson(endpoint, { name: name?.value || "", password: password.value });
+            const payload = await loadSession();
+            if (!payload?.authenticated) throw { reason: "session_unavailable" };
+            setStatus(authView === "reset-password" ? "Password replaced and other sessions revoked." : "Account created and signed in.");
+            closeButton?.focus();
+          }
+        } catch (error) {
+          const messages = {
+            invalid_credentials: "Email or password is incorrect.",
+            email_invalid: "Enter a valid email address.",
+            name_invalid: "Enter the name you want shown on your account.",
+            password_length_invalid: "Use a passphrase between 15 and 128 characters.",
+            password_common: "That passphrase is too common. Choose a more distinctive one.",
+            email_action_invalid: "This private link is invalid, expired, or has already been used.",
+            password_auth_unavailable: "Email and password sign-in is temporarily unavailable.",
+          };
+          setStatus(messages[error?.reason] || "That step could not be completed. Please try again.");
+        } finally {
+          setBusy(false);
+        }
       });
+      registerButton?.addEventListener("click", () => setAuthView("registration"));
+      recoveryButton?.addEventListener("click", () => setAuthView("reset"));
+      backButton?.addEventListener("click", () => setAuthView("login"));
       walletLinkButton?.addEventListener("click", async () => {
         if (!currentUser) return;
         if (!win.ethereum || typeof win.ethereum.request !== "function") {
@@ -1067,16 +1206,31 @@ ${competitionChildBrief(item)}`;
           logoutButton.disabled = false;
         }
       });
-      dialog.querySelectorAll("[data-auth-unavailable]").forEach((button) => {
-        button.addEventListener("click", () => {
-          setStatus("Account recovery and creation will be connected in a later phase.");
-        });
-      });
-
       renderProviderAvailability();
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
-      loadSession().then(() => {
+      const emailActionParams = new URLSearchParams(String(win.location.hash || "").replace(/^#/, ""));
+      const emailAction = emailActionParams.get("auth");
+      const emailToken = emailActionParams.get("token");
+      if ((emailAction === "register" || emailAction === "reset") && emailToken) {
+        win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
+      }
+      loadSession().then(async () => {
+        if ((emailAction === "register" || emailAction === "reset") && emailToken) {
+          showDialog();
+          setStatus("Verifying your private link…");
+          try {
+            const endpoint = emailAction === "register"
+              ? "/password/verification"
+              : "/password/reset-verification";
+            const payload = await postAccountJson(endpoint, { token: emailToken });
+            pendingEmail = payload.email || "";
+            setAuthView(emailAction === "register" ? "registration-password" : "reset-password");
+          } catch (error) {
+            setAuthView("login", "This private link is invalid, expired, or has already been used.");
+          }
+          return;
+        }
         if (authResult !== "success" && authResult !== "error") return;
         setStatus(authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
         showDialog();

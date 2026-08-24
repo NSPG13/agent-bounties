@@ -1,5 +1,9 @@
 # Deployment
 
+Website password authentication is an R3, disabled-first release. Follow
+[`site-password-auth.md`](site-password-auth.md) and its
+[`threat model`](security/site-password-auth-threat-model.md) before enabling it.
+
 Canonical domain, DNS, redirect, analytics, and search migration procedures are
 defined in [`domain-portfolio.md`](domain-portfolio.md).
 

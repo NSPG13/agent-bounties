@@ -22,6 +22,22 @@ envVarGroups:
         sync: false
       - key: SITE_AUTH_ALLOWED_ORIGINS
         value: https://agentbounties.app
+      - key: SITE_PASSWORD_AUTH_ENABLED
+        value: "false"
+      - key: AUTH_EMAIL_MODE
+        value: resend
+      - key: AUTH_EMAIL_FROM
+        value: Agent Bounties <no-reply@auth.agentbounties.app>
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SITE_AUTH_ATTEMPT_WINDOW_SECONDS
+        sync: false
+      - key: SITE_AUTH_ATTEMPT_LIMIT
+        sync: false
+      - key: SITE_AUTH_ATTEMPT_BLOCK_SECONDS
+        sync: false
+      - key: SITE_AUTH_PASSWORD_WORKERS
+        sync: false
       - key: GOOGLE_OAUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET
