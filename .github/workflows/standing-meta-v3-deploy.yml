@@ -80,9 +80,6 @@ jobs:
       - name: Python syntax
         run: python -m py_compile scripts/standing_meta_v3_deploy.py scripts/activate_standing_meta_v3_replacements.py
 
-      - name: Autonomous wallet compatibility contract
-        run: node scripts/test-autonomous-wallet-flow.js
-
       - name: V3 contract tests
         run: forge test --root contracts/base-escrow --match-contract CanonicalIndependentChildVerifierV3Test -vv
 
