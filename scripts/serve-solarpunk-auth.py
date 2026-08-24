@@ -744,6 +744,7 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
         return self.server.api_base_url  # type: ignore[attr-defined]
 
     def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")

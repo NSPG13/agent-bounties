@@ -255,6 +255,12 @@ class LocalAuthTests(unittest.TestCase):
                 self.assertIn('"google":true', body)
                 self.assertNotIn("google-secret", body)
 
+                connection.request("GET", "/index.html")
+                static_response = connection.getresponse()
+                self.assertEqual(static_response.status, 200)
+                self.assertEqual(static_response.getheader("Cache-Control"), "no-store")
+                static_response.read()
+
                 connection.request("GET", "/auth/account")
                 account_response = connection.getresponse()
                 account_body = account_response.read().decode("utf-8")
@@ -274,6 +280,18 @@ class LocalAuthTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+
+    def test_local_site_exposes_current_account_creation_flow(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        page = (repo_root / "site" / "index.html").read_text(encoding="utf-8")
+        script = (repo_root / "site" / "solarpunk-home.js").read_text(encoding="utf-8")
+        stale_message = "Account recovery and creation will be connected in a later phase."
+        self.assertIn("data-auth-register", page)
+        self.assertIn('"/password/registration"', script)
+        self.assertIn('"/password/verification"', script)
+        self.assertIn('"/password/complete"', script)
+        self.assertNotIn(stale_message, page)
+        self.assertNotIn(stale_message, script)
 
     def test_callback_sets_bounded_session_cookie_and_rejects_replay(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

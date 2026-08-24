@@ -1,8 +1,10 @@
 # Publishing first-party Agent Bounties blog posts
 
-The canonical Agent Bounties blog is a static, reviewable part of the public
-repository. A post is published only when its page, archive entry, feeds, and
-sitemap land together. Do not edit the deployed site outside this workflow.
+Agent Bounties writing is a static, reviewable part of the public repository.
+The About page is its human-facing index; there is no separate blog archive
+page or navigation item. A post is published only when its page, About entry,
+feeds, and sitemap land together. Do not edit the deployed site outside this
+workflow.
 
 ## Required files and metadata
 
@@ -12,8 +14,8 @@ sitemap land together. Do not edit the deployed site outside this workflow.
    canonical URL, Open Graph metadata, and `BlogPosting` JSON-LD.
 3. Add a plain-language publisher disclosure. Identify first-party product
    interests, syndication origins, affiliate relationships, or paid placement.
-4. Add the post to `site/blog/index.html`, `site/blog/posts.json`,
-   `site/blog/feed.xml`, `site/about.html#blog`, and `site/sitemap.xml`.
+4. Add the post to `site/about.html#blog`, `site/blog/posts.json`,
+   `site/blog/feed.xml`, and `site/sitemap.xml`.
 5. Keep navigation, skip links, heading order, tables, and link text accessible.
    Reuse `site/about.css`; do not add a one-off stylesheet without a durable need.
 

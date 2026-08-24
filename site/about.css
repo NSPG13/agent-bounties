@@ -219,7 +219,7 @@ body.about-body {
 .blog-card .post-type { color: var(--about-mint); font-size: 0.7rem; font-weight: 850; letter-spacing: 0.13em; text-transform: uppercase; }
 .blog-card h3 { margin: 38px 0 14px; font-family: var(--about-serif); font-size: clamp(1.55rem, 3vw, 2.2rem); font-weight: 560; line-height: 1.06; }
 .blog-card p { margin: 0; color: var(--about-muted); font-size: 0.9rem; line-height: 1.65; }
-.blog-card footer { display: flex; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 24px; color: #89978b; font-size: 0.72rem; }
+.blog-card footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 24px; color: #89978b; font-size: 0.72rem; }
 .blog-card a { color: var(--about-lime); font-weight: 800; text-decoration: none; }
 
 .editor-note { margin-top: 24px; padding: 22px 24px; color: var(--about-muted); line-height: 1.65; }

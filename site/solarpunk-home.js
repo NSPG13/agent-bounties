@@ -485,13 +485,13 @@ ${competitionChildBrief(item)}`;
         speed: .18 + (random() * .5),
         drift: random() > .5 ? 1 : -1,
       }));
-      const dragonflyCount = win.innerWidth <= 720 ? 6 : 12;
+      const dragonflyCount = win.innerWidth <= 720 ? 5 : 10;
       dragonflies = Array.from({ length: dragonflyCount }, () => ({
         originX: random() * bounds.width,
         baseY: (.12 + (random() * .66)) * bounds.height,
         direction: random() > .5 ? 1 : -1,
         speed: 17 + (random() * 25),
-        size: 1.08 + (random() * .68),
+        size: 1.55 + (random() * .85),
         phase: random() * Math.PI * 2,
         bob: 2 + (random() * 7),
         flutter: random() * Math.PI * 2,
@@ -624,29 +624,38 @@ ${competitionChildBrief(item)}`;
       context.rotate(heading);
       context.scale(dragonfly.size, dragonfly.size);
       context.lineCap = "round";
+      context.shadowBlur = 3.4;
+      context.shadowColor = "rgba(1, 20, 16, .92)";
 
       const wings = [
-        { x: -.2, y: -3.7 * wingBeat, rx: 7.3, ry: 1.22, rotation: -.92 },
-        { x: -.2, y: 3.7 * wingBeat, rx: 7.3, ry: 1.22, rotation: .92 },
-        { x: -3.5, y: -3.1 * wingBeat, rx: 6.1, ry: 1.12, rotation: -1.15 },
-        { x: -3.5, y: 3.1 * wingBeat, rx: 6.1, ry: 1.12, rotation: 1.15 },
+        { x: -.2, y: -4.1 * wingBeat, rx: 8.2, ry: 1.42, rotation: -.92 },
+        { x: -.2, y: 4.1 * wingBeat, rx: 8.2, ry: 1.42, rotation: .92 },
+        { x: -3.7, y: -3.45 * wingBeat, rx: 6.8, ry: 1.28, rotation: -1.15 },
+        { x: -3.7, y: 3.45 * wingBeat, rx: 6.8, ry: 1.28, rotation: 1.15 },
       ];
       wings.forEach((wing) => {
         context.beginPath();
-        context.fillStyle = "rgba(218, 255, 246, .32)";
-        context.strokeStyle = "rgba(105, 220, 198, .76)";
-        context.lineWidth = .64;
+        context.fillStyle = "rgba(224, 255, 249, .62)";
+        context.strokeStyle = "rgba(101, 244, 205, .98)";
+        context.lineWidth = .82;
         context.ellipse(wing.x, wing.y, wing.rx, wing.ry, wing.rotation, 0, Math.PI * 2);
         context.fill();
         context.stroke();
       });
 
+      context.shadowBlur = 2.2;
       const body = context.createLinearGradient(-10, 0, 5, 0);
-      body.addColorStop(0, "#286f68");
-      body.addColorStop(.58, "#62c985");
-      body.addColorStop(1, "#b9e55b");
+      body.addColorStop(0, "#1c746c");
+      body.addColorStop(.58, "#5cdda1");
+      body.addColorStop(1, "#d7f56c");
+      context.strokeStyle = "rgba(2, 42, 36, .95)";
+      context.lineWidth = 3.1;
+      context.beginPath();
+      context.moveTo(-11.5, 0);
+      context.quadraticCurveTo(-3, .3, 2.8, 0);
+      context.stroke();
       context.strokeStyle = body;
-      context.lineWidth = 1.6;
+      context.lineWidth = 2.05;
       context.beginPath();
       context.moveTo(-11.5, 0);
       context.quadraticCurveTo(-3, .3, 2.8, 0);
@@ -659,14 +668,18 @@ ${competitionChildBrief(item)}`;
         context.lineTo(segment, 1);
         context.stroke();
       });
-      context.fillStyle = "#4aa97d";
+      context.fillStyle = "#55d59a";
+      context.strokeStyle = "rgba(2, 42, 36, .95)";
+      context.lineWidth = .8;
       context.beginPath();
       context.ellipse(1, 0, 2.45, 1.55, 0, 0, Math.PI * 2);
       context.fill();
-      context.fillStyle = "#b7df55";
+      context.stroke();
+      context.fillStyle = "#d5f56b";
       context.beginPath();
       context.arc(4.15, 0, 1.45, 0, Math.PI * 2);
       context.fill();
+      context.stroke();
       context.fillStyle = "rgba(9, 56, 51, .88)";
       context.beginPath();
       context.arc(4.55, -.52, .31, 0, Math.PI * 2);

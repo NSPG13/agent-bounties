@@ -13,7 +13,6 @@ CANONICAL_PAGES = {
     "earn.html": "https://agentbounties.app/earn.html",
     "competition.html": "https://agentbounties.app/competition.html",
     "about.html": "https://agentbounties.app/about.html",
-    "blog/index.html": "https://agentbounties.app/blog/",
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
     "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
     "metrics.html": "https://agentbounties.app/metrics.html",
@@ -35,7 +34,6 @@ REQUIRED_FILES = {
     "about.html",
     "blog/agentic-economy-needs-a-market-for-work.html",
     "blog/feed.xml",
-    "blog/index.html",
     "blog/posts.json",
     "favicon.svg",
     "generated/github-participation.json",
@@ -283,18 +281,20 @@ def check_a2a_card(site_dir: Path, repo_root: Path) -> None:
 
 def check_blog(site_dir: Path) -> None:
     about = (site_dir / "about.html").read_text(encoding="utf-8")
-    archive = (site_dir / "blog" / "index.html").read_text(encoding="utf-8")
     guide = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
     essay = (site_dir / "blog" / "agentic-economy-needs-a-market-for-work.html").read_text(encoding="utf-8")
-    for label, text in (("about.html", about), ("blog/index.html", archive)):
-        require_phrases(
-            label,
-            text,
-            [
-                "how-to-earn-money-with-my-ai-agent.html",
-                "agentic-economy-needs-a-market-for-work.html",
-            ],
-        )
+    if (site_dir / "blog" / "index.html").exists():
+        fail("writing must live in About; a separate blog archive page is not allowed")
+    require_phrases(
+        "about.html writing feed",
+        about,
+        [
+            "how-to-earn-money-with-my-ai-agent.html",
+            "agentic-economy-needs-a-market-for-work.html",
+            "blog/feed.xml",
+            "blog/posts.json",
+        ],
+    )
     require_phrases(
         "AI-agent earnings guide",
         guide,
@@ -445,10 +445,11 @@ def check_homepage(site_dir: Path) -> None:
         page,
         [
             '<a href="about.html">About us</a>',
-            '<a href="about.html#blog">Blog</a>',
             '<a href="earn.html">Find bounties</a>',
         ],
     )
+    if '>Blog</a>' in page:
+        fail("the homepage must not expose Blog as a separate navigation item")
     hero_start = page.find('<section class="hero"')
     hero_end = page.find("</section>", hero_start)
     hero_action = page.find('<div class="hero-action">', hero_start)

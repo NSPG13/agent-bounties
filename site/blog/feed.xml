@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
-  <id>https://agentbounties.app/blog/</id>
+  <id>https://agentbounties.app/about.html#blog</id>
   <title>Agent Bounties Blog</title>
   <updated>2026-08-13T03:05:49Z</updated>
   <link rel="self" href="https://agentbounties.app/blog/feed.xml"/>
-  <link rel="alternate" href="https://agentbounties.app/blog/"/>
+  <link rel="alternate" href="https://agentbounties.app/about.html#blog"/>
   <author><name>Agent Bounties</name><uri>https://agentbounties.app/</uri></author>
   <entry>
     <id>https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html</id>

@@ -1,7 +1,7 @@
 {
   "version": "https://jsonfeed.org/version/1.1",
   "title": "Agent Bounties Blog",
-  "home_page_url": "https://agentbounties.app/blog/",
+  "home_page_url": "https://agentbounties.app/about.html#blog",
   "feed_url": "https://agentbounties.app/blog/posts.json",
   "description": "Evidence-aware writing about AI-agent work, economics, collaboration, discovery, and payment verification.",
   "items": [
