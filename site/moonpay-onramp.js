@@ -12,6 +12,7 @@
     providers: [],
     provider: null,
     account: null,
+    bountyContract: "",
     requiredUsdc: 0n,
     usdcBalance: null,
     ethBalance: null,
@@ -239,7 +240,9 @@
   function renderBalanceGuidance() {
     const guidance = select("[data-balance-guidance]");
     if (state.usdcBalance === null || state.ethBalance === null) {
-      guidance.textContent = "Base ETH may be required for wallet transaction gas unless the final wallet path sponsors it.";
+      guidance.textContent = state.bountyContract
+        ? "This existing-bounty flow may use gas sponsorship; verify the final wallet request before signing."
+        : "New-bounty creation is not gas-sponsored. Add a small amount of Base ETH to the same wallet as the planned USDC.";
       return;
     }
     const enoughUsdc = state.usdcBalance >= state.requiredUsdc;
@@ -248,12 +251,14 @@
       enoughUsdc
         ? "This wallet already holds at least the planned USDC contribution."
         : `USDC shortfall: ${formatUnits(state.requiredUsdc - state.usdcBalance, 6, 6)} USDC.`,
-      hasGas
-        ? "This wallet has some Base ETH for gas. The wallet still decides the actual fee."
-        : "No Base ETH is visible. The existing funding path may require gas unless the selected wallet sponsors it; MoonPay can also buy Base ETH.",
+      state.bountyContract
+        ? "Existing-bounty funding may use gas sponsorship; the final wallet path determines whether ETH is needed."
+        : (hasGas
+          ? "This wallet has some Base ETH for new-bounty creation gas. The wallet still decides the actual fee."
+          : "No Base ETH is visible. New-bounty creation cannot proceed until the same wallet has a small Base ETH balance; choose Base ETH above to review a separate purchase."),
     ];
     guidance.textContent = messages.join(" ");
-    guidance.dataset.tone = enoughUsdc && hasGas ? "success" : "pending";
+    guidance.dataset.tone = enoughUsdc && (state.bountyContract || hasGas) ? "success" : "pending";
     const observed = enoughUsdc ? "funded" : "unfunded";
     if (state.observedBalanceState !== observed) {
       state.observedBalanceState = observed;
@@ -294,6 +299,7 @@
     if (bountyContract && !ADDRESS.test(bountyContract)) {
       throw new Error("This on-ramp handoff contains an invalid bounty contract.");
     }
+    state.bountyContract = bountyContract.toLowerCase();
     state.requiredUsdc = parseUsdc(params.get("amount") || "5.10");
     if (state.requiredUsdc <= 0n) {
       throw new Error("This on-ramp handoff is missing a valid planned USDC amount.");
@@ -316,12 +322,14 @@
     if (asset === "eth") {
       help.textContent = "Buy Base ETH into the same wallet for transaction gas. This still does not fund the bounty.";
       button.textContent = "Continue to MoonPay for Base ETH";
+      select("[data-onramp-ack-copy]").textContent = "I understand that this purchases Base ETH into my wallet and does not yet fund the bounty.";
       if (Number(select("[data-fiat-amount]").value) > 100) {
         select("[data-fiat-amount]").value = "20.00";
       }
     } else {
       help.textContent = "Buy Base USDC into your wallet, then return to approve the contribution.";
       button.textContent = "Continue to MoonPay for Base USDC";
+      select("[data-onramp-ack-copy]").textContent = "I understand that this purchases Base USDC into my wallet and does not yet fund the bounty.";
     }
   }
 
@@ -358,12 +366,14 @@
     if (state.provider) await switchToBase(state.provider);
     track("onramp_moonpay_started");
     if (!bountyContract) {
+      const asset = select("[data-onramp-asset]").value;
+      const assetLabel = asset === "eth" ? "ETH" : "USDC";
       setOutput("[data-onramp-output]", [
-        "Opening MoonPay's public USDC purchase page for a new-bounty wallet.",
-        "Copy the exact destination address shown above, choose USDC on Base, and verify both again before paying.",
+        `Opening MoonPay's public ${assetLabel} purchase page for a new-bounty wallet.`,
+        `Copy the exact destination address shown above, choose ${assetLabel} on Base, and verify both again before paying.`,
         "This purchase does not create or fund a bounty.",
       ], "pending");
-      window.open("https://www.moonpay.com/buy/usdc", "_blank", "noopener,noreferrer");
+      window.open(asset === "eth" ? "https://www.moonpay.com/buy/eth" : "https://www.moonpay.com/buy/usdc", "_blank", "noopener,noreferrer");
       return;
     }
     const endpoint = `${protocol.mcp_base_url.replace(/\/$/, "")}/v1/onramps/moonpay/checkout`;
