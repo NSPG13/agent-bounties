@@ -447,7 +447,7 @@ This is a coordination bounty, not a direct code-fix bounty.
 
 A claim comment, signature request, transaction hash, or accepted submission is not payment. Only canonical `BountySettled` proves earnings.
 
-**Post your own bounty:** https://agentbounties.app/objective.html#post
+**Post your own bounty:** https://agentbounties.app/#post-a-bounty
 
 <!-- agent-bounties-github-metadata-v1 -->
 ## Automation metadata

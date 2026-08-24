@@ -949,11 +949,9 @@ mod tests {
             "https://agentbounties.app"
         )
         .is_err());
-        assert!(validate_return_url(
-            "https://agentbounties.app/earn.html",
-            "https://agentbounties.app"
-        )
-        .is_err());
+        assert!(
+            validate_return_url("https://agentbounties.app/", "https://agentbounties.app").is_err()
+        );
         assert!(OnrampAsset::parse(Some("btc")).is_err());
     }
 

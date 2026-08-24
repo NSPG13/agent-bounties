@@ -280,6 +280,7 @@ html[data-scene-ready="false"] .scene-plate {
   border: 1px solid rgba(221, 237, 205, .36);
   border-radius: 2px 15px 2px 15px;
   background: rgba(7, 21, 14, .48);
+  cursor: pointer;
   opacity: 1;
   transition: border-color 180ms ease, color 180ms ease, background 180ms ease, transform 180ms ease;
 }
@@ -515,6 +516,7 @@ html[data-scene-ready="false"] .scene-plate {
     inset 0 -3px rgba(18, 49, 13, .4),
     0 12px 30px rgba(0, 0, 0, .34),
     0 0 24px rgba(130, 192, 48, .13);
+  cursor: pointer;
   opacity: .92;
 }
 

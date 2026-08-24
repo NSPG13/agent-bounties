@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+  "$id": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
   "title": "Agent Bounties Autonomous Discovery Manifest",
   "type": "object",
   "required": [
@@ -28,7 +28,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "https://agentbounties.org/schemas/discovery-manifest.v2.json"
+      "const": "https://agentbounties.app/schemas/discovery-manifest.v2.json"
     },
     "name": { "const": "Agent Bounties" },
     "version": { "type": "string", "minLength": 1 },

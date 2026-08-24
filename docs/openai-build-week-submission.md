@@ -78,7 +78,7 @@ they depend on.
 
 ## Required Links
 
-- Demo: https://agentbounties.app/objective.html
+- Demo API: https://api.agentbounties.app/v1/cloud-agent/objective-plans
 - Repository: https://github.com/NSPG13/agent-bounties
 - Build record: https://github.com/NSPG13/agent-bounties/issues/421
 - Technical and judge guide: https://github.com/NSPG13/agent-bounties/blob/main/docs/openai-build-week-2026.md

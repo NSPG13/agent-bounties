@@ -17,7 +17,7 @@ def exercise_surface(client: AgentBountiesClient) -> dict:
     discovery = client.get_discovery_manifest()
     _require(
         discovery.get("schema")
-        == "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+        == "https://agentbounties.app/schemas/discovery-manifest.v2.json",
         "discovery manifest missing v2 schema",
     )
     _require(

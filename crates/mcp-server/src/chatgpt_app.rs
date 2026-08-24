@@ -47,7 +47,7 @@ const MCP_NAME_HEADER: &str = "mcp-name";
 const MCP_ALLOWED_ORIGINS_ENV: &str = "MCP_ALLOWED_ORIGINS";
 const CHATGPT_SANDBOX_ENV: &str = "CHATGPT_APP_SANDBOX_MODE";
 const FEED_WIDGET_URI: &str = "ui://agent-bounties/live-feed-v4.html";
-const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
+const POST_PAGE_URL: &str = "https://agentbounties.app/#post-a-bounty";
 const FEED_WIDGET_HTML: &str = include_str!("../assets/chatgpt-bounty-feed-widget.html");
 const BOUNTY_CARD_PREVIEW_HTML: &str = include_str!("../assets/chatgpt-bounty-card-preview.html");
 const FEED_CARD_ART: &[u8] =
@@ -2264,7 +2264,7 @@ async fn sandbox_tool_result(name: &str, arguments: &Value) -> Result<Value, Str
                     "sandbox": true,
                     "bounty_id": Uuid::new_v4(),
                     "title": title,
-                    "public_url": "https://agentbounties.app/earn.html",
+                    "public_url": "https://agentbounties.app/",
                     "funding_status": "sandbox_unfunded",
                     "published": false,
                     "payment_promised": false,
@@ -2378,10 +2378,7 @@ fn build_moonpay_onramp_handoff(
         query.append_pair("from", "chatgpt-app");
         query.append_pair("bountyContract", &bounty_contract.to_ascii_lowercase());
         query.append_pair("amount", &format_usdc(args.amount_base_units));
-        query.append_pair(
-            "return",
-            "https://agentbounties.app/earn.html#fund-bounty-panel",
-        );
+        query.append_pair("return", "https://agentbounties.app/");
         if let Some(intent_id) = &intent_id {
             query.append_pair("intent", intent_id);
         }
@@ -2589,7 +2586,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Make every bounty lifecycle action work through the MCP Apps bridge and preserve canonical evidence boundaries.",
                 "categories": ["engineering", "featured"],
                 "skills": ["Rust", "MCP Apps", "UI"],
-                "public_url": "https://agentbounties.app/earn.html",
+                "public_url": "https://agentbounties.app/",
                 "work_state": "claimable",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -2610,7 +2607,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Exercise the two-step funding interaction without moving USDC or contacting a relay.",
                 "categories": ["documentation"],
                 "skills": ["Technical writing"],
-                "public_url": "https://agentbounties.app/earn.html",
+                "public_url": "https://agentbounties.app/",
                 "work_state": "open",
                 "payment_state": "seeking_funding",
                 "payment_committed": false,
@@ -2631,7 +2628,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Exercise deterministic and signed-quorum verification plans against fixture evidence.",
                 "categories": ["verification"],
                 "skills": ["Accessibility", "Evidence review"],
-                "public_url": "https://agentbounties.app/earn.html",
+                "public_url": "https://agentbounties.app/",
                 "work_state": "submitted",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -2652,7 +2649,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Prepare a public artifact commitment and hash-matched evidence package entirely through the ChatGPT host bridge.",
                 "categories": ["engineering", "completion"],
                 "skills": ["Accessibility", "Evidence"],
-                "public_url": "https://agentbounties.app/earn.html",
+                "public_url": "https://agentbounties.app/",
                 "work_state": "in_progress",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -2673,7 +2670,7 @@ fn sandbox_feed_projection() -> Value {
                 "goal": "Exercise the committed deterministic-module verification branch without signing, broadcasting, or settling anything.",
                 "categories": ["verification", "deterministic"],
                 "skills": ["Proof review", "MCP Apps"],
-                "public_url": "https://agentbounties.app/earn.html",
+                "public_url": "https://agentbounties.app/",
                 "work_state": "submitted",
                 "payment_state": "escrowed",
                 "payment_committed": true,
@@ -5397,7 +5394,7 @@ mod tests {
     fn public_review_feed_filter_is_fail_closed() {
         let mut projection = json!({
             "source_statuses": [
-                {"source_type": "canonical_base", "authoritative_urls": ["https://agentbounties.app/earn.html"]}
+                {"source_type": "canonical_base", "authoritative_urls": ["https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true"]}
             ],
             "items": [
                 {
@@ -5408,7 +5405,7 @@ mod tests {
                     "work_state": "open",
                     "title": "Publish an accessibility checklist",
                     "goal": "Write a concise public checklist.",
-                    "public_url": "https://agentbounties.app/earn.html",
+                    "public_url": "https://agentbounties.app/",
                     "next_action": {"action": "submit_unfunded_bounty_solution", "url": "https://agentbounties.app/paid"},
                     "reward": {"amount": "0", "currency": "USDC"},
                     "evidence_requirements": {"acceptance_criteria": ["Include keyboard-only checks."]}
@@ -5465,7 +5462,7 @@ mod tests {
             "success_definition": "The solver receives canonical payment.",
             "solver_budget_usdc": "10.00",
             "settlement_policy": {"asset": "USDC"},
-            "source_url": "https://agentbounties.app/earn.html",
+            "source_url": "https://api.agentbounties.app/v1/opportunities",
             "next_action": "Fund the child tasks",
             "tasks": [{
                 "task_id": "task-1",
@@ -5499,7 +5496,7 @@ mod tests {
         let mut request = json!({
             "bounty_kind": "unfunded_offchain",
             "payment_promised": false,
-            "upgrade_url": "https://agentbounties.app/post.html"
+            "upgrade_url": "https://agentbounties.app/#post-a-bounty"
         });
         strip_public_unfunded_navigation(&mut request);
         assert!(request.get("upgrade_url").is_none());
@@ -5734,7 +5731,7 @@ mod tests {
                     "bounty_id": bounty_id,
                     "title": "Sandbox release checklist",
                     "stage": "prepared",
-                    "bounty_url": "https://agentbounties.app/earn.html",
+                    "bounty_url": "https://agentbounties.app/",
                     "status": "sandbox only",
                     "reward": "2 USDC",
                     "payment_state": "sandbox"

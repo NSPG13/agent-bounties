@@ -323,7 +323,7 @@ function nextActionFor(verified) {
       schema_version: CLAIM_HANDOFF_SCHEMA_VERSION,
       action: "post_own_bounty",
       ready: true,
-      url: "https://agentbounties.app/post.html",
+      url: "https://agentbounties.app/#post-a-bounty",
     };
   }
   const selected = verified.find((item) => item.claim_handoff.ready) || verified[0];
@@ -1514,8 +1514,8 @@ export async function collectInventory({
         : nextActionFor([])
     ),
     links: {
-      post_own_bounty: "https://agentbounties.app/post.html",
-      fund_bounty: "https://agentbounties.app/funding.html",
+      post_own_bounty: "https://agentbounties.app/#post-a-bounty",
+      fund_bounty: "https://api.agentbounties.app/public/funding",
       repository: "https://github.com/NSPG13/agent-bounties",
       llms_txt: "https://agentbounties.app/llms.txt",
     },

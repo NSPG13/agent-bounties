@@ -40,7 +40,7 @@ async function exerciseSurface(client: AgentBountiesClient): Promise<JsonObject>
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const discovery = asObject(await client.getDiscoveryManifest(), "discovery");
   requireCondition(
-    discovery.schema === "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+    discovery.schema === "https://agentbounties.app/schemas/discovery-manifest.v2.json",
     "discovery manifest missing v2 schema",
   );
   const protocol = asObject(discovery.protocol, "discovery.protocol");

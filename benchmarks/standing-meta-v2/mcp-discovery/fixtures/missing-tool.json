@@ -1,5 +1,5 @@
 {
-  "schema": "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+  "schema": "https://agentbounties.app/schemas/discovery-manifest.v2.json",
   "protocol": {
     "network": "base-mainnet",
     "chain_id": 8453,

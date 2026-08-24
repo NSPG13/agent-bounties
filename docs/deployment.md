@@ -229,9 +229,10 @@ For an all-404 result, repair in this order:
    change cannot bypass a production-image build.
 4. Copy the service's current `onrender.com` URL from **Settings** and rerun the
    diagnostic against it. Do not infer the hostname from the service name.
-5. If the Render URL passes, attach and verify `api.bountyboard.global`, set
-   `PUBLIC_BASE_URL=https://api.bountyboard.global` and
-   `MCP_BASE_URL=https://mcp.bountyboard.global`, then set the repository
+5. If the Render URL passes, attach and verify `api.agentbounties.app` and
+   `mcp.agentbounties.app`, set
+   `PUBLIC_BASE_URL=https://api.agentbounties.app` and
+   `MCP_BASE_URL=https://mcp.agentbounties.app`, then set the repository
    Actions variable `PRODUCTION_API_BASE_URL` to the verified API URL.
 6. Run `python scripts\check-render-blueprint.py`, dispatch **Render Deploy
    Recovery** for the latest successful `main` revision, and rerun the
