@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -19,7 +20,6 @@ if str(SCRIPT.parent) not in sys.path:
     sys.path.insert(0, str(SCRIPT.parent))
 
 import bounty_inventory_guard as GUARD
-import plan_open_competition_v2_replenishment as REPLENISHMENT
 
 
 def run_guard(
@@ -150,9 +150,12 @@ def open_competition_v2_report(*, count: int = 5) -> Path:
 class BountyInventoryGuardTests(unittest.TestCase):
     def test_gmv_review_evidence_matches_release_and_replenisher(self) -> None:
         expected = GUARD.REQUIRED_GMV_PROFILE["review_evidence_hash"]
-        self.assertEqual(GUARD.REQUIRED_GMV_PROFILE["review_evidence_hash"], expected)
+        replenisher = (SCRIPT.parent / "plan_open_competition_v2_replenishment.py").read_text(
+            encoding="utf-8"
+        )
         self.assertEqual(
-            REPLENISHMENT.REQUIRED_LIVE_GMV_PROFILE["review_evidence_hash"], expected
+            re.findall(r'"review_evidence_hash":\s*"(0x[0-9a-f]{64})"', replenisher),
+            [expected],
         )
 
     def test_rpc_probe_uses_failover_pool_and_redacts_credentials(self) -> None:
