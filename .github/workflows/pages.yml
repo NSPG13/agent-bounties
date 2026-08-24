@@ -192,7 +192,8 @@ jobs:
           grep -q '<h1>Privacy policy</h1>' /tmp/live-privacy.html
           grep -q '<h1>Terms of use</h1>' /tmp/live-terms.html
           grep -q 'discovery-manifest.v2.json' /tmp/live-discovery.json
-          for route in objective.html funding.html post.html; do
+          python scripts/check-public-handoffs.py --base-url https://agentbounties.app
+          for route in objective.html funding.html; do
             status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://agentbounties.app/${route}?verify=${nonce}")"
             [[ "${status}" == "404" ]]
           done
