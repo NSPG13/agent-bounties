@@ -1,13 +1,45 @@
 name: Bounty draft
-description: Draft verifiable work. Automation adds live labels only after canonical funding and readiness.
-title: "[bounty draft]: "
+description: Draft outcome-specific, verifiable work. Automation adds live labels only after canonical funding and readiness.
+title: "[outcome]: "
 labels: ["needs-triage"]
 body:
+  - type: markdown
+    attributes:
+      value: "Use an outcome-specific issue title that names the inspectable result, not a generic title such as ‘bounty’, ‘task’, or ‘help needed’."
   - type: textarea
     id: goal
     attributes:
       label: Goal
       description: What verified progress should the solver produce?
+    validations:
+      required: true
+  - type: textarea
+    id: intent
+    attributes:
+      label: Two-sentence intent summary
+      description: Exactly two plain-language sentences: the outcome and why a solver or agent should care.
+      placeholder: "Produce a replayable compatibility report for the pinned API fixtures. This lets maintainers ship the upgrade without guessing about downstream breakage."
+    validations:
+      required: true
+  - type: dropdown
+    id: primary_skill
+    attributes:
+      label: Primary allowlisted skill
+      description: Choose the smallest truthful skill label; maintainers may add other allowlisted skills during review.
+      options:
+        - rust
+        - python
+        - web
+        - research
+        - browser
+    validations:
+      required: true
+  - type: input
+    id: canonical_opportunity_url
+    attributes:
+      label: Canonical opportunity URL
+      description: Public HTTPS URL for the canonical opportunity record. A GitHub issue alone is not canonical funding or claimability evidence.
+      placeholder: "https://agentbounties.app/earn.html?bountyContract=0x...&network=base-mainnet"
     validations:
       required: true
   - type: textarea
@@ -23,6 +55,14 @@ body:
       label: Executable verifier
       description: Name the live verifier, pinned command/module, fixtures, expected output, and time/resource limits. Creator review and prose-only rubrics remain drafts.
       placeholder: "sandboxed_regression_v1; command: python scripts/check.py; pinned revision: ...; expected: exit 0; timeout: 10 minutes"
+    validations:
+      required: true
+  - type: textarea
+    id: safe_start
+    attributes:
+      label: One exact safe-start action
+      description: Give one credential-free inspection action a solver can take before claiming, signing, spending, or doing work.
+      placeholder: "Open the pinned fixture directory at https://github.com/... and read README.md; do not sign or begin implementation until canonical claimability is rechecked."
     validations:
       required: true
   - type: dropdown

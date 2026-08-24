@@ -38,7 +38,10 @@ use competition_metric_core::{
     verification_policy_hash, JournalScopeV2, PublicVectorCase, PublicVectorMode,
     PublicVectorProgramInput,
 };
-use db::{ObservedInterface, ObservedProtocolEra, PostgresStore};
+use db::{
+    AttributionReliability, DiscoveryInterface, DiscoveryRouteFamily, ObservedInterface,
+    ObservedProtocolEra, PostgresStore,
+};
 use domain::{
     Agent, AutonomousBountyTermsDocument, BountyStatus, CapabilityClass,
     DiscoverySubscriptionFilters, EvalRun, HelpRequest, Id, Money, Objective, ObjectiveAction,
@@ -2158,12 +2161,34 @@ fn is_mcp_http_adapter_path(path: &str) -> bool {
     path == "/tools" || path.starts_with("/tools/")
 }
 
+fn mcp_discovery_route_family(path: &str) -> Option<DiscoveryRouteFamily> {
+    match path {
+        "/tools" => Some(DiscoveryRouteFamily::ProtocolOrientation),
+        "/tools/list_opportunities"
+        | "/tools/list_claimable_bounties"
+        | "/tools/list_autonomous_bounties"
+        | "/tools/list_unfunded_bounties"
+        | "/tools/get_autonomous_inventory_summary" => Some(DiscoveryRouteFamily::OpportunityList),
+        "/tools/get_bounty_status"
+        | "/tools/get_paid_status"
+        | "/tools/get_autonomous_bounty_terms"
+        | "/tools/get_open_competition_status"
+        | "/tools/get_open_competition_readiness"
+        | "/tools/analyze_bounty_fit" => Some(DiscoveryRouteFamily::OpportunityDetail),
+        "/tools/create_discovery_subscription"
+        | "/tools/get_discovery_subscription"
+        | "/tools/delete_discovery_subscription" => Some(DiscoveryRouteFamily::Alerts),
+        _ => None,
+    }
+}
+
 async fn observe_mcp_http_adapter(
     State(state): State<SharedState>,
     request: Request,
     next: Next,
 ) -> Response {
     let observed = is_mcp_http_adapter_path(request.uri().path());
+    let discovery_route = mcp_discovery_route_family(request.uri().path());
     let excluded = analytics_exclusion_is_authorized(&state, request.headers());
     let mut response = next.run(request).await;
     attest_analytics_exclusion(&mut response, observed && excluded);
@@ -2175,6 +2200,20 @@ async fn observe_mcp_http_adapter(
                     .record_interface_usage(
                         ObservedInterface::Mcp,
                         ObservedProtocolEra::McpHttpAdapter,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
+        if let (Some(store), Some(route_family)) = (state.store.clone(), discovery_route) {
+            let succeeded = response.status().is_success();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_discovery_route_usage(
+                        DiscoveryInterface::Mcp,
+                        route_family,
+                        AttributionReliability::Observed,
                         succeeded,
                         Utc::now(),
                     )
@@ -7226,7 +7265,55 @@ async fn list_opportunities(Json(args): Json<OpportunityListArgs>) -> Json<serde
         "{}/v1/opportunities",
         public_base_url_from_env().trim_end_matches('/')
     );
-    proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await
+    let response = proxy_hosted_json(reqwest::Client::new().get(url).query(&args)).await;
+    attach_mcp_discovery_links(response, "opportunity_list")
+}
+
+fn attach_mcp_discovery_links(
+    mut response: Json<serde_json::Value>,
+    campaign: &str,
+) -> Json<serde_json::Value> {
+    let Some(items) = response
+        .0
+        .pointer_mut("/content/0/json/items")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return response;
+    };
+    for item in items {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let canonical_url = object
+            .get("public_url")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let discovery_id = object
+            .get("opportunity_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let (Some(canonical_url), Some(discovery_id)) = (canonical_url, discovery_id) else {
+            continue;
+        };
+        let mut attributed_url = canonical_url.clone();
+        if let Ok(mut url) = Url::parse(&canonical_url) {
+            url.query_pairs_mut()
+                .append_pair("utm_source", "mcp")
+                .append_pair("utm_medium", "agent")
+                .append_pair("utm_campaign", campaign)
+                .append_pair("discovery_id", &discovery_id);
+            attributed_url = url.to_string();
+        }
+        object.insert(
+            "discovery_links".to_string(),
+            json!({
+                "canonical_url": canonical_url,
+                "attributed_url": attributed_url,
+                "attribution_reliability": "observed"
+            }),
+        );
+    }
+    response
 }
 
 async fn create_discovery_subscription(
@@ -8799,6 +8886,35 @@ mod tests {
             &test_state(),
             &HeaderMap::new()
         ));
+    }
+
+    #[test]
+    fn mcp_opportunity_response_keeps_canonical_and_adds_attributed_link() {
+        let response = mcp_json(json!({
+            "items": [{
+                "opportunity_id": "eip155:8453:agent-bounties/autonomous-v1:0xabc",
+                "public_url": "https://agentbounties.app/?bounty=0xabc"
+            }]
+        }));
+        let enriched = attach_mcp_discovery_links(response, "opportunity_list");
+        let links = enriched
+            .0
+            .pointer("/content/0/json/items/0/discovery_links")
+            .expect("discovery links");
+        assert_eq!(
+            links["canonical_url"],
+            "https://agentbounties.app/?bounty=0xabc"
+        );
+        let attributed = Url::parse(links["attributed_url"].as_str().unwrap()).unwrap();
+        let query = attributed.query_pairs().collect::<HashMap<_, _>>();
+        assert_eq!(
+            query.get("utm_source").map(|value| value.as_ref()),
+            Some("mcp")
+        );
+        assert_eq!(
+            query.get("discovery_id").map(|value| value.as_ref()),
+            Some("eip155:8453:agent-bounties/autonomous-v1:0xabc")
+        );
     }
 
     #[test]

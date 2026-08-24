@@ -17,6 +17,7 @@ on:
       - "scripts/reconcile_github_bounty_labels.py"
       - "scripts/test_reconcile_github_bounty_labels.py"
       - "ops/github-bounty-discovery-policy.json"
+      - "ops/github-bounty-landing-copy.json"
       - "crates/api/src/github_discovery.rs"
       - "crates/api/src/main.rs"
       - "scripts/fixtures/bounty_inventory_*.json"
@@ -68,6 +69,7 @@ jobs:
           set +e
           python scripts/reconcile_github_bounty_labels.py \
             --policy ops/github-bounty-discovery-policy.json \
+            --landing-copy ops/github-bounty-landing-copy.json \
             --json-out bounty-label-reconciliation.json \
             --md-out bounty-label-reconciliation.md \
             "${EXECUTE_ARGS[@]}" 2>&1 | tee bounty-label-reconciliation.log

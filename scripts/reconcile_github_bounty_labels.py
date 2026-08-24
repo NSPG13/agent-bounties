@@ -27,6 +27,7 @@ from typing import Any, Callable, Mapping
 USER_AGENT = "agent-bounties-github-discovery/1"
 PROJECTION_SCHEMA = "agent-bounties/github-bounty-discovery-v1"
 POLICY_SCHEMA = "agent-bounties/github-bounty-discovery-policy-v1"
+LANDING_COPY_SCHEMA = "agent-bounties/github-bounty-landing-copy-v1"
 CORE_DISCOVERY_PROTOCOLS = frozenset(
     {
         "agent-bounties/autonomous-v1",
@@ -62,10 +63,15 @@ IDENTITY_MARKER_RE = re.compile(
     r"<!-- agent-bounties/github-discovery-v1 (\{[^\r\n]*\}) -->"
 )
 SETTLEMENT_RECEIPT_MARKER = "<!-- agent-bounties-canonical-settlement -->"
-COMMON_LABELS = frozenset({"bounty", "ai-agent-welcome", "payments"})
+COMMON_LABELS = frozenset({"bounty", "payments"})
+SKILL_LABELS = frozenset(
+    {"skill:rust", "skill:python", "skill:web", "skill:research", "skill:browser"}
+)
 MANAGED_LABELS = frozenset(
     {
         *COMMON_LABELS,
+        "ai-agent-welcome",
+        *SKILL_LABELS,
         "funding-needed",
         "funded-live",
         "ready-to-earn",
@@ -102,6 +108,11 @@ LABEL_DEFINITIONS = {
     "cancelled": ("ededed", "The canonical bounty was cancelled"),
     "settled-paid": ("0e8a16", "Canonical BountySettled payment evidence exists"),
     "good-first-agent-bounty": ("bfdadc", "Explicitly graded as suitable introductory agent work"),
+    "skill:rust": ("dea584", "Primary work skill: Rust"),
+    "skill:python": ("3572a5", "Primary work skill: Python"),
+    "skill:web": ("1f6feb", "Primary work skill: web development"),
+    "skill:research": ("8250df", "Primary work skill: research"),
+    "skill:browser": ("c5def5", "Primary work skill: browser operation"),
 }
 BOUNDARIES = (
     "GitHub is a discovery mirror, not a funding, verification, or settlement authority.",
@@ -138,6 +149,7 @@ class IssuePlan:
     mapping_action: str
     create_eligible: bool
     title: str
+    original_title: str
     original_body: str
     desired_body: str
     current_managed_labels: list[str]
@@ -315,6 +327,132 @@ def load_policy(path: Path, repository: str, network: str) -> dict[str, Any]:
     ):
         raise LabelReconciliationError("compatibility trial interval is invalid")
     return policy
+
+
+def load_landing_copy(path: Path, repository: str) -> dict[str, dict[str, Any]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise LabelReconciliationError(f"cannot load reviewed landing copy: {error}") from error
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != LANDING_COPY_SCHEMA
+        or manifest.get("repository") != repository
+        or not isinstance(manifest.get("entries"), dict)
+    ):
+        raise LabelReconciliationError("reviewed landing-copy manifest is malformed")
+    entries: dict[str, dict[str, Any]] = {}
+    action_verbs = {
+        "add",
+        "analyze",
+        "build",
+        "create",
+        "document",
+        "fix",
+        "implement",
+        "improve",
+        "migrate",
+        "produce",
+        "remove",
+        "restore",
+        "ship",
+        "test",
+        "update",
+        "verify",
+    }
+    for identity, raw in manifest["entries"].items():
+        if not isinstance(identity, str) or not DISCOVERY_ID.fullmatch(identity):
+            raise LabelReconciliationError("landing-copy discovery identity is invalid")
+        if not isinstance(raw, dict):
+            raise LabelReconciliationError(f"landing copy is not an object: {identity}")
+        title = str(raw.get("outcome_title") or "").strip()
+        title_words = re.findall(r"[A-Za-z0-9]+", title)
+        if (
+            len(title_words) < 5
+            or title_words[0].lower() not in action_verbs
+            or len(title) > 160
+            or title.lower() in {"bounty", "task", "help needed", "fix bug"}
+        ):
+            raise LabelReconciliationError(f"landing title is not outcome-specific: {identity}")
+        intent = str(raw.get("intent_summary") or "").strip()
+        sentences = [part.strip() for part in re.split(r"[.!?](?:\s+|$)", intent) if part.strip()]
+        if len(sentences) != 2 or len(intent) > 500:
+            raise LabelReconciliationError(f"landing intent must contain exactly two sentences: {identity}")
+        skills = raw.get("skills")
+        if (
+            not isinstance(skills, list)
+            or not 1 <= len(skills) <= 3
+            or any(f"skill:{skill}" not in SKILL_LABELS for skill in skills)
+            or len(skills) != len(set(skills))
+        ):
+            raise LabelReconciliationError(f"landing skills are not allowlisted: {identity}")
+        criteria = raw.get("acceptance_criteria")
+        if (
+            not isinstance(criteria, list)
+            or not 2 <= len(criteria) <= 8
+            or any(not isinstance(value, str) or not value.strip() or len(value) > 300 for value in criteria)
+        ):
+            raise LabelReconciliationError(f"landing acceptance criteria are malformed: {identity}")
+        canonical_url = require_public_https_url(
+            raw.get("canonical_opportunity_url"), f"{identity}.canonical_opportunity_url"
+        )
+        safe_start = raw.get("safe_start")
+        if not isinstance(safe_start, dict):
+            raise LabelReconciliationError(f"landing safe start is missing: {identity}")
+        for key in ("label", "instructions"):
+            value = safe_start.get(key)
+            if not isinstance(value, str) or not value.strip() or len(value) > 300:
+                raise LabelReconciliationError(f"landing safe start {key} is malformed: {identity}")
+        require_public_https_url(safe_start.get("url"), f"{identity}.safe_start.url")
+        if not isinstance(raw.get("issue_number"), int) or raw["issue_number"] <= 0:
+            raise LabelReconciliationError(f"landing issue number is invalid: {identity}")
+        parse_instant(raw.get("reviewed_at"), f"{identity}.reviewed_at")
+        if not isinstance(raw.get("reviewed_by"), str) or not raw["reviewed_by"].strip():
+            raise LabelReconciliationError(f"landing reviewer is missing: {identity}")
+        entries[identity] = {
+            **raw,
+            "outcome_title": title,
+            "intent_summary": intent,
+            "canonical_opportunity_url": canonical_url,
+            "skills": list(skills),
+            "acceptance_criteria": [value.strip() for value in criteria],
+        }
+    return entries
+
+
+def attach_landing_copy(
+    items: list[dict[str, Any]],
+    entries: Mapping[str, Mapping[str, Any]],
+    repository: str,
+) -> list[dict[str, Any]]:
+    attached: list[dict[str, Any]] = []
+    for source in items:
+        item = dict(source)
+        if item.get("lifecycle_state") == "ready_to_earn":
+            identity = str(item["discovery_id"])
+            landing = entries.get(identity)
+            if landing is None:
+                item["_landing_action_required"] = [
+                    "outcome_title",
+                    "intent_summary",
+                    "skills",
+                    "canonical_opportunity_url",
+                    "acceptance_criteria",
+                    "safe_start",
+                ]
+            else:
+                if landing.get("canonical_opportunity_url") != item.get("public_url"):
+                    raise LabelReconciliationError(
+                        f"reviewed canonical opportunity URL drifted from projection: {identity}"
+                    )
+                source_issue = parse_same_repository_issue(item.get("source_url"), repository)
+                if source_issue is not None and source_issue != landing.get("issue_number"):
+                    raise LabelReconciliationError(
+                        f"reviewed landing copy maps the wrong source issue: {identity}"
+                    )
+                item["_landing"] = dict(landing)
+        attached.append(item)
+    return attached
 
 
 def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1082,7 +1220,10 @@ def format_usdc(amount: Any) -> str:
 def render_managed_block(item: Mapping[str, Any]) -> str:
     identity = str(item["discovery_id"])
     marker = json.dumps({"discovery_id": identity}, separators=(",", ":"), sort_keys=True)
-    public_url = add_attribution(str(item["public_url"]), identity)
+    canonical_public_url = str(item["public_url"])
+    public_url = add_attribution(canonical_public_url, identity)
+    landing = item.get("_landing")
+    action_required = item.get("_landing_action_required")
     next_action = item.get("next_action")
     if not isinstance(next_action, dict) or not isinstance(next_action.get("label"), str):
         raise LabelReconciliationError(f"next action is malformed: {identity}")
@@ -1092,10 +1233,11 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
         f"<!-- agent-bounties/github-discovery-v1 {marker} -->",
         "## Canonical bounty discovery",
         "",
-        str(item["summary"]).strip(),
+        str(landing.get("intent_summary") if isinstance(landing, dict) else item["summary"]).strip(),
         "",
-        f"- **Mode:** {'Open competition' if item['competition_mode'] == 'first_valid_submission' else 'Exclusive claim'}",
-        f"- **Lifecycle:** `{item['lifecycle_state']}`",
+        f"- **Current work state:** `{item['lifecycle_state']}`",
+        f"- **Current payment state:** `{'paid' if item['lifecycle_state'] == 'settled' else 'escrowed' if item.get('funded') is True else 'unfunded'}`",
+        f"- **Current competition state:** `{'accepting_entries' if item['competition_mode'] == 'first_valid_submission' and item['lifecycle_state'] == 'ready_to_earn' else item['competition_mode']}`",
         f"- **Solver reward:** {format_usdc(item['reward_usdc_base_units'])} USDC",
         f"- **Entry/claim bond:** {format_usdc(item['bond_usdc_base_units'])} USDC",
         f"- **Funding:** {format_usdc(item['funded_usdc_base_units'])} / {format_usdc(item['funding_target_usdc_base_units'])} USDC",
@@ -1110,6 +1252,39 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
         lines.append(f"- **Capacity:** {item.get('entry_count', 0)} / {item.get('max_entries', '?')} entries")
     if item.get("deadline"):
         lines.append(f"- **{str(item.get('deadline_kind') or 'Deadline').replace('_', ' ').title()}:** `{item['deadline']}`")
+    if action_required:
+        lines.extend(
+            [
+                "",
+                "### Action required before solver invitation",
+                "",
+                "Canonical state is still shown above, but this issue is intentionally excluded from solver-invitation labels until reviewed landing copy supplies: "
+                + ", ".join(f"`{field}`" for field in action_required)
+                + ".",
+                "",
+                f"[Canonical opportunity URL]({canonical_public_url})",
+                "",
+                "> This publication gate does not change canonical funding or lifecycle state. Do not start, claim, sign, or spend from this incomplete mirror.",
+                MANAGED_END,
+            ]
+        )
+        return "\n".join(lines)
+    if isinstance(landing, dict):
+        lines.extend(
+            [
+                f"- **Allowlisted skills:** {', '.join(f'`skill:{skill}`' for skill in landing['skills'])}",
+                "",
+                "### Replayable acceptance criteria",
+                "",
+                *[f"- {criterion}" for criterion in landing["acceptance_criteria"]],
+                "",
+                "### One safe start",
+                "",
+                f"**[{landing['safe_start']['label']}]({add_attribution(str(landing['safe_start']['url']), identity)})** — {landing['safe_start']['instructions']}",
+                "",
+                f"[Canonical opportunity URL]({canonical_public_url}) · [Open with GitHub attribution]({public_url})",
+            ]
+        )
     if item["competition_mode"] == "first_valid_submission":
         lines.extend(
             [
@@ -1171,11 +1346,16 @@ def desired_labels(item: Mapping[str, Any], policy: Mapping[str, Any], generated
     if state == "funding_needed":
         labels.add("funding-needed")
     elif state == "ready_to_earn":
-        labels.update({"funded-live", "ready-to-earn", "claimable-live"})
-        if mode == "first_valid_submission":
-            labels.update({"open-competition", "verifier"})
-            if not trial_claimable_enabled(policy, generated_at):
-                labels.discard("claimable-live")
+        labels.add("funded-live")
+        landing = item.get("_landing")
+        if item.get("_landing_action_required") is None:
+            labels.update({"ai-agent-welcome", "ready-to-earn", "claimable-live"})
+            if isinstance(landing, dict):
+                labels.update(f"skill:{skill}" for skill in landing["skills"])
+            if mode == "first_valid_submission":
+                labels.update({"open-competition", "verifier"})
+                if not trial_claimable_enabled(policy, generated_at):
+                    labels.discard("claimable-live")
     elif state == "in_progress":
         labels.add("funded-live")
         labels.add("claimed-live" if mode == "exclusive_claim" else "in-progress")
@@ -1201,7 +1381,12 @@ def desired_labels(item: Mapping[str, Any], policy: Mapping[str, Any], generated
     elif state == "settled":
         labels.add("settled-paid")
     difficulty = item.get("difficulty")
-    if isinstance(difficulty, str) and difficulty.strip():
+    if (
+        state == "ready_to_earn"
+        and item.get("_landing_action_required") is None
+        and isinstance(difficulty, str)
+        and difficulty.strip()
+    ):
         labels.add("good-first-agent-bounty")
     return labels
 
@@ -1291,8 +1476,11 @@ def build_plans(
     policy: Mapping[str, Any],
     repository: str,
     comments_by_issue: Mapping[int, list[dict[str, Any]]] | None = None,
+    landing_entries: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[IssuePlan]:
     items = validate_projection(projection, str(policy["network"]), policy)
+    if landing_entries is not None:
+        items = attach_landing_copy(items, landing_entries, repository)
     generated_at = parse_instant(projection["generated_at"], "projection.generated_at")
     issue_by_number: dict[int, dict[str, Any]] = {}
     marker_to_issue: dict[str, dict[str, Any]] = {}
@@ -1351,6 +1539,20 @@ def build_plans(
                 mapping_action = "excluded_historical_terminal"
             else:
                 mapping_action = reason
+        if item.get("_landing_action_required"):
+            mapping_action = "action_required_landing_copy"
+            if issue is None:
+                eligible = False
+
+        lifecycle_state = str(item["lifecycle_state"])
+        preserve_closed_historical = bool(
+            issue
+            and issue.get("state") == "closed"
+            and lifecycle_state in {"settled", "cancelled", "expired"}
+        )
+        if preserve_closed_historical:
+            eligible = False
+            mapping_action = "preserve_closed_historical"
 
         managed = render_managed_block(item)
         original_body = str(issue.get("body") or "") if issue else ""
@@ -1358,7 +1560,7 @@ def build_plans(
         desired = desired_labels(item, policy, generated_at) if eligible else set()
         current_all = label_names(issue) if issue else set()
         current_managed = current_all & MANAGED_LABELS
-        state = str(item["lifecycle_state"])
+        state = lifecycle_state
         should_close = state == "settled" or (
             state in {"cancelled", "expired"} and item.get("recovery_action_available") is not True
         )
@@ -1394,6 +1596,14 @@ def build_plans(
                 0,
                 int((parse_instant(created_at, f"issue #{issue_number}.created_at") - parse_instant(item["created_at"], "created_at")).total_seconds()),
             )
+        landing = item.get("_landing")
+        desired_title = (
+            str(issue.get("title") or item["title"])
+            if issue and (preserve_closed_historical or item.get("_landing_action_required"))
+            else str(landing["outcome_title"])
+            if isinstance(landing, dict)
+            else f"[Bounty] {str(item['title']).strip()}"
+        )[:256]
         plans.append(
             IssuePlan(
                 discovery_id=identity,
@@ -1404,7 +1614,8 @@ def build_plans(
                 issue_url=str(issue.get("html_url")) if issue else None,
                 mapping_action=mapping_action,
                 create_eligible=eligible,
-                title=f"[Bounty] {str(item['title']).strip()}"[:256],
+                title=desired_title,
+                original_title=str(issue.get("title") or "") if issue else "",
                 original_body=original_body,
                 desired_body=desired_body,
                 current_managed_labels=sorted(current_managed),
@@ -1432,6 +1643,7 @@ def plan_has_write(plan: IssuePlan) -> bool:
         return False
     return (
         plan.issue_number is None
+        or plan.original_title != plan.title
         or plan.original_body != plan.desired_body
         or bool(plan.add_labels)
         or bool(plan.remove_labels)
@@ -1471,6 +1683,7 @@ def patch_issue_core(
     repository: str,
     token: str,
     issue_number: int,
+    title: str,
     body: str,
     labels: list[str],
 ) -> dict[str, Any]:
@@ -1478,7 +1691,7 @@ def patch_issue_core(
         request,
         "PATCH",
         f"https://api.github.com/repos/{repository}/issues/{issue_number}",
-        {"body": body, "labels": labels},
+        {"title": title, "body": body, "labels": labels},
         github_headers(token),
     )
     if result.status != 200 or not isinstance(result.body, dict):
@@ -1534,8 +1747,20 @@ def execute_plans(
                 raise LabelReconciliationError(f"issue #{issue_number} refresh failed")
             current_all = label_names(fetched.body)
             desired_all = sorted((current_all - MANAGED_LABELS) | set(plan.desired_managed_labels))
-            if str(fetched.body.get("body") or "") != plan.desired_body or current_all != set(desired_all):
-                patch_issue_core(request, repository, token, issue_number, plan.desired_body, desired_all)
+            if (
+                str(fetched.body.get("title") or "") != plan.title
+                or str(fetched.body.get("body") or "") != plan.desired_body
+                or current_all != set(desired_all)
+            ):
+                patch_issue_core(
+                    request,
+                    repository,
+                    token,
+                    issue_number,
+                    plan.title,
+                    plan.desired_body,
+                    desired_all,
+                )
 
         if plan.settlement_receipt and plan.receipt_action == "create":
             result = request_with_retry(
@@ -1584,6 +1809,7 @@ def execute_plans(
             raise LabelReconciliationError(f"issue #{issue_number} verification failed")
         if (
             issue_marker(verified.body) != plan.discovery_id
+            or str(verified.body.get("title") or "") != plan.title
             or label_names(verified.body) & MANAGED_LABELS != set(plan.desired_managed_labels)
             or verified.body.get("state") != plan.desired_state
         ):
@@ -1658,6 +1884,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--network", default="base-mainnet")
     parser.add_argument("--repository", default="NSPG13/agent-bounties")
     parser.add_argument("--policy", type=Path, default=Path("ops/github-bounty-discovery-policy.json"))
+    parser.add_argument(
+        "--landing-copy",
+        type=Path,
+        default=Path("ops/github-bounty-landing-copy.json"),
+    )
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm-repository")
@@ -1671,6 +1902,7 @@ def main(argv: list[str] | None = None, request: HttpRequest = default_http_requ
     repository = validate_repository(args.repository)
     api_base_url = normalize_api_base_url(args.api_base_url)
     policy = load_policy(args.policy, repository, args.network)
+    landing_entries = load_landing_copy(args.landing_copy, repository)
     token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
     if args.execute:
         if args.fixture:
@@ -1692,14 +1924,29 @@ def main(argv: list[str] | None = None, request: HttpRequest = default_http_requ
         issues = fetch_linked_source_issues(request, repository, token or None, items, issues)
         comments_by_issue = {}
 
-    plans = build_plans(projection, issues, policy, repository, comments_by_issue)
+    enforced_landing_entries = None if args.fixture else landing_entries
+    plans = build_plans(
+        projection,
+        issues,
+        policy,
+        repository,
+        comments_by_issue,
+        enforced_landing_entries,
+    )
     if not args.fixture:
         for plan in plans:
             if plan.lifecycle_state == "settled" and plan.issue_number is not None:
                 comments_by_issue[plan.issue_number] = fetch_issue_comments(
                     request, repository, plan.issue_number, token or None
                 )
-        plans = build_plans(projection, issues, policy, repository, comments_by_issue)
+        plans = build_plans(
+            projection,
+            issues,
+            policy,
+            repository,
+            comments_by_issue,
+            enforced_landing_entries,
+        )
     eligible = [plan for plan in plans if plan.create_eligible]
     excluded = [plan for plan in plans if not plan.create_eligible]
     writes = [plan for plan in plans if plan_has_write(plan)]

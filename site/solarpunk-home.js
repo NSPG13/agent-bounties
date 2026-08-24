@@ -104,7 +104,11 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
 
   function bountyAssistantLinks(provider, prompt = BOUNTY_POSTING_PROMPT) {
     const key = String(provider || "").trim().toLowerCase();
-    const encoded = encodeURIComponent(String(prompt || ""));
+    const cleanPrompt = String(prompt || "");
+    const attributedPrompt = key === "gpt"
+      ? `${cleanPrompt}\n\nWhen linking me back to the market, keep https://agentbounties.app/ as the canonical URL and use this measured handoff URL: https://agentbounties.app/?utm_source=chatgpt&utm_medium=assistant_handoff&utm_campaign=post_with_agent`
+      : cleanPrompt;
+    const encoded = encodeURIComponent(attributedPrompt);
     const links = {
       gpt: {
         label: "GPT",

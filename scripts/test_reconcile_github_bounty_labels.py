@@ -20,6 +20,7 @@ from reconcile_github_bounty_labels import (
     execute_plans,
     fetch_github_issues,
     issue_marker,
+    load_landing_copy,
     main,
     plan_has_write,
     request_with_retry,
@@ -222,6 +223,29 @@ def issue(number: int, *, body: str = "Human-authored context.", labels: list[st
     }
 
 
+def landing(record: dict, issue_number: int = 42) -> dict[str, dict]:
+    return {
+        record["discovery_id"]: {
+            "issue_number": issue_number,
+            "outcome_title": "Build a replayable compatibility report for the pinned fixtures",
+            "intent_summary": "Produce a replayable compatibility report for the pinned fixtures. Let maintainers ship the change without guessing about downstream behavior.",
+            "skills": ["python", "research"],
+            "canonical_opportunity_url": record["public_url"],
+            "acceptance_criteria": [
+                "Run the pinned checker and capture exit code zero.",
+                "Publish the fixture digest and exact reproduction command.",
+            ],
+            "safe_start": {
+                "label": "Inspect the pinned fixtures",
+                "url": "https://github.com/NSPG13/agent-bounties/tree/main/fixtures",
+                "instructions": "Read the fixtures before claiming or signing anything.",
+            },
+            "reviewed_by": "NSPG13",
+            "reviewed_at": NOW,
+        }
+    }
+
+
 class FakeGitHub:
     def __init__(self, issues: list[dict], comments: dict[int, list[dict]] | None = None) -> None:
         self.issues = {record["number"]: record for record in issues}
@@ -250,6 +274,8 @@ class FakeGitHub:
             return HttpResult(200, self.issues[int(match.group(1))], {})
         if match and method == "PATCH":
             record = self.issues[int(match.group(1))]
+            if "title" in body:
+                record["title"] = body["title"]
             if "body" in body:
                 record["body"] = body["body"]
             if "labels" in body:
@@ -281,6 +307,101 @@ class FakeGitHub:
 
 
 class GitHubDiscoveryReconciliationTests(unittest.TestCase):
+    def test_reviewed_landing_copy_controls_title_skills_and_safe_start(self) -> None:
+        record = item(90, source_url=f"https://github.com/{REPOSITORY}/issues/42")
+        source = issue(42, body="Keep this human section.", labels=["bounty"])
+        plan = build_plans(
+            projection(record),
+            [source],
+            policy(),
+            REPOSITORY,
+            landing_entries=landing(record),
+        )[0]
+        self.assertEqual(
+            plan.title,
+            "Build a replayable compatibility report for the pinned fixtures",
+        )
+        self.assertIn("skill:python", plan.desired_managed_labels)
+        self.assertIn("skill:research", plan.desired_managed_labels)
+        self.assertIn("### Replayable acceptance criteria", plan.desired_body)
+        self.assertIn("### One safe start", plan.desired_body)
+        self.assertIn("Canonical opportunity URL", plan.desired_body)
+        self.assertIn("utm_source=github", plan.desired_body)
+        self.assertTrue(plan.desired_body.startswith("Keep this human section."))
+
+    def test_missing_reviewed_copy_fails_closed_without_solver_invitation(self) -> None:
+        record = item(91, source_url=f"https://github.com/{REPOSITORY}/issues/42")
+        source = issue(
+            42,
+            labels=["bounty", "ai-agent-welcome", "ready-to-earn", "claimable-live"],
+        )
+        plan = build_plans(
+            projection(record),
+            [source],
+            policy(),
+            REPOSITORY,
+            landing_entries={},
+        )[0]
+        self.assertEqual(plan.mapping_action, "action_required_landing_copy")
+        self.assertIn("funded-live", plan.desired_managed_labels)
+        for invitation in ("ai-agent-welcome", "ready-to-earn", "claimable-live"):
+            self.assertNotIn(invitation, plan.desired_managed_labels)
+        self.assertIn("Action required before solver invitation", plan.desired_body)
+        self.assertEqual(plan.title, source["title"])
+
+    def test_missing_reviewed_copy_does_not_create_a_new_solver_mirror(self) -> None:
+        record = item(92)
+        plan = build_plans(
+            projection(record), [], policy(), REPOSITORY, landing_entries={}
+        )[0]
+        self.assertFalse(plan.create_eligible)
+        self.assertFalse(plan_has_write(plan))
+
+    def test_generic_reviewed_title_is_rejected(self) -> None:
+        record = item(93)
+        manifest = {
+            "schema_version": "agent-bounties/github-bounty-landing-copy-v1",
+            "repository": REPOSITORY,
+            "entries": landing(record),
+        }
+        manifest["entries"][record["discovery_id"]]["outcome_title"] = "Fix bug"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "landing.json")
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(LabelReconciliationError, "outcome-specific"):
+                load_landing_copy(path, REPOSITORY)
+
+    def test_reviewed_landing_copy_rejects_non_allowlisted_skills(self) -> None:
+        record = item(94)
+        manifest = {
+            "schema_version": "agent-bounties/github-bounty-landing-copy-v1",
+            "repository": REPOSITORY,
+            "entries": landing(record),
+        }
+        manifest["entries"][record["discovery_id"]]["skills"] = ["java"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "landing.json")
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(LabelReconciliationError, "allowlisted"):
+                load_landing_copy(path, REPOSITORY)
+
+    def test_reviewed_landing_copy_requires_exactly_two_intent_sentences(self) -> None:
+        record = item(95)
+        manifest = {
+            "schema_version": "agent-bounties/github-bounty-landing-copy-v1",
+            "repository": REPOSITORY,
+            "entries": landing(record),
+        }
+        manifest["entries"][record["discovery_id"]]["intent_summary"] = (
+            "Produce one replayable compatibility report. "
+            "Explain the impact. Include a release recommendation."
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "landing.json")
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(LabelReconciliationError, "exactly two sentences"):
+                load_landing_copy(path, REPOSITORY)
+
     def test_beta3_discovery_rejects_unrepresentable_winner_mode(self) -> None:
         self.assertEqual(
             beta3_discovery_competition_mode("first_proven"),
@@ -367,7 +488,7 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertEqual(required.mapping_action, "required_backfill")
         self.assertEqual(required.desired_state, "closed")
         self.assertEqual(required.desired_state_reason, "completed")
-        self.assertEqual(required.desired_managed_labels, ["ai-agent-welcome", "bounty", "payments", "settled-paid"])
+        self.assertEqual(required.desired_managed_labels, ["bounty", "payments", "settled-paid"])
 
         historical["source_url"] = f"https://github.com/{REPOSITORY}/issues/60"
         reused = build_plans(projection(historical), [issue(60)], policy(), REPOSITORY)[0]
@@ -430,6 +551,22 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         )
         self.assertLess(comment_index, close_index)
         self.assertEqual(service.issues[12]["state_reason"], "completed")
+
+    def test_closed_historical_issue_is_not_reformatted_or_rewritten(self) -> None:
+        settled = item(120, state="settled")
+        settled["source_url"] = f"https://github.com/{REPOSITORY}/issues/120"
+        source = issue(
+            120,
+            body="Historical human text and an earlier managed block stay untouched.",
+            labels=["bounty", "settled-paid"],
+            state="closed",
+        )
+        source["state_reason"] = "completed"
+        plan = build_plans(projection(settled), [source], policy(), REPOSITORY)[0]
+        self.assertEqual(plan.mapping_action, "preserve_closed_historical")
+        self.assertEqual(plan.original_body, plan.desired_body)
+        self.assertEqual(plan.original_title, plan.title)
+        self.assertFalse(plan_has_write(plan))
 
     def test_beta3_settlement_removes_earning_labels_and_records_keeper(self) -> None:
         settled = item(
