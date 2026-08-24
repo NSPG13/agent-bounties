@@ -18,6 +18,8 @@ CANONICAL_PAGES = {
     "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
     "authorize.html": "https://agentbounties.app/authorize.html",
     "cancel.html": "https://agentbounties.app/cancel.html",
+    "earn-money-using-ai.html": "https://agentbounties.app/earn-money-using-ai.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html": "https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html",
     "metrics.html": "https://agentbounties.app/metrics.html",
     "onramp.html": "https://agentbounties.app/onramp.html",
     "post.html": "https://agentbounties.app/post.html",
@@ -31,9 +33,11 @@ INDEXABLE_PAGES = {
     "blog/index.html",
     "competition.html",
     "earn.html",
+    "earn-money-using-ai.html",
     "how-to-earn-money-with-my-ai-agent.html",
     "index.html",
     "metrics.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html",
     "privacy.html",
     "terms.html",
 }
@@ -73,6 +77,8 @@ REQUIRED_FILES = {
     "index.html",
     "how-to-earn-money-with-my-ai-agent.html",
     "legal-consent.js",
+    "earn-money-using-ai.html",
+    "post-a-bounty-with-chatgpt-claude-gemini.html",
     "llms.txt",
     "metrics.css",
     "metrics.html",
@@ -343,6 +349,8 @@ def check_blog(site_dir: Path) -> None:
     about = (site_dir / "about.html").read_text(encoding="utf-8")
     archive = (site_dir / "blog" / "index.html").read_text(encoding="utf-8")
     guide = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
+    bounty_guide = (site_dir / "earn-money-using-ai.html").read_text(encoding="utf-8")
+    posting_guide = (site_dir / "post-a-bounty-with-chatgpt-claude-gemini.html").read_text(encoding="utf-8")
     essay = (site_dir / "blog" / "agentic-economy-needs-a-market-for-work.html").read_text(encoding="utf-8")
     for label, text in (("about.html", about), ("blog/index.html", archive)):
         require_phrases(
@@ -351,6 +359,8 @@ def check_blog(site_dir: Path) -> None:
             [
                 "how-to-earn-money-with-my-ai-agent.html",
                 "agentic-economy-needs-a-market-for-work.html",
+                "earn-money-using-ai.html",
+                "post-a-bounty-with-chatgpt-claude-gemini.html",
             ],
         )
     require_phrases(
@@ -366,6 +376,33 @@ def check_blog(site_dir: Path) -> None:
         ],
     )
     require_phrases(
+        "verifiable bounty earning guide",
+        bounty_guide,
+        [
+            '"@type":"BlogPosting"',
+            '"@type":"HowTo"',
+            '"@type":"FAQPage"',
+            "Calculate expected value before the agent starts",
+            "Use a five-gate completion workflow",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event",
+        ],
+    )
+    require_phrases(
+        "AI-assisted posting guide",
+        posting_guide,
+        [
+            '"@type":"BlogPosting"',
+            '"@type":"HowTo"',
+            '"@type":"FAQPage"',
+            'href="./#post-a-bounty"',
+            "prepare_bounty_post",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event",
+        ],
+    )
+    for retired in ("objective.html", "funding.html", "post.html"):
+        if retired in bounty_guide + posting_guide:
+            fail(f"restored guides must not revive retired route {retired}")
+    require_phrases(
         "agentic economy essay",
         essay,
         [
@@ -380,6 +417,8 @@ def check_blog(site_dir: Path) -> None:
     expected_urls = {
         "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
         "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
+        "https://agentbounties.app/earn-money-using-ai.html",
+        "https://agentbounties.app/post-a-bounty-with-chatgpt-claude-gemini.html",
     }
     if posts.get("version") != "https://jsonfeed.org/version/1.1":
         fail("blog JSON index must use JSON Feed 1.1")
@@ -412,6 +451,9 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "allow_google_signals: false",
             "allow_ad_personalization_signals: false",
             "data-google-analytics-consent",
+            "opportunity_feed_click",
+            "normalizedSource",
+            '"chatgpt"',
         ],
     )
     for forbidden in ("document.cookie", "location.search.slice", "wallet_address", "user_agent", "ip_address"):
@@ -437,6 +479,9 @@ def check_metrics(site_dir: Path) -> None:
             "Counts are external requests, not unique people, agents, clients, or sessions",
             "Verify every payout",
             "Policy-excluded value",
+            "Delayed discoverability scorecard",
+            "Captured ChatGPT referrals",
+            "GitHub unique cloners",
             'href="generated/public-metrics-policy.json"',
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
             '<a href="./">Home</a><a href="metrics.html" aria-current="page">Metrics</a>',
@@ -454,6 +499,8 @@ def check_metrics(site_dir: Path) -> None:
             "canonicalPayoutRows",
             "partitionCanonicalPayoutRows",
             "PUBLIC_METRICS_POLICY_URL",
+            "DISCOVERABILITY_URL",
+            "discoverabilitySummary",
             "visibilitychange",
             '"unavailable"',
             '"delayed"',
@@ -804,6 +851,8 @@ def main() -> int:
     if images != EXPECTED_SCENE_ASSETS:
         fail(f"orphaned or missing WebP assets: extra={sorted(images - EXPECTED_SCENE_ASSETS)} missing={sorted(EXPECTED_SCENE_ASSETS - images)}")
 
+    titles: dict[str, str] = {}
+    descriptions: dict[str, str] = {}
     for relative, canonical in CANONICAL_PAGES.items():
         path = site_dir / relative
         text = path.read_text(encoding="utf-8")
@@ -821,13 +870,21 @@ def main() -> int:
                 f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
                 f'<script src="{prefix}analytics-config.js?v=2"></script>',
-                f'<script src="{prefix}analytics.js?v=3"></script>',
+                f'<script src="{prefix}analytics.js?v=4"></script>',
             ],
         )
-        if text.index(f'src="{prefix}analytics-config.js?v=2"') > text.index(f'src="{prefix}analytics.js?v=3"'):
+        if text.index(f'src="{prefix}analytics-config.js?v=2"') > text.index(f'src="{prefix}analytics.js?v=4"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
             fail(f"{relative}: transactional handoffs must remain noindex, nofollow")
+        title = re.search(r"<title>([^<]+)</title>", text)
+        description = re.search(r'<meta name="description" content="([^"]+)"', text)
+        if not title or title.group(1) in titles:
+            fail(f"{relative}: title must be unique")
+        if not description or description.group(1) in descriptions:
+            fail(f"{relative}: meta description must be unique")
+        titles[title.group(1)] = relative
+        descriptions[description.group(1)] = relative
         for link in parser.links:
             check_internal_link(site_dir, path, link, parser.ids)
 
@@ -837,6 +894,12 @@ def main() -> int:
     expected_urls = {CANONICAL_PAGES[relative] for relative in INDEXABLE_PAGES}
     if urls != expected_urls:
         fail(f"sitemap must list every indexable canonical website page exactly once; found {sorted(urls)}")
+    for retired in (
+        "https://agentbounties.app/objective.html",
+        "https://agentbounties.app/funding.html",
+    ):
+        if retired in urls:
+            fail(f"sitemap must not contain retired transactional URL {retired}")
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
     require_phrases("robots.txt", robots, ["User-agent: OAI-SearchBot", "Sitemap: https://agentbounties.app/sitemap.xml"])
 

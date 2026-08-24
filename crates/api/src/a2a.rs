@@ -1,4 +1,6 @@
-use crate::{build_opportunity_projection, OpportunityQuery, SharedState};
+use crate::{
+    analytics_exclusion_is_authorized, build_opportunity_projection, OpportunityQuery, SharedState,
+};
 use axum::{
     extract::{
         rejection::{JsonRejection, QueryRejection},
@@ -10,10 +12,12 @@ use axum::{
     Extension, Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
+use db::{AttributionReliability, DiscoveryInterface, DiscoveryRouteFamily};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use url::Url;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -411,7 +415,12 @@ pub(crate) async fn send_message(
         Err(response) => return *response,
     };
     let invocation = invocation_from_message(&request.message);
-    let outcome = execute_skill(&state, invocation).await;
+    let analytics_excluded = analytics_exclusion_is_authorized(
+        state.analytics_exclusion_token.as_deref(),
+        state.operator_api_token.as_deref(),
+        &headers,
+    );
+    let outcome = execute_skill(&state, invocation, analytics_excluded).await;
     let task = task_from_outcome(request.message.clone(), context_id, outcome);
     match store.lock() {
         Ok(mut guard) => guard.insert(
@@ -894,8 +903,19 @@ fn invocation_from_message(message: &A2aMessage) -> SkillInvocation {
     }
 }
 
-async fn execute_skill(state: &SharedState, invocation: SkillInvocation) -> ExecutionOutcome {
-    match invocation.skill.as_str() {
+async fn execute_skill(
+    state: &SharedState,
+    invocation: SkillInvocation,
+    analytics_excluded: bool,
+) -> ExecutionOutcome {
+    let route_family = match invocation.skill.as_str() {
+        "discover-ready-to-earn-bounties" => Some(DiscoveryRouteFamily::OpportunityList),
+        "explain-bounty-opportunity" => Some(DiscoveryRouteFamily::OpportunityDetail),
+        "explain-agent-bounties-protocol" => Some(DiscoveryRouteFamily::ProtocolOrientation),
+        "explain-bounty-alerts" => Some(DiscoveryRouteFamily::Alerts),
+        _ => None,
+    };
+    let outcome = match invocation.skill.as_str() {
         "discover-ready-to-earn-bounties" => discover_bounties(state, &invocation.parameters).await,
         "explain-bounty-opportunity" => explain_opportunity(state, &invocation.parameters).await,
         "explain-agent-bounties-protocol" => protocol_overview(),
@@ -906,7 +926,24 @@ async fn execute_skill(state: &SharedState, invocation: SkillInvocation) -> Exec
             artifact_name: None,
             data: None,
         },
+    };
+    if !analytics_excluded {
+        if let (Some(store), Some(route_family)) = (state.store.clone(), route_family) {
+            let succeeded = outcome.state != A2aTaskState::Failed;
+            tokio::spawn(async move {
+                let _ = store
+                    .record_discovery_route_usage(
+                        DiscoveryInterface::A2a,
+                        route_family,
+                        AttributionReliability::Observed,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
     }
+    outcome
 }
 
 async fn discover_bounties(state: &SharedState, parameters: &Value) -> ExecutionOutcome {
@@ -983,7 +1020,32 @@ async fn discover_bounties(state: &SharedState, parameters: &Value) -> Execution
         reward_matches && category_matches && skills_match
     });
     projection.items.truncate(limit);
-    let count = projection.items.len();
+    let items = projection
+        .items
+        .into_iter()
+        .map(|item| {
+            let canonical_url = item.public_url.clone();
+            let opportunity_id = item.opportunity_id.clone();
+            let attributed_url =
+                attributed_discovery_url(&canonical_url, "a2a-opportunity-list", &opportunity_id);
+            let mut value = serde_json::to_value(item).expect("opportunity item serializes");
+            value
+                .as_object_mut()
+                .expect("opportunity item is an object")
+                .insert(
+                    "discovery_links".to_string(),
+                    json!({
+                        "canonical_url": canonical_url,
+                        "attributed_url": attributed_url,
+                        "interface": "a2a",
+                        "campaign": "a2a-opportunity-list",
+                        "discovery_id": opportunity_id
+                    }),
+                );
+            value
+        })
+        .collect::<Vec<_>>();
+    let count = items.len();
     let degraded = projection.degraded;
     ExecutionOutcome {
         state: A2aTaskState::Completed,
@@ -995,7 +1057,7 @@ async fn discover_bounties(state: &SharedState, parameters: &Value) -> Execution
             "network": projection.network,
             "degraded": projection.degraded,
             "sourceStatuses": projection.source_statuses,
-            "items": projection.items,
+            "items": items,
             "evidenceBoundary": projection.evidence_boundary,
             "appliedFilters": {
                 "view": view,
@@ -1055,12 +1117,43 @@ async fn explain_opportunity(state: &SharedState, parameters: &Value) -> Executi
             data: Some(json!({"opportunityId": opportunity_id, "found": false, "generatedAt": projection.generated_at, "degraded": projection.degraded})),
         };
     };
+    let canonical_url = item.public_url.clone();
+    let attributed_url = attributed_discovery_url(
+        &canonical_url,
+        "a2a-opportunity-detail",
+        &item.opportunity_id,
+    );
     ExecutionOutcome {
         state: A2aTaskState::Completed,
         summary: format!("{} is currently {} with payment state {}. This response is read-only and does not reserve or claim it.", item.title, item.work_state, item.payment_state),
         artifact_name: Some("Agent Bounties opportunity detail".to_string()),
-        data: Some(json!({"found": true, "generatedAt": projection.generated_at, "degraded": projection.degraded, "opportunity": item, "evidenceBoundary": PAYMENT_BOUNDARY})),
+        data: Some(json!({
+            "found": true,
+            "generatedAt": projection.generated_at,
+            "degraded": projection.degraded,
+            "opportunity": item,
+            "discoveryLinks": {
+                "canonicalUrl": canonical_url,
+                "attributedUrl": attributed_url,
+                "interface": "a2a",
+                "campaign": "a2a-opportunity-detail",
+                "discoveryId": opportunity_id
+            },
+            "evidenceBoundary": PAYMENT_BOUNDARY
+        })),
     }
+}
+
+fn attributed_discovery_url(canonical_url: &str, campaign: &str, discovery_id: &str) -> String {
+    let Ok(mut url) = Url::parse(canonical_url) else {
+        return canonical_url.to_string();
+    };
+    url.query_pairs_mut()
+        .append_pair("utm_source", "a2a")
+        .append_pair("utm_medium", "agent")
+        .append_pair("utm_campaign", campaign)
+        .append_pair("discovery_id", discovery_id);
+    url.to_string()
 }
 
 fn protocol_overview() -> ExecutionOutcome {
@@ -1069,7 +1162,10 @@ fn protocol_overview() -> ExecutionOutcome {
         summary: "Agent Bounties exposes separate A2A, MCP, REST, feed, and portable-skill interfaces. Discovery is not funding, a claim, verification, settlement, or payment proof.".to_string(),
         artifact_name: Some("Agent Bounties protocol orientation".to_string()),
         data: Some(json!({
-            "a2a": "https://api.agentbounties.app/.well-known/agent-card.json",
+            "a2a": {
+                "canonicalUrl": "https://api.agentbounties.app/.well-known/agent-card.json",
+                "attributedUrl": attributed_discovery_url("https://api.agentbounties.app/.well-known/agent-card.json", "a2a-protocol-orientation", "agent-card")
+            },
             "openapi": "https://api.agentbounties.app/api-docs/openapi.json",
             "mcp": "https://mcp.agentbounties.app/mcp",
             "opportunityFeed": "https://api.agentbounties.app/v1/opportunities/feed.json",
@@ -1093,7 +1189,8 @@ fn alert_overview() -> ExecutionOutcome {
                 "verify": ["HMAC signature", "timestamp tolerance", "event ID deduplication"]
             },
             "conditionalFeed": {
-                "url": "https://api.agentbounties.app/v1/opportunities/feed.json?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&work_state=claimable&payment_state=escrowed",
+                "canonicalUrl": "https://api.agentbounties.app/v1/opportunities/feed.json?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&work_state=claimable&payment_state=escrowed",
+                "attributedUrl": attributed_discovery_url("https://api.agentbounties.app/v1/opportunities/feed.json?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&work_state=claimable&payment_state=escrowed", "a2a-alerts", "ready-to-earn-feed"),
                 "validators": ["ETag", "Last-Modified"],
                 "suggestedIntervalSeconds": [300, 900]
             },
@@ -1354,6 +1451,34 @@ mod tests {
         assert_eq!(
             invocation_from_message(&text_message("Explain the protocol")).skill,
             "explain-agent-bounties-protocol"
+        );
+    }
+
+    #[test]
+    fn attributed_links_keep_the_canonical_target_and_exact_discovery_id() {
+        let canonical = "https://agentbounties.app/?bounty=0xabc";
+        let discovery_id = "eip155:8453:agent-bounties/autonomous-v1:0xabc";
+        let attributed =
+            attributed_discovery_url(canonical, "a2a-opportunity-detail", discovery_id);
+        let parsed = Url::parse(&attributed).unwrap();
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("agentbounties.app"));
+        let query = parsed.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            query.get("bounty").map(|value| value.as_ref()),
+            Some("0xabc")
+        );
+        assert_eq!(
+            query.get("utm_source").map(|value| value.as_ref()),
+            Some("a2a")
+        );
+        assert_eq!(
+            query.get("utm_campaign").map(|value| value.as_ref()),
+            Some("a2a-opportunity-detail")
+        );
+        assert_eq!(
+            query.get("discovery_id").map(|value| value.as_ref()),
+            Some(discovery_id)
         );
     }
 

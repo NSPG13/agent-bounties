@@ -18,6 +18,7 @@
     "page_view",
     "market_view",
     "funded_bounty_click",
+    "opportunity_feed_click",
     "unfunded_post_started",
     "unfunded_post_completed",
     "funding_started",
@@ -80,6 +81,54 @@
       .replace(/^-+|-+$/g, "")
       .slice(0, 64);
     return /^[a-z0-9][a-z0-9._-]*$/.test(normalized) ? normalized : null;
+  }
+
+  function normalizedSource(value) {
+    const token = safeToken(value);
+    if (!token) return null;
+    const host = token.replace(/^www\./, "");
+    if (
+      host === "chatgpt" ||
+      host === "openai" ||
+      host === "chat.openai.com" ||
+      host === "chatgpt.com" ||
+      host.endsWith(".chatgpt.com") ||
+      host.endsWith(".openai.com")
+    ) {
+      return "chatgpt";
+    }
+    if (host === "google" || host === "google.com" || /^google\.[a-z.]+$/.test(host)) {
+      return "google";
+    }
+    if (host === "bing" || host === "bing.com" || host.endsWith(".bing.com")) return "bing";
+    if (host === "github" || host === "github.com" || host.endsWith(".github.com")) {
+      return "github";
+    }
+    if (
+      [
+        "medium",
+        "medium.com",
+        "substack",
+        "substack.com",
+        "devto",
+        "dev.to",
+        "hackernews",
+        "hn",
+        "news.ycombinator.com",
+        "reddit",
+        "reddit.com",
+        "x",
+        "x.com",
+        "twitter",
+        "twitter.com",
+        "t.co",
+      ].includes(host) ||
+      host.endsWith(".substack.com") ||
+      host.endsWith(".reddit.com")
+    ) {
+      return "syndicated";
+    }
+    return token;
   }
 
   function privacySignalEnabled() {
@@ -198,7 +247,11 @@
     if (!local) return { source: "direct", campaign: null, referrer_host: null };
     try {
       const existing = JSON.parse(local.getItem(ATTRIBUTION_KEY) || "null");
-      if (existing && existing.expires_at > Date.now()) return existing;
+      if (existing && existing.expires_at > Date.now()) {
+        existing.source = normalizedSource(existing.source) || "direct";
+        local.setItem(ATTRIBUTION_KEY, JSON.stringify(existing));
+        return existing;
+      }
     } catch (_error) {
       // Replace corrupt first-touch state below.
     }
@@ -217,7 +270,11 @@
       referrerHost = null;
     }
     const attribution = {
-      source: utmSource || sharedFrom || safeToken(referrerHost) || "direct",
+      source:
+        normalizedSource(utmSource) ||
+        normalizedSource(sharedFrom) ||
+        normalizedSource(referrerHost) ||
+        "direct",
       campaign,
       referrer_host: referrerHost,
       expires_at: Date.now() + VISITOR_TTL_MS,
@@ -320,6 +377,22 @@
       opportunity_id: target.dataset.analyticsOpportunityId,
       bounty_contract: target.dataset.analyticsBountyContract,
     });
+  });
+
+  document.addEventListener("click", function (event) {
+    const link = event.target.closest("a[href]");
+    if (!link) return;
+    try {
+      const target = new URL(link.href, window.location.href);
+      if (
+        target.hostname === "api.agentbounties.app" &&
+        /^\/v1\/opportunities\/feed\.(rss|atom|json)$/.test(target.pathname)
+      ) {
+        track("opportunity_feed_click");
+      }
+    } catch (_error) {
+      // Invalid links are ignored; click measurement never alters navigation.
+    }
   });
 
   document.addEventListener("click", function (event) {

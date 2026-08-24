@@ -1,3 +1,7 @@
+param(
+    [string] $ExternalDatabaseUrl = ""
+)
+
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
@@ -5,8 +9,13 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 
 Push-Location $repoRoot
 try {
-    Start-AgentBountiesPostgres
-    $databaseUrl = Get-AgentBountiesDatabaseUrl
+    if ($ExternalDatabaseUrl) {
+        $databaseUrl = $ExternalDatabaseUrl
+    }
+    else {
+        Start-AgentBountiesPostgres
+        $databaseUrl = Get-AgentBountiesDatabaseUrl
+    }
 
     Invoke-Checked { cargo build -p api -p mcp-server }
     $previousTestDatabaseUrl = $env:AGENT_BOUNTIES_TEST_DATABASE_URL
@@ -41,6 +50,9 @@ try {
         }
         Invoke-Checked {
             cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
+        }
+        Invoke-Checked {
+            cargo test -p db tests::discoverability_snapshot_idempotency_and_restart_hydration_are_durable -- --ignored --exact --nocapture
         }
         Invoke-Checked {
             cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture

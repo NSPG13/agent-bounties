@@ -54,7 +54,10 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   const custom = home.bountyAssistantLinks("custom");
   assert.equal(gpt.desktopUrl, null);
   assert.equal(new URL(gpt.webUrl).origin, "https://chatgpt.com");
-  assert.equal(new URL(gpt.webUrl).searchParams.get("prompt"), prompt);
+  const gptPrompt = new URL(gpt.webUrl).searchParams.get("prompt");
+  assert.ok(gptPrompt.startsWith(prompt));
+  assert.match(gptPrompt, /utm_source=chatgpt/);
+  assert.match(gptPrompt, /canonical URL/);
   assert.equal(gpt.webPrefillsPrompt, true);
   assert.equal(claude.desktopUrl, `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`);
   assert.equal(new URL(claude.webUrl).origin, "https://claude.ai");
@@ -101,7 +104,7 @@ test("competition posting handoffs preserve only live canonical context", () => 
   assert.match(prompt, /ask me to fill only its bracketed placeholders/i);
   assert.match(prompt, /complete win, loss, and expected economics/i);
   assert.doesNotMatch(prompt, /Begin by asking/);
-  assert.equal(new URL(home.bountyAssistantLinks("gpt", prompt).webUrl).searchParams.get("prompt"), prompt);
+  assert.match(new URL(home.bountyAssistantLinks("gpt", prompt).webUrl).searchParams.get("prompt"), /utm_source=chatgpt/);
 });
 
 test("wallet linking helpers encode exact EIP-191 input without exposing raw errors", () => {

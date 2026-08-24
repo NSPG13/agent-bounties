@@ -525,6 +525,10 @@ def main() -> int:
             )
             if domains != [expected_domain]:
                 fail(f"{service} custom domain must be exactly {expected_domain}")
+        if service == "agent-bounties-api":
+            require_env_sync_false(block, "DISCOVERABILITY_INGEST_TOKEN")
+        if service != "agent-bounties-api" and "DISCOVERABILITY_INGEST_TOKEN" in block:
+            fail("DISCOVERABILITY_INGEST_TOKEN must be scoped only to the API service")
         if service == "agent-bounties-base-indexer":
             require_env_value(block, "BASE_INDEXER_NETWORK", "base-mainnet")
             require_env_value(block, "BASE_INDEXER_PROTOCOL", "autonomous-v1")

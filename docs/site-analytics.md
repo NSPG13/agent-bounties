@@ -31,6 +31,10 @@ GA4 disabled without affecting first-party analytics.
   8,760 hours.
 - MCP `get_site_analytics`, TypeScript `getSiteAnalytics`, and Python
   `get_site_analytics` expose the same read-only aggregate report.
+- `GET /v1/discoverability/summary` returns a delayed, failure-closed allowlist
+  combining Search Console, GitHub traffic, first-party acquisition, and A2A,
+  MCP, API/CLI, and feed interactions. Operator-only provider details remain
+  outside this public endpoint; see [`discoverability-measurement.md`](discoverability-measurement.md).
 
 The aggregate endpoint is public and never returns event-level identifiers.
 
@@ -119,6 +123,8 @@ The collector accepts only:
 - `page_view`
 - `market_view` after the live opportunity projection and claim evidence load
 - `funded_bounty_click` on a canonically funded, claimable card
+- `opportunity_feed_click` when a browser follows a published RSS, Atom, or JSON
+  opportunity-feed link
 - `unfunded_post_started` and `unfunded_post_completed` for compatible future
   first-party no-wallet publishing interfaces
 - `canonical_post_started` and `canonical_post_confirmed`
@@ -158,6 +164,12 @@ but the canonical event index remains authoritative. Only confirmed
   only a normalized `utm_campaign` token.
 - **Market-to-funded-click:** distinct sessions with
   `funded_bounty_click` divided by distinct sessions with `market_view`.
+- **Captured ChatGPT referral:** a browser first touch with an observed
+  `chatgpt.com` or legacy OpenAI referrer, or an explicit tagged ChatGPT handoff.
+  Generic MCP traffic is never inferred to be ChatGPT.
+- **Opportunity-feed click:** an allowlisted click event on a published
+  opportunity feed. It describes browser interaction, not a subscription or an
+  agent identity.
 - **Canonical-post completion:** distinct sessions with
   `canonical_post_confirmed` divided by distinct sessions with
   `canonical_post_started`.

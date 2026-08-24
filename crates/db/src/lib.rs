@@ -78,6 +78,8 @@ pub const COMPETITION_ACTIVATION_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0027_competition_activation_analytics.sql");
 pub const ONBOARDING_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0028_onboarding_analytics.sql");
+pub const DISCOVERABILITY_MEASUREMENT_MIGRATION: &str =
+    include_str!("../../../migrations/0029_discoverability_measurement.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -536,6 +538,97 @@ pub enum ObservedProtocolEra {
     McpLegacy,
     McpModern,
     McpHttpAdapter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryInterface {
+    A2a,
+    Mcp,
+    Api,
+    Cli,
+    Feed,
+}
+
+impl DiscoveryInterface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::A2a => "a2a",
+            Self::Mcp => "mcp",
+            Self::Api => "api",
+            Self::Cli => "cli",
+            Self::Feed => "feed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryRouteFamily {
+    AgentCard,
+    OpportunityList,
+    OpportunityDetail,
+    Alerts,
+    ProtocolOrientation,
+}
+
+impl DiscoveryRouteFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentCard => "agent_card",
+            Self::OpportunityList => "opportunity_list",
+            Self::OpportunityDetail => "opportunity_detail",
+            Self::Alerts => "alerts",
+            Self::ProtocolOrientation => "protocol_orientation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributionReliability {
+    Observed,
+    Declared,
+}
+
+impl AttributionReliability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Declared => "declared",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DiscoveryRouteUsageStats {
+    pub interface: String,
+    pub route_family: String,
+    pub attribution_reliability: String,
+    pub interaction_count: u64,
+    pub successful_interaction_count: u64,
+    pub first_observed_at: DateTime<Utc>,
+    pub last_observed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoverabilitySnapshot {
+    pub provider: String,
+    pub observed_at: DateTime<Utc>,
+    pub window_started_at: DateTime<Utc>,
+    pub window_ended_at: DateTime<Utc>,
+    pub data_through: DateTime<Utc>,
+    pub payload_checksum: String,
+    pub payload: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewDiscoverabilitySnapshot {
+    pub provider: String,
+    pub observed_at: DateTime<Utc>,
+    pub window_started_at: DateTime<Utc>,
+    pub window_ended_at: DateTime<Utc>,
+    pub data_through: DateTime<Utc>,
+    pub payload_checksum: String,
+    pub payload: serde_json::Value,
 }
 
 impl ObservedProtocolEra {
@@ -1209,8 +1302,10 @@ impl PostgresStore {
                 OPEN_COMPETITION_V2_BETA3_MIGRATION,
                 OPPORTUNITY_FEEDBACK_MIGRATION,
                 SITE_AUTH_ACCOUNTS_MIGRATION,
-                COMPETITION_ACTIVATION_ANALYTICS_MIGRATION,
-                ONBOARDING_ANALYTICS_MIGRATION,
+                // 0029 is a strict superset of the 0027 and 0028 analytics
+                // constraints. Replaying either narrower constraint would
+                // reject valid later events before 0029 can replace it.
+                DISCOVERABILITY_MEASUREMENT_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1806,6 +1901,157 @@ impl PostgresStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn record_discovery_route_usage(
+        &self,
+        interface: DiscoveryInterface,
+        route_family: DiscoveryRouteFamily,
+        attribution_reliability: AttributionReliability,
+        succeeded: bool,
+        observed_at: DateTime<Utc>,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO discovery_route_usage_hourly
+              (bucket_started_at, interface, route_family, attribution_reliability,
+               interaction_count, successful_interaction_count,
+               first_observed_at, last_observed_at)
+            VALUES (
+              date_trunc('hour', $1 AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+              $2, $3, $4, 1, CASE WHEN $5 THEN 1 ELSE 0 END, $1, $1
+            )
+            ON CONFLICT (
+              bucket_started_at, interface, route_family, attribution_reliability
+            ) DO UPDATE SET
+              interaction_count = discovery_route_usage_hourly.interaction_count + 1,
+              successful_interaction_count =
+                discovery_route_usage_hourly.successful_interaction_count
+                + CASE WHEN $5 THEN 1 ELSE 0 END,
+              first_observed_at = LEAST(
+                discovery_route_usage_hourly.first_observed_at,
+                EXCLUDED.first_observed_at
+              ),
+              last_observed_at = GREATEST(
+                discovery_route_usage_hourly.last_observed_at,
+                EXCLUDED.last_observed_at
+              )
+            "#,
+        )
+        .bind(observed_at)
+        .bind(interface.as_str())
+        .bind(route_family.as_str())
+        .bind(attribution_reliability.as_str())
+        .bind(succeeded)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn discovery_route_usage_stats(
+        &self,
+        window_started_at: DateTime<Utc>,
+    ) -> DbResult<Vec<DiscoveryRouteUsageStats>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT interface, route_family, attribution_reliability,
+                   SUM(interaction_count)::BIGINT AS interaction_count,
+                   SUM(successful_interaction_count)::BIGINT AS successful_interaction_count,
+                   MIN(first_observed_at) AS first_observed_at,
+                   MAX(last_observed_at) AS last_observed_at
+            FROM discovery_route_usage_hourly
+            WHERE bucket_started_at >= date_trunc('hour', $1 AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+              AND bucket_started_at <= NOW()
+            GROUP BY interface, route_family, attribution_reliability
+            ORDER BY interface, route_family, attribution_reliability
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(DiscoveryRouteUsageStats {
+                    interface: row.try_get("interface")?,
+                    route_family: row.try_get("route_family")?,
+                    attribution_reliability: row.try_get("attribution_reliability")?,
+                    interaction_count: u64_from_i64(row.try_get("interaction_count")?)?,
+                    successful_interaction_count: u64_from_i64(
+                        row.try_get("successful_interaction_count")?,
+                    )?,
+                    first_observed_at: row.try_get("first_observed_at")?,
+                    last_observed_at: row.try_get("last_observed_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn insert_discoverability_snapshot(
+        &self,
+        snapshot: &NewDiscoverabilitySnapshot,
+    ) -> DbResult<bool> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM discoverability_snapshots WHERE observed_at < NOW() - INTERVAL '18 months'",
+        )
+        .execute(&mut *transaction)
+        .await?;
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO discoverability_snapshots
+              (provider, observed_at, window_started_at, window_ended_at,
+               data_through, payload_checksum, payload)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (
+              provider, observed_at, window_started_at, window_ended_at, payload_checksum
+            ) DO NOTHING
+            RETURNING provider
+            "#,
+        )
+        .bind(&snapshot.provider)
+        .bind(snapshot.observed_at)
+        .bind(snapshot.window_started_at)
+        .bind(snapshot.window_ended_at)
+        .bind(snapshot.data_through)
+        .bind(&snapshot.payload_checksum)
+        .bind(&snapshot.payload)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .is_some();
+        transaction.commit().await?;
+        Ok(inserted)
+    }
+
+    pub async fn list_discoverability_snapshots(
+        &self,
+        window_started_at: DateTime<Utc>,
+    ) -> DbResult<Vec<DiscoverabilitySnapshot>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT provider, observed_at, window_started_at, window_ended_at,
+                   data_through, payload_checksum, payload, created_at
+            FROM discoverability_snapshots
+            WHERE observed_at >= $1 AND observed_at <= NOW()
+            ORDER BY observed_at DESC, provider, data_through DESC
+            "#,
+        )
+        .bind(window_started_at)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(DiscoverabilitySnapshot {
+                    provider: row.try_get("provider")?,
+                    observed_at: row.try_get("observed_at")?,
+                    window_started_at: row.try_get("window_started_at")?,
+                    window_ended_at: row.try_get("window_ended_at")?,
+                    data_through: row.try_get("data_through")?,
+                    payload_checksum: row.try_get("payload_checksum")?,
+                    payload: row.try_get("payload")?,
+                    created_at: row.try_get("created_at")?,
+                })
+            })
+            .collect()
     }
 
     pub async fn reserve_social_mention_ingestion(
@@ -10198,6 +10444,37 @@ mod tests {
     }
 
     #[test]
+    fn discoverability_analytics_allowlist_supersedes_prior_constraints() {
+        fn event_names(migration: &str) -> std::collections::BTreeSet<String> {
+            let values = migration
+                .split_once("CHECK (event_name IN (")
+                .expect("analytics migration must define an event-name constraint")
+                .1
+                .split_once("));")
+                .expect("analytics event-name constraint must terminate")
+                .0;
+            values
+                .split(',')
+                .map(|value| value.trim().trim_matches('\'').to_string())
+                .collect()
+        }
+
+        let discoverability_events = event_names(DISCOVERABILITY_MEASUREMENT_MIGRATION);
+        for earlier in [
+            COMPETITION_ACTIVATION_ANALYTICS_MIGRATION,
+            ONBOARDING_ANALYTICS_MIGRATION,
+        ] {
+            for event_name in event_names(earlier) {
+                assert!(
+                    discoverability_events.contains(&event_name),
+                    "0029 must preserve prior analytics event {event_name}"
+                );
+            }
+        }
+        assert!(discoverability_events.contains("opportunity_feed_click"));
+    }
+
+    #[test]
     fn interface_usage_migration_stores_only_hourly_aggregate_attribution() {
         for invariant in [
             "interface_usage_hourly",
@@ -10262,6 +10539,45 @@ mod tests {
             assert!(
                 !EXTERNAL_INTERFACE_USAGE_MIGRATION.contains(forbidden),
                 "external interface usage must not contain or backfill {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn discoverability_measurement_migration_is_private_aggregate_and_idempotent() {
+        for invariant in [
+            "discoverability_snapshots",
+            "payload_checksum",
+            "PRIMARY KEY (",
+            "provider IN ('search_console', 'github', 'first_party', 'external_interfaces')",
+            "discoverability_snapshots_recent_idx",
+            "discovery_route_usage_hourly",
+            "interface IN ('a2a', 'mcp', 'api', 'cli', 'feed')",
+            "attribution_reliability IN ('observed', 'declared')",
+            "opportunity_feed_click",
+            "auth_completed",
+            "onramp_returned",
+            "Operator-only provider snapshots",
+        ] {
+            assert!(
+                DISCOVERABILITY_MEASUREMENT_MIGRATION.contains(invariant),
+                "missing discoverability measurement invariant {invariant}"
+            );
+        }
+        for forbidden in [
+            "ip_address TEXT",
+            "user_agent TEXT",
+            "wallet_address TEXT",
+            "visitor_id UUID",
+            "session_id UUID",
+            "prompt TEXT",
+            "request_body JSONB",
+            "task_content JSONB",
+            "unique_agent_id",
+        ] {
+            assert!(
+                !DISCOVERABILITY_MEASUREMENT_MIGRATION.contains(forbidden),
+                "discoverability route aggregation must not persist {forbidden}"
             );
         }
     }
@@ -12262,6 +12578,75 @@ mod tests {
             observed.canonical_outcomes.repeat_paid_solver_wallets,
             baseline.canonical_outcomes.repeat_paid_solver_wallets + 1
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn discoverability_snapshot_idempotency_and_restart_hydration_are_durable() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+
+        let observed_at = Utc::now() - chrono::Duration::seconds(2);
+        let checksum = Uuid::new_v4().simple().to_string().repeat(2);
+        let snapshot = NewDiscoverabilitySnapshot {
+            provider: "github".to_string(),
+            observed_at,
+            window_started_at: observed_at - chrono::Duration::days(14),
+            window_ended_at: observed_at,
+            data_through: observed_at - chrono::Duration::days(1),
+            payload_checksum: checksum.clone(),
+            payload: serde_json::json!({
+                "totals": {
+                    "unique_visitors": 300,
+                    "unique_cloners": 530,
+                    "views": 487,
+                    "clones": 31808
+                }
+            }),
+        };
+        assert!(store
+            .insert_discoverability_snapshot(&snapshot)
+            .await
+            .unwrap());
+        assert!(!store
+            .insert_discoverability_snapshot(&snapshot)
+            .await
+            .unwrap());
+
+        store
+            .record_discovery_route_usage(
+                DiscoveryInterface::Feed,
+                DiscoveryRouteFamily::OpportunityList,
+                AttributionReliability::Observed,
+                true,
+                observed_at,
+            )
+            .await
+            .unwrap();
+        let route_stats = store
+            .discovery_route_usage_stats(observed_at - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        assert!(route_stats.iter().any(|row| {
+            row.interface == "feed"
+                && row.route_family == "opportunity_list"
+                && row.attribution_reliability == "observed"
+                && row.interaction_count >= 1
+                && row.successful_interaction_count >= 1
+        }));
+
+        drop(store);
+        let restarted = PostgresStore::connect(&database_url).await.unwrap();
+        let snapshots = restarted
+            .list_discoverability_snapshots(observed_at - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        assert!(snapshots.iter().any(|stored| {
+            stored.provider == "github"
+                && stored.payload_checksum == checksum
+                && stored.payload == snapshot.payload
+        }));
     }
 
     #[test]

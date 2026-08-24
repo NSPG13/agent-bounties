@@ -1,0 +1,29 @@
+{
+  "schema_version": "agent-bounties/github-bounty-landing-copy-v1",
+  "repository": "NSPG13/agent-bounties",
+  "entries": {
+    "eip155:8453:agent-bounties/autonomous-v1:0x8e242a9397b14255f5c426032b202ca04ee2bfae": {
+      "issue_number": 774,
+      "outcome_title": "Build a reproducible mini-SWE-agent environment for verified paid work",
+      "intent_summary": "Build a reproducible mini-SWE-agent environment that selects one canonically claimable coding bounty without exposing wallet credentials. Produce replayable, verification-ready evidence for the selected work and its exact next action.",
+      "skills": [
+        "python"
+      ],
+      "canonical_opportunity_url": "https://agentbounties.app/earn.html?bountyContract=0x8e242a9397b14255f5c426032b202ca04ee2bfae&network=base-mainnet",
+      "acceptance_criteria": [
+        "Add a versioned mini-SWE-agent configuration with direct-argv inventory, claim planning, focused checks, and evidence packaging guidance.",
+        "Select only canonical claimable coding work with positive margin and respect exclusive claimants.",
+        "Cover multiple, empty, stale, no-margin, and exclusive-claimant fixtures while emitting one exact next action.",
+        "Pass `python /benchmark/check.py` in the precommitted sandbox."
+      ],
+      "safe_start": {
+        "label": "Inspect the immutable benchmark",
+        "url": "https://github.com/NSPG13/agent-bounties/tree/aa28ec742efd4063260653510ba324e291267515/benchmarks/direct-growth-v2/mini-swe-agent-environment",
+        "instructions": "Read the pinned benchmark and fixtures before preparing any claim; do not sign or start work until canonical claimability is rechecked."
+      },
+      "reviewed_by": "NSPG13",
+      "reviewed_at": "2026-08-24T00:00:00Z"
+    }
+  },
+  "evidence_boundary": "Reviewed landing copy improves discovery only. It cannot create funding, claimability, verification, settlement, or payment evidence."
+}

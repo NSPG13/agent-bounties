@@ -1,0 +1,40 @@
+name: Discoverability snapshot
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discoverability-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PRODUCTION_API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
+      REPOSITORY_TRAFFIC_TOKEN: ${{ secrets.REPOSITORY_TRAFFIC_TOKEN }}
+      GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+      DISCOVERABILITY_INGEST_TOKEN: ${{ secrets.DISCOVERABILITY_INGEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install read-only provider clients
+        run: python -m pip install --disable-pip-version-check --no-input google-auth==2.40.3 requests==2.32.4
+
+      - name: Validate collector
+        run: python -m unittest scripts/test_discoverability_snapshot.py
+
+      - name: Snapshot overlapping provider windows
+        run: python scripts/discoverability_snapshot.py

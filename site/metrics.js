@@ -15,6 +15,7 @@
   const BASESCAN_TX_URL = "https://basescan.org/tx/";
   const GITHUB_URL = "generated/github-participation.json";
   const ACQUISITION_URL = "https://api.agentbounties.app/v1/analytics/site";
+  const DISCOVERABILITY_URL = "https://api.agentbounties.app/v1/discoverability/summary";
   const PLATFORM_DELAY_MS = 5 * 60 * 1000;
   const GITHUB_DELAY_MS = 2 * 60 * 60 * 1000;
   const ACQUISITION_DELAY_MS = 15 * 60 * 1000;
@@ -52,6 +53,52 @@
   function formatPercent(value) {
     const percent = Math.max(0, Math.min(1, finiteNumber(value))) * 100;
     return `${percent.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
+  }
+
+  function discoverabilitySummary(response) {
+    const unavailable = {
+      status: "unavailable",
+      generated_at: null,
+      data_through: null,
+      human_reach: null,
+      automation_reach: null,
+    };
+    if (!response || response.schema_version !== "agent-bounties/discoverability-summary-v1" || response.status !== "ready") {
+      return unavailable;
+    }
+    const sourceNames = new Set(["search_console", "github", "first_party", "external_interfaces"]);
+    const sources = Array.isArray(response.sources) ? response.sources : [];
+    if (sources.length !== sourceNames.size || sources.some((source) => (
+      !sourceNames.delete(source?.provider) || source?.available !== true || source?.stale !== false
+      || !Number.isFinite(Date.parse(source?.data_through || ""))
+    )) || sourceNames.size) {
+      return unavailable;
+    }
+    const human = response.human_reach;
+    const automation = response.automation_reach;
+    const countKeys = [
+      [human, "search_impressions"], [human, "organic_clicks"],
+      [human, "github_unique_visitors"], [human, "captured_chatgpt_referrals"],
+      [human, "opportunity_feed_clicks"], [automation, "a2a_interactions"],
+      [automation, "mcp_interactions"], [automation, "api_cli_interactions"],
+      [automation, "feed_interactions"], [automation, "github_unique_cloners"],
+    ];
+    if (countKeys.some(([group, key]) => !Number.isSafeInteger(group?.[key]) || group[key] < 0)
+      || !Number.isFinite(human?.market_to_funded_opportunity_ctr)
+      || human.market_to_funded_opportunity_ctr < 0
+      || human.market_to_funded_opportunity_ctr > 1
+      || !Number.isFinite(human?.google_average_position)
+      || human.google_average_position < 0) {
+      return unavailable;
+    }
+    const through = sources.map((source) => Date.parse(source.data_through));
+    return {
+      status: "ready",
+      generated_at: response.generated_at,
+      data_through: new Date(Math.min(...through)).toISOString(),
+      human_reach: human,
+      automation_reach: automation,
+    };
   }
 
   function interfaceUsageSummary(response) {
@@ -499,6 +546,7 @@
       publicMetricsPolicy: null,
       github: null,
       acquisition: null,
+      discoverability: null,
       errors: {},
       timers: [],
     };
@@ -718,7 +766,39 @@
       });
     }
 
-    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage) {
+    function renderDiscoverability(response) {
+      const summary = discoverabilitySummary(response);
+      const available = summary.status === "ready";
+      const status = one("[data-discoverability-status]");
+      if (status) {
+        status.dataset.status = summary.status;
+        status.textContent = available ? "complete snapshot" : "unavailable";
+      }
+      const human = summary.human_reach || {};
+      const automation = summary.automation_reach || {};
+      const count = (selector, value) => setText(selector, available ? formatInteger(value) : "—");
+      count("[data-search-impressions]", human.search_impressions);
+      count("[data-organic-clicks]", human.organic_clicks);
+      count("[data-discovery-github-visitors]", human.github_unique_visitors);
+      count("[data-chatgpt-referrals]", human.captured_chatgpt_referrals);
+      count("[data-opportunity-feed-clicks]", human.opportunity_feed_clicks);
+      setText("[data-market-funded-ctr]", available ? formatPercent(human.market_to_funded_opportunity_ctr) : "—");
+      count("[data-a2a-interactions]", automation.a2a_interactions);
+      count("[data-mcp-interactions]", automation.mcp_interactions);
+      count("[data-api-cli-interactions]", automation.api_cli_interactions);
+      count("[data-feed-interactions]", automation.feed_interactions);
+      count("[data-discovery-github-cloners]", automation.github_unique_cloners);
+      if (available) {
+        const dataThrough = new Date(summary.data_through).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+        const generated = new Date(summary.generated_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+        setText("[data-discoverability-window]", `Search/browser 28 days · interfaces 30 days · GitHub 14 days · data through ${dataThrough} · generated ${generated}`);
+      } else {
+        setText("[data-discoverability-window]", "A required provider is missing, malformed, or more than nine days stale. No partial values are shown.");
+      }
+      return summary;
+    }
+
+    function renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage, discoverability) {
       const target = one("[data-source-ledger]");
       if (!target) return;
       target.replaceChildren();
@@ -729,6 +809,7 @@
         ["GitHub participation", merged.github_status, state.github?.generated_at, "Hourly aggregate of external issues, pull requests, comments, and reviews."],
         ["Repository acquisition", repositoryStatus, state.github?.repository_acquisition?.generated_at, "GitHub clone and page-view aggregates for its rolling 14-day traffic window."],
         ["Browser acquisition", acquisitionStatus, state.acquisition?.generated_at, "First-party browser/device IDs; never counted as users or identities."],
+        ["Discoverability scorecard", discoverability.status, discoverability.generated_at, "Delayed aggregate snapshots from Search Console, GitHub traffic, first-party acquisition, and external route interactions."],
       ];
       sources.forEach(([name, status, generatedAt, description]) => {
         const item = doc.createElement("article");
@@ -815,6 +896,7 @@
       setText("[data-keeper-pay]", payout ? amount(payout.selected_keeper_pay) : "—");
       setText("[data-completion-bonus]", payout ? amount(payout.selected_completion_bonus) : "—");
       renderInterfaceUsage(interfaceUsage);
+      const discoverability = renderDiscoverability(state.discoverability);
       renderPayoutAudit(audit);
 
       const inventoryReady = inventory?.status === "ready";
@@ -885,7 +967,7 @@
         ? `${formatInteger(state.acquisition.overview?.sessions)} browser sessions in the matching lookback. Device/browser IDs are not people.`
         : "Acquisition source unavailable. Browser IDs are never estimated or counted as active identities.");
       setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "0 USDC");
-      renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage);
+      renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage, discoverability);
 
       const notices = [];
       if (merged.status === "partial") notices.push("Identity totals are partial because a required participation source is unavailable or incomplete.");
@@ -971,6 +1053,17 @@
       render();
     }
 
+    async function refreshDiscoverability() {
+      try {
+        state.discoverability = await requestJson(DISCOVERABILITY_URL);
+        delete state.errors.discoverability;
+      } catch (error) {
+        state.discoverability = null;
+        state.errors.discoverability = error;
+      }
+      render();
+    }
+
     doc.querySelectorAll("[data-period]").forEach((button) => {
       button.addEventListener("click", () => {
         const next = button.dataset.period;
@@ -982,7 +1075,7 @@
         state.platform = null;
         state.acquisition = null;
         render();
-        void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition()]);
+        void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition(), refreshDiscoverability()]);
       });
     });
 
@@ -996,13 +1089,16 @@
       state.timers.push(win.setInterval(() => {
         if (!doc.hidden) void refreshRepository();
       }, 300_000));
+      state.timers.push(win.setInterval(() => {
+        if (!doc.hidden) void refreshDiscoverability();
+      }, 300_000));
     }
 
     doc.addEventListener("visibilitychange", () => {
-      if (!doc.hidden) void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition()]);
+      if (!doc.hidden) void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition(), refreshDiscoverability()]);
     });
     render();
-    void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition()]);
+    void Promise.all([refreshPlatform(), refreshRepository(), refreshAcquisition(), refreshDiscoverability()]);
     schedule();
     return state;
   }
@@ -1013,6 +1109,7 @@
     chartSvg,
     combinedStatus,
     dashboardStatus,
+    discoverabilitySummary,
     formatUsdc,
     mergeDaily,
     mergeMetrics,
