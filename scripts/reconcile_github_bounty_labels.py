@@ -28,6 +28,12 @@ USER_AGENT = "agent-bounties-github-discovery/1"
 PROJECTION_SCHEMA = "agent-bounties/github-bounty-discovery-v1"
 POLICY_SCHEMA = "agent-bounties/github-bounty-discovery-policy-v1"
 LANDING_COPY_SCHEMA = "agent-bounties/github-bounty-landing-copy-v1"
+REVIEWED_BETA3_SOURCE_PATHS = frozenset(
+    {
+        "ops/open-competition-v2-forward-gmv-candidate-pool-v2.json",
+        "ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+    }
+)
 CORE_DISCOVERY_PROTOCOLS = frozenset(
     {
         "agent-bounties/autonomous-v1",
@@ -431,6 +437,50 @@ def attach_landing_copy(
         if item.get("lifecycle_state") == "ready_to_earn":
             identity = str(item["discovery_id"])
             landing = entries.get(identity)
+            if (
+                landing is None
+                and item.get("protocol_version") == BETA3_PROTOCOL
+                and item.get("competition_mode") == "best_score"
+                and is_same_repository_reviewed_beta3_artifact(
+                    item.get("source_url"), repository
+                )
+            ):
+                scoring_window = item.get("scoring_window")
+                if not isinstance(scoring_window, dict):
+                    raise LabelReconciliationError(
+                        f"reviewed Beta3 landing copy lacks a scoring window: {identity}"
+                    )
+                public_url = require_public_https_url(
+                    item.get("public_url"), f"{identity}.public_url"
+                )
+                title = f"Generate qualifying GMV for {str(item.get('title') or '').strip()}"
+                if len(title) > 160:
+                    raise LabelReconciliationError(
+                        f"reviewed Beta3 landing title is too long: {identity}"
+                    )
+                landing = {
+                    "issue_number": None,
+                    "outcome_title": title,
+                    "intent_summary": (
+                        "Create and fund useful marketplace demand that settles canonically inside the exact scoring window. "
+                        "Produce the highest eligible externally funded GMV score without counting excluded wallets or contracts."
+                    ),
+                    "skills": ["research", "browser"],
+                    "canonical_opportunity_url": public_url,
+                    "acceptance_criteria": [
+                        "Use the same Base wallet for qualifying child-bounty funding and the competition entry.",
+                        "Have a different eligible wallet complete the useful child bounty.",
+                        f"Reach confirmed canonical child settlement between {scoring_window.get('starts_at')} and {scoring_window.get('ends_at')}.",
+                        "Preserve the contract-bound funding and settlement evidence required by the published snapshot and verifier.",
+                    ],
+                    "safe_start": {
+                        "label": "Open the contract-specific participation page",
+                        "url": public_url,
+                        "instructions": "Read the exact UTC window, complete economics, exclusions, and current next action before funding anything.",
+                    },
+                    "reviewed_by": "reviewed Beta3 public metadata",
+                    "reviewed_at": item.get("updated_at"),
+                }
             if landing is None:
                 item["_landing_action_required"] = [
                     "outcome_title",
@@ -446,9 +496,14 @@ def attach_landing_copy(
                         f"reviewed canonical opportunity URL drifted from projection: {identity}"
                     )
                 source_issue = parse_same_repository_issue(item.get("source_url"), repository)
-                if source_issue is not None and source_issue != landing.get("issue_number"):
+                landing_issue = landing.get("issue_number")
+                if source_issue is not None and source_issue != landing_issue:
                     raise LabelReconciliationError(
                         f"reviewed landing copy maps the wrong source issue: {identity}"
+                    )
+                if source_issue is None and landing_issue is not None:
+                    raise LabelReconciliationError(
+                        f"artifact-backed landing copy must not preassign an issue: {identity}"
                     )
                 item["_landing"] = dict(landing)
         attached.append(item)
@@ -496,7 +551,7 @@ def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -
             or identity in seen
             or protocol not in SUPPORTED_PROTOCOLS
             or lifecycle not in LIFECYCLE_STATES
-            or mode not in {"exclusive_claim", "first_valid_submission"}
+            or mode not in {"exclusive_claim", "first_valid_submission", "best_score"}
             or not ADDRESS.fullmatch(contract)
             or item.get("network") != network
             or item.get("chain_id") != policy.get("chain_id")
@@ -516,7 +571,9 @@ def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -
         if not isinstance(action, dict):
             raise LabelReconciliationError(f"next action is malformed: {identity}")
         require_public_https_url(action.get("url"), f"{identity}.next_action.url")
-        if protocol in {"agent-bounties/open-competition-v1", BETA3_PROTOCOL} and mode != "first_valid_submission":
+        if protocol == "agent-bounties/open-competition-v1" and mode != "first_valid_submission":
+            raise LabelReconciliationError(f"Open Competition mode mismatch: {identity}")
+        if protocol == BETA3_PROTOCOL and mode not in {"first_valid_submission", "best_score"}:
             raise LabelReconciliationError(f"Open Competition mode mismatch: {identity}")
         if protocol == "agent-bounties/autonomous-v1" and mode != "exclusive_claim":
             raise LabelReconciliationError(f"autonomous-v1 mode mismatch: {identity}")
@@ -697,11 +754,16 @@ def beta3_lifecycle(state: str, verification_ready: bool) -> str:
 
 
 def beta3_discovery_competition_mode(winner_mode: object) -> str:
-    if winner_mode != "first_proven":
+    modes = {
+        "first_proven": "first_valid_submission",
+        "best_score": "best_score",
+    }
+    try:
+        return modes[str(winner_mode)]
+    except KeyError as error:
         raise LabelReconciliationError(
             "GitHub discovery cannot represent this Beta3 winner mode safely"
-        )
-    return "first_valid_submission"
+        ) from error
 
 
 def augment_projection_with_beta3(
@@ -791,7 +853,11 @@ def augment_projection_with_beta3(
         requirements = opportunity.get("evidence_requirements")
         if not isinstance(requirements, dict) or requirements.get("protocol_version") != BETA3_PROTOCOL:
             continue
-        if parse_same_repository_issue(opportunity.get("source_url"), repository) is None:
+        source_url = opportunity.get("source_url")
+        if (
+            parse_same_repository_issue(source_url, repository) is None
+            and not is_same_repository_reviewed_beta3_artifact(source_url, repository)
+        ):
             continue
         contract = str(opportunity.get("source_id") or "").lower()
         record = records.get(contract)
@@ -815,6 +881,28 @@ def augment_projection_with_beta3(
         competition_mode = beta3_discovery_competition_mode(
             opportunity.get("winner_mode") or canonical.get("winner_mode")
         )
+        participation_phase = requirements.get("participation_phase")
+        scoring_window = requirements.get("scoring_window")
+        scoring_formula = requirements.get("scoring_formula")
+        qualifying_action = requirements.get("qualifying_action")
+        cash_economics = opportunity.get("cash_economics")
+        if competition_mode == "best_score":
+            if participation_phase not in {"upcoming", "scoring", "proof"}:
+                raise LabelReconciliationError("best-score Beta3 participation phase is malformed")
+            if not isinstance(scoring_window, dict):
+                raise LabelReconciliationError("best-score Beta3 scoring window is missing")
+            starts_at = parse_instant(scoring_window.get("starts_at"), "scoring_window.starts_at")
+            ends_at = parse_instant(scoring_window.get("ends_at"), "scoring_window.ends_at")
+            if starts_at >= ends_at:
+                raise LabelReconciliationError("best-score Beta3 scoring window is malformed")
+            if not isinstance(scoring_formula, str) or not scoring_formula.strip():
+                raise LabelReconciliationError("best-score Beta3 scoring formula is missing")
+            if not isinstance(qualifying_action, dict) or not str(
+                qualifying_action.get("objective") or ""
+            ).strip():
+                raise LabelReconciliationError("best-score Beta3 qualifying action is missing")
+            if not isinstance(cash_economics, dict):
+                raise LabelReconciliationError("best-score Beta3 cash economics are missing")
         target = opportunity_amount(opportunity, "funding_target")
         settlement = beta3_settlement_evidence(opportunity, canonical, relevant, safe_number)
         created_block = min(
@@ -824,6 +912,14 @@ def augment_projection_with_beta3(
         next_action = opportunity.get("next_action")
         if not isinstance(next_action, dict):
             raise LabelReconciliationError("public Beta3 opportunity lacks a next action")
+        next_action_kind = str(next_action.get("action") or "")
+        next_action_label = {
+            "prepare_open_competition_v2_score": "Prepare scoring work",
+            "generate_open_competition_v2_score": "Generate a qualifying score",
+            "inspect_open_competition_v2_snapshot": "Inspect the scoring snapshot",
+            "quote_open_competition_v2_proof": "Enter competition",
+            "inspect_open_competition_v2_settlement": "Inspect settlement",
+        }.get(next_action_kind, "Enter competition")
         selected.append(
             {
                 "discovery_id": f"eip155:{chain_id}:{BETA3_PROTOCOL}:{contract}",
@@ -871,12 +967,17 @@ def augment_projection_with_beta3(
                     "ready": verification_ready,
                 },
                 "next_action": {
-                    "kind": next_action.get("action"),
-                    "label": "Inspect settlement" if lifecycle == "settled" else "Enter competition",
+                    "kind": next_action_kind,
+                    "label": "Inspect settlement" if lifecycle == "settled" else next_action_label,
                     "method": next_action.get("method"),
                     "url": next_action.get("url"),
                     "instructions": next_action.get("instructions"),
                 },
+                "participation_phase": participation_phase,
+                "scoring_window": scoring_window,
+                "scoring_formula": scoring_formula,
+                "qualifying_action": qualifying_action,
+                "cash_economics": cash_economics,
                 "recovery_action_available": False,
                 "identity_warning": "One wallet does not prove one independent person.",
                 "settlement_evidence": settlement,
@@ -1098,6 +1199,30 @@ def parse_same_repository_issue(source_url: Any, repository: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def is_same_repository_reviewed_beta3_artifact(source_url: Any, repository: str) -> bool:
+    """Admit only immutable, reviewed Beta3 source artifacts from this repository."""
+    if source_url is None:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(str(source_url))
+    except ValueError as error:
+        raise LabelReconciliationError("source URL is malformed") from error
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        return False
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise LabelReconciliationError("GitHub source URL must be exact and credential-free")
+    prefix = f"/{repository}/blob/"
+    if not parsed.path.startswith(prefix):
+        return False
+    remainder = parsed.path[len(prefix) :]
+    revision, separator, path = remainder.partition("/")
+    return bool(
+        separator
+        and re.fullmatch(r"[0-9a-f]{40}", revision)
+        and path in REVIEWED_BETA3_SOURCE_PATHS
+    )
+
+
 def fetch_linked_source_issues(
     request: HttpRequest,
     repository: str,
@@ -1228,6 +1353,12 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
     if not isinstance(next_action, dict) or not isinstance(next_action.get("label"), str):
         raise LabelReconciliationError(f"next action is malformed: {identity}")
     action_url = add_attribution(str(next_action.get("url")), identity)
+    competition_mode = str(item["competition_mode"])
+    competition_state = competition_mode
+    if competition_mode == "first_valid_submission" and item["lifecycle_state"] == "ready_to_earn":
+        competition_state = "accepting_entries"
+    elif competition_mode == "best_score":
+        competition_state = str(item.get("participation_phase") or "best_score")
     lines = [
         MANAGED_START,
         f"<!-- agent-bounties/github-discovery-v1 {marker} -->",
@@ -1237,7 +1368,7 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
         "",
         f"- **Current work state:** `{item['lifecycle_state']}`",
         f"- **Current payment state:** `{'paid' if item['lifecycle_state'] == 'settled' else 'escrowed' if item.get('funded') is True else 'unfunded'}`",
-        f"- **Current competition state:** `{'accepting_entries' if item['competition_mode'] == 'first_valid_submission' and item['lifecycle_state'] == 'ready_to_earn' else item['competition_mode']}`",
+        f"- **Current competition state:** `{competition_state}`",
         f"- **Solver reward:** {format_usdc(item['reward_usdc_base_units'])} USDC",
         f"- **Entry/claim bond:** {format_usdc(item['bond_usdc_base_units'])} USDC",
         f"- **Funding:** {format_usdc(item['funded_usdc_base_units'])} / {format_usdc(item['funding_target_usdc_base_units'])} USDC",
@@ -1248,8 +1379,10 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
             f"- **Verifier:** {verifier.get('display_name', 'Unspecified')} "
             f"(`{verifier.get('method', 'unknown')}`; ready: `{str(verifier.get('ready') is True).lower()}`)"
         )
-    if item.get("entry_count") is not None or item.get("max_entries") is not None:
-        lines.append(f"- **Capacity:** {item.get('entry_count', 0)} / {item.get('max_entries', '?')} entries")
+    if item.get("max_entries") is not None:
+        lines.append(f"- **Capacity:** {item.get('entry_count', 0)} / {item['max_entries']} entries")
+    elif item.get("entry_count") is not None:
+        lines.append(f"- **Accepted entries:** {item['entry_count']}")
     if item.get("deadline"):
         lines.append(f"- **{str(item.get('deadline_kind') or 'Deadline').replace('_', ' ').title()}:** `{item['deadline']}`")
     if action_required:
@@ -1292,6 +1425,36 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
                 "### Open Competition rules",
                 "",
                 "First valid confirmed reveal wins. Each wallet may enter once; an entry does not prove one independent person. Save the local commitment recovery envelope because the API never stores its plaintext salt.",
+            ]
+        )
+    elif item["competition_mode"] == "best_score":
+        scoring_window = item.get("scoring_window")
+        qualifying_action = item.get("qualifying_action")
+        cash_economics = item.get("cash_economics")
+        if (
+            not isinstance(scoring_window, dict)
+            or not isinstance(qualifying_action, dict)
+            or not isinstance(cash_economics, dict)
+        ):
+            raise LabelReconciliationError(f"best-score discovery evidence is missing: {identity}")
+        exclusions = qualifying_action.get("excluded")
+        if not isinstance(exclusions, list) or not all(
+            isinstance(value, str) and value.strip() for value in exclusions
+        ):
+            raise LabelReconciliationError(f"best-score exclusions are malformed: {identity}")
+        lines.extend(
+            [
+                "",
+                "### Best-score competition rules",
+                "",
+                str(qualifying_action.get("objective") or "").strip(),
+                "",
+                f"- **Scoring window:** `{scoring_window['starts_at']}` to `{scoring_window['ends_at']}`",
+                f"- **Scoring formula:** `{item['scoring_formula']}`",
+                f"- **Excluded:** {'; '.join(exclusions)}",
+                f"- **Hosted proof and relay cost:** {format_usdc(opportunity_amount(cash_economics, 'required_external_spend'))} USDC",
+                "- **Child funding:** user-selected, paid to the child solver after settlement, and still spent if this competition entry loses.",
+                "- **Decision rule:** use the contract-specific page to calculate win, loss, break-even, and expected cash result before funding.",
             ]
         )
     payment_event = (
@@ -1370,18 +1533,18 @@ def desired_labels(item: Mapping[str, Any], policy: Mapping[str, Any], generated
             labels.update({"ai-agent-welcome", "ready-to-earn", "claimable-live"})
             if isinstance(landing, dict):
                 labels.update(f"skill:{skill}" for skill in landing["skills"])
-            if mode == "first_valid_submission":
+            if mode in {"first_valid_submission", "best_score"}:
                 labels.update({"open-competition", "verifier"})
                 if not trial_claimable_enabled(policy, generated_at):
                     labels.discard("claimable-live")
     elif state == "in_progress":
         labels.add("funded-live")
         labels.add("claimed-live" if mode == "exclusive_claim" else "in-progress")
-        if mode == "first_valid_submission":
+        if mode in {"first_valid_submission", "best_score"}:
             labels.add("open-competition")
     elif state == "verification_pending":
         labels.update({"funded-live", "verification-pending"})
-        if mode == "first_valid_submission":
+        if mode in {"first_valid_submission", "best_score"}:
             labels.add("open-competition")
     elif state == "unavailable":
         if item.get("funded") is True:
@@ -1390,7 +1553,7 @@ def desired_labels(item: Mapping[str, Any], policy: Mapping[str, Any], generated
             labels.add("verification-unavailable")
         else:
             labels.add("in-progress")
-        if mode == "first_valid_submission":
+        if mode in {"first_valid_submission", "best_score"}:
             labels.add("open-competition")
     elif state in {"cancelled", "expired"}:
         labels.add(state)

@@ -83,7 +83,7 @@ REQUIRED_LIVE_GMV_PROFILE = {
     "elf_hash": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
     "journal_schema_hash": GMV_JOURNAL_SCHEMA_HASH,
     "metric_program_hash": GMV_METRIC_PROGRAM_HASH,
-    "review_evidence_hash": "0xa721b85db55db5c827dee508d89de09a222d9d70150f3eeb2a69a34b670023dd",
+    "review_evidence_hash": "0x3e2c7a15171134c86436148ff0d0f871eeeca205f1328b3f41a23e75437a5c21",
 }
 
 

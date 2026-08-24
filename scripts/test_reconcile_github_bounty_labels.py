@@ -16,11 +16,13 @@ from reconcile_github_bounty_labels import (
     MANAGED_START,
     HttpResult,
     LabelReconciliationError,
+    augment_projection_with_beta3,
     beta3_discovery_competition_mode,
     build_plans,
     execute_plans,
     fetch_github_issues,
     issue_marker,
+    is_same_repository_reviewed_beta3_artifact,
     load_landing_copy,
     main,
     plan_has_write,
@@ -403,13 +405,174 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
             with self.assertRaisesRegex(LabelReconciliationError, "exactly two sentences"):
                 load_landing_copy(path, REPOSITORY)
 
-    def test_beta3_discovery_rejects_unrepresentable_winner_mode(self) -> None:
+    def test_beta3_discovery_represents_supported_winner_modes(self) -> None:
         self.assertEqual(
             beta3_discovery_competition_mode("first_proven"),
             "first_valid_submission",
         )
+        self.assertEqual(beta3_discovery_competition_mode("best_score"), "best_score")
         with self.assertRaisesRegex(LabelReconciliationError, "winner mode safely"):
-            beta3_discovery_competition_mode("best_score")
+            beta3_discovery_competition_mode("subjective_judgment")
+
+    def test_beta3_artifact_source_requires_pinned_allowlisted_same_repo_url(self) -> None:
+        pinned = (
+            f"https://github.com/{REPOSITORY}/blob/"
+            + "a" * 40
+            + "/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json"
+        )
+        self.assertTrue(is_same_repository_reviewed_beta3_artifact(pinned, REPOSITORY))
+        self.assertFalse(
+            is_same_repository_reviewed_beta3_artifact(
+                f"https://github.com/{REPOSITORY}/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+                REPOSITORY,
+            )
+        )
+        self.assertFalse(
+            is_same_repository_reviewed_beta3_artifact(
+                f"https://github.com/{REPOSITORY}/blob/{'a' * 40}/README.md",
+                REPOSITORY,
+            )
+        )
+        self.assertFalse(
+            is_same_repository_reviewed_beta3_artifact(
+                f"https://github.com/another/repo/blob/{'a' * 40}/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json",
+                REPOSITORY,
+            )
+        )
+
+    def test_beta3_augmentation_includes_pinned_best_score_artifact(self) -> None:
+        contract = "0x" + "4" * 40
+        bounty_id = "0x" + "5" * 64
+        source_url = (
+            f"https://github.com/{REPOSITORY}/blob/"
+            + "a" * 40
+            + "/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json"
+        )
+        base = projection()
+        base["source_statuses"] = [
+            source
+            for source in base["source_statuses"]
+            if source["protocol_version"] != BETA3_PROTOCOL
+        ]
+        amount = lambda value: {
+            "amount": str(value),
+            "currency": "USDC",
+            "unit": "base_units",
+        }
+        inventory = {
+            "network": NETWORK,
+            "protocol_version": BETA3_PROTOCOL,
+            "competitions": [
+                {
+                    "record": {
+                        "network": NETWORK,
+                        "factory_contract": "0x" + "3" * 40,
+                        "safe_block_number": 49_799_500,
+                        "safe_block_hash": "0x" + "d" * 64,
+                        "projection": {
+                            "competition": contract,
+                            "bounty_id": bounty_id,
+                            "state": "active",
+                            "winner_mode": "best_score",
+                        },
+                    }
+                }
+            ],
+        }
+        events = {
+            "network": NETWORK,
+            "protocol_version": BETA3_PROTOCOL,
+            "events": [
+                {
+                    "contract_address": contract,
+                    "bounty_id": bounty_id,
+                    "block_number": 49_799_100,
+                    "kind": "competition_activated",
+                }
+            ],
+        }
+        opportunity = {
+            "source_id": contract,
+            "source_url": source_url,
+            "created_at": "2026-08-24T18:00:00Z",
+            "updated_at": "2026-08-24T18:00:00Z",
+            "title": "6 USDC prize — Highest externally funded canonical GMV — daily 20260825",
+            "goal": "Create and fund useful demand. Highest eligible score wins.",
+            "categories": ["research"],
+            "skills": ["browser"],
+            "public_url": f"https://agentbounties.app/competition.html?bountyContract={contract}&network=base-mainnet",
+            "verification_ready": True,
+            "winner_mode": "best_score",
+            "reward": amount(6_000_000),
+            "completion_bonus": amount(40_000),
+            "bond": amount(0),
+            "funded_amount": amount(6_040_000),
+            "funding_target": amount(6_040_000),
+            "entry_count": 0,
+            "deadline": "2026-11-22T00:00:00Z",
+            "deadline_kind": "proof_deadline",
+            "verifier_profile_id": "forward-canonical-gmv-attribution-metric-v2",
+            "verifier_profile_name": "forward-canonical-gmv-attribution-metric-v2",
+            "verification_method": "sp1_plonk",
+            "cash_economics": {"required_external_spend": amount(110_000)},
+            "evidence_requirements": {
+                "protocol_version": BETA3_PROTOCOL,
+                "participation_phase": "upcoming",
+                "scoring_window": {
+                    "starts_at": "2026-08-25T00:00:00Z",
+                    "ends_at": "2026-08-26T00:00:00Z",
+                    "minimum_score_base_units": "1",
+                },
+                "scoring_formula": "sum(settlement_gmv * entrant_funding / total_funding)",
+                "qualifying_action": {
+                    "objective": "Post or fund useful marketplace demand that reaches canonical settlement inside the scoring window.",
+                    "excluded": ["operator or reserve wallets"],
+                },
+            },
+            "next_action": {
+                "action": "prepare_open_competition_v2_score",
+                "method": "GET",
+                "url": f"https://agentbounties.app/competition.html?bountyContract={contract}&network=base-mainnet",
+                "instructions": "Prepare the exact child-bounty brief.",
+            },
+        }
+
+        def request(method, url, body, headers):
+            if "/v1/metrics/platform" in url:
+                return HttpResult(
+                    200,
+                    {
+                        "coverage": {
+                            "marketplace_indexers_fresh": True,
+                            "awaiting_block_time_events": 0,
+                        }
+                    },
+                    {},
+                )
+            if "/inventory?" in url:
+                return HttpResult(200, inventory, {})
+            if "/events?" in url:
+                return HttpResult(200, events, {})
+            if "/v1/opportunities?" in url:
+                return HttpResult(200, {"items": [opportunity]}, {})
+            raise AssertionError(url)
+
+        augmented = augment_projection_with_beta3(
+            request,
+            "https://api.agentbounties.app",
+            NETWORK,
+            REPOSITORY,
+            base,
+        )
+        beta3 = [
+            record
+            for record in augmented["items"]
+            if record["protocol_version"] == BETA3_PROTOCOL
+        ]
+        self.assertEqual(len(beta3), 1)
+        self.assertEqual(beta3[0]["competition_mode"], "best_score")
+        self.assertEqual(beta3[0]["participation_phase"], "upcoming")
+        self.assertEqual(beta3[0]["next_action"]["label"], "Prepare scoring work")
 
     def test_workflow_is_least_privilege_concurrent_dry_run_by_default(self) -> None:
         workflow = Path(".github/workflows/bounty-inventory-guard.yml").read_text(encoding="utf-8")
@@ -438,6 +601,76 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertIn("First valid confirmed reveal wins", plan.desired_body)
         self.assertIn("discovery_id=", plan.desired_body)
         self.assertNotIn("competition", plan.desired_managed_labels)
+
+    def test_best_score_beta3_artifact_creates_decision_grade_mirror(self) -> None:
+        record = item(1060)
+        contract = record["bounty_contract"]
+        record.update(
+            {
+                "discovery_id": f"eip155:{CHAIN_ID}:{BETA3_PROTOCOL}:{contract}",
+                "protocol_version": BETA3_PROTOCOL,
+                "source_url": (
+                    f"https://github.com/{REPOSITORY}/blob/"
+                    + "a" * 40
+                    + "/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json"
+                ),
+                "competition_mode": "best_score",
+                "title": "6 USDC prize — Highest externally funded canonical GMV — daily 20260825",
+                "public_url": f"https://agentbounties.app/competition.html?bountyContract={contract}&network=base-mainnet",
+                "reward_usdc_base_units": "6000000",
+                "verifier_reward_usdc_base_units": "40000",
+                "bond_usdc_base_units": "0",
+                "funded_usdc_base_units": "6040000",
+                "funding_target_usdc_base_units": "6040000",
+                "entry_count": 0,
+                "max_entries": None,
+                "participation_phase": "upcoming",
+                "scoring_window": {
+                    "starts_at": "2026-08-25T00:00:00Z",
+                    "ends_at": "2026-08-26T00:00:00Z",
+                    "minimum_score_base_units": "1",
+                },
+                "scoring_formula": "sum(settlement_gmv * entrant_funding / total_funding)",
+                "qualifying_action": {
+                    "objective": "Post or fund useful marketplace demand that reaches canonical settlement inside the scoring window.",
+                    "excluded": ["operator or reserve wallets", "excluded reward contracts"],
+                },
+                "cash_economics": {
+                    "required_external_spend": {
+                        "amount": "110000",
+                        "currency": "USDC",
+                        "unit": "base_units",
+                    }
+                },
+                "next_action": {
+                    "kind": "prepare_open_competition_v2_score",
+                    "label": "Prepare scoring work",
+                    "method": "GET",
+                    "url": f"https://agentbounties.app/competition.html?bountyContract={contract}&network=base-mainnet",
+                    "instructions": "Prepare now; do not fund score before the UTC window starts.",
+                },
+            }
+        )
+        plan = build_plans(
+            projection(record),
+            [],
+            policy(),
+            REPOSITORY,
+            landing_entries={},
+        )[0]
+        self.assertTrue(plan.create_eligible)
+        self.assertEqual(plan.mapping_action, "current_nonterminal_backfill")
+        self.assertTrue(
+            {"ready-to-earn", "claimable-live", "open-competition", "verifier"}.issubset(
+                plan.desired_managed_labels
+            )
+        )
+        self.assertIn("Current competition state:** `upcoming`", plan.desired_body)
+        self.assertIn("2026-08-25T00:00:00Z", plan.desired_body)
+        self.assertIn("Hosted proof and relay cost:** 0.11 USDC", plan.desired_body)
+        self.assertIn("still spent if this competition entry loses", plan.desired_body)
+        self.assertIn("Prepare scoring work", plan.desired_body)
+        self.assertTrue(plan.title.startswith("Generate qualifying GMV"))
 
     def test_github_claim_command_recovers_to_open_competition(self) -> None:
         contract = "0x" + "3" * 40

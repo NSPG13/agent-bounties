@@ -26,7 +26,7 @@ export const CANONICAL_GMV_PROFILE = Object.freeze({
   elf_hash: "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
   journal_schema_hash: "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
   metric_program_hash: "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9",
-  review_evidence_hash: "0xa721b85db55db5c827dee508d89de09a222d9d70150f3eeb2a69a34b670023dd",
+  review_evidence_hash: "0x3e2c7a15171134c86436148ff0d0f871eeeca205f1328b3f41a23e75437a5c21",
 });
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;

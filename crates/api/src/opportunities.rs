@@ -964,13 +964,7 @@ fn v2_public_metadata(
         if item.seed_id.trim().is_empty()
             || item.title.trim().is_empty()
             || item.summary.trim().is_empty()
-            || !(item
-                .source_url
-                .starts_with("https://github.com/NSPG13/agent-bounties/issues/")
-                || item.source_url
-                    == "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-candidate-pool-v2.json"
-                || item.source_url
-                    == "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json")
+            || !reviewed_v2_public_source_url(&item.source_url)
             || item.bounty_id.len() != 66
             || item.competition.len() != 42
         {
@@ -1006,6 +1000,28 @@ fn v2_public_metadata(
         }
     }
     Ok(indexed)
+}
+
+fn reviewed_v2_public_source_url(source_url: &str) -> bool {
+    if source_url.starts_with("https://github.com/NSPG13/agent-bounties/issues/") {
+        return true;
+    }
+    let Some(remainder) = source_url.strip_prefix("https://github.com/NSPG13/agent-bounties/blob/")
+    else {
+        return false;
+    };
+    let Some((revision, path)) = remainder.split_once('/') else {
+        return false;
+    };
+    revision.len() == 40
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && matches!(
+            path,
+            "ops/open-competition-v2-forward-gmv-candidate-pool-v2.json"
+                | "ops/open-competition-v2-forward-gmv-reward-cohort-v1.json"
+        )
 }
 
 fn v2_scoring_phase(
@@ -2412,6 +2428,20 @@ mod tests {
             .next_action
             .instructions
             .contains("Do not generate score"));
+    }
+
+    #[test]
+    fn beta3_public_metadata_source_requires_pinned_reviewed_artifact() {
+        let revision = "b600500a0ba25babe5bf9d262472ef4f701b480a";
+        assert!(reviewed_v2_public_source_url(&format!(
+            "https://github.com/NSPG13/agent-bounties/blob/{revision}/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json"
+        )));
+        assert!(!reviewed_v2_public_source_url(
+            "https://github.com/NSPG13/agent-bounties/blob/main/ops/open-competition-v2-forward-gmv-reward-cohort-v1.json"
+        ));
+        assert!(!reviewed_v2_public_source_url(&format!(
+            "https://github.com/NSPG13/agent-bounties/blob/{revision}/README.md"
+        )));
     }
 
     #[test]

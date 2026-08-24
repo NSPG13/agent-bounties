@@ -54,6 +54,27 @@ async function permissionlessDirectManifest() {
   return manifest;
 }
 
+test("canonical GMV review evidence stays pinned to the current release identity", async () => {
+  const identity = (
+    await readFile(
+      new URL(
+        "../programs/forward-canonical-gmv-attribution-metric-v2/release-identity.json",
+        import.meta.url,
+      ),
+      "utf8",
+    )
+  ).replaceAll("\r\n", "\n");
+  const expected = keccak256Hex(`0x${Buffer.from(identity, "utf8").toString("hex")}`);
+  assert.equal(CANONICAL_GMV_PROFILE.review_evidence_hash, expected);
+  for (const path of [
+    "../scripts/bounty_inventory_guard.py",
+    "../scripts/plan_open_competition_v2_replenishment.py",
+  ]) {
+    const source = await readFile(new URL(path, import.meta.url), "utf8");
+    assert.match(source, new RegExp(`review_evidence_hash["']?\\s*:\\s*["']${expected}["']`));
+  }
+});
+
 test("Base RPC transport chunks public-endpoint batches and retries rate limits", async () => {
   const calls = Array.from({ length: 12 }, (_, index) => ({
     key: `call_${index}`,
