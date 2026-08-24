@@ -15,7 +15,7 @@
     <meta property="og:url" content="https://agentbounties.app/metrics.html">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="guild-pages.css?v=20260721">
-    <link rel="stylesheet" href="metrics.css?v=5">
+    <link rel="stylesheet" href="metrics.css?v=6">
   </head>
   <body class="metrics-page guild-interior">
     <a class="skip-link" href="#main-content">Skip to metrics</a>
@@ -66,6 +66,40 @@
           <p class="metric-change"><strong data-mature-cohort>—</strong> mature claimed rounds</p>
           <p data-immature-context>Recent claims stay outside the rate until they mature or reach a terminal event.</p>
         </article>
+      </section>
+
+      <section id="discoverability" class="discoverability-section" aria-labelledby="discoverability-title" data-reveal>
+        <div class="section-heading discoverability-heading">
+          <div><p class="metrics-kicker">Delayed discoverability scorecard</p><h2 id="discoverability-title">How people and automation find the market</h2></div>
+          <div class="discoverability-state" aria-live="polite">
+            <span class="source-state" data-discoverability-status data-status="loading">loading</span>
+            <p data-discoverability-window>Loading the latest complete provider snapshot.</p>
+          </div>
+        </div>
+        <div class="discoverability-groups">
+          <section aria-labelledby="human-reach-title">
+            <h3 id="human-reach-title">Human reach</h3>
+            <div class="discoverability-grid">
+              <article><span>Google impressions</span><output data-search-impressions>—</output><small>Search Console</small></article>
+              <article><span>Google organic clicks</span><output data-organic-clicks>—</output><small>Search Console</small></article>
+              <article><span>GitHub unique visitors</span><output data-discovery-github-visitors>—</output><small>GitHub-measured identities</small></article>
+              <article><span>Captured ChatGPT referrals</span><output data-chatgpt-referrals>—</output><small>Observed or explicitly tagged</small></article>
+              <article><span>Opportunity-feed clicks</span><output data-opportunity-feed-clicks>—</output><small>First-party browser events</small></article>
+              <article><span>Market → funded opportunity</span><output data-market-funded-ctr>—</output><small>Click-through rate</small></article>
+            </div>
+          </section>
+          <section aria-labelledby="automation-reach-title">
+            <h3 id="automation-reach-title">Automation reach</h3>
+            <div class="discoverability-grid">
+              <article><span>A2A interactions</span><output data-a2a-interactions>—</output><small>Observed route interactions</small></article>
+              <article><span>MCP interactions</span><output data-mcp-interactions>—</output><small>Observed route interactions</small></article>
+              <article><span>API + CLI interactions</span><output data-api-cli-interactions>—</output><small>Observed or declared interface</small></article>
+              <article><span>Feed interactions</span><output data-feed-interactions>—</output><small>Observed route interactions</small></article>
+              <article><span>GitHub unique cloners</span><output data-discovery-github-cloners>—</output><small>GitHub-measured identities</small></article>
+            </div>
+          </section>
+        </div>
+        <p class="discoverability-boundary">Interactions are aggregate route observations, not unique people or independent agents. GitHub cloners are GitHub-measured identities, not people or successful participants. Search and browser headlines use rolling 28-day windows, interface interactions use 30 days, and GitHub traffic uses its rolling 14-day window. All values become unavailable when any required provider is missing or more than nine days stale.</p>
       </section>
 
       <section id="interface-usage" class="interface-usage-section" aria-labelledby="interface-usage-title" data-reveal>
@@ -260,7 +294,7 @@
 
     <footer class="guild-shell-footer"><span>Public aggregate evidence and canonical transaction proofs. No participant handles or wallet identities are displayed.</span><a href="./">Home</a><a href="protocol.json">Protocol</a><a href="https://api.agentbounties.app/api-docs/openapi.json">API</a></footer>
     <script src="analytics-config.js?v=2"></script>
-    <script src="analytics.js?v=3"></script>
-    <script src="metrics.js?v=7"></script>
+    <script src="analytics.js?v=4"></script>
+    <script src="metrics.js?v=8"></script>
   </body>
 </html>

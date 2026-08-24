@@ -1,4 +1,5 @@
 mod a2a;
+mod discoverability;
 mod github_discovery;
 mod open_competition_v2_api;
 mod opportunities;
@@ -89,12 +90,13 @@ use cloud_agent::{
     CloudObjectiveVerifierDraft, CloudUnfundedBountyRequest,
 };
 use db::{
-    BaseIndexerHeartbeat, ChatgptActionIntent as DbChatgptActionIntent, ChatgptActionObservation,
-    ClaimCandidateReservation, ClaimFunnelStats, DbError, GitHubIssueSyncBountyUpsert,
-    NewBondSponsorship, NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription,
-    NewLegalAcceptance, NewOpenCompetitionEntrantRelay, NewOpportunityComment,
-    NewSiteAnalyticsEvent, NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution,
-    NewX402RelayAttempt, ObservedInterface, ObservedProtocolEra, OpenCompetitionEntrantRelay,
+    AttributionReliability, BaseIndexerHeartbeat, ChatgptActionIntent as DbChatgptActionIntent,
+    ChatgptActionObservation, ClaimCandidateReservation, ClaimFunnelStats, DbError,
+    DiscoveryInterface, DiscoveryRouteFamily, GitHubIssueSyncBountyUpsert, NewBondSponsorship,
+    NewChatgptActionIntent, NewClaimCandidate, NewDiscoveryWebhookSubscription, NewLegalAcceptance,
+    NewOpenCompetitionEntrantRelay, NewOpportunityComment, NewSiteAnalyticsEvent,
+    NewSocialMentionIngestion, NewTrialBounty, NewUnfundedBountySolution, NewX402RelayAttempt,
+    ObservedInterface, ObservedProtocolEra, OpenCompetitionEntrantRelay,
     OpenCompetitionEntrantRelayStatus, OpportunityComment as DbOpportunityComment,
     OpportunityLifecycleStats, PlatformDemandGrowthStats, PlatformMetricsStats, PostgresStore,
     SiteAnalyticsStats, SocialMentionIngestion, TrialBounty, UnfundedBountySolution,
@@ -216,6 +218,9 @@ use worker::{
         record_site_analytics_event,
         site_analytics,
         platform_metrics,
+        discoverability::ingest_snapshots,
+        discoverability::operator_report,
+        discoverability::public_summary,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -475,6 +480,13 @@ use worker::{
         ,PlatformDemandGrowthResponse
         ,PlatformDailyResponse
         ,PlatformCoverageResponse
+        ,discoverability::DiscoverabilitySnapshotRequest
+        ,discoverability::DiscoverabilityIngestionRequest
+        ,discoverability::DiscoverabilityIngestionResponse
+        ,discoverability::DiscoverabilitySourceStatus
+        ,discoverability::HumanReachSummary
+        ,discoverability::AutomationReachSummary
+        ,discoverability::DiscoverabilityPublicSummary
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -529,6 +541,21 @@ impl Modify for SecurityAddon {
         bearer.description =
             Some("Bearer form of the operator API token for hosted mutation surfaces.".to_string());
         components.add_security_scheme("operator_bearer", SecurityScheme::Http(bearer));
+        components.add_security_scheme(
+            "discoverability_ingest_token",
+            SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::with_description(
+                "x-agent-bounties-discoverability-ingest",
+                "Ingestion-only token for discoverability snapshots. It grants no wallet, payment, or general operator authority.",
+            ))),
+        );
+        let mut ingest_bearer = Http::new(HttpAuthScheme::Bearer);
+        ingest_bearer.bearer_format = Some("discoverability-ingest-token".to_string());
+        ingest_bearer.description =
+            Some("Bearer form of the ingestion-only discoverability token.".to_string());
+        components.add_security_scheme(
+            "discoverability_ingest_bearer",
+            SecurityScheme::Http(ingest_bearer),
+        );
     }
 }
 
@@ -547,6 +574,7 @@ struct AppState {
     base_rpc_urls: BaseRpcUrlConfig,
     base_broadcast_enabled: bool,
     operator_api_token: Option<String>,
+    discoverability_ingest_token: Option<String>,
     analytics_exclusion_token: Option<String>,
     public_base_url: String,
     mcp_base_url: String,
@@ -2171,6 +2199,9 @@ async fn main() -> anyhow::Result<()> {
         operator_api_token: env::var("OPERATOR_API_TOKEN")
             .ok()
             .and_then(non_empty_secret),
+        discoverability_ingest_token: env::var("DISCOVERABILITY_INGEST_TOKEN")
+            .ok()
+            .and_then(non_empty_secret),
         analytics_exclusion_token: env::var("ANALYTICS_EXCLUSION_TOKEN")
             .ok()
             .and_then(non_empty_secret),
@@ -2188,6 +2219,7 @@ async fn main() -> anyhow::Result<()> {
     let public_app = Router::new()
         .route("/health", get(health))
         .merge(a2a::router())
+        .merge(discoverability::router())
         .route("/llms.txt", get(llms_txt))
         .route("/v1/legal/policy", get(legal_policy))
         .route("/v1/legal/acceptances", post(record_legal_acceptance))
@@ -2731,6 +2763,66 @@ fn attributed_api_interface(headers: &HeaderMap) -> Option<ObservedInterface> {
     }
 }
 
+fn discovery_route_attribution(
+    path: &str,
+    headers: &HeaderMap,
+) -> Option<(
+    DiscoveryInterface,
+    DiscoveryRouteFamily,
+    AttributionReliability,
+)> {
+    if path == "/.well-known/agent-card.json" {
+        return Some((
+            DiscoveryInterface::A2a,
+            DiscoveryRouteFamily::AgentCard,
+            AttributionReliability::Observed,
+        ));
+    }
+    if path.starts_with("/a2a/v1/") && path != "/a2a/v1/message:send" {
+        return Some((
+            DiscoveryInterface::A2a,
+            DiscoveryRouteFamily::ProtocolOrientation,
+            AttributionReliability::Observed,
+        ));
+    }
+    if matches!(
+        path,
+        "/v1/opportunities/feed.rss"
+            | "/v1/opportunities/feed.atom"
+            | "/v1/opportunities/feed.json"
+    ) {
+        return Some((
+            DiscoveryInterface::Feed,
+            DiscoveryRouteFamily::OpportunityList,
+            AttributionReliability::Observed,
+        ));
+    }
+    let route_family = if path == "/v1/opportunities" {
+        Some(DiscoveryRouteFamily::OpportunityList)
+    } else if path.starts_with("/public/opportunities/") {
+        Some(DiscoveryRouteFamily::OpportunityDetail)
+    } else if path.starts_with("/v1/discovery/subscriptions") {
+        Some(DiscoveryRouteFamily::Alerts)
+    } else if matches!(
+        path,
+        "/.well-known/agent-bounties.json"
+            | "/v1/discovery"
+            | "/llms.txt"
+            | "/api-docs/openapi.json"
+            | "/docs"
+    ) {
+        Some(DiscoveryRouteFamily::ProtocolOrientation)
+    } else {
+        None
+    }?;
+    let interface = match attributed_api_interface(headers)? {
+        ObservedInterface::Api => DiscoveryInterface::Api,
+        ObservedInterface::Cli => DiscoveryInterface::Cli,
+        ObservedInterface::Mcp => return None,
+    };
+    Some((interface, route_family, AttributionReliability::Declared))
+}
+
 fn analytics_exclusion_is_authorized(
     analytics_exclusion_token: Option<&str>,
     operator_api_token: Option<&str>,
@@ -2763,6 +2855,7 @@ async fn observe_interface_usage(
     next: Next,
 ) -> Response {
     let interface = attributed_api_interface(request.headers());
+    let discovery_route = discovery_route_attribution(request.uri().path(), request.headers());
     let excluded = analytics_exclusion_is_authorized(
         state.analytics_exclusion_token.as_deref(),
         state.operator_api_token.as_deref(),
@@ -2782,6 +2875,22 @@ async fn observe_interface_usage(
                     .record_interface_usage(
                         interface,
                         ObservedProtocolEra::NotApplicable,
+                        succeeded,
+                        Utc::now(),
+                    )
+                    .await;
+            });
+        }
+        if let (Some(store), Some((interface, route_family, reliability))) =
+            (state.store.clone(), discovery_route)
+        {
+            let succeeded = response.status().is_success();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_discovery_route_usage(
+                        interface,
+                        route_family,
+                        reliability,
                         succeeded,
                         Utc::now(),
                     )
@@ -5011,6 +5120,52 @@ fn normalize_site_analytics_token(value: Option<String>) -> Result<Option<String
     Ok(Some(value))
 }
 
+fn normalize_site_analytics_source(value: Option<String>) -> Result<Option<String>, StatusCode> {
+    let Some(source) = normalize_site_analytics_token(value)? else {
+        return Ok(None);
+    };
+    let host = source.strip_prefix("www.").unwrap_or(&source);
+    let normalized = if matches!(
+        host,
+        "chatgpt" | "openai" | "chat.openai.com" | "chatgpt.com"
+    ) || host.ends_with(".chatgpt.com")
+        || host.ends_with(".openai.com")
+    {
+        "chatgpt"
+    } else if matches!(host, "google" | "google.com") || host.starts_with("google.") {
+        "google"
+    } else if matches!(host, "bing" | "bing.com") || host.ends_with(".bing.com") {
+        "bing"
+    } else if matches!(host, "github" | "github.com") || host.ends_with(".github.com") {
+        "github"
+    } else if matches!(
+        host,
+        "medium"
+            | "medium.com"
+            | "substack"
+            | "substack.com"
+            | "devto"
+            | "dev.to"
+            | "hackernews"
+            | "hn"
+            | "news.ycombinator.com"
+            | "reddit"
+            | "reddit.com"
+            | "x"
+            | "x.com"
+            | "twitter"
+            | "twitter.com"
+            | "t.co"
+    ) || host.ends_with(".substack.com")
+        || host.ends_with(".reddit.com")
+    {
+        "syndicated"
+    } else {
+        return Ok(Some(source));
+    };
+    Ok(Some(normalized.to_string()))
+}
+
 fn normalize_site_analytics_referrer(value: Option<String>) -> Result<Option<String>, StatusCode> {
     let Some(value) = value else {
         return Ok(None);
@@ -5038,6 +5193,7 @@ fn validated_site_analytics_event(
         "page_view"
             | "market_view"
             | "funded_bounty_click"
+            | "opportunity_feed_click"
             | "unfunded_post_started"
             | "unfunded_post_completed"
             | "funding_started"
@@ -5108,7 +5264,7 @@ fn validated_site_analytics_event(
         session_id: request.session_id,
         event_name: request.event_name,
         page_path: request.page_path,
-        source: normalize_site_analytics_token(request.source)?,
+        source: normalize_site_analytics_source(request.source)?,
         campaign: normalize_site_analytics_token(request.campaign)?,
         referrer_host: normalize_site_analytics_referrer(request.referrer_host)?,
         opportunity_id,
@@ -17464,6 +17620,88 @@ mod tests {
     }
 
     #[test]
+    fn site_analytics_normalizes_known_discovery_sources_without_inferring_mcp() {
+        for source in [
+            "chatgpt.com",
+            "chat.openai.com",
+            "links.chatgpt.com",
+            "openai",
+        ] {
+            assert_eq!(
+                normalize_site_analytics_source(Some(source.to_string())).unwrap(),
+                Some("chatgpt".to_string())
+            );
+        }
+        for (source, expected) in [
+            ("www.google.com", "google"),
+            ("bing.com", "bing"),
+            ("github.com", "github"),
+            ("dev.to", "syndicated"),
+            ("news.ycombinator.com", "syndicated"),
+        ] {
+            assert_eq!(
+                normalize_site_analytics_source(Some(source.to_string())).unwrap(),
+                Some(expected.to_string())
+            );
+        }
+        assert_eq!(
+            normalize_site_analytics_source(Some("mcp".to_string())).unwrap(),
+            Some("mcp".to_string())
+        );
+    }
+
+    #[test]
+    fn discovery_route_classification_is_explicit_and_failure_closed() {
+        let empty = HeaderMap::new();
+        assert_eq!(
+            discovery_route_attribution("/.well-known/agent-card.json", &empty),
+            Some((
+                DiscoveryInterface::A2a,
+                DiscoveryRouteFamily::AgentCard,
+                AttributionReliability::Observed,
+            ))
+        );
+        assert_eq!(
+            discovery_route_attribution("/v1/opportunities/feed.json", &empty),
+            Some((
+                DiscoveryInterface::Feed,
+                DiscoveryRouteFamily::OpportunityList,
+                AttributionReliability::Observed,
+            ))
+        );
+        assert_eq!(
+            discovery_route_attribution("/v1/opportunities", &empty),
+            None
+        );
+
+        let mut declared = HeaderMap::new();
+        declared.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("cli"),
+        );
+        assert_eq!(
+            discovery_route_attribution("/v1/opportunities", &declared),
+            Some((
+                DiscoveryInterface::Cli,
+                DiscoveryRouteFamily::OpportunityList,
+                AttributionReliability::Declared,
+            ))
+        );
+        declared.insert(
+            INTERFACE_ATTRIBUTION_HEADER,
+            HeaderValue::from_static("mcp"),
+        );
+        assert_eq!(
+            discovery_route_attribution("/v1/opportunities", &declared),
+            None
+        );
+        assert_eq!(
+            discovery_route_attribution("/v1/unrelated", &declared),
+            None
+        );
+    }
+
+    #[test]
     fn legal_policy_is_hash_bound_and_acceptance_is_action_wallet_and_time_bound() {
         let policy = build_legal_policy("https://agentbounties.app/");
         assert_eq!(policy.terms_version, LEGAL_TERMS_VERSION);
@@ -20351,6 +20589,20 @@ mod tests {
         assert!(paths.contains_key("/v1/analytics/events"));
         assert!(paths.contains_key("/v1/analytics/site"));
         assert!(paths.contains_key("/v1/metrics/platform"));
+        assert!(paths.contains_key("/v1/operator/discoverability/snapshots"));
+        assert!(paths.contains_key("/v1/operator/discoverability/report"));
+        assert!(paths.contains_key("/v1/discoverability/summary"));
+        let ingestion_security =
+            paths["/v1/operator/discoverability/snapshots"]["post"]["security"].to_string();
+        assert!(ingestion_security.contains("discoverability_ingest_token"));
+        assert!(!ingestion_security.contains("operator_api_token"));
+        let report_security =
+            paths["/v1/operator/discoverability/report"]["get"]["security"].to_string();
+        assert!(report_security.contains("operator_api_token"));
+        assert!(!report_security.contains("discoverability_ingest_token"));
+        assert!(value["components"]["schemas"]
+            .get("DiscoverabilityPublicSummary")
+            .is_some());
         assert!(paths.contains_key("/v1/discovery/subscriptions"));
         assert!(paths.contains_key("/v1/discovery/subscriptions/{id}"));
         assert!(paths.contains_key("/public/opportunities/{opportunity_id}/embed"));
@@ -21950,6 +22202,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -21986,6 +22239,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22013,6 +22267,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22040,6 +22295,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22071,6 +22327,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: Some(token.to_string()),
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22104,6 +22361,7 @@ mod tests {
             },
             base_broadcast_enabled: true,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22134,6 +22392,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22164,6 +22423,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
@@ -22195,6 +22455,7 @@ mod tests {
             base_rpc_urls: BaseRpcUrlConfig::default(),
             base_broadcast_enabled: false,
             operator_api_token: None,
+            discoverability_ingest_token: None,
             analytics_exclusion_token: None,
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),

@@ -263,6 +263,7 @@ body.metrics-page {
 
 .trend-section,
 .repository-section,
+.discoverability-section,
 .interface-usage-section,
 .payout-audit-section,
 .composition-section,
@@ -275,6 +276,83 @@ body.metrics-page {
 
 .interface-usage-section {
   scroll-margin-top: 148px;
+}
+
+.discoverability-heading {
+  align-items: end;
+}
+
+.discoverability-state {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.discoverability-state p,
+.discoverability-boundary {
+  margin: 0;
+  color: var(--metrics-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.discoverability-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(32px, 5vw, 72px);
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--metrics-line-strong);
+}
+
+.discoverability-groups h3 {
+  margin: 0 0 18px;
+  color: var(--metrics-paper);
+  font: 500 clamp(24px, 3vw, 38px) / 1 Georgia, "Times New Roman", serif;
+}
+
+.discoverability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--metrics-line);
+}
+
+.discoverability-grid article {
+  min-width: 0;
+  padding: 20px 18px 22px 0;
+  border-bottom: 1px solid var(--metrics-line);
+}
+
+.discoverability-grid article:nth-child(even) {
+  padding-left: 18px;
+  border-left: 1px solid var(--metrics-line);
+}
+
+.discoverability-grid span,
+.discoverability-grid small {
+  display: block;
+  color: var(--metrics-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.discoverability-grid span {
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.discoverability-grid output {
+  display: block;
+  margin: 12px 0 8px;
+  color: var(--metrics-accent);
+  font: 500 clamp(26px, 3vw, 42px) / 1 Georgia, "Times New Roman", serif;
+  letter-spacing: -0.04em;
+}
+
+.discoverability-boundary {
+  margin-top: 22px;
+  max-width: 1100px;
 }
 
 .interface-usage-heading {
@@ -1070,6 +1148,10 @@ body.metrics-page {
     grid-template-columns: 1fr;
   }
 
+  .discoverability-groups {
+    grid-template-columns: 1fr;
+  }
+
   .interface-row {
     grid-template-columns: minmax(190px, 1fr) minmax(140px, 0.7fr) minmax(200px, 1fr);
     gap: 24px;
@@ -1110,6 +1192,15 @@ body.metrics-page {
   .supporting-grid {
     grid-template-columns: 1fr;
     gap: 24px;
+  }
+
+  .discoverability-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .discoverability-grid article:nth-child(even) {
+    padding-left: 0;
+    border-left: 0;
   }
 
   .metrics-intro h1 {

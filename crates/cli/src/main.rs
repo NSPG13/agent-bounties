@@ -4813,6 +4813,29 @@ fn print_service_smoke_report(report: &ServiceSmokeReport) -> Result<()> {
     Ok(())
 }
 
+struct ScopedEnvironmentVariable {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedEnvironmentVariable {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = env::var_os(key);
+        env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvironmentVariable {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.as_ref() {
+            env::set_var(self.key, previous);
+        } else {
+            env::remove_var(self.key);
+        }
+    }
+}
+
 async fn service_smoke_spawn(
     api_base_url: String,
     mcp_base_url: String,
@@ -4820,6 +4843,12 @@ async fn service_smoke_spawn(
     verify_restart_persistence: bool,
 ) -> Result<()> {
     const SMOKE_OPERATOR_TOKEN: &str = "agent-bounties-local-service-smoke";
+    const SMOKE_ANALYTICS_EXCLUSION_TOKEN: &str =
+        "agent-bounties-local-service-smoke-analytics-exclusion";
+    let _analytics_exclusion = ScopedEnvironmentVariable::set(
+        ANALYTICS_EXCLUSION_TOKEN_ENV,
+        SMOKE_ANALYTICS_EXCLUSION_TOKEN,
+    );
     let api = normalize_base_url(&api_base_url);
     let mcp = normalize_base_url(&mcp_base_url);
     if verify_restart_persistence && database_url.is_none() {
@@ -4837,6 +4866,7 @@ async fn service_smoke_spawn(
             ("PUBLIC_BASE_URL", api.as_str()),
             ("MCP_BASE_URL", mcp.as_str()),
             ("OPERATOR_API_TOKEN", SMOKE_OPERATOR_TOKEN),
+            ("ANALYTICS_EXCLUSION_TOKEN", SMOKE_ANALYTICS_EXCLUSION_TOKEN),
         ],
         database_url.as_deref(),
     )
@@ -4847,6 +4877,7 @@ async fn service_smoke_spawn(
             ("MCP_BIND_ADDR", mcp_bind.as_str()),
             ("PUBLIC_BASE_URL", api.as_str()),
             ("MCP_BASE_URL", mcp.as_str()),
+            ("ANALYTICS_EXCLUSION_TOKEN", SMOKE_ANALYTICS_EXCLUSION_TOKEN),
         ],
         database_url.as_deref(),
     ) {
@@ -4882,6 +4913,7 @@ async fn service_smoke_spawn(
             database_url.as_deref().unwrap(),
             &report,
             SMOKE_OPERATOR_TOKEN,
+            SMOKE_ANALYTICS_EXCLUSION_TOKEN,
             &before,
         )
         .await?;
@@ -4896,6 +4928,7 @@ async fn verify_service_smoke_restart_persistence(
     database_url: &str,
     report: &ServiceSmokeReport,
     operator_token: &str,
+    analytics_exclusion_token: &str,
     before: &DurableDataSnapshot,
 ) -> Result<()> {
     let api_bind = bind_addr_from_base_url(api)?;
@@ -4910,6 +4943,7 @@ async fn verify_service_smoke_restart_persistence(
             ("PUBLIC_BASE_URL", api),
             ("MCP_BASE_URL", mcp),
             ("OPERATOR_API_TOKEN", operator_token),
+            ("ANALYTICS_EXCLUSION_TOKEN", analytics_exclusion_token),
         ],
         Some(database_url),
     )
@@ -4920,6 +4954,7 @@ async fn verify_service_smoke_restart_persistence(
             ("MCP_BIND_ADDR", mcp_bind.as_str()),
             ("PUBLIC_BASE_URL", api),
             ("MCP_BASE_URL", mcp),
+            ("ANALYTICS_EXCLUSION_TOKEN", analytics_exclusion_token),
         ],
         Some(database_url),
     ) {
@@ -4930,9 +4965,27 @@ async fn verify_service_smoke_restart_persistence(
         }
     };
 
-    let result = (|| -> Result<()> {
+    let result = async {
         wait_for_health(&format!("{api}/health"))?;
         wait_for_health(&format!("{mcp}/health"))?;
+
+        // Capture restart hydration before the read probes below. Some probes are
+        // intentionally counted in the privacy-minimized interface telemetry, so
+        // comparing after those requests would mistake expected observations for
+        // persistence drift.
+        let after_startup = PostgresStore::connect(database_url)
+            .await
+            .context("failed to connect for the post-restart durable-data snapshot")?
+            .durable_data_snapshot()
+            .await
+            .context("failed to capture the post-restart durable-data snapshot")?;
+        require(
+            before == &after_startup,
+            &format!(
+                "restart hydration changed durable rows: {}",
+                durable_snapshot_changes(before, &after_startup).join(", ")
+            ),
+        )?;
 
         let api_eval_runs = get_json(&format!("{api}/v1/evals/runs"))?;
         require(
@@ -5006,26 +5059,13 @@ async fn verify_service_smoke_restart_persistence(
             &mcp_agent_paid_status,
             "restarted MCP must hydrate solver payout summary from Postgres",
         )?;
-        Ok(())
-    })();
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
 
     stop_child(&mut api_child);
     stop_child(&mut mcp_child);
-    result?;
-
-    let after = PostgresStore::connect(database_url)
-        .await
-        .context("failed to connect for the post-restart durable-data snapshot")?
-        .durable_data_snapshot()
-        .await
-        .context("failed to capture the post-restart durable-data snapshot")?;
-    require(
-        before == &after,
-        &format!(
-            "restart hydration changed durable rows: {}",
-            durable_snapshot_changes(before, &after).join(", ")
-        ),
-    )
+    result
 }
 
 fn durable_snapshot_changes(
@@ -5860,6 +5900,7 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
     let mut routes = BTreeSet::new();
     for relative_path in [
         "crates/api/src/main.rs",
+        "crates/api/src/discoverability.rs",
         "crates/api/src/open_competition_v2_api.rs",
         "crates/mcp-server/src/main.rs",
     ] {
@@ -7243,6 +7284,20 @@ mod tests {
         assert!(active_issues.iter().any(|issue| issue
             .message
             .contains("unknown API route `/v1/base/release-plan`")));
+    }
+
+    #[test]
+    fn docs_contract_loads_routes_from_dedicated_api_modules() {
+        let contract_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let routes = load_api_routes(&contract_root).expect("API routes should load");
+
+        for route in [
+            "/v1/operator/discoverability/snapshots",
+            "/v1/operator/discoverability/report",
+            "/v1/discoverability/summary",
+        ] {
+            assert!(routes.contains(route), "missing modular API route {route}");
+        }
     }
 
     #[test]

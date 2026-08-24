@@ -156,6 +156,18 @@ This optional acquisition section reports privacy-minimized browser/device IDs.
 It is labeled as acquisition context, not users, has no pre-deployment backfill,
 and is never added to active identities.
 
+`GET /v1/discoverability/summary`
+
+This delayed scorecard keeps human reach separate from automation reach. Human
+headlines are Search Console impressions/clicks, GitHub unique visitors,
+captured ChatGPT referrals, opportunity-feed clicks, and market-to-funded CTR.
+Automation headlines are A2A, MCP, API/CLI, and feed interactions plus GitHub
+unique cloners. Interactions are not unique agents, and GitHub unique cloners
+are GitHub-measured identities rather than people or successful participants.
+The response includes provider windows, `data_through`, generation time, and an
+`unavailable` state when any required snapshot is missing or over nine days
+stale. Raw queries, paths, referrers, and provider payloads remain operator-only.
+
 The same response supplies the dashboard's live external-interface-usage section. It
 shows hourly aggregate external request totals and successful HTTP responses for REST API,
 CLI, modern MCP, legacy MCP, and the MCP HTTP adapter. These are interactions,

@@ -183,6 +183,65 @@ test("interface usage aggregates fixed API CLI and MCP rows without claiming use
   assert.equal(summary.last_observed_at, "2026-08-13T17:16:00.000Z");
 });
 
+test("discoverability scorecard accepts only complete fresh aggregate providers", () => {
+  const response = {
+    schema_version: "agent-bounties/discoverability-summary-v1",
+    status: "ready",
+    generated_at: "2026-08-24T12:00:00Z",
+    sources: ["search_console", "github", "first_party", "external_interfaces"].map((provider, index) => ({
+      provider,
+      available: true,
+      stale: false,
+      data_through: `2026-08-${20 + index}T00:00:00Z`,
+    })),
+    human_reach: {
+      search_impressions: 350,
+      organic_clicks: 5,
+      google_average_position: 7.8,
+      github_unique_visitors: 300,
+      captured_chatgpt_referrals: 38,
+      opportunity_feed_clicks: 25,
+      market_to_funded_opportunity_ctr: 0.058,
+    },
+    automation_reach: {
+      a2a_interactions: 11,
+      mcp_interactions: 12,
+      api_cli_interactions: 13,
+      feed_interactions: 14,
+      github_unique_cloners: 530,
+    },
+  };
+  const summary = metrics.discoverabilitySummary(response);
+  assert.equal(summary.status, "ready");
+  assert.equal(summary.human_reach.search_impressions, 350);
+  assert.equal(summary.automation_reach.github_unique_cloners, 530);
+  assert.equal(summary.data_through, "2026-08-20T00:00:00.000Z");
+});
+
+test("discoverability scorecard fails closed for stale, partial, malformed, or invalid counts", () => {
+  const ready = {
+    schema_version: "agent-bounties/discoverability-summary-v1",
+    status: "ready",
+    generated_at: "2026-08-24T12:00:00Z",
+    sources: ["search_console", "github", "first_party", "external_interfaces"].map((provider) => ({
+      provider, available: true, stale: false, data_through: "2026-08-23T00:00:00Z",
+    })),
+    human_reach: {
+      search_impressions: 1, organic_clicks: 1, google_average_position: 1,
+      github_unique_visitors: 1, captured_chatgpt_referrals: 1,
+      opportunity_feed_clicks: 1, market_to_funded_opportunity_ctr: 0.058,
+    },
+    automation_reach: {
+      a2a_interactions: 1, mcp_interactions: 1, api_cli_interactions: 1,
+      feed_interactions: 1, github_unique_cloners: 1,
+    },
+  };
+  assert.equal(metrics.discoverabilitySummary({ ...ready, status: "unavailable" }).status, "unavailable");
+  assert.equal(metrics.discoverabilitySummary({ ...ready, sources: ready.sources.slice(1) }).status, "unavailable");
+  assert.equal(metrics.discoverabilitySummary({ ...ready, sources: ready.sources.map((source, index) => index ? source : { ...source, stale: true }) }).status, "unavailable");
+  assert.equal(metrics.discoverabilitySummary({ ...ready, human_reach: { ...ready.human_reach, search_impressions: -1 } }).status, "unavailable");
+});
+
 test("interface usage handles empty coverage duplicate buckets and malformed success counts", () => {
   assert.equal(metrics.interfaceUsageSummary(null).status, "unavailable");
 

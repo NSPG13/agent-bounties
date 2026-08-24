@@ -291,6 +291,17 @@ Shared secrets belong in Render environment groups, never in Git:
 - optional `OPERATOR_API_TOKEN` for non-protocol administrative surfaces,
 - future Stripe secrets and verified webhook secret.
 
+`DISCOVERABILITY_INGEST_TOKEN` is a direct `sync: false` secret on the API
+service, so MCP and workers never receive it. Provision the same value in GitHub
+Actions only as a separate maintainer R3 access step.
+
+The weekly discoverability workflow additionally needs the GitHub Actions-only
+`REPOSITORY_TRAFFIC_TOKEN` and `GSC_SERVICE_ACCOUNT_JSON`. The Search Console
+service account must be a restricted read-only user of
+`https://agentbounties.app/`. These values are not created by deployment and
+must never be exposed to the website or application containers. See
+[`discoverability-measurement.md`](discoverability-measurement.md).
+
 The hosted model credential is a direct API-service secret, not a shared
 environment-group value. This prevents MCP and the indexer from receiving it.
 

@@ -259,6 +259,9 @@ services:
         value: "false"
       - key: CLOUD_AGENT_API_KEY
         sync: false
+      # Provision the same value in GitHub Actions only as a separate R3 access step.
+      - key: DISCOVERABILITY_INGEST_TOKEN
+        sync: false
       - key: CLOUD_AGENT_ENABLED
         value: "true"
       - key: CLOUD_AGENT_PUBLIC_DRAFTS
