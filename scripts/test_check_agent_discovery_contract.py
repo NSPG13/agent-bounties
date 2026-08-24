@@ -94,10 +94,10 @@ class AgentDiscoveryContractTests(unittest.TestCase):
         )
 
     def test_removed_public_route_fails(self) -> None:
-        with self.assertRaisesRegex(SystemExit, "intentionally removed route earn.html"):
+        with self.assertRaisesRegex(SystemExit, "intentionally removed route post.html"):
             guard.validate_entrypoint_text(
                 "guide.md",
-                "Open https://agentbounties.app/earn.html\n",
+                "Open https://agentbounties.app/post.html\n",
                 max_lines=4,
                 max_chars=200,
                 required=(),
