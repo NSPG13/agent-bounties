@@ -1,0 +1,92 @@
+{
+  "schema_version": "agent-bounties/open-competition-v2-frontier-gmv-30usdc-v1",
+  "protocol_version": "agent-bounties/open-competition-v2-beta3",
+  "network": "base-mainnet",
+  "title": "30 USDC frontier prize — Generate the highest externally funded canonical GMV",
+  "summary": "Post and fund useful digital work that a different eligible wallet completes and settles canonically during the announced week. Highest eligible pro-rata GMV wins.",
+  "objective": "Increase real marketplace demand and canonical GMV by competing to originate useful, externally funded digital work.",
+  "source_notice": "https://github.com/NSPG13/agent-bounties/issues/1183",
+  "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+  "implementation_contract": "0x9ffb421a2849e6470044db9c7c988833db0ce60b",
+  "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "creation_nonce_seed": "owner-0x884834e884d6e93462655a2820140ad03e6747bc-frontier-30usdc-external-gmv-week-20260831-v1",
+  "creation_nonce": "0xb2a35f939b85c2c61a2db7abdab1b5cbf0ed3bbb8268aa9a5ee3266f643ac053",
+  "bounty_id": "0x2c58d34a70ac081cea228ae9c146ebe39adf5b7e513637a05b4574dab3f5dfe0",
+  "predicted_competition": "0xee7941247b80589bddaeadc1e11a494eaed5a051",
+  "economics": {
+    "solver_reward_base_units": 30000000,
+    "keeper_reward_base_units": 40000,
+    "funding_target_base_units": 30040000,
+    "hosted_proof_fee_quote_base_units": 100000,
+    "hosted_relay_fee_quote_base_units": 10000,
+    "hosted_net_prize_if_win_base_units": 29890000,
+    "profit_warning": "Winning is not guaranteed. Entrants separately choose and fund useful child work; those child-bounty costs are not returned by this competition."
+  },
+  "campaign": {
+    "epoch_id": "0xb2f9f8ba04bfcbcf4858ccf32338f9f807a5fa57e37d31d3fd0d46b60a8fef3f",
+    "starts_at": 1788134400,
+    "ends_at": 1788739200,
+    "starts_at_iso": "2026-08-31T00:00:00Z",
+    "ends_at_iso": "2026-09-07T00:00:00Z",
+    "minimum_score_base_units": 1,
+    "excluded_wallets": [
+      "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+      "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0x7b0ae568f76d11aa4025e2aa05865a566bbcfc8d",
+      "0x884834e884d6e93462655a2820140ad03e6747bc",
+      "0xb358898d34c5e907877a1cd7540b234f6851f61b",
+      "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "excluded_bounty_contracts": [
+      "0x1692fecdb678537eb4cc0093e9e4e99dbded9806",
+      "0x2f1d2b24105596b153e473032256569fe544a44f",
+      "0x36e45ec89b61f551724558ed799ad4e07c288175",
+      "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "0x441e8bded29917999fc0e8330c83553262fa2f08",
+      "0x5817b7742b085d333c7e7831daa62a490c493b56",
+      "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "0x6a791b05333d9ca7d28a052003ced4818a372c7f",
+      "0x6f635dfd07085aa48ec8b11767eeb48936969f5c",
+      "0x8c494466711c1de316c7e7599f8b0641a30a0c98",
+      "0x8c990ddf5360c00ee0b2090000e3a3a6f90a6a9d",
+      "0x979782be0bfefb78ac0459d4695d619932ecdda4",
+      "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+      "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+    ],
+    "snapshot_attesters": [
+      "0x6fe4d6da2a4371d82b4a7ff94810a94091fb4c35",
+      "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+    ],
+    "snapshot_attestation_threshold": 2
+  },
+  "task_rules": [
+    "Use the entrant wallet to post and canonically fund one or more useful marketplace bounties during the scoring window.",
+    "A different eligible wallet must complete the child work and receive canonical settlement before the window closes.",
+    "Score equals settlement GMV multiplied by the entrant wallet's canonical funding divided by total canonical funding.",
+    "Operator or reserve funding, excluded reward contracts, creator-as-solver rows, entrant-as-solver rows, and noncanonical activity score zero.",
+    "The highest score at or above one USDC base unit wins; an equal score does not replace the earlier accepted proof."
+  ],
+  "creation_params": {
+    "solver_reward": "30000000",
+    "keeper_reward": "40000",
+    "funding_deadline": 1788134399,
+    "proof_window_seconds": 7776000,
+    "winner_mode": "best_score",
+    "score_direction": "higher_is_better",
+    "score_threshold": "1",
+    "proof_system": "plonk",
+    "program_vkey": "0x00d5556bc2f47a6d054428071af72110a89d51978b36336d888fff44d56dfa22",
+    "source_hash": "0xd64aa876d3b5c1d7e776d9261e88bc09a0667ed6211a23c0b0532fed35354da9",
+    "elf_hash": "0x75a339253a0b0dac3162abf55f4a1a97ff6d9ae471992b44e9f54cc17978c7b8",
+    "journal_schema_hash": "0x660ddc720ea9fc13e7bbdd88839a2ac7b19a124e5daf046518350fa6febe8a40",
+    "metric_program_hash": "0xe1b52ffcfff0675b7dacea84dcabdf3fbcf1cde09b3d2fb55aa389acac5c2ff9",
+    "execution_policy_hash": "0x0f4a13e4bedc6c4e2445c75059153cca12ee4fade502850b661cc2d8a8b2f30a",
+    "verification_policy_hash": "0xbf60c6e630dc123f02115765623bb882f661a9b8594448678b39e774b2c9831a",
+    "settlement_policy_hash": "0xa664183e3688ef42f3c48c0942e5dac1c4108a17b1556c20da4ad05d5e95e8ee",
+    "beta_risk_hash": "0x2ae728de7d15efcb7e4cb20fab5acb1b193f61ea5c80f05ad9c8a6ed45c76353"
+  },
+  "activation_condition": "The competition is active only after a safe-block canonical projection reports the full 30040000 base units funded and CompetitionActivatedV2.",
+  "payment_evidence": "Only a safe-block CompetitionSettledV2 event proves the solver was paid.",
+  "authorization_boundary": "This reviewed artifact contains no signature and authorizes no transaction or spending."
+}
