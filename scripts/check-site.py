@@ -159,7 +159,7 @@ def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
     missing = set(schema.get("required", [])) - set(discovery)
     if unknown or missing:
         fail(f"discovery schema mismatch: unknown={sorted(unknown)} missing={sorted(missing)}")
-    if discovery.get("schema") != "https://agentbounties.org/schemas/discovery-manifest.v2.json":
+    if discovery.get("schema") != "https://agentbounties.app/schemas/discovery-manifest.v2.json":
         fail("discovery manifest must use schema v2")
     if discovery.get("open_source") is not True:
         fail("discovery manifest must advertise open_source=true")
@@ -322,7 +322,7 @@ def check_homepage(site_dir: Path) -> None:
     if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
         fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
     stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
-    if not stylesheet_version or int(stylesheet_version.group(1)) < 12:
+    if not stylesheet_version or int(stylesheet_version.group(1)) < 13:
         fail("the homepage must load the flow-layout stylesheet through a cache-busted URL")
     require_phrases(
         "index.html bounty assistant launcher",
@@ -418,6 +418,13 @@ def check_homepage(site_dir: Path) -> None:
         fail("the homepage CTA must not use independent absolute positioning")
     if "margin-top: clamp(32px, 4vh, 40px)" not in hero_action_css.group("body"):
         fail("the desktop bounty CTA must retain breathing room below the headline")
+    for selector, label in (
+        (r"\.scene-nav \.login-preview", "login"),
+        (r"\.hero-action button", "post-a-bounty"),
+    ):
+        match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
+        if not match or "cursor: pointer" not in match.group("body"):
+            fail(f"the {label} button must show a hand pointer on hover")
     desktop_title_css = re.search(r"@media\s*\(min-width:\s*821px\)\s*\{\s*\.stone-title\s*\{(?P<body>[^}]*)\}", css)
     if not desktop_title_css or "line-height: 1" not in desktop_title_css.group("body"):
         fail("the desktop hero title must retain its increased line spacing")

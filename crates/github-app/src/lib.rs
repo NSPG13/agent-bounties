@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
-const STATIC_FUNDING_PAGE_URL: &str = "https://agentbounties.app/funding.html";
-const STATIC_POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
-const STATIC_EARN_PAGE_URL: &str = "https://agentbounties.app/earn.html";
+const STATIC_FUNDING_PAGE_URL: &str = "https://api.agentbounties.app/public/funding";
+const STATIC_POST_PAGE_URL: &str = "https://agentbounties.app/#post-a-bounty";
+const STATIC_EARN_PAGE_URL: &str = "https://agentbounties.app/";
 pub const GITHUB_CREATE_DISCOVERY_SOURCE: &str = "GitHub /agent-bounty create";
 pub const SOCIAL_MENTION_MIN_GITHUB_CANONICAL_FUNDED: u32 = 3;
 pub const SOCIAL_MENTION_MIN_GITHUB_CANONICAL_SETTLED: u32 = 2;

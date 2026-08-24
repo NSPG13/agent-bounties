@@ -29,7 +29,7 @@ def is_hex(value: Any, byte_length: int) -> bool:
 def check_discovery(discovery: dict[str, Any]) -> None:
     expect(
         discovery["schema"]
-        == "https://agentbounties.org/schemas/discovery-manifest.v2.json",
+        == "https://agentbounties.app/schemas/discovery-manifest.v2.json",
         "rehearsal discovery must use v2",
     )
     protocol = discovery["protocol"]

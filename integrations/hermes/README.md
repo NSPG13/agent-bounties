@@ -39,4 +39,4 @@ Smoke:
 python scripts/check-hermes-integration.py
 ```
 
-Post your own bounty: https://agentbounties.app/post.html
+Post your own bounty: https://agentbounties.app/#post-a-bounty

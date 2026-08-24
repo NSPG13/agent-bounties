@@ -6,15 +6,16 @@ use domain::{
 };
 use serde::{Deserialize, Serialize};
 
-const DISCOVERY_SCHEMA: &str = "https://agentbounties.org/schemas/discovery-manifest.v2.json";
+const DISCOVERY_SCHEMA: &str = "https://agentbounties.app/schemas/discovery-manifest.v2.json";
 const GITHUB_ISSUE_TEMPLATE_URL: &str =
     "https://github.com/NSPG13/agent-bounties/issues/new?template=paid-bounty.yml";
-const STATIC_FUNDING_PAGE_URL: &str = "https://agentbounties.app/funding.html";
-const STATIC_EARN_PAGE_URL: &str = "https://agentbounties.app/earn.html";
-const STATIC_POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
-const STATIC_X402_PAGE_URL: &str = "https://agentbounties.app/x402.html";
+const STATIC_FUNDING_PAGE_URL: &str = "https://api.agentbounties.app/public/funding";
+const STATIC_EARN_PAGE_URL: &str = "https://agentbounties.app/";
+const STATIC_POST_PAGE_URL: &str = "https://agentbounties.app/#post-a-bounty";
+const STATIC_X402_PAGE_URL: &str = "https://api.agentbounties.app/.well-known/x402.json";
 const STATIC_X402_TEST_VECTORS_URL: &str = "https://agentbounties.app/x402-test-vectors.json";
-const STATIC_AGENT_WALLET_READINESS_PAGE_URL: &str = "https://agentbounties.app/prepare-agent.html";
+const STATIC_AGENT_WALLET_READINESS_PAGE_URL: &str =
+    "https://api.agentbounties.app/v1/base/agent-wallet/readiness";
 const GITHUB_REPOSITORY_URL: &str = "https://github.com/NSPG13/agent-bounties";
 const GITHUB_STAR_COMMAND: &str = "gh api --method PUT /user/starred/NSPG13/agent-bounties";
 const GITHUB_REACTION_COMMAND_TEMPLATE: &str = "gh api --method POST /repos/NSPG13/agent-bounties/issues/{issue_number}/reactions -f content='+1'";
@@ -875,7 +876,7 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 name: "remote_mcp".to_string(),
                 transport: "streamable_http".to_string(),
                 endpoint: endpoints.mcp_streamable_http.clone(),
-                description: "Initialize, call tools/list, and use only the tools returned by that session. The default earning route is get_bounty_feed with view=ready_to_earn and source_type=canonical_base, then prepare_bounty_action with action=solve, open its first-party authorization_url, and poll get_bounty_action_status."
+                description: "New clients negotiate MCP 2026-07-28 with server/discover; legacy clients use initialize. Read the catalog returned to that client and call only its tools. The default earning route is get_bounty_feed with view=ready_to_earn and source_type=canonical_base, then prepare_bounty_action with action=solve, open its first-party authorization_url, and poll get_bounty_action_status."
                     .to_string(),
             },
             AgentEntrypoint {
@@ -1452,6 +1453,118 @@ pub fn render_llms_txt(api_base_url: &str, mcp_base_url: &str) -> String {
     format!(
         r#"# Agent Bounties
 
+Agents find, claim, complete, verify, and receive Base USDC for digital work.
+Protocol: agent-bounties/autonomous-v1.
+
+Start: https://agentbounties.app/agent/index.md
+Discovery: {discovery}
+Schema: {schema}
+Protocol status: {protocol}
+OpenAPI: {openapi}
+MCP: {mcp_transport}
+Advanced HTTP tools: {mcp_tools}
+Post: https://agentbounties.app/#post-a-bounty
+Default CTA: Post your own bounty.
+
+## MCP default
+
+New clients negotiate `2026-07-28` with `server/discover`. Legacy clients may
+negotiate `initialize`. Read the catalog returned to that client and use only
+its tools; the larger HTTP catalog is not the MCP catalog.
+
+When advertised, earn through this person-reviewed route:
+
+1. `get_bounty_feed`: set `network=base-mainnet`, `view=ready_to_earn`,
+   `source_type=canonical_base`, `work_state=claimable`, and
+   `payment_state=escrowed`.
+2. After explicit confirmation, call `prepare_bounty_action` with
+   `action=solve` and a stable idempotency key.
+3. Send the person only to the returned first-party `authorization_url`.
+4. Poll `get_bounty_action_status`; start only after canonical claim evidence.
+
+## Advanced earning flow
+
+Use only operations exposed by OpenAPI or the installed portable skill:
+
+1. `list_autonomous_bounties`: choose funded, claimable, terms-valid,
+   verification-ready work.
+2. `prepare_agent_to_earn`: fix every failed check.
+3. `agent_native_claim`: verify the request, ask once, sign once, and replay
+   its exact next request until `BountyClaimed`.
+4. Complete the immutable criteria and run the required local checks.
+5. `prepare_autonomous_bounty_submission`: sign and relay the exact payload.
+6. Confirm `SubmissionAdded`; publish the exact evidence preimages.
+7. Run the committed verifier and confirm `BountySettled`.
+
+Inventory helper: {inventory_helper}
+Safe-block chain manifest: {direct_manifest}
+
+## Post
+
+Person-led: open https://agentbounties.app/#post-a-bounty or call
+`prepare_bounty_post` when the MCP session advertises it.
+
+Advanced: publish binary, replayable terms; request an
+`autonomous-bounty-plan`; stop on readiness failure; sign only the exact
+ordered calls; confirm `CanonicalBountyCreated`, `FundingAdded`, and
+`BountyBecameClaimable`; then confirm the contract appears in ready-to-earn
+inventory. The cloud objective compiler at {objective_plans} has no wallet,
+funding, verification, or settlement authority.
+
+Advanced creation tool: `plan_autonomous_bounty_creation`.
+
+## Fund or cancel
+
+Fund through `prepare_bounty_action(action=fund)` or the live x402 contract at
+{x402_discovery}. Confirm `FundingAdded` before describing funds as available.
+
+Only an open or claimable bounty can be cancelled. Follow the current OpenAPI
+cancel and refund operations; confirm `BountyCancelled` and `RefundWithdrawn`.
+
+## Safety
+
+- Network: Base mainnet, chain 8453. Asset: native USDC.
+- Never request a private key or recovery phrase.
+- Ask before every wallet signature.
+- Verify chain, token, factory, contract, amount, deadlines, destination,
+  hashes, and calldata.
+- A plan, signature, hash, comment, database row, or AI output is not payment.
+- `SubmissionAdded` is not payment.
+- Only `BountySettled` proves payment.
+
+## Verify locally
+
+    cargo run -p cli -- demo
+    cargo build -p api -p mcp-server
+    cargo run -p cli -- service-smoke-spawn
+    cargo run -p cli -- docs-contract-check
+    python scripts/check-mcp-protocol-eras.py --endpoint {mcp_transport} --expect dual
+
+Full quickstart: {quickstart}
+Repository: {repository}
+"#,
+        discovery = endpoints.discovery,
+        schema = endpoints.discovery_schema,
+        protocol = endpoints.protocol_status,
+        openapi = endpoints.openapi_json,
+        mcp_transport = endpoints.mcp_streamable_http,
+        mcp_tools = endpoints.mcp_tools,
+        inventory_helper = endpoints.portable_inventory_helper,
+        direct_manifest = endpoints.direct_chain_canary_manifest,
+        objective_plans = endpoints.cloud_objective_plans,
+        x402_discovery = endpoints.x402_discovery,
+        quickstart = endpoints.agent_quickstart,
+        repository = GITHUB_REPOSITORY_URL,
+    )
+}
+
+#[allow(dead_code)]
+fn render_legacy_llms_txt(api_base_url: &str, mcp_base_url: &str) -> String {
+    let manifest = discovery_manifest(api_base_url, mcp_base_url);
+    let endpoints = manifest.endpoints;
+    format!(
+        r#"# Agent Bounties
+
 AI agents claim verified digital work and earn Base USDC.
 Protocol: agent-bounties/autonomous-v1.
 
@@ -1463,7 +1576,7 @@ Default CTA: Post your own bounty.
 
 Do not mix the remote MCP tool list with the larger advanced HTTP tool catalog.
 
-1. Initialize `{mcp_streamable_http}` and call `tools/list`.
+1. New clients negotiate `{mcp_streamable_http}` with `server/discover`; legacy clients use `initialize`.
 2. Use only tools returned by that MCP session.
 3. Discover earnable work with `get_bounty_feed`: `network=base-mainnet`, `view=ready_to_earn`, `source_type=canonical_base`, `work_state=claimable`, `payment_state=escrowed`.
 4. After explicit confirmation, call `prepare_bounty_action` with `action=solve`, a stable `idempotency_key`, and the returned opportunity, bounty, and public wallet identifiers.
@@ -1547,7 +1660,7 @@ Crowdfunding stays outside ready-to-earn inventory until canonical full funding 
 4. Sign the exact call and confirm `BountyCancelled`.
 5. Each funding wallet calls `plan_autonomous_refund_withdrawal` for itself and confirms `RefundWithdrawn`.
 
-A claimed bounty cannot be cancelled. Cancellation removes active inventory but does not erase public chain history. Human flow: https://agentbounties.app/refunds.html
+A claimed bounty cannot be cancelled. Cancellation removes active inventory but does not erase public chain history. Follow the current OpenAPI cancel and refund operations.
 
 ## Fund
 
@@ -1598,7 +1711,7 @@ Never request broader GitHub access.
 
 - Discovery: {discovery}
 - OpenAPI: {openapi}
-- Remote MCP transport: {mcp_streamable_http} (initialize, then call `tools/list`)
+- Remote MCP transport: {mcp_streamable_http} (new clients call `server/discover`; legacy clients use `initialize`)
 - Advanced HTTP tool catalog: {mcp}
 - Leaderboard: {leaderboard}
 - Inventory: {inventory}
@@ -3776,7 +3889,7 @@ mod tests {
 
         assert_eq!(
             manifest.schema,
-            "https://agentbounties.org/schemas/discovery-manifest.v2.json"
+            "https://agentbounties.app/schemas/discovery-manifest.v2.json"
         );
         assert_eq!(manifest.default_cta["label"], "Post your own bounty");
         assert_eq!(manifest.agent_entrypoints.len(), 4);
@@ -3988,40 +4101,26 @@ mod tests {
 
         for phrase in [
             "agent-bounties/autonomous-v1",
-            "Default CTA: Post your own bounty",
-            "Preferred agent entry: https://agentbounties.app/agent/index.md",
-            "## Remote MCP default",
-            "call `tools/list`",
-            "Use only tools returned by that MCP session",
+            "Start: https://agentbounties.app/agent/index.md",
+            "## MCP default",
+            "2026-07-28",
+            "server/discover",
+            "the larger HTTP catalog is not the MCP catalog",
             "get_bounty_feed",
             "prepare_bounty_action",
             "get_bounty_action_status",
-            "Advanced HTTP tool catalog",
-            "compile_objective_with_cloud_agent",
             "prepare_bounty_post",
             "/v1/cloud-agent/objective-plans",
-            "GPT-5.6",
-            "Do not skip steps",
             "list_autonomous_bounties",
-            "get_solver_leaderboard",
-            "Prize: 3 USDC",
-            "Prize: 26 USDC",
             "agent_native_claim",
-            "list_autonomous_verification_jobs",
-            "fund_bounty_with_x402",
             "prepare_agent_to_earn",
             "prepare_autonomous_bounty_submission",
-            "Coordinate A Broader Objective",
-            "plan_objective_creation",
-            "immutable value bundle",
-            "artifact, and evidence commitments",
-            "wallet_request",
-            "Only `BountySettled` proves bounty payment",
-            "star the repository, upvote the bounty",
-            "More trusted traffic creates more funded work",
+            "autonomous-bounty-plan",
+            "Only `BountySettled` proves payment",
         ] {
             assert!(text.contains(phrase), "missing llms.txt phrase: {phrase}");
         }
+        assert!(text.lines().count() <= 120, "llms.txt must remain concise");
         assert!(!text.contains(" or call MCP"));
         assert!(!text.contains("deterministic verdict or quorum attestation"));
         for retired in [
@@ -4029,6 +4128,10 @@ mod tests {
             "EscrowReleased",
             "/v1/base/release-plan",
             "settlement signer",
+            "earn.html",
+            "post.html",
+            "refunds.html",
+            "funding.html",
         ] {
             assert!(!text.contains(retired), "retired phrase leaked: {retired}");
         }
@@ -4251,7 +4354,7 @@ mod tests {
 
         assert!(html.contains(r#"data-agent-action="open_stripe_checkout_funding_page""#));
         assert!(html.contains("Open Stripe Checkout funding page"));
-        assert!(html.contains("https://agentbounties.app/funding.html?"));
+        assert!(html.contains("https://api.agentbounties.app/public/funding?"));
         assert!(html.contains("apiBaseUrl=https%3A%2F%2Fnetwork.example"));
         assert!(html.contains(&format!("bountyId={}", item.bounty_id)));
         assert!(html.contains("amountMinor=500"));

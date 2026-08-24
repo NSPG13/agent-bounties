@@ -41,7 +41,7 @@ COMMENT_ID_RE = re.compile(r"Claim comment id:\s*`?([0-9]+)`?")
 RESERVATION_RE = re.compile(r"Reservation id:\s*`?([^\s`]+)`?")
 CONTRIBUTOR_RE = re.compile(r"Contributor:\s*`?([^\s`]+)`?")
 DEFAULT_API_BASE_URL = "https://api.agentbounties.app"
-STATIC_EARN_PAGE_URL = "https://agentbounties.app/earn.html"
+STATIC_EARN_PAGE_URL = "https://agentbounties.app/"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 EVM_ADDRESS_SEARCH_RE = re.compile(r"(?<![0-9A-Za-z])0x[0-9a-fA-F]{40}(?![0-9A-Za-z])")
 
@@ -1087,7 +1087,7 @@ def run_self_test() -> int:
             "signal": {
                 "decision": "OnChainClaimRequired",
                 "reservation_id": "routing-only",
-                "claim_handoff_url": "https://agentbounties.app/earn.html?bountyContract=0x1111111111111111111111111111111111111111",
+                "claim_handoff_url": "https://agentbounties.app/",
                 "claim_plan_request": {
                     "method": "POST",
                     "url": "https://api.agentbounties.app/v1/base/autonomous-bounties/claims",

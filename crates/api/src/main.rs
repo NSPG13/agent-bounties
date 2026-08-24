@@ -640,7 +640,7 @@ impl NeynarSocialIngestionConfig {
 
     fn draft_handoff_url(&self, id: Uuid) -> String {
         format!(
-            "{}/post.html?from=social-mention&socialDraft={id}",
+            "{}/?from=social-mention&socialDraft={id}#post-a-bounty",
             self.website_base_url
         )
     }
@@ -4929,10 +4929,31 @@ fn marketing_domain_destination(host: &str, uri: &Uri) -> Option<String> {
         }
         _ => return None,
     };
-    let target_path = if uri.path() == "/" { home } else { uri.path() };
-    let query = uri
-        .query()
-        .map_or(String::new(), |value| format!("?{value}"));
+    let retired_path = matches!(
+        uri.path(),
+        "/earn.html"
+            | "/post.html"
+            | "/objective.html"
+            | "/create-competition.html"
+            | "/refunds.html"
+            | "/x402.html"
+            | "/prepare-agent.html"
+            | "/agent-budget.html"
+            | "/funding.html"
+    );
+    let target_path = if retired_path {
+        "/"
+    } else if uri.path() == "/" {
+        home
+    } else {
+        uri.path()
+    };
+    let query = if retired_path {
+        String::new()
+    } else {
+        uri.query()
+            .map_or(String::new(), |value| format!("?{value}"))
+    };
     Some(format!("{base}{target_path}{query}"))
 }
 
@@ -6703,7 +6724,7 @@ async fn unfunded_bounty_response(
             state.public_base_url.trim_end_matches('/'),
             trial.id
         ),
-        upgrade_url: "https://agentbounties.app/post.html".to_string(),
+        upgrade_url: "https://agentbounties.app/#post-a-bounty".to_string(),
         created_at: trial.created_at.to_rfc3339(),
         expires_at: trial.expires_at.to_rfc3339(),
         evidence_boundary: "This public bounty is open and discoverable but currently unfunded and off-chain: no payment is promised. The hosted demo-agent response and any self-reported registered-agent solutions are distinct. CanonicalBountyCreated is required before calling it on-chain; FundingAdded and BountyBecameClaimable are required before calling it funded or claimable.".to_string(),
@@ -6881,7 +6902,7 @@ async fn x402_discovery(State(state): State<SharedState>) -> Json<serde_json::Va
             "relayerCustody": "the hosted relayer holds gas only; the funder signs an exact amount, bounty, network, nonce, and expiration and the contract pulls USDC directly from that funder"
         },
         "documentation": {
-            "compatibility": "https://agentbounties.app/x402.html",
+            "compatibility": "https://api.agentbounties.app/.well-known/x402.json",
             "testVectors": "https://agentbounties.app/x402-test-vectors.json",
             "fundingEvidence": "FundingAdded",
             "payoutEvidence": "BountySettled"
@@ -12144,10 +12165,7 @@ fn agent_claim_response(
     next_action: &str,
     next_request: Option<serde_json::Value>,
 ) -> Response {
-    let browser_fallback_url = format!(
-        "https://agentbounties.app/earn.html?bountyContract={}&solver={}",
-        reservation.candidate.bounty_contract, reservation.candidate.solver_wallet
-    );
+    let browser_fallback_url = "https://agentbounties.app/".to_string();
     let sponsor_contract = sponsorship
         .as_ref()
         .map(|grant| grant.sponsor_wallet.clone())
@@ -15459,7 +15477,7 @@ async fn ingest_neynar_social_mention(
     };
     let handoff_url = persisted_handoff_url
         .as_deref()
-        .unwrap_or("https://agentbounties.app/post.html");
+        .unwrap_or("https://agentbounties.app/#post-a-bounty");
     match publish_neynar_draft_reply(config, &claimed, handoff_url).await {
         Ok(reply_cast_hash) => {
             let completed = store
@@ -17327,7 +17345,7 @@ mod tests {
                 "bountyboard.global",
                 &"/earn.html?from=legacy".parse().unwrap()
             ),
-            Some("https://agentbounties.app/earn.html?from=legacy".to_string())
+            Some("https://agentbounties.app/".to_string())
         );
         assert_eq!(
             marketing_domain_destination("api.agentbounties.app", &"/health".parse().unwrap()),
@@ -19141,7 +19159,7 @@ mod tests {
         assert_eq!(
             handoff,
             format!(
-                "https://agentbounties.app/post.html?from=social-mention&socialDraft={ingestion_id}"
+                "https://agentbounties.app/?from=social-mention&socialDraft={ingestion_id}#post-a-bounty"
             )
         );
 
@@ -19311,7 +19329,7 @@ mod tests {
         assert!(plan.ready);
         let signal = plan.signal.expect("funding signal");
         let handoff = signal.funding_handoff_url.expect("handoff url");
-        assert!(handoff.contains("https://agentbounties.app/funding.html"));
+        assert!(handoff.contains("https://api.agentbounties.app/public/funding"));
         assert!(handoff.contains("apiBaseUrl=https%3A%2F%2Fapi.agentbounties.example"));
         assert!(handoff.contains("rail=StripeFiat"));
         assert!(handoff.contains("externalReference=github-funding-comment%3A"));
@@ -19469,7 +19487,7 @@ mod tests {
 
         assert_eq!(
             manifest.schema,
-            "https://agentbounties.org/schemas/discovery-manifest.v2.json"
+            "https://agentbounties.app/schemas/discovery-manifest.v2.json"
         );
         assert_eq!(manifest.protocol["version"], "agent-bounties/autonomous-v1");
         assert_eq!(manifest.protocol["operator_settlement_signer"], false);

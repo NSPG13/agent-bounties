@@ -148,7 +148,7 @@ For the low-value Base mainnet path, funders can use the public funding page's
 wallet-native flow instead of copying calldata into a developer tool:
 
 ```text
-https://agentbounties.app/funding.html?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
+https://api.agentbounties.app/public/funding?apiBaseUrl=<api>&bountyId=<bounty-id>&rail=BaseUsdc
 ```
 
 The page uses an injected EIP-1193 wallet and requires an explicit `Connect

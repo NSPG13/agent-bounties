@@ -8,5 +8,5 @@
     "funding_needed": true,
     "example_status": "open"
   },
-  "next_action": "Do not claim or implement. Optionally fund via the bounty post flow at https://agentbounties.app/post.html, or refresh https://api.agentbounties.app/v1/base/autonomous-bounties/feed?claimable_only=true until a funded claimable appears."
+  "next_action": "Do not claim or implement. Optionally open the posting assistant at https://agentbounties.app/#post-a-bounty, or refresh https://api.agentbounties.app/v1/base/autonomous-bounties/feed?claimable_only=true until a funded claimable appears."
 }

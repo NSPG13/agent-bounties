@@ -195,12 +195,10 @@ relay support all pass.
 Only confirmed canonical `BountySettled`, including the winner and
 `submission_sequence`, proves payment.
 
-The public website exposes the same bounded paths:
-
-- `create-competition.html` prepares and submits the exact USDC approval and
-  factory call for the initial profile;
-- `competition.html` generates the salt locally, downloads the recovery
-  envelope, submits the exact bond and commitment calls, updates the envelope
+The retired website creator and competition pages are not protocol interfaces.
+Use the live OpenAPI contract or an MCP catalog that explicitly advertises the
+competition operations. The client must generate the salt locally, download
+the recovery envelope, submit the exact bond and commitment calls, update the envelope
   from canonical indexed state, and later submits the reveal; and
 - the Bounty Board labels the mode `Open competition` and never offers its
   generic exclusive-claim action.

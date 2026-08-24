@@ -38,7 +38,7 @@ const protocol = manifest.protocol ?? {};
 const endpoints = manifest.endpoints ?? {};
 const tools = Array.isArray(manifest.agent_tools) ? manifest.agent_tools : [];
 const errors = [];
-if (manifest.schema !== "https://agentbounties.org/schemas/discovery-manifest.v2.json") errors.push("schema_mismatch");
+if (manifest.schema !== "https://agentbounties.app/schemas/discovery-manifest.v2.json") errors.push("schema_mismatch");
 if (protocol.network !== "base-mainnet") errors.push("protocol_network_mismatch");
 if (protocol.chain_id !== 8453) errors.push("protocol_chain_id_mismatch");
 if (protocol.asset !== "USDC") errors.push("protocol_asset_mismatch");

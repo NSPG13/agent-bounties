@@ -3,10 +3,132 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+RETIRED_PUBLIC_ROUTES = (
+    "earn.html",
+    "post.html",
+    "objective.html",
+    "create-competition.html",
+    "refunds.html",
+    "x402.html",
+    "prepare-agent.html",
+    "agent-budget.html",
+    "funding.html",
+)
+
+ENTRYPOINT_CONTRACTS = {
+    "README.md": (
+        180,
+        16_000,
+        ("service-smoke-spawn", "docs-contract-check", "BountySettled"),
+    ),
+    "docs/agent-quickstart.md": (
+        240,
+        18_000,
+        (
+            "server/discover",
+            "2026-07-28",
+            "service-smoke-spawn",
+            "prepare_agent_to_earn",
+            "BountySettled",
+        ),
+    ),
+    "docs/interaction-guide.md": (
+        140,
+        13_000,
+        ("server/discover", "production-smoke", "service-smoke-spawn"),
+    ),
+    "site/llms.txt": (
+        140,
+        13_000,
+        ("server/discover", "get_bounty_feed", "Only `BountySettled` proves payment."),
+    ),
+    "site/agent/index.md": (
+        90,
+        11_000,
+        ("server/discover", "No computer use is required", "get_bounty_feed"),
+    ),
+}
+
+
+def validate_entrypoint_text(
+    label: str,
+    text: str,
+    *,
+    max_lines: int,
+    max_chars: int,
+    required: tuple[str, ...],
+) -> None:
+    line_count = len(text.splitlines())
+    if line_count > max_lines:
+        raise SystemExit(f"{label} is too long: {line_count} lines; limit is {max_lines}")
+    if len(text) > max_chars:
+        raise SystemExit(f"{label} is too long: {len(text)} characters; limit is {max_chars}")
+    for marker in required:
+        if marker not in text:
+            raise SystemExit(f"{label} is missing actionable marker {marker!r}")
+    for route in RETIRED_PUBLIC_ROUTES:
+        if route in text:
+            raise SystemExit(f"{label} points to intentionally removed route {route}")
+    for retired_domain in ("bountyboard.global", "agentbounties.org"):
+        if retired_domain in text:
+            raise SystemExit(f"{label} uses retired domain {retired_domain}")
+
+
+def validate_public_agent_entrypoints(root: Path) -> None:
+    for relative, (max_lines, max_chars, required) in ENTRYPOINT_CONTRACTS.items():
+        path = root / relative
+        if not path.exists():
+            raise SystemExit(f"missing public agent entrypoint {relative}")
+        validate_entrypoint_text(
+            relative,
+            path.read_text(encoding="utf-8"),
+            max_lines=max_lines,
+            max_chars=max_chars,
+            required=required,
+        )
+
+    public_source = (root / "crates/web-public/src/lib.rs").read_text(encoding="utf-8")
+    for route in RETIRED_PUBLIC_ROUTES:
+        retired_url = f'https://agentbounties.app/{route}'
+        if retired_url in public_source:
+            raise SystemExit(f"shared discovery source advertises removed URL {retired_url}")
+    if 'const DISCOVERY_SCHEMA: &str = "https://agentbounties.app/' not in public_source:
+        raise SystemExit("shared discovery source must use the agentbounties.app schema identity")
+
+    schema_path = root / "schemas/discovery-manifest.v2.json"
+    discovery_path = root / "site/.well-known/agent-bounties.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    discovery = json.loads(discovery_path.read_text(encoding="utf-8"))
+    if schema.get("$id") != "https://agentbounties.app/schemas/discovery-manifest.v2.json":
+        raise SystemExit("discovery schema $id must use agentbounties.app")
+    if discovery.get("schema") != schema.get("$id"):
+        raise SystemExit("static discovery does not identify its published schema")
+    unknown = set(discovery) - set(schema.get("properties", {}))
+    missing = set(schema.get("required", [])) - set(discovery)
+    if unknown or missing:
+        raise SystemExit(
+            f"static discovery top-level schema mismatch: unknown={sorted(unknown)} "
+            f"missing={sorted(missing)}"
+        )
+
+    serialized_discovery = json.dumps(discovery, sort_keys=True)
+    for route in RETIRED_PUBLIC_ROUTES:
+        if route in serialized_discovery:
+            raise SystemExit(f"static discovery advertises removed route {route}")
+    if discovery.get("website") != "https://agentbounties.app/":
+        raise SystemExit("static discovery website must be https://agentbounties.app/")
+
+    protocol = json.loads((root / "site/protocol.json").read_text(encoding="utf-8"))
+    if protocol.get("protocol_version") != "agent-bounties/autonomous-v1":
+        raise SystemExit("protocol status must identify agent-bounties/autonomous-v1")
+    if protocol.get("status") != "active" or protocol.get("chain_id") != 8453:
+        raise SystemExit("protocol status must identify the active Base mainnet deployment")
 
 
 def validate_agent_discovery_contract(root: Path) -> None:
@@ -62,9 +184,10 @@ def validate_agent_discovery_contract(root: Path) -> None:
 
 def main() -> int:
     validate_agent_discovery_contract(ROOT)
+    validate_public_agent_entrypoints(ROOT)
     print(
-        "Agent discovery contract passed: generic manifest retained; "
-        "unsupported A2A surface absent and status documented"
+        "Agent discovery contract passed: entrypoints concise; removed routes absent; "
+        "schema, protocol, generic discovery, and A2A boundaries valid"
     )
     return 0
 

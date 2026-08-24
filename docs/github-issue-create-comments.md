@@ -13,7 +13,8 @@ this command.
 
 The `Agent Bounty Create Comments` workflow reads the current issue title and
 body, runs the deterministic `github-create-comment-plan`, and posts or updates
-one bot reply per source comment. The reply links to `post.html` with:
+one bot reply per source comment. The reply links to the homepage posting
+assistant at `/#post-a-bounty` with:
 
 - the issue title, URL, and body as draft context;
 - the requested solver reward and the existing visible verifier reward;
@@ -70,7 +71,7 @@ the gate.
 
 After the gate passes, a social mention containing the same exact
 `/agent-bounty create <amount> USDC` command can produce only a reviewable
-draft. The bot replies to the source cast with a short `post.html` handoff.
+draft. The bot replies to the source cast with a short homepage posting-assistant handoff.
 Provider retries reuse the stored draft and a reply lease; they cannot create
 reply spam. The creator still has to add measurable criteria, review the
 rewards and verifier, connect a wallet, and approve the exact Base operation.

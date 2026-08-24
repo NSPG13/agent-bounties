@@ -611,7 +611,7 @@ def issue_body(
 
 How did you find this bounty, what made it worth attempting, and what should be easier next time?
 
-**Post your own bounty:** https://agentbounties.app/post.html
+**Post your own bounty:** https://agentbounties.app/#post-a-bounty
 
 <!-- agent-bounties-github-metadata-v1 -->
 ## Automation metadata

@@ -84,6 +84,35 @@ class AgentDiscoveryContractTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "retired unsupported A2A artifact"):
                 guard.validate_agent_discovery_contract(root)
 
+    def test_concise_actionable_entrypoint_passes(self) -> None:
+        guard.validate_entrypoint_text(
+            "guide.md",
+            "server/discover\nget_bounty_feed\nOnly `BountySettled` proves payment.\n",
+            max_lines=4,
+            max_chars=200,
+            required=("server/discover", "get_bounty_feed", "BountySettled"),
+        )
+
+    def test_removed_public_route_fails(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "intentionally removed route earn.html"):
+            guard.validate_entrypoint_text(
+                "guide.md",
+                "Open https://agentbounties.app/earn.html\n",
+                max_lines=4,
+                max_chars=200,
+                required=(),
+            )
+
+    def test_entrypoint_length_budget_fails(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "too long"):
+            guard.validate_entrypoint_text(
+                "guide.md",
+                "one\ntwo\nthree\n",
+                max_lines=2,
+                max_chars=200,
+                required=(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

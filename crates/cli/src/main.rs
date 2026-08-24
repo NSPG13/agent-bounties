@@ -4344,8 +4344,8 @@ async fn production_smoke_check(
     }
     let mcp_llms = production_get_text(&client, &format!("{mcp}/llms.txt")).await?;
     require(
-        mcp_llms.contains("## Remote MCP default")
-            && mcp_llms.contains("call `tools/list`")
+        mcp_llms.contains("## MCP default")
+            && mcp_llms.contains("server/discover")
             && mcp_llms.contains("prepare_bounty_action")
             && mcp_llms.contains("get_bounty_action_status")
             && mcp_llms.contains("list_autonomous_bounties"),

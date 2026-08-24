@@ -6,7 +6,7 @@
 
 **Track:** Developer Tools
 
-**Live judge path:** https://agentbounties.app/objective.html
+**Live judge path:** https://api.agentbounties.app/v1/cloud-agent/objective-plans
 
 **Source:** https://github.com/NSPG13/agent-bounties
 
@@ -89,12 +89,12 @@ arithmetic, and the settlement evidence boundary.
 
 ## Judge Path
 
-### Browser
+### Hosted API
 
-1. Open https://agentbounties.app/objective.html.
-2. Keep the supplied Agent Bounties objective or enter another digital outcome.
-3. Set four to six tasks and a solver budget.
-4. Select **Compile objective**.
+1. POST a digital outcome, constraints, task limit, and solver budget to
+   `https://api.agentbounties.app/v1/cloud-agent/objective-plans`.
+2. Inspect the returned task graph and deterministic validation report.
+3. Reject any task without replayable evidence or within-budget economics.
 5. Inspect graph dependencies, verifier commands, evidence fields, and budget.
 6. Scroll to live canonical proof and open a paid result.
 

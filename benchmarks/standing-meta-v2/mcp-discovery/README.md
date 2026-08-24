@@ -13,7 +13,7 @@ write exactly one compact JSON line to stdout. It must write nothing to stderr.
 
 The checker must validate these exact values:
 
-- schema: `https://agentbounties.org/schemas/discovery-manifest.v2.json`
+- schema: `https://agentbounties.app/schemas/discovery-manifest.v2.json`
 - network: `base-mainnet`
 - chain ID: `8453`
 - asset: `USDC`
