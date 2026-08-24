@@ -2,6 +2,8 @@
 /feeds/proof/
 /.env
 /.env.local
+/.env.auth.local
+/.wallet-links.local.json
 *.log
 node_modules/
 dist/

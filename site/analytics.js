@@ -133,7 +133,7 @@
     notice.setAttribute("aria-label", "Optional analytics choice");
     notice.innerHTML =
       '<p><strong>Help improve Agent Bounties?</strong> Allow Google Analytics for anonymous traffic and page-use measurement. Wallets, bounty evidence, and payment data are not sent.</p>' +
-      '<div class="actions"><button class="button primary" type="button" data-google-analytics-allow>Allow</button><button class="button secondary" type="button" data-google-analytics-deny>No thanks</button><a href="privacy.html">Privacy</a></div>';
+      '<div class="actions"><button class="button primary" type="button" data-google-analytics-allow>Allow</button><button class="button secondary" type="button" data-google-analytics-deny>No thanks</button><span>Optional and privacy-signal aware</span></div>';
     document.body.appendChild(notice);
     notice.querySelector("[data-google-analytics-allow]").addEventListener("click", function () {
       setGoogleConsent(true);
