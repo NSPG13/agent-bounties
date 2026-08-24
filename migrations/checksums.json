@@ -28,6 +28,7 @@
     "0024_open_competition_v2_beta3.sql": "c9e1110996d70a4fa709dcae01e529b7f2b5304f93d71a7fe6b74bb1141ecf84",
     "0025_opportunity_feedback.sql": "355b584b56fe3e266150533b0d8cb0ac896db17c5d7102e41c15351a63bf84bf",
     "0026_site_auth_accounts.sql": "f3846a415b46b3eb3e48ba82b6922dc023a3d876ce2965f4b2ff0c20591cffdd",
-    "0027_competition_activation_analytics.sql": "e4411c9d4b7f0b99bfa50d127d05598843bedc3fb699821ea661367f05bda9d6"
+    "0027_competition_activation_analytics.sql": "e4411c9d4b7f0b99bfa50d127d05598843bedc3fb699821ea661367f05bda9d6",
+    "0028_onboarding_analytics.sql": "970867ff225a30782a8cf276bb65356566d1ac4ef8dc2d14b0b7e1631166ab3f"
   }
 }

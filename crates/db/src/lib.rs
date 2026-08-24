@@ -76,6 +76,8 @@ pub const SITE_AUTH_ACCOUNTS_MIGRATION: &str =
     include_str!("../../../migrations/0026_site_auth_accounts.sql");
 pub const COMPETITION_ACTIVATION_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0027_competition_activation_analytics.sql");
+pub const ONBOARDING_ANALYTICS_MIGRATION: &str =
+    include_str!("../../../migrations/0028_onboarding_analytics.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1208,6 +1210,7 @@ impl PostgresStore {
                 OPPORTUNITY_FEEDBACK_MIGRATION,
                 SITE_AUTH_ACCOUNTS_MIGRATION,
                 COMPETITION_ACTIVATION_ANALYTICS_MIGRATION,
+                ONBOARDING_ANALYTICS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -10165,6 +10168,31 @@ mod tests {
             assert!(
                 COMPETITION_ACTIVATION_ANALYTICS_MIGRATION.contains(invariant),
                 "missing competition activation analytics invariant {invariant}"
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_analytics_migration_matches_the_api_allowlist() {
+        for invariant in [
+            "DROP CONSTRAINT IF EXISTS site_analytics_event_name_check",
+            "auth_completed",
+            "wallet_link_started",
+            "wallet_link_confirmed",
+            "wallet_missing_detected",
+            "wallet_connected",
+            "wallet_unfunded_detected",
+            "wallet_funded_observed",
+            "canonical_post_handoff_viewed",
+            "onramp_viewed",
+            "onramp_moonpay_started",
+            "onramp_metamask_started",
+            "onramp_coinbase_started",
+            "onramp_returned",
+        ] {
+            assert!(
+                ONBOARDING_ANALYTICS_MIGRATION.contains(invariant),
+                "missing onboarding analytics invariant {invariant}"
             );
         }
     }
