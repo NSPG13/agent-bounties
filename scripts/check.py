@@ -95,8 +95,8 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
         "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
-        "scripts/check-site.py", "scripts/check-coinbase-embedded-wallet.py", "scripts/configure-wallet-providers.py",
-        "scripts/check-moonpay-onramp.py", "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
+        "scripts/check-site.py", "scripts/configure-wallet-providers.py",
+        "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/check-agent-discovery-contract.py", "scripts/test_check_agent_discovery_contract.py",
         "scripts/test_check_render_blueprint.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
@@ -267,23 +267,19 @@ def main() -> int:
     ])
     py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     py("scripts/check-site.py")
-    py("scripts/check-moonpay-onramp.py")
     py("scripts/check-migration-history.py")
     py("scripts/test_check_agent_discovery_contract.py", "-v")
     py("scripts/check-agent-discovery-contract.py")
     run_many([[node, *args] for args in (
         ["--check", "skills/agent-bounties/scripts/check-in.mjs"], ["--test", "scripts/test_agent_bounties_openclaw_skill.mjs"],
         ["benchmarks/standing-meta-v2/mcp-discovery/self-test.mjs"], ["benchmarks/direct-v1/agent-loop/self-test.mjs"],
-        ["scripts/test-autonomous-wallet-flow.js"], ["--check", "tools/autonomous-activation.js"],
+        ["--check", "tools/autonomous-activation.js"],
         ["scripts/test-autonomous-activation-console.js"], ["--check", "tools/canonical-child-verifier-deployment.js"],
         ["scripts/test-canonical-child-verifier-deployment-console.js"], ["--check", "tools/base-sepolia-sponsor-activation.js"],
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
         ["--test", "scripts/test-metrics-dashboard.js"],
         ["--check", "scripts/open-competition-v1-signer.js"],
         ["scripts/test-open-competition-v1-signer-console.js"],
-        ["scripts/test-create-competition-flow.js"],
-        ["scripts/test-marketplace-refill-confirmation.js"],
-        ["--check", "site/standing-meta-v3-migration.js"],
     )])
     py("-m", "pip", "install", "-r", "scripts/requirements-attest.txt")
     py("scripts/test_shared_evm.py", "-v")

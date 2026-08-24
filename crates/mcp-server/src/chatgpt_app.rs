@@ -48,10 +48,10 @@ const MCP_ALLOWED_ORIGINS_ENV: &str = "MCP_ALLOWED_ORIGINS";
 const CHATGPT_SANDBOX_ENV: &str = "CHATGPT_APP_SANDBOX_MODE";
 const FEED_WIDGET_URI: &str = "ui://agent-bounties/live-feed-v4.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
-const FEED_WIDGET_HTML: &str = include_str!("../../../site/chatgpt-bounty-feed-widget.html");
-const BOUNTY_CARD_PREVIEW_HTML: &str =
-    include_str!("../../../site/chatgpt-bounty-card-preview.html");
-const FEED_CARD_ART: &[u8] = include_bytes!("../../../site/assets/bounty-quest-agent-v1.webp");
+const FEED_WIDGET_HTML: &str = include_str!("../assets/chatgpt-bounty-feed-widget.html");
+const BOUNTY_CARD_PREVIEW_HTML: &str = include_str!("../assets/chatgpt-bounty-card-preview.html");
+const FEED_CARD_ART: &[u8] =
+    include_bytes!("../../../site/assets/solarpunk/characters-helping.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
@@ -540,7 +540,7 @@ fn sandbox_bounty_image_reference(
         source: "chatgpt_user_generated".to_string(),
         prompt: bounded_text(&args.image_prompt, "image_prompt", 4_000)?,
         alt_text: bounded_text(&args.image_alt_text, "image_alt_text", 500)?,
-        asset_url: "https://agentbounties.app/assets/bounty-quest-agent-v1.webp".to_string(),
+        asset_url: "https://agentbounties.app/assets/solarpunk/characters-helping.webp".to_string(),
         sha256: "0".repeat(64),
         mime_type: "image/webp".to_string(),
     })

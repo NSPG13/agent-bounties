@@ -134,7 +134,7 @@ def main() -> None:
         )
         require(actual == expected, f"{name} annotations drifted: {actual} != {expected}")
 
-    widget = (ROOT / "site" / "chatgpt-bounty-feed-widget.html").read_text(
+    widget = (ROOT / "crates" / "mcp-server" / "assets" / "chatgpt-bounty-feed-widget.html").read_text(
         encoding="utf-8"
     )
     require(
@@ -199,25 +199,13 @@ def main() -> None:
         and "must not generate a replacement" in widget,
         "Post bounty conversation must preserve the user-owned ChatGPT image flow",
     )
-    composer = (ROOT / "site" / "bounty-composer-v2.js").read_text(
-        encoding="utf-8"
-    )
-    chat_css = (ROOT / "site" / "bounty-chat.css").read_text(encoding="utf-8")
-    require(
-        "enableChatgptHandoffReview" in composer
-        and 'params.get("from") === "chatgpt-app"' in composer
-        and 'inputWrap.hidden = true' in composer
-        and 'ui.revise.hidden = true' in composer
-        and "chatgpt-handoff-review" in chat_css,
-        "ChatGPT post handoff must show a read-only review card without a second composer",
-    )
     for mutating_tool in FULL_TOOLS - {"get_bounty_feed", "render_bounty_feed"}:
         require(
             f'callTool("{mutating_tool}"' not in widget,
             f"widget must leave {mutating_tool} to the confirmed conversation flow",
         )
 
-    preview = (ROOT / "site" / "chatgpt-bounty-card-preview.html").read_text(
+    preview = (ROOT / "crates" / "mcp-server" / "assets" / "chatgpt-bounty-card-preview.html").read_text(
         encoding="utf-8"
     )
     for brand_color in (
@@ -308,7 +296,7 @@ def main() -> None:
         "hosted MoonPay checkout-preparation route is missing",
     )
 
-    preview = (ROOT / "site" / "chatgpt-bounty-card-preview.html").read_text(
+    preview = (ROOT / "crates" / "mcp-server" / "assets" / "chatgpt-bounty-card-preview.html").read_text(
         encoding="utf-8"
     )
     require("Download PNG" in preview, "card preview must require an explicit download click")

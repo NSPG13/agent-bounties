@@ -1,5 +1,10 @@
 # MoonPay wallet on-ramp
 
+> Public UI status: dormant. The from-scratch site redesign intentionally
+> removed the former `onramp.html` browser surface. Server-side checkout
+> planning, signing, deployment configuration, and canonical payment-evidence
+> rules remain preserved, but no public page currently offers this flow.
+
 This integration adds a bounded MoonPay wallet-top-up step without changing the autonomous bounty protocol. The ChatGPT app exposes only a first-party handoff planner; provider checkout and every wallet or purchase step remain outside ChatGPT.
 
 ## Evidence boundary
@@ -48,14 +53,11 @@ The fallback is not equivalent to the signed integration. It cannot cryptographi
 
 ## Architecture
 
-- Browser page: `site/onramp.html`
-- Signed-checkout browser controller: `site/moonpay-onramp.js`
-- Direct consumer fallback controller: `site/moonpay-direct-fallback.js`
-- Funding-form handoff: `site/moonpay-link.js`
+- Browser page and controllers: intentionally not mounted in the redesigned site
 - ChatGPT handoff planner and in-chat funding control: `crates/mcp-server/src/chatgpt_app.rs`
-- Server route: the MoonPay checkout endpoint on the configured MCP origin; its exact registered path is asserted by `scripts/check-moonpay-onramp.py`
+- Server route: the MoonPay checkout endpoint on the configured MCP origin
 - Server implementation: `crates/mcp-server/src/moonpay.rs`
-- Static and evidence-boundary gate: `scripts/check-moonpay-onramp.py`
+- Production endpoint gate: `scripts/check-moonpay-production.py`
 
 The browser never receives `MOONPAY_SECRET_KEY`. It sends the reviewed wallet, asset, fiat amount, return URL, optional hosted action intent, and bounty contract to the first-party server. The server validates the request origin and return URL, rate-limits the device, binds live URLs to a hash of the public client IP, signs the final encoded query with HMAC-SHA256, appends `signature` last, and returns a `no-store` response.
 
@@ -115,7 +117,7 @@ Run:
 
 ```bash
 cargo test -p mcp-server moonpay
-python scripts/check-moonpay-onramp.py
+cargo test -p mcp-server moonpay -- --nocapture
 python scripts/check-site.py
 ```
 

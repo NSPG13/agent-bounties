@@ -14,6 +14,41 @@ envVarGroups:
       - key: DISCOVERY_WEBHOOK_SIGNING_KEY
         generateValue: true
 
+  - name: agent-bounties-site-auth
+    envVars:
+      - key: AUTH_SESSION_SECRET
+        sync: false
+      - key: AUTH_WALLET_LINK_SECRET
+        sync: false
+      - key: SITE_AUTH_ALLOWED_ORIGINS
+        value: https://agentbounties.app
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        value: https://api.agentbounties.app/v1/site-auth/callback/google
+      - key: MICROSOFT_OAUTH_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_OAUTH_TENANT
+        value: common
+      - key: MICROSOFT_OAUTH_REDIRECT_URI
+        value: https://api.agentbounties.app/v1/site-auth/callback/microsoft
+      - key: GITHUB_OAUTH_CLIENT_ID
+        sync: false
+      - key: GITHUB_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_OAUTH_REDIRECT_URI
+        value: https://api.agentbounties.app/v1/site-auth/callback/github
+      - key: AMAZON_OAUTH_CLIENT_ID
+        sync: false
+      - key: AMAZON_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: AMAZON_OAUTH_REDIRECT_URI
+        value: https://api.agentbounties.app/v1/site-auth/callback/amazon
+
   - name: agent-bounties-stripe
     envVars:
       - key: STRIPE_SECRET_KEY
@@ -253,6 +288,7 @@ services:
       - fromGroup: agent-bounties-bond-sponsor
       - fromGroup: agent-bounties-discovery
       - fromGroup: agent-bounties-v2-beta3
+      - fromGroup: agent-bounties-site-auth
 
   - type: web
     name: agent-bounties-mcp

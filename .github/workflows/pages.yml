@@ -6,54 +6,30 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pages.yml"
-      - ".github/ISSUE_TEMPLATE/paid-bounty.yml"
-      - "deployments/bounded-agent-wallet-base-mainnet.json"
-      - "deployments/bounded-agent-wallet-v2-base-mainnet.json"
-      - "docs/posting-a-usable-bounty.md"
       - "site/**"
-      - "tools/coinbase-embedded-wallet/**"
       - "scripts/check-site.py"
-      - "scripts/requirements-site.txt"
-      - "scripts/check-coinbase-embedded-wallet.py"
-      - "scripts/configure-wallet-providers.py"
-      - "scripts/test-wallet-adapter-registry.js"
-      - "scripts/test-x402-browser.js"
-      - "scripts/test-homepage-bounty-wiring.py"
-      - "scripts/test-homepage-bounty-flow.js"
-      - "scripts/test-create-competition-flow.js"
-      - "scripts/test-ai-bounty-handoff.js"
+      - "scripts/test-solarpunk-home.js"
       - "scripts/test-metrics-dashboard.js"
-      - "scripts/test-marketplace-refill-confirmation.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
       - "crates/api/fixtures/public-metrics-policy.json"
+      - "deployments/base-mainnet.json"
+      - "schemas/discovery-manifest.v2.json"
   push:
     branches: [main]
     paths:
       - ".github/workflows/pages.yml"
-      - ".github/ISSUE_TEMPLATE/paid-bounty.yml"
-      - "deployments/bounded-agent-wallet-base-mainnet.json"
-      - "deployments/bounded-agent-wallet-v2-base-mainnet.json"
-      - "docs/posting-a-usable-bounty.md"
       - "site/**"
-      - "tools/coinbase-embedded-wallet/**"
       - "scripts/check-site.py"
-      - "scripts/requirements-site.txt"
-      - "scripts/check-coinbase-embedded-wallet.py"
-      - "scripts/configure-wallet-providers.py"
-      - "scripts/test-wallet-adapter-registry.js"
-      - "scripts/test-x402-browser.js"
-      - "scripts/test-homepage-bounty-wiring.py"
-      - "scripts/test-homepage-bounty-flow.js"
-      - "scripts/test-create-competition-flow.js"
-      - "scripts/test-ai-bounty-handoff.js"
+      - "scripts/test-solarpunk-home.js"
       - "scripts/test-metrics-dashboard.js"
-      - "scripts/test-marketplace-refill-confirmation.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
       - "crates/api/fixtures/public-metrics-policy.json"
+      - "deployments/base-mainnet.json"
+      - "schemas/discovery-manifest.v2.json"
   workflow_dispatch:
 
 permissions:
@@ -61,7 +37,6 @@ permissions:
 
 concurrency:
   group: pages-${{ github.ref }}
-  # An hourly snapshot must not cancel a protected-main deployment already in flight.
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
@@ -72,31 +47,22 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - run: python -m pip install -r scripts/requirements-site.txt
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
-      - name: Install locked Coinbase wallet dependencies
-        run: npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
-      - name: Prepare reviewed esbuild binary
-        run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
-      - name: Verify committed Coinbase wallet bundle is reproducible
+      - run: python -m pip install -r scripts/requirements-site.txt
+      - name: Validate the reduced public site
+        run: python scripts/check-site.py
+      - name: Check retained browser JavaScript
         run: |
-          cp site/coinbase-embedded-wallet.bundle.js /tmp/coinbase-wallet.js
-          cp site/coinbase-embedded-wallet.bundle.css /tmp/coinbase-wallet.css
-          npm run build --prefix tools/coinbase-embedded-wallet
-          cmp /tmp/coinbase-wallet.js site/coinbase-embedded-wallet.bundle.js
-          cmp /tmp/coinbase-wallet.css site/coinbase-embedded-wallet.bundle.css
-      - run: python scripts/check-coinbase-embedded-wallet.py
-      - run: python scripts/check-site.py
-      - run: python scripts/test-homepage-bounty-wiring.py
-      - run: node scripts/test-homepage-bounty-flow.js
-      - run: node scripts/test-create-competition-flow.js
-      - run: node scripts/test-ai-bounty-handoff.js
-      - run: node --test scripts/test-metrics-dashboard.js
-      - run: node scripts/test-marketplace-refill-confirmation.js
+          node --check site/analytics-config.js
+          node --check site/analytics.js
+          node --check site/solarpunk-home.js
+          node --check site/metrics.js
+      - name: Test the living scene and marketplace evidence states
+        run: node --test scripts/test-solarpunk-home.js
+      - name: Test the retained Metrics evidence engine
+        run: node --test scripts/test-metrics-dashboard.js
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v
@@ -113,68 +79,8 @@ jobs:
           assert value["schema_version"] == "agent-bounties/github-participation-v1"
           assert value["coverage"]["raw_identifiers_included"] is False
           assert set(value["periods"]) == {"7d", "28d", "90d", "lifetime"}
-          acquisition = value["repository_acquisition"]
-          assert acquisition["window_kind"] == "rolling_14_days"
-          assert acquisition["coverage"]["status"] == "unavailable"
-          assert len(acquisition["historical_snapshots"]) == 2
           PY
-      - name: Check simplified public scripts
-        run: |
-          node --check site/bounty-board.js
-          node --check site/bounty-entry.js
-          node --check site/ai-bounty-handoff.js
-          node --check site/bounty-composer-v2.js
-          node --check site/bounty-chat-ui.js
-          node --check site/simple-home.js
-          node --check site/metrics.js
-          node --check site/guild-shell.js
-          node --check site/wallet-adapter-registry.js
-          node --check site/x402-browser.js
-          node scripts/test-wallet-adapter-registry.js
-          node scripts/test-x402-browser.js
-          grep -q 'data-primary-bounty-cta>Post a bounty</a>' site/index.html
-          grep -q 'class="mode-switch"' site/index.html
-          grep -q 'action="objective.html"' site/index.html
-          grep -q 'src="bounty-entry.js?v=1"' site/index.html
-          ! grep -q 'data-connect-wallet' site/index.html
-          ! grep -q 'class="network-chip"' site/index.html
-          grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' site/agent/index.html
-          grep -q 'No computer use is required' site/agent/index.md
-          grep -q '"agent_mode": "https://agentbounties.app/agent/"' site/.well-known/agent-bounties.json
-          grep -q 'data-board-search' site/earn.html
-          grep -q 'id="fund-bounty-panel"' site/earn.html
-          grep -q 'Gas is sponsored for this funding action' site/earn.html
-          grep -q 'data-wallet-requires="direct-transactions"' site/earn.html
-          grep -q 'class="composer-page chat-app-page"' site/objective.html
-          grep -q 'class="chat-app-header"' site/objective.html
-          grep -q 'id="bounty-composer-form"' site/objective.html
-          grep -q 'data-bounty-chat' site/objective.html
-          grep -q 'data-conversation-log' site/objective.html
-          grep -q 'id="bounty-preview"' site/objective.html
-          grep -q 'data-mission-context' site/objective.html
-          grep -q 'data-image-status' site/objective.html
-          grep -q 'data-approve-card' site/objective.html
-          grep -q 'data-open-funding' site/objective.html
-          grep -q '>Connect wallet<' site/objective.html
-          grep -q 'data-payment-method="crypto"' site/objective.html
-          grep -q 'ai-bounty-handoff.js?v=5' site/objective.html
-          grep -q 'bounty-composer-v2.js?v=2' site/objective.html
-          grep -q 'bounty-entry.js?v=1' site/objective.html
-          grep -q 'bounty-chat-ui.js?v=4' site/objective.html
-          grep -q 'data-ai-draft-import' site/objective.html
-          grep -q 'prepare_bounty_post' site/ai-bounty-handoff.js
-          ! grep -q 'chat-composer-intro' site/objective.html
-          ! grep -q 'draft-panel' site/objective.html
-          grep -q 'dataset.bountyComposer = "chat-v2"' site/bounty-chat-ui.js
-          grep -q 'entryIntent.autostart' site/bounty-chat-ui.js
-          grep -q 'form.requestSubmit()' site/bounty-chat-ui.js
-          grep -q 'log.append(preview)' site/bounty-chat-ui.js
-          grep -q 'body.classList.contains("chat-app-page")' site/analytics-config.js
-          grep -q 'x-agent-bounties-draft-visual' site/bounty-composer-v2.js
-          grep -q 'MAX_TASK_DAYS = 30' site/bounty-composer-v2.js
-          grep -q 'Ongoing' site/bounty-composer-v2.js
-          grep -q 'You ask. Someone helps. They show proof. They get paid.' site/how-it-works.html
-      - name: Verify production analytics substitution preserves the public shell
+      - name: Verify optional analytics substitution
         env:
           GA_MEASUREMENT_ID: G-TEST123
         run: |
@@ -194,9 +100,6 @@ jobs:
           )
           if count != 1:
               raise SystemExit("analytics configuration assignment was not found exactly once")
-          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js", "chat-app-page"):
-              if required not in updated:
-                  raise SystemExit(f"Pages analytics substitution removed {required}")
           path.write_text(updated, encoding="utf-8")
           PY
           grep -q 'googleMeasurementId: "G-TEST123"' /tmp/analytics-config.js
@@ -207,8 +110,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
-      pull-requests: read
       pages: write
       id-token: write
     environment:
@@ -219,23 +120,8 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: tools/coinbase-embedded-wallet/package-lock.json
-      - name: Build Coinbase embedded-wallet adapter from lockfile
-        run: |
-          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
-          npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
-          npm run build --prefix tools/coinbase-embedded-wallet
-      - name: Configure public wallet providers
-        env:
-          COINBASE_CDP_PROJECT_ID: ${{ vars.COINBASE_CDP_PROJECT_ID }}
-        run: python scripts/configure-wallet-providers.py
-      - run: python scripts/check-coinbase-embedded-wallet.py
       - uses: actions/configure-pages@v6
-      - name: Configure optional Google Analytics without removing the public shell
+      - name: Configure optional Google Analytics
         env:
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
         run: |
@@ -258,15 +144,10 @@ jobs:
           )
           if count != 1:
               raise SystemExit("analytics configuration assignment was not found exactly once")
-          for required in ("loadGuildShell", "guild-pages.css", "guild-shell.js", "simple-home.js", "chat-app-page"):
-              if required not in updated:
-                  raise SystemExit(f"refusing to deploy without {required}")
           path.write_text(updated, encoding="utf-8")
           PY
-      - name: Stage bounded-wallet deployment manifest
+      - name: Stage machine-readable protocol schemas
         run: |
-          cp deployments/bounded-agent-wallet-base-mainnet.json site/bounded-agent-wallet-base-mainnet.json
-          cp deployments/bounded-agent-wallet-v2-base-mainnet.json site/bounded-agent-wallet-v2-base-mainnet.json
           mkdir -p site/schemas
           cp schemas/discovery-manifest.v2.json site/schemas/discovery-manifest.v2.json
       - name: Generate privacy-safe GitHub participation metrics
@@ -285,130 +166,23 @@ jobs:
           include-hidden-files: true
       - id: deployment
         uses: actions/deploy-pages@v5
-      - name: Verify the normal chatbot and embedded-wallet experience
+      - name: Verify Home, Metrics, legal pages, discovery, and removed-route 404s
         if: github.event_name != 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LIVE_CANARY_ISSUE: "499"
         run: |
           set -euo pipefail
-          expected_build="$(head -n 1 site/live-guild-build.txt | tr -d '\r\n')"
-          success=false
-          attempt_used=0
-          failure_detail="deployment has not propagated"
-
-          for attempt in $(seq 1 60); do
-            attempt_used="$attempt"
-            nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-${attempt}-$(date +%s)"
-            common_curl=(--fail --silent --show-error --location --retry 2 --retry-delay 1 --header "Cache-Control: no-cache" --header "Pragma: no-cache")
-
-            if curl "${common_curl[@]}" "https://agentbounties.app/live-guild-build.txt?verify=${nonce}" -o /tmp/live-canary.txt \
-              && curl "${common_curl[@]}" "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html \
-              && curl "${common_curl[@]}" "https://agentbounties.app/agent/?verify=${nonce}" -o /tmp/live-agent.html \
-              && curl "${common_curl[@]}" "https://agentbounties.app/agent/index.md?verify=${nonce}" -o /tmp/live-agent.md \
-              && curl "${common_curl[@]}" "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-agent-manifest.json \
-              && curl "${common_curl[@]}" "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html \
-              && curl "${common_curl[@]}" "https://agentbounties.app/objective.html?verify=${nonce}" -o /tmp/live-objective.html \
-              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat.css?verify=${nonce}" -o /tmp/live-chat.css \
-              && curl "${common_curl[@]}" "https://agentbounties.app/ai-bounty-handoff.css?verify=${nonce}" -o /tmp/live-ai-handoff.css \
-              && curl "${common_curl[@]}" "https://agentbounties.app/ai-bounty-handoff.js?verify=${nonce}" -o /tmp/live-ai-handoff.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-composer-v2.js?verify=${nonce}" -o /tmp/live-composer.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-chat-ui.js?verify=${nonce}" -o /tmp/live-chat-ui.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/bounty-entry.js?verify=${nonce}" -o /tmp/live-entry.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/how-it-works.html?verify=${nonce}" -o /tmp/live-how.html \
-              && curl "${common_curl[@]}" "https://agentbounties.app/analytics-config.js?verify=${nonce}" -o /tmp/live-analytics.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/simple-home.js?verify=${nonce}" -o /tmp/live-simple-home.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/wallet-config.js?verify=${nonce}" -o /tmp/live-wallet-config.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/coinbase-embedded-wallet.bundle.js?verify=${nonce}" -o /tmp/live-coinbase-wallet.js \
-              && curl "${common_curl[@]}" "https://agentbounties.app/x402-browser.js?verify=${nonce}" -o /tmp/live-x402-browser.js; then
-              actual_build="$(head -n 1 /tmp/live-canary.txt | tr -d '\r\n')"
-              if [[ "${actual_build}" == "${expected_build}" ]] \
-                && grep -q 'data-primary-bounty-cta>Post a bounty</a>' /tmp/live-index.html \
-                && grep -q 'class="mode-switch"' /tmp/live-index.html \
-                && grep -q 'action="objective.html"' /tmp/live-index.html \
-                && ! grep -q 'data-connect-wallet' /tmp/live-index.html \
-                && ! grep -q 'class="network-chip"' /tmp/live-index.html \
-                && grep -q 'AGENT MODE · NO COMPUTER USE REQUIRED' /tmp/live-agent.html \
-                && grep -q 'No computer use is required' /tmp/live-agent.md \
-                && grep -q '"agent_mode": "https://agentbounties.app/agent/"' /tmp/live-agent-manifest.json \
-                && grep -q 'data-public-ux="simplified-v1"' /tmp/live-earn.html \
-                && grep -q 'data-board-search' /tmp/live-earn.html \
-                && grep -q 'id="fund-bounty-panel"' /tmp/live-earn.html \
-                && grep -q 'Gas is sponsored for this funding action' /tmp/live-earn.html \
-                && grep -q 'class="composer-page chat-app-page"' /tmp/live-objective.html \
-                && grep -q 'class="chat-app-header"' /tmp/live-objective.html \
-                && grep -q 'id="bounty-composer-form"' /tmp/live-objective.html \
-                && grep -q 'data-conversation-log' /tmp/live-objective.html \
-                && grep -q 'id="bounty-preview"' /tmp/live-objective.html \
-                && grep -q 'data-approve-card' /tmp/live-objective.html \
-                && grep -q 'data-open-funding' /tmp/live-objective.html \
-                && grep -q '>Connect wallet<' /tmp/live-objective.html \
-                && grep -q 'bounty-entry.js?v=1' /tmp/live-objective.html \
-                && grep -q 'ai-bounty-handoff.js?v=5' /tmp/live-objective.html \
-                && grep -q 'bounty-chat-ui.js?v=4' /tmp/live-objective.html \
-                && grep -q 'data-ai-draft-import' /tmp/live-objective.html \
-                && ! grep -q 'chat-composer-intro' /tmp/live-objective.html \
-                && ! grep -q 'draft-panel' /tmp/live-objective.html \
-                && grep -q '.chat-app-header' /tmp/live-chat.css \
-                && grep -q '.ai-provider-grid' /tmp/live-ai-handoff.css \
-                && grep -q 'prepare_bounty_post' /tmp/live-ai-handoff.js \
-                && grep -q 'agent-bounties:prepared-draft' /tmp/live-ai-handoff.js \
-                && grep -q 'grid-template-rows: minmax(0, 1fr) auto auto' /tmp/live-chat.css \
-                && grep -q 'x-agent-bounties-draft-visual' /tmp/live-composer.js \
-                && grep -q 'MAX_TASK_DAYS = 30' /tmp/live-composer.js \
-                && grep -q 'dataset.bountyComposer = "chat-v2"' /tmp/live-chat-ui.js \
-                && grep -q 'entryIntent.autostart' /tmp/live-chat-ui.js \
-                && grep -q 'agent-bounties:homepage-bounty-intent' /tmp/live-entry.js \
-                && grep -q 'log.append(preview)' /tmp/live-chat-ui.js \
-                && grep -q 'body.classList.contains("chat-app-page")' /tmp/live-analytics.js \
-                && grep -q 'You ask. Someone helps. They show proof. They get paid.' /tmp/live-how.html \
-                && grep -q 'simple-home.js' /tmp/live-analytics.js \
-                && grep -q '\["earn.html", "Bounty Board"\]' /tmp/live-simple-home.js \
-                && grep -q '\["how-it-works.html", "How It Works"\]' /tmp/live-simple-home.js \
-                && ! grep -q 'Open Source' /tmp/live-simple-home.js \
-                && grep -q 'coinbaseEmbedded' /tmp/live-wallet-config.js \
-                && ! grep -q '__COINBASE_CDP_PROJECT_ID__' /tmp/live-wallet-config.js \
-                && grep -q 'coinbase-embedded' /tmp/live-coinbase-wallet.js \
-                && grep -q 'Link another sign-in method' /tmp/live-coinbase-wallet.js \
-                && grep -q 'agent-bounty-fund' /tmp/live-x402-browser.js; then
-                success=true
-                failure_detail=""
-                break
-              fi
-              failure_detail="expected build ${expected_build}, received ${actual_build:-empty}, or chatbot/embedded-wallet markers were missing"
-            else
-              failure_detail="one or more live URLs returned a non-success response"
-            fi
-            sleep 5
+          nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
+          curl --fail --silent --show-error --location "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/metrics.html?verify=${nonce}" -o /tmp/live-metrics.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/privacy.html?verify=${nonce}" -o /tmp/live-privacy.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/terms.html?verify=${nonce}" -o /tmp/live-terms.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-discovery.json
+          grep -q 'data-scene-root' /tmp/live-index.html
+          grep -q 'Rather pay for results than tokens?' /tmp/live-index.html
+          grep -q 'id="payout-audit"' /tmp/live-metrics.html
+          grep -q '<h1>Privacy policy</h1>' /tmp/live-privacy.html
+          grep -q '<h1>Terms of use</h1>' /tmp/live-terms.html
+          grep -q 'discovery-manifest.v2.json' /tmp/live-discovery.json
+          for route in earn.html objective.html funding.html post.html; do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://agentbounties.app/${route}?verify=${nonce}")"
+            [[ "${status}" == "404" ]]
           done
-
-          verified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          if [[ "${success}" == "true" ]]; then
-            cat > /tmp/live-proof.md <<EOF
-          ✅ **User-owned AI bounty composer and Coinbase adapter canary passed**
-
-          - Commit: \`${GITHUB_SHA}\`
-          - Expected and live build: \`${expected_build}\`
-          - Attempts: ${attempt_used}
-          - Verified at: ${verified_at}
-          - Live bounty creation hands the original idea to ChatGPT, Claude, Gemini, or another MCP-capable user account without calling a platform model key.
-          - The portable JSON return path renders the standardized draft inline and retains review, approval, and wallet gates.
-          - The Coinbase adapter is configured without a placeholder, includes explicit auth-method linking, and routes supported EOA funding through the gas-sponsored x402 path.
-          - Workflow: ${run_url}
-          EOF
-          else
-            cat > /tmp/live-proof.md <<EOF
-          ❌ **User-owned AI bounty composer or Coinbase adapter canary failed**
-
-          - Commit: \`${GITHUB_SHA}\`
-          - Expected build: \`${expected_build}\`
-          - Attempts: ${attempt_used}
-          - Last failure: ${failure_detail}
-          - Checked at: ${verified_at}
-          - Workflow: ${run_url}
-          EOF
-          fi
-
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${LIVE_CANARY_ISSUE}/comments" --raw-field body="$(cat /tmp/live-proof.md)"
-          [[ "${success}" == "true" ]]

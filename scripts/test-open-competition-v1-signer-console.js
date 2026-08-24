@@ -34,6 +34,7 @@ for (const forbidden of ["privateKey", "private_key", "seed phrase", "mnemonic",
 
 assert.ok(html.includes('id="wallet-provider"'));
 assert.ok(html.includes('id="bundle"'));
+assert.ok(html.includes('src="evm.js"'));
 assert.ok(html.includes("open-competition-v1-signer.js?v=partial-deployment-recovery-v1"));
 assert.ok(script.includes("Load and inspect the frozen bundle before connecting a wallet."));
 assert.ok(script.includes('Connected account ${account || "(none)"} is not the frozen admin'));

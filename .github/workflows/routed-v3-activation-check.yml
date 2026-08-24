@@ -11,9 +11,6 @@ on:
       - "scripts/test_activate_routed_v3_replacements.py"
       - "scripts/test_shared_rpc.py"
       - "benchmarks/direct-inventory-v1/rpc-failover/check.py"
-      - "scripts/test-durable-wallet-policy.js"
-      - "site/durable-wallet-policy.html"
-      - "site/durable-wallet-policy.js"
 
 permissions:
   contents: read
@@ -36,8 +33,6 @@ jobs:
           WORKSPACE_ROOT=. python benchmarks/direct-inventory-v1/rpc-failover/check.py
           python -m unittest scripts.test_activate_routed_v3_replacements -v
           python -m py_compile scripts/activate_routed_v3_dynamic.py scripts/activate_routed_v3_replacements.py scripts/check_routed_v3_activation_readiness.py
-          node --check site/durable-wallet-policy.js
-          node scripts/test-durable-wallet-policy.js
 
       - name: Dynamic direct-chain attestation passes with RPC failover
         run: |

@@ -124,11 +124,13 @@ repository:
 
 1. `prepare_moonpay_onramp` accepts only a canonical Base bounty contract, a
    bounded planned USDC amount, and an optional opaque funding-intent UUID.
-2. It returns a first-party
-   `https://agentbounties.app/onramp.html` handoff.
+2. The tool contract retains a first-party
+   `https://agentbounties.app/onramp.html` handoff, but the redesigned site does
+   not mount that page; do not offer this action until a replacement funding UI
+   is reviewed.
 3. It does not call MoonPay, create checkout, connect a wallet, or move money.
-4. The hosted page connects the user's selected Base wallet and checks the
-   destination, planned amount, USDC balance, and optional gas balance.
+4. A future replacement page must connect the user's selected Base wallet and
+   check the destination, planned amount, USDC balance, and optional gas balance.
 5. The browser requests a device-bound signed MoonPay URL from
    `/v1/onramps/moonpay/checkout`.
 6. MoonPay handles its purchase, payment methods, eligibility, identity checks,
@@ -305,7 +307,7 @@ Before a developer-mode public beta:
 4. Run `cargo build -p mcp-server`, then
    `python scripts/check-chatgpt-app-runtime.py`.
 5. Run `python scripts/check-chatgpt-app-submission.py`.
-6. Run `python scripts/check-moonpay-onramp.py`.
+6. Run `cargo test -p mcp-server moonpay -- --nocapture` for the preserved server-side boundary.
 7. Run `python scripts/check-site.py` and the widget JavaScript syntax checks.
 8. Confirm a modern request with exact MCP client-info name `openai-mcp` and no
    `Origin` lists exactly the ten full-product tools, including

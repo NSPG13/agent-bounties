@@ -6,8 +6,11 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
-const outfile = path.join(root, "site/coinbase-embedded-wallet.bundle.js");
-const cssfile = path.join(root, "site/coinbase-embedded-wallet.bundle.css");
+const outdir = process.env.COINBASE_WALLET_OUTDIR
+  ? path.resolve(process.env.COINBASE_WALLET_OUTDIR)
+  : path.join(root, "target", "coinbase-embedded-wallet");
+const outfile = path.join(outdir, "coinbase-embedded-wallet.bundle.js");
+const cssfile = path.join(outdir, "coinbase-embedded-wallet.bundle.css");
 const checkOnly = process.argv.includes("--check");
 
 await mkdir(path.dirname(outfile), { recursive: true });

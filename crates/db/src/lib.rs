@@ -72,6 +72,8 @@ pub const OPEN_COMPETITION_V2_BETA3_MIGRATION: &str =
     include_str!("../../../migrations/0024_open_competition_v2_beta3.sql");
 pub const OPPORTUNITY_FEEDBACK_MIGRATION: &str =
     include_str!("../../../migrations/0025_opportunity_feedback.sql");
+pub const SITE_AUTH_ACCOUNTS_MIGRATION: &str =
+    include_str!("../../../migrations/0026_site_auth_accounts.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -209,6 +211,8 @@ pub enum DbError {
     ChatgptActionIntentUnavailable,
     #[error("bounty image asset conflict: {0}")]
     BountyImageAssetConflict(String),
+    #[error("site account wallet conflict: {0}")]
+    SiteAuthConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -1125,6 +1129,14 @@ pub struct PostgresStore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteAuthWallet {
+    pub address: String,
+    pub chain_id: i64,
+    pub linked_at: DateTime<Utc>,
+    pub proof: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenCompetitionV2IndexerAgreement {
     pub network: String,
     pub factory_contract: String,
@@ -1184,6 +1196,7 @@ impl PostgresStore {
                 OPEN_COMPETITION_V2_BETA2_MIGRATION,
                 OPEN_COMPETITION_V2_BETA3_MIGRATION,
                 OPPORTUNITY_FEEDBACK_MIGRATION,
+                SITE_AUTH_ACCOUNTS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1241,6 +1254,142 @@ impl PostgresStore {
             schema_version: "agent-bounties/durable-data-snapshot-v1".to_string(),
             tables,
         })
+    }
+
+    pub async fn upsert_site_auth_account(
+        &self,
+        account_key: &str,
+        provider: &str,
+        provider_subject: &str,
+        display_name: &str,
+        email: &str,
+        avatar_url: &str,
+    ) -> DbResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO site_auth_accounts
+              (account_key, provider, provider_subject, display_name, email, avatar_url)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (account_key) DO UPDATE SET
+              display_name = EXCLUDED.display_name,
+              email = EXCLUDED.email,
+              avatar_url = EXCLUDED.avatar_url,
+              last_signed_in_at = NOW()
+            "#,
+        )
+        .bind(account_key)
+        .bind(provider)
+        .bind(provider_subject)
+        .bind(display_name)
+        .bind(email)
+        .bind(avatar_url)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_site_auth_wallets(&self, account_key: &str) -> DbResult<Vec<SiteAuthWallet>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT wallet_address, chain_id, linked_at, proof_method
+            FROM site_auth_wallets
+            WHERE account_key = $1
+            ORDER BY linked_at ASC
+            "#,
+        )
+        .bind(account_key)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(SiteAuthWallet {
+                    address: row.try_get("wallet_address")?,
+                    chain_id: row.try_get("chain_id")?,
+                    linked_at: row.try_get("linked_at")?,
+                    proof: row.try_get("proof_method")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn link_site_auth_wallet(
+        &self,
+        account_key: &str,
+        wallet_address: &str,
+        chain_id: i64,
+    ) -> DbResult<Vec<SiteAuthWallet>> {
+        let mut transaction = self.pool.begin().await?;
+        let account_exists: Option<String> = sqlx::query_scalar(
+            "SELECT account_key FROM site_auth_accounts WHERE account_key = $1 FOR UPDATE",
+        )
+        .bind(account_key)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if account_exists.is_none() {
+            return Err(DbError::SiteAuthConflict(
+                "site_auth_account_unavailable".to_string(),
+            ));
+        }
+        let linked_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM site_auth_wallets WHERE account_key = $1")
+                .bind(account_key)
+                .fetch_one(&mut *transaction)
+                .await?;
+        let current_owner: Option<String> = sqlx::query_scalar(
+            "SELECT account_key FROM site_auth_wallets WHERE wallet_address = lower($1)",
+        )
+        .bind(wallet_address)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if current_owner
+            .as_deref()
+            .is_some_and(|owner| owner != account_key)
+        {
+            return Err(DbError::SiteAuthConflict(
+                "wallet_linked_to_another_account".to_string(),
+            ));
+        }
+        if current_owner.is_none() && linked_count >= 8 {
+            return Err(DbError::SiteAuthConflict(
+                "wallet_limit_reached".to_string(),
+            ));
+        }
+        let inserted_owner: String = sqlx::query_scalar(
+            r#"
+            INSERT INTO site_auth_wallets (wallet_address, account_key, chain_id)
+            VALUES (lower($1), $2, $3)
+            ON CONFLICT (wallet_address) DO UPDATE SET
+              wallet_address = EXCLUDED.wallet_address
+            RETURNING account_key
+            "#,
+        )
+        .bind(wallet_address)
+        .bind(account_key)
+        .bind(chain_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if inserted_owner != account_key {
+            return Err(DbError::SiteAuthConflict(
+                "wallet_linked_to_another_account".to_string(),
+            ));
+        }
+        transaction.commit().await?;
+        self.list_site_auth_wallets(account_key).await
+    }
+
+    pub async fn unlink_site_auth_wallet(
+        &self,
+        account_key: &str,
+        wallet_address: &str,
+    ) -> DbResult<Vec<SiteAuthWallet>> {
+        sqlx::query(
+            "DELETE FROM site_auth_wallets WHERE account_key = $1 AND wallet_address = lower($2)",
+        )
+        .bind(account_key)
+        .bind(wallet_address)
+        .execute(&self.pool)
+        .await?;
+        self.list_site_auth_wallets(account_key).await
     }
 
     pub async fn record_legal_acceptance(
