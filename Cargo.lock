@@ -697,6 +697,7 @@ dependencies = [
  "sha2",
  "tokio",
  "tokio-stream",
+ "tower",
  "tower-http 0.7.0",
  "url",
  "utoipa",

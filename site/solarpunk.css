@@ -2067,7 +2067,7 @@ html[data-scene-ready="false"] .scene-plate {
     grid-template-columns: 1fr auto;
   }
 
-  .scene-nav button:not(.login-preview) {
+  .scene-nav a {
     display: none;
   }
 

@@ -12,6 +12,10 @@ CANONICAL_PAGES = {
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
     "competition.html": "https://agentbounties.app/competition.html",
+    "about.html": "https://agentbounties.app/about.html",
+    "blog/index.html": "https://agentbounties.app/blog/",
+    "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
+    "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
     "metrics.html": "https://agentbounties.app/metrics.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "terms.html": "https://agentbounties.app/terms.html",
@@ -19,6 +23,7 @@ CANONICAL_PAGES = {
 REQUIRED_FILES = {
     ".nojekyll",
     ".well-known/agent-bounties.json",
+    ".well-known/agent-card.json",
     ".well-known/x402.json",
     "agent/index.md",
     "analytics-config.js",
@@ -26,10 +31,17 @@ REQUIRED_FILES = {
     "competition.html",
     "competition.js",
     "earn.html",
+    "about.css",
+    "about.html",
+    "blog/agentic-economy-needs-a-market-for-work.html",
+    "blog/feed.xml",
+    "blog/index.html",
+    "blog/posts.json",
     "favicon.svg",
     "generated/github-participation.json",
     "generated/public-metrics-policy.json",
     "index.html",
+    "how-to-earn-money-with-my-ai-agent.html",
     "llms.txt",
     "metrics.css",
     "metrics.html",
@@ -48,6 +60,7 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "about.css",
     "analytics-config.js",
     "analytics.js",
     "competition.js",
@@ -216,12 +229,115 @@ def check_discovery(site_dir: Path, repo_root: Path, protocol: dict) -> None:
 
     llms = (site_dir / "llms.txt").read_text(encoding="utf-8")
     agent_markdown = (site_dir / "agent" / "index.md").read_text(encoding="utf-8")
-    require_phrases("llms.txt", llms, ["get_bounty_feed", "Only `BountySettled` proves payment."])
+    require_phrases(
+        "llms.txt",
+        llms,
+        [
+            "get_bounty_feed",
+            "A2A Agent Card: https://api.agentbounties.app/.well-known/agent-card.json",
+            "Only a confirmed canonical `BountySettled` or `CompetitionSettledV2` event",
+        ],
+    )
     require_phrases(
         "agent/index.md",
         agent_markdown,
         ["No computer use is required", "get_bounty_feed", "CompetitionSettledV2"],
     )
+
+
+def check_a2a_card(site_dir: Path, repo_root: Path) -> None:
+    site_card_path = site_dir / ".well-known" / "agent-card.json"
+    api_card_path = repo_root / "crates" / "api" / "fixtures" / "agent-card.json"
+    if site_card_path.read_bytes() != api_card_path.read_bytes():
+        fail("website and API A2A Agent Cards must match byte-for-byte")
+    card = json_file(site_card_path)
+    interfaces = card.get("supportedInterfaces", [])
+    if interfaces != [
+        {
+            "url": "https://api.agentbounties.app/a2a/v1",
+            "protocolBinding": "HTTP+JSON",
+            "protocolVersion": "1.0",
+        }
+    ]:
+        fail("A2A Agent Card must advertise only the implemented HTTP+JSON 1.0 interface")
+    if card.get("capabilities") != {
+        "streaming": False,
+        "pushNotifications": False,
+        "extendedAgentCard": False,
+    }:
+        fail("A2A Agent Card capabilities must remain conservative and implementation-backed")
+    expected_skills = {
+        "discover-ready-to-earn-bounties",
+        "explain-bounty-opportunity",
+        "explain-agent-bounties-protocol",
+        "explain-bounty-alerts",
+    }
+    skills = card.get("skills", [])
+    if {skill.get("id") for skill in skills} != expected_skills:
+        fail("A2A Agent Card skills must match the read-only implementation")
+    if any(not skill.get("examples") or not skill.get("tags") for skill in skills):
+        fail("every A2A skill must include examples and discovery tags")
+    if "cannot claim work" not in card.get("description", ""):
+        fail("A2A Agent Card must state its consequential-action boundary")
+
+
+def check_blog(site_dir: Path) -> None:
+    about = (site_dir / "about.html").read_text(encoding="utf-8")
+    archive = (site_dir / "blog" / "index.html").read_text(encoding="utf-8")
+    guide = (site_dir / "how-to-earn-money-with-my-ai-agent.html").read_text(encoding="utf-8")
+    essay = (site_dir / "blog" / "agentic-economy-needs-a-market-for-work.html").read_text(encoding="utf-8")
+    for label, text in (("about.html", about), ("blog/index.html", archive)):
+        require_phrases(
+            label,
+            text,
+            [
+                "how-to-earn-money-with-my-ai-agent.html",
+                "agentic-economy-needs-a-market-for-work.html",
+            ],
+        )
+    require_phrases(
+        "AI-agent earnings guide",
+        guide,
+        [
+            '"@type": "BlogPosting"',
+            '"@type": "FAQPage"',
+            "Publisher disclosure:",
+            "Contribution margin",
+            "Where Agent Bounties fits",
+            "makes no earnings promise",
+        ],
+    )
+    require_phrases(
+        "agentic economy essay",
+        essay,
+        [
+            '"@type":"BlogPosting"',
+            "Publisher disclosure:",
+            "originally published on DEV",
+            "Collaboration and competition should coexist",
+            "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event",
+        ],
+    )
+    posts = json_file(site_dir / "blog" / "posts.json")
+    expected_urls = {
+        "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+        "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
+    }
+    if posts.get("version") != "https://jsonfeed.org/version/1.1":
+        fail("blog JSON index must use JSON Feed 1.1")
+    if {item.get("url") for item in posts.get("items", [])} != expected_urls:
+        fail("blog JSON index must contain every canonical post exactly once")
+    atom = ET.parse(site_dir / "blog" / "feed.xml").getroot()
+    namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    atom_links = {
+        item.attrib.get("href")
+        for item in atom.findall("atom:entry/atom:link", namespace)
+        if item.attrib.get("href")
+    }
+    if atom_links != expected_urls:
+        fail("Atom feed must contain every canonical post exactly once")
+
+
 def check_analytics(site_dir: Path, repo_root: Path) -> None:
     javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
@@ -324,10 +440,15 @@ def check_homepage(site_dir: Path) -> None:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment.",
         ],
     )
-    if page.count("<button type=\"button\" disabled>") < 1:
-        fail("the unfinished About control must remain a native disabled button")
-    if '<a href="earn.html">Find bounties</a>' not in page:
-        fail("the homepage must route Find bounties to the unified market")
+    require_phrases(
+        "index.html navigation",
+        page,
+        [
+            '<a href="about.html">About us</a>',
+            '<a href="about.html#blog">Blog</a>',
+            '<a href="earn.html">Find bounties</a>',
+        ],
+    )
     hero_start = page.find('<section class="hero"')
     hero_end = page.find("</section>", hero_start)
     hero_action = page.find('<div class="hero-action">', hero_start)
@@ -582,7 +703,7 @@ def main() -> int:
 
     html_files = {path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*.html")}
     if html_files != set(CANONICAL_PAGES):
-        fail(f"site HTML contract differs from the approved public pages; found {sorted(html_files)}")
+        fail(f"site HTML inventory does not match canonical page policy; found {sorted(html_files)}")
     ui_code = {path.relative_to(site_dir).as_posix() for pattern in ("*.js", "*.css") for path in site_dir.rglob(pattern)}
     if ui_code != ALLOWED_UI_CODE:
         fail(f"orphaned or missing UI code: extra={sorted(ui_code - ALLOWED_UI_CODE)} missing={sorted(ALLOWED_UI_CODE - ui_code)}")
@@ -593,6 +714,7 @@ def main() -> int:
     for relative, canonical in CANONICAL_PAGES.items():
         path = site_dir / relative
         text = path.read_text(encoding="utf-8")
+        prefix = "../" if relative.startswith("blog/") else ""
         parser = PageParser()
         parser.feed(text)
         if parser.h1_count != 1:
@@ -603,13 +725,13 @@ def main() -> int:
             [
                 "<title>",
                 '<meta name="description"',
-                '<link rel="icon" href="favicon.svg" type="image/svg+xml">',
+                f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
-                '<script src="analytics-config.js?v=2"></script>',
-                '<script src="analytics.js?v=3"></script>',
+                f'<script src="{prefix}analytics-config.js?v=2"></script>',
+                f'<script src="{prefix}analytics.js?v=3"></script>',
             ],
         )
-        if text.index('src="analytics-config.js?v=2"') > text.index('src="analytics.js?v=3"'):
+        if text.index(f'src="{prefix}analytics-config.js?v=2"') > text.index(f'src="{prefix}analytics.js?v=3"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         for link in parser.links:
             check_internal_link(site_dir, path, link, parser.ids)
@@ -618,7 +740,7 @@ def main() -> int:
     namespace = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     urls = {item.text.strip() for item in sitemap.findall("sm:url/sm:loc", namespace) if item.text}
     if urls != set(CANONICAL_PAGES.values()):
-        fail(f"sitemap must list exactly the approved public pages; found {sorted(urls)}")
+        fail(f"sitemap must list every canonical website page exactly once; found {sorted(urls)}")
     robots = (site_dir / "robots.txt").read_text(encoding="utf-8")
     require_phrases("robots.txt", robots, ["User-agent: OAI-SearchBot", "Sitemap: https://agentbounties.app/sitemap.xml"])
 
@@ -633,10 +755,12 @@ def main() -> int:
     deployment = json_file(repo_root / "deployments" / "base-mainnet.json")
     check_protocol(protocol, deployment)
     check_discovery(site_dir, repo_root, protocol)
+    check_a2a_card(site_dir, repo_root)
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
     check_marketplace(site_dir)
     check_metrics(site_dir)
+    check_blog(site_dir)
     privacy = (site_dir / "privacy.html").read_text(encoding="utf-8")
     terms = (site_dir / "terms.html").read_text(encoding="utf-8")
     require_phrases(
@@ -657,7 +781,7 @@ def main() -> int:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
         ],
     )
-    print("site checks passed: Home + unified market + competition workspace + Metrics + required legal pages; protocol, evidence, analytics, and asset budgets intact")
+    print("site checks passed: Home, unified market, competition, A2A, blog, Metrics, legal pages, protocol, evidence, analytics, and asset budgets intact")
     return 0
 
 
