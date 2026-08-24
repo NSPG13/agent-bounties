@@ -71,6 +71,13 @@ Safety:
 - Preserve the child terms hash, funding events, and settlement event for the scoring snapshot.`;
   }
 
+  function childPostUrl(item) {
+    const contract = String(item?.source_id || "").toLowerCase();
+    const network = String(item?.network || "base-mainnet").toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(contract) || network !== "base-mainnet") return null;
+    return `./?parentCompetition=${encodeURIComponent(contract)}&network=${encodeURIComponent(network)}#post-a-bounty`;
+  }
+
   function participationManifest(item, timing) {
     const base = marketplace.apiBase(typeof window !== "undefined" ? window.location : null);
     return {
@@ -190,6 +197,9 @@ Safety:
     const manifest = JSON.stringify(participationManifest(item, timing), null, 2);
     setText(doc, "[data-child-template]", template);
     setText(doc, "[data-machine-request]", manifest);
+    const childPost = doc.querySelector("[data-child-post-started]");
+    const postUrl = childPostUrl(item);
+    if (childPost && postUrl) childPost.href = postUrl;
     const machineSource = doc.querySelector("[data-machine-source]");
     if (machineSource) machineSource.href = marketplace.opportunityFeedUrl(win.location);
     const snapshotSource = doc.querySelector("[data-snapshot-source]");
@@ -303,5 +313,5 @@ Safety:
     }
   }
 
-  return { childTemplate, economics, participationManifest, signedUsdc, start };
+  return { childPostUrl, childTemplate, economics, participationManifest, signedUsdc, start };
 });

@@ -134,6 +134,96 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
     return Object.hasOwn(links, key) ? links[key] : null;
   }
 
+  function parseCompetitionPostingRequest(search) {
+    const params = new URLSearchParams(String(search || ""));
+    if (!params.has("parentCompetition")) return { requested: false, valid: false };
+    const contract = String(params.get("parentCompetition") || "").trim().toLowerCase();
+    const network = String(params.get("network") || "base-mainnet").trim().toLowerCase();
+    return {
+      requested: true,
+      valid: /^0x[0-9a-f]{40}$/.test(contract) && network === "base-mainnet",
+      contract,
+      network,
+    };
+  }
+
+  function competitionPostingItem(projection, request) {
+    if (!request?.requested || !request.valid) throw new Error("invalid competition posting context");
+    if (projection?.schema_version !== "agent-bounties/opportunity-projection-v1" || !Array.isArray(projection.items)) {
+      throw new Error("invalid unified opportunity projection");
+    }
+    const item = projection.items.find((candidate) =>
+      String(candidate?.source_id || "").toLowerCase() === request.contract
+      && String(candidate?.network || "").toLowerCase() === request.network
+      && String(candidate?.opportunity_id || "").startsWith("open-competition-v2:")
+    );
+    const window = item?.evidence_requirements?.scoring_window;
+    const startsAt = Date.parse(String(window?.starts_at || ""));
+    const endsAt = Date.parse(String(window?.ends_at || ""));
+    if (!item
+      || item.source_status !== "active"
+      || item.work_state !== "claimable"
+      || item.payment_state !== "escrowed"
+      || item.payment_committed !== true
+      || item.verification_ready !== true
+      || item.competition_mode !== "best_score"
+      || item.evidence_requirements?.program_profile !== "forward-canonical-gmv-attribution-metric-v2"
+      || !Number.isFinite(startsAt)
+      || !Number.isFinite(endsAt)
+      || endsAt <= startsAt) {
+      throw new Error("competition is not ready for a bound posting handoff");
+    }
+    return item;
+  }
+
+  function competitionChildBrief(item) {
+    const window = item.evidence_requirements.scoring_window;
+    const windowText = `${window.starts_at} through ${window.ends_at}`;
+    return `Qualifying Agent Bounties demand brief
+
+Parent competition: ${item.source_id}
+Entering/funding wallet: 0xYOUR_BASE_WALLET
+Scoring window: ${windowText}
+
+Outcome requested:
+[Describe one useful digital result that another agent can deliver.]
+
+Objective acceptance tests:
+1. [Binary or measurable test]
+2. [Exact artifact/evidence schema]
+3. [Deterministic verifier or precommitted quorum]
+
+Funding:
+- Network: Base mainnet
+- Asset: native USDC
+- Solver reward: [AMOUNT]
+- Fully fund before another wallet claims or enters
+
+Canonical completion requirement:
+- A wallet different from the creator completes the child bounty.
+- The child reaches confirmed canonical settlement inside ${windowText}.
+- Funding attributable to 0xYOUR_BASE_WALLET is used in the parent score.
+
+Safety:
+- Do not use an operator/reserve wallet or excluded reward contract.
+- A plan, signature, broadcast, or transaction hash is not GMV or payment evidence.
+- Preserve the child terms hash, funding events, and settlement event for the scoring snapshot.`;
+  }
+
+  function competitionPostingPrompt(item) {
+    const basePrompt = BOUNTY_POSTING_PROMPT.replace(/\n\nBegin by asking:[\s\S]*$/, "");
+    return `${basePrompt}
+
+This is a contract-bound Open Competition V2 child-bounty posting session.
+- Parent competition: ${item.source_id}
+- Network: ${item.network}
+- Do not replace the parent contract, network, or UTC scoring window.
+- Do not restart with a generic outcome question. Present the reviewed brief below, ask me to fill only its bracketed placeholders, and warn if the proposed child cannot settle inside the window.
+- Before any wallet interaction, calculate the parent competition's complete win, loss, and expected economics using the child funding I select.
+
+${competitionChildBrief(item)}`;
+  }
+
   function shortWalletAddress(value) {
     const address = String(value || "").trim().toLowerCase();
     return /^0x[0-9a-f]{40}$/.test(address) ? `${address.slice(0, 8)}…${address.slice(-6)}` : "";
@@ -1010,10 +1100,16 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       const copyButton = dialog.querySelector("[data-bounty-copy]");
       const webFallback = dialog.querySelector("[data-bounty-web-fallback]");
       const promptDetails = dialog.querySelector(".bounty-prompt-preview");
+      const launcherTitle = dialog.querySelector("#bounty-launcher-title");
+      const launcherDescription = dialog.querySelector("#bounty-launcher-description");
+      const postingRequest = parseCompetitionPostingRequest(win.location.search);
+      let launcherPrompt = BOUNTY_POSTING_PROMPT;
+      let contextReady = !postingRequest.requested;
+      let contextStatus = postingRequest.requested ? "Verifying the parent competition and reviewed child-bounty brief…" : "";
       let launchTimer = 0;
       let appHandoffObserved = false;
 
-      if (promptPreview) promptPreview.textContent = BOUNTY_POSTING_PROMPT;
+      if (promptPreview) promptPreview.textContent = launcherPrompt;
 
       const setStatus = (message) => {
         if (status) status.textContent = message;
@@ -1036,7 +1132,9 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
           webFallback.removeAttribute("href");
         }
         promptDetails?.removeAttribute("open");
-        setStatus("");
+        assistantButtons.forEach((button) => { button.disabled = !contextReady; });
+        if (copyButton) copyButton.disabled = !contextReady;
+        setStatus(contextStatus);
       };
       const showDialog = () => {
         resetLauncher();
@@ -1050,11 +1148,11 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       };
       const copyPrompt = async () => {
         try {
-          await win.navigator.clipboard.writeText(BOUNTY_POSTING_PROMPT);
+          await win.navigator.clipboard.writeText(launcherPrompt);
           return true;
         } catch (error) {
           const textarea = doc.createElement("textarea");
-          textarea.value = BOUNTY_POSTING_PROMPT;
+          textarea.value = launcherPrompt;
           textarea.setAttribute("readonly", "");
           textarea.style.position = "fixed";
           textarea.style.opacity = "0";
@@ -1099,7 +1197,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
         button.addEventListener("click", async () => {
           clearLaunchProbe();
           const key = String(button.dataset.bountyAssistant || "").toLowerCase();
-          const links = bountyAssistantLinks(key);
+          const links = bountyAssistantLinks(key, launcherPrompt);
           if (!links) return;
           assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
           button.setAttribute("aria-current", "true");
@@ -1146,6 +1244,27 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
       });
       if (win.location.hash === "#post-a-bounty") {
         win.requestAnimationFrame?.(showDialog);
+      }
+      if (postingRequest.requested) {
+        void (async () => {
+          if (!postingRequest.valid) throw new Error("invalid competition posting context");
+          const protocol = await requestJson("protocol.json");
+          const apiBase = String(protocol?.api_base_url || "").replace(/\/$/, "");
+          if (!/^https:\/\//.test(apiBase)) throw new Error("API discovery is unavailable");
+          const projection = await requestJson(`${apiBase}/v1/opportunities?network=${encodeURIComponent(postingRequest.network)}&view=ready_to_earn&source_type=canonical_base&limit=300&live=${Date.now()}`);
+          const item = competitionPostingItem(projection, postingRequest);
+          launcherPrompt = competitionPostingPrompt(item);
+          contextReady = true;
+          contextStatus = `Verified ${shortWalletAddress(item.source_id)}. The selected assistant will receive the exact parent contract, UTC window, and reviewed child brief.`;
+          if (launcherTitle) launcherTitle.textContent = "Post a qualifying bounty";
+          if (launcherDescription) launcherDescription.textContent = `Bound to ${shortWalletAddress(item.source_id)} · ${item.evidence_requirements.scoring_window.starts_at} → ${item.evidence_requirements.scoring_window.ends_at}`;
+          if (promptPreview) promptPreview.textContent = launcherPrompt;
+          resetLauncher();
+        })().catch(() => {
+          contextReady = false;
+          contextStatus = "This competition could not be verified in the live unified projection. Return to its participation page; no generic posting prompt was substituted.";
+          resetLauncher();
+        });
       }
     }
 
@@ -1197,6 +1316,9 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
     authProviderPath,
     authResultMessage,
     bountyAssistantLinks,
+    competitionChildBrief,
+    competitionPostingItem,
+    competitionPostingPrompt,
     clamp,
     flameMotion,
     hashSeed,
@@ -1204,6 +1326,7 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
     isReadyToEarn,
     marketSnapshot,
     parseSceneTime,
+    parseCompetitionPostingRequest,
     sceneBlend,
     sceneTimeOverride,
     seededRandom,
