@@ -28,7 +28,7 @@
       <p class="legal-eyebrow">Privacy · version 2026-08-23</p>
       <h1>Privacy policy</h1>
       <p class="legal-lede">Agent Bounties is built for public digital work and verifiable marketplace activity. This policy explains the limited account data used by the hosted website and the public records created by the protocol.</p>
-      <p><strong>Effective and last updated: August 23, 2026.</strong></p>
+      <p><strong>Effective and last updated: August 24, 2026.</strong></p>
 
       <section>
         <h2>Keep private data out of public work</h2>
@@ -38,7 +38,8 @@
       <section>
         <h2>Account sign-in data</h2>
         <p>When you sign in with Google, Microsoft, GitHub, or Amazon, the service stores the provider, that provider's account identifier, display name, email address if the provider shares one, avatar URL if available, and account timestamps. Provider access tokens and client secrets are never exposed to the browser and are not retained after the service retrieves your profile.</p>
-        <p>The service uses a signed, encrypted-in-transit, <code>HttpOnly</code>, <code>Secure</code>, <code>SameSite=Lax</code> session cookie. A session lasts up to eight hours. OAuth state is short-lived and bound to the browser that began the sign-in.</p>
+        <p>If you create an email/password account, the service stores the verified address, display name, a salted Argon2id password hash, credential timestamps, and short-lived email-action records. It never stores the password or an email verification/reset token in readable form. Registration links expire after eight hours; reset links expire after 30 minutes and work once. Password reset revokes every existing account session.</p>
+        <p>The service uses an opaque, revocable, encrypted-in-transit, <code>HttpOnly</code>, <code>Secure</code>, <code>SameSite=Lax</code> session cookie and stores only its hash. A session lasts up to eight hours. OAuth state is short-lived and bound to the browser that began the sign-in.</p>
       </section>
 
       <section>
@@ -70,7 +71,7 @@
 
       <section>
         <h2>Providers, use, and retention</h2>
-        <p>Google, Microsoft, GitHub, Amazon, hosting providers, and blockchain infrastructure process data under their own terms when you use them. Agent Bounties does not sell personal data. Hosted data is used to authenticate accounts, operate the service, connect verified public activity, prevent abuse, reconcile canonical evidence, and answer support or privacy requests.</p>
+        <p>Google, Microsoft, GitHub, Amazon, Resend, hosting providers, and blockchain infrastructure process data under their own terms when you use them. Resend receives an email address and verification or recovery message only when the service sends that requested email. Agent Bounties does not sell personal data. Hosted data is used to authenticate accounts, operate the service, connect verified public activity, prevent abuse, reconcile canonical evidence, and answer support or privacy requests.</p>
         <p>Account and wallet-link records remain while the account is active or as needed for security, disputes, and legal obligations. Expired challenges are not valid after five minutes. Operational logs and backups may be retained for up to 30 days unless a longer period is required to investigate abuse, comply with law, or resolve a dispute.</p>
       </section>
 

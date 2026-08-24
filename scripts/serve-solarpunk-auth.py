@@ -21,6 +21,7 @@ import secrets
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,6 +45,7 @@ DEFAULT_ENV = ROOT / ".env.auth.local"
 DEFAULT_WALLET_LINKS = ROOT / ".wallet-links.local.json"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SESSION_COOKIE = "agent_bounties_session"
+PASSWORD_SETUP_COOKIE = "agent_bounties_password_setup"
 SESSION_MAX_AGE = 8 * 60 * 60
 STATE_MAX_AGE = 10 * 60
 WALLET_CHALLENGE_MAX_AGE = 5 * 60
@@ -90,6 +92,7 @@ def sign_session(user: dict[str, Any], secret: str, now: int | None = None) -> s
         "avatar": str(user.get("avatar", ""))[:2048],
         "iat": issued_at,
         "exp": issued_at + SESSION_MAX_AGE,
+        "credential_version": int(user.get("credential_version", 0)),
     }
     payload = b64url_encode(json.dumps(safe_user, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     signature = b64url_encode(hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest())
@@ -675,6 +678,52 @@ def purge_wallet_challenges(now: float | None = None) -> None:
             WALLET_CHALLENGES.pop(key, None)
 
 
+def normalize_email(value: Any) -> str:
+    email = unicodedata.normalize("NFC", str(value or "")).strip().lower()
+    if len(email) > 320 or any(character.isspace() for character in email):
+        raise ValueError("email_invalid")
+    if email.count("@") != 1:
+        raise ValueError("email_invalid")
+    local, domain = email.split("@", 1)
+    if not local or len(local) > 64 or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ValueError("email_invalid")
+    return email
+
+
+def normalize_password(value: Any) -> str:
+    password = unicodedata.normalize("NFC", str(value or ""))
+    if not 15 <= len(password) <= 128:
+        raise ValueError("password_length_invalid")
+    if password.strip().lower() in {
+        "passwordpassword",
+        "password123456",
+        "123456789012345",
+        "qwertyuiopasdfgh",
+        "letmeinletmein",
+        "correcthorsebatterystaple",
+        "correct horse battery staple",
+        "agentbounties",
+        "agentbounties.app",
+    }:
+        raise ValueError("password_common")
+    return password
+
+
+def local_password_hash(password: str, salt: bytes | None = None) -> str:
+    salt = secrets.token_bytes(16) if salt is None else salt
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    return f"{salt.hex()}:{digest.hex()}"
+
+
+def local_password_verify(stored: str, password: str) -> bool:
+    try:
+        salt_hex, expected = stored.split(":", 1)
+        candidate = local_password_hash(password, bytes.fromhex(salt_hex)).split(":", 1)[1]
+        return hmac.compare_digest(candidate, expected)
+    except (ValueError, TypeError):
+        return False
+
+
 class LocalAuthHandler(SimpleHTTPRequestHandler):
     server_version = "AgentBountiesLocalAuth/1.0"
 
@@ -723,7 +772,13 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
     def current_user(self) -> dict[str, Any] | None:
         cookie = SimpleCookie(self.headers.get("Cookie", ""))
         morsel = cookie.get(SESSION_COOKIE)
-        return verify_session(morsel.value, self.session_secret) if morsel else None
+        user = verify_session(morsel.value, self.session_secret) if morsel else None
+        if user and user.get("provider") == "password":
+            with self.server.password_lock:  # type: ignore[attr-defined]
+                credential = self.server.password_credentials.get(str(user.get("email", "")).lower())  # type: ignore[attr-defined]
+            if not credential or int(user.get("credential_version", 0)) != int(credential["version"]):
+                return None
+        return user
 
     def read_json_body(self, maximum_bytes: int = 8_192) -> dict[str, Any]:
         try:
@@ -755,7 +810,12 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path == "/healthz":
-            self.send_json(HTTPStatus.OK, {"ok": True, "providers": configured_providers(self.auth_env)})
+            self.send_json(HTTPStatus.OK, {"ok": True, "providers": configured_providers(self.auth_env), "password": True, "email_delivery": "capture", "storage": "local-preview"})
+            return
+        if parsed.path == "/auth/dev/captured-mail":
+            with self.server.password_lock:  # type: ignore[attr-defined]
+                messages = list(self.server.captured_mail)  # type: ignore[attr-defined]
+            self.send_json(HTTPStatus.OK, {"messages": messages})
             return
         if parsed.path == "/auth/session":
             user = self.current_user()
@@ -763,8 +823,11 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "authenticated": bool(user),
-                    "user": user if user else None,
+                    "user": ({key: user.get(key, "") for key in ("name", "email", "avatar")} if user else None),
+                    "sign_in_method": user.get("provider") if user else None,
+                    "linked_methods": [user.get("provider")] if user else [],
                     "providers": configured_providers(self.auth_env),
+                    "password": True,
                 },
             )
             return
@@ -813,6 +876,27 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return
+        if parsed.path == "/auth/password/registration":
+            self.begin_password_action("registration")
+            return
+        if parsed.path == "/auth/password/reset":
+            self.begin_password_action("reset")
+            return
+        if parsed.path == "/auth/password/verification":
+            self.verify_password_action("registration")
+            return
+        if parsed.path == "/auth/password/reset-verification":
+            self.verify_password_action("reset")
+            return
+        if parsed.path == "/auth/password/complete":
+            self.complete_password_action("registration")
+            return
+        if parsed.path == "/auth/password/reset-complete":
+            self.complete_password_action("reset")
+            return
+        if parsed.path == "/auth/password/login":
+            self.password_login()
+            return
         if parsed.path == "/auth/wallet/challenge":
             self.begin_wallet_link()
             return
@@ -823,6 +907,146 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
             self.unlink_wallet()
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+    def password_request(self) -> dict[str, Any] | None:
+        if not self.browser_origin():
+            self.send_json(HTTPStatus.FORBIDDEN, {"error": "invalid_origin"})
+            return None
+        try:
+            return self.read_json_body()
+        except ValueError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return None
+
+    def begin_password_action(self, purpose: str) -> None:
+        payload = self.password_request()
+        if payload is None:
+            return
+        try:
+            display_email = unicodedata.normalize("NFC", str(payload.get("email") or "")).strip()
+            email_key = normalize_email(display_email)
+        except ValueError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        with self.server.password_lock:  # type: ignore[attr-defined]
+            credential = self.server.password_credentials.get(email_key)  # type: ignore[attr-defined]
+            should_send = (purpose == "registration" and credential is None) or (purpose == "reset" and credential is not None)
+            if should_send:
+                token = secrets.token_hex(32)
+                token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+                lifetime = SESSION_MAX_AGE if purpose == "registration" else 30 * 60
+                self.server.password_actions[token_hash] = {  # type: ignore[attr-defined]
+                    "purpose": purpose,
+                    "email": display_email,
+                    "email_key": email_key,
+                    "expires_at": time.time() + lifetime,
+                }
+                action = "register" if purpose == "registration" else "reset"
+                origin = self.browser_origin() or f"http://{self.server.server_address[0]}:{self.server.server_address[1]}"  # type: ignore[attr-defined]
+                self.server.captured_mail.append({  # type: ignore[attr-defined]
+                    "to": display_email,
+                    "purpose": purpose,
+                    "action_url": f"{origin}/#auth={action}&token={token}",
+                    "created_at": utc_iso(time.time()),
+                })
+        self.send_json(
+            HTTPStatus.ACCEPTED,
+            {"accepted": True, "message": "If this address can continue, an email with the next step will arrive shortly."},
+        )
+
+    def verify_password_action(self, purpose: str) -> None:
+        payload = self.password_request()
+        if payload is None:
+            return
+        token = str(payload.get("token") or "")
+        token_hash = hashlib.sha256(token.encode("ascii", errors="ignore")).hexdigest()
+        with self.server.password_lock:  # type: ignore[attr-defined]
+            action = self.server.password_actions.pop(token_hash, None)  # type: ignore[attr-defined]
+            if not action or action["purpose"] != purpose or float(action["expires_at"]) <= time.time():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "email_action_invalid"})
+                return
+            setup = secrets.token_hex(32)
+            setup_hash = hashlib.sha256(setup.encode("ascii")).hexdigest()
+            self.server.password_setups[setup_hash] = action  # type: ignore[attr-defined]
+        self.send_response(HTTPStatus.OK)
+        body = json.dumps({"verified": True, "purpose": purpose, "email": action["email"]}, separators=(",", ":")).encode("utf-8")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Set-Cookie", f"{PASSWORD_SETUP_COOKIE}={setup}; Path=/auth/password; HttpOnly; SameSite=Strict; Max-Age=1800")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def complete_password_action(self, purpose: str) -> None:
+        payload = self.password_request()
+        if payload is None:
+            return
+        cookie = SimpleCookie(self.headers.get("Cookie", ""))
+        morsel = cookie.get(PASSWORD_SETUP_COOKIE)
+        setup_hash = hashlib.sha256((morsel.value if morsel else "").encode("ascii")).hexdigest()
+        try:
+            password = normalize_password(payload.get("password"))
+            name = unicodedata.normalize("NFC", str(payload.get("name") or "")).strip()
+            if purpose == "registration" and not 1 <= len(name) <= 160:
+                raise ValueError("name_invalid")
+        except ValueError as error:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+        with self.server.password_lock:  # type: ignore[attr-defined]
+            action = self.server.password_setups.pop(setup_hash, None)  # type: ignore[attr-defined]
+            if not action or action["purpose"] != purpose or float(action["expires_at"]) <= time.time():
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "email_action_invalid"})
+                return
+            prior = self.server.password_credentials.get(action["email_key"])  # type: ignore[attr-defined]
+            version = int(prior.get("version", 0) if prior else 0) + 1
+            if purpose == "reset" and prior:
+                name = str(prior["name"])
+            self.server.password_credentials[action["email_key"]] = {  # type: ignore[attr-defined]
+                "email": action["email"],
+                "name": name,
+                "password_hash": local_password_hash(password),
+                "version": version,
+            }
+        self.password_session(action["email_key"], self.server.password_credentials[action["email_key"]])  # type: ignore[attr-defined]
+
+    def password_login(self) -> None:
+        payload = self.password_request()
+        if payload is None:
+            return
+        try:
+            email_key = normalize_email(payload.get("email"))
+            password = unicodedata.normalize("NFC", str(payload.get("password") or ""))
+        except ValueError:
+            email_key = "invalid"
+            password = str(payload.get("password") or "")
+        with self.server.password_lock:  # type: ignore[attr-defined]
+            credential = self.server.password_credentials.get(email_key)  # type: ignore[attr-defined]
+        dummy = "00" * 16 + ":" + "00" * 32
+        valid = local_password_verify(str(credential["password_hash"]) if credential else dummy, password)
+        if not credential or not valid:
+            self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid_credentials"})
+            return
+        self.password_session(email_key, credential)
+
+    def password_session(self, email_key: str, credential: dict[str, Any]) -> None:
+        user = {
+            "provider": "password",
+            "sub": email_key,
+            "name": credential["name"],
+            "email": credential["email"],
+            "avatar": "",
+            "credential_version": credential["version"],
+        }
+        session = sign_session(user, self.session_secret)
+        body = b'{"authenticated":true}'
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE}={session}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_MAX_AGE}")
+        self.send_header("Set-Cookie", f"{PASSWORD_SETUP_COOKIE}=; Path=/auth/password; HttpOnly; SameSite=Strict; Max-Age=0")
+        self.end_headers()
+        self.wfile.write(body)
 
     def wallet_request_context(self) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
         user = self.current_user()
@@ -986,6 +1210,11 @@ class LocalAuthServer(ThreadingHTTPServer):
         wallet_secret = env.get("AUTH_WALLET_LINK_SECRET") or env["AUTH_SESSION_SECRET"]
         self.wallet_store = WalletLinkStore(wallet_links_path.resolve(), wallet_secret)
         self.api_base_url = env.get("AGENT_BOUNTIES_API_BASE_URL", "https://api.agentbounties.app").rstrip("/")
+        self.password_credentials: dict[str, dict[str, Any]] = {}
+        self.password_actions: dict[str, dict[str, Any]] = {}
+        self.password_setups: dict[str, dict[str, Any]] = {}
+        self.captured_mail: list[dict[str, Any]] = []
+        self.password_lock = threading.Lock()
         super().__init__(address, handler)
 
 

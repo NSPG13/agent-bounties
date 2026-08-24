@@ -22,6 +22,13 @@ test("scene review overrides are localhost-only", () => {
   assert.equal(home.sceneTimeOverride("?sceneTime=25:00", "localhost"), null);
 });
 
+test("daylight uses dragonflies while darker phases keep green fireflies", () => {
+  assert.equal(home.sceneInsectKind(360), "firefly");
+  assert.equal(home.sceneInsectKind(600), "dragonfly");
+  assert.equal(home.sceneInsectKind(1080), "firefly");
+  assert.equal(home.sceneInsectKind(1410), "firefly");
+});
+
 test("OAuth provider routes and callback messages are bounded", () => {
   assert.equal(home.authProviderPath("Google"), "/auth/login/google");
   assert.equal(home.authProviderPath("github"), "/auth/login/github");

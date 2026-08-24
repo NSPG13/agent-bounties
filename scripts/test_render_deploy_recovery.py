@@ -1385,6 +1385,8 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             "GITHUB_OAUTH_CLIENT_SECRET": "github-secret",
             "AMAZON_OAUTH_CLIENT_ID": "amazon-client",
             "AMAZON_OAUTH_CLIENT_SECRET": "amazon-secret",
+            "RESEND_API_KEY": "re_test_secret",
+            "SITE_PASSWORD_AUTH_ENABLED": "false",
         }
         evidence, changed = recovery.reconcile_site_auth_environment(
             client,
@@ -1394,7 +1396,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             website_base_url="https://agentbounties.app",
         )
         self.assertTrue(changed)
-        self.assertEqual(len(evidence), 16)
+        self.assertEqual(len(evidence), 20)
         self.assertIn(
             (
                 "agent-bounties-api",
@@ -1404,7 +1406,7 @@ class RenderDeployRecoveryTests(unittest.TestCase):
             client.calls,
         )
         serialized = recovery.json.dumps(evidence)
-        for secret in ("s" * 40, "w" * 40, "google-secret", "github-secret"):
+        for secret in ("s" * 40, "w" * 40, "google-secret", "github-secret", "re_test_secret"):
             self.assertNotIn(secret, serialized)
 
     def test_site_auth_partial_provider_configuration_fails_closed(self) -> None:
@@ -1429,6 +1431,9 @@ class RenderDeployRecoveryTests(unittest.TestCase):
                 "amazon": True,
                 "enterprise": False,
             },
+            "password": False,
+            "email_delivery": "unavailable",
+            "durable_sessions": True,
         }
         self.assertTrue(recovery.validate_site_auth_readiness(payload)["ok"])
         payload["providers"]["amazon"] = False

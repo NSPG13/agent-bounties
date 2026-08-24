@@ -161,6 +161,8 @@ SITE_AUTH_INPUT_KEYS = (
     "GITHUB_OAUTH_CLIENT_SECRET",
     "AMAZON_OAUTH_CLIENT_ID",
     "AMAZON_OAUTH_CLIENT_SECRET",
+    "RESEND_API_KEY",
+    "SITE_PASSWORD_AUTH_ENABLED",
 )
 
 
@@ -2210,6 +2212,11 @@ def normalize_site_auth_environment(
         values["AUTH_WALLET_LINK_SECRET"] = values["AUTH_SESSION_SECRET"]
     if len(values["AUTH_WALLET_LINK_SECRET"]) < 32:
         raise RecoveryError("site auth requires an AUTH_WALLET_LINK_SECRET of at least 32 characters")
+    password_enabled = values["SITE_PASSWORD_AUTH_ENABLED"] or "false"
+    if password_enabled not in {"true", "false"}:
+        raise RecoveryError("SITE_PASSWORD_AUTH_ENABLED must be true or false")
+    if password_enabled == "true" and not values["RESEND_API_KEY"]:
+        raise RecoveryError("enabled password auth requires RESEND_API_KEY")
     for provider in ("GOOGLE", "MICROSOFT", "GITHUB", "AMAZON"):
         client_id = values[f"{provider}_OAUTH_CLIENT_ID"]
         client_secret = values[f"{provider}_OAUTH_CLIENT_SECRET"]
@@ -2219,6 +2226,9 @@ def normalize_site_auth_environment(
     values.update(
         {
             "SITE_AUTH_ALLOWED_ORIGINS": website_base_url.rstrip("/"),
+            "SITE_PASSWORD_AUTH_ENABLED": password_enabled,
+            "AUTH_EMAIL_MODE": "resend",
+            "AUTH_EMAIL_FROM": "Agent Bounties <no-reply@auth.agentbounties.app>",
             "GOOGLE_OAUTH_REDIRECT_URI": f"{api}/v1/site-auth/callback/google",
             "MICROSOFT_OAUTH_TENANT": "common",
             "MICROSOFT_OAUTH_REDIRECT_URI": f"{api}/v1/site-auth/callback/microsoft",
@@ -2246,6 +2256,9 @@ def reconcile_site_auth_environment(
         return [], False
     public_keys = {
         "SITE_AUTH_ALLOWED_ORIGINS",
+        "SITE_PASSWORD_AUTH_ENABLED",
+        "AUTH_EMAIL_MODE",
+        "AUTH_EMAIL_FROM",
         "GOOGLE_OAUTH_REDIRECT_URI",
         "MICROSOFT_OAUTH_TENANT",
         "MICROSOFT_OAUTH_REDIRECT_URI",
@@ -2280,10 +2293,19 @@ def validate_site_auth_readiness(payload: object) -> dict[str, Any]:
             raise RecoveryError(f"site auth readiness reports {provider}=false")
     if payload.get("storage") != "postgres":
         raise RecoveryError("site auth readiness storage is not postgres")
+    if not isinstance(payload.get("password"), bool):
+        raise RecoveryError("site auth readiness password status is invalid")
+    if payload.get("durable_sessions") is not True:
+        raise RecoveryError("site auth readiness durable sessions are unavailable")
+    if payload.get("email_delivery") not in {"unavailable", "resend"}:
+        raise RecoveryError("site auth readiness email delivery status is invalid")
     return {
         "ok": True,
         "providers": sorted(provider for provider, ready in providers.items() if ready),
         "storage": "postgres",
+        "password": payload["password"],
+        "email_delivery": payload["email_delivery"],
+        "durable_sessions": True,
     }
 
 
