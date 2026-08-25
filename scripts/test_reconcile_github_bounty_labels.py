@@ -669,10 +669,13 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertIn("2026-08-25T00:00:00Z", plan.desired_body)
         self.assertIn("Hosted proof and relay cost:** 0.11 USDC", plan.desired_body)
         self.assertIn("still spent if this competition entry loses", plan.desired_body)
+        self.assertIn("a `/claim` comment, GitHub PR", plan.desired_body)
+        self.assertIn("accepted entries normally remain at zero during scoring", plan.desired_body)
+        self.assertIn("one concrete digital deliverable with binary acceptance tests", plan.desired_body)
         self.assertIn("Prepare scoring work", plan.desired_body)
         self.assertTrue(plan.title.startswith("Generate qualifying GMV"))
 
-    def test_github_claim_command_recovers_to_open_competition(self) -> None:
+    def test_github_claim_command_recovers_to_v1_open_competition(self) -> None:
         contract = "0x" + "3" * 40
         recovery = open_competition_wrong_mode_plan(
             {
@@ -684,6 +687,41 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertEqual(recovery["signal"]["error_code"], "wrong_competition_mode")
         self.assertEqual(recovery["signal"]["correct_action"], "enter_competition")
         self.assertIn("discovery_id=", recovery["signal"]["competition_url"])
+
+    def test_github_claim_command_recovers_to_v2_best_score_phase(self) -> None:
+        contract = "0x" + "4" * 40
+        discovery_id = f"eip155:{CHAIN_ID}:{BETA3_PROTOCOL}:{contract}"
+        recovery = open_competition_wrong_mode_plan(
+            {
+                "url": f"https://github.com/{REPOSITORY}/issues/1214",
+                "issue_body": "\n".join(
+                    [
+                        MANAGED_START,
+                        f'<!-- agent-bounties/github-discovery-v1 {{"discovery_id":"{discovery_id}"}} -->',
+                        "- **Current competition state:** `scoring`",
+                        "- **Verifier:** forward-canonical-gmv-attribution-metric-v2 (`sp1_plonk`; ready: `true`)",
+                        "### Best-score competition rules",
+                        "### Next action",
+                        MANAGED_END,
+                    ]
+                ),
+            }
+        )
+        self.assertFalse(recovery["ready"])
+        self.assertEqual(recovery["signal"]["protocol_version"], BETA3_PROTOCOL)
+        self.assertEqual(recovery["signal"]["competition_mode"], "best_score")
+        self.assertEqual(recovery["signal"]["participation_phase"], "scoring")
+        self.assertEqual(
+            recovery["signal"]["correct_action"],
+            "generate_open_competition_v2_score",
+        )
+        self.assertEqual(recovery["signal"]["bounty_contract"], contract)
+        self.assertEqual(recovery["signal"]["discovery_id"], discovery_id)
+        self.assertIn("CompetitionEntryQualifiedV2", recovery["check"]["text"])
+        self.assertIn("GitHub PR is not a competition entry", recovery["check"]["text"])
+        self.assertNotIn("first_valid_submission", recovery["check"]["text"])
+        self.assertNotIn("open-competition-v1", recovery["check"]["text"])
+        self.assertNotIn("commitment recovery envelope", recovery["check"]["text"])
 
     def test_reuses_same_repository_source_and_preserves_human_content(self) -> None:
         source = issue(42, body="Keep this human section.", labels=["bounty", "help wanted"])

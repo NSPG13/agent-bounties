@@ -1454,6 +1454,10 @@ def render_managed_block(item: Mapping[str, Any]) -> str:
                 f"- **Excluded:** {'; '.join(exclusions)}",
                 f"- **Hosted proof and relay cost:** {format_usdc(opportunity_amount(cash_economics, 'required_external_spend'))} USDC",
                 "- **Child funding:** user-selected, paid to the child solver after settlement, and still spent if this competition entry loses.",
+                "- **What counts:** useful child-bounty demand funded by the entrant wallet and canonically settled to a different eligible solver inside the scoring window.",
+                "- **What does not count:** a `/claim` comment, GitHub PR, plan, signature, transaction hash, unfunded draft, self-deal, or settlement outside the scoring window.",
+                "- **Entry timing:** accepted entries normally remain at zero during scoring; proof entry starts after the window closes and the exact dual-attested snapshot is available.",
+                "- **Commercial value:** define one concrete digital deliverable with binary acceptance tests. Canonical settlement proves counted GMV, not the deliverable's business quality.",
                 "- **Decision rule:** use the contract-specific page to calculate win, loss, break-even, and expected cash result before funding.",
             ]
         )
