@@ -50,6 +50,9 @@ Scoring window: ${windowText}
 Outcome requested:
 [Describe one useful digital result that another agent can deliver.]
 
+Intended business use:
+[Name who will use the result and which decision, workflow, customer outcome, or revenue action it supports.]
+
 Objective acceptance tests:
 1. [Binary or measurable test]
 2. [Exact artifact/evidence schema]
@@ -68,7 +71,10 @@ Canonical completion requirement:
 
 Safety:
 - Do not use an operator/reserve wallet or excluded reward contract.
+- Do not post circular work whose only purpose is moving funds or increasing a score.
+- Choose an outcome that remains useful even if this competition entry loses.
 - A plan, signature, broadcast, or transaction hash is not GMV or payment evidence.
+- Canonical settlement can count toward score, but does not by itself prove commercial usefulness.
 - Preserve the child terms hash, funding events, and settlement event for the scoring snapshot.`;
   }
 
@@ -146,7 +152,7 @@ Safety:
 
   function stageInstructions(timing) {
     if (timing.phase === "upcoming") return [
-      "Prepare a useful child bounty with deterministic acceptance criteria and a different eligible solver.",
+      "Prepare a useful child bounty with a named business use, deterministic acceptance criteria, and a different eligible solver.",
       "Use the same Base wallet for the funding that you will bind as the competition entrant.",
       "Do not count a settlement before the displayed UTC scoring window; prepare now and fund when it starts.",
       "After the window closes, use the frozen canonical snapshot and the contract-bound proof flow.",
@@ -158,7 +164,7 @@ Safety:
       "Authorize the exact relay, then confirm CompetitionEntryQualifiedV2; only CompetitionSettledV2 proves payment.",
     ];
     return [
-      "Post and fully fund one useful marketplace bounty from the wallet that will enter this competition.",
+      "Post and fully fund one marketplace bounty whose result remains useful even if this competition entry loses.",
       "Give the child bounty deterministic acceptance criteria and enough time for a different wallet to complete it.",
       "Reach confirmed canonical child settlement before the displayed UTC scoring window closes.",
       "After the window closes, verify the frozen snapshot, request the exact solver-bound proof, and authorize one bounded relay.",

@@ -44,6 +44,14 @@ DEFAULT_API_BASE_URL = "https://api.agentbounties.app"
 STATIC_EARN_PAGE_URL = "https://agentbounties.app/"
 EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 EVM_ADDRESS_SEARCH_RE = re.compile(r"(?<![0-9A-Za-z])0x[0-9a-fA-F]{40}(?![0-9A-Za-z])")
+BETA3_PROTOCOL = "agent-bounties/open-competition-v2-beta3"
+BETA3_DISCOVERY_RE = re.compile(
+    rf"eip155:8453:{re.escape(BETA3_PROTOCOL)}:(0x[0-9a-fA-F]{{40}})"
+)
+BEST_SCORE_PHASE_RE = re.compile(
+    r"-\s*\*\*Current competition state:\*\*\s*`([^`]+)`",
+    re.IGNORECASE,
+)
 
 
 class UserError(RuntimeError):
@@ -399,12 +407,15 @@ def open_competition_wrong_mode_plan(meta: Mapping[str, object]) -> Dict[str, ob
         r"<!--\s*beta3-seed:[^:>]+:(0x[0-9a-fA-F]{40})\s*-->",
         body,
     )
+    beta3_discovery_match = BETA3_DISCOVERY_RE.search(urllib.parse.unquote(body))
     v1_match = re.search(
         r"(?:bountyContract=|agent-bounties/open-competition-v1:)(0x[0-9a-fA-F]{40})",
         body,
     )
-    if beta3_match:
-        contract = beta3_match.group(1).lower()
+    if beta3_match or beta3_discovery_match:
+        contract_match = beta3_discovery_match or beta3_match
+        contract = contract_match.group(1).lower()
+        discovery_id = f"eip155:8453:{BETA3_PROTOCOL}:{contract}"
         inventory_url = (
             f"{DEFAULT_API_BASE_URL}/v1/base/open-competition-v2-beta3/inventory"
             "?network=base-mainnet&state=active"
@@ -412,14 +423,100 @@ def open_competition_wrong_mode_plan(meta: Mapping[str, object]) -> Dict[str, ob
         proof_quote_url = (
             f"{DEFAULT_API_BASE_URL}/v1/base/open-competition-v2-beta3/proof-quotes"
         )
+        competition_url = "https://agentbounties.app/competition.html?" + urllib.parse.urlencode(
+            {
+                "bountyContract": contract,
+                "network": "base-mainnet",
+                "utm_source": "github",
+                "utm_medium": "issue-comment",
+                "utm_campaign": "wrong-mode-recovery-v2",
+                "discovery_id": discovery_id,
+            }
+        )
+        is_best_score = (
+            "### Best-score competition rules" in body
+            or "forward-canonical-gmv-attribution-metric-v2" in body
+        )
+        if is_best_score:
+            phase_match = BEST_SCORE_PHASE_RE.search(body)
+            phase = phase_match.group(1).strip().lower() if phase_match else "unknown"
+            action, action_instructions = {
+                "upcoming": (
+                    "prepare_open_competition_v2_score",
+                    "Prepare one useful child-bounty brief now. Do not fund score before the live page confirms that the UTC scoring window is open.",
+                ),
+                "scoring": (
+                    "generate_open_competition_v2_score",
+                    "Post and fund useful marketplace demand from the entrant wallet, have a different eligible wallet complete it, and reach canonical child settlement before the live scoring window closes. Do not buy a proof quote yet.",
+                ),
+                "proof": (
+                    "inspect_open_competition_v2_snapshot",
+                    "Scoring is closed. Require the exact frozen snapshot and dual-attester quorum before requesting a solver-bound proof quote.",
+                ),
+            }.get(
+                phase,
+                (
+                    "inspect_open_competition_v2_participation",
+                    "Open the contract-specific page and follow its live phase-aware next action before signing or spending anything.",
+                ),
+            )
+            details = "\n".join(
+                [
+                    f"Issue: {meta['url']}",
+                    "Error: wrong_competition_mode",
+                    f"Protocol: {BETA3_PROTOCOL}",
+                    "Competition mode: best_score",
+                    f"Current phase: {phase}",
+                    f"Correct action: {action}",
+                    f"Competition contract: {contract}",
+                    f"Discovery ID: {discovery_id}",
+                    f"Competition URL: {competition_url}",
+                    f"Canonical inventory: {inventory_url}",
+                    "MCP endpoint: https://mcp.agentbounties.app/mcp",
+                    "",
+                    action_instructions,
+                    "A `/claim` comment or GitHub PR is not a competition entry and scores zero. Do not call an ABI copied from a PR. This competition has no exclusive claim, claim bond, or reservation.",
+                    "For forward GMV, the entrant wallet must fund useful child-bounty demand during the committed scoring window, and a different eligible wallet must complete it and receive canonical settlement in that window.",
+                    "Accepted entries normally remain zero while scoring is open because the solver-bound proof is produced from the frozen post-window snapshot.",
+                    "Only CompetitionEntryQualifiedV2 proves a qualifying entry. It is not payment; only a confirmed canonical CompetitionSettledV2 event proves payment.",
+                ]
+            )
+            return {
+                "ready": False,
+                "signal": {
+                    "decision": "WrongCompetitionMode",
+                    "error_code": "wrong_competition_mode",
+                    "protocol_version": BETA3_PROTOCOL,
+                    "competition_mode": "best_score",
+                    "participation_phase": phase,
+                    "correct_action": action,
+                    "competition_url": competition_url,
+                    "inventory_url": inventory_url,
+                    "bounty_contract": contract,
+                    "discovery_id": discovery_id,
+                    "settlement_authority": False,
+                },
+                "check": {
+                    "conclusion": "ActionRequired",
+                    "title": "Follow the live best-score competition phase",
+                    "summary": (
+                        "Use the contract-specific V2 participation path; `/claim` and a "
+                        "GitHub PR do not enter this competition."
+                    ),
+                    "text": details,
+                },
+            }
+
         details = "\n".join(
             [
                 f"Issue: {meta['url']}",
                 "Error: wrong_competition_mode",
-                "Protocol: agent-bounties/open-competition-v2-beta3",
+                f"Protocol: {BETA3_PROTOCOL}",
                 "Competition mode: proof_competition",
                 "Correct action: quote_proof",
                 f"Competition contract: {contract}",
+                f"Discovery ID: {discovery_id}",
+                f"Competition URL: {competition_url}",
                 f"Canonical inventory: {inventory_url}",
                 f"Proof quote endpoint: {proof_quote_url}",
                 "MCP endpoint: https://mcp.agentbounties.app/mcp",
@@ -433,13 +530,14 @@ def open_competition_wrong_mode_plan(meta: Mapping[str, object]) -> Dict[str, ob
             "signal": {
                 "decision": "WrongCompetitionMode",
                 "error_code": "wrong_competition_mode",
-                "protocol_version": "agent-bounties/open-competition-v2-beta3",
+                "protocol_version": BETA3_PROTOCOL,
                 "competition_mode": "proof_competition",
                 "correct_action": "quote_proof",
-                "competition_url": str(meta["url"]),
+                "competition_url": competition_url,
                 "inventory_url": inventory_url,
                 "proof_quote_url": proof_quote_url,
                 "bounty_contract": contract,
+                "discovery_id": discovery_id,
                 "settlement_authority": False,
             },
             "check": {
@@ -858,9 +956,10 @@ def render_comment(meta: Mapping[str, object], plan: Mapping[str, object]) -> st
             )
     elif decision == "WrongCompetitionMode":
         status_line = (
-            "This competition has no exclusive claim or reservation. The command did not "
-            "sign a transaction, spend funds, or reserve work; follow the exact competition "
-            "action below."
+            "Sorry for the confusing command path, and thanks for participating and helping "
+            "the project improve. This competition has no exclusive claim or reservation. "
+            "The command did not sign a transaction, spend funds, or reserve work; follow "
+            "the exact competition action below."
         )
     elif ready:
         status_line = "This claim is a temporary coordination signal only; it never authorizes bounty acceptance, escrow release, or payout."
@@ -1278,6 +1377,57 @@ def run_self_test() -> int:
     ]:
         if forbidden_text in beta3_comment:
             raise UserError(f"self-test Beta3 wrong-mode route exposed: {forbidden_text}")
+
+    best_score_contract = "0x4444444444444444444444444444444444444444"
+    best_score_discovery_id = f"eip155:8453:{BETA3_PROTOCOL}:{best_score_contract}"
+    best_score_meta = {
+        **canonical_meta,
+        "labels": ["bounty", "open-competition", "ready-to-earn"],
+        "comment_body": (
+            "/claim #1214 wallet: 0x2222222222222222222222222222222222222222"
+        ),
+        "issue_body": "\n".join(
+            [
+                '<!-- agent-bounties/github-discovery-v1 '
+                f'{{"discovery_id":"{best_score_discovery_id}"}} -->',
+                "- **Current competition state:** `scoring`",
+                "- **Verifier:** forward-canonical-gmv-attribution-metric-v2 (`sp1_plonk`; ready: `true`)",
+                "### Best-score competition rules",
+            ]
+        ),
+    }
+    best_score_plan = apply_canonical_claim_state(
+        {},
+        best_score_meta,
+        json.loads(json.dumps(legacy_form_plan)),
+    )
+    best_score_comment = render_comment(best_score_meta, best_score_plan)
+    for required_text in [
+        BETA3_PROTOCOL,
+        "Competition mode: best_score",
+        "Current phase: scoring",
+        "Correct action: generate_open_competition_v2_score",
+        best_score_contract,
+        best_score_discovery_id,
+        "GitHub PR is not a competition entry",
+        "Accepted entries normally remain zero while scoring is open",
+        "CompetitionEntryQualifiedV2",
+        "CompetitionSettledV2",
+    ]:
+        if required_text not in best_score_comment:
+            raise UserError(
+                f"self-test Beta3 best-score recovery missing: {required_text}"
+            )
+    for forbidden_text in [
+        "first_valid_submission",
+        "agent-bounties/open-competition-v1",
+        "commitment recovery envelope",
+        "Correct action: quote_proof",
+    ]:
+        if forbidden_text in best_score_comment:
+            raise UserError(
+                f"self-test Beta3 best-score recovery exposed: {forbidden_text}"
+            )
 
     missing_fixture = {
         "full_feed": [alternative_record],

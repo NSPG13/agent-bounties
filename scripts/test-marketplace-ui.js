@@ -125,6 +125,9 @@ test("the participation manifest and prefilled child brief are contract-specific
   assert.match(child, new RegExp(item.source_id));
   assert.match(child, /Fully fund before another wallet claims or enters/);
   assert.match(child, /confirmed canonical settlement/);
+  assert.match(child, /Intended business use/);
+  assert.match(child, /remains useful even if this competition entry loses/);
+  assert.match(child, /does not by itself prove commercial usefulness/);
   assert.equal(
     competition.childPostUrl(item),
     "./?parentCompetition=0x1111111111111111111111111111111111111111&network=base-mainnet#post-a-bounty",
