@@ -988,7 +988,7 @@ async fn handle_request(
 
     let result = match method {
         "server/discover" if era == McpProtocolEra::Modern => Ok(discover_result()),
-        "initialize" if era == McpProtocolEra::Legacy => Ok(initialize_result(&params)),
+        "initialize" if era == McpProtocolEra::Legacy => initialize_result(&params),
         "ping" if era == McpProtocolEra::Legacy => Ok(json!({})),
         "tools/list" => {
             let mut tools = mcp_tools_for_catalog(catalog_profile).await;
@@ -1041,21 +1041,24 @@ async fn handle_request(
     })
 }
 
-fn initialize_result(params: &Value) -> Value {
+fn initialize_result(params: &Value) -> Result<Value, String> {
     let requested = params
         .get("protocolVersion")
         .and_then(Value::as_str)
         .unwrap_or(MCP_LEGACY_PROTOCOL_VERSION);
-    let protocol_version = match requested {
-        "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
-        _ => MCP_LEGACY_PROTOCOL_VERSION,
-    };
-    json!({
-        "protocolVersion": protocol_version,
+    // Require exact protocol-version membership (no silent fallback, no echo).
+    // An unsupported client version is rejected with a JSON-RPC error instead of
+    // being silently downgraded or echoed back as a falsely negotiated session.
+    const SUPPORTED_MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+    if !SUPPORTED_MCP_VERSIONS.contains(&requested) {
+        return Err(format!("Unsupported MCP protocol version: {requested}"));
+    }
+    Ok(json!({
+        "protocolVersion": requested,
         "capabilities": mcp_server_capabilities(),
         "serverInfo": mcp_server_info(),
         "instructions": mcp_server_instructions()
-    })
+    }))
 }
 
 fn discover_result() -> Value {
@@ -5150,6 +5153,31 @@ mod tests {
             ),
             McpProtocolEra::Modern
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_initialize_rejects_unsupported_version() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "initialize",
+            "params": {"protocolVersion": "2099-99-99"}
+        });
+        assert_eq!(
+            mcp_protocol_era(&HeaderMap::new(), &request),
+            McpProtocolEra::Legacy
+        );
+        let (status, response) = handle_request(
+            public_tool_test_state(),
+            request,
+            McpProtocolEra::Legacy,
+            McpCatalogProfile::Core,
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(response.get("result").is_none());
     }
 
     #[tokio::test]
