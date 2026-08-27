@@ -9,7 +9,7 @@ Create an MCP tool that queries the live bounty feed and returns formatted resul
 
 ## Requirements
 - Add an MCP tool to the `plugins/agent-bounties/` directory
-- Tool name: `get_claimable_bounties`
+- Tool name: `list_claimable_bounties`
 - Queries `https://api.agentbounties.app/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=true`
 - Returns JSON with: issue number, title, labels, reward amounts, claim status
 - Handles API errors gracefully (timeout, invalid response)
