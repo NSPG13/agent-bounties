@@ -1046,6 +1046,11 @@ fn initialize_result(params: &Value) -> Value {
         .get("protocolVersion")
         .and_then(Value::as_str)
         .unwrap_or(MCP_LEGACY_PROTOCOL_VERSION);
+    // Exact whole-token membership: echo a requested version only when it is one
+    // of the supported legacy tokens. Prefix/suffix lookalikes, unknown, missing,
+    // and non-string input all deterministically select the server legacy version
+    // instead of being echoed or rejected. The modern `MCP_PROTOCOL_VERSION` path
+    // is enforced separately in `discover_result` and must not appear here.
     let protocol_version = match requested {
         "2024-11-05" | "2025-03-26" | "2025-06-18" => requested,
         _ => MCP_LEGACY_PROTOCOL_VERSION,
@@ -5150,6 +5155,63 @@ mod tests {
             ),
             McpProtocolEra::Modern
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_initialize_selects_exact_supported_versions_and_falls_back_otherwise() {
+        let supported = ["2024-11-05", "2025-03-26", "2025-06-18"];
+        for version in supported {
+            let request = json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {"protocolVersion": version}
+            });
+            let (status, response) = handle_request(
+                public_tool_test_state(),
+                request,
+                McpProtocolEra::Legacy,
+                McpCatalogProfile::Core,
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(response["result"]["protocolVersion"], version);
+            assert!(response.get("error").is_none());
+        }
+
+        // Prefix/suffix lookalikes, unknown, missing, and non-string input all
+        // deterministically select the server legacy version instead of being
+        // echoed or rejected.
+        let fallback = [
+            json!({"protocolVersion": "2025-06-18-extra"}),
+            json!({"protocolVersion": "x2025-06-18"}),
+            json!({"protocolVersion": "2099-99-99"}),
+            json!({}),
+            json!({"protocolVersion": 42}),
+        ];
+        for params in fallback {
+            let request = json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": params
+            });
+            let (status, response) = handle_request(
+                public_tool_test_state(),
+                request,
+                McpProtocolEra::Legacy,
+                McpCatalogProfile::Core,
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                response["result"]["protocolVersion"],
+                MCP_LEGACY_PROTOCOL_VERSION
+            );
+            assert!(response.get("error").is_none());
+        }
     }
 
     #[tokio::test]
