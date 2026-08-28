@@ -550,9 +550,13 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
                 return HttpResult(
                     200,
                     {
-                        "degraded": False,
+                        "degraded": True,
                         "source_statuses": [
-                            {"source_type": "canonical_base", "available": True}
+                            {
+                                "source_type": "canonical_base",
+                                "available": False,
+                                "error": "canonical_read_model_unavailable",
+                            }
                         ],
                         "items": [opportunity],
                     },

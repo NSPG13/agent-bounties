@@ -865,12 +865,22 @@ def _augment_projection_with_beta3(
         if isinstance(opportunity_sources, list)
         else []
     )
-    if (
-        opportunities.get("degraded") is not False
-        or len(canonical_sources) != 1
-        or canonical_sources[0].get("available") is not True
-    ):
+    if len(canonical_sources) != 1:
+        raise LabelReconciliationError("Beta3 opportunity source status is malformed")
+    canonical_error = str(canonical_sources[0].get("error") or "")
+    canonical_error_codes = set(canonical_error.split("+")) if canonical_error else set()
+    known_canonical_errors = {
+        "canonical_read_model_unavailable",
+        "open_competition_read_model_unavailable",
+        "open_competition_v2_read_model_unavailable",
+    }
+    if not canonical_error_codes.issubset(known_canonical_errors):
+        raise LabelReconciliationError("Beta3 opportunity source status is malformed")
+    if "open_competition_v2_read_model_unavailable" in canonical_error_codes:
         raise LabelReconciliationError("Beta3 opportunity projection is degraded")
+    expected_available = not canonical_error_codes
+    if canonical_sources[0].get("available") is not expected_available:
+        raise LabelReconciliationError("Beta3 opportunity source status is inconsistent")
     inventory_factory = str(inventory.get("factory_contract") or "").lower()
     event_factory = str(event_feed.get("factory_contract") or "").lower()
     if (
