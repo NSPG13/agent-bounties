@@ -27,6 +27,7 @@ from reconcile_github_bounty_labels import (
     main,
     plan_has_write,
     request_with_retry,
+    validate_projection,
 )
 from github_claim_comment import open_competition_wrong_mode_plan
 
@@ -537,24 +538,26 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
             },
         }
 
+        inventory["factory_contract"] = "0x" + "3" * 40
+        events["factory_contract"] = "0x" + "3" * 40
+
         def request(method, url, body, headers):
-            if "/v1/metrics/platform" in url:
-                return HttpResult(
-                    200,
-                    {
-                        "coverage": {
-                            "marketplace_indexers_fresh": True,
-                            "awaiting_block_time_events": 0,
-                        }
-                    },
-                    {},
-                )
             if "/inventory?" in url:
                 return HttpResult(200, inventory, {})
             if "/events?" in url:
                 return HttpResult(200, events, {})
             if "/v1/opportunities?" in url:
-                return HttpResult(200, {"items": [opportunity]}, {})
+                return HttpResult(
+                    200,
+                    {
+                        "degraded": False,
+                        "source_statuses": [
+                            {"source_type": "canonical_base", "available": True}
+                        ],
+                        "items": [opportunity],
+                    },
+                    {},
+                )
             raise AssertionError(url)
 
         augmented = augment_projection_with_beta3(
@@ -573,6 +576,58 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
         self.assertEqual(beta3[0]["competition_mode"], "best_score")
         self.assertEqual(beta3[0]["participation_phase"], "upcoming")
         self.assertEqual(beta3[0]["next_action"]["label"], "Prepare scoring work")
+
+    def test_beta3_outage_preserves_other_protocol_reconciliation(self) -> None:
+        core = item(42)
+        base = projection(core)
+        base["source_statuses"] = [
+            source
+            for source in base["source_statuses"]
+            if source["protocol_version"] != BETA3_PROTOCOL
+        ]
+
+        def request(method, url, body, headers):
+            if "/inventory?" in url:
+                return HttpResult(503, {"error": "read model unavailable"}, {})
+            raise AssertionError(url)
+
+        augmented = augment_projection_with_beta3(
+            request,
+            "https://api.agentbounties.app",
+            NETWORK,
+            REPOSITORY,
+            base,
+        )
+        validated = validate_projection(augmented, NETWORK, policy())
+
+        self.assertEqual(validated, [core])
+        self.assertEqual(augmented["partial_protocols"], [BETA3_PROTOCOL])
+        beta3_source = next(
+            source
+            for source in augmented["source_statuses"]
+            if source["protocol_version"] == BETA3_PROTOCOL
+        )
+        self.assertFalse(beta3_source["available"])
+        self.assertFalse(beta3_source["fresh"])
+        self.assertIn("returned HTTP 503", beta3_source["error"])
+
+    def test_partial_protocol_cannot_publish_items(self) -> None:
+        beta3 = item(43)
+        beta3["protocol_version"] = BETA3_PROTOCOL
+        beta3["competition_mode"] = "best_score"
+        partial = projection(beta3)
+        partial["partial_protocols"] = [BETA3_PROTOCOL]
+        beta3_source = next(
+            source
+            for source in partial["source_statuses"]
+            if source["protocol_version"] == BETA3_PROTOCOL
+        )
+        beta3_source.update(
+            {"available": False, "fresh": False, "item_count": 0, "error": "unavailable"}
+        )
+
+        with self.assertRaisesRegex(LabelReconciliationError, "malformed discovery record"):
+            validate_projection(partial, NETWORK, policy())
 
     def test_workflow_is_least_privilege_concurrent_dry_run_by_default(self) -> None:
         workflow = Path(".github/workflows/bounty-inventory-guard.yml").read_text(encoding="utf-8")
@@ -1017,6 +1072,8 @@ class GitHubDiscoveryReconciliationTests(unittest.TestCase):
             self.assertEqual(payload["mode"], "dry-run")
             self.assertEqual(payload["coverage_percent"], 100.0)
             self.assertEqual(payload["covered_record_count"], 1)
+            self.assertEqual(payload["partial_protocols"], [])
+            self.assertEqual(len(payload["source_statuses"]), 3)
             self.assertIn("Covered records: `1`", markdown.read_text(encoding="utf-8"))
             with self.assertRaisesRegex(LabelReconciliationError, "fixture mode"):
                 with patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):

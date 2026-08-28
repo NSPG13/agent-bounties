@@ -524,18 +524,34 @@ def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -
         or not TX_HASH.fullmatch(str(safe.get("hash") or "").lower())
     ):
         raise LabelReconciliationError("discovery projection is degraded or stale")
+    partial_protocols_raw = payload.get("partial_protocols", [])
+    if (
+        not isinstance(partial_protocols_raw, list)
+        or not all(isinstance(protocol, str) for protocol in partial_protocols_raw)
+        or len(set(partial_protocols_raw)) != len(partial_protocols_raw)
+        or not set(partial_protocols_raw).issubset({BETA3_PROTOCOL})
+    ):
+        raise LabelReconciliationError("partial projection protocols are malformed")
+    partial_protocols = set(partial_protocols_raw)
     sources = payload.get("source_statuses")
     if not isinstance(sources, list) or {
         source.get("protocol_version") for source in sources if isinstance(source, dict)
     } != SUPPORTED_PROTOCOLS:
         raise LabelReconciliationError("discovery projection protocol adapters are incomplete")
-    if any(
-        not isinstance(source, dict)
-        or source.get("available") is not True
-        or source.get("fresh") is not True
-        for source in sources
-    ):
-        raise LabelReconciliationError("a canonical projection source is degraded")
+    for source in sources:
+        if not isinstance(source, dict):
+            raise LabelReconciliationError("a canonical projection source is malformed")
+        protocol = str(source.get("protocol_version") or "")
+        if protocol in partial_protocols:
+            if (
+                source.get("available") is not False
+                or source.get("fresh") is not False
+                or require_unsigned(source.get("item_count"), f"{protocol}.item_count") != 0
+                or not str(source.get("error") or "").strip()
+            ):
+                raise LabelReconciliationError("a partial projection source is malformed")
+        elif source.get("available") is not True or source.get("fresh") is not True:
+            raise LabelReconciliationError("a canonical projection source is degraded")
     items = payload.get("items")
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise LabelReconciliationError("discovery projection items are malformed")
@@ -550,6 +566,7 @@ def validate_projection(payload: Any, network: str, policy: Mapping[str, Any]) -
             not DISCOVERY_ID.fullmatch(identity)
             or identity in seen
             or protocol not in SUPPORTED_PROTOCOLS
+            or protocol in partial_protocols
             or lifecycle not in LIFECYCLE_STATES
             or mode not in {"exclusive_claim", "first_valid_submission", "best_score"}
             or not ADDRESS.fullmatch(contract)
@@ -773,25 +790,56 @@ def augment_projection_with_beta3(
     repository: str,
     projection: Mapping[str, Any],
 ) -> dict[str, Any]:
+    try:
+        return _augment_projection_with_beta3(
+            request, api_base_url, network, repository, projection
+        )
+    except LabelReconciliationError as error:
+        return beta3_unavailable_projection(projection, str(error))
+
+
+def beta3_unavailable_projection(
+    projection: Mapping[str, Any], error: str
+) -> dict[str, Any]:
+    result = dict(projection)
+    existing_items = result.get("items")
+    existing_sources = result.get("source_statuses")
+    if not isinstance(existing_items, list) or not isinstance(existing_sources, list):
+        raise LabelReconciliationError("core discovery projection is malformed")
+    result["items"] = [
+        item
+        for item in existing_items
+        if isinstance(item, dict) and item.get("protocol_version") != BETA3_PROTOCOL
+    ]
+    result["source_statuses"] = [
+        source
+        for source in existing_sources
+        if isinstance(source, dict) and source.get("protocol_version") != BETA3_PROTOCOL
+    ]
+    result["source_statuses"].append(
+        {
+            "source_type": "open_competition_v2",
+            "protocol_version": BETA3_PROTOCOL,
+            "factory_contract": None,
+            "available": False,
+            "fresh": False,
+            "item_count": 0,
+            "persisted_cursor_block": 0,
+            "error": f"beta3_projection_unavailable: {error}",
+        }
+    )
+    result["partial_protocols"] = [BETA3_PROTOCOL]
+    return result
+
+
+def _augment_projection_with_beta3(
+    request: HttpRequest,
+    api_base_url: str,
+    network: str,
+    repository: str,
+    projection: Mapping[str, Any],
+) -> dict[str, Any]:
     query = urllib.parse.urlencode({"network": network})
-    metrics = fetch_json_object(
-        request,
-        f"{api_base_url}/v1/metrics/platform?period=7d",
-        "platform metrics",
-    )
-    coverage = metrics.get("coverage")
-    beta3_fresh = (
-        coverage.get("marketplace_indexers_fresh")
-        if isinstance(coverage, dict)
-        else False
-    )
-    if (
-        not isinstance(coverage, dict)
-        or beta3_fresh is not True
-        or require_unsigned(coverage.get("awaiting_block_time_events"), "awaiting_block_time_events")
-        != 0
-    ):
-        raise LabelReconciliationError("Beta3 canonical indexer is degraded")
     inventory = fetch_json_object(
         request,
         f"{api_base_url}/v1/base/open-competition-v2-beta3/inventory?{query}",
@@ -807,11 +855,31 @@ def augment_projection_with_beta3(
         f"{api_base_url}/v1/opportunities?{urllib.parse.urlencode({'network': network, 'source_type': 'canonical_base', 'limit': 300})}",
         "opportunity inventory",
     )
+    opportunity_sources = opportunities.get("source_statuses")
+    canonical_sources = (
+        [
+            source
+            for source in opportunity_sources
+            if isinstance(source, dict) and source.get("source_type") == "canonical_base"
+        ]
+        if isinstance(opportunity_sources, list)
+        else []
+    )
+    if (
+        opportunities.get("degraded") is not False
+        or len(canonical_sources) != 1
+        or canonical_sources[0].get("available") is not True
+    ):
+        raise LabelReconciliationError("Beta3 opportunity projection is degraded")
+    inventory_factory = str(inventory.get("factory_contract") or "").lower()
+    event_factory = str(event_feed.get("factory_contract") or "").lower()
     if (
         inventory.get("network") != network
         or inventory.get("protocol_version") != BETA3_PROTOCOL
         or event_feed.get("network") != network
         or event_feed.get("protocol_version") != BETA3_PROTOCOL
+        or not ADDRESS.fullmatch(inventory_factory)
+        or inventory_factory != event_factory
     ):
         raise LabelReconciliationError("Beta3 canonical views disagree on protocol or network")
     competitions = inventory.get("competitions")
@@ -845,7 +913,7 @@ def augment_projection_with_beta3(
             raise LabelReconciliationError("Beta3 inventory identity is malformed or duplicated")
         records[contract] = (canonical, safe_number, safe_hash)
         factories.add(factory)
-    if len(factories) != 1:
+    if factories != {inventory_factory}:
         raise LabelReconciliationError("Beta3 inventory does not have one factory")
     selected = []
     chain_id = require_unsigned(projection.get("chain_id"), "projection.chain_id")
@@ -1003,6 +1071,7 @@ def augment_projection_with_beta3(
             "error": None,
         },
     ]
+    result.pop("partial_protocols", None)
     return result
 
 
@@ -2177,6 +2246,8 @@ def main(argv: list[str] | None = None, request: HttpRequest = default_http_requ
         "projection_schema_version": projection.get("schema_version"),
         "projection_generated_at": projection.get("generated_at"),
         "projection_safe_block": projection.get("safe_block"),
+        "partial_protocols": projection.get("partial_protocols", []),
+        "source_statuses": projection.get("source_statuses", []),
         "projection_record_count": len(plans),
         "mapped_issue_count_before_reconciliation": sum(
             plan.issue_number is not None for plan in eligible
