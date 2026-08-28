@@ -1,0 +1,13 @@
+{
+  "schema_version": "inventory-state-breakdown-v1",
+  "generated_at": "2026-08-27T11:59:00Z",
+  "max_age_seconds": 900,
+  "source": {"name": "canonical-marketplace-projection", "status": "ready"},
+  "degraded": false,
+  "items": [
+    {"id": "ready-1", "state": "ready_to_earn"},
+    {"id": "progress-1", "state": "in_progress"},
+    {"id": "submitted-1", "state": "submitted"},
+    {"id": "paid-1", "state": "paid"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "inventory-state-breakdown-v1",
+  "generated_at": "2026-08-27T11:59:00Z",
+  "max_age_seconds": 900,
+  "source": {"name": "canonical-marketplace-projection", "status": "partial"},
+  "degraded": true,
+  "items": [
+    {"id": "unknown-1", "state": "ready_to_earn"},
+    {"id": "unknown-2", "state": "paid"}
+  ]
+}
