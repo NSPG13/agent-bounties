@@ -155,6 +155,33 @@ provider. The owner can:
    unavailable, pull the creator refund into the reserve and recover it; and
 4. transfer recovery authority only through two-step ownership acceptance.
 
+For a production reserve, use the localhost confirmation server instead of
+copying calldata by hand. It binds both transactions to Base, the reviewed
+deployment, the exact owner and reserve, simulates each call, persists submitted
+hashes before reconciliation, and verifies the USDC transfer at a safe block:
+
+Download the exact reviewed production artifacts first. Do not substitute the
+older checked-in deployment manifest, which describes an earlier deployment:
+
+```powershell
+gh run download 32606926043 --repo NSPG13/agent-bounties `
+  --name open-competition-v2-beta3-mainnet-deployment-5a351f3e373691be58a9575b4374812b494b6086 `
+  --dir <reviewed-artifact-directory>
+
+python scripts/serve_open_competition_v2_reserve_recovery.py `
+  --deployment <reviewed-artifact-directory>/bounded-open-competition-v2-wallet-base-mainnet.json `
+  --deployment-evidence <reviewed-artifact-directory>/bounded-open-competition-v2-wallet-deployment-evidence.json `
+  --expected-balance <safe-block-USDC-base-units> `
+  --expected-lifetime-spent <safe-block-USDC-base-units> `
+  --result-output output/open-competition-v2-reserve-recovery.json
+```
+
+The two owner confirmations have zero ETH value. The first moves no USDC. The
+second asks the reserve to return its full current, uncommitted USDC balance to
+the owner. Neither transaction can cancel, settle, enter, or withdraw from an
+active competition; healthy active escrow remains governed by its immutable
+terms and deadlines.
+
 Funds already escrowed in a healthy active competition are deliberately not
 clawbackable before its committed proof window ends. This preserves participant
 trust. They become recoverable only through the competition's canonical refund

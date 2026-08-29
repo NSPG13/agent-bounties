@@ -96,6 +96,8 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
         "scripts/check-site.py", "scripts/configure-wallet-providers.py",
+        "scripts/serve_open_competition_v2_reserve_recovery.py",
+        "scripts/test_serve_open_competition_v2_reserve_recovery.py",
         "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/check-agent-discovery-contract.py", "scripts/test_check_agent_discovery_contract.py",
         "scripts/test_check_render_blueprint.py",
@@ -318,6 +320,7 @@ def main() -> int:
         "scripts.test_verify_sp1_patched_graph",
         "scripts.test_verify_open_competition_v2_metric_release",
         "scripts.test_open_competition_v2_frontier_gmv_30usdc",
+        "scripts.test_serve_open_competition_v2_reserve_recovery",
         "-v",
     )
     check_deployment_bundles(cargo, platform)
