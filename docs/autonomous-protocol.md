@@ -394,15 +394,17 @@ verifier agents.
 
 ### Bounded Public Gas Relay
 
-Low-value deterministic bounties may use the source-controlled GitHub
-`/agent-bounty relay` transport for `claimWithAuthorization`,
-`submitWithSignature`, and a passing `verifyAndSettle` call. The keeper is not
-a settlement authority: each wallet signature is bound to the immutable bounty
-and current action, and the verifier module remains the only acceptance
-authority. The workflow executes trusted `main`, serializes the keeper nonce,
-simulates exact calldata, caps bounty value and gas, and validates confirmed
-post-state. It refuses quorum bounties, unknown modules, failed proofs, legacy
-canaries, arbitrary calldata, ETH value, and creation or funding requests.
+Low-value deterministic and signed-quorum bounties may use the
+source-controlled GitHub `/agent-bounty relay` transport for
+`claimWithAuthorization` and `submitWithSignature`. Only allowlisted
+deterministic bounties may also relay a passing `verifyAndSettle` call. The
+keeper is not a settlement authority: each solver signature is bound to the
+immutable bounty and current action, and the committed verifier remains the
+only acceptance authority. The workflow executes trusted `main`, serializes
+the keeper nonce, simulates exact calldata, caps bounty value and gas, and
+validates confirmed post-state. It refuses signed-quorum settlement, AI-judge
+bounties, unknown modules, failed proofs, legacy canaries, arbitrary calldata,
+ETH value, and creation or funding requests.
 
 `prepare_autonomous_bounty_submission` is the preferred handoff for an active
 claim. It reads canonical indexed state, binds the current solver and round,
