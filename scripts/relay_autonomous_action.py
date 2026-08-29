@@ -2,8 +2,9 @@
 """Relay one bounded autonomous-v1 solver action from a GitHub issue comment.
 
 The keeper is intentionally not a general transaction signer. It accepts only
-three exact calls against low-value canonical Base-mainnet bounties using the
-deployed deterministic verifier module.
+three exact calls against low-value canonical Base-mainnet bounties. Claim and
+submission relays support deterministic and signed-quorum verification;
+settlement remains limited to allowlisted deterministic verifier modules.
 """
 
 from __future__ import annotations
@@ -55,6 +56,9 @@ STATUS_CLAIMABLE = 1
 STATUS_CLAIMED = 2
 STATUS_SUBMITTED = 3
 STATUS_SETTLED = 4
+VERIFICATION_MODE_DETERMINISTIC = 0
+VERIFICATION_MODE_SIGNED_QUORUM = 1
+MAX_SIGNED_QUORUM_THRESHOLD = 8
 HEX_32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 HEX_SIGNATURE_RE = re.compile(r"^0x[0-9a-fA-F]{130}$")
 PRIVATE_KEY_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]{64}$")
@@ -554,9 +558,10 @@ def read_state(client: CastClient, contract: str, block: str | None = None) -> B
 def validate_common(
     state: BountyState,
     *,
+    action: str = "claim",
     require_funded: bool = True,
-    verification_mode: int = 0,
-    threshold: int = 1,
+    verification_mode: int | None = None,
+    threshold: int | None = None,
     expected_verifier_module: str | None = None,
 ) -> None:
     expected = {
@@ -566,23 +571,54 @@ def validate_common(
         "factory_implementation": IMPLEMENTATION,
         "factory": FACTORY,
         "settlement_token": USDC,
-        "verification_mode": verification_mode,
-        "threshold": threshold,
     }
+    if verification_mode is not None:
+        expected["verification_mode"] = verification_mode
+    if threshold is not None:
+        expected["threshold"] = threshold
     for field, wanted in expected.items():
         observed = getattr(state, field)
         if observed != wanted:
             raise RelayError(
                 f"fail-closed canonical-state mismatch for {field}: expected {wanted}, got {observed}"
             )
-    allowed_verifier_modules = (
-        ALLOWED_VERIFIER_MODULES
-        if expected_verifier_module is None
-        else (expected_verifier_module,)
-    )
-    if state.verifier_module not in allowed_verifier_modules:
+    if verification_mode is not None:
+        allowed_verifier_modules = (
+            ALLOWED_VERIFIER_MODULES
+            if expected_verifier_module is None
+            else (expected_verifier_module,)
+        )
+        if state.verifier_module not in allowed_verifier_modules:
+            raise RelayError(
+                "verifier module is not allowlisted for the bounded relay: "
+                f"{state.verifier_module}"
+            )
+    elif state.verification_mode == VERIFICATION_MODE_DETERMINISTIC:
+        if state.threshold != 1:
+            raise RelayError("deterministic verification requires threshold 1")
+        allowed_verifier_modules = (
+            ALLOWED_VERIFIER_MODULES
+            if expected_verifier_module is None
+            else (expected_verifier_module,)
+        )
+        if state.verifier_module not in allowed_verifier_modules:
+            raise RelayError(
+                "verifier module is not allowlisted for the bounded relay: "
+                f"{state.verifier_module}"
+            )
+    elif state.verification_mode == VERIFICATION_MODE_SIGNED_QUORUM:
+        if action == "settle":
+            raise RelayError(
+                "signed-quorum settlement is not supported by the deterministic relay"
+            )
+        if state.verifier_module != ZERO_ADDRESS:
+            raise RelayError("signed-quorum verification must not configure a verifier module")
+        if not 1 <= state.threshold <= MAX_SIGNED_QUORUM_THRESHOLD:
+            raise RelayError("signed-quorum threshold must be between 1 and 8")
+    else:
         raise RelayError(
-            f"verifier module is not allowlisted for the bounded relay: {state.verifier_module}"
+            "verification mode is not supported by the bounded relay: "
+            f"{state.verification_mode}"
         )
     if state.target_amount <= 0 or state.target_amount > MAX_TARGET_MINOR:
         raise RelayError("bounty exceeds the public relay 5 USDC target cap")
@@ -693,7 +729,13 @@ def validate_receipt(receipt: Mapping[str, object], contract: str) -> tuple[str,
 
 
 def validate_after(action: str, envelope: Mapping[str, object], before: BountyState, after: BountyState) -> None:
-    validate_common(after, require_funded=action != "settle")
+    validate_common(after, action=action, require_funded=action != "settle")
+    if (
+        after.verification_mode != before.verification_mode
+        or after.verifier_module != before.verifier_module
+        or after.threshold != before.threshold
+    ):
+        raise RelayError("post-transaction verification policy mismatch")
     if after.round != before.round + (1 if action == "claim" else 0):
         raise RelayError("post-transaction round mismatch")
     if action == "claim":
@@ -762,7 +804,11 @@ def read_actionable_state(
     while True:
         attempts += 1
         state = read_state(client, contract, block="latest")
-        validate_common(state, require_funded=state.status != STATUS_SETTLED)
+        validate_common(
+            state,
+            action=action,
+            require_funded=state.status != STATUS_SETTLED,
+        )
         if already_applied(action, event.envelope, state):
             return state, None, attempts
         try:
