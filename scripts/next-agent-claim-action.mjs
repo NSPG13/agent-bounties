@@ -7,6 +7,18 @@ const emit = (value, status = 0) => {
   process.exit(status);
 };
 
+// Production only permits replaying the signed claim to this exact HTTPS host.
+const ALLOWED_REPLAY_HOST = "api.agentbounties.app";
+
+function isAllowedReplayUrl(u) {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === "https:" && parsed.hostname === ALLOWED_REPLAY_HOST;
+  } catch {
+    return false;
+  }
+}
+
 if (process.argv.length !== 3) emit({ ok: false, errors: ["claim_response_path_required"] }, 2);
 
 let text;
@@ -86,6 +98,7 @@ if (state === "authorization_ready") {
     !Array.isArray(next) &&
     typeof next === "object" &&
     typeof next.url === "string" &&
+    isAllowedReplayUrl(next.url) &&
     next.method === "POST" &&
     next.body &&
     typeof next.body.idempotency_key === "string";

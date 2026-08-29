@@ -14,6 +14,7 @@ mkdirSync(scriptsRoot, { recursive: true });
 const claimImplementation = `
 import { readFileSync } from "node:fs";
 const emit = (value, status = 0) => { console.log(JSON.stringify(value)); process.exit(status); };
+const allowedReplay = (u) => { try { const p = new URL(u); return p.protocol === "https:" && p.hostname === "api.agentbounties.app"; } catch { return false; } };
 if (process.argv.length !== 3) emit({ok:false,errors:["claim_response_path_required"]}, 2);
 let text;
 try { text = readFileSync(process.argv[2], "utf8"); } catch { emit({ok:false,errors:["claim_response_unreadable"]}, 2); }
@@ -34,7 +35,7 @@ if (state === "authorization_ready") {
   const next = value.next_request;
   const params = request?.params;
   const solver = String(candidate.solver_wallet ?? "").toLowerCase();
-  const valid = request?.method === "eth_signTypedData_v4" && Array.isArray(params) && params.length === 2 && String(params[0]).toLowerCase() === solver && /^0x[0-9a-f]{40}$/.test(solver) && typeof params[1] === "string" && params[1].length > 0 && next && !Array.isArray(next) && typeof next === "object" && typeof next.url === "string" && next.method === "POST" && next.body && typeof next.body.idempotency_key === "string";
+  const valid = request?.method === "eth_signTypedData_v4" && Array.isArray(params) && params.length === 2 && String(params[0]).toLowerCase() === solver && /^0x[0-9a-f]{40}$/.test(solver) && typeof params[1] === "string" && params[1].length > 0 && next && !Array.isArray(next) && typeof next === "object" && typeof next.url === "string" && allowedReplay(next.url) && next.method === "POST" && next.body && typeof next.body.idempotency_key === "string";
   if (!valid) emit({ok:false,errors:["authorization_request_invalid"]}, 1);
   emit({ok:true,state,action:"sign_wallet_request_and_replay",may_sign:true,may_start_work:false});
 }
