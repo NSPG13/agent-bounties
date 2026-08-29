@@ -302,6 +302,34 @@ class RelayTests(unittest.TestCase):
                 bounty_state(verifier_module="0x9999999999999999999999999999999999999999")
             )
 
+    def test_signed_quorum_allows_solver_actions_but_not_settlement(self) -> None:
+        state = bounty_state(
+            verification_mode=relay.VERIFICATION_MODE_SIGNED_QUORUM,
+            verifier_module=relay.ZERO_ADDRESS,
+            threshold=2,
+        )
+        relay.validate_common(state, action="claim")
+        relay.validate_common(state, action="submit")
+        with self.assertRaisesRegex(relay.RelayError, "settlement is not supported"):
+            relay.validate_common(state, action="settle")
+        with self.assertRaisesRegex(relay.RelayError, "must not configure"):
+            relay.validate_common(
+                bounty_state(
+                    verification_mode=relay.VERIFICATION_MODE_SIGNED_QUORUM,
+                    verifier_module=relay.VERIFIER_MODULE,
+                ),
+                action="submit",
+            )
+        with self.assertRaisesRegex(relay.RelayError, "between 1 and 8"):
+            relay.validate_common(
+                bounty_state(
+                    verification_mode=relay.VERIFICATION_MODE_SIGNED_QUORUM,
+                    verifier_module=relay.ZERO_ADDRESS,
+                    threshold=0,
+                ),
+                action="submit",
+            )
+
     def test_claim_builds_only_bounded_authorization_call(self) -> None:
         client = FakeClient()
         signature, args = relay.action_call(client, event(claim_envelope()), bounty_state())
@@ -516,6 +544,35 @@ class RelayTests(unittest.TestCase):
         )
         report, _ = self.run_relay(before, after, submit_envelope())
         self.assertEqual(report["outcome"], "relayed")
+
+    def test_executes_signed_quorum_submission_without_settlement_authority(self) -> None:
+        policy = {
+            "verification_mode": relay.VERIFICATION_MODE_SIGNED_QUORUM,
+            "verifier_module": relay.ZERO_ADDRESS,
+            "threshold": 1,
+        }
+        before = bounty_state(
+            status=relay.STATUS_CLAIMED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            active_claim_bond=100_000,
+            **policy,
+        )
+        after = bounty_state(
+            status=relay.STATUS_SUBMITTED,
+            round=1,
+            solver=SOLVER,
+            claim_expires_at=NOW + 1_000,
+            verification_expires_at=NOW + 2_000,
+            active_claim_bond=100_000,
+            submission_hash=HASH_A,
+            evidence_hash=HASH_B,
+            **policy,
+        )
+        report, client = self.run_relay(before, after, submit_envelope())
+        self.assertEqual(report["outcome"], "relayed")
+        self.assertTrue(client.send_args[3].startswith("submitWithSignature"))
 
     def test_executes_passing_settlement_and_accepts_zero_funded_post_state(self) -> None:
         before = bounty_state(
