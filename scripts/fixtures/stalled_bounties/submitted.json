@@ -1,0 +1,45 @@
+{
+  "bounty_id": "0x3333333333333333333333333333333333333333333333333333333333333333",
+  "bounty_contract": "0x3333333333333333333333333333333333333333",
+  "status": "submitted",
+  "round": 1,
+  "solver": "0x4444444444444444444444444444444444444444",
+  "active_claim_bond": 100000,
+  "funded_amount": 1100000,
+  "target_amount": 1100000,
+  "solver_reward": 1000000,
+  "verifier_reward": 100000,
+  "claim_expires_at": 1780000000,
+  "verification_expires_at": 1780007200,
+  "submission_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+  "evidence_hash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+  "terms_valid": true,
+  "verification_ready": true,
+  "terms": {
+    "document": {
+      "title": "Submitted Work Pending Verification",
+      "claim_window_seconds": 604800,
+      "verification_window_seconds": 7200,
+      "contract_terms": {
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200
+      }
+    }
+  },
+  "events": [
+    {
+      "kind": "BountyClaimed",
+      "round": 1,
+      "solver": "0x4444444444444444444444444444444444444444",
+      "claim_expires_at": 1780000000
+    },
+    {
+      "kind": "SubmissionAdded",
+      "round": 1,
+      "solver": "0x4444444444444444444444444444444444444444",
+      "submission_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+      "evidence_hash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+      "verification_expires_at": 1780007200
+    }
+  ]
+}

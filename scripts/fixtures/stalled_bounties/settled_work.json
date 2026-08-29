@@ -1,0 +1,59 @@
+{
+  "bounty_id": "0x6666666666666666666666666666666666666666666666666666666666666666",
+  "bounty_contract": "0x6666666666666666666666666666666666666666",
+  "status": "settled",
+  "round": 1,
+  "solver": "0x7777777777777777777777777777777777777777",
+  "active_claim_bond": 0,
+  "funded_amount": 0,
+  "target_amount": 1100000,
+  "solver_reward": 1000000,
+  "verifier_reward": 100000,
+  "claim_expires_at": 1780000000,
+  "verification_expires_at": 1780007200,
+  "submission_hash": "0x9999999999999999999999999999999999999999999999999999999999999999",
+  "evidence_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "terms_valid": true,
+  "verification_ready": true,
+  "settlement_evidence": {
+    "event_name": "BountySettled",
+    "bounty_id": "0x6666666666666666666666666666666666666666666666666666666666666666",
+    "bounty_contract": "0x6666666666666666666666666666666666666666",
+    "round": 1,
+    "solver": "0x7777777777777777777777777777777777777777",
+    "solver_reward": "1000000",
+    "claim_bond_returned": "100000",
+    "timeout_bond_bonus": "0",
+    "verifier_reward": "100000",
+    "submission_hash": "0x9999999999999999999999999999999999999999999999999999999999999999",
+    "evidence_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "transaction_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "confirmed_canonical": true
+  },
+  "events": [
+    {
+      "kind": "BountyClaimed",
+      "round": 1,
+      "solver": "0x7777777777777777777777777777777777777777",
+      "claim_expires_at": 1780000000
+    },
+    {
+      "kind": "SubmissionAdded",
+      "round": 1,
+      "solver": "0x7777777777777777777777777777777777777777",
+      "submission_hash": "0x9999999999999999999999999999999999999999999999999999999999999999",
+      "evidence_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "verification_expires_at": 1780007200
+    },
+    {
+      "kind": "BountySettled",
+      "round": 1,
+      "solver": "0x7777777777777777777777777777777777777777",
+      "solver_reward": 1000000,
+      "claim_bond_returned": 100000,
+      "timeout_bond_bonus": 0,
+      "verifier_reward": 100000,
+      "confirmed_canonical": true
+    }
+  ]
+}

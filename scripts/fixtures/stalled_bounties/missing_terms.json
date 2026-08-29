@@ -1,0 +1,25 @@
+{
+  "bounty_id": "0x7777777777777777777777777777777777777777777777777777777777777777",
+  "bounty_contract": "0x7777777777777777777777777777777777777777",
+  "status": "claimed",
+  "round": 1,
+  "solver": "0x8888888888888888888888888888888888888888",
+  "active_claim_bond": 100000,
+  "funded_amount": 1100000,
+  "target_amount": 1100000,
+  "solver_reward": 1000000,
+  "verifier_reward": 100000,
+  "claim_expires_at": 1780000000,
+  "verification_expires_at": 0,
+  "terms_valid": false,
+  "verification_ready": false,
+  "terms": null,
+  "events": [
+    {
+      "kind": "BountyClaimed",
+      "round": 1,
+      "solver": "0x8888888888888888888888888888888888888888",
+      "claim_expires_at": 1780000000
+    }
+  ]
+}
