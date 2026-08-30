@@ -103,6 +103,10 @@ may have only `contents: read` and `actions: write`, must run from exact current
 `main`, must use the repository token without other secrets, and must allowlist
 only the existing regression runner/signer workflows.
 
+The scheduled workflow must use one repository-wide concurrency group with
+`cancel-in-progress: false`, preventing overlapping schedules from issuing the
+same idempotent action before GitHub run state catches up.
+
 The signer and relay paths must accept distinct provider variables for signer
 one, signer two, and relay, each with a safe public fallback. Provider URLs must
 not appear in watchdog artifacts.

@@ -735,7 +735,7 @@ command_matches = re.findall(r"(?m)^\s{6,}-\s+run:\s*(\S.*)$", jobs_block)
 execute_commands = [
     command
     for command in command_matches
-    if re.search(r"(?:^|\s)python\s+scripts/regression_verifier_watchdog\.py\s+execute(?:\s|$)", command)
+    if re.match(r"^python\s+scripts/regression_verifier_watchdog\.py\s+execute(?:\s|$)", command)
 ]
 if len(execute_commands) != 1:
     raise SystemExit("scheduled watchdog job must invoke exactly one effective execute command")
@@ -743,6 +743,14 @@ execute_command = execute_commands[0]
 for flag in ("--plan", "--repository", "--github-api-base", "--token-env", "--execute"):
     if not re.search(rf"(?:^|\s){re.escape(flag)}(?:\s|$)", execute_command):
         raise SystemExit(f"effective watchdog execute command is missing {flag}")
+for pattern, label in (
+    (r'(?:^|\s)--repository\s+"?\$GITHUB_REPOSITORY"?(?:\s|$)', "repository binding"),
+    (r"(?:^|\s)--github-api-base\s+https://api\.github\.com(?:\s|$)", "GitHub API base"),
+    (r"(?:^|\s)--token-env\s+GITHUB_TOKEN(?:\s|$)", "token environment binding"),
+    (r"(?:^|\s)--plan\s+\S+(?:\s|$)", "plan path"),
+):
+    if not re.search(pattern, execute_command):
+        raise SystemExit(f"effective watchdog execute command has no exact {label}")
 if not re.search(
     r"(?m)^\s{6,}GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}\s*$",
     jobs_block,
@@ -760,6 +768,17 @@ permission_lines = {
 }
 if permission_lines != {"contents: read", "actions: write"}:
     raise SystemExit("watchdog workflow permissions must be exactly contents: read and actions: write")
+concurrency_block = top_level_block(workflow_lower, "concurrency:")
+concurrency_lines = {
+    line.strip()
+    for line in concurrency_block.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+}
+if concurrency_lines != {
+    "group: regression-verifier-watchdog-mainnet",
+    "cancel-in-progress: false",
+}:
+    raise SystemExit("watchdog workflow must serialize the exact mainnet concurrency group")
 referenced_workflows = set(re.findall(r"[a-z0-9_-]+\.ya?ml", execute_command.lower()))
 unknown_workflows = referenced_workflows - {
     "regression-verifier-runner.yml",
@@ -802,6 +821,21 @@ fallbacks = {
 }
 if len(fallbacks) != 3:
     raise SystemExit("signer one, signer two, and relay must have distinct public fallbacks")
+for block, variable in (
+    (sign_one_block, "REGRESSION_VERIFIER_ONE_RPC_URL"),
+    (sign_two_block, "REGRESSION_VERIFIER_TWO_RPC_URL"),
+):
+    if not re.search(
+        rf"(?ms)^\s{{4}}uses:\s*\./\.github/workflows/regression-verifier-signing-reusable\.yml\s*$"
+        rf".*?^\s{{4}}with:\s*$.*?^\s{{6}}rpc_url:\s*\$\{{\{{\s*vars\.{variable}\b",
+        block,
+    ):
+        raise SystemExit(f"{variable} is not consumed by the reusable signing job")
+if not re.search(
+    r"(?m)^\s{4}env:\s*$\n\s{6}BASE_MAINNET_RPC_URL:\s*\$\{\{\s*vars\.REGRESSION_VERIFIER_RELAY_RPC_URL\b",
+    relay_block,
+):
+    raise SystemExit("relay provider is not bound in the effective relay job environment")
 
 workflow_call = reusable_workflow.split("workflow_call:", 1)[1].split("secrets:", 1)[0]
 rpc_input = workflow_call.split("rpc_url:", 1)[1]

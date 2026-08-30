@@ -262,6 +262,9 @@ on:
 permissions:
   contents: read
   actions: write
+concurrency:
+  group: regression-verifier-watchdog-mainnet
+  cancel-in-progress: false
 jobs:
   watchdog:
     runs-on: ubuntu-latest
