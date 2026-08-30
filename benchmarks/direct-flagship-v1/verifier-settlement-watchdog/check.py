@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
 import json
 import os
 import random
@@ -11,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +73,7 @@ def run(
     signer: str | None = None,
     workflow: str | None = None,
     canonical_job_hash: str | None = None,
+    workflow_run_id: int | None = None,
 ) -> dict[str, Any]:
     return {
         "job_id": job_id,
@@ -90,6 +93,9 @@ def run(
         "retryable": retryable,
         "signer": signer,
         "canonical_job_hash": canonical_job_hash,
+        "workflow_run_id": workflow_run_id
+        if workflow_run_id is not None
+        else 4200 + {"runner": 1, "signer_one": 2, "signer_two": 3, "relay": 4}[stage],
     }
 
 
@@ -202,11 +208,21 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
     if [item.get("job_id") for item in records] != expected_order:
         raise SystemExit("watchdog records must be deadline ordered")
     by_id: dict[str, dict[str, Any]] = {}
+    expected_by_id = {item["job_id"]: item for item in expected_jobs}
+    automated_targets = {
+        "dispatch_runner": "regression-verifier-runner.yml",
+        "retry_runner": "regression-verifier-runner.yml",
+        "retry_signer_one": "regression-verifier-signer.yml",
+        "retry_signer_two": "regression-verifier-signer.yml",
+        "retry_relay": "regression-verifier-signer.yml",
+    }
     forbidden_actions = {"accept", "reject", "sign", "settle", "pay", "transfer", "wallet_call"}
     for record in records:
         job_id = record.get("job_id")
         if not isinstance(job_id, str) or job_id in by_id:
             raise SystemExit("watchdog record job_id is missing or duplicated")
+        if record.get("verification_expires_at") != expected_by_id[job_id]["verification_expires_at"]:
+            raise SystemExit(f"watchdog record {job_id} changed the canonical verification deadline")
         if not str(record.get("next_owner", "")).strip():
             raise SystemExit(f"watchdog record {job_id} has no next owner")
         if not str(record.get("reason", "")).strip():
@@ -223,6 +239,20 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
             or ("verdict" in action_text and action != "escalate_no_verdict")
         ):
             raise SystemExit(f"watchdog emitted forbidden authority: {action}")
+        target_workflow = record.get("target_workflow")
+        workflow_run_id = record.get("workflow_run_id")
+        if record.get("automation_allowed") is True:
+            expected_target = automated_targets.get(str(action))
+            if target_workflow != expected_target:
+                raise SystemExit(f"watchdog record {job_id} does not bind its allowlisted workflow")
+            if action == "dispatch_runner" and workflow_run_id is not None:
+                raise SystemExit(f"new runner dispatch {job_id} must not claim an existing workflow run")
+            if action != "dispatch_runner" and (
+                not isinstance(workflow_run_id, int) or workflow_run_id <= 0
+            ):
+                raise SystemExit(f"watchdog retry {job_id} must bind a positive workflow run ID")
+        elif target_workflow is not None or workflow_run_id is not None:
+            raise SystemExit(f"non-automated watchdog record {job_id} must not target a workflow")
         serialized = json.dumps(record, sort_keys=True).lower()
         if any(token in serialized for token in ("private_key", "seed phrase", "mnemonic", "https://", "http://")):
             raise SystemExit(f"watchdog record {job_id} exposed a secret or provider URL")
@@ -392,13 +422,19 @@ for index in range(84):
         matrix_runs.append(run(job_id, "runner", "failure"))
         expected = ("retry_runner", True, None)
     elif case == "signer_one_retry":
-        matrix_runs.append(run(job_id, "runner", "success", artifact_hash=candidate_hash))
+        matrix_runs.extend(
+            [
+                run(job_id, "runner", "success", artifact_hash=candidate_hash),
+                run(job_id, "signer_one", "failure", signer=ADDRESS_ONE),
+            ]
+        )
         expected = ("retry_signer_one", True, "signer_one_secondary")
     elif case == "signer_two_retry":
         matrix_runs.extend(
             [
                 run(job_id, "runner", "success", artifact_hash=candidate_hash),
                 run(job_id, "signer_one", "success", signer=ADDRESS_ONE),
+                run(job_id, "signer_two", "failure", signer=ADDRESS_TWO),
             ]
         )
         expected = ("retry_signer_two", True, "signer_two_secondary")
@@ -450,6 +486,172 @@ matrix = validate(matrix_plan, matrix_jobs)
 for job_id, (action, automated, provider) in matrix_expected.items():
     expect(matrix[job_id], action, automated, provider)
 
+
+class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
+    requests: list[dict[str, Any]] = []
+    signer_run_id = 0
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def record(self, body: bytes = b"") -> None:
+        self.__class__.requests.append(
+            {
+                "method": self.command,
+                "path": self.path,
+                "authorization": self.headers.get("Authorization"),
+                "body": body.decode("utf-8", "replace"),
+            }
+        )
+
+    def respond(self, status: int, payload: dict[str, Any] | None = None) -> None:
+        body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        if body:
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 - standard library handler name
+        self.record()
+        if self.path == "/repos/NSPG13/agent-bounties/branches/main":
+            self.respond(200, {"name": "main", "commit": {"sha": MAIN_SHA}})
+            return
+        expected = f"/repos/NSPG13/agent-bounties/actions/runs/{self.signer_run_id}"
+        if self.path != expected:
+            self.respond(404, {"message": "not found"})
+            return
+        self.respond(
+            200,
+            {
+                "id": self.signer_run_id,
+                "path": ".github/workflows/regression-verifier-signer.yml",
+                "head_sha": MAIN_SHA,
+                "status": "completed",
+                "conclusion": "failure",
+            },
+        )
+
+    def do_POST(self) -> None:  # noqa: N802 - standard library handler name
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        self.record(body)
+        allowed = {
+            "/repos/NSPG13/agent-bounties/actions/workflows/"
+            "regression-verifier-runner.yml/dispatches",
+            f"/repos/NSPG13/agent-bounties/actions/runs/{self.signer_run_id}/rerun-failed-jobs",
+        }
+        self.respond(204 if self.path in allowed else 404, None if self.path in allowed else {"message": "not found"})
+
+
+def execute(plan: dict[str, Any], api_base: str) -> subprocess.CompletedProcess[bytes]:
+    tool = require("scripts/regression_verifier_watchdog.py")
+    with tempfile.TemporaryDirectory(prefix="watchdog-execute-") as temporary:
+        plan_path = Path(temporary) / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        environment = os.environ.copy()
+        environment["WATCHDOG_BENCHMARK_TOKEN"] = "benchmark-token"
+        return subprocess.run(
+            [
+                sys.executable,
+                str(tool),
+                "execute",
+                "--plan",
+                str(plan_path),
+                "--repository",
+                "NSPG13/agent-bounties",
+                "--github-api-base",
+                api_base,
+                "--token-env",
+                "WATCHDOG_BENCHMARK_TOKEN",
+                "--execute",
+            ],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+            check=False,
+        )
+
+
+# Exercise the production executor against a local fake GitHub boundary. It may
+# dispatch the runner and rerun only a current-main signer workflow; changing
+# the target workflow must fail before any write request.
+dispatch_jobs = [job("execute-dispatch", "2026-09-01T14:00:00Z")]
+_, dispatch_plan = invoke(dispatch_jobs, [])
+relay_execute_jobs = [job("execute-relay", "2026-09-01T14:10:00Z")]
+relay_execute_runs = [
+    run("execute-relay", "runner", "success", artifact_hash=candidate_hash, workflow_run_id=4301),
+    run("execute-relay", "signer_one", "success", signer=ADDRESS_ONE, workflow_run_id=4302),
+    run("execute-relay", "signer_two", "success", signer=ADDRESS_TWO, workflow_run_id=4303),
+    run(
+        "execute-relay",
+        "relay",
+        "failure",
+        provider_role="relay_primary",
+        workflow_run_id=4304,
+    ),
+]
+_, relay_execute_plan = invoke(relay_execute_jobs, relay_execute_runs)
+execution_plan = {
+    "schema": SCHEMA,
+    "network": "base-mainnet",
+    "generated_at": NOW,
+    "fail_closed": True,
+    "repository": "NSPG13/agent-bounties",
+    "current_main_sha": MAIN_SHA,
+    "jobs": dispatch_plan["jobs"] + relay_execute_plan["jobs"],
+}
+FakeGitHubHandler.requests = []
+FakeGitHubHandler.signer_run_id = 4304
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHubHandler)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+try:
+    api_base = f"http://127.0.0.1:{server.server_port}"
+    completed = execute(execution_plan, api_base)
+    if completed.returncode != 0:
+        raise SystemExit(
+            "watchdog execute fixture failed:\n" + completed.stdout.decode("utf-8", "replace")[-5000:]
+        )
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise SystemExit("watchdog execute did not emit one JSON report") from error
+    if report.get("schema") != "agent-bounties/regression-verifier-watchdog-execution-v1":
+        raise SystemExit("watchdog execute report schema is invalid")
+    if report.get("executed_count") != 2 or report.get("fail_closed") is not True:
+        raise SystemExit("watchdog execute report does not reconcile both bounded actions")
+    writes = [item for item in FakeGitHubHandler.requests if item["method"] == "POST"]
+    expected_writes = {
+        "/repos/NSPG13/agent-bounties/actions/workflows/"
+        "regression-verifier-runner.yml/dispatches",
+        "/repos/NSPG13/agent-bounties/actions/runs/4304/rerun-failed-jobs",
+    }
+    if {item["path"] for item in writes} != expected_writes or len(writes) != 2:
+        raise SystemExit("watchdog execute wrote outside the exact allowlisted GitHub actions")
+    if any(item["authorization"] != "Bearer benchmark-token" for item in FakeGitHubHandler.requests):
+        raise SystemExit("watchdog execute did not use the environment-scoped token")
+    dispatch = next(item for item in writes if item["path"].endswith("/dispatches"))
+    if json.loads(dispatch["body"]) != {"ref": "main"}:
+        raise SystemExit("watchdog runner dispatch must bind the protected main ref")
+
+    unsafe_plan = json.loads(json.dumps(execution_plan))
+    unsafe_plan["jobs"][0]["target_workflow"] = "unreviewed-wallet-job.yml"
+    request_count = len(FakeGitHubHandler.requests)
+    rejected = execute(unsafe_plan, api_base)
+    if rejected.returncode == 0:
+        raise SystemExit("watchdog execute accepted a non-allowlisted workflow")
+    if len(FakeGitHubHandler.requests) != request_count:
+        raise SystemExit("watchdog execute contacted GitHub before rejecting an unknown workflow")
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
 # The implementation must ship its own deterministic tests and the tightly
 # permissioned production workflow required by the paid outcome.
 tests = require("scripts/test_regression_verifier_watchdog.py")
@@ -492,13 +694,53 @@ if unknown_workflows:
     raise SystemExit(f"watchdog workflow references an unknown workflow: {sorted(unknown_workflows)}")
 
 signer_workflow = require(".github/workflows/regression-verifier-signer.yml").read_text(encoding="utf-8")
-for variable in (
-    "REGRESSION_VERIFIER_ONE_RPC_URL",
-    "REGRESSION_VERIFIER_TWO_RPC_URL",
-    "REGRESSION_VERIFIER_RELAY_RPC_URL",
+reusable_workflow = require(
+    ".github/workflows/regression-verifier-signing-reusable.yml"
+).read_text(encoding="utf-8")
+if "REGRESSION_VERIFIER_RPC_URL" in signer_workflow or "REGRESSION_VERIFIER_RPC_URL" in reusable_workflow:
+    raise SystemExit("signer workflows still consume the shared regression verifier RPC variable")
+
+
+def provider_binding(block: str, key: str, variable: str) -> str:
+    match = re.search(
+        rf"(?m)^\s*{re.escape(key)}:\s*\$\{{\{{\s*vars\.{variable}\s*\|\|\s*'([^']+)'\s*\}}\}}\s*$",
+        block,
+    )
+    if not match:
+        raise SystemExit(f"effective provider binding is missing for {variable}")
+    fallback = match.group(1)
+    if not fallback.startswith("https://"):
+        raise SystemExit(f"provider fallback for {variable} must be public HTTPS")
+    return fallback
+
+
+try:
+    sign_one_block = signer_workflow.split("\n  sign-one:", 1)[1].split("\n  sign-two:", 1)[0]
+    sign_two_block = signer_workflow.split("\n  sign-two:", 1)[1].split("\n  relay:", 1)[0]
+    relay_block = signer_workflow.split("\n  relay:", 1)[1]
+except IndexError as error:
+    raise SystemExit("signer workflow job boundaries are unavailable") from error
+fallbacks = {
+    provider_binding(sign_one_block, "rpc_url", "REGRESSION_VERIFIER_ONE_RPC_URL"),
+    provider_binding(sign_two_block, "rpc_url", "REGRESSION_VERIFIER_TWO_RPC_URL"),
+    provider_binding(relay_block, "BASE_MAINNET_RPC_URL", "REGRESSION_VERIFIER_RELAY_RPC_URL"),
+}
+if len(fallbacks) != 3:
+    raise SystemExit("signer one, signer two, and relay must have distinct public fallbacks")
+
+workflow_call = reusable_workflow.split("workflow_call:", 1)[1].split("secrets:", 1)[0]
+rpc_input = workflow_call.split("rpc_url:", 1)[1]
+if not re.search(r"required:\s*true", rpc_input) or not re.search(r"type:\s*string", rpc_input):
+    raise SystemExit("reusable signer rpc_url input must be a required string")
+if not re.search(
+    r"(?m)^\s*BASE_MAINNET_RPC_URL:\s*\$\{\{\s*inputs\.rpc_url\s*\}\}\s*$",
+    reusable_workflow,
 ):
-    if variable not in signer_workflow:
-        raise SystemExit(f"signer workflow is missing independent provider variable {variable}")
+    raise SystemExit("reusable signer does not consume its exact rpc_url input")
+if '--rpc-url "$BASE_MAINNET_RPC_URL"' not in reusable_workflow:
+    raise SystemExit("reusable signer does not pass its bound provider to the signing command")
+if '--rpc-url "$BASE_MAINNET_RPC_URL"' not in relay_block:
+    raise SystemExit("relay does not pass its independent provider to the relay command")
 
 documentation = require("docs/sandboxed-regression-verifier.md").read_text(encoding="utf-8").lower()
 for phrase in ("watchdog", "fail closed", "idempotency", "provider", "bountysettled"):

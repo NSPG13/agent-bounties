@@ -35,6 +35,9 @@ job must produce exactly one record with:
 - `job_id` and `verification_expires_at` copied from canonical input;
 - one `next_action` and one `next_owner`;
 - `automation_allowed`, which is true only for a bounded, allowlisted retry;
+- `target_workflow`, restricted to the precommitted runner or signer workflow;
+- `workflow_run_id` for a bounded retry of an existing signer/relay run, and
+  `null` for a new runner dispatch;
 - a stable `sha256:<64 lowercase hex>` `idempotency_key`;
 - a provider **role**, never a provider URL or secret;
 - a plain-language `reason` and exact `recheck_at` timestamp.
@@ -48,6 +51,26 @@ actions include `observe_terminal`, `expire_submission`,
 `reconcile_canonical_state`, and `escalate_no_verdict`. The watchdog may never
 emit or execute a verdict, attestation, signature, settlement, payment, wallet,
 or arbitrary workflow action.
+
+The same tool must expose the production execution boundary:
+
+```text
+WATCHDOG_GITHUB_TOKEN=... python scripts/regression_verifier_watchdog.py execute \
+  --plan PLAN.json \
+  --repository NSPG13/agent-bounties \
+  --github-api-base https://api.github.com \
+  --token-env WATCHDOG_GITHUB_TOKEN \
+  --execute
+```
+
+Execution must reject a different repository, stale main, a non-allowlisted
+workflow, a missing/invalid run ID, or an action whose workflow does not match
+the current GitHub run metadata before making a write request. A new runner
+action may dispatch only `regression-verifier-runner.yml` on `main`. A bounded
+signer or relay retry may call only `rerun-failed-jobs` on a run whose effective
+path is `.github/workflows/regression-verifier-signer.yml` and whose head is
+exact current main. The token is read only from the named environment variable,
+never a command-line value or output artifact.
 
 ## Required behavior
 

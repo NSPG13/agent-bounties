@@ -17,6 +17,9 @@ GOOD_PLANNER = r'''#!/usr/bin/env python3
 import argparse
 import hashlib
 import json
+import os
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 
@@ -31,7 +34,87 @@ plan.add_argument("--jobs", required=True)
 plan.add_argument("--runs", required=True)
 plan.add_argument("--policy", required=True)
 plan.add_argument("--now", required=True)
+execute = sub.add_parser("execute")
+execute.add_argument("--plan", required=True)
+execute.add_argument("--repository", required=True)
+execute.add_argument("--github-api-base", required=True)
+execute.add_argument("--token-env", required=True)
+execute.add_argument("--execute", action="store_true")
 args = parser.parse_args()
+if args.command == "execute":
+    document = json.load(open(args.plan, encoding="utf-8"))
+    if args.repository != "NSPG13/agent-bounties" or document.get("repository") != args.repository:
+        raise SystemExit("repository is not allowlisted")
+    if not args.execute or document.get("fail_closed") is not True:
+        raise SystemExit("explicit fail-closed execution is required")
+    allowed = {
+        "dispatch_runner": "regression-verifier-runner.yml",
+        "retry_runner": "regression-verifier-runner.yml",
+        "retry_signer_one": "regression-verifier-signer.yml",
+        "retry_signer_two": "regression-verifier-signer.yml",
+        "retry_relay": "regression-verifier-signer.yml",
+    }
+    automated = [item for item in document["jobs"] if item.get("automation_allowed") is True]
+    for item in automated:
+        expected = allowed.get(item.get("next_action"))
+        if expected is None or item.get("target_workflow") != expected:
+            raise SystemExit("workflow is not allowlisted")
+        run_id = item.get("workflow_run_id")
+        if item["next_action"] == "dispatch_runner" and run_id is not None:
+            raise SystemExit("new runner dispatch cannot bind a run ID")
+        if item["next_action"] != "dispatch_runner" and (not isinstance(run_id, int) or run_id <= 0):
+            raise SystemExit("workflow retry requires a positive run ID")
+    token = os.environ.get(args.token_env)
+    if not token:
+        raise SystemExit("token environment variable is unavailable")
+
+    def request(method, path, payload=None):
+        body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
+        req = urllib.request.Request(
+            args.github_api_base.rstrip("/") + path,
+            data=body,
+            method=method,
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            raw = response.read()
+            return None if not raw else json.loads(raw)
+
+    branch = request("GET", "/repos/NSPG13/agent-bounties/branches/main")
+    if branch["commit"]["sha"] != document.get("current_main_sha"):
+        raise SystemExit("plan is not bound to current main")
+    executed = []
+    for item in automated:
+        action = item["next_action"]
+        if action == "dispatch_runner":
+            request(
+                "POST",
+                "/repos/NSPG13/agent-bounties/actions/workflows/"
+                "regression-verifier-runner.yml/dispatches",
+                {"ref": "main"},
+            )
+        else:
+            run_id = item["workflow_run_id"]
+            metadata = request("GET", f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}")
+            if (
+                metadata.get("path") != ".github/workflows/" + item["target_workflow"]
+                or metadata.get("head_sha") != document["current_main_sha"]
+                or metadata.get("status") != "completed"
+            ):
+                raise SystemExit("workflow run metadata is not safe to retry")
+            request(
+                "POST",
+                f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/rerun-failed-jobs",
+            )
+        executed.append(item["idempotency_key"])
+    print(json.dumps({
+        "schema": "agent-bounties/regression-verifier-watchdog-execution-v1",
+        "fail_closed": True,
+        "executed_count": len(executed),
+        "idempotency_keys": executed,
+    }, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
+
 jobs_doc = json.load(open(args.jobs, encoding="utf-8"))
 runs_doc = json.load(open(args.runs, encoding="utf-8"))
 policy = json.load(open(args.policy, encoding="utf-8"))
@@ -113,6 +196,26 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             action, owner, automated, provider = "reconcile_canonical_state", "canonical-indexer", False, "canonical_chain"
             reason = "The quorum exists; canonical state must be reconciled."
     key_payload = json.dumps([job["job_id"], job["canonical_job_hash"], action, provider], separators=(",", ":"))
+    target_workflow = None
+    workflow_run_id = None
+    if automated:
+        target_workflow = {
+            "dispatch_runner": "regression-verifier-runner.yml",
+            "retry_runner": "regression-verifier-runner.yml",
+            "retry_signer_one": "regression-verifier-signer.yml",
+            "retry_signer_two": "regression-verifier-signer.yml",
+            "retry_relay": "regression-verifier-signer.yml",
+        }[action]
+        if action != "dispatch_runner":
+            stage = {
+                "retry_runner": "runner",
+                "retry_signer_one": "signer_one",
+                "retry_signer_two": "signer_two",
+                "retry_relay": "relay",
+            }[action]
+            workflow_run_id = next(
+                item["workflow_run_id"] for item in reversed(job_runs) if item["stage"] == stage
+            )
     records.append({
         "job_id": job["job_id"],
         "verification_expires_at": job["verification_expires_at"],
@@ -120,6 +223,8 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         "next_owner": owner,
         "automation_allowed": automated,
         "provider_role": provider,
+        "target_workflow": target_workflow,
+        "workflow_run_id": workflow_run_id,
         "reason": reason,
         "recheck_at": args.now,
         "idempotency_key": "sha256:" + hashlib.sha256(key_payload.encode()).hexdigest(),
@@ -157,10 +262,38 @@ jobs:
 '''
 
 SIGNER_WORKFLOW = '''name: Regression Verifier Signer
-env:
-  ONE: ${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL }}
-  TWO: ${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL }}
-  RELAY: ${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL }}
+jobs:
+  sign-one:
+    uses: ./.github/workflows/regression-verifier-signing-reusable.yml
+    with:
+      rpc_url: ${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}
+  sign-two:
+    uses: ./.github/workflows/regression-verifier-signing-reusable.yml
+    with:
+      rpc_url: ${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}
+  relay:
+    env:
+      BASE_MAINNET_RPC_URL: ${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}
+    steps:
+      - run: python scripts/regression_verifier_pipeline.py relay --rpc-url "$BASE_MAINNET_RPC_URL"
+'''
+
+REUSABLE_WORKFLOW = '''name: Regression Verifier Signing Slot
+on:
+  workflow_call:
+    inputs:
+      rpc_url:
+        required: true
+        type: string
+    secrets:
+      verifier_private_key:
+        required: true
+jobs:
+  sign:
+    env:
+      BASE_MAINNET_RPC_URL: ${{ inputs.rpc_url }}
+    steps:
+      - run: python scripts/regression_verifier_pipeline.py sign --rpc-url "$BASE_MAINNET_RPC_URL"
 '''
 
 DOC = '''# Verifier watchdog
@@ -175,6 +308,7 @@ def build(root: Path, planner: str) -> None:
         "scripts/test_regression_verifier_watchdog.py": "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\nif __name__ == '__main__': unittest.main()\n",
         ".github/workflows/regression-verifier-watchdog.yml": WATCHDOG_WORKFLOW,
         ".github/workflows/regression-verifier-signer.yml": SIGNER_WORKFLOW,
+        ".github/workflows/regression-verifier-signing-reusable.yml": REUSABLE_WORKFLOW,
         "docs/sandboxed-regression-verifier.md": DOC,
     }
     for relative, content in paths.items():
