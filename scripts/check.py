@@ -319,7 +319,7 @@ def main() -> int:
         "scripts.test_verify_open_competition_v2_slither",
         "scripts.test_verify_sp1_patched_graph",
         "scripts.test_verify_open_competition_v2_metric_release",
-        "scripts.test_open_competition_v2_frontier_gmv_30usdc",
+        "scripts.test_open_competition_v2_profitable_gmv_15usdc",
         "scripts.test_serve_open_competition_v2_reserve_recovery",
         "-v",
     )
