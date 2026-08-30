@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_source_guard.py")
+REPOSITORY = SCRIPT.resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("regression_verifier_source_guard", SCRIPT)
 assert SPEC and SPEC.loader
 GUARD = importlib.util.module_from_spec(SPEC)
@@ -57,6 +58,15 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             )
             self.assertNotEqual(before, GUARD.source_digest(root, "worker-build"))
 
+    def test_toolchain_override_changes_worker_digest(self) -> None:
+        for override in GUARD.OPTIONAL_BUILD_ROOTS:
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.fixture(root)
+                before = GUARD.source_digest(root, "worker-build")
+                (root / override).write_text("1.99.0\n", encoding="utf-8")
+                self.assertNotEqual(before, GUARD.source_digest(root, "worker-build"))
+
     def test_runtime_digest_detects_post_build_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -73,6 +83,25 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             (root / "Cargo.lock").unlink()
             with self.assertRaisesRegex(GUARD.GuardError, "missing guarded build input"):
                 GUARD.source_digest(root, "worker-build")
+
+    def test_checked_in_workflows_scope_key_and_watch_toolchain_overrides(self) -> None:
+        reusable = (
+            REPOSITORY / ".github/workflows/regression-verifier-signing-reusable.yml"
+        ).read_text(encoding="utf-8")
+        secret = "${{ secrets.verifier_private_key }}"
+        self.assertEqual(reusable.count(secret), 1)
+        self.assertGreater(
+            reusable.index(secret),
+            reusable.index("Re-fetch state and sign one exact candidate set"),
+        )
+        for relative in (
+            ".github/workflows/regression-verifier-runner.yml",
+            ".github/workflows/regression-verifier-signer.yml",
+        ):
+            workflow = (REPOSITORY / relative).read_text(encoding="utf-8")
+            if "pull_request:" in workflow:
+                self.assertIn('      - "rust-toolchain"', workflow)
+                self.assertIn('      - "rust-toolchain.toml"', workflow)
 
 
 if __name__ == "__main__":

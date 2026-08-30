@@ -9,6 +9,8 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/**"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
       - "scripts/regression_verifier_pipeline.py"
       - "scripts/regression_verifier_source_guard.py"
       - "scripts/test_regression_verifier_pipeline.py"
@@ -38,7 +40,7 @@ jobs:
           python scripts/test_regression_verifier_pipeline.py -v
           python scripts/test_regression_verifier_source_guard.py -v
           python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b8f857539fb5168f2894bf72a32859a85d8edc34e515fa4ee3cc59cff5d26ac
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f71f935815302c1b548b8355547f621b2bf7c7cbbe2d6d839f212518fe650b7
           python -m py_compile scripts/regression_verifier_pipeline.py
           cargo test -p verifier-sdk -p worker
 
@@ -71,7 +73,7 @@ jobs:
       - name: Revalidate reviewed runtime after build
         run: |
           python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b8f857539fb5168f2894bf72a32859a85d8edc34e515fa4ee3cc59cff5d26ac
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f71f935815302c1b548b8355547f621b2bf7c7cbbe2d6d839f212518fe650b7
 
       - name: Run canonical jobs without signing secrets
         run: >-

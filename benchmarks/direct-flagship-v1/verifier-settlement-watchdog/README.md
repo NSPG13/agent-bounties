@@ -244,12 +244,15 @@ Provider URLs must not appear in watchdog plan or state artifacts.
 
 The immutable checker also binds the exact newline-normalized source bytes of
 `scripts/regression_verifier_pipeline.py`, the source guard, and both security
-test suites. It binds every Cargo workspace, lockfile, configuration, and local
-crate input used to build the regression worker. The runner, both signers, and
-the relay verify that complete build-input digest before `cargo build`, then
-recheck the build inputs and signing runtime after the build and before any
-private key is exposed. Adding a `build.rs`, changing a local dependency, or
-mutating the Python runtime therefore fails closed. Workflow command
+test suites. It binds every Cargo workspace, lockfile, configuration, local
+crate input, and any root `rust-toolchain` or `rust-toolchain.toml` override
+used to build the regression worker. The PR contract workflows watch both
+override paths. The runner, both signers, and the relay verify that complete
+build-input digest before `cargo build`, then recheck the build inputs and
+signing runtime after the build and before any private key is exposed. Signing
+and keeper keys exist only in the final exact step that consumes them. Adding a
+`build.rs` or toolchain override, changing a local dependency, or mutating the
+Python runtime therefore fails closed. Workflow command
 allowlisting alone is insufficient because a changed executable behind the
 same command would otherwise inherit signing authority. Candidate
 revalidation runs with signing and keeper secrets removed from its environment.

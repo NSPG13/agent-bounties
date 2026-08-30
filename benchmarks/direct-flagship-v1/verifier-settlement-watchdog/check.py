@@ -31,15 +31,15 @@ ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
 PIPELINE_SHA256 = "6af6dc49cf5b90a314e4f87263abd5d9714cd037513d934604670a72fa33031c"
 PIPELINE_TEST_SHA256 = "6edc11c081d6f0592c09c1e9a16f44ed9165f15ce7fd83d222fa8e209b6b3d08"
-SOURCE_GUARD_SHA256 = "06185f1a88bc3f8168ce2ed8c6ecec2b4b6d78fa9815a851fc4c21c88225f79c"
-SOURCE_GUARD_TEST_SHA256 = "6937f9c76e0b1a526d89fbc16fa4e2ecae1be999b6e208bca7bacbde656a4273"
+SOURCE_GUARD_SHA256 = "8b612fa6b18d24de2831a051a3b44f838c1f875769b2766d7431b369f0921173"
+SOURCE_GUARD_TEST_SHA256 = "f37a497e6518779f60aca6c743a4997eba98191a5dd47bb409ff3f5adf16e80b"
 WORKER_BUILD_SHA256 = "6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"
-SIGNING_RUNTIME_SHA256 = "6b8f857539fb5168f2894bf72a32859a85d8edc34e515fa4ee3cc59cff5d26ac"
+SIGNING_RUNTIME_SHA256 = "8f71f935815302c1b548b8355547f621b2bf7c7cbbe2d6d839f212518fe650b7"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "e0226724ff53c13637d047d81b40cd16b7290d1259b3602630e842758bd614f4",
+    ".github/workflows/regression-verifier-runner.yml": "d09b9cf508a3163b33fd9e93eeb40d638f537560c3619cd774bb227c97700ce9",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "ae96d5317b33acf0979c0b24c27e9c54715e9ce46cd483a463163bb3247d28df",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "b873ce859541e68a96319a67bd95d1eac92e4e6d74307b214297d8e19e5de4f3",
+    ".github/workflows/regression-verifier-signer.yml": "15092010c549bfef91713c3da083bf19d8f8e129da503904a972f9fdb5f79f9a",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "06b88703d0fecff7c5481fa403d29b7eda93e86f4d8c240c628bb371bb381683",
 }
 
 

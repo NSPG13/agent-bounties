@@ -12,6 +12,7 @@ from pathlib import Path
 
 HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
+OPTIONAL_BUILD_ROOTS = ("rust-toolchain", "rust-toolchain.toml")
 RUNTIME_FILES = (
     "scripts/regression_verifier_pipeline.py",
     "scripts/test_regression_verifier_pipeline.py",
@@ -27,9 +28,11 @@ class GuardError(RuntimeError):
 def _guarded_files(root: Path, scope: str) -> list[Path]:
     if scope == "worker-build":
         candidates: list[Path] = []
-        for relative in BUILD_ROOTS:
+        for relative in BUILD_ROOTS + OPTIONAL_BUILD_ROOTS:
             candidate = root / relative
             if not candidate.exists():
+                if relative in OPTIONAL_BUILD_ROOTS:
+                    continue
                 raise GuardError(f"missing guarded build input: {relative}")
             if candidate.is_symlink():
                 raise GuardError(f"guarded build input may not be a symlink: {relative}")
