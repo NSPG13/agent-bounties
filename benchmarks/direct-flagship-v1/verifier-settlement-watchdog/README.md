@@ -65,14 +65,34 @@ or arbitrary workflow action.
 The same tool must expose the production execution boundary:
 
 ```text
+GITHUB_TOKEN=... python scripts/regression_verifier_watchdog.py plan-live \
+  --api-base https://api.agentbounties.app \
+  --repository NSPG13/agent-bounties \
+  --github-api-base https://api.github.com \
+  --token-env GITHUB_TOKEN \
+  --policy ops/regression-verifier-watchdog-policy.json \
+  --output target/watchdog-plan.json \
+  --allow-workflow regression-verifier-runner.yml \
+  --allow-workflow regression-verifier-signer.yml
+
 WATCHDOG_GITHUB_TOKEN=... python scripts/regression_verifier_watchdog.py execute \
   --plan PLAN.json \
   --repository NSPG13/agent-bounties \
   --github-api-base https://api.github.com \
   --token-env WATCHDOG_GITHUB_TOKEN \
   --state .watchdog/state.json \
-  --execute
+  --execute \
+  --allow-workflow regression-verifier-runner.yml \
+  --allow-workflow regression-verifier-signer.yml
 ```
+
+`plan-live` must build the executable plan itself from the pinned production
+verification-job feed, protected-main metadata, and GitHub Actions run state.
+It must work from a clean checkout without a pre-created `target/watchdog-plan.json`,
+write that file before execution, and send the repository token only to the
+pinned `https://api.github.com` origin. The Agent Bounties feed is pinned to
+`https://api.agentbounties.app`. The exact workflow allowlist is required on
+both commands and cannot be expanded by a plan or environment value.
 
 Execution must reject a different repository, stale main, a non-allowlisted
 workflow, a missing/invalid run ID, or an action whose workflow does not match
@@ -90,7 +110,9 @@ plan, fetch current main, and fetch/revalidate every referenced workflow run
 before issuing the first POST. If any later action is unsafe, execute no action.
 The state file records successfully executed idempotency keys atomically. An
 unchanged plan replay must make no GitHub request and report the already
-executed actions as skipped.
+executed actions as skipped. If a later POST fails after an earlier POST
+succeeds, the earlier key must already be durable; a retry may issue only the
+remaining POST.
 
 ## Required behavior
 
@@ -111,7 +133,8 @@ executed actions as skipped.
 Add deterministic implementation tests at
 `scripts/test_regression_verifier_watchdog.py`, incident fixtures under
 `scripts/fixtures/regression_verifier_watchdog/`, concise documentation, and a
-scheduled `.github/workflows/regression-verifier-watchdog.yml`. The workflow
+checked-in `ops/regression-verifier-watchdog-policy.json`, plus a scheduled
+`.github/workflows/regression-verifier-watchdog.yml`. The workflow
 may have only `contents: read` and `actions: write`, must run from exact current
 `main`, must use the repository token without other secrets, and must allowlist
 only the existing regression runner/signer workflows.
@@ -119,17 +142,26 @@ only the existing regression runner/signer workflows.
 The scheduled workflow must use one repository-wide concurrency group with
 `cancel-in-progress: false`, preventing overlapping schedules from issuing the
 same idempotent action before GitHub run state catches up.
-It must restore and save `.watchdog/state.json` with pinned `actions/cache`
+It must restore and save `.watchdog/state.json` with commit-pinned `actions/cache`
 restore/save actions so successfully executed keys survive later schedules.
+Cache save must run with `if: ${{ always() }}` so a successful first action is
+not forgotten when a later action fails.
 The job must inherit the exact top-level permission map; job-level permission
-overrides are forbidden. Its only steps are a commit-pinned checkout, a
-commit-pinned cache restore, the exact single watchdog execute argv, and a
-commit-pinned cache save. Shell suffixes, extra commands, and unrelated actions
-are forbidden.
+overrides are forbidden. The workflow must use strict JSON-syntax YAML so the
+benchmark validates the effective document rather than substring spellings.
+Its only job has no `defaults`, custom shell, container, services, or extra
+keys. Its only steps are: commit-pinned checkout of `${{ github.repository }}`
+at `main` with credentials disabled; commit-pinned cache restore; the exact
+`plan-live` argv; the exact `execute` argv; and commit-pinned cache save.
+Shell suffixes, shell comments that hide arguments, extra commands, extra jobs,
+and unrelated actions are forbidden.
 
 The signer and relay paths must accept distinct provider variables for signer
-one, signer two, and relay, each with a safe public fallback. Provider URLs must
-not appear in watchdog artifacts.
+one, signer two, and relay. Their precommitted public fallbacks are respectively
+`https://mainnet.base.org`, `https://base-rpc.publicnode.com`, and
+`https://1rpc.io/base`. The effective signer and relay command argv must consume
+the bound `BASE_MAINNET_RPC_URL`; text hidden after a shell comment does not
+qualify. Provider URLs must not appear in watchdog plan or state artifacts.
 
 ## Evidence boundary
 

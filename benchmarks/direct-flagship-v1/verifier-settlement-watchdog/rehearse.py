@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -18,6 +19,9 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
+import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,6 +41,23 @@ def bound_idempotency_key(job_id, canonical_job_hash, action, provider, workflow
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
 
 
+def allowed_origin(value, official):
+    parsed = urllib.parse.urlparse(value)
+    return value == official or (
+        os.environ.get("WATCHDOG_BENCHMARK_LOOPBACK") == "1"
+        and parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and parsed.port is not None
+    )
+
+
+def fetch_json(base, path, token=None):
+    headers = {} if token is None else {"Authorization": "Bearer " + token}
+    request = urllib.request.Request(base.rstrip("/") + path, headers=headers)
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.loads(response.read())
+
+
 parser = argparse.ArgumentParser()
 sub = parser.add_subparsers(dest="command", required=True)
 plan = sub.add_parser("plan")
@@ -51,22 +72,115 @@ execute.add_argument("--github-api-base", required=True)
 execute.add_argument("--token-env", required=True)
 execute.add_argument("--state", required=True)
 execute.add_argument("--execute", action="store_true")
+execute.add_argument("--allow-workflow", action="append", default=[])
+live = sub.add_parser("plan-live")
+live.add_argument("--api-base", required=True)
+live.add_argument("--repository", required=True)
+live.add_argument("--github-api-base", required=True)
+live.add_argument("--token-env", required=True)
+live.add_argument("--policy", required=True)
+live.add_argument("--output", required=True)
+live.add_argument("--allow-workflow", action="append", default=[])
 args = parser.parse_args()
+if args.command == "plan-live":
+    if args.repository != "NSPG13/agent-bounties":
+        raise SystemExit("repository is not allowlisted")
+    if not allowed_origin(args.api_base, "https://api.agentbounties.app"):
+        raise SystemExit("Agent Bounties API origin is not pinned")
+    if not allowed_origin(args.github_api_base, "https://api.github.com"):
+        raise SystemExit("GitHub API origin is not pinned")
+    allowed_workflows = [
+        "regression-verifier-runner.yml",
+        "regression-verifier-signer.yml",
+    ]
+    if args.allow_workflow != allowed_workflows:
+        raise SystemExit("live planner workflow allowlist is not exact")
+    token = os.environ.get(args.token_env)
+    if not token:
+        raise SystemExit("token environment variable is unavailable")
+    branch = fetch_json(
+        args.github_api_base,
+        "/repos/NSPG13/agent-bounties/branches/main",
+        token,
+    )
+    main_sha = branch["commit"]["sha"]
+    jobs_payload = fetch_json(
+        args.api_base,
+        "/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet",
+    )
+    runs_payload = fetch_json(
+        args.github_api_base,
+        "/repos/NSPG13/agent-bounties/actions/runs?per_page=100",
+        token,
+    )
+    jobs_document = jobs_payload if isinstance(jobs_payload, dict) else {
+        "schema": "agent-bounties/regression-verifier-watchdog-jobs-v1",
+        "network": "base-mainnet",
+        "safe_block": 0,
+        "jobs": jobs_payload,
+    }
+    runs_document = runs_payload if "runs" in runs_payload else {
+        "schema": "agent-bounties/regression-verifier-watchdog-runs-v1",
+        "repository": args.repository,
+        "current_main_sha": main_sha,
+        "runs": runs_payload.get("workflow_runs", []),
+    }
+    policy = json.loads(Path(args.policy).read_text(encoding="utf-8"))
+    policy["current_main_sha"] = main_sha
+    policy["allowed_workflows"] = allowed_workflows
+    now = os.environ.get("WATCHDOG_BENCHMARK_NOW") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with tempfile.TemporaryDirectory(prefix="watchdog-live-plan-") as temporary:
+        directory = Path(temporary)
+        paths = {
+            "jobs": directory / "jobs.json",
+            "runs": directory / "runs.json",
+            "policy": directory / "policy.json",
+        }
+        paths["jobs"].write_text(json.dumps(jobs_document), encoding="utf-8")
+        paths["runs"].write_text(json.dumps(runs_document), encoding="utf-8")
+        paths["policy"].write_text(json.dumps(policy), encoding="utf-8")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                __file__,
+                "plan",
+                "--jobs",
+                str(paths["jobs"]),
+                "--runs",
+                str(paths["runs"]),
+                "--policy",
+                str(paths["policy"]),
+                "--now",
+                now,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=30,
+        )
+    if completed.returncode != 0:
+        raise SystemExit("live plan generation failed: " + completed.stdout.decode("utf-8", "replace"))
+    document = json.loads(completed.stdout)
+    document["repository"] = args.repository
+    document["current_main_sha"] = main_sha
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    print(json.dumps({"schema": "agent-bounties/regression-verifier-watchdog-live-plan-v1", "job_count": len(document["jobs"]), "output": str(output)}, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(0)
 if args.command == "execute":
     document = json.load(open(args.plan, encoding="utf-8"))
     if args.repository != "NSPG13/agent-bounties" or document.get("repository") != args.repository:
         raise SystemExit("repository is not allowlisted")
     if not args.execute or document.get("fail_closed") is not True:
         raise SystemExit("explicit fail-closed execution is required")
-    parsed_api_base = urllib.parse.urlparse(args.github_api_base)
-    benchmark_loopback = (
-        os.environ.get("WATCHDOG_BENCHMARK_LOOPBACK") == "1"
-        and parsed_api_base.scheme == "http"
-        and parsed_api_base.hostname == "127.0.0.1"
-        and parsed_api_base.port is not None
-    )
-    if args.github_api_base != "https://api.github.com" and not benchmark_loopback:
+    if not allowed_origin(args.github_api_base, "https://api.github.com"):
         raise SystemExit("GitHub API origin is not pinned")
+    if args.allow_workflow != [
+        "regression-verifier-runner.yml",
+        "regression-verifier-signer.yml",
+    ]:
+        raise SystemExit("executor workflow allowlist is not exact")
     allowed = {
         "dispatch_runner": "regression-verifier-runner.yml",
         "retry_runner": "regression-verifier-runner.yml",
@@ -346,35 +460,57 @@ import json
 print(json.dumps({"schema":"agent-bounties/regression-verifier-watchdog-plan-v1","network":"base-mainnet","generated_at":"2026-09-01T12:00:00Z","fail_closed":False,"jobs":[]}))
 '''
 
-WATCHDOG_WORKFLOW = '''name: Regression Verifier Watchdog
-on:
-  schedule:
-    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
-  workflow_dispatch:
-permissions:
-  contents: read
-  actions: write
-concurrency:
-  group: regression-verifier-watchdog-mainnet
-  cancel-in-progress: false
-jobs:
-  watchdog:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3333333333333333333333333333333333333333
-      - uses: actions/cache/restore@1111111111111111111111111111111111111111
-        with:
-          path: .watchdog/state.json
-          key: ${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}
-          restore-keys: ${{ runner.os }}-regression-verifier-watchdog-
-      - run: python scripts/regression_verifier_watchdog.py execute --plan target/watchdog-plan.json --repository "$GITHUB_REPOSITORY" --github-api-base https://api.github.com --token-env GITHUB_TOKEN --state .watchdog/state.json --execute --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-      - uses: actions/cache/save@2222222222222222222222222222222222222222
-        with:
-          path: .watchdog/state.json
-          key: ${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}
-'''
+WATCHDOG_WORKFLOW = '''{
+  "name": "Regression Verifier Watchdog",
+  "on": {
+    "schedule": [{"cron": "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"}],
+    "workflow_dispatch": {}
+  },
+  "permissions": {"contents": "read", "actions": "write"},
+  "concurrency": {
+    "group": "regression-verifier-watchdog-mainnet",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "watchdog": {
+      "runs-on": "ubuntu-latest",
+      "steps": [
+        {
+          "uses": "actions/checkout@3333333333333333333333333333333333333333",
+          "with": {
+            "repository": "${{ github.repository }}",
+            "ref": "main",
+            "persist-credentials": false
+          }
+        },
+        {
+          "uses": "actions/cache/restore@1111111111111111111111111111111111111111",
+          "with": {
+            "path": ".watchdog/state.json",
+            "key": "${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}",
+            "restore-keys": "${{ runner.os }}-regression-verifier-watchdog-"
+          }
+        },
+        {
+          "run": "python scripts/regression_verifier_watchdog.py plan-live --api-base https://api.agentbounties.app --repository $GITHUB_REPOSITORY --github-api-base https://api.github.com --token-env GITHUB_TOKEN --policy ops/regression-verifier-watchdog-policy.json --output target/watchdog-plan.json --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml",
+          "env": {"GITHUB_TOKEN": "${{ github.token }}"}
+        },
+        {
+          "run": "python scripts/regression_verifier_watchdog.py execute --plan target/watchdog-plan.json --repository $GITHUB_REPOSITORY --github-api-base https://api.github.com --token-env GITHUB_TOKEN --state .watchdog/state.json --execute --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml",
+          "env": {"GITHUB_TOKEN": "${{ github.token }}"}
+        },
+        {
+          "if": "${{ always() }}",
+          "uses": "actions/cache/save@2222222222222222222222222222222222222222",
+          "with": {
+            "path": ".watchdog/state.json",
+            "key": "${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}"
+          }
+        }
+      ]
+    }
+  }
+}'''
 
 SIGNER_WORKFLOW = '''name: Regression Verifier Signer
 jobs:
@@ -416,6 +552,23 @@ The watchdog must fail closed. Idempotency bounds retries across each provider r
 It never creates a verdict, and only canonical BountySettled proves payment.
 '''
 
+WATCHDOG_POLICY = '''{
+  "schema": "agent-bounties/regression-verifier-watchdog-policy-v1",
+  "network": "base-mainnet",
+  "max_attempts_per_stage": 2,
+  "minimum_retry_budget_seconds": 900,
+  "backoff_seconds": 300,
+  "allowed_workflows": [
+    "regression-verifier-runner.yml",
+    "regression-verifier-signer.yml"
+  ],
+  "provider_roles": {
+    "signer_one": ["signer_one_primary", "signer_one_secondary"],
+    "signer_two": ["signer_two_primary", "signer_two_secondary"],
+    "relay": ["relay_primary", "relay_secondary"]
+  }
+}'''
+
 
 def build(root: Path, planner: str) -> None:
     paths = {
@@ -424,6 +577,7 @@ def build(root: Path, planner: str) -> None:
         ".github/workflows/regression-verifier-watchdog.yml": WATCHDOG_WORKFLOW,
         ".github/workflows/regression-verifier-signer.yml": SIGNER_WORKFLOW,
         ".github/workflows/regression-verifier-signing-reusable.yml": REUSABLE_WORKFLOW,
+        "ops/regression-verifier-watchdog-policy.json": WATCHDOG_POLICY,
         "docs/sandboxed-regression-verifier.md": DOC,
     }
     for relative, content in paths.items():
@@ -454,23 +608,81 @@ with tempfile.TemporaryDirectory(prefix="watchdog-known-good-") as temporary:
     if result.returncode != 0:
         raise SystemExit("known-good rehearsal failed:\n" + result.stdout[-5000:])
 
+def mutate_workflow(source: str, mutation) -> str:
+    document = json.loads(source)
+    mutation(document)
+    return json.dumps(document, indent=2)
+
+
+def watchdog_job(document: dict) -> dict:
+    return document["jobs"]["watchdog"]
+
+
+def watchdog_steps(document: dict) -> list[dict]:
+    return watchdog_job(document)["steps"]
+
+
 workflow_mutations = {
-    "shell suffix": lambda source: source.replace(
-        " --allow-workflow regression-verifier-signer.yml",
-        " --allow-workflow regression-verifier-signer.yml; gh api repos/example/example",
+    "shell suffix": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_steps(document)[3].__setitem__(
+            "run", watchdog_steps(document)[3]["run"] + "; gh api repos/example/example"
+        ),
     ),
-    "job permission override": lambda source: source.replace(
-        "  watchdog:\n    runs-on:",
-        "  watchdog:\n    permissions: write-all\n    runs-on:",
+    "job permission override": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_job(document).__setitem__("permissions", "write-all"),
     ),
-    "unrelated write step": lambda source: source.replace(
-        "      - uses: actions/cache/save@",
-        "      - run: gh api repos/example/example/issues/1 -f labels=unsafe\n"
-        "      - uses: actions/cache/save@",
+    "unrelated write step": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_steps(document).insert(
+            4, {"run": "gh api repos/example/example/issues/1 -f labels=unsafe"}
+        ),
     ),
-    "unpinned API origin": lambda source: source.replace(
-        "--github-api-base https://api.github.com",
-        "--github-api-base https://attacker.invalid",
+    "unpinned API origin": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_steps(document)[2].__setitem__(
+            "run",
+            watchdog_steps(document)[2]["run"].replace(
+                "https://api.github.com", "https://attacker.invalid"
+            ),
+        ),
+    ),
+    "custom default shell": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_job(document).__setitem__(
+            "defaults", {"run": {"shell": "bash -l {0}"}}
+        ),
+    ),
+    "attacker checkout ref": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_steps(document)[0]["with"].__setitem__(
+            "ref", "refs/heads/attacker"
+        ),
+    ),
+    "attacker checkout repository": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_steps(document)[0]["with"].__setitem__(
+            "repository", "attacker/repository"
+        ),
+    ),
+    "job container": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_job(document).__setitem__(
+            "container", "attacker.invalid/watchdog:latest"
+        ),
+    ),
+    "cache save skips failure": lambda source: mutate_workflow(
+        source,
+        lambda document: watchdog_steps(document)[4].__setitem__(
+            "if", "${{ success() }}"
+        ),
+    ),
+    "extra job": lambda source: mutate_workflow(
+        source,
+        lambda document: document["jobs"].__setitem__(
+            "untrusted", {"runs-on": "ubuntu-latest", "steps": []}
+        ),
     ),
 }
 for mutation_name, mutate in workflow_mutations.items():
@@ -486,6 +698,42 @@ for mutation_name, mutate in workflow_mutations.items():
         result = check(mutated)
         if result.returncode == 0:
             raise SystemExit(f"unsafe workflow mutation was accepted: {mutation_name}")
+
+provider_mutations = {
+    "signer rpc hidden by comment": (
+        ".github/workflows/regression-verifier-signing-reusable.yml",
+        lambda source: source.replace(
+            ' sign --rpc-url "$BASE_MAINNET_RPC_URL"',
+            ' sign # --rpc-url "$BASE_MAINNET_RPC_URL"',
+        ),
+    ),
+    "relay rpc hidden by comment": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: source.replace(
+            ' relay --rpc-url "$BASE_MAINNET_RPC_URL"',
+            ' relay # --rpc-url "$BASE_MAINNET_RPC_URL"',
+        ),
+    ),
+    "uncommitted signer provider": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: source.replace(
+            "https://base-rpc.publicnode.com", "https://attacker.invalid/base"
+        ),
+    ),
+}
+for mutation_name, (relative_path, mutate) in provider_mutations.items():
+    with tempfile.TemporaryDirectory(prefix="watchdog-provider-mutation-") as temporary:
+        mutated = Path(temporary)
+        build(mutated, GOOD_PLANNER)
+        artifact_path = mutated / relative_path
+        original = artifact_path.read_text(encoding="utf-8")
+        changed = mutate(original)
+        if changed == original:
+            raise SystemExit(f"{mutation_name} rehearsal did not alter the provider path")
+        artifact_path.write_text(changed, encoding="utf-8")
+        result = check(mutated)
+        if result.returncode == 0:
+            raise SystemExit(f"unsafe provider mutation was accepted: {mutation_name}")
 
 with tempfile.TemporaryDirectory(prefix="watchdog-known-bad-") as temporary:
     bad = Path(temporary)

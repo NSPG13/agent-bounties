@@ -607,6 +607,9 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     signer_run_id = 0
     unsafe_run_metadata = False
     stale_branch_metadata = False
+    scheduled_jobs: dict[str, Any] = {}
+    scheduled_runs: dict[str, Any] = {}
+    fail_post_path: str | None = None
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -633,6 +636,12 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - standard library handler name
         self.record()
+        if self.path == "/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet":
+            self.respond(200, self.scheduled_jobs)
+            return
+        if self.path == "/repos/NSPG13/agent-bounties/actions/runs?per_page=100":
+            self.respond(200, self.scheduled_runs)
+            return
         if self.path == "/repos/NSPG13/agent-bounties/branches/main":
             branch_sha = "b" * 40 if self.stale_branch_metadata else MAIN_SHA
             self.respond(200, {"name": "main", "commit": {"sha": branch_sha}})
@@ -661,6 +670,9 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
             "regression-verifier-runner.yml/dispatches",
             f"/repos/NSPG13/agent-bounties/actions/runs/{self.signer_run_id}/rerun-failed-jobs",
         }
+        if self.path == self.fail_post_path:
+            self.respond(500, {"message": "injected later write failure"})
+            return
         self.respond(204 if self.path in allowed else 404, None if self.path in allowed else {"message": "not found"})
 
 
@@ -692,6 +704,10 @@ def execute(
                 "--state",
                 str(state_path),
                 "--execute",
+                "--allow-workflow",
+                "regression-verifier-runner.yml",
+                "--allow-workflow",
+                "regression-verifier-signer.yml",
             ],
             cwd=ROOT,
             env=environment,
@@ -700,6 +716,47 @@ def execute(
             timeout=30,
             check=False,
         )
+
+
+def plan_live(
+    api_base: str,
+    output_path: Path,
+    policy_path: Path,
+) -> subprocess.CompletedProcess[bytes]:
+    tool = require("scripts/regression_verifier_watchdog.py")
+    environment = os.environ.copy()
+    environment["WATCHDOG_BENCHMARK_TOKEN"] = "benchmark-token"
+    environment["WATCHDOG_BENCHMARK_LOOPBACK"] = "1"
+    environment["WATCHDOG_BENCHMARK_NOW"] = NOW
+    return subprocess.run(
+        [
+            sys.executable,
+            str(tool),
+            "plan-live",
+            "--api-base",
+            api_base,
+            "--repository",
+            "NSPG13/agent-bounties",
+            "--github-api-base",
+            api_base,
+            "--token-env",
+            "WATCHDOG_BENCHMARK_TOKEN",
+            "--policy",
+            str(policy_path),
+            "--output",
+            str(output_path),
+            "--allow-workflow",
+            "regression-verifier-runner.yml",
+            "--allow-workflow",
+            "regression-verifier-signer.yml",
+        ],
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+    )
 
 
 # Exercise the production executor against a local fake GitHub boundary. It may
@@ -732,6 +789,18 @@ execution_plan = {
 }
 FakeGitHubHandler.requests = []
 FakeGitHubHandler.signer_run_id = 4304
+FakeGitHubHandler.scheduled_jobs = {
+    "schema": "agent-bounties/regression-verifier-watchdog-jobs-v1",
+    "network": "base-mainnet",
+    "safe_block": 50_700_000,
+    "jobs": dispatch_jobs + relay_execute_jobs,
+}
+FakeGitHubHandler.scheduled_runs = {
+    "schema": "agent-bounties/regression-verifier-watchdog-runs-v1",
+    "repository": "NSPG13/agent-bounties",
+    "current_main_sha": MAIN_SHA,
+    "runs": relay_execute_runs,
+}
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHubHandler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
@@ -739,6 +808,42 @@ execution_state = tempfile.TemporaryDirectory(prefix="watchdog-state-")
 try:
     api_base = f"http://127.0.0.1:{server.server_port}"
     state_root = Path(execution_state.name)
+    live_plan_path = state_root / "watchdog-plan.json"
+    live_policy_path = require("ops/regression-verifier-watchdog-policy.json")
+    checked_policy = json.loads(live_policy_path.read_text(encoding="utf-8"))
+    expected_checked_policy = {
+        key: value for key, value in POLICY.items() if key != "current_main_sha"
+    }
+    if checked_policy != expected_checked_policy:
+        raise SystemExit("checked-in watchdog policy does not match the precommitted bounds")
+    completed = plan_live(api_base, live_plan_path, live_policy_path)
+    if completed.returncode != 0 or not live_plan_path.is_file():
+        raise SystemExit(
+            "watchdog live planning fixture failed:\n"
+            + completed.stdout.decode("utf-8", "replace")[-5000:]
+        )
+    generated_execution_plan = json.loads(live_plan_path.read_text(encoding="utf-8"))
+    if generated_execution_plan != execution_plan:
+        raise SystemExit("watchdog live planner did not produce the exact executable plan")
+    requested_paths = {item["path"] for item in FakeGitHubHandler.requests}
+    required_live_paths = {
+        "/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet",
+        "/repos/NSPG13/agent-bounties/actions/runs?per_page=100",
+        "/repos/NSPG13/agent-bounties/branches/main",
+    }
+    if not required_live_paths.issubset(requested_paths):
+        raise SystemExit("watchdog live planner did not acquire every required production input")
+    github_requests = [
+        item for item in FakeGitHubHandler.requests if item["path"].startswith("/repos/")
+    ]
+    if any(item["authorization"] != "Bearer benchmark-token" for item in github_requests):
+        raise SystemExit("watchdog live planner did not scope its token to GitHub requests")
+    platform_requests = [
+        item for item in FakeGitHubHandler.requests if item["path"].startswith("/v1/")
+    ]
+    if any(item["authorization"] is not None for item in platform_requests):
+        raise SystemExit("watchdog live planner leaked the GitHub token to the platform API")
+    FakeGitHubHandler.requests = []
     successful_state = state_root / "successful.json"
     completed = execute(execution_plan, api_base, successful_state)
     if completed.returncode != 0:
@@ -776,6 +881,38 @@ try:
         raise SystemExit("watchdog replay did not report both idempotent actions as skipped")
     if len(FakeGitHubHandler.requests) != request_count:
         raise SystemExit("watchdog replay contacted GitHub after both actions were recorded")
+
+    FakeGitHubHandler.requests = []
+    partial_state = state_root / "partial.json"
+    FakeGitHubHandler.fail_post_path = (
+        "/repos/NSPG13/agent-bounties/actions/runs/4304/rerun-failed-jobs"
+    )
+    partial = execute(execution_plan, api_base, partial_state)
+    if partial.returncode == 0:
+        raise SystemExit("watchdog partial-write fixture did not inject the later failure")
+    partial_writes = [item for item in FakeGitHubHandler.requests if item["method"] == "POST"]
+    if [item["path"] for item in partial_writes] != [
+        "/repos/NSPG13/agent-bounties/actions/workflows/"
+        "regression-verifier-runner.yml/dispatches",
+        "/repos/NSPG13/agent-bounties/actions/runs/4304/rerun-failed-jobs",
+    ]:
+        raise SystemExit("watchdog partial-write fixture did not fail after the first action")
+    partial_document = json.loads(partial_state.read_text(encoding="utf-8"))
+    if partial_document != {
+        "schema": "agent-bounties/regression-verifier-watchdog-state-v1",
+        "executed_idempotency_keys": [execution_plan["jobs"][0]["idempotency_key"]],
+    }:
+        raise SystemExit("watchdog did not durably record the first action before later failure")
+    FakeGitHubHandler.requests = []
+    FakeGitHubHandler.fail_post_path = None
+    resumed = execute(execution_plan, api_base, partial_state)
+    if resumed.returncode != 0:
+        raise SystemExit("watchdog could not resume after a later action failed")
+    resumed_writes = [item for item in FakeGitHubHandler.requests if item["method"] == "POST"]
+    if [item["path"] for item in resumed_writes] != [
+        "/repos/NSPG13/agent-bounties/actions/runs/4304/rerun-failed-jobs"
+    ]:
+        raise SystemExit("watchdog repeated an earlier successful action after partial failure")
 
     unsafe_plan = json.loads(json.dumps(execution_plan))
     unsafe_plan["jobs"][0]["target_workflow"] = "unreviewed-wallet-job.yml"
@@ -819,6 +956,7 @@ try:
 finally:
     FakeGitHubHandler.unsafe_run_metadata = False
     FakeGitHubHandler.stale_branch_metadata = False
+    FakeGitHubHandler.fail_post_path = None
     execution_state.cleanup()
     server.shutdown()
     server.server_close()
@@ -839,168 +977,98 @@ if completed.returncode != 0:
     raise SystemExit("watchdog implementation tests failed:\n" + completed.stdout.decode()[-5000:])
 
 workflow = require(".github/workflows/regression-verifier-watchdog.yml").read_text(encoding="utf-8")
-workflow_lower = workflow.lower()
-for forbidden in ("pull_request_target", "issue_comment:", "id-token: write", "contents: write", "secrets."):
-    if forbidden in workflow_lower:
-        raise SystemExit(f"watchdog workflow contains forbidden privilege or trigger: {forbidden}")
-
-
-def top_level_block(source: str, key: str) -> str:
-    lines = source.splitlines()
-    try:
-        start = next(index for index, line in enumerate(lines) if line.strip() == key and not line[:1].isspace())
-    except StopIteration as error:
-        raise SystemExit(f"watchdog workflow has no effective top-level {key}") from error
-    collected = []
-    for line in lines[start + 1 :]:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and not line[:1].isspace():
-            break
-        collected.append(line)
-    return "\n".join(collected)
-
-
-trigger_block = top_level_block(workflow, "on:")
-trigger_keys = {
-    match.group(1)
-    for line in trigger_block.splitlines()
-    if (match := re.match(r"^  ([a-zA-Z0-9_-]+):\s*(?:#.*)?$", line))
-}
-if trigger_keys != {"schedule", "workflow_dispatch"}:
-    raise SystemExit("watchdog workflow triggers must be exactly schedule and workflow_dispatch")
-if not re.search(r'(?m)^\s{4,}-\s+cron:\s*["\'][^"\']+["\']\s*$', trigger_block):
-    raise SystemExit("watchdog schedule has no effective cron entry")
-
-jobs_block = top_level_block(workflow, "jobs:")
-job_keys = {
-    match.group(1)
-    for line in jobs_block.splitlines()
-    if (match := re.match(r"^  ([a-zA-Z0-9_-]+):\s*(?:#.*)?$", line))
-}
-if job_keys != {"watchdog"}:
-    raise SystemExit("watchdog workflow must contain exactly one effective watchdog job")
-if re.search(r"(?m)^\s{4}permissions:\s*", jobs_block):
-    raise SystemExit("watchdog job must inherit the exact top-level permission map")
-command_matches = re.findall(r"(?m)^\s{6,}-\s+run:\s*(\S.*)$", jobs_block)
-if len(command_matches) != 1:
-    raise SystemExit("scheduled watchdog job must contain exactly one effective run command")
-execute_command = command_matches[0]
-expected_execute_tokens = [
-    "python",
-    "scripts/regression_verifier_watchdog.py",
-    "execute",
-    "--plan",
-    "target/watchdog-plan.json",
-    "--repository",
-    "$GITHUB_REPOSITORY",
-    "--github-api-base",
-    "https://api.github.com",
-    "--token-env",
-    "GITHUB_TOKEN",
-    "--state",
-    ".watchdog/state.json",
-    "--execute",
-    "--allow-workflow",
-    "regression-verifier-runner.yml",
-    "--allow-workflow",
-    "regression-verifier-signer.yml",
-]
 try:
-    execute_tokens = shlex.split(execute_command, posix=True)
-except ValueError as error:
-    raise SystemExit("scheduled watchdog execute command is not safely parseable") from error
-if execute_tokens != expected_execute_tokens:
-    raise SystemExit("scheduled watchdog execute command must contain only the exact pinned argv")
-if not re.search(
-    r"(?m)^\s{6,}GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}\s*$",
-    jobs_block,
-):
-    raise SystemExit("watchdog execute job does not bind the repository token")
-
-permission_block = top_level_block(workflow_lower, "permissions:")
-permission_lines = {
-    line.strip()
-    for line in permission_block.splitlines()
-    if line.strip() and not line.lstrip().startswith("#")
-}
-if permission_lines != {"contents: read", "actions: write"}:
+    workflow_document = json.loads(workflow)
+except json.JSONDecodeError as error:
+    raise SystemExit("watchdog workflow must use strict JSON-syntax YAML") from error
+if set(workflow_document) != {"name", "on", "permissions", "concurrency", "jobs"}:
+    raise SystemExit("watchdog workflow has unknown effective top-level keys")
+if workflow_document["name"] != "Regression Verifier Watchdog":
+    raise SystemExit("watchdog workflow name is not exact")
+triggers = workflow_document["on"]
+if not isinstance(triggers, dict) or set(triggers) != {"schedule", "workflow_dispatch"}:
+    raise SystemExit("watchdog workflow triggers must be exactly schedule and workflow_dispatch")
+schedule = triggers["schedule"]
+if schedule != [{"cron": "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"}]:
+    raise SystemExit("watchdog workflow has no single effective cron schedule")
+if workflow_document["permissions"] != {"contents": "read", "actions": "write"}:
     raise SystemExit("watchdog workflow permissions must be exactly contents: read and actions: write")
-concurrency_block = top_level_block(workflow_lower, "concurrency:")
-concurrency_lines = {
-    line.strip()
-    for line in concurrency_block.splitlines()
-    if line.strip() and not line.lstrip().startswith("#")
-}
-if concurrency_lines != {
-    "group: regression-verifier-watchdog-mainnet",
-    "cancel-in-progress: false",
+if workflow_document["concurrency"] != {
+    "group": "regression-verifier-watchdog-mainnet",
+    "cancel-in-progress": False,
 }:
     raise SystemExit("watchdog workflow must serialize the exact mainnet concurrency group")
-cache_steps = list(
-    re.finditer(
-        r"(?m)^\s{6,}-\s+uses:\s+actions/cache/(restore|save)@([0-9a-f]{40})\s*$",
-        jobs_block,
-    )
-)
-if [match.group(1) for match in cache_steps] != ["restore", "save"]:
-    raise SystemExit("watchdog workflow must use one pinned cache restore and one pinned cache save")
-workflow_steps = list(
-    re.finditer(r"(?m)^\s{6,}-\s+(uses|run):\s*(\S.*)$", jobs_block)
-)
-if len(workflow_steps) != 4:
-    raise SystemExit("watchdog job may contain only checkout, cache restore, execute, and cache save")
-step_kinds = [(match.group(1), match.group(2)) for match in workflow_steps]
-if not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", step_kinds[0][1]):
-    raise SystemExit("watchdog checkout action must be pinned to an exact commit")
-if step_kinds[0][0] != "uses" or step_kinds[1][1] != cache_steps[0].group(0).split("uses:", 1)[1].strip():
-    raise SystemExit("watchdog checkout/cache restore steps are not exact")
-if step_kinds[2] != ("run", execute_command):
-    raise SystemExit("watchdog execute step is not the sole command")
-if step_kinds[3][0] != "uses" or step_kinds[3][1] != cache_steps[1].group(0).split("uses:", 1)[1].strip():
-    raise SystemExit("watchdog cache save step is not exact")
-execute_offset = jobs_block.find(execute_command)
-if not (cache_steps[0].start() < execute_offset < cache_steps[1].start()):
-    raise SystemExit("watchdog state restore, execute, and save steps are out of order")
-
-
-def workflow_step_block(match: re.Match[str]) -> str:
-    remainder = jobs_block[match.end() :]
-    next_step = re.search(r"(?m)^\s{6,}-\s+(?:uses|run):", remainder)
-    return remainder[: next_step.start()] if next_step else remainder
-
-
-restore_block = workflow_step_block(cache_steps[0])
-save_block = workflow_step_block(cache_steps[1])
-execute_block = workflow_step_block(workflow_steps[2])
-execute_environment = {
-    line.strip()
-    for line in execute_block.splitlines()
-    if line.strip() and not line.lstrip().startswith("#")
-}
-if execute_environment != {"env:", "GITHUB_TOKEN: ${{ github.token }}"}:
-    raise SystemExit("watchdog execute step environment must contain only the repository token")
-state_path_pattern = r"(?m)^\s{10,}path:\s+\.watchdog/state\.json\s*$"
-cache_key_pattern = (
-    r"(?m)^\s{10,}key:\s+\$\{\{\s*runner\.os\s*\}\}"
-    r"-regression-verifier-watchdog-\$\{\{\s*github\.run_id\s*\}\}\s*$"
-)
-if not re.search(state_path_pattern, restore_block) or not re.search(state_path_pattern, save_block):
-    raise SystemExit("watchdog cache steps do not persist the exact execution state path")
-if not re.search(cache_key_pattern, restore_block) or not re.search(cache_key_pattern, save_block):
-    raise SystemExit("watchdog cache restore/save keys do not bind the current run")
-if not re.search(
-    r"(?m)^\s{10,}restore-keys:\s+\$\{\{\s*runner\.os\s*\}\}"
-    r"-regression-verifier-watchdog-\s*$",
-    restore_block,
+jobs = workflow_document["jobs"]
+if not isinstance(jobs, dict) or set(jobs) != {"watchdog"}:
+    raise SystemExit("watchdog workflow must contain exactly one effective watchdog job")
+watchdog_job = jobs["watchdog"]
+if set(watchdog_job) != {"runs-on", "steps"} or watchdog_job["runs-on"] != "ubuntu-latest":
+    raise SystemExit("watchdog job may not override permissions, defaults, shell, or container")
+steps = watchdog_job["steps"]
+if not isinstance(steps, list) or len(steps) != 5 or not all(isinstance(step, dict) for step in steps):
+    raise SystemExit("watchdog job must contain exactly five bounded steps")
+checkout, restore, live_step, execute_step, save = steps
+if set(checkout) != {"uses", "with"} or not re.fullmatch(
+    r"actions/checkout@[0-9a-f]{40}", str(checkout["uses"])
 ):
-    raise SystemExit("watchdog cache restore has no cross-schedule state prefix")
-referenced_workflows = set(re.findall(r"[a-z0-9_-]+\.ya?ml", execute_command.lower()))
-unknown_workflows = referenced_workflows - {
-    "regression-verifier-runner.yml",
-    "regression-verifier-signer.yml",
-}
-if unknown_workflows:
-    raise SystemExit(f"watchdog workflow references an unknown workflow: {sorted(unknown_workflows)}")
+    raise SystemExit("watchdog checkout action must be commit-pinned")
+if checkout["with"] != {
+    "repository": "${{ github.repository }}",
+    "ref": "main",
+    "persist-credentials": False,
+}:
+    raise SystemExit("watchdog checkout must bind protected main without persisted credentials")
+cache_key = "${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}"
+cache_prefix = "${{ runner.os }}-regression-verifier-watchdog-"
+if set(restore) != {"uses", "with"} or not re.fullmatch(
+    r"actions/cache/restore@[0-9a-f]{40}", str(restore["uses"])
+):
+    raise SystemExit("watchdog cache restore must be commit-pinned")
+if restore["with"] != {
+    "path": ".watchdog/state.json",
+    "key": cache_key,
+    "restore-keys": cache_prefix,
+}:
+    raise SystemExit("watchdog cache restore does not bind the exact state file")
+token_environment = {"GITHUB_TOKEN": "${{ github.token }}"}
+if set(live_step) != {"run", "env"} or live_step["env"] != token_environment:
+    raise SystemExit("watchdog live planner step is not tightly scoped")
+if set(execute_step) != {"run", "env"} or execute_step["env"] != token_environment:
+    raise SystemExit("watchdog execute step is not tightly scoped")
+expected_live_tokens = [
+    "python", "scripts/regression_verifier_watchdog.py", "plan-live",
+    "--api-base", "https://api.agentbounties.app",
+    "--repository", "$GITHUB_REPOSITORY",
+    "--github-api-base", "https://api.github.com",
+    "--token-env", "GITHUB_TOKEN",
+    "--policy", "ops/regression-verifier-watchdog-policy.json",
+    "--output", "target/watchdog-plan.json",
+    "--allow-workflow", "regression-verifier-runner.yml",
+    "--allow-workflow", "regression-verifier-signer.yml",
+]
+expected_execute_tokens = [
+    "python", "scripts/regression_verifier_watchdog.py", "execute",
+    "--plan", "target/watchdog-plan.json",
+    "--repository", "$GITHUB_REPOSITORY",
+    "--github-api-base", "https://api.github.com",
+    "--token-env", "GITHUB_TOKEN",
+    "--state", ".watchdog/state.json", "--execute",
+    "--allow-workflow", "regression-verifier-runner.yml",
+    "--allow-workflow", "regression-verifier-signer.yml",
+]
+try:
+    live_tokens = shlex.split(str(live_step["run"]), posix=True)
+    execute_tokens = shlex.split(str(execute_step["run"]), posix=True)
+except ValueError as error:
+    raise SystemExit("watchdog production commands are not safely parseable") from error
+if live_tokens != expected_live_tokens or execute_tokens != expected_execute_tokens:
+    raise SystemExit("watchdog production commands must contain only the exact pinned argv")
+if set(save) != {"if", "uses", "with"} or save["if"] != "${{ always() }}" or not re.fullmatch(
+    r"actions/cache/save@[0-9a-f]{40}", str(save["uses"])
+):
+    raise SystemExit("watchdog cache save must be pinned and run after partial failure")
+if save["with"] != {"path": ".watchdog/state.json", "key": cache_key}:
+    raise SystemExit("watchdog cache save does not persist the exact execution state")
 
 signer_workflow = require(".github/workflows/regression-verifier-signer.yml").read_text(encoding="utf-8")
 reusable_workflow = require(
@@ -1030,12 +1098,23 @@ try:
 except IndexError as error:
     raise SystemExit("signer workflow job boundaries are unavailable") from error
 fallbacks = {
-    provider_binding(sign_one_block, "rpc_url", "REGRESSION_VERIFIER_ONE_RPC_URL"),
-    provider_binding(sign_two_block, "rpc_url", "REGRESSION_VERIFIER_TWO_RPC_URL"),
-    provider_binding(relay_block, "BASE_MAINNET_RPC_URL", "REGRESSION_VERIFIER_RELAY_RPC_URL"),
+    "signer_one": provider_binding(
+        sign_one_block, "rpc_url", "REGRESSION_VERIFIER_ONE_RPC_URL"
+    ),
+    "signer_two": provider_binding(
+        sign_two_block, "rpc_url", "REGRESSION_VERIFIER_TWO_RPC_URL"
+    ),
+    "relay": provider_binding(
+        relay_block, "BASE_MAINNET_RPC_URL", "REGRESSION_VERIFIER_RELAY_RPC_URL"
+    ),
 }
-if len(fallbacks) != 3:
-    raise SystemExit("signer one, signer two, and relay must have distinct public fallbacks")
+expected_fallbacks = {
+    "signer_one": "https://mainnet.base.org",
+    "signer_two": "https://base-rpc.publicnode.com",
+    "relay": "https://1rpc.io/base",
+}
+if fallbacks != expected_fallbacks:
+    raise SystemExit("signer and relay provider fallbacks must match the precommitted origins")
 for block, variable in (
     (sign_one_block, "REGRESSION_VERIFIER_ONE_RPC_URL"),
     (sign_two_block, "REGRESSION_VERIFIER_TWO_RPC_URL"),
@@ -1061,10 +1140,72 @@ if not re.search(
     reusable_workflow,
 ):
     raise SystemExit("reusable signer does not consume its exact rpc_url input")
-if '--rpc-url "$BASE_MAINNET_RPC_URL"' not in reusable_workflow:
-    raise SystemExit("reusable signer does not pass its bound provider to the signing command")
-if '--rpc-url "$BASE_MAINNET_RPC_URL"' not in relay_block:
-    raise SystemExit("relay does not pass its independent provider to the relay command")
+
+
+def effective_run_commands(block: str) -> list[str]:
+    """Extract the effective shell bodies from the constrained workflow subset."""
+    lines = block.splitlines()
+    commands: list[str] = []
+    index = 0
+    while index < len(lines):
+        match = re.match(r"^(\s*)(?:-\s+)?run:\s*(.*?)\s*$", lines[index])
+        if not match:
+            index += 1
+            continue
+        indentation = len(match.group(1))
+        scalar = match.group(2)
+        if scalar not in {">", ">-", "|", "|-"}:
+            commands.append(scalar)
+            index += 1
+            continue
+        pieces: list[str] = []
+        index += 1
+        while index < len(lines):
+            line = lines[index]
+            if line.strip() and len(line) - len(line.lstrip()) <= indentation:
+                break
+            if line.strip():
+                pieces.append(line.strip())
+            index += 1
+        separator = " " if scalar.startswith(">") else "\n"
+        commands.append(separator.join(pieces))
+    return commands
+
+
+def pipeline_command_tokens(block: str, subcommand: str) -> list[str]:
+    matches: list[list[str]] = []
+    for command in effective_run_commands(block):
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        try:
+            tokens = list(lexer)
+        except ValueError as error:
+            raise SystemExit(f"{subcommand} workflow command is not safely parseable") from error
+        if tokens[:3] == [
+            "python",
+            "scripts/regression_verifier_pipeline.py",
+            subcommand,
+        ]:
+            matches.append(tokens)
+    if len(matches) != 1:
+        raise SystemExit(f"workflow must contain exactly one effective {subcommand} pipeline command")
+    tokens = matches[0]
+    if any(token in {";", "&&", "||", "|", "&"} for token in tokens):
+        raise SystemExit(f"{subcommand} pipeline command contains a shell control operator")
+    return tokens
+
+
+def require_rpc_argument(tokens: list[str], subcommand: str) -> None:
+    positions = [index for index, token in enumerate(tokens) if token == "--rpc-url"]
+    if len(positions) != 1 or positions[0] + 1 >= len(tokens):
+        raise SystemExit(f"{subcommand} command must contain one effective --rpc-url argument")
+    if tokens[positions[0] + 1] != "$BASE_MAINNET_RPC_URL":
+        raise SystemExit(f"{subcommand} command does not consume the bound provider variable")
+
+
+require_rpc_argument(pipeline_command_tokens(reusable_workflow, "sign"), "sign")
+require_rpc_argument(pipeline_command_tokens(relay_block, "relay"), "relay")
 
 documentation = require("docs/sandboxed-regression-verifier.md").read_text(encoding="utf-8").lower()
 for phrase in ("watchdog", "fail closed", "idempotency", "provider", "bountysettled"):
