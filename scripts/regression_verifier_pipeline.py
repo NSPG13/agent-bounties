@@ -36,6 +36,10 @@ MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES = 128 * 1024 * 1024
 MAX_GITHUB_SOURCE_ARCHIVE_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_GITHUB_BENCHMARK_ARCHIVE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_GITHUB_ARCHIVE_ENTRIES = 100_000
+BASE_MAINNET_CHAIN_ID = 8453
+RELAY_GAS_LIMIT = 500_000
+RELAY_MAX_FEE_PER_GAS = 500_000_000
+RELAY_PRIORITY_FEE_PER_GAS = 1_000_000
 
 
 class PipelineError(RuntimeError):
@@ -637,6 +641,84 @@ def attestation_digest(
     return local_digest
 
 
+def relay_rpc_preflight(
+    cast: Path,
+    rpc_url: str,
+    bounty: str,
+    expected_keeper: str,
+    attestations: str,
+    environment: dict[str, str],
+) -> int:
+    chain_id_text = run(
+        [str(cast), "chain-id", "--rpc-url", rpc_url], env=environment
+    ).strip().lower()
+    try:
+        chain_id = int(chain_id_text, 0)
+    except ValueError as error:
+        raise PipelineError("relay RPC returned an invalid chain id") from error
+    if chain_id != BASE_MAINNET_CHAIN_ID:
+        raise PipelineError("relay RPC is not Base mainnet")
+
+    code = run(
+        [str(cast), "code", "--rpc-url", rpc_url, bounty], env=environment
+    ).lower()
+    if not re.fullmatch(r"0x[0-9a-f]+", code) or code == "0x" or set(code[2:]) == {"0"}:
+        raise PipelineError("relay RPC returned no bounty contract code")
+
+    call = [
+        str(cast),
+        "call",
+        "--rpc-url",
+        rpc_url,
+        "--from",
+        expected_keeper,
+        bounty,
+        "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
+        attestations,
+    ]
+    run(call, env=environment)
+    estimate_text = run(
+        [
+            str(cast),
+            "estimate",
+            "--rpc-url",
+            rpc_url,
+            "--from",
+            expected_keeper,
+            bounty,
+            "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
+            attestations,
+        ],
+        env=environment,
+    ).strip().lower()
+    try:
+        estimated_gas = int(estimate_text, 0)
+    except ValueError as error:
+        raise PipelineError("relay RPC returned an invalid gas estimate") from error
+    if estimated_gas <= 0 or estimated_gas > RELAY_GAS_LIMIT:
+        raise PipelineError("relay gas estimate exceeds the precommitted limit")
+
+    nonce_text = run(
+        [
+            str(cast),
+            "nonce",
+            "--rpc-url",
+            rpc_url,
+            "--block",
+            "latest",
+            expected_keeper,
+        ],
+        env=environment,
+    ).strip().lower()
+    try:
+        nonce = int(nonce_text, 0)
+    except ValueError as error:
+        raise PipelineError("relay RPC returned an invalid keeper nonce") from error
+    if nonce < 0:
+        raise PipelineError("relay RPC returned a negative keeper nonce")
+    return nonce
+
+
 def command_sign(args: argparse.Namespace) -> None:
     if not os.environ.get(args.private_key_env, "").strip():
         raise PipelineError(f"{args.private_key_env} is required")
@@ -753,9 +835,10 @@ def command_sign(args: argparse.Namespace) -> None:
 
 
 def command_relay(args: argparse.Namespace) -> None:
-    keeper = os.environ.get(args.keeper_key_env, "").strip()
-    if not keeper:
+    if not os.environ.get(args.keeper_key_env, "").strip():
         raise PipelineError(f"{args.keeper_key_env} is required")
+    secret_free_environment = environment_without(args.keeper_key_env)
+    expected_keeper = normalize_address(args.expected_keeper, "expected keeper")
     configured = [normalize_address(value, "verifier") for value in args.verifier]
     if len(configured) not in {1, 2} or len(set(configured)) != len(configured):
         raise PipelineError("relay requires one or two distinct configured verifiers")
@@ -794,6 +877,7 @@ def command_relay(args: argparse.Namespace) -> None:
         raise PipelineError("candidate manifest entries are invalid")
     seen_candidate_jobs: set[str] = set()
     seen_candidate_files: set[str] = set()
+    relay_plans: list[dict[str, str]] = []
     for entry in candidate_entries:
         job_id = str(entry.get("job_id", ""))
         candidate_path = manifest_file(
@@ -846,6 +930,53 @@ def command_relay(args: argparse.Namespace) -> None:
             f"({item['verifier']},{str(item['passed']).lower()},{item['response_hash']},{item['deadline']},{item['signature']})"
             for item in attestations
         )
+        relay_plans.append(
+            {
+                "job_id": job_id,
+                "bounty": normalize_address(current.get("bounty_contract"), "bounty contract"),
+                "attestations": f"[{tuple_values}]",
+            }
+        )
+
+    if not relay_plans:
+        return
+
+    observed_nonce: int | None = None
+    for plan in relay_plans:
+        nonce = relay_rpc_preflight(
+            args.cast,
+            args.rpc_url,
+            plan["bounty"],
+            expected_keeper,
+            plan["attestations"],
+            secret_free_environment,
+        )
+        if observed_nonce is None:
+            observed_nonce = nonce
+        elif nonce != observed_nonce:
+            raise PipelineError("relay RPC keeper nonce changed during the pre-write preflight")
+
+    # No child process receives the keeper key until every candidate, current
+    # canonical job, exact call, chain, contract, gas bound, and starting nonce
+    # has passed validation.
+    keeper = os.environ.get(args.keeper_key_env, "").strip()
+    keeper_address = normalize_address(
+        run(
+            [
+                str(args.cast),
+                "wallet",
+                "address",
+                "--private-key",
+                keeper,
+            ],
+            env=secret_free_environment,
+        ),
+        "keeper",
+    )
+    if keeper_address != expected_keeper:
+        raise PipelineError("keeper private key does not match the expected public address")
+
+    for offset, plan in enumerate(relay_plans):
         transaction = run(
             [
                 str(args.cast),
@@ -853,18 +984,29 @@ def command_relay(args: argparse.Namespace) -> None:
                 "--json",
                 "--rpc-url",
                 args.rpc_url,
+                "--chain",
+                str(BASE_MAINNET_CHAIN_ID),
+                "--nonce",
+                str((observed_nonce or 0) + offset),
+                "--gas-limit",
+                str(RELAY_GAS_LIMIT),
+                "--gas-price",
+                str(RELAY_MAX_FEE_PER_GAS),
+                "--priority-gas-price",
+                str(RELAY_PRIORITY_FEE_PER_GAS),
                 "--private-key",
                 keeper,
-                current["bounty_contract"],
+                plan["bounty"],
                 "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
-                f"[{tuple_values}]",
-            ]
+                plan["attestations"],
+            ],
+            env=secret_free_environment,
         )
         receipt = json.loads(transaction)
         transaction_hash = str(receipt.get("transactionHash", "")).lower()
         if not HASH.fullmatch(transaction_hash) or str(receipt.get("status", "")) not in {"0x1", "1"}:
             raise PipelineError("attestation relay did not return a successful receipt")
-        print(f"relayed {job_id}: {transaction_hash}")
+        print(f"relayed {plan['job_id']}: {transaction_hash}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -903,6 +1045,7 @@ def parser() -> argparse.ArgumentParser:
     relay_parser.add_argument("--worker", type=Path, required=True)
     relay_parser.add_argument("--cast", type=Path, default=Path("cast"))
     relay_parser.add_argument("--keeper-key-env", default="BASE_KEEPER_PRIVATE_KEY")
+    relay_parser.add_argument("--expected-keeper", required=True)
     relay_parser.set_defaults(handler=command_relay)
     return root
 

@@ -102,7 +102,7 @@ jobs:
     env:
       API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
       BASE_MAINNET_RPC_URL: ${{ vars.REGRESSION_VERIFIER_RPC_URL || 'https://mainnet.base.org' }}
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      KEEPER_ADDRESS: "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
       VERIFIER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
@@ -131,6 +131,8 @@ jobs:
           path: target/attestations-two
       - run: cargo build --release -p worker
       - name: Revalidate and relay exact quorum
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
         run: >-
           python scripts/regression_verifier_pipeline.py relay
           --api-base "$API_BASE_URL"
@@ -142,3 +144,4 @@ jobs:
           --verifier "$VERIFIER_ONE"
           --verifier "$VERIFIER_TWO"
           --worker target/release/worker
+          --expected-keeper "$KEEPER_ADDRESS"

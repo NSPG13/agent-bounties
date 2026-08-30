@@ -52,6 +52,7 @@ def bound_idempotency_key(
     run_id,
     workflow_job_id,
     run_attempt,
+    affected_workflow_jobs,
     main_sha,
 ):
     payload = json.dumps(
@@ -64,9 +65,11 @@ def bound_idempotency_key(
             run_id,
             workflow_job_id,
             run_attempt,
+            affected_workflow_jobs,
             main_sha,
         ],
         separators=(",", ":"),
+        sort_keys=True,
     )
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
 
@@ -371,7 +374,7 @@ if args.command == "plan-live":
                     "stage": stage,
                     "status": observed.get("status"),
                     "conclusion": observed.get("conclusion"),
-                    "attempt": workflow_run.get("run_attempt"),
+                    "attempt": observed.get("run_attempt"),
                     "head_sha": workflow_run.get("head_sha"),
                     "workflow": workflow_names[path],
                     "provider_role": {
@@ -391,7 +394,7 @@ if args.command == "plan-live":
                     "canonical_job_hash": normalized["canonical_job_hash"],
                     "workflow_run_id": run_id,
                     "workflow_job_id": observed.get("id"),
-                    "workflow_run_attempt": workflow_run.get("run_attempt"),
+                    "workflow_run_attempt": observed.get("run_attempt"),
                 })
     runs_document = {
         "schema": "agent-bounties/regression-verifier-watchdog-runs-v1",
@@ -464,6 +467,12 @@ if args.command == "execute":
     automated = [item for item in document["jobs"] if item.get("automation_allowed") is True]
     seen_keys = set()
     seen_retry_run_ids = set()
+    expected_affected_names = {
+        "retry_runner": [("run-no-secrets", "target")],
+        "retry_signer_one": [("sign-one / sign", "target"), ("relay", "dependent")],
+        "retry_signer_two": [("sign-two / sign", "target"), ("relay", "dependent")],
+        "retry_relay": [("relay", "target")],
+    }
     for item in automated:
         expected = allowed.get(item.get("next_action"))
         if expected is None or item.get("target_workflow") != expected:
@@ -480,6 +489,25 @@ if args.command == "execute":
             or run_attempt <= 0
         ):
             raise SystemExit("workflow retry requires positive run, job, and attempt IDs")
+        affected = item.get("affected_workflow_jobs")
+        expected_affected = expected_affected_names[item["next_action"]]
+        if (
+            not isinstance(affected, list)
+            or len(affected) != len(expected_affected)
+            or [
+                (entry.get("name"), entry.get("effect"))
+                for entry in affected
+                if isinstance(entry, dict)
+            ] != expected_affected
+            or any(
+                not isinstance(entry.get("workflow_job_id"), int)
+                or entry["workflow_job_id"] <= 0
+                for entry in affected
+            )
+            or affected[0]["workflow_job_id"] != workflow_job_id
+            or len({entry["workflow_job_id"] for entry in affected}) != len(affected)
+        ):
+            raise SystemExit("retry does not bind its exact target and dependent jobs")
         expected_key = bound_idempotency_key(
             item.get("job_id"),
             item.get("canonical_job_hash"),
@@ -489,6 +517,7 @@ if args.command == "execute":
             run_id,
             workflow_job_id,
             run_attempt,
+            affected,
             document.get("current_main_sha"),
         )
         if item.get("idempotency_key") != expected_key or expected_key in seen_keys:
@@ -553,23 +582,40 @@ if args.command == "execute":
         if not isinstance(current_attempt, int) or current_attempt < item["workflow_run_attempt"]:
             raise SystemExit("workflow run attempt regressed")
         if current_attempt > item["workflow_run_attempt"]:
+            attempts = request(
+                "GET",
+                f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/jobs?filter=all&per_page=100",
+            ).get("jobs")
+            target_name = expected_job_names[item["next_action"]]
+            if not isinstance(attempts, list) or not any(
+                isinstance(job, dict)
+                and job.get("run_id") == run_id
+                and job.get("name") == target_name
+                and isinstance(job.get("run_attempt"), int)
+                and job["run_attempt"] > item["workflow_run_attempt"]
+                for job in attempts
+            ):
+                raise SystemExit("run attempt advanced without exact target-job retry evidence")
             remotely_completed.append(item)
             continue
         if metadata.get("status") != "completed" or metadata.get("conclusion") != "failure":
             raise SystemExit("workflow run is not a completed failure")
-        workflow_job_id = item["workflow_job_id"]
-        job_metadata = request(
-            "GET",
-            f"/repos/NSPG13/agent-bounties/actions/jobs/{workflow_job_id}",
-        )
-        if (
-            job_metadata.get("id") != workflow_job_id
-            or job_metadata.get("run_id") != run_id
-            or job_metadata.get("name") != expected_job_names[item["next_action"]]
-            or job_metadata.get("status") != "completed"
-            or job_metadata.get("conclusion") != "failure"
-        ):
-            raise SystemExit("workflow job metadata is not safe to retry")
+        for affected in item["affected_workflow_jobs"]:
+            affected_id = affected["workflow_job_id"]
+            job_metadata = request(
+                "GET",
+                f"/repos/NSPG13/agent-bounties/actions/jobs/{affected_id}",
+            )
+            expected_conclusion = "failure" if affected["effect"] == "target" else "skipped"
+            if (
+                job_metadata.get("id") != affected_id
+                or job_metadata.get("run_id") != run_id
+                or job_metadata.get("name") != affected["name"]
+                or job_metadata.get("status") != "completed"
+                or job_metadata.get("conclusion") != expected_conclusion
+                or job_metadata.get("run_attempt") != item["workflow_run_attempt"]
+            ):
+                raise SystemExit("workflow target or dependent job metadata is not safe to retry")
     for item in remotely_completed:
         completed_keys.add(item["idempotency_key"])
     if remotely_completed:
@@ -723,6 +769,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
     workflow_run_id = None
     workflow_job_id = None
     workflow_run_attempt = None
+    affected_workflow_jobs = []
     if automated:
         target_workflow = {
             "retry_runner": "regression-verifier-runner.yml",
@@ -740,7 +787,42 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         workflow_run_id = selected_run["workflow_run_id"]
         workflow_job_id = selected_run["workflow_job_id"]
         workflow_run_attempt = selected_run["workflow_run_attempt"]
-        if workflow_run_id in reserved_retry_runs:
+        affected_workflow_jobs = [{
+            "workflow_job_id": workflow_job_id,
+            "name": {
+                "runner": "run-no-secrets",
+                "signer_one": "sign-one / sign",
+                "signer_two": "sign-two / sign",
+                "relay": "relay",
+            }[stage],
+            "effect": "target",
+        }]
+        if action in {"retry_signer_one", "retry_signer_two"}:
+            dependent = next(
+                (
+                    item for item in reversed(job_runs)
+                    if item["stage"] == "relay"
+                    and item["workflow_run_id"] == workflow_run_id
+                ),
+                None,
+            )
+            if dependent is None or dependent.get("conclusion") != "skipped":
+                action = "escalate_no_verdict"
+                owner = "maintainer-on-call"
+                automated = False
+                reason = "The signer retry has no exact skipped relay dependency to authorize."
+                target_workflow = None
+                workflow_run_id = None
+                workflow_job_id = None
+                workflow_run_attempt = None
+                affected_workflow_jobs = []
+            else:
+                affected_workflow_jobs.append({
+                    "workflow_job_id": dependent["workflow_job_id"],
+                    "name": "relay",
+                    "effect": "dependent",
+                })
+        if automated and workflow_run_id in reserved_retry_runs:
             action = "await_shared_retry"
             owner = "github-actions"
             automated = False
@@ -749,7 +831,8 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             workflow_run_id = None
             workflow_job_id = None
             workflow_run_attempt = None
-        else:
+            affected_workflow_jobs = []
+        elif automated:
             reserved_retry_runs.add(workflow_run_id)
     idempotency_key = bound_idempotency_key(
         job["job_id"],
@@ -760,6 +843,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         workflow_run_id,
         workflow_job_id,
         workflow_run_attempt,
+        affected_workflow_jobs,
         policy["current_main_sha"],
     )
     recheck_at = (
@@ -779,6 +863,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         "workflow_run_id": workflow_run_id,
         "workflow_job_id": workflow_job_id,
         "workflow_run_attempt": workflow_run_attempt,
+        "affected_workflow_jobs": affected_workflow_jobs,
         "reason": reason,
         "recheck_at": recheck_at,
         "idempotency_key": idempotency_key,
@@ -926,7 +1011,8 @@ SIGNER_WORKFLOW = '''{
       "concurrency": {"group": "regression-verifier-relay-mainnet", "cancel-in-progress": false},
       "env": {
         "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
-        "BASE_MAINNET_RPC_URL": "${{ github.run_attempt == 1 && 'https://1rpc.io/base' || 'https://base.meowrpc.com' }}"
+        "BASE_MAINNET_RPC_URL": "${{ github.run_attempt == 1 && 'https://1rpc.io/base' || 'https://base.meowrpc.com' }}",
+        "KEEPER_ADDRESS": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
         ,"VERIFIER_ONE": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}"
         ,"VERIFIER_TWO": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}"
       },
@@ -940,7 +1026,7 @@ SIGNER_WORKFLOW = '''{
         {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-attestations-one-${{ github.event.workflow_run.id }}", "path": "target/attestations-one"}},
         {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-attestations-two-${{ github.event.workflow_run.id }}", "path": "target/attestations-two"}},
         {"run": "cargo build --release -p worker"},
-        {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
+        {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --expected-keeper $KEEPER_ADDRESS", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
       ]
     }
   }

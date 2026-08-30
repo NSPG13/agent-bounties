@@ -141,6 +141,146 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
 
         self.assertEqual(events, ["digest", "key-address", "key-sign"])
 
+    def test_relay_key_is_not_exposed_before_exact_rpc_preflight(self) -> None:
+        verifier = "0x" + "1" * 40
+        keeper = "0x" + "2" * 40
+        bounty = "0x" + "3" * 40
+        response_hash = "0x" + "4" * 64
+        signature = "0x" + "5" * 130
+        job_id = "base-mainnet:test:relay"
+        events: list[str] = []
+        job = {
+            "job_id": job_id,
+            "verification_mode": "signed_quorum",
+            "threshold": 1,
+            "eligible_verifiers": [verifier],
+            "bounty_contract": bounty,
+        }
+
+        def fake_preflight(*_args, **_kwargs) -> int:
+            events.append("preflight")
+            return 7
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
+            self.assertIn("preflight", events)
+            if command[1:3] == ["wallet", "address"]:
+                events.append("key-address")
+                return keeper
+            if command[1] == "send":
+                events.append("send")
+                self.assertIn("--chain", command)
+                self.assertEqual(command[command.index("--chain") + 1], "8453")
+                self.assertEqual(command[command.index("--nonce") + 1], "7")
+                self.assertEqual(
+                    command[command.index("--gas-limit") + 1],
+                    str(pipeline.RELAY_GAS_LIMIT),
+                )
+                self.assertEqual(
+                    command[command.index("--gas-price") + 1],
+                    str(pipeline.RELAY_MAX_FEE_PER_GAS),
+                )
+                return '{"transactionHash":"0x' + "6" * 64 + '","status":"0x1"}'
+            self.fail(f"unexpected command: {command}")
+
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
+            os.environ,
+            {"BASE_KEEPER_PRIVATE_KEY": "test-secret"},
+            clear=False,
+        ):
+            root = Path(temporary)
+            candidates = root / "candidates"
+            attestations = root / "attestations"
+            candidates.mkdir()
+            attestations.mkdir()
+            candidate_file = pipeline.content_addressed_name("candidate", job_id)
+            attestation_file = pipeline.content_addressed_name("attestation", job_id)
+            pipeline.write_json(
+                candidates / "manifest.json",
+                {
+                    "schema": pipeline.MANIFEST_SCHEMA,
+                    "candidates": [{"job_id": job_id, "file": candidate_file}],
+                },
+            )
+            pipeline.write_json(
+                candidates / candidate_file,
+                {
+                    "schema": pipeline.CANDIDATE_SCHEMA,
+                    "job": job,
+                    "outcome": {"verdict": "passed", "response_hash": response_hash},
+                },
+            )
+            pipeline.write_json(
+                attestations / "manifest.json",
+                {
+                    "schema": pipeline.ATTESTATION_SCHEMA,
+                    "signer": verifier,
+                    "attestations": [{"job_id": job_id, "file": attestation_file}],
+                },
+            )
+            pipeline.write_json(
+                attestations / attestation_file,
+                {
+                    "schema": pipeline.ATTESTATION_SCHEMA,
+                    "job_id": job_id,
+                    "bounty_contract": bounty,
+                    "verifier": verifier,
+                    "passed": True,
+                    "response_hash": response_hash,
+                    "deadline": 2_000_000_000,
+                    "signature": signature,
+                },
+            )
+            args = mock.Mock(
+                keeper_key_env="BASE_KEEPER_PRIVATE_KEY",
+                expected_keeper=keeper,
+                verifier=[verifier],
+                candidates=candidates,
+                attestations=[attestations],
+                api_base="https://api.agentbounties.app",
+                network="base-mainnet",
+                worker=Path("trusted-worker"),
+                cast=Path("cast"),
+                rpc_url="https://relay.invalid",
+            )
+            with mock.patch.object(pipeline, "current_job", return_value=job), mock.patch.object(
+                pipeline, "validate_candidate"
+            ), mock.patch.object(
+                pipeline, "relay_rpc_preflight", side_effect=fake_preflight
+            ), mock.patch.object(
+                pipeline, "run", side_effect=fake_run
+            ):
+                pipeline.command_relay(args)
+
+        self.assertEqual(events, ["preflight", "key-address", "send"])
+
+    def test_relay_rpc_preflight_rejects_unbounded_gas_before_key_use(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
+            commands.append(command)
+            return {
+                "chain-id": "8453",
+                "code": "0x60016000",
+                "call": "0x",
+                "estimate": str(pipeline.RELAY_GAS_LIMIT + 1),
+            }[command[1]]
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), self.assertRaisesRegex(
+            pipeline.PipelineError,
+            "gas estimate exceeds",
+        ):
+            pipeline.relay_rpc_preflight(
+                Path("cast"),
+                "https://relay.invalid",
+                "0x" + "1" * 40,
+                "0x" + "2" * 40,
+                "[]",
+                {"PUBLIC_VALUE": "kept"},
+            )
+        self.assertEqual([command[1] for command in commands], ["chain-id", "code", "call", "estimate"])
+
     def test_candidate_validation_strips_signing_secrets_from_worker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
             os.environ,

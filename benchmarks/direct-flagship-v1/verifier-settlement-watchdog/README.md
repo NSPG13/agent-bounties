@@ -39,9 +39,14 @@ job must produce exactly one record with:
 - `target_workflow`, restricted to the precommitted runner or signer workflow;
 - `workflow_run_id`, `workflow_job_id`, and `workflow_run_attempt` for one
   bounded retry of an exact failed job, and `null` for every non-writing wait;
+- `affected_workflow_jobs`, an exact ordered list containing the target job and
+  every dependent job GitHub will also execute. It is empty for non-writing
+  records. A signer retry binds its exact signer as `target` and the exact
+  same-run relay as `dependent`; runner and relay retries bind only themselves;
 - a stable `sha256:<64 lowercase hex>` `idempotency_key` bound to the canonical
   job hash, selected action, provider role, target workflow, exact workflow run
-  ID, job ID, run attempt, and current protected-main SHA;
+  ID, job ID, run attempt, complete affected-job list, and current
+  protected-main SHA;
 - a provider **role**, never a provider URL or secret;
 - a plain-language `reason` and exact `recheck_at` timestamp.
 
@@ -138,10 +143,16 @@ unchanged plan replay must make no GitHub request and report the already
 executed actions as skipped. If a later POST fails after an earlier POST
 succeeds, the earlier key must already be durable; a retry may issue only the
 remaining POST.
+For signer retries, GitHub's exact-job endpoint also reruns dependent jobs. The
+plan and idempotency key must therefore bind the exact same-run relay job, and
+the executor must validate the signer target and relay dependency before the
+single signer POST. An unmodeled dependent job is a hard failure.
+
 If GitHub accepts a job retry but the connection fails before local state is
-written, the next execution must compare the remote `run_attempt` with the
-attempt bound into the plan. A greater remote attempt reconciles that action as
-already accepted and must not issue another POST.
+written, a greater run-wide `run_attempt` is insufficient evidence. The next
+execution must query all attempts for that run and find the exact target job
+name at a greater job attempt before recording the action without another POST.
+An attempt increase caused by another job must fail closed without writing.
 
 ## Required behavior
 
@@ -240,6 +251,14 @@ Before a private key is passed to any child process, the signer verifies Base
 chain ID 8453, nonempty code at the committed bounty contract, and an EIP-712
 attestation digest computed locally from canonical fields. The RPC contract
 digest must equal that independent local digest; disagreement fails closed.
+
+Before the keeper key is passed to any child process, the relay validates every
+candidate and attestation, requires Base chain ID 8453 and nonempty code at each
+exact bounty, simulates each exact settlement call from the checked-in keeper
+address, enforces a 500,000 gas ceiling, and binds the starting nonce. The
+secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
+500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
+unbounded or RPC-selected transaction parameter is forbidden.
 
 ## Evidence boundary
 

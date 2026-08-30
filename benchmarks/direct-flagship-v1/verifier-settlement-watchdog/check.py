@@ -29,8 +29,14 @@ SCHEMA = "agent-bounties/regression-verifier-watchdog-plan-v1"
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
-PIPELINE_SHA256 = "233971ba582da87c42120ad139b80822496b078df15f5db9ad8fd5ee6df69fd3"
-PIPELINE_TEST_SHA256 = "d2bd33edc846fe107bf6d68eeb4f8172618fbf7465e71c0abbc14b9f9f495742"
+PIPELINE_SHA256 = "71c1b425b16310d7cfbf7789f1b335697b51d1004870f4018cc1686ce8d22c4f"
+PIPELINE_TEST_SHA256 = "fc03dadf286aa90a57a8af77ea4bcf08503309758c0ae6bf1f26a36052623806"
+CANONICAL_WORKFLOW_SHA256 = {
+    ".github/workflows/regression-verifier-runner.yml": "a010575e48f94e7a7c7d582872532970d3196092e35c32f60b9735097f30d209",
+    ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
+    ".github/workflows/regression-verifier-signer.yml": "84e89410a9e86932f3d984054674746d2ee04732b59179fa1c131bf3c3cd7d7b",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "69b33edd16699e3d042d041a371080e2ecc33a2d659c75ab09f2c2699e354771",
+}
 
 
 def require(path: str) -> Path:
@@ -38,6 +44,33 @@ def require(path: str) -> Path:
     if not candidate.is_file():
         raise SystemExit(f"missing required file: {path}")
     return candidate
+
+
+def canonical_workflow_hash(path: str) -> str:
+    try:
+        document = json.loads(require(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{path} must use strict JSON-syntax YAML") from error
+    canonical = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+# Reject an effective workflow or trusted-executable mutation before running
+# the expensive live state-machine matrix. Whitespace-only JSON formatting
+# remains free; executable semantics do not.
+for workflow_path, expected_hash in CANONICAL_WORKFLOW_SHA256.items():
+    if canonical_workflow_hash(workflow_path) != expected_hash:
+        raise SystemExit(f"{workflow_path} differs from the reviewed effective workflow")
+pipeline_bytes_early = require("scripts/regression_verifier_pipeline.py").read_bytes().replace(
+    b"\r\n", b"\n"
+)
+pipeline_tests_early = require("scripts/test_regression_verifier_pipeline.py").read_bytes().replace(
+    b"\r\n", b"\n"
+)
+if hashlib.sha256(pipeline_bytes_early).hexdigest() != PIPELINE_SHA256:
+    raise SystemExit("regression verifier pipeline differs from the reviewed executable")
+if hashlib.sha256(pipeline_tests_early).hexdigest() != PIPELINE_TEST_SHA256:
+    raise SystemExit("regression verifier pipeline tests differ from the reviewed suite")
 
 
 def hash32(value: str) -> str:
@@ -85,6 +118,12 @@ def run(
     workflow_job_id: int | None = None,
 ) -> dict[str, Any]:
     identity = int(hashlib.sha256(f"{job_id}:{stage}".encode()).hexdigest()[:12], 16)
+    run_identity = int(
+        hashlib.sha256(
+            f"{job_id}:{'runner' if stage == 'runner' else 'signer-workflow'}".encode()
+        ).hexdigest()[:12],
+        16,
+    )
     return {
         "job_id": job_id,
         "stage": stage,
@@ -105,7 +144,7 @@ def run(
         "canonical_job_hash": canonical_job_hash,
         "workflow_run_id": workflow_run_id
         if workflow_run_id is not None
-        else 10_000 + identity,
+        else 10_000 + run_identity,
         "workflow_job_id": workflow_job_id
         if workflow_job_id is not None
         else 20_000 + identity,
@@ -349,6 +388,7 @@ def validate(
         workflow_run_id = record.get("workflow_run_id")
         workflow_job_id = record.get("workflow_job_id")
         workflow_run_attempt = record.get("workflow_run_attempt")
+        affected_workflow_jobs = record.get("affected_workflow_jobs")
         if record.get("automation_allowed") is True:
             expected_target = automated_targets.get(str(action))
             if target_workflow != expected_target:
@@ -375,12 +415,44 @@ def validate(
                     raise SystemExit(
                         f"watchdog retry {job_id} does not bind the selected stage's latest job attempt"
                     )
+                affected_stages = [retry_stages[str(action)]]
+                if action in {"retry_signer_one", "retry_signer_two"}:
+                    affected_stages.append("relay")
+                expected_affected = []
+                names = {
+                    "runner": "run-no-secrets",
+                    "signer_one": "sign-one / sign",
+                    "signer_two": "sign-two / sign",
+                    "relay": "relay",
+                }
+                for stage in affected_stages:
+                    stage_runs = [
+                        item
+                        for item in runs_by_job_stage.get((job_id, stage), [])
+                        if item.get("workflow_run_id") == workflow_run_id
+                    ]
+                    if not stage_runs:
+                        raise SystemExit(
+                            f"watchdog retry {job_id} does not model every affected workflow job"
+                        )
+                    affected = stage_runs[-1]
+                    expected_affected.append(
+                        {
+                            "workflow_job_id": affected["workflow_job_id"],
+                            "name": names[stage],
+                            "effect": "target" if stage == retry_stages[str(action)] else "dependent",
+                        }
+                    )
+                if affected_workflow_jobs != expected_affected:
+                    raise SystemExit(
+                        f"watchdog retry {job_id} does not bind the exact target and dependent jobs"
+                    )
             if workflow_run_id in seen_automated_run_ids:
                 raise SystemExit(
                     f"watchdog retry {job_id} duplicates a workflow-run retry target"
                 )
             seen_automated_run_ids.add(workflow_run_id)
-        elif any(
+        elif affected_workflow_jobs != [] or any(
             value is not None
             for value in (
                 target_workflow,
@@ -400,9 +472,11 @@ def validate(
                 workflow_run_id,
                 workflow_job_id,
                 workflow_run_attempt,
+                affected_workflow_jobs,
                 POLICY["current_main_sha"],
             ],
             separators=(",", ":"),
+            sort_keys=True,
         )
         expected_key = "sha256:" + hashlib.sha256(key_payload.encode("utf-8")).hexdigest()
         if idempotency_key != expected_key or idempotency_key in seen_idempotency_keys:
@@ -466,6 +540,7 @@ signer_runs = [
         signer=ADDRESS_TWO,
         provider_role="signer_two_primary",
     ),
+    run("signer-gap", "relay", "skipped", provider_role="relay_primary"),
 ]
 _, signer_plan = invoke(signer_jobs, signer_runs)
 signer = validate(signer_plan, signer_jobs, signer_runs)
@@ -627,6 +702,8 @@ for index in range(102):
             [
                 run(job_id, "runner", "success", artifact_hash=candidate_hash),
                 run(job_id, "signer_one", "failure", signer=ADDRESS_ONE),
+                run(job_id, "signer_two", "success", signer=ADDRESS_TWO),
+                run(job_id, "relay", "skipped", provider_role="relay_primary"),
             ]
         )
         expected = ("retry_signer_one", True, "signer_one_secondary")
@@ -636,6 +713,7 @@ for index in range(102):
                 run(job_id, "runner", "success", artifact_hash=candidate_hash),
                 run(job_id, "signer_one", "success", signer=ADDRESS_ONE),
                 run(job_id, "signer_two", "failure", signer=ADDRESS_TWO),
+                run(job_id, "relay", "skipped", provider_role="relay_primary"),
             ]
         )
         expected = ("retry_signer_two", True, "signer_two_secondary")
@@ -729,6 +807,7 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
     retry_runs: dict[int, dict[str, Any]] = {}
     retry_jobs: dict[int, dict[str, Any]] = {}
+    retry_attempt_jobs: dict[int, list[dict[str, Any]]] = {}
     unsafe_run_metadata = False
     stale_branch_metadata = False
     scheduled_jobs: object = []
@@ -786,6 +865,18 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
         if jobs_match:
             payload = self.scheduled_run_jobs.get(int(jobs_match.group(1)))
             self.respond(200 if payload is not None else 404, payload or {"message": "not found"})
+            return
+        retry_attempts_match = re.fullmatch(
+            r"/repos/NSPG13/agent-bounties/actions/runs/(\d+)/jobs\?filter=all&per_page=100",
+            self.path,
+        )
+        if retry_attempts_match:
+            run_id = int(retry_attempts_match.group(1))
+            jobs = self.retry_attempt_jobs.get(run_id)
+            self.respond(
+                200 if jobs is not None else 404,
+                {"total_count": len(jobs or []), "jobs": jobs or []},
+            )
             return
         artifacts_match = re.fullmatch(
             r"/repos/NSPG13/agent-bounties/actions/runs/(\d+)/artifacts\?per_page=100",
@@ -849,6 +940,16 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
             return
         run_id = int(job["run_id"])
         self.retry_runs[run_id]["run_attempt"] += 1
+        run_attempt = self.retry_runs[run_id]["run_attempt"]
+        self.retry_attempt_jobs.setdefault(run_id, []).append(
+            {
+                **job,
+                "id": workflow_job_id + run_attempt * 100_000,
+                "run_attempt": run_attempt,
+                "status": "completed",
+                "conclusion": "success",
+            }
+        )
         if self.path == self.accept_then_drop_path:
             self.close_connection = True
             try:
@@ -972,6 +1073,41 @@ relay_execute_runs = [
     ),
 ]
 _, relay_execute_plan = invoke(relay_execute_jobs, relay_execute_runs)
+signer_execute_jobs = [job("execute-signer", "2026-09-01T14:20:00Z")]
+signer_execute_runs = [
+    run(
+        "execute-signer",
+        "runner",
+        "success",
+        artifact_hash=candidate_hash,
+        workflow_run_id=4306,
+        workflow_job_id=7308,
+    ),
+    run(
+        "execute-signer",
+        "signer_one",
+        "success",
+        signer=ADDRESS_ONE,
+        workflow_run_id=4305,
+        workflow_job_id=7305,
+    ),
+    run(
+        "execute-signer",
+        "signer_two",
+        "failure",
+        signer=ADDRESS_TWO,
+        workflow_run_id=4305,
+        workflow_job_id=7306,
+    ),
+    run(
+        "execute-signer",
+        "relay",
+        "skipped",
+        workflow_run_id=4305,
+        workflow_job_id=7307,
+    ),
+]
+_, signer_execute_plan = invoke(signer_execute_jobs, signer_execute_runs)
 execution_plan = {
     "schema": SCHEMA,
     "network": "base-mainnet",
@@ -999,6 +1135,14 @@ FakeGitHubHandler.retry_runs = {
         "conclusion": "failure",
         "run_attempt": 1,
     },
+    4305: {
+        "id": 4305,
+        "path": ".github/workflows/regression-verifier-signer.yml",
+        "head_sha": MAIN_SHA,
+        "status": "completed",
+        "conclusion": "failure",
+        "run_attempt": 1,
+    },
 }
 FakeGitHubHandler.retry_jobs = {
     7300: {
@@ -1007,6 +1151,7 @@ FakeGitHubHandler.retry_jobs = {
         "name": "run-no-secrets",
         "status": "completed",
         "conclusion": "failure",
+        "run_attempt": 1,
     },
     7304: {
         "id": 7304,
@@ -1014,7 +1159,36 @@ FakeGitHubHandler.retry_jobs = {
         "name": "relay",
         "status": "completed",
         "conclusion": "failure",
+        "run_attempt": 1,
     },
+    7305: {
+        "id": 7305,
+        "run_id": 4305,
+        "name": "sign-one / sign",
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": 1,
+    },
+    7306: {
+        "id": 7306,
+        "run_id": 4305,
+        "name": "sign-two / sign",
+        "status": "completed",
+        "conclusion": "failure",
+        "run_attempt": 1,
+    },
+    7307: {
+        "id": 7307,
+        "run_id": 4305,
+        "name": "relay",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_attempt": 1,
+    },
+}
+FakeGitHubHandler.retry_attempt_jobs = {
+    run_id: [dict(job) for job in FakeGitHubHandler.retry_jobs.values() if job["run_id"] == run_id]
+    for run_id in FakeGitHubHandler.retry_runs
 }
 live_production_jobs = [
     production_job("live-signer-gap", "2026-09-01T14:30:00Z"),
@@ -1108,14 +1282,14 @@ FakeGitHubHandler.scheduled_runs = {
 FakeGitHubHandler.scheduled_run_jobs = {
     5301: {
         "total_count": 1,
-        "jobs": [{"id": 7301, "name": "run-no-secrets", "status": "completed", "conclusion": "success"}],
+        "jobs": [{"id": 7301, "name": "run-no-secrets", "status": "completed", "conclusion": "success", "run_attempt": 1}],
     },
     5302: {
         "total_count": 3,
         "jobs": [
-            {"id": 7302, "name": "sign-one / sign", "status": "completed", "conclusion": "success"},
-            {"id": 7303, "name": "sign-two / sign", "status": "completed", "conclusion": "failure"},
-            {"id": 7304, "name": "relay", "status": "completed", "conclusion": "skipped"},
+            {"id": 7302, "name": "sign-one / sign", "status": "completed", "conclusion": "success", "run_attempt": 1},
+            {"id": 7303, "name": "sign-two / sign", "status": "completed", "conclusion": "failure", "run_attempt": 1},
+            {"id": 7304, "name": "relay", "status": "completed", "conclusion": "skipped", "run_attempt": 1},
         ],
     },
 }
@@ -1266,6 +1440,36 @@ try:
     if len(FakeGitHubHandler.requests) != request_count:
         raise SystemExit("watchdog replay contacted GitHub after both actions were recorded")
 
+    # A signer retry is allowed to invoke GitHub's exact-job endpoint only when
+    # the plan also binds the relay job that GitHub will rerun as a dependent.
+    signer_record = signer_execute_plan["jobs"][0]
+    if signer_record.get("affected_workflow_jobs") != [
+        {"workflow_job_id": 7306, "name": "sign-two / sign", "effect": "target"},
+        {"workflow_job_id": 7307, "name": "relay", "effect": "dependent"},
+    ]:
+        raise SystemExit("signer retry plan does not disclose its dependent relay execution")
+    FakeGitHubHandler.requests = []
+    signer_state = state_root / "signer-dependent.json"
+    signer_execution = execute(
+        {
+            **signer_execute_plan,
+            "repository": "NSPG13/agent-bounties",
+            "current_main_sha": MAIN_SHA,
+        },
+        api_base,
+        signer_state,
+    )
+    if signer_execution.returncode != 0:
+        raise SystemExit(
+            "watchdog rejected the fully modeled signer retry:\n"
+            + signer_execution.stdout.decode("utf-8", "replace")[-5000:]
+        )
+    signer_writes = [item for item in FakeGitHubHandler.requests if item["method"] == "POST"]
+    if [item["path"] for item in signer_writes] != [
+        "/repos/NSPG13/agent-bounties/actions/jobs/7306/rerun"
+    ]:
+        raise SystemExit("signer retry wrote outside its exact target-job endpoint")
+
     FakeGitHubHandler.requests = []
     FakeGitHubHandler.retry_runs[4300]["run_attempt"] = 1
     FakeGitHubHandler.retry_runs[4304]["run_attempt"] = 1
@@ -1322,6 +1526,33 @@ try:
     reconciled_report = json.loads(reconciled.stdout)
     if reconciled_report.get("executed_count") != 0 or reconciled_report.get("skipped_count") != 1:
         raise SystemExit("watchdog crash reconciliation report is inaccurate")
+
+    # A run-wide attempt increase caused by a different job is not a receipt
+    # for the planned target. The stale plan must fail closed without replaying
+    # or recording the target idempotency key.
+    FakeGitHubHandler.requests = []
+    FakeGitHubHandler.retry_runs[4300]["run_attempt"] = 2
+    FakeGitHubHandler.retry_attempt_jobs[4300] = [
+        {**FakeGitHubHandler.retry_jobs[7300], "run_attempt": 1},
+        {
+            "id": 999_002,
+            "run_id": 4300,
+            "name": "unrelated-maintenance-job",
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 2,
+        },
+    ]
+    unrelated_state = state_root / "unrelated-attempt.json"
+    unrelated = execute(crash_plan, api_base, unrelated_state)
+    if unrelated.returncode == 0 or unrelated_state.exists():
+        raise SystemExit("watchdog treated an unrelated job retry as the target crash receipt")
+    if any(item["method"] == "POST" for item in FakeGitHubHandler.requests):
+        raise SystemExit("watchdog replayed after an unrelated run-attempt increase")
+    FakeGitHubHandler.retry_runs[4300]["run_attempt"] = 1
+    FakeGitHubHandler.retry_attempt_jobs[4300] = [
+        {**FakeGitHubHandler.retry_jobs[7300], "run_attempt": 1}
+    ]
 
     unsafe_plan = json.loads(json.dumps(execution_plan))
     unsafe_plan["jobs"][0]["target_workflow"] = "unreviewed-wallet-job.yml"
@@ -1652,6 +1883,7 @@ if (
     or relay_job["env"] != {
         "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
         "BASE_MAINNET_RPC_URL": "${{ github.run_attempt == 1 && 'https://1rpc.io/base' || 'https://base.meowrpc.com' }}",
+        "KEEPER_ADDRESS": "0xc26a630e85134ed30968735c8e7de4576cfa5dbc",
         "VERIFIER_ONE": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}",
         "VERIFIER_TWO": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}",
     }
@@ -1710,7 +1942,8 @@ relay_command = (
     "--network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL "
     "--candidates target/regression-candidates --attestations target/attestations-one "
     "--attestations target/attestations-two --verifier $VERIFIER_ONE "
-    "--verifier $VERIFIER_TWO --worker target/release/worker"
+    "--verifier $VERIFIER_TWO --worker target/release/worker "
+    "--expected-keeper $KEEPER_ADDRESS"
 )
 expected_signer_steps = [
     {
@@ -1839,6 +2072,7 @@ expected_relay_tokens = [
     "--verifier", "$VERIFIER_ONE",
     "--verifier", "$VERIFIER_TWO",
     "--worker", "target/release/worker",
+    "--expected-keeper", "$KEEPER_ADDRESS",
 ]
 if exact_pipeline_tokens(reusable_job.get("steps"), "sign") != expected_sign_tokens:
     raise SystemExit("effective signer command must equal the complete precommitted argv")

@@ -134,10 +134,19 @@ keeper secrets removed from its environment.
 The no-secrets candidate runner is schedule-only. The settlement watchdog may
 retry one exact failed GitHub job, but it cannot dispatch a workflow or rerun a
 whole workflow run. Its plan binds the workflow run, exact job, run attempt,
-current protected-main revision, and one idempotency key. If GitHub accepts a
-retry and the client loses the response, a higher remote run attempt is the
-crash-recovery receipt and prevents replay. An RPC response, signature,
-workflow result, or broadcast is never settlement evidence.
+current protected-main revision, every dependent job GitHub will also execute,
+and one idempotency key. A signer retry explicitly binds its dependent relay;
+an unmodeled dependency fails closed. If GitHub accepts a retry and the client
+loses the response, a higher run-wide attempt is not enough: all job attempts
+must show the exact target job at a higher attempt before the retry is recorded
+without replay.
+
+Before the keeper key reaches any child process, every relay call is validated
+against current canonical input, simulated from the exact keeper on Base chain
+8453, checked for deployed bounty code, and bounded to a 500,000 gas limit,
+0.5 gwei maximum fee, 0.001 gwei priority fee, and preflighted nonce. An RPC
+response, signature, workflow result, or broadcast is never settlement
+evidence.
 
 Only confirmed canonical `BountySettled` is payout evidence. A runner receipt,
 response hash, verifier signature, quorum plan, relay transaction hash, or
