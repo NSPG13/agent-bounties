@@ -631,15 +631,24 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         if runner and runner["conclusion"] == "failure":
             action, owner, provider = "retry_runner", "regression-verifier-runner", "runner"
             reason = "The candidate runner failed retryably."
-        elif runner and runner["conclusion"] == "success" and (not one or one["conclusion"] != "success"):
+        elif runner and runner["conclusion"] == "success" and not one:
+            action, owner, automated, provider = "await_active_run", "github-actions", False, "signer_one"
+            reason = "The candidate artifact exists; the triggered signer run has not appeared yet."
+        elif runner and runner["conclusion"] == "success" and one["conclusion"] != "success":
             action, owner, provider = "retry_signer_one", "regression-verifier-signer-one", "signer_one_secondary"
             reason = "Signer one is the first missing stage."
-        elif one and one["conclusion"] == "success" and (not two or two["conclusion"] != "success"):
+        elif one and one["conclusion"] == "success" and not two:
+            action, owner, automated, provider = "await_active_run", "github-actions", False, "signer_two"
+            reason = "Signer one succeeded; the second signer job has not appeared yet."
+        elif one and one["conclusion"] == "success" and two["conclusion"] != "success":
             action, owner, provider = "retry_signer_two", "regression-verifier-signer-two", "signer_two_secondary"
             reason = "Signer two is the only missing signer stage."
         elif two and two["conclusion"] == "success" and relay and relay["conclusion"] == "failure":
             action, owner, provider = "retry_relay", "regression-verifier-relay", "relay_secondary"
             reason = "Both signers succeeded and only the retryable relay failed."
+        elif two and two["conclusion"] == "success" and not relay:
+            action, owner, automated, provider = "await_active_run", "github-actions", False, "relay"
+            reason = "Both signers succeeded; the relay job has not appeared yet."
         elif two and two["conclusion"] == "success":
             action, owner, automated, provider = "reconcile_canonical_state", "canonical-indexer", False, "canonical_chain"
             reason = "The quorum exists; canonical state must be reconciled."
@@ -705,6 +714,39 @@ import json
 print(json.dumps({"schema":"agent-bounties/regression-verifier-watchdog-plan-v1","network":"base-mainnet","generated_at":"2026-09-01T12:00:00Z","fail_closed":False,"jobs":[]}))
 '''
 
+RUNNER_WORKFLOW = '''{
+  "name": "Regression Verifier Runner",
+  "on": {
+    "workflow_dispatch": {},
+    "schedule": [{"cron": "7,22,37,52 * * * *"}]
+  },
+  "permissions": {"contents": "read"},
+  "concurrency": {
+    "group": "regression-verifier-runner-mainnet",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "run-no-secrets": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 90,
+      "env": {
+        "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
+        "VERIFIER_ONE": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}",
+        "VERIFIER_TWO": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}"
+      },
+      "steps": [
+        {"uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a", "with": {"repository": "${{ github.repository }}", "ref": "main", "persist-credentials": false}},
+        {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "with": {"python-version": "3.12"}},
+        {"uses": "dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0"},
+        {"uses": "Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae"},
+        {"name": "Build isolated regression worker", "run": "cargo build --release -p worker"},
+        {"name": "Run canonical jobs without signing secrets", "run": "python scripts/regression_verifier_pipeline.py run --api-base $API_BASE_URL --network base-mainnet --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --staging $RUNNER_TEMP/regression-staging --output target/regression-candidates --max-jobs 5"},
+        {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-candidates-${{ github.run_id }}", "path": "target/regression-candidates", "if-no-files-found": "error", "retention-days": 7}}
+      ]
+    }
+  }
+}'''
+
 WATCHDOG_WORKFLOW = '''{
   "name": "Regression Verifier Watchdog",
   "on": {
@@ -769,38 +811,40 @@ SIGNER_WORKFLOW = '''{
   "permissions": {"actions": "read", "contents": "read"},
   "jobs": {
     "sign-one": {
-      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "if": "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
       "with": {
         "revision": "${{ github.event.workflow_run.head_sha }}",
         "candidate_run_id": "${{ github.event.workflow_run.id }}",
         "signer_slot": "one",
         "expected_signer": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}",
-        "rpc_url": "${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}"
+        "primary_rpc_url": "https://mainnet.base.org",
+        "secondary_rpc_url": "https://developer-access-mainnet.base.org"
       },
       "secrets": {"verifier_private_key": "${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}"}
     },
     "sign-two": {
-      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "if": "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
       "with": {
         "revision": "${{ github.event.workflow_run.head_sha }}",
         "candidate_run_id": "${{ github.event.workflow_run.id }}",
         "signer_slot": "two",
         "expected_signer": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}",
-        "rpc_url": "${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}"
+        "primary_rpc_url": "https://base-rpc.publicnode.com",
+        "secondary_rpc_url": "https://base-mainnet.public.blastapi.io"
       },
       "secrets": {"verifier_private_key": "${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}"}
     },
     "relay": {
-      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "if": "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "needs": ["sign-one", "sign-two"],
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 20,
       "concurrency": {"group": "regression-verifier-relay-mainnet", "cancel-in-progress": false},
       "env": {
         "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
-        "BASE_MAINNET_RPC_URL": "${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}"
+        "BASE_MAINNET_RPC_URL": "${{ github.run_attempt == 1 && 'https://1rpc.io/base' || 'https://base.meowrpc.com' }}"
         ,"VERIFIER_ONE": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}"
         ,"VERIFIER_TWO": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}"
       },
@@ -829,7 +873,8 @@ REUSABLE_WORKFLOW = '''{
         "candidate_run_id": {"required": true, "type": "string"},
         "signer_slot": {"required": true, "type": "string"},
         "expected_signer": {"required": true, "type": "string"},
-        "rpc_url": {"required": true, "type": "string"}
+        "primary_rpc_url": {"required": true, "type": "string"},
+        "secondary_rpc_url": {"required": true, "type": "string"}
       },
       "secrets": {"verifier_private_key": {"required": true}}
     }
@@ -841,7 +886,7 @@ REUSABLE_WORKFLOW = '''{
       "timeout-minutes": 20,
       "env": {
         "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
-        "BASE_MAINNET_RPC_URL": "${{ inputs.rpc_url }}",
+        "BASE_MAINNET_RPC_URL": "${{ github.run_attempt == 1 && inputs.primary_rpc_url || inputs.secondary_rpc_url }}",
         "ATTESTATION_OUTPUT": "target/attestations-${{ inputs.signer_slot }}",
         "EXPECTED_SIGNER": "${{ inputs.expected_signer }}"
       },
@@ -888,6 +933,7 @@ def build(root: Path, planner: str) -> None:
         "scripts/regression_verifier_watchdog.py": planner,
         "scripts/test_regression_verifier_watchdog.py": "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\nif __name__ == '__main__': unittest.main()\n",
         ".github/workflows/regression-verifier-watchdog.yml": WATCHDOG_WORKFLOW,
+        ".github/workflows/regression-verifier-runner.yml": RUNNER_WORKFLOW,
         ".github/workflows/regression-verifier-signer.yml": SIGNER_WORKFLOW,
         ".github/workflows/regression-verifier-signing-reusable.yml": REUSABLE_WORKFLOW,
         "ops/regression-verifier-watchdog-policy.json": WATCHDOG_POLICY,
@@ -1016,6 +1062,40 @@ for mutation_name, mutate in workflow_mutations.items():
         if result.returncode == 0:
             raise SystemExit(f"unsafe workflow mutation was accepted: {mutation_name}")
 
+runner_mutations = {
+    "fabricated candidate archive": lambda source: mutate_workflow(
+        source,
+        lambda document: document["jobs"]["run-no-secrets"]["steps"][5].__setitem__(
+            "run", "python -c \"print('fabricated candidate')\""
+        ),
+    ),
+    "unreviewed candidate-producing step": lambda source: mutate_workflow(
+        source,
+        lambda document: document["jobs"]["run-no-secrets"]["steps"].insert(
+            6, {"run": "python scripts/fabricate_regression_candidates.py"}
+        ),
+    ),
+    "candidate checkout from attacker branch": lambda source: mutate_workflow(
+        source,
+        lambda document: document["jobs"]["run-no-secrets"]["steps"][0]["with"].__setitem__(
+            "ref", "refs/heads/attacker"
+        ),
+    ),
+}
+for mutation_name, mutate in runner_mutations.items():
+    with tempfile.TemporaryDirectory(prefix="watchdog-runner-mutation-") as temporary:
+        mutated = Path(temporary)
+        build(mutated, GOOD_PLANNER)
+        runner_path = mutated / ".github/workflows/regression-verifier-runner.yml"
+        original = runner_path.read_text(encoding="utf-8")
+        changed = mutate(original)
+        if changed == original:
+            raise SystemExit(f"{mutation_name} rehearsal did not alter the candidate runner")
+        runner_path.write_text(changed, encoding="utf-8")
+        result = check(mutated)
+        if result.returncode == 0:
+            raise SystemExit(f"unsafe candidate runner mutation was accepted: {mutation_name}")
+
 provider_mutations = {
     "extra signer key-exfiltration step": (
         ".github/workflows/regression-verifier-signing-reusable.yml",
@@ -1077,6 +1157,26 @@ provider_mutations = {
         ".github/workflows/regression-verifier-signer.yml",
         lambda source: source.replace(
             "https://base-rpc.publicnode.com", "https://attacker.invalid/base"
+        ),
+    ),
+    "signer retry reuses the primary provider": (
+        ".github/workflows/regression-verifier-signing-reusable.yml",
+        lambda source: source.replace(
+            "${{ github.run_attempt == 1 && inputs.primary_rpc_url || inputs.secondary_rpc_url }}",
+            "${{ inputs.primary_rpc_url }}",
+        ),
+    ),
+    "signer primary and secondary are identical": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: source.replace(
+            "https://developer-access-mainnet.base.org", "https://mainnet.base.org"
+        ),
+    ),
+    "relay retry reuses the primary provider": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: source.replace(
+            "${{ github.run_attempt == 1 && 'https://1rpc.io/base' || 'https://base.meowrpc.com' }}",
+            "https://1rpc.io/base",
         ),
     ),
     "yaml decoy provider block": (

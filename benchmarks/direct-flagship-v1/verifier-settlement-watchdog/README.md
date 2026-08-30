@@ -61,6 +61,11 @@ Queued or in-progress runner, signer, or relay runs must produce
 `await_active_run` and no automation. The watchdog may never
 emit or execute a verdict, attestation, signature, settlement, payment, wallet,
 or arbitrary workflow action.
+The short visibility gap after a candidate runner succeeds but before its
+`workflow_run` signer appears must also produce `await_active_run`, with no
+target workflow, run ID, or write. The same rule applies between successful
+signer stages and a not-yet-visible downstream stage. A retry is allowed only
+after the exact downstream stage has appeared and failed retryably.
 
 The same tool must expose the production execution boundary:
 
@@ -188,12 +193,34 @@ including a command before or after the expected pipeline command, are
 forbidden. The signer workflow run name must bind the exact upstream candidate
 runner ID so live planning can prove job membership from the runner artifact.
 
-The signer and relay paths must accept distinct provider variables for signer
-one, signer two, and relay. Their precommitted public fallbacks are respectively
-`https://mainnet.base.org`, `https://base-rpc.publicnode.com`, and
-`https://1rpc.io/base`. The effective signer and relay command argv must consume
-the bound `BASE_MAINNET_RPC_URL`; text hidden after a shell comment does not
-qualify. Provider URLs must not appear in watchdog plan or state artifacts.
+The candidate-producing `.github/workflows/regression-verifier-runner.yml`
+must also use strict JSON-syntax YAML and equal the complete benchmarked
+contract. It may expose only the exact schedule and an empty
+`workflow_dispatch`; the latter exists solely so the watchdog can dispatch the
+protected `main` workflow. It has `contents: read`, one serialized
+`run-no-secrets` job, no secret environment values, and an exact ordered list
+of commit-pinned actions and commands. Checkout is bound to
+`${{ github.repository }}` at `main` with persisted credentials disabled. The
+only candidate-producing command is the exact precommitted
+`regression_verifier_pipeline.py run` invocation, and only its exact output is
+uploaded under `regression-candidates-${{ github.run_id }}`. Extra jobs, steps,
+commands, checkout refs, artifact paths, or unpinned actions are forbidden.
+The signer accepts a runner only when its event is `schedule` or
+`workflow_dispatch` and its repository, branch, revision, and artifact all bind
+to current protected `main`.
+
+Each signer and relay path has an exact primary and a distinct exact secondary
+RPC. Signer one uses `https://mainnet.base.org` then
+`https://developer-access-mainnet.base.org`; signer two uses
+`https://base-rpc.publicnode.com` then
+`https://base-mainnet.public.blastapi.io`; relay uses `https://1rpc.io/base`
+then `https://base.meowrpc.com`. GitHub increments `github.run_attempt` when the
+watchdog reruns a failed job: attempt one must select the primary and the only
+allowed retry must select the secondary. Keeping the primary on retry, using
+identical endpoints, or accepting an operator-selected URL is forbidden. The
+effective signer and relay command argv must consume the selected
+`BASE_MAINNET_RPC_URL`; text hidden after a shell comment does not qualify.
+Provider URLs must not appear in watchdog plan or state artifacts.
 
 ## Evidence boundary
 
