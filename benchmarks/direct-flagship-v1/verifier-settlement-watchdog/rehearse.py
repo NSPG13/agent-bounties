@@ -57,6 +57,17 @@ def parse_time(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def observation_rank(item):
+    values = (
+        item.get("workflow_run_id"),
+        item.get("workflow_run_attempt"),
+        item.get("workflow_job_id"),
+    )
+    if not all(isinstance(value, int) and value > 0 for value in values):
+        raise SystemExit("workflow observation has no monotonic GitHub identity")
+    return values
+
+
 def bound_idempotency_key(
     job_id,
     canonical_job_hash,
@@ -675,8 +686,9 @@ reserved_retry_runs = set()
 for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires_at"], item["job_id"])):
     job_runs = [item for item in runs_doc["runs"] if item["job_id"] == job["job_id"]]
     latest = {stage: None for stage in ("runner", "signer_one", "signer_two", "relay")}
-    for item in job_runs:
-        latest[item["stage"]] = item
+    for stage in latest:
+        stage_runs = [item for item in job_runs if item["stage"] == stage]
+        latest[stage] = max(stage_runs, key=observation_rank) if stage_runs else None
     active_run = next(
         (
             latest[stage]
@@ -693,8 +705,8 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
     expires = parse_time(job["verification_expires_at"])
     successful_signers = [
         item.get("signer")
-        for item in job_runs
-        if item["stage"].startswith("signer_")
+        for item in (latest["signer_one"], latest["signer_two"])
+        if item
         and item.get("status") == "completed"
         and item["conclusion"] == "success"
     ]
@@ -797,7 +809,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             "retry_signer_two": "signer_two",
             "retry_relay": "relay",
         }[action]
-        selected_run = next(item for item in reversed(job_runs) if item["stage"] == stage)
+        selected_run = latest[stage]
         workflow_run_id = selected_run["workflow_run_id"]
         workflow_job_id = selected_run["workflow_job_id"]
         workflow_run_attempt = selected_run["workflow_run_attempt"]
@@ -812,14 +824,12 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             "effect": "target",
         }]
         if action in {"retry_signer_one", "retry_signer_two"}:
-            dependent = next(
-                (
-                    item for item in reversed(job_runs)
-                    if item["stage"] == "relay"
-                    and item["workflow_run_id"] == workflow_run_id
-                ),
-                None,
-            )
+            dependent_runs = [
+                item for item in job_runs
+                if item["stage"] == "relay"
+                and item["workflow_run_id"] == workflow_run_id
+            ]
+            dependent = max(dependent_runs, key=observation_rank) if dependent_runs else None
             if dependent is None or dependent.get("conclusion") != "skipped":
                 action = "escalate_no_verdict"
                 owner = "maintainer-on-call"
@@ -923,7 +933,7 @@ RUNNER_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"},
         {"name": "Build isolated regression worker", "run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f3a2578b6fd8675f7cee667149e229ed2f429fb28da3fc98a0edd29b247d504"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 4cf120e5a097e6bef29ed8004c256c4445b01e2d1e881f0df7a9bcd393740d3c"},
         {"name": "Run canonical jobs without signing secrets", "run": "python scripts/regression_verifier_pipeline.py run --api-base $API_BASE_URL --network base-mainnet --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --staging $RUNNER_TEMP/regression-staging --output target/regression-candidates --max-jobs 5"},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-candidates-${{ github.run_id }}", "path": "target/regression-candidates", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1045,7 +1055,7 @@ SIGNER_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"},
         {"run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f3a2578b6fd8675f7cee667149e229ed2f429fb28da3fc98a0edd29b247d504"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 4cf120e5a097e6bef29ed8004c256c4445b01e2d1e881f0df7a9bcd393740d3c"},
         {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --expected-keeper $KEEPER_ADDRESS", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
       ]
     }
@@ -1088,7 +1098,7 @@ REUSABLE_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"},
         {"run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f3a2578b6fd8675f7cee667149e229ed2f429fb28da3fc98a0edd29b247d504"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 4cf120e5a097e6bef29ed8004c256c4445b01e2d1e881f0df7a9bcd393740d3c"},
         {"name": "Re-fetch state and sign one exact candidate set", "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER", "env": {"REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"}},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-attestations-${{ inputs.signer_slot }}-${{ inputs.candidate_run_id }}", "path": "target/attestations-${{ inputs.signer_slot }}", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1431,6 +1441,23 @@ for mutation_name, (relative_path, mutate) in provider_mutations.items():
         result = check(mutated)
         if result.returncode == 0:
             raise SystemExit(f"unsafe provider mutation was accepted: {mutation_name}")
+
+keeper_workflow_mutations = {
+    "yaml extension without lock": """name: Evil\non: workflow_dispatch\njobs:\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+    "block scalar lock decoy": """name: Decoy\non: workflow_dispatch\njobs:\n  send:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          group: agent-bounties-shared-base-keeper\n          cancel-in-progress: false\n          echo '${{ secrets.BASE_KEEPER_PRIVATE_KEY }}'\n""",
+    "workflow-level starvation lock": """name: Starvation\non: issue_comment\nconcurrency:\n  group: agent-bounties-shared-base-keeper\n  cancel-in-progress: false\njobs:\n  validation:\n    runs-on: ubuntu-latest\n    steps: []\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+}
+for mutation_name, document in keeper_workflow_mutations.items():
+    with tempfile.TemporaryDirectory(prefix="watchdog-keeper-workflow-mutation-") as temporary:
+        mutated = Path(temporary)
+        build(mutated, GOOD_PLANNER)
+        suffix = ".yaml" if mutation_name == "yaml extension without lock" else ".yml"
+        (mutated / ".github/workflows" / f"evil{suffix}").write_text(
+            document, encoding="utf-8"
+        )
+        result = check(mutated)
+        if result.returncode == 0:
+            raise SystemExit(f"unsafe keeper workflow was accepted: {mutation_name}")
 
 with tempfile.TemporaryDirectory(prefix="watchdog-build-input-mutation-") as temporary:
     mutated = Path(temporary)

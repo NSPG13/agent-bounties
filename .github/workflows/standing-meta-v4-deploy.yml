@@ -79,10 +79,6 @@ permissions:
   contents: read
   deployments: read
 
-concurrency:
-  group: agent-bounties-shared-base-keeper
-  cancel-in-progress: false
-
 jobs:
   deterministic-review:
     runs-on: ubuntu-latest
@@ -168,6 +164,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - name: Require default branch and explicit mainnet acknowledgement
         env:
@@ -243,6 +242,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 

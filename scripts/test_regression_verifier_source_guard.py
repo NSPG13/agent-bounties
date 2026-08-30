@@ -13,7 +13,6 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("regression_verifier_source_guard.py")
 REPOSITORY = SCRIPT.resolve().parents[1]
-SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 SPEC = importlib.util.spec_from_file_location("regression_verifier_source_guard", SCRIPT)
 assert SPEC and SPEC.loader
 GUARD = importlib.util.module_from_spec(SPEC)
@@ -153,14 +152,34 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
                         f"{relative} does not watch compile-time input {included}",
                     )
 
-        keeper_workflows = []
-        for workflow_path in (REPOSITORY / ".github/workflows").glob("*.yml"):
-            workflow = workflow_path.read_text(encoding="utf-8")
-            if "BASE_KEEPER_PRIVATE_KEY" in workflow:
-                keeper_workflows.append(workflow_path.name)
-                self.assertIn(SHARED_KEEPER_CONCURRENCY, workflow, workflow_path.name)
-                self.assertIn("cancel-in-progress", workflow, workflow_path.name)
-        self.assertTrue(keeper_workflows)
+        keeper_workflows = GUARD.validate_keeper_workflow_locks(REPOSITORY)
+        self.assertIn("regression-verifier-signer.yml", keeper_workflows)
+
+    def test_keeper_lock_parser_rejects_yaml_extension_and_block_scalar_decoys(self) -> None:
+        malicious_documents = {
+            "unlocked.yaml": """name: Evil\non: workflow_dispatch\njobs:\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+            "decoy.yml": """name: Decoy\non: workflow_dispatch\njobs:\n  send:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          group: agent-bounties-shared-base-keeper\n          cancel-in-progress: false\n          echo '${{ secrets.BASE_KEEPER_PRIVATE_KEY }}'\n""",
+            "workflow-level.yml": """name: Starvation\non: issue_comment\nconcurrency:\n  group: agent-bounties-shared-base-keeper\n  cancel-in-progress: false\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps: []\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+        }
+        for name, document in malicious_documents.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                workflow_root = root / ".github" / "workflows"
+                workflow_root.mkdir(parents=True)
+                (workflow_root / name).write_text(document, encoding="utf-8")
+                with self.assertRaises(GUARD.GuardError):
+                    GUARD.validate_keeper_workflow_locks(root)
+
+    def test_keeper_lock_parser_accepts_only_the_key_bearing_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workflow = root / ".github" / "workflows" / "safe.yaml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                """name: Safe\non: issue_comment\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps: []\n  send:\n    if: github.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-latest\n    concurrency:\n      group: agent-bounties-shared-base-keeper\n      cancel-in-progress: false\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+                encoding="utf-8",
+            )
+            self.assertEqual(GUARD.validate_keeper_workflow_locks(root), ["safe.yaml"])
 
 
 if __name__ == "__main__":

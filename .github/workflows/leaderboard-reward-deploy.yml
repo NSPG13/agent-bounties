@@ -20,10 +20,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: agent-bounties-shared-base-keeper
-  cancel-in-progress: false
-
 jobs:
   deterministic-gates:
     runs-on: ubuntu-latest
@@ -45,6 +41,9 @@ jobs:
     needs: deterministic-gates
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_SEPOLIA_RPC_URL: https://sepolia.base.org
@@ -91,6 +90,9 @@ jobs:
     needs: base-sepolia-rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}

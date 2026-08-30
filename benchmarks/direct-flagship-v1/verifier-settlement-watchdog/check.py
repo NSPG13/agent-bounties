@@ -10,6 +10,7 @@ import json
 import os
 import random
 import re
+import runpy
 import shlex
 import socket
 import subprocess
@@ -31,16 +32,16 @@ ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
 PIPELINE_SHA256 = "c58602e3929f0a9b8d1cc437b58086cd6c5ac2d1194c4e89aeea97184609e140"
 PIPELINE_TEST_SHA256 = "1665f99a25f3ffdd1be1fb167e4ba9a09c729966c46ec41990629d5dd6f271e5"
-SOURCE_GUARD_SHA256 = "1ff5e0a5b9a100d4e5f321a0347be0bdf9fffe2fe7fa2ad625b3963f2215afd8"
-SOURCE_GUARD_TEST_SHA256 = "aaed28ea7d691706ff5faeae20134497797fdd0ebdee3b9c5e1444a997d3de5b"
+SOURCE_GUARD_SHA256 = "f6e2aef9539c9477430644f9cdac9e241a2e0ae4cd51a3c4365b6cc41f447f42"
+SOURCE_GUARD_TEST_SHA256 = "8e856f7138203c143d557d879d4bb4b1d51eb1ad02e7db43fb80e84fd153e21e"
 WORKER_BUILD_SHA256 = "3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d"
-SIGNING_RUNTIME_SHA256 = "8f3a2578b6fd8675f7cee667149e229ed2f429fb28da3fc98a0edd29b247d504"
+SIGNING_RUNTIME_SHA256 = "4cf120e5a097e6bef29ed8004c256c4445b01e2d1e881f0df7a9bcd393740d3c"
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "386a79d05075ace6cbc71f01866f9059714a374eefdbf2d13fea38d0e782504b",
+    ".github/workflows/regression-verifier-runner.yml": "860311681823d8e63d70eef7a292d53d19a60b6bd5cd31abe3389e7ab230b6de",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "2ee9fdba55b680fc36c73ed58c34a4755e7c7e6b359d73d03da6418aa775b44c",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "930f041ab3a22a41cf672bf8cfdbd9aaa069df6710410b6bec3b6f8e5ac7eb3a",
+    ".github/workflows/regression-verifier-signer.yml": "18955ab9544d92d0224c74fe232edff886a217827f1015e8fa32279fe9906fbe",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "506d351ad0075d59f48c882eb2396d823ecafaa0317cd48ed8e6d34881a38319",
 }
 
 
@@ -66,52 +67,6 @@ def canonical_workflow_hash(path: str) -> str:
 for workflow_path, expected_hash in CANONICAL_WORKFLOW_SHA256.items():
     if canonical_workflow_hash(workflow_path) != expected_hash:
         raise SystemExit(f"{workflow_path} differs from the reviewed effective workflow")
-keeper_workflows = []
-
-
-def keeper_concurrency_values(workflow_text: str) -> tuple[list[str], list[str]]:
-    try:
-        document = json.loads(workflow_text)
-    except json.JSONDecodeError:
-        groups = [
-            value.strip()
-            for value in re.findall(r"(?m)^\s+group:\s*([^#\r\n]+)", workflow_text)
-        ]
-        cancels = [
-            value.strip()
-            for value in re.findall(
-                r"(?m)^\s+cancel-in-progress:\s*([^#\r\n]+)", workflow_text
-            )
-        ]
-        return groups, cancels
-    groups: list[str] = []
-    cancels: list[str] = []
-    pending: list[Any] = [document]
-    while pending:
-        value = pending.pop()
-        if isinstance(value, dict):
-            concurrency = value.get("concurrency")
-            if isinstance(concurrency, dict) and "group" in concurrency:
-                groups.append(str(concurrency.get("group")))
-                cancels.append(str(concurrency.get("cancel-in-progress")).lower())
-            pending.extend(value.values())
-        elif isinstance(value, list):
-            pending.extend(value)
-    return groups, cancels
-
-
-for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
-    workflow_text = workflow_path.read_text(encoding="utf-8")
-    if "BASE_KEEPER_PRIVATE_KEY" not in workflow_text:
-        continue
-    keeper_workflows.append(workflow_path.name)
-    groups, cancel_values = keeper_concurrency_values(workflow_text)
-    if groups != [SHARED_KEEPER_CONCURRENCY] or cancel_values != ["false"]:
-        raise SystemExit(
-            f"{workflow_path.relative_to(ROOT)} does not use the sole shared keeper lock"
-        )
-if not keeper_workflows:
-    raise SystemExit("no keeper workflow was available for shared-lock validation")
 pipeline_bytes_early = require("scripts/regression_verifier_pipeline.py").read_bytes().replace(
     b"\r\n", b"\n"
 )
@@ -133,6 +88,11 @@ if hashlib.sha256(source_guard_early).hexdigest() != SOURCE_GUARD_SHA256:
 if hashlib.sha256(source_guard_tests_early).hexdigest() != SOURCE_GUARD_TEST_SHA256:
     raise SystemExit("regression verifier source guard tests differ from the reviewed suite")
 source_guard = require("scripts/regression_verifier_source_guard.py")
+source_guard_module = runpy.run_path(str(source_guard))
+try:
+    keeper_workflows = source_guard_module["validate_keeper_workflow_locks"](ROOT)
+except source_guard_module["GuardError"] as error:
+    raise SystemExit(f"keeper workflow lock contract failed: {error}") from error
 for guard_scope, expected_digest in (
     ("worker-build", WORKER_BUILD_SHA256),
     ("signing-runtime", SIGNING_RUNTIME_SHA256),
@@ -238,6 +198,17 @@ def run(
         else 20_000 + identity,
         "workflow_run_attempt": attempt,
     }
+
+
+def observation_rank(item: dict[str, Any]) -> tuple[int, int, int]:
+    values = (
+        item.get("workflow_run_id"),
+        item.get("workflow_run_attempt"),
+        item.get("workflow_job_id"),
+    )
+    if not all(isinstance(value, int) and value > 0 for value in values):
+        raise SystemExit("workflow observation has no monotonic GitHub identity")
+    return values  # type: ignore[return-value]
 
 
 def production_job(name: str, expiry: str) -> dict[str, Any]:
@@ -494,7 +465,7 @@ def validate(
                 )
             if action in retry_stages:
                 matching_runs = runs_by_job_stage.get((job_id, retry_stages[str(action)]), [])
-                selected = matching_runs[-1] if matching_runs else {}
+                selected = max(matching_runs, key=observation_rank) if matching_runs else {}
                 if (
                     workflow_run_id != selected.get("workflow_run_id")
                     or workflow_job_id != selected.get("workflow_job_id")
@@ -523,7 +494,7 @@ def validate(
                         raise SystemExit(
                             f"watchdog retry {job_id} does not model every affected workflow job"
                         )
-                    affected = stage_runs[-1]
+                    affected = max(stage_runs, key=observation_rank)
                     expected_affected.append(
                         {
                             "workflow_job_id": affected["workflow_job_id"],
@@ -645,6 +616,21 @@ relay_runs = [
 _, relay_plan = invoke(relay_jobs, relay_runs)
 relay = validate(relay_plan, relay_jobs, relay_runs)
 expect(relay["relay-gap"], "retry_relay", True, "relay_secondary")
+
+# GitHub does not contractually order workflow_runs for this planner. A stale
+# failure appearing after a newer successful stage must never authorize an
+# obsolete retry. Monotonic run/attempt/job IDs select the effective stage.
+newest_jobs = [job("newest-stage", "2026-09-01T14:10:00Z")]
+newest_runs = [
+    run("newest-stage", "runner", "success", artifact_hash=candidate_hash, workflow_run_id=5200),
+    run("newest-stage", "signer_one", "success", signer=ADDRESS_ONE, workflow_run_id=5201),
+    run("newest-stage", "signer_two", "success", signer=ADDRESS_TWO, workflow_run_id=5201),
+    run("newest-stage", "relay", "success", workflow_run_id=5201),
+    run("newest-stage", "runner", "failure", workflow_run_id=5100),
+]
+_, newest_plan = invoke(newest_jobs, newest_runs)
+newest = validate(newest_plan, newest_jobs, newest_runs)
+expect(newest["newest-stage"], "reconcile_canonical_state", False, "canonical_chain")
 
 # Existing queued or in-progress work is owned by that active workflow run. A
 # later schedule must wait instead of dispatching or rerunning the same stage.

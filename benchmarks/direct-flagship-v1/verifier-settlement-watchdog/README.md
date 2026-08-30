@@ -120,7 +120,9 @@ ID in the exact run name and may inherit only that runner's proven membership.
 An old run, a missing/expired artifact, a job-ID-only match, or a run timestamp
 is not processing evidence. A newly submitted job must wait for the next fixed
 runner schedule rather than inherit status from an older workflow run. The
-watchdog never creates a new runner execution.
+watchdog never creates a new runner execution. When several current-main
+observations exist for one stage, monotonic GitHub run, attempt, and job IDs
+select the newest observation regardless of API response order.
 
 Execution must reject a different repository, stale main, a non-allowlisted
 workflow, missing/invalid run, job, or attempt IDs, duplicate actions against
@@ -276,8 +278,12 @@ enforces a 500,000 gas ceiling. It reads both the latest and pending keeper
 nonces through two independent Base RPCs and refuses to send unless every
 latest/pending value agrees, so a pending or stale nonce view fails closed. It
 repeats that independent check immediately before every send. Every checked-in
-workflow that can receive `BASE_KEEPER_PRIVATE_KEY` is serialized under the
-repository-wide `agent-bounties-shared-base-keeper` concurrency group. The
+job that can receive `BASE_KEEPER_PRIVATE_KEY` is serialized under the
+repository-wide `agent-bounties-shared-base-keeper` concurrency group; the
+lock is forbidden at workflow scope and on validation-only jobs so public event
+churn cannot occupy or replace a pending key-bearing transaction job. Both
+`.yml` and `.yaml` files are parsed structurally, and block-scalar text cannot
+impersonate concurrency keys. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.
