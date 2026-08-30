@@ -11,6 +11,11 @@ from pathlib import Path
 
 
 HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+INCLUDE_CALL = re.compile(r"include_(?:str|bytes)!\s*\(")
+LITERAL_INCLUDE = re.compile(
+    r'include_(?:str|bytes)!\s*\(\s*"([^"\\]*)"\s*,?\s*\)',
+    re.MULTILINE,
+)
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
 OPTIONAL_BUILD_ROOTS = ("rust-toolchain", "rust-toolchain.toml")
 RUNTIME_FILES = (
@@ -25,9 +30,51 @@ class GuardError(RuntimeError):
     """Raised when a guarded source set cannot be trusted."""
 
 
+def _compile_time_inputs(root: Path, guarded_files: set[Path]) -> set[Path]:
+    """Resolve every literal Rust include outside or inside the guarded roots.
+
+    Rust permits compile-time inputs to live outside a crate directory. Hashing
+    only Cargo manifests and crate roots therefore does not bind the executable.
+    Reject non-literal include paths because their effective files cannot be
+    proven from this source-only guard.
+    """
+
+    inputs: set[Path] = set()
+    for source in sorted(path for path in guarded_files if path.suffix == ".rs"):
+        text = source.read_text(encoding="utf-8")
+        calls = INCLUDE_CALL.findall(text)
+        literals = LITERAL_INCLUDE.findall(text)
+        if len(calls) != len(literals):
+            relative = source.relative_to(root).as_posix()
+            raise GuardError(f"non-literal or unsupported compile-time include: {relative}")
+        for literal in literals:
+            try:
+                included = (source.parent / literal).resolve(strict=True)
+                relative = included.relative_to(root)
+            except (OSError, ValueError) as error:
+                source_name = source.relative_to(root).as_posix()
+                raise GuardError(
+                    f"compile-time include escapes or is missing: {source_name}: {literal}"
+                ) from error
+            cursor = root
+            for part in relative.parts:
+                cursor /= part
+                if cursor.is_symlink():
+                    raise GuardError(
+                        "compile-time include may not traverse a symlink: "
+                        f"{relative.as_posix()}"
+                    )
+            if not included.is_file():
+                raise GuardError(
+                    f"compile-time include is not a file: {relative.as_posix()}"
+                )
+            inputs.add(included)
+    return inputs
+
+
 def _guarded_files(root: Path, scope: str) -> list[Path]:
     if scope == "worker-build":
-        candidates: list[Path] = []
+        candidates: set[Path] = set()
         for relative in BUILD_ROOTS + OPTIONAL_BUILD_ROOTS:
             candidate = root / relative
             if not candidate.exists():
@@ -37,7 +84,7 @@ def _guarded_files(root: Path, scope: str) -> list[Path]:
             if candidate.is_symlink():
                 raise GuardError(f"guarded build input may not be a symlink: {relative}")
             if candidate.is_file():
-                candidates.append(candidate)
+                candidates.add(candidate)
                 continue
             for child in candidate.rglob("*"):
                 if child.is_symlink():
@@ -45,7 +92,8 @@ def _guarded_files(root: Path, scope: str) -> list[Path]:
                         f"guarded build input may not be a symlink: {child.relative_to(root).as_posix()}"
                     )
                 if child.is_file():
-                    candidates.append(child)
+                    candidates.add(child)
+        candidates.update(_compile_time_inputs(root, candidates))
         return sorted(candidates, key=lambda path: path.relative_to(root).as_posix())
     if scope == "signing-runtime":
         candidates = []

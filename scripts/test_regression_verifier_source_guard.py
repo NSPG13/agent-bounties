@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +24,8 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
     def fixture(self, root: Path) -> None:
         (root / ".cargo").mkdir(parents=True)
         (root / "crates" / "worker" / "src").mkdir(parents=True)
+        (root / "migrations").mkdir(parents=True)
+        (root / "schemas").mkdir(parents=True)
         (root / "scripts").mkdir(parents=True)
         (root / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
         (root / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
@@ -30,8 +34,13 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "[package]\nname = 'worker'\nversion = '0.1.0'\n", encoding="utf-8"
         )
         (root / "crates" / "worker" / "src" / "main.rs").write_text(
-            "fn main() {}\n", encoding="utf-8"
+            'const MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");\n'
+            'const SCHEMA: &[u8] = include_bytes!("../../../schemas/discovery.json");\n'
+            "fn main() {}\n",
+            encoding="utf-8",
         )
+        (root / "migrations" / "0001_core.sql").write_text("select 1;\n", encoding="utf-8")
+        (root / "schemas" / "discovery.json").write_text("{}\n", encoding="utf-8")
         for relative in GUARD.RUNTIME_FILES:
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +68,26 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             )
             self.assertNotEqual(before, GUARD.source_digest(root, "worker-build"))
 
+    def test_out_of_tree_compile_time_inputs_change_worker_digest(self) -> None:
+        for relative in ("migrations/0001_core.sql", "schemas/discovery.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.fixture(root)
+                before = GUARD.source_digest(root, "worker-build")
+                (root / relative).write_text("changed\n", encoding="utf-8")
+                self.assertNotEqual(before, GUARD.source_digest(root, "worker-build"))
+
+    def test_non_literal_compile_time_input_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            (root / "crates" / "worker" / "src" / "main.rs").write_text(
+                'const DATA: &[u8] = include_bytes!(env!("UNBOUND_FILE"));\nfn main() {}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GUARD.GuardError, "non-literal"):
+                GUARD.source_digest(root, "worker-build")
+
     def test_toolchain_override_changes_worker_digest(self) -> None:
         for override in GUARD.OPTIONAL_BUILD_ROOTS:
             with self.subTest(override=override), tempfile.TemporaryDirectory() as temporary:
@@ -85,7 +114,7 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(GUARD.GuardError, "missing guarded build input"):
                 GUARD.source_digest(root, "worker-build")
 
-    def test_checked_in_workflows_scope_key_and_watch_toolchain_overrides(self) -> None:
+    def test_checked_in_workflows_scope_key_and_watch_all_external_build_inputs(self) -> None:
         reusable = (
             REPOSITORY / ".github/workflows/regression-verifier-signing-reusable.yml"
         ).read_text(encoding="utf-8")
@@ -95,6 +124,19 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             reusable.index(secret),
             reusable.index("Re-fetch state and sign one exact candidate set"),
         )
+        compile_time_inputs = GUARD._compile_time_inputs(
+            REPOSITORY,
+            set(GUARD._guarded_files(REPOSITORY, "worker-build")),
+        )
+        root_prefixes = tuple(
+            f"{relative}/" for relative in GUARD.BUILD_ROOTS if (REPOSITORY / relative).is_dir()
+        )
+        external_inputs = sorted(
+            path.relative_to(REPOSITORY).as_posix()
+            for path in compile_time_inputs
+            if not path.relative_to(REPOSITORY).as_posix().startswith(root_prefixes)
+        )
+        self.assertTrue(external_inputs)
         for relative in (
             ".github/workflows/regression-verifier-runner.yml",
             ".github/workflows/regression-verifier-signer.yml",
@@ -103,6 +145,13 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             if "pull_request:" in workflow:
                 self.assertIn('      - "rust-toolchain"', workflow)
                 self.assertIn('      - "rust-toolchain.toml"', workflow)
+                paths_block = workflow.split("    paths:\n", 1)[1].split("  schedule:", 1)[0]
+                watched = re.findall(r'^\s+- "([^"]+)"$', paths_block, re.MULTILINE)
+                for included in external_inputs:
+                    self.assertTrue(
+                        any(fnmatch.fnmatchcase(included, pattern) for pattern in watched),
+                        f"{relative} does not watch compile-time input {included}",
+                    )
 
         keeper_workflows = []
         for workflow_path in (REPOSITORY / ".github/workflows").glob("*.yml"):
