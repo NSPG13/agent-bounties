@@ -34,14 +34,14 @@ def clone_address(factory: str, implementation: str, salt: bytes) -> str:
     )[12:].hex()
 
 
-class FrontierGmvThirtyUsdcTests(unittest.TestCase):
+class ProfitableGmvFifteenUsdcTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.spec = json.loads(
             (
                 ROOT
                 / "ops"
-                / "open-competition-v2-frontier-gmv-30usdc-v1.json"
+                / "open-competition-v2-profitable-gmv-15usdc-v1.json"
             ).read_text(encoding="utf-8")
         )
 
@@ -111,11 +111,49 @@ class FrontierGmvThirtyUsdcTests(unittest.TestCase):
 
     def test_economics_and_public_metadata_are_exact(self) -> None:
         economics = self.spec["economics"]
-        self.assertEqual(economics["solver_reward_base_units"], 30_000_000)
+        self.assertEqual(economics["solver_reward_base_units"], 15_000_000)
         self.assertEqual(economics["keeper_reward_base_units"], 40_000)
-        self.assertEqual(economics["funding_target_base_units"], 30_040_000)
+        self.assertEqual(economics["funding_target_base_units"], 15_040_000)
         self.assertEqual(
-            economics["hosted_net_prize_if_win_base_units"], 29_890_000
+            economics["hosted_net_prize_if_win_base_units"], 14_890_000
+        )
+        self.assertEqual(economics["owner_balance_after_funding_base_units"], 2_028_098)
+
+        participation = self.spec["participation_economics"]
+        self.assertEqual(participation["minimum_per_child_spend_base_units"], 0)
+        self.assertEqual(
+            participation["qualification_minimum_attributable_gmv_base_units"],
+            1_000_000,
+        )
+        self.assertEqual(self.spec["campaign"]["minimum_score_base_units"], 1_000_000)
+        self.assertEqual(self.spec["creation_params"]["score_threshold"], "1000000")
+        self.assertEqual(
+            economics["owner_balance_after_funding_base_units"],
+            17_068_098 - economics["funding_target_base_units"],
+        )
+        current_six_usdc_contracts = {
+            "0xbab4de620cee1286307d6551bc5c2816dc27d45a",
+            "0x5a096ba0dc8f647cc499d14cd82ff49eef05b828",
+            "0xee01479015026afc2b09dea37d2ed805926c3c0d",
+            "0xdc1bbcbcb149b07262565c8b9caa1ae5e2058f76",
+            "0x81f0dd1f7da5f53ab6317e27131f9af45392b84c",
+        }
+        self.assertTrue(
+            current_six_usdc_contracts.issubset(
+                set(self.spec["campaign"]["excluded_bounty_contracts"])
+            )
+        )
+        self.assertEqual(
+            participation["one_usdc_child_example"][
+                "winner_cash_margin_after_hosted_fees_base_units"
+            ],
+            13_890_000,
+        )
+        self.assertEqual(
+            participation["three_usdc_child_example"][
+                "winner_cash_margin_after_hosted_fees_base_units"
+            ],
+            11_890_000,
         )
 
         registry = json.loads(
@@ -130,8 +168,32 @@ class FrontierGmvThirtyUsdcTests(unittest.TestCase):
         ]
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["bounty_id"], self.spec["bounty_id"])
-        self.assertEqual(matches[0]["epoch_starts_at"], "2026-08-31T00:00:00Z")
-        self.assertEqual(matches[0]["epoch_ends_at"], "2026-09-07T00:00:00Z")
+        self.assertEqual(matches[0]["minimum_score_base_units"], "1000000")
+        other_campaigns = [
+            item for item in registry["competitions"] if item is not matches[0]
+        ]
+        self.assertTrue(
+            all(
+                item["epoch_ends_at"] <= matches[0]["epoch_starts_at"]
+                for item in other_campaigns
+            ),
+            "the profitable replacement must not duplicate an existing scoring window",
+        )
+        self.assertFalse(
+            any(
+                item["seed_id"] == "external-gmv-frontier-30usdc-week-20260831-v1"
+                for item in registry["competitions"]
+            )
+        )
+        self.assertFalse(
+            (ROOT / "ops" / "open-competition-v2-frontier-gmv-30usdc-v1.json").exists()
+        )
+        self.assertEqual(matches[0]["epoch_starts_at"], "2026-09-21T00:00:00Z")
+        self.assertEqual(matches[0]["epoch_ends_at"], "2026-09-28T00:00:00Z")
+        self.assertEqual(
+            self.spec["creation_params"]["funding_deadline"],
+            self.spec["campaign"]["starts_at"] - 1,
+        )
 
 
 if __name__ == "__main__":
