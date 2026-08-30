@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,6 +58,15 @@ if args.command == "execute":
         raise SystemExit("repository is not allowlisted")
     if not args.execute or document.get("fail_closed") is not True:
         raise SystemExit("explicit fail-closed execution is required")
+    parsed_api_base = urllib.parse.urlparse(args.github_api_base)
+    benchmark_loopback = (
+        os.environ.get("WATCHDOG_BENCHMARK_LOOPBACK") == "1"
+        and parsed_api_base.scheme == "http"
+        and parsed_api_base.hostname == "127.0.0.1"
+        and parsed_api_base.port is not None
+    )
+    if args.github_api_base != "https://api.github.com" and not benchmark_loopback:
+        raise SystemExit("GitHub API origin is not pinned")
     allowed = {
         "dispatch_runner": "regression-verifier-runner.yml",
         "retry_runner": "regression-verifier-runner.yml",
@@ -351,7 +361,7 @@ jobs:
   watchdog:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@pinned
+      - uses: actions/checkout@3333333333333333333333333333333333333333
       - uses: actions/cache/restore@1111111111111111111111111111111111111111
         with:
           path: .watchdog/state.json
@@ -443,6 +453,39 @@ with tempfile.TemporaryDirectory(prefix="watchdog-known-good-") as temporary:
     result = check(good)
     if result.returncode != 0:
         raise SystemExit("known-good rehearsal failed:\n" + result.stdout[-5000:])
+
+workflow_mutations = {
+    "shell suffix": lambda source: source.replace(
+        " --allow-workflow regression-verifier-signer.yml",
+        " --allow-workflow regression-verifier-signer.yml; gh api repos/example/example",
+    ),
+    "job permission override": lambda source: source.replace(
+        "  watchdog:\n    runs-on:",
+        "  watchdog:\n    permissions: write-all\n    runs-on:",
+    ),
+    "unrelated write step": lambda source: source.replace(
+        "      - uses: actions/cache/save@",
+        "      - run: gh api repos/example/example/issues/1 -f labels=unsafe\n"
+        "      - uses: actions/cache/save@",
+    ),
+    "unpinned API origin": lambda source: source.replace(
+        "--github-api-base https://api.github.com",
+        "--github-api-base https://attacker.invalid",
+    ),
+}
+for mutation_name, mutate in workflow_mutations.items():
+    with tempfile.TemporaryDirectory(prefix="watchdog-workflow-mutation-") as temporary:
+        mutated = Path(temporary)
+        build(mutated, GOOD_PLANNER)
+        workflow_path = mutated / ".github/workflows/regression-verifier-watchdog.yml"
+        original = workflow_path.read_text(encoding="utf-8")
+        changed = mutate(original)
+        if changed == original:
+            raise SystemExit(f"{mutation_name} rehearsal did not alter the workflow")
+        workflow_path.write_text(changed, encoding="utf-8")
+        result = check(mutated)
+        if result.returncode == 0:
+            raise SystemExit(f"unsafe workflow mutation was accepted: {mutation_name}")
 
 with tempfile.TemporaryDirectory(prefix="watchdog-known-bad-") as temporary:
     bad = Path(temporary)

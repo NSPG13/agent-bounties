@@ -82,6 +82,8 @@ signer or relay retry may call only `rerun-failed-jobs` on a run whose effective
 path is `.github/workflows/regression-verifier-signer.yml` and whose head is
 exact current main. The token is read only from the named environment variable,
 never a command-line value or output artifact.
+The production command must pin the API origin to `https://api.github.com` and
+must reject every other non-test origin before sending the repository token.
 
 All actions in one plan are atomic at the write boundary: validate the entire
 plan, fetch current main, and fetch/revalidate every referenced workflow run
@@ -119,6 +121,11 @@ The scheduled workflow must use one repository-wide concurrency group with
 same idempotent action before GitHub run state catches up.
 It must restore and save `.watchdog/state.json` with pinned `actions/cache`
 restore/save actions so successfully executed keys survive later schedules.
+The job must inherit the exact top-level permission map; job-level permission
+overrides are forbidden. Its only steps are a commit-pinned checkout, a
+commit-pinned cache restore, the exact single watchdog execute argv, and a
+commit-pinned cache save. Shell suffixes, extra commands, and unrelated actions
+are forbidden.
 
 The signer and relay paths must accept distinct provider variables for signer
 one, signer two, and relay, each with a safe public fallback. Provider URLs must

@@ -9,6 +9,7 @@ import json
 import os
 import random
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -605,6 +606,7 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
     signer_run_id = 0
     unsafe_run_metadata = False
+    stale_branch_metadata = False
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -632,7 +634,8 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - standard library handler name
         self.record()
         if self.path == "/repos/NSPG13/agent-bounties/branches/main":
-            self.respond(200, {"name": "main", "commit": {"sha": MAIN_SHA}})
+            branch_sha = "b" * 40 if self.stale_branch_metadata else MAIN_SHA
+            self.respond(200, {"name": "main", "commit": {"sha": branch_sha}})
             return
         expected = f"/repos/NSPG13/agent-bounties/actions/runs/{self.signer_run_id}"
         if self.path != expected:
@@ -672,6 +675,7 @@ def execute(
         plan_path.write_text(json.dumps(plan), encoding="utf-8")
         environment = os.environ.copy()
         environment["WATCHDOG_BENCHMARK_TOKEN"] = "benchmark-token"
+        environment["WATCHDOG_BENCHMARK_LOOPBACK"] = "1"
         return subprocess.run(
             [
                 sys.executable,
@@ -789,8 +793,32 @@ try:
         raise SystemExit("watchdog execute accepted stale metadata in a later action")
     if any(item["method"] == "POST" for item in FakeGitHubHandler.requests):
         raise SystemExit("watchdog execute wrote an earlier action before all metadata passed")
+
+    FakeGitHubHandler.requests = []
+    FakeGitHubHandler.unsafe_run_metadata = False
+    FakeGitHubHandler.stale_branch_metadata = True
+    rejected = execute(execution_plan, api_base, state_root / "stale-main.json")
+    if rejected.returncode == 0:
+        raise SystemExit("watchdog execute accepted a plan after protected main advanced")
+    if not any(item["path"].endswith("/branches/main") for item in FakeGitHubHandler.requests):
+        raise SystemExit("watchdog execute did not fetch protected main before execution")
+    if any(item["method"] == "POST" for item in FakeGitHubHandler.requests):
+        raise SystemExit("watchdog execute wrote from a stale protected-main plan")
+
+    FakeGitHubHandler.requests = []
+    FakeGitHubHandler.stale_branch_metadata = False
+    rejected = execute(
+        execution_plan,
+        f"http://localhost:{server.server_port}",
+        state_root / "attacker-origin.json",
+    )
+    if rejected.returncode == 0:
+        raise SystemExit("watchdog execute accepted a non-pinned GitHub API origin")
+    if FakeGitHubHandler.requests:
+        raise SystemExit("watchdog execute sent its token to a non-pinned API origin")
 finally:
     FakeGitHubHandler.unsafe_run_metadata = False
+    FakeGitHubHandler.stale_branch_metadata = False
     execution_state.cleanup()
     server.shutdown()
     server.server_close()
@@ -851,35 +879,43 @@ job_keys = {
 }
 if job_keys != {"watchdog"}:
     raise SystemExit("watchdog workflow must contain exactly one effective watchdog job")
+if re.search(r"(?m)^\s{4}permissions:\s*", jobs_block):
+    raise SystemExit("watchdog job must inherit the exact top-level permission map")
 command_matches = re.findall(r"(?m)^\s{6,}-\s+run:\s*(\S.*)$", jobs_block)
-execute_commands = [
-    command
-    for command in command_matches
-    if re.match(r"^python\s+scripts/regression_verifier_watchdog\.py\s+execute(?:\s|$)", command)
+if len(command_matches) != 1:
+    raise SystemExit("scheduled watchdog job must contain exactly one effective run command")
+execute_command = command_matches[0]
+expected_execute_tokens = [
+    "python",
+    "scripts/regression_verifier_watchdog.py",
+    "execute",
+    "--plan",
+    "target/watchdog-plan.json",
+    "--repository",
+    "$GITHUB_REPOSITORY",
+    "--github-api-base",
+    "https://api.github.com",
+    "--token-env",
+    "GITHUB_TOKEN",
+    "--state",
+    ".watchdog/state.json",
+    "--execute",
+    "--allow-workflow",
+    "regression-verifier-runner.yml",
+    "--allow-workflow",
+    "regression-verifier-signer.yml",
 ]
-if len(execute_commands) != 1:
-    raise SystemExit("scheduled watchdog job must invoke exactly one effective execute command")
-execute_command = execute_commands[0]
-for flag in ("--plan", "--repository", "--github-api-base", "--token-env", "--state", "--execute"):
-    if not re.search(rf"(?:^|\s){re.escape(flag)}(?:\s|$)", execute_command):
-        raise SystemExit(f"effective watchdog execute command is missing {flag}")
-for pattern, label in (
-    (r'(?:^|\s)--repository\s+"?\$GITHUB_REPOSITORY"?(?:\s|$)', "repository binding"),
-    (r"(?:^|\s)--github-api-base\s+https://api\.github\.com(?:\s|$)", "GitHub API base"),
-    (r"(?:^|\s)--token-env\s+GITHUB_TOKEN(?:\s|$)", "token environment binding"),
-    (r"(?:^|\s)--plan\s+\S+(?:\s|$)", "plan path"),
-    (r"(?:^|\s)--state\s+\.watchdog/state\.json(?:\s|$)", "persistent state path"),
-):
-    if not re.search(pattern, execute_command):
-        raise SystemExit(f"effective watchdog execute command has no exact {label}")
+try:
+    execute_tokens = shlex.split(execute_command, posix=True)
+except ValueError as error:
+    raise SystemExit("scheduled watchdog execute command is not safely parseable") from error
+if execute_tokens != expected_execute_tokens:
+    raise SystemExit("scheduled watchdog execute command must contain only the exact pinned argv")
 if not re.search(
     r"(?m)^\s{6,}GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}\s*$",
     jobs_block,
 ):
     raise SystemExit("watchdog execute job does not bind the repository token")
-for allowed in ("regression-verifier-runner.yml", "regression-verifier-signer.yml"):
-    if allowed not in execute_command:
-        raise SystemExit(f"watchdog execute command does not pin allowlisted workflow {allowed}")
 
 permission_block = top_level_block(workflow_lower, "permissions:")
 permission_lines = {
@@ -908,6 +944,20 @@ cache_steps = list(
 )
 if [match.group(1) for match in cache_steps] != ["restore", "save"]:
     raise SystemExit("watchdog workflow must use one pinned cache restore and one pinned cache save")
+workflow_steps = list(
+    re.finditer(r"(?m)^\s{6,}-\s+(uses|run):\s*(\S.*)$", jobs_block)
+)
+if len(workflow_steps) != 4:
+    raise SystemExit("watchdog job may contain only checkout, cache restore, execute, and cache save")
+step_kinds = [(match.group(1), match.group(2)) for match in workflow_steps]
+if not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", step_kinds[0][1]):
+    raise SystemExit("watchdog checkout action must be pinned to an exact commit")
+if step_kinds[0][0] != "uses" or step_kinds[1][1] != cache_steps[0].group(0).split("uses:", 1)[1].strip():
+    raise SystemExit("watchdog checkout/cache restore steps are not exact")
+if step_kinds[2] != ("run", execute_command):
+    raise SystemExit("watchdog execute step is not the sole command")
+if step_kinds[3][0] != "uses" or step_kinds[3][1] != cache_steps[1].group(0).split("uses:", 1)[1].strip():
+    raise SystemExit("watchdog cache save step is not exact")
 execute_offset = jobs_block.find(execute_command)
 if not (cache_steps[0].start() < execute_offset < cache_steps[1].start()):
     raise SystemExit("watchdog state restore, execute, and save steps are out of order")
@@ -921,6 +971,14 @@ def workflow_step_block(match: re.Match[str]) -> str:
 
 restore_block = workflow_step_block(cache_steps[0])
 save_block = workflow_step_block(cache_steps[1])
+execute_block = workflow_step_block(workflow_steps[2])
+execute_environment = {
+    line.strip()
+    for line in execute_block.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+}
+if execute_environment != {"env:", "GITHUB_TOKEN: ${{ github.token }}"}:
+    raise SystemExit("watchdog execute step environment must contain only the repository token")
 state_path_pattern = r"(?m)^\s{10,}path:\s+\.watchdog/state\.json\s*$"
 cache_key_pattern = (
     r"(?m)^\s{10,}key:\s+\$\{\{\s*runner\.os\s*\}\}"
