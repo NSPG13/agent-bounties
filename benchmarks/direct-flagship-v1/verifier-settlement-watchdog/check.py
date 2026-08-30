@@ -102,6 +102,51 @@ def run(
     }
 
 
+def production_job(name: str, expiry: str) -> dict[str, Any]:
+    expires_at = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+    return {
+        "job_id": f"base-mainnet:{name}:3",
+        "network": "base-mainnet",
+        "bounty_id": hash32(f"bounty:{name}"),
+        "bounty_contract": "0x" + hashlib.sha1(name.encode()).hexdigest()[:40],
+        "round": 3,
+        "solver_wallet": "0x" + "33" * 20,
+        "verification_mode": "signed_quorum",
+        "verifier_module": None,
+        "eligible_verifiers": [ADDRESS_ONE, ADDRESS_TWO],
+        "threshold": 2,
+        "verifier_reward": "10000",
+        "current_solver_payout": "100000",
+        "verification_expires_at": int(expires_at.timestamp()),
+        "terms": {"terms_hash": hash32(f"terms:{name}"), "document": {}},
+        "submission_evidence": {
+            "evidence_hash": hash32(f"evidence:{name}"),
+            "created_at": int(datetime.fromisoformat(NOW.replace("Z", "+00:00")).timestamp()),
+        },
+        "required_action": "Evaluate the immutable policy and relay a matching quorum.",
+        "payout_boundary": "Only confirmed canonical BountySettled proves payment.",
+    }
+
+
+def normalize_production_job(item: dict[str, Any]) -> dict[str, Any]:
+    canonical_payload = json.dumps(item, sort_keys=True, separators=(",", ":"))
+    return {
+        "job_id": item["job_id"],
+        "bounty_contract": item["bounty_contract"],
+        "round": item["round"],
+        "status": "submitted",
+        "canonical_job_hash": "0x" + hashlib.sha256(canonical_payload.encode()).hexdigest(),
+        "submission_hash": item["submission_evidence"]["evidence_hash"],
+        "verification_expires_at": datetime.fromtimestamp(
+            item["verification_expires_at"], timezone.utc
+        ).isoformat().replace("+00:00", "Z"),
+        "required_verifiers": item["eligible_verifiers"],
+        "threshold": item["threshold"],
+        "input_readiness": "ready",
+        "canonical_terminal_event": None,
+    }
+
+
 POLICY = {
     "schema": "agent-bounties/regression-verifier-watchdog-policy-v1",
     "network": "base-mainnet",
@@ -607,8 +652,9 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     signer_run_id = 0
     unsafe_run_metadata = False
     stale_branch_metadata = False
-    scheduled_jobs: dict[str, Any] = {}
+    scheduled_jobs: object = []
     scheduled_runs: dict[str, Any] = {}
+    scheduled_run_jobs: dict[int, dict[str, Any]] = {}
     fail_post_path: str | None = None
 
     def log_message(self, _format: str, *_args: object) -> None:
@@ -624,7 +670,7 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
             }
         )
 
-    def respond(self, status: int, payload: dict[str, Any] | None = None) -> None:
+    def respond(self, status: int, payload: object | None = None) -> None:
         body = b"" if payload is None else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         if body:
@@ -641,6 +687,14 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/repos/NSPG13/agent-bounties/actions/runs?per_page=100":
             self.respond(200, self.scheduled_runs)
+            return
+        jobs_match = re.fullmatch(
+            r"/repos/NSPG13/agent-bounties/actions/runs/(\d+)/jobs\?per_page=100",
+            self.path,
+        )
+        if jobs_match:
+            payload = self.scheduled_run_jobs.get(int(jobs_match.group(1)))
+            self.respond(200 if payload is not None else 404, payload or {"message": "not found"})
             return
         if self.path == "/repos/NSPG13/agent-bounties/branches/main":
             branch_sha = "b" * 40 if self.stale_branch_metadata else MAIN_SHA
@@ -789,17 +843,97 @@ execution_plan = {
 }
 FakeGitHubHandler.requests = []
 FakeGitHubHandler.signer_run_id = 4304
-FakeGitHubHandler.scheduled_jobs = {
-    "schema": "agent-bounties/regression-verifier-watchdog-jobs-v1",
-    "network": "base-mainnet",
-    "safe_block": 50_700_000,
-    "jobs": dispatch_jobs + relay_execute_jobs,
-}
-FakeGitHubHandler.scheduled_runs = {
-    "schema": "agent-bounties/regression-verifier-watchdog-runs-v1",
+live_production_jobs = [production_job("live-signer-gap", "2026-09-01T14:30:00Z")]
+live_jobs = [normalize_production_job(item) for item in live_production_jobs]
+live_job = live_jobs[0]
+
+
+def live_artifact(stage: str, run_id: int) -> str:
+    payload = f"{stage}:{live_job['canonical_job_hash']}:{run_id}"
+    return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
+
+
+live_runs = [
+    run(
+        live_job["job_id"],
+        "runner",
+        "success",
+        artifact_hash=live_artifact("runner", 5301),
+        workflow_run_id=5301,
+        canonical_job_hash=live_job["canonical_job_hash"],
+    ),
+    run(
+        live_job["job_id"],
+        "signer_one",
+        "success",
+        provider_role="signer_one_primary",
+        artifact_hash=live_artifact("signer_one", 5302),
+        signer=ADDRESS_ONE,
+        workflow_run_id=5302,
+        canonical_job_hash=live_job["canonical_job_hash"],
+    ),
+    run(
+        live_job["job_id"],
+        "signer_two",
+        "failure",
+        provider_role="signer_two_primary",
+        workflow_run_id=5302,
+        canonical_job_hash=live_job["canonical_job_hash"],
+    ),
+    run(
+        live_job["job_id"],
+        "relay",
+        "skipped",
+        provider_role="relay_primary",
+        workflow_run_id=5302,
+        canonical_job_hash=live_job["canonical_job_hash"],
+    ),
+]
+_, live_plan = invoke(live_jobs, live_runs)
+live_execution_plan = {
+    **live_plan,
     "repository": "NSPG13/agent-bounties",
     "current_main_sha": MAIN_SHA,
-    "runs": relay_execute_runs,
+}
+FakeGitHubHandler.scheduled_jobs = live_production_jobs
+FakeGitHubHandler.scheduled_runs = {
+    "total_count": 2,
+    "workflow_runs": [
+        {
+            "id": 5301,
+            "path": ".github/workflows/regression-verifier-runner.yml",
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+            "head_sha": MAIN_SHA,
+            "event": "schedule",
+            "created_at": "2026-09-01T12:05:00Z",
+        },
+        {
+            "id": 5302,
+            "path": ".github/workflows/regression-verifier-signer.yml",
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 1,
+            "head_sha": MAIN_SHA,
+            "event": "workflow_run",
+            "created_at": "2026-09-01T12:20:00Z",
+        },
+    ],
+}
+FakeGitHubHandler.scheduled_run_jobs = {
+    5301: {
+        "total_count": 1,
+        "jobs": [{"name": "run-no-secrets", "status": "completed", "conclusion": "success"}],
+    },
+    5302: {
+        "total_count": 3,
+        "jobs": [
+            {"name": "sign-one / sign", "status": "completed", "conclusion": "success"},
+            {"name": "sign-two / sign", "status": "completed", "conclusion": "failure"},
+            {"name": "relay", "status": "completed", "conclusion": "skipped"},
+        ],
+    },
 }
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHubHandler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -823,13 +957,15 @@ try:
             + completed.stdout.decode("utf-8", "replace")[-5000:]
         )
     generated_execution_plan = json.loads(live_plan_path.read_text(encoding="utf-8"))
-    if generated_execution_plan != execution_plan:
+    if generated_execution_plan != live_execution_plan:
         raise SystemExit("watchdog live planner did not produce the exact executable plan")
     requested_paths = {item["path"] for item in FakeGitHubHandler.requests}
     required_live_paths = {
         "/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet",
         "/repos/NSPG13/agent-bounties/actions/runs?per_page=100",
         "/repos/NSPG13/agent-bounties/branches/main",
+        "/repos/NSPG13/agent-bounties/actions/runs/5301/jobs?per_page=100",
+        "/repos/NSPG13/agent-bounties/actions/runs/5302/jobs?per_page=100",
     }
     if not required_live_paths.issubset(requested_paths):
         raise SystemExit("watchdog live planner did not acquire every required production input")
@@ -986,8 +1122,8 @@ if set(workflow_document) != {"name", "on", "permissions", "concurrency", "jobs"
 if workflow_document["name"] != "Regression Verifier Watchdog":
     raise SystemExit("watchdog workflow name is not exact")
 triggers = workflow_document["on"]
-if not isinstance(triggers, dict) or set(triggers) != {"schedule", "workflow_dispatch"}:
-    raise SystemExit("watchdog workflow triggers must be exactly schedule and workflow_dispatch")
+if not isinstance(triggers, dict) or set(triggers) != {"schedule"}:
+    raise SystemExit("watchdog workflow must be schedule-only on the protected default branch")
 schedule = triggers["schedule"]
 if schedule != [{"cron": "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"}]:
     raise SystemExit("watchdog workflow has no single effective cron schedule")
@@ -1074,107 +1210,49 @@ signer_workflow = require(".github/workflows/regression-verifier-signer.yml").re
 reusable_workflow = require(
     ".github/workflows/regression-verifier-signing-reusable.yml"
 ).read_text(encoding="utf-8")
-if "REGRESSION_VERIFIER_RPC_URL" in signer_workflow or "REGRESSION_VERIFIER_RPC_URL" in reusable_workflow:
-    raise SystemExit("signer workflows still consume the shared regression verifier RPC variable")
-
-
-def provider_binding(block: str, key: str, variable: str) -> str:
-    match = re.search(
-        rf"(?m)^\s*{re.escape(key)}:\s*\$\{{\{{\s*vars\.{variable}\s*\|\|\s*'([^']+)'\s*\}}\}}\s*$",
-        block,
-    )
-    if not match:
-        raise SystemExit(f"effective provider binding is missing for {variable}")
-    fallback = match.group(1)
-    if not fallback.startswith("https://"):
-        raise SystemExit(f"provider fallback for {variable} must be public HTTPS")
-    return fallback
-
+try:
+    signer_document = json.loads(signer_workflow)
+    reusable_document = json.loads(reusable_workflow)
+except json.JSONDecodeError as error:
+    raise SystemExit("signer workflows must use strict JSON-syntax YAML") from error
+if set(signer_document) != {"name", "on", "permissions", "jobs"}:
+    raise SystemExit("signer workflow has unknown effective top-level keys")
+signer_jobs = signer_document["jobs"]
+if not isinstance(signer_jobs, dict) or not {"sign-one", "sign-two", "relay"}.issubset(signer_jobs):
+    raise SystemExit("signer workflow is missing an effective signer or relay job")
+expected_provider_bindings = {
+    "sign-one": "${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}",
+    "sign-two": "${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}",
+}
+for job_name, expected_binding in expected_provider_bindings.items():
+    selected = signer_jobs[job_name]
+    if selected.get("uses") != "./.github/workflows/regression-verifier-signing-reusable.yml":
+        raise SystemExit(f"{job_name} does not call the reviewed reusable signer")
+    if not isinstance(selected.get("with"), dict) or selected["with"].get("rpc_url") != expected_binding:
+        raise SystemExit(f"{job_name} provider binding does not match its precommitted origin")
+relay_job = signer_jobs["relay"]
+if not isinstance(relay_job.get("env"), dict) or relay_job["env"].get(
+    "BASE_MAINNET_RPC_URL"
+) != "${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}":
+    raise SystemExit("relay provider binding does not match its precommitted origin")
 
 try:
-    sign_one_block = signer_workflow.split("\n  sign-one:", 1)[1].split("\n  sign-two:", 1)[0]
-    sign_two_block = signer_workflow.split("\n  sign-two:", 1)[1].split("\n  relay:", 1)[0]
-    relay_block = signer_workflow.split("\n  relay:", 1)[1]
-except IndexError as error:
-    raise SystemExit("signer workflow job boundaries are unavailable") from error
-fallbacks = {
-    "signer_one": provider_binding(
-        sign_one_block, "rpc_url", "REGRESSION_VERIFIER_ONE_RPC_URL"
-    ),
-    "signer_two": provider_binding(
-        sign_two_block, "rpc_url", "REGRESSION_VERIFIER_TWO_RPC_URL"
-    ),
-    "relay": provider_binding(
-        relay_block, "BASE_MAINNET_RPC_URL", "REGRESSION_VERIFIER_RELAY_RPC_URL"
-    ),
-}
-expected_fallbacks = {
-    "signer_one": "https://mainnet.base.org",
-    "signer_two": "https://base-rpc.publicnode.com",
-    "relay": "https://1rpc.io/base",
-}
-if fallbacks != expected_fallbacks:
-    raise SystemExit("signer and relay provider fallbacks must match the precommitted origins")
-for block, variable in (
-    (sign_one_block, "REGRESSION_VERIFIER_ONE_RPC_URL"),
-    (sign_two_block, "REGRESSION_VERIFIER_TWO_RPC_URL"),
-):
-    if not re.search(
-        rf"(?ms)^\s{{4}}uses:\s*\./\.github/workflows/regression-verifier-signing-reusable\.yml\s*$"
-        rf".*?^\s{{4}}with:\s*$.*?^\s{{6}}rpc_url:\s*\$\{{\{{\s*vars\.{variable}\b",
-        block,
-    ):
-        raise SystemExit(f"{variable} is not consumed by the reusable signing job")
-if not re.search(
-    r"(?m)^\s{4}env:\s*$\n\s{6}BASE_MAINNET_RPC_URL:\s*\$\{\{\s*vars\.REGRESSION_VERIFIER_RELAY_RPC_URL\b",
-    relay_block,
-):
-    raise SystemExit("relay provider is not bound in the effective relay job environment")
-
-workflow_call = reusable_workflow.split("workflow_call:", 1)[1].split("secrets:", 1)[0]
-rpc_input = workflow_call.split("rpc_url:", 1)[1]
-if not re.search(r"required:\s*true", rpc_input) or not re.search(r"type:\s*string", rpc_input):
+    rpc_input = reusable_document["on"]["workflow_call"]["inputs"]["rpc_url"]
+    reusable_job = reusable_document["jobs"]["sign"]
+except (KeyError, TypeError) as error:
+    raise SystemExit("reusable signer effective input or job is missing") from error
+if rpc_input != {"required": True, "type": "string"}:
     raise SystemExit("reusable signer rpc_url input must be a required string")
-if not re.search(
-    r"(?m)^\s*BASE_MAINNET_RPC_URL:\s*\$\{\{\s*inputs\.rpc_url\s*\}\}\s*$",
-    reusable_workflow,
-):
+if reusable_job.get("env", {}).get("BASE_MAINNET_RPC_URL") != "${{ inputs.rpc_url }}":
     raise SystemExit("reusable signer does not consume its exact rpc_url input")
 
 
-def effective_run_commands(block: str) -> list[str]:
-    """Extract the effective shell bodies from the constrained workflow subset."""
-    lines = block.splitlines()
-    commands: list[str] = []
-    index = 0
-    while index < len(lines):
-        match = re.match(r"^(\s*)(?:-\s+)?run:\s*(.*?)\s*$", lines[index])
-        if not match:
-            index += 1
-            continue
-        indentation = len(match.group(1))
-        scalar = match.group(2)
-        if scalar not in {">", ">-", "|", "|-"}:
-            commands.append(scalar)
-            index += 1
-            continue
-        pieces: list[str] = []
-        index += 1
-        while index < len(lines):
-            line = lines[index]
-            if line.strip() and len(line) - len(line.lstrip()) <= indentation:
-                break
-            if line.strip():
-                pieces.append(line.strip())
-            index += 1
-        separator = " " if scalar.startswith(">") else "\n"
-        commands.append(separator.join(pieces))
-    return commands
-
-
-def pipeline_command_tokens(block: str, subcommand: str) -> list[str]:
+def exact_pipeline_tokens(steps: object, subcommand: str) -> list[str]:
+    if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+        raise SystemExit(f"{subcommand} workflow steps are invalid")
+    commands = [str(step["run"]) for step in steps if "run" in step]
     matches: list[list[str]] = []
-    for command in effective_run_commands(block):
+    for command in commands:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = "#"
@@ -1182,30 +1260,40 @@ def pipeline_command_tokens(block: str, subcommand: str) -> list[str]:
             tokens = list(lexer)
         except ValueError as error:
             raise SystemExit(f"{subcommand} workflow command is not safely parseable") from error
-        if tokens[:3] == [
-            "python",
-            "scripts/regression_verifier_pipeline.py",
-            subcommand,
-        ]:
+        if tokens[:3] == ["python", "scripts/regression_verifier_pipeline.py", subcommand]:
             matches.append(tokens)
     if len(matches) != 1:
         raise SystemExit(f"workflow must contain exactly one effective {subcommand} pipeline command")
-    tokens = matches[0]
-    if any(token in {";", "&&", "||", "|", "&"} for token in tokens):
-        raise SystemExit(f"{subcommand} pipeline command contains a shell control operator")
-    return tokens
+    return matches[0]
 
 
-def require_rpc_argument(tokens: list[str], subcommand: str) -> None:
-    positions = [index for index, token in enumerate(tokens) if token == "--rpc-url"]
-    if len(positions) != 1 or positions[0] + 1 >= len(tokens):
-        raise SystemExit(f"{subcommand} command must contain one effective --rpc-url argument")
-    if tokens[positions[0] + 1] != "$BASE_MAINNET_RPC_URL":
-        raise SystemExit(f"{subcommand} command does not consume the bound provider variable")
-
-
-require_rpc_argument(pipeline_command_tokens(reusable_workflow, "sign"), "sign")
-require_rpc_argument(pipeline_command_tokens(relay_block, "relay"), "relay")
+expected_sign_tokens = [
+    "python", "scripts/regression_verifier_pipeline.py", "sign",
+    "--api-base", "$API_BASE_URL",
+    "--network", "base-mainnet",
+    "--rpc-url", "$BASE_MAINNET_RPC_URL",
+    "--candidates", "target/regression-candidates",
+    "--output", "$ATTESTATION_OUTPUT",
+    "--worker", "target/release/worker",
+    "--private-key-env", "REGRESSION_VERIFIER_PRIVATE_KEY",
+    "--expected-signer", "$EXPECTED_SIGNER",
+]
+expected_relay_tokens = [
+    "python", "scripts/regression_verifier_pipeline.py", "relay",
+    "--api-base", "$API_BASE_URL",
+    "--network", "base-mainnet",
+    "--rpc-url", "$BASE_MAINNET_RPC_URL",
+    "--candidates", "target/regression-candidates",
+    "--attestations", "target/attestations-one",
+    "--attestations", "target/attestations-two",
+    "--verifier", "$VERIFIER_ONE",
+    "--verifier", "$VERIFIER_TWO",
+    "--worker", "target/release/worker",
+]
+if exact_pipeline_tokens(reusable_job.get("steps"), "sign") != expected_sign_tokens:
+    raise SystemExit("effective signer command must equal the complete precommitted argv")
+if exact_pipeline_tokens(relay_job.get("steps"), "relay") != expected_relay_tokens:
+    raise SystemExit("effective relay command must equal the complete precommitted argv")
 
 documentation = require("docs/sandboxed-regression-verifier.md").read_text(encoding="utf-8").lower()
 for phrase in ("watchdog", "fail closed", "idempotency", "provider", "bountysettled"):
