@@ -243,9 +243,15 @@ effective signer and relay command argv must consume the selected
 Provider URLs must not appear in watchdog plan or state artifacts.
 
 The immutable checker also binds the exact newline-normalized source bytes of
-`scripts/regression_verifier_pipeline.py` and its security test suite. Workflow
-command allowlisting alone is insufficient because a changed executable behind
-the same command would otherwise inherit signing authority. Candidate
+`scripts/regression_verifier_pipeline.py`, the source guard, and both security
+test suites. It binds every Cargo workspace, lockfile, configuration, and local
+crate input used to build the regression worker. The runner, both signers, and
+the relay verify that complete build-input digest before `cargo build`, then
+recheck the build inputs and signing runtime after the build and before any
+private key is exposed. Adding a `build.rs`, changing a local dependency, or
+mutating the Python runtime therefore fails closed. Workflow command
+allowlisting alone is insufficient because a changed executable behind the
+same command would otherwise inherit signing authority. Candidate
 revalidation runs with signing and keeper secrets removed from its environment.
 Before a private key is passed to any child process, the signer verifies Base
 chain ID 8453, nonempty code at the committed bounty contract, and an EIP-712

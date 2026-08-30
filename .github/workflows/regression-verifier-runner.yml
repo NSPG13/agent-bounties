@@ -3,12 +3,16 @@ name: Regression Verifier Runner
 on:
   pull_request:
     paths:
+      - ".cargo/**"
       - ".github/workflows/regression-verifier-runner.yml"
       - ".github/workflows/regression-verifier-signer.yml"
-      - "crates/verifier-sdk/**"
-      - "crates/worker/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
       - "scripts/regression_verifier_pipeline.py"
+      - "scripts/regression_verifier_source_guard.py"
       - "scripts/test_regression_verifier_pipeline.py"
+      - "scripts/test_regression_verifier_source_guard.py"
   schedule:
     - cron: "7,22,37,52 * * * *"
 
@@ -32,6 +36,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           python scripts/test_regression_verifier_pipeline.py -v
+          python scripts/test_regression_verifier_source_guard.py -v
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1
           python -m py_compile scripts/regression_verifier_pipeline.py
           cargo test -p verifier-sdk -p worker
 
@@ -52,8 +59,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
 
+      - name: Verify reviewed worker build inputs
+        run: >-
+          python scripts/regression_verifier_source_guard.py
+          --scope worker-build
+          --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
+
       - name: Build isolated regression worker
         run: cargo build --release -p worker
+
+      - name: Revalidate reviewed runtime after build
+        run: |
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1
 
       - name: Run canonical jobs without signing secrets
         run: >-

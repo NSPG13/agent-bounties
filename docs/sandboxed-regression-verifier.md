@@ -131,6 +131,13 @@ digest and an independently computed local EIP-712 digest before exposing the
 signing key to a child process. Candidate revalidation runs with signing and
 keeper secrets removed from its environment.
 
+The production workflows also pin the complete Cargo workspace, lockfile,
+configuration, and local crate source set used to build the worker. They verify
+that digest before building and revalidate both the build inputs and the exact
+signing runtime afterward. Any new build script, dependency drift, or
+post-build mutation stops the workflow before a verifier or keeper key reaches
+a child process.
+
 The no-secrets candidate runner is schedule-only. The settlement watchdog may
 retry one exact failed GitHub job, but it cannot dispatch a workflow or rerun a
 whole workflow run. Its plan binds the workflow run, exact job, run attempt,

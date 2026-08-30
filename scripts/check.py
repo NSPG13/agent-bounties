@@ -91,6 +91,8 @@ def compile_python(platform: str) -> None:
         "scripts/test_activate_direct_growth_v2.py",
         "scripts/test_activate_direct_inventory_v1.py",
         "scripts/test_direct_flagship_verifier_watchdog.py",
+        "scripts/regression_verifier_source_guard.py",
+        "scripts/test_regression_verifier_source_guard.py",
         "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py",
         "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py",
         "scripts/direct_recovery_689.py", "scripts/test_direct_recovery_689.py",
@@ -146,6 +148,7 @@ scripts/activate_routed_v3_replacements.py scripts/test_activate_routed_v3_repla
 scripts/activate_direct_growth_v2.py scripts/test_activate_direct_growth_v2.py
 scripts/test_activate_direct_inventory_v1.py
 scripts/test_direct_flagship_verifier_watchdog.py
+scripts/regression_verifier_source_guard.py scripts/test_regression_verifier_source_guard.py
 benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py
 benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py
 scripts/direct_recovery_689.py scripts/test_direct_recovery_689.py
@@ -263,6 +266,7 @@ def main() -> int:
         "scripts.test_activate_direct_growth_v2",
         "scripts.test_activate_direct_inventory_v1",
         "scripts.test_direct_flagship_verifier_watchdog",
+        "scripts.test_regression_verifier_source_guard",
         "-v",
     )
     py("benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py")

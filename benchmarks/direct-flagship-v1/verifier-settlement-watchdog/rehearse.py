@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,12 @@ TRUSTED_PIPELINE = (REPOSITORY / "scripts/regression_verifier_pipeline.py").read
 )
 TRUSTED_PIPELINE_TESTS = (
     REPOSITORY / "scripts/test_regression_verifier_pipeline.py"
+).read_text(encoding="utf-8")
+TRUSTED_SOURCE_GUARD = (
+    REPOSITORY / "scripts/regression_verifier_source_guard.py"
+).read_text(encoding="utf-8")
+TRUSTED_SOURCE_GUARD_TESTS = (
+    REPOSITORY / "scripts/test_regression_verifier_source_guard.py"
 ).read_text(encoding="utf-8")
 
 GOOD_PLANNER = r'''#!/usr/bin/env python3
@@ -906,7 +913,10 @@ RUNNER_WORKFLOW = '''{
         {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "with": {"python-version": "3.12"}},
         {"uses": "dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0"},
         {"uses": "Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae"},
+        {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"},
         {"name": "Build isolated regression worker", "run": "cargo build --release -p worker"},
+        {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1"},
         {"name": "Run canonical jobs without signing secrets", "run": "python scripts/regression_verifier_pipeline.py run --api-base $API_BASE_URL --network base-mainnet --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --staging $RUNNER_TEMP/regression-staging --output target/regression-candidates --max-jobs 5"},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-candidates-${{ github.run_id }}", "path": "target/regression-candidates", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1025,7 +1035,10 @@ SIGNER_WORKFLOW = '''{
         {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-candidates-${{ github.event.workflow_run.id }}", "path": "target/regression-candidates", "github-token": "${{ github.token }}", "run-id": "${{ github.event.workflow_run.id }}"}},
         {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-attestations-one-${{ github.event.workflow_run.id }}", "path": "target/attestations-one"}},
         {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-attestations-two-${{ github.event.workflow_run.id }}", "path": "target/attestations-two"}},
+        {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"},
         {"run": "cargo build --release -p worker"},
+        {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1"},
         {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --expected-keeper $KEEPER_ADDRESS", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
       ]
     }
@@ -1065,7 +1078,10 @@ REUSABLE_WORKFLOW = '''{
         {"uses": "Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae"},
         {"uses": "foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a"},
         {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-candidates-${{ inputs.candidate_run_id }}", "path": "target/regression-candidates", "github-token": "${{ github.token }}", "run-id": "${{ inputs.candidate_run_id }}"}},
+        {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"},
         {"run": "cargo build --release -p worker"},
+        {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1"},
         {"name": "Re-fetch state and sign one exact candidate set", "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER", "env": {"REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"}},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-attestations-${{ inputs.signer_slot }}-${{ inputs.candidate_run_id }}", "path": "target/attestations-${{ inputs.signer_slot }}", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1097,11 +1113,21 @@ WATCHDOG_POLICY = '''{
 
 
 def build(root: Path, planner: str) -> None:
+    for relative in ("Cargo.toml", "Cargo.lock", ".cargo", "crates"):
+        source = REPOSITORY / relative
+        destination = root / relative
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
     paths = {
         "scripts/regression_verifier_watchdog.py": planner,
         "scripts/test_regression_verifier_watchdog.py": "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\nif __name__ == '__main__': unittest.main()\n",
         "scripts/regression_verifier_pipeline.py": TRUSTED_PIPELINE,
         "scripts/test_regression_verifier_pipeline.py": TRUSTED_PIPELINE_TESTS,
+        "scripts/regression_verifier_source_guard.py": TRUSTED_SOURCE_GUARD,
+        "scripts/test_regression_verifier_source_guard.py": TRUSTED_SOURCE_GUARD_TESTS,
         ".github/workflows/regression-verifier-watchdog.yml": WATCHDOG_WORKFLOW,
         ".github/workflows/regression-verifier-runner.yml": RUNNER_WORKFLOW,
         ".github/workflows/regression-verifier-signer.yml": SIGNER_WORKFLOW,
@@ -1383,6 +1409,20 @@ for mutation_name, (relative_path, mutate) in provider_mutations.items():
         result = check(mutated)
         if result.returncode == 0:
             raise SystemExit(f"unsafe provider mutation was accepted: {mutation_name}")
+
+with tempfile.TemporaryDirectory(prefix="watchdog-build-input-mutation-") as temporary:
+    mutated = Path(temporary)
+    build(mutated, GOOD_PLANNER)
+    build_script = mutated / "crates/worker/build.rs"
+    build_script.write_text(
+        'fn main() { std::fs::write("scripts/regression_verifier_pipeline.py", "attacker").unwrap(); }\n',
+        encoding="utf-8",
+    )
+    result = check(mutated)
+    if result.returncode == 0:
+        raise SystemExit("contributor-controlled worker build script was accepted")
+    if "worker-build source set drifted" not in result.stdout:
+        raise SystemExit("worker build-input mutation failed for the wrong reason:\n" + result.stdout[-5000:])
 
 with tempfile.TemporaryDirectory(prefix="watchdog-known-bad-") as temporary:
     bad = Path(temporary)

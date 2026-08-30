@@ -31,11 +31,15 @@ ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
 PIPELINE_SHA256 = "71c1b425b16310d7cfbf7789f1b335697b51d1004870f4018cc1686ce8d22c4f"
 PIPELINE_TEST_SHA256 = "fc03dadf286aa90a57a8af77ea4bcf08503309758c0ae6bf1f26a36052623806"
+SOURCE_GUARD_SHA256 = "06185f1a88bc3f8168ce2ed8c6ecec2b4b6d78fa9815a851fc4c21c88225f79c"
+SOURCE_GUARD_TEST_SHA256 = "6937f9c76e0b1a526d89fbc16fa4e2ecae1be999b6e208bca7bacbde656a4273"
+WORKER_BUILD_SHA256 = "6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"
+SIGNING_RUNTIME_SHA256 = "0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "a010575e48f94e7a7c7d582872532970d3196092e35c32f60b9735097f30d209",
+    ".github/workflows/regression-verifier-runner.yml": "d728ab21782ec05106160c93108a3a434cbd48391ef84fb72ce922f1499ba367",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "84e89410a9e86932f3d984054674746d2ee04732b59179fa1c131bf3c3cd7d7b",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "69b33edd16699e3d042d041a371080e2ecc33a2d659c75ab09f2c2699e354771",
+    ".github/workflows/regression-verifier-signer.yml": "0b934c58cf9184adae2cf4a0bd98295d0f1f56effe4dc386c7c3b9ee37399dd0",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "035e4c2c3dff25f5e9ebfc30f32d01ca810cb36c82a60480888db1b4393719d9",
 }
 
 
@@ -67,10 +71,47 @@ pipeline_bytes_early = require("scripts/regression_verifier_pipeline.py").read_b
 pipeline_tests_early = require("scripts/test_regression_verifier_pipeline.py").read_bytes().replace(
     b"\r\n", b"\n"
 )
+source_guard_early = require("scripts/regression_verifier_source_guard.py").read_bytes().replace(
+    b"\r\n", b"\n"
+)
+source_guard_tests_early = require(
+    "scripts/test_regression_verifier_source_guard.py"
+).read_bytes().replace(b"\r\n", b"\n")
 if hashlib.sha256(pipeline_bytes_early).hexdigest() != PIPELINE_SHA256:
     raise SystemExit("regression verifier pipeline differs from the reviewed executable")
 if hashlib.sha256(pipeline_tests_early).hexdigest() != PIPELINE_TEST_SHA256:
     raise SystemExit("regression verifier pipeline tests differ from the reviewed suite")
+if hashlib.sha256(source_guard_early).hexdigest() != SOURCE_GUARD_SHA256:
+    raise SystemExit("regression verifier source guard differs from the reviewed executable")
+if hashlib.sha256(source_guard_tests_early).hexdigest() != SOURCE_GUARD_TEST_SHA256:
+    raise SystemExit("regression verifier source guard tests differ from the reviewed suite")
+source_guard = require("scripts/regression_verifier_source_guard.py")
+for guard_scope, expected_digest in (
+    ("worker-build", WORKER_BUILD_SHA256),
+    ("signing-runtime", SIGNING_RUNTIME_SHA256),
+):
+    guarded = subprocess.run(
+        [
+            sys.executable,
+            str(source_guard),
+            "--root",
+            str(ROOT),
+            "--scope",
+            guard_scope,
+            "--expected-sha256",
+            expected_digest,
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=30,
+        check=False,
+    )
+    if guarded.returncode != 0:
+        raise SystemExit(
+            f"reviewed {guard_scope} source set drifted:\n"
+            + guarded.stdout.decode("utf-8", "replace")[-5000:]
+        )
 
 
 def hash32(value: str) -> str:
@@ -1625,12 +1666,23 @@ if completed.returncode != 0:
 # precommitted by the immutable checker.
 pipeline = require("scripts/regression_verifier_pipeline.py")
 pipeline_tests = require("scripts/test_regression_verifier_pipeline.py")
+source_guard_tests = require("scripts/test_regression_verifier_source_guard.py")
 pipeline_bytes = pipeline.read_bytes().replace(b"\r\n", b"\n")
 pipeline_test_bytes = pipeline_tests.read_bytes().replace(b"\r\n", b"\n")
 if b"\r" in pipeline_bytes or hashlib.sha256(pipeline_bytes).hexdigest() != PIPELINE_SHA256:
     raise SystemExit("regression verifier pipeline differs from the reviewed executable")
 if b"\r" in pipeline_test_bytes or hashlib.sha256(pipeline_test_bytes).hexdigest() != PIPELINE_TEST_SHA256:
     raise SystemExit("regression verifier pipeline tests differ from the reviewed suite")
+completed = subprocess.run(
+    [sys.executable, str(source_guard_tests), "-v"],
+    cwd=ROOT,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    timeout=120,
+    check=False,
+)
+if completed.returncode != 0:
+    raise SystemExit("source guard tests failed:\n" + completed.stdout.decode()[-5000:])
 
 workflow = require(".github/workflows/regression-verifier-watchdog.yml").read_text(encoding="utf-8")
 try:
@@ -1776,6 +1828,14 @@ runner_command = (
     "--worker target/release/worker --staging $RUNNER_TEMP/regression-staging "
     "--output target/regression-candidates --max-jobs 5"
 )
+build_guard_command = (
+    "python scripts/regression_verifier_source_guard.py --scope worker-build "
+    f"--expected-sha256 {WORKER_BUILD_SHA256}"
+)
+runtime_guard_command = (
+    "python scripts/regression_verifier_source_guard.py --scope signing-runtime "
+    f"--expected-sha256 {SIGNING_RUNTIME_SHA256}"
+)
 expected_runner_steps = [
     {
         "uses": checkout_action,
@@ -1788,7 +1848,10 @@ expected_runner_steps = [
     {"uses": python_action, "with": {"python-version": "3.12"}},
     {"uses": rust_action},
     {"uses": cache_action},
+    {"name": "Verify reviewed worker build inputs", "run": build_guard_command},
     {"name": "Build isolated regression worker", "run": "cargo build --release -p worker"},
+    {"name": "Revalidate reviewed sources after build", "run": build_guard_command},
+    {"name": "Revalidate reviewed signing runtime", "run": runtime_guard_command},
     {"name": "Run canonical jobs without signing secrets", "run": runner_command},
     {
         "uses": upload_action,
@@ -1963,7 +2026,10 @@ expected_signer_steps = [
             "run-id": "${{ inputs.candidate_run_id }}",
         },
     },
+    {"name": "Verify reviewed worker build inputs", "run": build_guard_command},
     {"run": "cargo build --release -p worker"},
+    {"name": "Revalidate reviewed sources after build", "run": build_guard_command},
+    {"name": "Revalidate reviewed signing runtime", "run": runtime_guard_command},
     {
         "name": "Re-fetch state and sign one exact candidate set",
         "run": sign_command,
@@ -2019,7 +2085,10 @@ expected_relay_steps = [
             "path": "target/attestations-two",
         },
     },
+    {"name": "Verify reviewed worker build inputs", "run": build_guard_command},
     {"run": "cargo build --release -p worker"},
+    {"name": "Revalidate reviewed sources after build", "run": build_guard_command},
+    {"name": "Revalidate reviewed signing runtime", "run": runtime_guard_command},
     {
         "name": "Revalidate and relay exact quorum",
         "run": relay_command,
