@@ -13,6 +13,13 @@ from pathlib import Path
 
 BENCHMARK = Path(__file__).resolve().parent
 CHECKER = BENCHMARK / "check.py"
+REPOSITORY = BENCHMARK.parents[2]
+TRUSTED_PIPELINE = (REPOSITORY / "scripts/regression_verifier_pipeline.py").read_text(
+    encoding="utf-8"
+)
+TRUSTED_PIPELINE_TESTS = (
+    REPOSITORY / "scripts/test_regression_verifier_pipeline.py"
+).read_text(encoding="utf-8")
 
 GOOD_PLANNER = r'''#!/usr/bin/env python3
 import argparse
@@ -36,9 +43,29 @@ def parse_time(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def bound_idempotency_key(job_id, canonical_job_hash, action, provider, workflow, run_id, main_sha):
+def bound_idempotency_key(
+    job_id,
+    canonical_job_hash,
+    action,
+    provider,
+    workflow,
+    run_id,
+    workflow_job_id,
+    run_attempt,
+    main_sha,
+):
     payload = json.dumps(
-        [job_id, canonical_job_hash, action, provider, workflow, run_id, main_sha],
+        [
+            job_id,
+            canonical_job_hash,
+            action,
+            provider,
+            workflow,
+            run_id,
+            workflow_job_id,
+            run_attempt,
+            main_sha,
+        ],
         separators=(",", ":"),
     )
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
@@ -363,6 +390,8 @@ if args.command == "plan-live":
                     "signer": signer,
                     "canonical_job_hash": normalized["canonical_job_hash"],
                     "workflow_run_id": run_id,
+                    "workflow_job_id": observed.get("id"),
+                    "workflow_run_attempt": workflow_run.get("run_attempt"),
                 })
     runs_document = {
         "schema": "agent-bounties/regression-verifier-watchdog-runs-v1",
@@ -427,7 +456,6 @@ if args.command == "execute":
     ]:
         raise SystemExit("executor workflow allowlist is not exact")
     allowed = {
-        "dispatch_runner": "regression-verifier-runner.yml",
         "retry_runner": "regression-verifier-runner.yml",
         "retry_signer_one": "regression-verifier-signer.yml",
         "retry_signer_two": "regression-verifier-signer.yml",
@@ -435,15 +463,23 @@ if args.command == "execute":
     }
     automated = [item for item in document["jobs"] if item.get("automation_allowed") is True]
     seen_keys = set()
+    seen_retry_run_ids = set()
     for item in automated:
         expected = allowed.get(item.get("next_action"))
         if expected is None or item.get("target_workflow") != expected:
             raise SystemExit("workflow is not allowlisted")
         run_id = item.get("workflow_run_id")
-        if item["next_action"] == "dispatch_runner" and run_id is not None:
-            raise SystemExit("new runner dispatch cannot bind a run ID")
-        if item["next_action"] != "dispatch_runner" and (not isinstance(run_id, int) or run_id <= 0):
-            raise SystemExit("workflow retry requires a positive run ID")
+        workflow_job_id = item.get("workflow_job_id")
+        run_attempt = item.get("workflow_run_attempt")
+        if (
+            not isinstance(run_id, int)
+            or run_id <= 0
+            or not isinstance(workflow_job_id, int)
+            or workflow_job_id <= 0
+            or not isinstance(run_attempt, int)
+            or run_attempt <= 0
+        ):
+            raise SystemExit("workflow retry requires positive run, job, and attempt IDs")
         expected_key = bound_idempotency_key(
             item.get("job_id"),
             item.get("canonical_job_hash"),
@@ -451,11 +487,16 @@ if args.command == "execute":
             item.get("provider_role"),
             item.get("target_workflow"),
             run_id,
+            workflow_job_id,
+            run_attempt,
             document.get("current_main_sha"),
         )
         if item.get("idempotency_key") != expected_key or expected_key in seen_keys:
             raise SystemExit("idempotency key is not uniquely bound to the canonical action")
+        if run_id in seen_retry_run_ids:
+            raise SystemExit("only one job retry may target a workflow run")
         seen_keys.add(expected_key)
+        seen_retry_run_ids.add(run_id)
     state_path = Path(args.state)
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -493,35 +534,60 @@ if args.command == "execute":
     branch = request("GET", "/repos/NSPG13/agent-bounties/branches/main")
     if branch["commit"]["sha"] != document.get("current_main_sha"):
         raise SystemExit("plan is not bound to current main")
-    retry_metadata = {}
+    remotely_completed = []
+    expected_job_names = {
+        "retry_runner": "run-no-secrets",
+        "retry_signer_one": "sign-one / sign",
+        "retry_signer_two": "sign-two / sign",
+        "retry_relay": "relay",
+    }
     for item in pending:
-        if item["next_action"] == "dispatch_runner":
-            continue
         run_id = item["workflow_run_id"]
         metadata = request("GET", f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}")
         if (
             metadata.get("path") != ".github/workflows/" + item["target_workflow"]
             or metadata.get("head_sha") != document["current_main_sha"]
-            or metadata.get("status") != "completed"
         ):
             raise SystemExit("workflow run metadata is not safe to retry")
-        retry_metadata[run_id] = metadata
+        current_attempt = metadata.get("run_attempt")
+        if not isinstance(current_attempt, int) or current_attempt < item["workflow_run_attempt"]:
+            raise SystemExit("workflow run attempt regressed")
+        if current_attempt > item["workflow_run_attempt"]:
+            remotely_completed.append(item)
+            continue
+        if metadata.get("status") != "completed" or metadata.get("conclusion") != "failure":
+            raise SystemExit("workflow run is not a completed failure")
+        workflow_job_id = item["workflow_job_id"]
+        job_metadata = request(
+            "GET",
+            f"/repos/NSPG13/agent-bounties/actions/jobs/{workflow_job_id}",
+        )
+        if (
+            job_metadata.get("id") != workflow_job_id
+            or job_metadata.get("run_id") != run_id
+            or job_metadata.get("name") != expected_job_names[item["next_action"]]
+            or job_metadata.get("status") != "completed"
+            or job_metadata.get("conclusion") != "failure"
+        ):
+            raise SystemExit("workflow job metadata is not safe to retry")
+    for item in remotely_completed:
+        completed_keys.add(item["idempotency_key"])
+    if remotely_completed:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_state = state_path.with_suffix(state_path.suffix + ".tmp")
+        temporary_state.write_text(json.dumps({
+            "schema": "agent-bounties/regression-verifier-watchdog-state-v1",
+            "executed_idempotency_keys": sorted(completed_keys),
+        }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary_state, state_path)
+    pending_writes = [item for item in pending if item not in remotely_completed]
     executed = []
-    for item in pending:
-        action = item["next_action"]
-        if action == "dispatch_runner":
-            request(
-                "POST",
-                "/repos/NSPG13/agent-bounties/actions/workflows/"
-                "regression-verifier-runner.yml/dispatches",
-                {"ref": "main"},
-            )
-        else:
-            run_id = item["workflow_run_id"]
-            request(
-                "POST",
-                f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/rerun-failed-jobs",
-            )
+    for item in pending_writes:
+        workflow_job_id = item["workflow_job_id"]
+        request(
+            "POST",
+            f"/repos/NSPG13/agent-bounties/actions/jobs/{workflow_job_id}/rerun",
+        )
         executed.append(item["idempotency_key"])
         completed_keys.add(item["idempotency_key"])
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -535,7 +601,7 @@ if args.command == "execute":
         "schema": "agent-bounties/regression-verifier-watchdog-execution-v1",
         "fail_closed": True,
         "executed_count": len(executed),
-        "skipped_count": len(automated) - len(pending),
+        "skipped_count": len(automated) - len(pending_writes),
         "idempotency_keys": executed,
     }, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
@@ -545,6 +611,7 @@ runs_doc = json.load(open(args.runs, encoding="utf-8"))
 policy = json.load(open(args.policy, encoding="utf-8"))
 now = parse_time(args.now)
 records = []
+reserved_retry_runs = set()
 for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires_at"], item["job_id"])):
     job_runs = [item for item in runs_doc["runs"] if item["job_id"] == job["job_id"]]
     latest = {stage: None for stage in ("runner", "signer_one", "signer_two", "relay")}
@@ -558,11 +625,11 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         ),
         None,
     )
-    action = "dispatch_runner"
+    action = "await_scheduled_runner"
     owner = "regression-verifier-runner"
-    automated = True
+    automated = False
     provider = "runner"
-    reason = "No candidate run exists for this live canonical job."
+    reason = "No candidate run exists; the fixed runner schedule owns the next attempt."
     expires = parse_time(job["verification_expires_at"])
     successful_signers = [
         item.get("signer")
@@ -629,22 +696,22 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         two = latest["signer_two"]
         relay = latest["relay"]
         if runner and runner["conclusion"] == "failure":
-            action, owner, provider = "retry_runner", "regression-verifier-runner", "runner"
+            action, owner, automated, provider = "retry_runner", "regression-verifier-runner", True, "runner"
             reason = "The candidate runner failed retryably."
         elif runner and runner["conclusion"] == "success" and not one:
             action, owner, automated, provider = "await_active_run", "github-actions", False, "signer_one"
             reason = "The candidate artifact exists; the triggered signer run has not appeared yet."
         elif runner and runner["conclusion"] == "success" and one["conclusion"] != "success":
-            action, owner, provider = "retry_signer_one", "regression-verifier-signer-one", "signer_one_secondary"
+            action, owner, automated, provider = "retry_signer_one", "regression-verifier-signer-one", True, "signer_one_secondary"
             reason = "Signer one is the first missing stage."
         elif one and one["conclusion"] == "success" and not two:
             action, owner, automated, provider = "await_active_run", "github-actions", False, "signer_two"
             reason = "Signer one succeeded; the second signer job has not appeared yet."
         elif one and one["conclusion"] == "success" and two["conclusion"] != "success":
-            action, owner, provider = "retry_signer_two", "regression-verifier-signer-two", "signer_two_secondary"
+            action, owner, automated, provider = "retry_signer_two", "regression-verifier-signer-two", True, "signer_two_secondary"
             reason = "Signer two is the only missing signer stage."
         elif two and two["conclusion"] == "success" and relay and relay["conclusion"] == "failure":
-            action, owner, provider = "retry_relay", "regression-verifier-relay", "relay_secondary"
+            action, owner, automated, provider = "retry_relay", "regression-verifier-relay", True, "relay_secondary"
             reason = "Both signers succeeded and only the retryable relay failed."
         elif two and two["conclusion"] == "success" and not relay:
             action, owner, automated, provider = "await_active_run", "github-actions", False, "relay"
@@ -654,24 +721,36 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             reason = "The quorum exists; canonical state must be reconciled."
     target_workflow = None
     workflow_run_id = None
+    workflow_job_id = None
+    workflow_run_attempt = None
     if automated:
         target_workflow = {
-            "dispatch_runner": "regression-verifier-runner.yml",
             "retry_runner": "regression-verifier-runner.yml",
             "retry_signer_one": "regression-verifier-signer.yml",
             "retry_signer_two": "regression-verifier-signer.yml",
             "retry_relay": "regression-verifier-signer.yml",
         }[action]
-        if action != "dispatch_runner":
-            stage = {
-                "retry_runner": "runner",
-                "retry_signer_one": "signer_one",
-                "retry_signer_two": "signer_two",
-                "retry_relay": "relay",
-            }[action]
-            workflow_run_id = next(
-                item["workflow_run_id"] for item in reversed(job_runs) if item["stage"] == stage
-            )
+        stage = {
+            "retry_runner": "runner",
+            "retry_signer_one": "signer_one",
+            "retry_signer_two": "signer_two",
+            "retry_relay": "relay",
+        }[action]
+        selected_run = next(item for item in reversed(job_runs) if item["stage"] == stage)
+        workflow_run_id = selected_run["workflow_run_id"]
+        workflow_job_id = selected_run["workflow_job_id"]
+        workflow_run_attempt = selected_run["workflow_run_attempt"]
+        if workflow_run_id in reserved_retry_runs:
+            action = "await_shared_retry"
+            owner = "github-actions"
+            automated = False
+            reason = "Another deadline-ordered job owns the same workflow-run retry."
+            target_workflow = None
+            workflow_run_id = None
+            workflow_job_id = None
+            workflow_run_attempt = None
+        else:
+            reserved_retry_runs.add(workflow_run_id)
     idempotency_key = bound_idempotency_key(
         job["job_id"],
         job["canonical_job_hash"],
@@ -679,6 +758,8 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         provider,
         target_workflow,
         workflow_run_id,
+        workflow_job_id,
+        workflow_run_attempt,
         policy["current_main_sha"],
     )
     recheck_at = (
@@ -696,6 +777,8 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         "provider_role": provider,
         "target_workflow": target_workflow,
         "workflow_run_id": workflow_run_id,
+        "workflow_job_id": workflow_job_id,
+        "workflow_run_attempt": workflow_run_attempt,
         "reason": reason,
         "recheck_at": recheck_at,
         "idempotency_key": idempotency_key,
@@ -717,7 +800,6 @@ print(json.dumps({"schema":"agent-bounties/regression-verifier-watchdog-plan-v1"
 RUNNER_WORKFLOW = '''{
   "name": "Regression Verifier Runner",
   "on": {
-    "workflow_dispatch": {},
     "schedule": [{"cron": "7,22,37,52 * * * *"}]
   },
   "permissions": {"contents": "read"},
@@ -811,7 +893,7 @@ SIGNER_WORKFLOW = '''{
   "permissions": {"actions": "read", "contents": "read"},
   "jobs": {
     "sign-one": {
-      "if": "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
       "with": {
         "revision": "${{ github.event.workflow_run.head_sha }}",
@@ -824,7 +906,7 @@ SIGNER_WORKFLOW = '''{
       "secrets": {"verifier_private_key": "${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}"}
     },
     "sign-two": {
-      "if": "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
       "with": {
         "revision": "${{ github.event.workflow_run.head_sha }}",
@@ -837,7 +919,7 @@ SIGNER_WORKFLOW = '''{
       "secrets": {"verifier_private_key": "${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}"}
     },
     "relay": {
-      "if": "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' || github.event.workflow_run.event == 'workflow_dispatch') && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "needs": ["sign-one", "sign-two"],
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 20,
@@ -932,6 +1014,8 @@ def build(root: Path, planner: str) -> None:
     paths = {
         "scripts/regression_verifier_watchdog.py": planner,
         "scripts/test_regression_verifier_watchdog.py": "import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\nif __name__ == '__main__': unittest.main()\n",
+        "scripts/regression_verifier_pipeline.py": TRUSTED_PIPELINE,
+        "scripts/test_regression_verifier_pipeline.py": TRUSTED_PIPELINE_TESTS,
         ".github/workflows/regression-verifier-watchdog.yml": WATCHDOG_WORKFLOW,
         ".github/workflows/regression-verifier-runner.yml": RUNNER_WORKFLOW,
         ".github/workflows/regression-verifier-signer.yml": SIGNER_WORKFLOW,
@@ -942,7 +1026,7 @@ def build(root: Path, planner: str) -> None:
     for relative, content in paths.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content, encoding="utf-8", newline="\n")
 
 
 def check(root: Path) -> subprocess.CompletedProcess[str]:
@@ -1063,6 +1147,10 @@ for mutation_name, mutate in workflow_mutations.items():
             raise SystemExit(f"unsafe workflow mutation was accepted: {mutation_name}")
 
 runner_mutations = {
+    "manually dispatchable candidate runner": lambda source: mutate_workflow(
+        source,
+        lambda document: document["on"].__setitem__("workflow_dispatch", {}),
+    ),
     "fabricated candidate archive": lambda source: mutate_workflow(
         source,
         lambda document: document["jobs"]["run-no-secrets"]["steps"][5].__setitem__(
@@ -1097,6 +1185,13 @@ for mutation_name, mutate in runner_mutations.items():
             raise SystemExit(f"unsafe candidate runner mutation was accepted: {mutation_name}")
 
 provider_mutations = {
+    "mutable verifier runtime": (
+        "scripts/regression_verifier_pipeline.py",
+        lambda source: source.replace(
+            'raise PipelineError("RPC attestation digest differs from the local EIP-712 digest")',
+            'return remote_digest  # unsafe runtime mutation',
+        ),
+    ),
     "extra signer key-exfiltration step": (
         ".github/workflows/regression-verifier-signing-reusable.yml",
         lambda source: mutate_workflow(

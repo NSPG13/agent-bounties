@@ -37,11 +37,11 @@ job must produce exactly one record with:
 - one `next_action` and one `next_owner`;
 - `automation_allowed`, which is true only for a bounded, allowlisted retry;
 - `target_workflow`, restricted to the precommitted runner or signer workflow;
-- `workflow_run_id` for a bounded retry of an existing signer/relay run, and
-  `null` for a new runner dispatch;
+- `workflow_run_id`, `workflow_job_id`, and `workflow_run_attempt` for one
+  bounded retry of an exact failed job, and `null` for every non-writing wait;
 - a stable `sha256:<64 lowercase hex>` `idempotency_key` bound to the canonical
   job hash, selected action, provider role, target workflow, exact workflow run
-  ID (or null for a dispatch), and current protected-main SHA;
+  ID, job ID, run attempt, and current protected-main SHA;
 - a provider **role**, never a provider URL or secret;
 - a plain-language `reason` and exact `recheck_at` timestamp.
 
@@ -53,10 +53,11 @@ parseable RFC 3339 UTC instant.
 Records are ordered by verification deadline and then job ID. Repeating the
 same command with the same inputs must produce byte-for-byte identical output.
 
-Allowed automated actions are `dispatch_runner`, `retry_runner`,
-`retry_signer_one`, `retry_signer_two`, and `retry_relay`. Safe non-automated
-actions include `observe_terminal`, `expire_submission`,
-`await_active_run`, `reconcile_canonical_state`, and `escalate_no_verdict`.
+Allowed automated actions are `retry_runner`, `retry_signer_one`,
+`retry_signer_two`, and `retry_relay`. Safe non-automated actions include
+`await_scheduled_runner`, `await_shared_retry`, `observe_terminal`,
+`expire_submission`, `await_active_run`, `reconcile_canonical_state`, and
+`escalate_no_verdict`.
 Queued or in-progress runner, signer, or relay runs must produce
 `await_active_run` and no automation. The watchdog may never
 emit or execute a verdict, attestation, signature, settlement, payment, wallet,
@@ -112,35 +113,44 @@ validate the exact manifest/file names and size limits, and hash each complete
 embedded production job. Signer runs must expose their upstream candidate run
 ID in the exact run name and may inherit only that runner's proven membership.
 An old run, a missing/expired artifact, a job-ID-only match, or a run timestamp
-is not processing evidence. A newly submitted job must receive a new runner
-dispatch rather than inherit status from an older workflow run.
+is not processing evidence. A newly submitted job must wait for the next fixed
+runner schedule rather than inherit status from an older workflow run. The
+watchdog never creates a new runner execution.
 
 Execution must reject a different repository, stale main, a non-allowlisted
-workflow, a missing/invalid run ID, or an action whose workflow does not match
-the current GitHub run metadata before making a write request. A new runner
-action may dispatch only `regression-verifier-runner.yml` on `main`. A bounded
-signer or relay retry may call only `rerun-failed-jobs` on a run whose effective
-path is `.github/workflows/regression-verifier-signer.yml` and whose head is
-exact current main. The token is read only from the named environment variable,
-never a command-line value or output artifact.
+workflow, missing/invalid run, job, or attempt IDs, duplicate actions against
+one workflow run, or metadata that does not bind the expected exact failed job
+before making a write request. A bounded retry may call only
+`POST /actions/jobs/{workflow_job_id}/rerun` for the expected job name in a
+completed failed run whose workflow and head are exact current main. It may
+never use a run-wide rerun endpoint or dispatch a workflow. The token is read
+only from the named environment variable, never a command-line value or output
+artifact.
 The production command must pin the API origin to `https://api.github.com` and
 must reject every other non-test origin before sending the repository token.
 
 All actions in one plan are atomic at the write boundary: validate the entire
 plan, fetch current main, and fetch/revalidate every referenced workflow run
-before issuing the first POST. If any later action is unsafe, execute no action.
+and exact job before issuing the first POST. If any later action is unsafe,
+execute no action.
 The state file records successfully executed idempotency keys atomically. An
 unchanged plan replay must make no GitHub request and report the already
 executed actions as skipped. If a later POST fails after an earlier POST
 succeeds, the earlier key must already be durable; a retry may issue only the
 remaining POST.
+If GitHub accepts a job retry but the connection fails before local state is
+written, the next execution must compare the remote `run_attempt` with the
+attempt bound into the plan. A greater remote attempt reconciles that action as
+already accepted and must not issue another POST.
 
 ## Required behavior
 
 - Prioritize the earliest live verification deadline.
 - Isolate one bad job so another valid job still gets a plan.
-- Dispatch a runner for a live job with no candidate.
+- Wait for the fixed schedule when a live job has no candidate.
 - Retry only the missing or retryable stage, within the attempt and time budget.
+- Let only the earliest-deadline canonical job own a retry when several jobs
+  share one workflow run; the other jobs wait for that shared retry.
 - Wait without automation when the selected stage already has a queued or
   in-progress workflow run.
 - Use the secondary provider role after a retryable primary-provider failure.
@@ -195,9 +205,8 @@ runner ID so live planning can prove job membership from the runner artifact.
 
 The candidate-producing `.github/workflows/regression-verifier-runner.yml`
 must also use strict JSON-syntax YAML and equal the complete benchmarked
-contract. It may expose only the exact schedule and an empty
-`workflow_dispatch`; the latter exists solely so the watchdog can dispatch the
-protected `main` workflow. It has `contents: read`, one serialized
+contract. It may expose only the exact fixed schedule; `workflow_dispatch` is
+forbidden. It has `contents: read`, one serialized
 `run-no-secrets` job, no secret environment values, and an exact ordered list
 of commit-pinned actions and commands. Checkout is bound to
 `${{ github.repository }}` at `main` with persisted credentials disabled. The
@@ -205,9 +214,9 @@ only candidate-producing command is the exact precommitted
 `regression_verifier_pipeline.py run` invocation, and only its exact output is
 uploaded under `regression-candidates-${{ github.run_id }}`. Extra jobs, steps,
 commands, checkout refs, artifact paths, or unpinned actions are forbidden.
-The signer accepts a runner only when its event is `schedule` or
-`workflow_dispatch` and its repository, branch, revision, and artifact all bind
-to current protected `main`.
+The signer accepts a runner only when its event is `schedule` and its
+repository, branch, revision, and artifact all bind to current protected
+`main`.
 
 Each signer and relay path has an exact primary and a distinct exact secondary
 RPC. Signer one uses `https://mainnet.base.org` then
@@ -221,6 +230,16 @@ identical endpoints, or accepting an operator-selected URL is forbidden. The
 effective signer and relay command argv must consume the selected
 `BASE_MAINNET_RPC_URL`; text hidden after a shell comment does not qualify.
 Provider URLs must not appear in watchdog plan or state artifacts.
+
+The immutable checker also binds the exact newline-normalized source bytes of
+`scripts/regression_verifier_pipeline.py` and its security test suite. Workflow
+command allowlisting alone is insufficient because a changed executable behind
+the same command would otherwise inherit signing authority. Candidate
+revalidation runs with signing and keeper secrets removed from its environment.
+Before a private key is passed to any child process, the signer verifies Base
+chain ID 8453, nonempty code at the committed bounty contract, and an EIP-712
+attestation digest computed locally from canonical fields. The RPC contract
+digest must equal that independent local digest; disagreement fails closed.
 
 ## Evidence boundary
 

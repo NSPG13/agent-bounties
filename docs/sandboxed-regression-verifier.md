@@ -122,13 +122,22 @@ a separate capability that verifies a fresh candidate against the current
 canonical job and requires exactly the verifier path or paths committed before
 funding.
 
-The signer and keeper workflows read their Base endpoint from the dedicated
-`REGRESSION_VERIFIER_RPC_URL` Actions variable and otherwise use
-`https://mainnet.base.org`. Keep this separate from the application's general
-`BASE_MAINNET_RPC_URL`: an unavailable shared provider must not disable the
-isolated verification path. Any configured endpoint remains subject to the
-same exact current-job revalidation and on-chain signature checks; an RPC
-response, signature, or broadcast is never settlement evidence.
+Each signer and keeper path has a precommitted primary Base endpoint and a
+different precommitted secondary endpoint. Attempt one uses the primary; the
+only bounded retry uses the secondary. Operators and bounty inputs cannot
+select an endpoint. The pipeline verifies chain ID 8453, nonempty code at the
+committed bounty contract, and equality between the contract's attestation
+digest and an independently computed local EIP-712 digest before exposing the
+signing key to a child process. Candidate revalidation runs with signing and
+keeper secrets removed from its environment.
+
+The no-secrets candidate runner is schedule-only. The settlement watchdog may
+retry one exact failed GitHub job, but it cannot dispatch a workflow or rerun a
+whole workflow run. Its plan binds the workflow run, exact job, run attempt,
+current protected-main revision, and one idempotency key. If GitHub accepts a
+retry and the client loses the response, a higher remote run attempt is the
+crash-recovery receipt and prevents replay. An RPC response, signature,
+workflow result, or broadcast is never settlement evidence.
 
 Only confirmed canonical `BountySettled` is payout evidence. A runner receipt,
 response hash, verifier signature, quorum plan, relay transaction hash, or

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 import sys
 import tarfile
 import tempfile
@@ -38,6 +39,158 @@ def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
 
 
 class RegressionVerifierPipelineTests(unittest.TestCase):
+    def test_manifest_files_are_exact_content_addressed_basenames(self) -> None:
+        job_id = "base-mainnet:test:1"
+        candidate = pipeline.content_addressed_name("candidate", job_id)
+        self.assertEqual(
+            pipeline.manifest_file(
+                Path("candidates"),
+                candidate,
+                pipeline.CANDIDATE_FILE,
+                "candidate manifest file",
+            ),
+            Path("candidates") / candidate,
+        )
+        for unsafe in ("../candidate-" + "a" * 64 + ".json", "manifest.json", "C:\\secret"):
+            with self.subTest(unsafe=unsafe), self.assertRaises(pipeline.PipelineError):
+                pipeline.manifest_file(
+                    Path("candidates"),
+                    unsafe,
+                    pipeline.CANDIDATE_FILE,
+                    "candidate manifest file",
+                )
+
+    def test_signing_key_is_not_exposed_before_local_digest_validation(self) -> None:
+        signer = "0x" + "1" * 40
+        digest = "0x" + "2" * 64
+        response_hash = "0x" + "3" * 64
+        events: list[str] = []
+        job = {
+            "job_id": "base-mainnet:test:1",
+            "verification_mode": "signed_quorum",
+            "threshold": 1,
+            "eligible_verifiers": [signer],
+        }
+        current = {
+            **job,
+            "verification_expires_at": 2_000_001_000,
+            "bounty_contract": "0x" + "4" * 40,
+        }
+
+        def fake_digest(*_args, **_kwargs) -> str:
+            events.append("digest")
+            return digest
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("REGRESSION_VERIFIER_PRIVATE_KEY", env)
+            self.assertIn("digest", events)
+            if command[1:3] == ["wallet", "address"]:
+                events.append("key-address")
+                return signer
+            if command[1:3] == ["wallet", "sign"]:
+                events.append("key-sign")
+                return "0x" + "5" * 130
+            self.fail(f"unexpected command: {command}")
+
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
+            os.environ,
+            {"REGRESSION_VERIFIER_PRIVATE_KEY": "test-secret"},
+            clear=False,
+        ):
+            root = Path(temporary)
+            candidates = root / "candidates"
+            output = root / "output"
+            candidates.mkdir()
+            candidate_file = pipeline.content_addressed_name("candidate", job["job_id"])
+            pipeline.write_json(
+                candidates / "manifest.json",
+                {
+                    "schema": pipeline.MANIFEST_SCHEMA,
+                    "candidates": [{"job_id": job["job_id"], "file": candidate_file}],
+                },
+            )
+            pipeline.write_json(
+                candidates / candidate_file,
+                {
+                    "schema": pipeline.CANDIDATE_SCHEMA,
+                    "job": job,
+                    "outcome": {"verdict": "passed", "response_hash": response_hash},
+                },
+            )
+            args = mock.Mock(
+                private_key_env="REGRESSION_VERIFIER_PRIVATE_KEY",
+                expected_signer=signer,
+                candidates=candidates,
+                output=output,
+                api_base="https://api.agentbounties.app",
+                network="base-mainnet",
+                worker=Path("trusted-worker"),
+                cast=Path("cast"),
+                rpc_url="https://base-rpc.invalid",
+            )
+            with mock.patch.object(pipeline, "current_job", return_value=current), mock.patch.object(
+                pipeline, "validate_candidate"
+            ), mock.patch.object(
+                pipeline, "attestation_digest", side_effect=fake_digest
+            ), mock.patch.object(
+                pipeline, "run", side_effect=fake_run
+            ), mock.patch.object(
+                pipeline.time, "time", return_value=2_000_000_000
+            ):
+                pipeline.command_sign(args)
+
+        self.assertEqual(events, ["digest", "key-address", "key-sign"])
+
+    def test_candidate_validation_strips_signing_secrets_from_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
+            os.environ,
+            {"REGRESSION_VERIFIER_PRIVATE_KEY": "test-secret", "PUBLIC_VALUE": "kept"},
+            clear=False,
+        ), mock.patch.object(pipeline, "run", return_value="ok") as invoked:
+            pipeline.validate_candidate(
+                Path("trusted-worker"),
+                {"schema": pipeline.CANDIDATE_SCHEMA, "job": {}},
+                {},
+                Path(temporary),
+                secret_names=("REGRESSION_VERIFIER_PRIVATE_KEY",),
+            )
+        environment = invoked.call_args.kwargs["env"]
+        self.assertNotIn("REGRESSION_VERIFIER_PRIVATE_KEY", environment)
+        self.assertEqual(environment["PUBLIC_VALUE"], "kept")
+
+    def test_rpc_digest_must_equal_local_eip712_digest(self) -> None:
+        good = "0x" + "1" * 64
+        bad = "0x" + "2" * 64
+        current = {"bounty_contract": "0x" + "3" * 40}
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("REGRESSION_VERIFIER_PRIVATE_KEY", env)
+            if command[1] == "chain-id":
+                return "8453"
+            if command[1] == "code":
+                return "0x60016000"
+            if command[1] == "call":
+                return bad
+            self.fail(f"unexpected command: {command}")
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
+            pipeline, "local_attestation_digest", return_value=good
+        ):
+            with self.assertRaisesRegex(
+                pipeline.PipelineError,
+                "differs from the local EIP-712 digest",
+            ):
+                pipeline.attestation_digest(
+                    Path("cast"),
+                    "https://secondary.invalid",
+                    current,
+                    "0x" + "4" * 40,
+                    True,
+                    "0x" + "5" * 64,
+                    2_000_000_000,
+                    {"PUBLIC_VALUE": "kept"},
+                )
+
     def test_runner_selects_single_verifier_and_legacy_two_verifier_jobs(self) -> None:
         configured = ["0x" + "1" * 40, "0x" + "2" * 40]
         jobs = [

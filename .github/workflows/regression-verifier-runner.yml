@@ -9,7 +9,6 @@ on:
       - "crates/worker/**"
       - "scripts/regression_verifier_pipeline.py"
       - "scripts/test_regression_verifier_pipeline.py"
-  workflow_dispatch:
   schedule:
     - cron: "7,22,37,52 * * * *"
 
@@ -37,7 +36,7 @@ jobs:
           cargo test -p verifier-sdk -p worker
 
   run-no-secrets:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule'
     needs: contract
     runs-on: ubuntu-latest
     timeout-minutes: 90
