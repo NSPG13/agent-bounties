@@ -32,13 +32,16 @@ It must print one JSON object using schema
 `network`, `generated_at`, `fail_closed: true`, and a `jobs` array. Each input
 job must produce exactly one record with:
 
-- `job_id` and `verification_expires_at` copied from canonical input;
+- `job_id`, `canonical_job_hash`, and `verification_expires_at` copied from
+  canonical input;
 - one `next_action` and one `next_owner`;
 - `automation_allowed`, which is true only for a bounded, allowlisted retry;
 - `target_workflow`, restricted to the precommitted runner or signer workflow;
 - `workflow_run_id` for a bounded retry of an existing signer/relay run, and
   `null` for a new runner dispatch;
-- a stable `sha256:<64 lowercase hex>` `idempotency_key`;
+- a stable `sha256:<64 lowercase hex>` `idempotency_key` bound to the canonical
+  job hash, selected action, provider role, target workflow, exact workflow run
+  ID (or null for a dispatch), and current protected-main SHA;
 - a provider **role**, never a provider URL or secret;
 - a plain-language `reason` and exact `recheck_at` timestamp.
 
@@ -53,7 +56,9 @@ same command with the same inputs must produce byte-for-byte identical output.
 Allowed automated actions are `dispatch_runner`, `retry_runner`,
 `retry_signer_one`, `retry_signer_two`, and `retry_relay`. Safe non-automated
 actions include `observe_terminal`, `expire_submission`,
-`reconcile_canonical_state`, and `escalate_no_verdict`. The watchdog may never
+`await_active_run`, `reconcile_canonical_state`, and `escalate_no_verdict`.
+Queued or in-progress runner, signer, or relay runs must produce
+`await_active_run` and no automation. The watchdog may never
 emit or execute a verdict, attestation, signature, settlement, payment, wallet,
 or arbitrary workflow action.
 
@@ -65,6 +70,7 @@ WATCHDOG_GITHUB_TOKEN=... python scripts/regression_verifier_watchdog.py execute
   --repository NSPG13/agent-bounties \
   --github-api-base https://api.github.com \
   --token-env WATCHDOG_GITHUB_TOKEN \
+  --state .watchdog/state.json \
   --execute
 ```
 
@@ -80,6 +86,9 @@ never a command-line value or output artifact.
 All actions in one plan are atomic at the write boundary: validate the entire
 plan, fetch current main, and fetch/revalidate every referenced workflow run
 before issuing the first POST. If any later action is unsafe, execute no action.
+The state file records successfully executed idempotency keys atomically. An
+unchanged plan replay must make no GitHub request and report the already
+executed actions as skipped.
 
 ## Required behavior
 
@@ -87,6 +96,8 @@ before issuing the first POST. If any later action is unsafe, execute no action.
 - Isolate one bad job so another valid job still gets a plan.
 - Dispatch a runner for a live job with no candidate.
 - Retry only the missing or retryable stage, within the attempt and time budget.
+- Wait without automation when the selected stage already has a queued or
+  in-progress workflow run.
 - Use the secondary provider role after a retryable primary-provider failure.
 - Refuse automation for stale-main artifacts, canonical drift, replay,
   duplicate signer evidence, unknown workflows, exhausted retries, and too
@@ -106,6 +117,8 @@ only the existing regression runner/signer workflows.
 The scheduled workflow must use one repository-wide concurrency group with
 `cancel-in-progress: false`, preventing overlapping schedules from issuing the
 same idempotent action before GitHub run state catches up.
+It must restore and save `.watchdog/state.json` with pinned `actions/cache`
+restore/save actions so successfully executed keys survive later schedules.
 
 The signer and relay paths must accept distinct provider variables for signer
 one, signer two, and relay, each with a safe public fallback. Provider URLs must

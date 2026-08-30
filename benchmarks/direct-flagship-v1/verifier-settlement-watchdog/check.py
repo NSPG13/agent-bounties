@@ -64,8 +64,9 @@ def job(
 def run(
     job_id: str,
     stage: str,
-    conclusion: str,
+    conclusion: str | None,
     *,
+    run_status: str = "completed",
     attempt: int = 1,
     head_sha: str = MAIN_SHA,
     provider_role: str | None = None,
@@ -79,7 +80,7 @@ def run(
     return {
         "job_id": job_id,
         "stage": stage,
-        "status": "completed",
+        "status": run_status,
         "conclusion": conclusion,
         "attempt": attempt,
         "head_sha": head_sha,
@@ -192,7 +193,11 @@ def invoke(jobs: list[dict[str, Any]], runs: list[dict[str, Any]]) -> tuple[byte
         return raw, parsed
 
 
-def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def validate(
+    plan: dict[str, Any],
+    expected_jobs: list[dict[str, Any]],
+    observed_runs: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     if plan.get("schema") != SCHEMA:
         raise SystemExit("watchdog plan schema is invalid")
     if plan.get("network") != "base-mainnet" or plan.get("generated_at") != NOW:
@@ -210,6 +215,9 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
         raise SystemExit("watchdog records must be deadline ordered")
     by_id: dict[str, dict[str, Any]] = {}
     expected_by_id = {item["job_id"]: item for item in expected_jobs}
+    runs_by_job_stage: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for observed in observed_runs:
+        runs_by_job_stage.setdefault((observed["job_id"], observed["stage"]), []).append(observed)
     automated_targets = {
         "dispatch_runner": "regression-verifier-runner.yml",
         "retry_runner": "regression-verifier-runner.yml",
@@ -217,11 +225,20 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
         "retry_signer_two": "regression-verifier-signer.yml",
         "retry_relay": "regression-verifier-signer.yml",
     }
+    retry_stages = {
+        "retry_runner": "runner",
+        "retry_signer_one": "signer_one",
+        "retry_signer_two": "signer_two",
+        "retry_relay": "relay",
+    }
     forbidden_actions = {"accept", "reject", "sign", "settle", "pay", "transfer", "wallet_call"}
+    seen_idempotency_keys: set[str] = set()
     for record in records:
         job_id = record.get("job_id")
-        if not isinstance(job_id, str) or job_id in by_id:
+        if not isinstance(job_id, str) or job_id not in expected_by_id or job_id in by_id:
             raise SystemExit("watchdog record job_id is missing or duplicated")
+        if record.get("canonical_job_hash") != expected_by_id[job_id]["canonical_job_hash"]:
+            raise SystemExit(f"watchdog record {job_id} changed the canonical job hash")
         if record.get("verification_expires_at") != expected_by_id[job_id]["verification_expires_at"]:
             raise SystemExit(f"watchdog record {job_id} changed the canonical verification deadline")
         if not str(record.get("next_owner", "")).strip():
@@ -235,7 +252,8 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
             raise SystemExit(f"watchdog record {job_id} has no parseable UTC recheck") from error
         if parsed_recheck.tzinfo != timezone.utc or not recheck_at.endswith("Z"):
             raise SystemExit(f"watchdog record {job_id} recheck must be explicit UTC")
-        if not HASH_RE.fullmatch(str(record.get("idempotency_key", ""))):
+        idempotency_key = str(record.get("idempotency_key", ""))
+        if not HASH_RE.fullmatch(idempotency_key):
             raise SystemExit(f"watchdog record {job_id} has an invalid idempotency key")
         action = record.get("next_action")
         action_text = str(action).lower()
@@ -257,8 +275,31 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
                 not isinstance(workflow_run_id, int) or workflow_run_id <= 0
             ):
                 raise SystemExit(f"watchdog retry {job_id} must bind a positive workflow run ID")
+            if action in retry_stages:
+                matching_runs = runs_by_job_stage.get((job_id, retry_stages[str(action)]), [])
+                expected_run_id = matching_runs[-1].get("workflow_run_id") if matching_runs else None
+                if workflow_run_id != expected_run_id:
+                    raise SystemExit(
+                        f"watchdog retry {job_id} does not bind the selected stage's latest run"
+                    )
         elif target_workflow is not None or workflow_run_id is not None:
             raise SystemExit(f"non-automated watchdog record {job_id} must not target a workflow")
+        key_payload = json.dumps(
+            [
+                job_id,
+                expected_by_id[job_id]["canonical_job_hash"],
+                action,
+                record.get("provider_role"),
+                target_workflow,
+                workflow_run_id,
+                POLICY["current_main_sha"],
+            ],
+            separators=(",", ":"),
+        )
+        expected_key = "sha256:" + hashlib.sha256(key_payload.encode("utf-8")).hexdigest()
+        if idempotency_key != expected_key or idempotency_key in seen_idempotency_keys:
+            raise SystemExit(f"watchdog record {job_id} has an unbound or duplicate idempotency key")
+        seen_idempotency_keys.add(idempotency_key)
         generated = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
         expected_recheck = (
             generated + timedelta(seconds=POLICY["backoff_seconds"])
@@ -292,7 +333,7 @@ isolated_jobs = [
     job("bad-input", "2026-09-01T12:30:00Z", readiness="unavailable"),
 ]
 _, isolated_plan = invoke(isolated_jobs, [])
-isolated = validate(isolated_plan, isolated_jobs)
+isolated = validate(isolated_plan, isolated_jobs, [])
 expect(isolated["bad-input"], "escalate_no_verdict", False)
 expect(isolated["earlier-ready"], "dispatch_runner", True)
 expect(isolated["later-ready"], "dispatch_runner", True)
@@ -319,7 +360,7 @@ signer_runs = [
     ),
 ]
 _, signer_plan = invoke(signer_jobs, signer_runs)
-signer = validate(signer_plan, signer_jobs)
+signer = validate(signer_plan, signer_jobs, signer_runs)
 expect(signer["signer-gap"], "retry_signer_two", True, "signer_two_secondary")
 
 # A retryable relay provider failure uses only the secondary relay provider.
@@ -331,8 +372,43 @@ relay_runs = [
     run("relay-gap", "relay", "failure", provider_role="relay_primary", retryable=True),
 ]
 _, relay_plan = invoke(relay_jobs, relay_runs)
-relay = validate(relay_plan, relay_jobs)
+relay = validate(relay_plan, relay_jobs, relay_runs)
 expect(relay["relay-gap"], "retry_relay", True, "relay_secondary")
+
+# Existing queued or in-progress work is owned by that active workflow run. A
+# later schedule must wait instead of dispatching or rerunning the same stage.
+active_jobs = [
+    job("active-runner", "2026-09-01T14:20:00Z"),
+    job("active-signer", "2026-09-01T14:30:00Z"),
+    job("active-relay", "2026-09-01T14:40:00Z"),
+]
+active_runs = [
+    run("active-runner", "runner", None, run_status="queued", workflow_run_id=4401),
+    run("active-signer", "runner", "success", artifact_hash=candidate_hash, workflow_run_id=4402),
+    run(
+        "active-signer",
+        "signer_one",
+        None,
+        run_status="in_progress",
+        provider_role="signer_one_primary",
+        workflow_run_id=4403,
+    ),
+    run("active-relay", "runner", "success", artifact_hash=candidate_hash, workflow_run_id=4404),
+    run("active-relay", "signer_one", "success", signer=ADDRESS_ONE, workflow_run_id=4405),
+    run("active-relay", "signer_two", "success", signer=ADDRESS_TWO, workflow_run_id=4406),
+    run(
+        "active-relay",
+        "relay",
+        None,
+        run_status="in_progress",
+        provider_role="relay_primary",
+        workflow_run_id=4407,
+    ),
+]
+_, active_plan = invoke(active_jobs, active_runs)
+active = validate(active_plan, active_jobs, active_runs)
+for active_job in active_jobs:
+    expect(active[active_job["job_id"]], "await_active_run", False)
 
 # Stale artifacts, replay-like duplicate signers, exhausted attempts, and short
 # deadline budgets must never be automated.
@@ -371,7 +447,7 @@ unsafe_runs = [
     ),
 ]
 _, unsafe_plan = invoke(unsafe_jobs, unsafe_runs)
-unsafe = validate(unsafe_plan, unsafe_jobs)
+unsafe = validate(unsafe_plan, unsafe_jobs, unsafe_runs)
 for job_id in (
     "stale-main",
     "duplicate-signer",
@@ -395,7 +471,7 @@ terminal_jobs = [
     job("expired", "2026-09-01T11:59:59Z"),
 ]
 _, terminal_plan = invoke(terminal_jobs, [])
-terminal = validate(terminal_plan, terminal_jobs)
+terminal = validate(terminal_plan, terminal_jobs, [])
 expect(terminal["settled"], "observe_terminal", False)
 expect(terminal["expired"], "expire_submission", False)
 
@@ -420,8 +496,11 @@ cases = (
     "too_late",
     "expired",
     "terminal",
+    "runner_active",
+    "signer_active",
+    "relay_active",
 )
-for index in range(84):
+for index in range(102):
     case = cases[index % len(cases)]
     opaque = hashlib.sha256(f"{rng.getrandbits(128):032x}:{index}".encode()).hexdigest()[:18]
     job_id = f"matrix-{opaque}"
@@ -488,15 +567,36 @@ for index in range(84):
     elif case == "expired":
         item["verification_expires_at"] = "2026-09-01T11:59:59Z"
         expected = ("expire_submission", False, None)
-    else:
+    elif case == "terminal":
         item["status"] = "settled"
         item["canonical_terminal_event"] = "BountySettled"
         expected = ("observe_terminal", False, None)
+    elif case == "runner_active":
+        matrix_runs.append(run(job_id, "runner", None, run_status="queued"))
+        expected = ("await_active_run", False, None)
+    elif case == "signer_active":
+        matrix_runs.extend(
+            [
+                run(job_id, "runner", "success", artifact_hash=candidate_hash),
+                run(job_id, "signer_one", None, run_status="in_progress"),
+            ]
+        )
+        expected = ("await_active_run", False, None)
+    else:
+        matrix_runs.extend(
+            [
+                run(job_id, "runner", "success", artifact_hash=candidate_hash),
+                run(job_id, "signer_one", "success", signer=ADDRESS_ONE),
+                run(job_id, "signer_two", "success", signer=ADDRESS_TWO),
+                run(job_id, "relay", None, run_status="in_progress"),
+            ]
+        )
+        expected = ("await_active_run", False, None)
     matrix_jobs.append(item)
     matrix_expected[job_id] = expected
 
 _, matrix_plan = invoke(matrix_jobs, matrix_runs)
-matrix = validate(matrix_plan, matrix_jobs)
+matrix = validate(matrix_plan, matrix_jobs, matrix_runs)
 for job_id, (action, automated, provider) in matrix_expected.items():
     expect(matrix[job_id], action, automated, provider)
 
@@ -561,7 +661,11 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
         self.respond(204 if self.path in allowed else 404, None if self.path in allowed else {"message": "not found"})
 
 
-def execute(plan: dict[str, Any], api_base: str) -> subprocess.CompletedProcess[bytes]:
+def execute(
+    plan: dict[str, Any],
+    api_base: str,
+    state_path: Path,
+) -> subprocess.CompletedProcess[bytes]:
     tool = require("scripts/regression_verifier_watchdog.py")
     with tempfile.TemporaryDirectory(prefix="watchdog-execute-") as temporary:
         plan_path = Path(temporary) / "plan.json"
@@ -581,6 +685,8 @@ def execute(plan: dict[str, Any], api_base: str) -> subprocess.CompletedProcess[
                 api_base,
                 "--token-env",
                 "WATCHDOG_BENCHMARK_TOKEN",
+                "--state",
+                str(state_path),
                 "--execute",
             ],
             cwd=ROOT,
@@ -625,9 +731,12 @@ FakeGitHubHandler.signer_run_id = 4304
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHubHandler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
+execution_state = tempfile.TemporaryDirectory(prefix="watchdog-state-")
 try:
     api_base = f"http://127.0.0.1:{server.server_port}"
-    completed = execute(execution_plan, api_base)
+    state_root = Path(execution_state.name)
+    successful_state = state_root / "successful.json"
+    completed = execute(execution_plan, api_base, successful_state)
     if completed.returncode != 0:
         raise SystemExit(
             "watchdog execute fixture failed:\n" + completed.stdout.decode("utf-8", "replace")[-5000:]
@@ -654,10 +763,20 @@ try:
     if json.loads(dispatch["body"]) != {"ref": "main"}:
         raise SystemExit("watchdog runner dispatch must bind the protected main ref")
 
+    request_count = len(FakeGitHubHandler.requests)
+    replayed = execute(execution_plan, api_base, successful_state)
+    if replayed.returncode != 0:
+        raise SystemExit("watchdog execute could not reconcile an unchanged replay")
+    replay_report = json.loads(replayed.stdout)
+    if replay_report.get("executed_count") != 0 or replay_report.get("skipped_count") != 2:
+        raise SystemExit("watchdog replay did not report both idempotent actions as skipped")
+    if len(FakeGitHubHandler.requests) != request_count:
+        raise SystemExit("watchdog replay contacted GitHub after both actions were recorded")
+
     unsafe_plan = json.loads(json.dumps(execution_plan))
     unsafe_plan["jobs"][0]["target_workflow"] = "unreviewed-wallet-job.yml"
     request_count = len(FakeGitHubHandler.requests)
-    rejected = execute(unsafe_plan, api_base)
+    rejected = execute(unsafe_plan, api_base, state_root / "unsafe.json")
     if rejected.returncode == 0:
         raise SystemExit("watchdog execute accepted a non-allowlisted workflow")
     if len(FakeGitHubHandler.requests) != request_count:
@@ -665,13 +784,14 @@ try:
 
     FakeGitHubHandler.requests = []
     FakeGitHubHandler.unsafe_run_metadata = True
-    rejected = execute(execution_plan, api_base)
+    rejected = execute(execution_plan, api_base, state_root / "stale.json")
     if rejected.returncode == 0:
         raise SystemExit("watchdog execute accepted stale metadata in a later action")
     if any(item["method"] == "POST" for item in FakeGitHubHandler.requests):
         raise SystemExit("watchdog execute wrote an earlier action before all metadata passed")
 finally:
     FakeGitHubHandler.unsafe_run_metadata = False
+    execution_state.cleanup()
     server.shutdown()
     server.server_close()
     thread.join(timeout=5)
@@ -740,7 +860,7 @@ execute_commands = [
 if len(execute_commands) != 1:
     raise SystemExit("scheduled watchdog job must invoke exactly one effective execute command")
 execute_command = execute_commands[0]
-for flag in ("--plan", "--repository", "--github-api-base", "--token-env", "--execute"):
+for flag in ("--plan", "--repository", "--github-api-base", "--token-env", "--state", "--execute"):
     if not re.search(rf"(?:^|\s){re.escape(flag)}(?:\s|$)", execute_command):
         raise SystemExit(f"effective watchdog execute command is missing {flag}")
 for pattern, label in (
@@ -748,6 +868,7 @@ for pattern, label in (
     (r"(?:^|\s)--github-api-base\s+https://api\.github\.com(?:\s|$)", "GitHub API base"),
     (r"(?:^|\s)--token-env\s+GITHUB_TOKEN(?:\s|$)", "token environment binding"),
     (r"(?:^|\s)--plan\s+\S+(?:\s|$)", "plan path"),
+    (r"(?:^|\s)--state\s+\.watchdog/state\.json(?:\s|$)", "persistent state path"),
 ):
     if not re.search(pattern, execute_command):
         raise SystemExit(f"effective watchdog execute command has no exact {label}")
@@ -779,6 +900,42 @@ if concurrency_lines != {
     "cancel-in-progress: false",
 }:
     raise SystemExit("watchdog workflow must serialize the exact mainnet concurrency group")
+cache_steps = list(
+    re.finditer(
+        r"(?m)^\s{6,}-\s+uses:\s+actions/cache/(restore|save)@([0-9a-f]{40})\s*$",
+        jobs_block,
+    )
+)
+if [match.group(1) for match in cache_steps] != ["restore", "save"]:
+    raise SystemExit("watchdog workflow must use one pinned cache restore and one pinned cache save")
+execute_offset = jobs_block.find(execute_command)
+if not (cache_steps[0].start() < execute_offset < cache_steps[1].start()):
+    raise SystemExit("watchdog state restore, execute, and save steps are out of order")
+
+
+def workflow_step_block(match: re.Match[str]) -> str:
+    remainder = jobs_block[match.end() :]
+    next_step = re.search(r"(?m)^\s{6,}-\s+(?:uses|run):", remainder)
+    return remainder[: next_step.start()] if next_step else remainder
+
+
+restore_block = workflow_step_block(cache_steps[0])
+save_block = workflow_step_block(cache_steps[1])
+state_path_pattern = r"(?m)^\s{10,}path:\s+\.watchdog/state\.json\s*$"
+cache_key_pattern = (
+    r"(?m)^\s{10,}key:\s+\$\{\{\s*runner\.os\s*\}\}"
+    r"-regression-verifier-watchdog-\$\{\{\s*github\.run_id\s*\}\}\s*$"
+)
+if not re.search(state_path_pattern, restore_block) or not re.search(state_path_pattern, save_block):
+    raise SystemExit("watchdog cache steps do not persist the exact execution state path")
+if not re.search(cache_key_pattern, restore_block) or not re.search(cache_key_pattern, save_block):
+    raise SystemExit("watchdog cache restore/save keys do not bind the current run")
+if not re.search(
+    r"(?m)^\s{10,}restore-keys:\s+\$\{\{\s*runner\.os\s*\}\}"
+    r"-regression-verifier-watchdog-\s*$",
+    restore_block,
+):
+    raise SystemExit("watchdog cache restore has no cross-schedule state prefix")
 referenced_workflows = set(re.findall(r"[a-z0-9_-]+\.ya?ml", execute_command.lower()))
 unknown_workflows = referenced_workflows - {
     "regression-verifier-runner.yml",

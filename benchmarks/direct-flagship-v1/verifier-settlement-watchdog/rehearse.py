@@ -21,10 +21,19 @@ import os
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 def parse_time(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def bound_idempotency_key(job_id, canonical_job_hash, action, provider, workflow, run_id, main_sha):
+    payload = json.dumps(
+        [job_id, canonical_job_hash, action, provider, workflow, run_id, main_sha],
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
 
 
 parser = argparse.ArgumentParser()
@@ -39,6 +48,7 @@ execute.add_argument("--plan", required=True)
 execute.add_argument("--repository", required=True)
 execute.add_argument("--github-api-base", required=True)
 execute.add_argument("--token-env", required=True)
+execute.add_argument("--state", required=True)
 execute.add_argument("--execute", action="store_true")
 args = parser.parse_args()
 if args.command == "execute":
@@ -55,6 +65,7 @@ if args.command == "execute":
         "retry_relay": "regression-verifier-signer.yml",
     }
     automated = [item for item in document["jobs"] if item.get("automation_allowed") is True]
+    seen_keys = set()
     for item in automated:
         expected = allowed.get(item.get("next_action"))
         if expected is None or item.get("target_workflow") != expected:
@@ -64,6 +75,36 @@ if args.command == "execute":
             raise SystemExit("new runner dispatch cannot bind a run ID")
         if item["next_action"] != "dispatch_runner" and (not isinstance(run_id, int) or run_id <= 0):
             raise SystemExit("workflow retry requires a positive run ID")
+        expected_key = bound_idempotency_key(
+            item.get("job_id"),
+            item.get("canonical_job_hash"),
+            item.get("next_action"),
+            item.get("provider_role"),
+            item.get("target_workflow"),
+            run_id,
+            document.get("current_main_sha"),
+        )
+        if item.get("idempotency_key") != expected_key or expected_key in seen_keys:
+            raise SystemExit("idempotency key is not uniquely bound to the canonical action")
+        seen_keys.add(expected_key)
+    state_path = Path(args.state)
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if state.get("schema") != "agent-bounties/regression-verifier-watchdog-state-v1":
+            raise SystemExit("execution state schema is invalid")
+        completed_keys = set(state.get("executed_idempotency_keys", []))
+    else:
+        completed_keys = set()
+    pending = [item for item in automated if item["idempotency_key"] not in completed_keys]
+    if not pending:
+        print(json.dumps({
+            "schema": "agent-bounties/regression-verifier-watchdog-execution-v1",
+            "fail_closed": True,
+            "executed_count": 0,
+            "skipped_count": len(automated),
+            "idempotency_keys": [],
+        }, sort_keys=True, separators=(",", ":")))
+        raise SystemExit(0)
     token = os.environ.get(args.token_env)
     if not token:
         raise SystemExit("token environment variable is unavailable")
@@ -84,7 +125,7 @@ if args.command == "execute":
     if branch["commit"]["sha"] != document.get("current_main_sha"):
         raise SystemExit("plan is not bound to current main")
     retry_metadata = {}
-    for item in automated:
+    for item in pending:
         if item["next_action"] == "dispatch_runner":
             continue
         run_id = item["workflow_run_id"]
@@ -97,7 +138,7 @@ if args.command == "execute":
             raise SystemExit("workflow run metadata is not safe to retry")
         retry_metadata[run_id] = metadata
     executed = []
-    for item in automated:
+    for item in pending:
         action = item["next_action"]
         if action == "dispatch_runner":
             request(
@@ -113,10 +154,19 @@ if args.command == "execute":
                 f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/rerun-failed-jobs",
             )
         executed.append(item["idempotency_key"])
+        completed_keys.add(item["idempotency_key"])
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_state = state_path.with_suffix(state_path.suffix + ".tmp")
+        temporary_state.write_text(json.dumps({
+            "schema": "agent-bounties/regression-verifier-watchdog-state-v1",
+            "executed_idempotency_keys": sorted(completed_keys),
+        }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary_state, state_path)
     print(json.dumps({
         "schema": "agent-bounties/regression-verifier-watchdog-execution-v1",
         "fail_closed": True,
         "executed_count": len(executed),
+        "skipped_count": len(automated) - len(pending),
         "idempotency_keys": executed,
     }, sort_keys=True, separators=(",", ":")))
     raise SystemExit(0)
@@ -128,6 +178,17 @@ now = parse_time(args.now)
 records = []
 for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires_at"], item["job_id"])):
     job_runs = [item for item in runs_doc["runs"] if item["job_id"] == job["job_id"]]
+    latest = {stage: None for stage in ("runner", "signer_one", "signer_two", "relay")}
+    for item in job_runs:
+        latest[item["stage"]] = item
+    active_run = next(
+        (
+            latest[stage]
+            for stage in ("runner", "signer_one", "signer_two", "relay")
+            if latest[stage] and latest[stage].get("status") in {"queued", "in_progress"}
+        ),
+        None,
+    )
     action = "dispatch_runner"
     owner = "regression-verifier-runner"
     automated = True
@@ -137,7 +198,9 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
     successful_signers = [
         item.get("signer")
         for item in job_runs
-        if item["stage"].startswith("signer_") and item["conclusion"] == "success"
+        if item["stage"].startswith("signer_")
+        and item.get("status") == "completed"
+        and item["conclusion"] == "success"
     ]
     stale = any(item["head_sha"] != policy["current_main_sha"] for item in job_runs)
     unknown_workflow = any(item["workflow"] not in policy["allowed_workflows"] for item in job_runs)
@@ -153,6 +216,10 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
     exhausted = any(
         item["conclusion"] == "failure"
         and item["attempt"] >= policy["max_attempts_per_stage"]
+        for item in job_runs
+    )
+    invalid_run_status = any(
+        item.get("status") not in {"queued", "in_progress", "completed"}
         for item in job_runs
     )
     terminal = job.get("canonical_terminal_event") or job.get("status") in {"settled", "rejected", "cancelled"}
@@ -174,14 +241,20 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         or canonical_drift
         or nonretryable_failure
         or exhausted
+        or invalid_run_status
         or len(successful_signers) != len(set(successful_signers))
     ):
         action, owner, automated, provider = "escalate_no_verdict", "maintainer-on-call", False, "none"
         reason = "Stale, replay-like, or exhausted evidence blocks automation."
+    elif active_run:
+        action, owner, automated, provider = (
+            "await_active_run",
+            "github-actions",
+            False,
+            active_run["stage"],
+        )
+        reason = "The selected stage already has a queued or in-progress workflow run."
     else:
-        latest = {stage: None for stage in ("runner", "signer_one", "signer_two", "relay")}
-        for item in job_runs:
-            latest[item["stage"]] = item
         runner = latest["runner"]
         one = latest["signer_one"]
         two = latest["signer_two"]
@@ -201,7 +274,6 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         elif two and two["conclusion"] == "success":
             action, owner, automated, provider = "reconcile_canonical_state", "canonical-indexer", False, "canonical_chain"
             reason = "The quorum exists; canonical state must be reconciled."
-    key_payload = json.dumps([job["job_id"], job["canonical_job_hash"], action, provider], separators=(",", ":"))
     target_workflow = None
     workflow_run_id = None
     if automated:
@@ -222,6 +294,15 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             workflow_run_id = next(
                 item["workflow_run_id"] for item in reversed(job_runs) if item["stage"] == stage
             )
+    idempotency_key = bound_idempotency_key(
+        job["job_id"],
+        job["canonical_job_hash"],
+        action,
+        provider,
+        target_workflow,
+        workflow_run_id,
+        policy["current_main_sha"],
+    )
     recheck_at = (
         now + timedelta(seconds=policy["backoff_seconds"])
         if automated
@@ -229,6 +310,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
     ).isoformat().replace("+00:00", "Z")
     records.append({
         "job_id": job["job_id"],
+        "canonical_job_hash": job["canonical_job_hash"],
         "verification_expires_at": job["verification_expires_at"],
         "next_action": action,
         "next_owner": owner,
@@ -238,7 +320,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         "workflow_run_id": workflow_run_id,
         "reason": reason,
         "recheck_at": recheck_at,
-        "idempotency_key": "sha256:" + hashlib.sha256(key_payload.encode()).hexdigest(),
+        "idempotency_key": idempotency_key,
     })
 print(json.dumps({
     "schema": "agent-bounties/regression-verifier-watchdog-plan-v1",
@@ -270,9 +352,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@pinned
-      - run: python scripts/regression_verifier_watchdog.py execute --plan target/watchdog-plan.json --repository "$GITHUB_REPOSITORY" --github-api-base https://api.github.com --token-env GITHUB_TOKEN --execute --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml
+      - uses: actions/cache/restore@1111111111111111111111111111111111111111
+        with:
+          path: .watchdog/state.json
+          key: ${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-regression-verifier-watchdog-
+      - run: python scripts/regression_verifier_watchdog.py execute --plan target/watchdog-plan.json --repository "$GITHUB_REPOSITORY" --github-api-base https://api.github.com --token-env GITHUB_TOKEN --state .watchdog/state.json --execute --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/cache/save@2222222222222222222222222222222222222222
+        with:
+          path: .watchdog/state.json
+          key: ${{ runner.os }}-regression-verifier-watchdog-${{ github.run_id }}
 '''
 
 SIGNER_WORKFLOW = '''name: Regression Verifier Signer
