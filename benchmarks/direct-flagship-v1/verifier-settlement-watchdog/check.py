@@ -29,17 +29,18 @@ SCHEMA = "agent-bounties/regression-verifier-watchdog-plan-v1"
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
-PIPELINE_SHA256 = "6af6dc49cf5b90a314e4f87263abd5d9714cd037513d934604670a72fa33031c"
-PIPELINE_TEST_SHA256 = "6edc11c081d6f0592c09c1e9a16f44ed9165f15ce7fd83d222fa8e209b6b3d08"
+PIPELINE_SHA256 = "c58602e3929f0a9b8d1cc437b58086cd6c5ac2d1194c4e89aeea97184609e140"
+PIPELINE_TEST_SHA256 = "1665f99a25f3ffdd1be1fb167e4ba9a09c729966c46ec41990629d5dd6f271e5"
 SOURCE_GUARD_SHA256 = "8b612fa6b18d24de2831a051a3b44f838c1f875769b2766d7431b369f0921173"
-SOURCE_GUARD_TEST_SHA256 = "f37a497e6518779f60aca6c743a4997eba98191a5dd47bb409ff3f5adf16e80b"
+SOURCE_GUARD_TEST_SHA256 = "dd4f3d9450f226ad12f17fc7e7d9a02d305f592ef8bd9c1027b4defce9eadcef"
 WORKER_BUILD_SHA256 = "6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1"
-SIGNING_RUNTIME_SHA256 = "8f71f935815302c1b548b8355547f621b2bf7c7cbbe2d6d839f212518fe650b7"
+SIGNING_RUNTIME_SHA256 = "35d1326ab1f50e47b4b5001f698c7c33065a931a258afdca35b731524c73e0d7"
+SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "d09b9cf508a3163b33fd9e93eeb40d638f537560c3619cd774bb227c97700ce9",
+    ".github/workflows/regression-verifier-runner.yml": "4b9555417d564c7e7b6ea1a17d4fe790ae882b4e0085229ba5e5c90bef9b1fdc",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "15092010c549bfef91713c3da083bf19d8f8e129da503904a972f9fdb5f79f9a",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "06b88703d0fecff7c5481fa403d29b7eda93e86f4d8c240c628bb371bb381683",
+    ".github/workflows/regression-verifier-signer.yml": "28814edb3cd366151ce7d4088c5a42ef8cfd672112b4c49e02339bd30def66db",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "c906258b63260583d626f8b653376b5a5b582e7e0e5b48dfd4a9d7a6f2d9139d",
 }
 
 
@@ -65,6 +66,52 @@ def canonical_workflow_hash(path: str) -> str:
 for workflow_path, expected_hash in CANONICAL_WORKFLOW_SHA256.items():
     if canonical_workflow_hash(workflow_path) != expected_hash:
         raise SystemExit(f"{workflow_path} differs from the reviewed effective workflow")
+keeper_workflows = []
+
+
+def keeper_concurrency_values(workflow_text: str) -> tuple[list[str], list[str]]:
+    try:
+        document = json.loads(workflow_text)
+    except json.JSONDecodeError:
+        groups = [
+            value.strip()
+            for value in re.findall(r"(?m)^\s+group:\s*([^#\r\n]+)", workflow_text)
+        ]
+        cancels = [
+            value.strip()
+            for value in re.findall(
+                r"(?m)^\s+cancel-in-progress:\s*([^#\r\n]+)", workflow_text
+            )
+        ]
+        return groups, cancels
+    groups: list[str] = []
+    cancels: list[str] = []
+    pending: list[Any] = [document]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            concurrency = value.get("concurrency")
+            if isinstance(concurrency, dict) and "group" in concurrency:
+                groups.append(str(concurrency.get("group")))
+                cancels.append(str(concurrency.get("cancel-in-progress")).lower())
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return groups, cancels
+
+
+for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    if "BASE_KEEPER_PRIVATE_KEY" not in workflow_text:
+        continue
+    keeper_workflows.append(workflow_path.name)
+    groups, cancel_values = keeper_concurrency_values(workflow_text)
+    if groups != [SHARED_KEEPER_CONCURRENCY] or cancel_values != ["false"]:
+        raise SystemExit(
+            f"{workflow_path.relative_to(ROOT)} does not use the sole shared keeper lock"
+        )
+if not keeper_workflows:
+    raise SystemExit("no keeper workflow was available for shared-lock validation")
 pipeline_bytes_early = require("scripts/regression_verifier_pipeline.py").read_bytes().replace(
     b"\r\n", b"\n"
 )
@@ -1940,7 +1987,7 @@ if (
     or relay_job["runs-on"] != "ubuntu-latest"
     or relay_job["timeout-minutes"] != 20
     or relay_job["concurrency"] != {
-        "group": "regression-verifier-relay-mainnet",
+        "group": "agent-bounties-shared-base-keeper",
         "cancel-in-progress": False,
     }
     or relay_job["env"] != {

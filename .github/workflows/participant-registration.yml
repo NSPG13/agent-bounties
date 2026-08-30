@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: participant-registration-${{ github.event.sender.id }}
+      group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}

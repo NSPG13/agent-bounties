@@ -19,7 +19,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: direct-growth-v2-activation
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: synthetic-paid-loop-canary-mainnet
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

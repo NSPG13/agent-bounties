@@ -40,6 +40,10 @@ BASE_MAINNET_CHAIN_ID = 8453
 RELAY_GAS_LIMIT = 500_000
 RELAY_MAX_FEE_PER_GAS = 500_000_000
 RELAY_PRIORITY_FEE_PER_GAS = 1_000_000
+KEEPER_NONCE_CONFIRMATION_RPCS = (
+    "https://mainnet.base.org",
+    "https://base-rpc.publicnode.com",
+)
 CANONICAL_BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
 CANONICAL_SETTLEMENT_TOKEN = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 CANONICAL_BOUNTY_RUNTIME = (
@@ -747,32 +751,66 @@ def relay_rpc_preflight(
     if estimated_gas <= 0 or estimated_gas > RELAY_GAS_LIMIT:
         raise PipelineError("relay gas estimate exceeds the precommitted limit")
 
-    observed_nonces: dict[str, int] = {}
-    for block_tag in ("latest", "pending"):
-        nonce_text = run(
-            [
-                str(cast),
-                "nonce",
-                "--rpc-url",
-                rpc_url,
-                "--block",
-                block_tag,
-                expected_keeper,
-            ],
-            env=environment,
-        ).strip().lower()
+    return keeper_nonce_preflight(cast, rpc_url, expected_keeper, environment)
+
+
+def keeper_nonce_preflight(
+    cast: Path,
+    rpc_url: str,
+    expected_keeper: str,
+    environment: dict[str, str],
+) -> int:
+    rpc_urls: list[str] = []
+    for candidate in (rpc_url, *KEEPER_NONCE_CONFIRMATION_RPCS):
+        normalized = candidate.rstrip("/").lower()
+        if normalized not in {value.rstrip("/").lower() for value in rpc_urls}:
+            rpc_urls.append(candidate)
+        if len(rpc_urls) == 2:
+            break
+
+    confirmed: dict[str, int] = {}
+    for nonce_rpc in rpc_urls:
         try:
-            nonce = int(nonce_text, 0)
+            chain_id = int(
+                run(
+                    [str(cast), "chain-id", "--rpc-url", nonce_rpc],
+                    env=environment,
+                ),
+                0,
+            )
         except ValueError as error:
-            raise PipelineError("relay RPC returned an invalid keeper nonce") from error
-        if nonce < 0:
-            raise PipelineError("relay RPC returned a negative keeper nonce")
-        observed_nonces[block_tag] = nonce
-    if observed_nonces["pending"] != observed_nonces["latest"]:
-        raise PipelineError(
-            "keeper has another pending transaction; retry after it confirms or drops"
-        )
-    return observed_nonces["latest"]
+            raise PipelineError("nonce RPC returned an invalid chain id") from error
+        if chain_id != BASE_MAINNET_CHAIN_ID:
+            raise PipelineError("nonce RPC is not Base mainnet")
+        observed: dict[str, int] = {}
+        for block_tag in ("latest", "pending"):
+            nonce_text = run(
+                [
+                    str(cast),
+                    "nonce",
+                    "--rpc-url",
+                    nonce_rpc,
+                    "--block",
+                    block_tag,
+                    expected_keeper,
+                ],
+                env=environment,
+            ).strip().lower()
+            try:
+                nonce = int(nonce_text, 0)
+            except ValueError as error:
+                raise PipelineError("nonce RPC returned an invalid keeper nonce") from error
+            if nonce < 0:
+                raise PipelineError("nonce RPC returned a negative keeper nonce")
+            observed[block_tag] = nonce
+        if observed["pending"] != observed["latest"]:
+            raise PipelineError(
+                "keeper has another pending transaction; retry after it confirms or drops"
+            )
+        confirmed[nonce_rpc] = observed["latest"]
+    if len(set(confirmed.values())) != 1:
+        raise PipelineError("independent nonce RPCs disagree on the keeper nonce")
+    return next(iter(confirmed.values()))
 
 
 def command_sign(args: argparse.Namespace) -> None:
@@ -1033,6 +1071,15 @@ def command_relay(args: argparse.Namespace) -> None:
         raise PipelineError("keeper private key does not match the expected public address")
 
     for offset, plan in enumerate(relay_plans):
+        expected_nonce = (observed_nonce or 0) + offset
+        immediate_nonce = keeper_nonce_preflight(
+            args.cast,
+            args.rpc_url,
+            expected_keeper,
+            secret_free_environment,
+        )
+        if immediate_nonce != expected_nonce:
+            raise PipelineError("keeper nonce changed immediately before settlement send")
         transaction = run(
             [
                 str(args.cast),
@@ -1043,7 +1090,7 @@ def command_relay(args: argparse.Namespace) -> None:
                 "--chain",
                 str(BASE_MAINNET_CHAIN_ID),
                 "--nonce",
-                str((observed_nonce or 0) + offset),
+                str(expected_nonce),
                 "--gas-limit",
                 str(RELAY_GAS_LIMIT),
                 "--gas-price",

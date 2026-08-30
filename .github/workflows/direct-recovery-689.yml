@@ -28,7 +28,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: direct-recovery-689-mainnet
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

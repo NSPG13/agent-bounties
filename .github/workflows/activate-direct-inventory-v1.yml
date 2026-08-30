@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: direct-inventory-v1-activation
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

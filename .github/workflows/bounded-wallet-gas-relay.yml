@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: autonomous-gas-relay-base-mainnet
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: leaderboard-reward-deploy
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

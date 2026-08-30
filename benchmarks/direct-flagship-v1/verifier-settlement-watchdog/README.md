@@ -270,9 +270,11 @@ candidate and attestation, requires Base chain ID 8453 and the same safe-block
 canonical runtime, factory, and token provenance at each exact bounty,
 simulates each exact settlement call from the checked-in keeper address, and
 enforces a 500,000 gas ceiling. It reads both the latest and pending keeper
-nonces and refuses to send unless they are equal, so it cannot replace an
-unrelated pending keeper transaction. The relay job is serialized under the
-repository-wide `regression-verifier-relay-mainnet` concurrency group. The
+nonces through two independent Base RPCs and refuses to send unless every
+latest/pending value agrees, so a pending or stale nonce view fails closed. It
+repeats that independent check immediately before every send. Every checked-in
+workflow that can receive `BASE_KEEPER_PRIVATE_KEY` is serialized under the
+repository-wide `agent-bounties-shared-base-keeper` concurrency group. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.

@@ -80,7 +80,7 @@ permissions:
   deployments: read
 
 concurrency:
-  group: standing-meta-v4-${{ github.event.inputs.network || github.ref }}
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

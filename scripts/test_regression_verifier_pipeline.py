@@ -161,6 +161,10 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             events.append("preflight")
             return 7
 
+        def fake_immediate_nonce(*_args, **_kwargs) -> int:
+            events.append("pre-send-nonce")
+            return 7
+
         def fake_run(command: list[str], *, env=None) -> str:
             self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
             self.assertIn("preflight", events)
@@ -248,11 +252,13 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             ), mock.patch.object(
                 pipeline, "relay_rpc_preflight", side_effect=fake_preflight
             ), mock.patch.object(
+                pipeline, "keeper_nonce_preflight", side_effect=fake_immediate_nonce
+            ), mock.patch.object(
                 pipeline, "run", side_effect=fake_run
             ):
                 pipeline.command_relay(args)
 
-        self.assertEqual(events, ["preflight", "key-address", "send"])
+        self.assertEqual(events, ["preflight", "key-address", "pre-send-nonce", "send"])
 
     def test_relay_rpc_preflight_rejects_unbounded_gas_before_key_use(self) -> None:
         commands: list[list[str]] = []
@@ -279,7 +285,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             )
         self.assertEqual([command[1] for command in commands], ["chain-id", "call", "estimate"])
 
-    def test_relay_rpc_preflight_rejects_pending_keeper_nonce(self) -> None:
+    def test_keeper_nonce_preflight_rejects_pending_keeper_nonce(self) -> None:
         commands: list[list[str]] = []
 
         def fake_run(command: list[str], *, env=None) -> str:
@@ -295,15 +301,13 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 return "7" if command[command.index("--block") + 1] == "latest" else "8"
             self.fail(f"unexpected command: {command}")
 
-        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
-            pipeline, "canonical_bounty_rpc_preflight"
-        ), self.assertRaisesRegex(pipeline.PipelineError, "another pending transaction"):
-            pipeline.relay_rpc_preflight(
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), self.assertRaisesRegex(
+            pipeline.PipelineError, "another pending transaction"
+        ):
+            pipeline.keeper_nonce_preflight(
                 Path("cast"),
                 "https://relay.invalid",
-                "0x" + "1" * 40,
                 "0x" + "2" * 40,
-                "[]",
                 {"PUBLIC_VALUE": "kept"},
             )
         nonce_blocks = [
@@ -313,28 +317,45 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         ]
         self.assertEqual(nonce_blocks, ["latest", "pending"])
 
-    def test_relay_rpc_preflight_returns_nonce_only_when_latest_equals_pending(self) -> None:
+    def test_keeper_nonce_preflight_requires_two_matching_rpcs(self) -> None:
+        commands: list[list[str]] = []
+
         def fake_run(command: list[str], *, env=None) -> str:
             self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
-            return {
-                "chain-id": "8453",
-                "call": "0x",
-                "estimate": "100000",
-                "nonce": "7",
-            }[command[1]]
+            commands.append(command)
+            return "8453" if command[1] == "chain-id" else "7"
 
-        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
-            pipeline, "canonical_bounty_rpc_preflight"
-        ):
-            nonce = pipeline.relay_rpc_preflight(
+        with mock.patch.object(pipeline, "run", side_effect=fake_run):
+            nonce = pipeline.keeper_nonce_preflight(
                 Path("cast"),
                 "https://relay.invalid",
-                "0x" + "1" * 40,
                 "0x" + "2" * 40,
-                "[]",
                 {"PUBLIC_VALUE": "kept"},
             )
         self.assertEqual(nonce, 7)
+        rpc_urls = {
+            command[command.index("--rpc-url") + 1]
+            for command in commands
+            if "--rpc-url" in command
+        }
+        self.assertEqual(rpc_urls, {"https://relay.invalid", "https://mainnet.base.org"})
+
+    def test_keeper_nonce_preflight_rejects_equal_but_stale_rpc_pair(self) -> None:
+        def fake_run(command: list[str], *, env=None) -> str:
+            if command[1] == "chain-id":
+                return "8453"
+            rpc_url = command[command.index("--rpc-url") + 1]
+            return "7" if rpc_url == "https://relay.invalid" else "6"
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), self.assertRaisesRegex(
+            pipeline.PipelineError, "independent nonce RPCs disagree"
+        ):
+            pipeline.keeper_nonce_preflight(
+                Path("cast"),
+                "https://relay.invalid",
+                "0x" + "2" * 40,
+                {"PUBLIC_VALUE": "kept"},
+            )
 
     def test_canonical_bounty_preflight_rejects_wrong_nonempty_runtime(self) -> None:
         commands: list[list[str]] = []

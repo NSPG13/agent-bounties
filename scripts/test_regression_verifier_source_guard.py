@@ -11,6 +11,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("regression_verifier_source_guard.py")
 REPOSITORY = SCRIPT.resolve().parents[1]
+SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 SPEC = importlib.util.spec_from_file_location("regression_verifier_source_guard", SCRIPT)
 assert SPEC and SPEC.loader
 GUARD = importlib.util.module_from_spec(SPEC)
@@ -102,6 +103,15 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             if "pull_request:" in workflow:
                 self.assertIn('      - "rust-toolchain"', workflow)
                 self.assertIn('      - "rust-toolchain.toml"', workflow)
+
+        keeper_workflows = []
+        for workflow_path in (REPOSITORY / ".github/workflows").glob("*.yml"):
+            workflow = workflow_path.read_text(encoding="utf-8")
+            if "BASE_KEEPER_PRIVATE_KEY" in workflow:
+                keeper_workflows.append(workflow_path.name)
+                self.assertIn(SHARED_KEEPER_CONCURRENCY, workflow, workflow_path.name)
+                self.assertIn("cancel-in-progress", workflow, workflow_path.name)
+        self.assertTrue(keeper_workflows)
 
 
 if __name__ == "__main__":

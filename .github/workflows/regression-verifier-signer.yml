@@ -37,7 +37,7 @@ jobs:
       - run: python scripts/test_regression_verifier_pipeline.py -v
       - run: python scripts/test_regression_verifier_source_guard.py -v
       - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
-      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f71f935815302c1b548b8355547f621b2bf7c7cbbe2d6d839f212518fe650b7
+      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 35d1326ab1f50e47b4b5001f698c7c33065a931a258afdca35b731524c73e0d7
 
   authorize-run:
     if: >-
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: regression-verifier-relay-mainnet
+      group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
       API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
@@ -150,7 +150,7 @@ jobs:
       - name: Revalidate reviewed runtime after build
         run: |
           python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 8f71f935815302c1b548b8355547f621b2bf7c7cbbe2d6d839f212518fe650b7
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 35d1326ab1f50e47b4b5001f698c7c33065a931a258afdca35b731524c73e0d7
       - name: Revalidate and relay exact quorum
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}

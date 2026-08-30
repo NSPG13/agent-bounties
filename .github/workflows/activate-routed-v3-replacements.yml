@@ -22,7 +22,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: routed-v3-replacement-activation-${{ github.ref || github.event.issue.number }}
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

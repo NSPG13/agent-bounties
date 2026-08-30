@@ -31,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: durable-verifier-router-${{ github.ref || github.event.issue.number }}
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

@@ -10,7 +10,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: standing-meta-v3-replacement-activation
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:

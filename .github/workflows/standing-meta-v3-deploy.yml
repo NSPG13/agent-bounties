@@ -36,7 +36,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: standing-meta-v3-deploy-${{ github.ref }}
+  group: agent-bounties-shared-base-keeper
   cancel-in-progress: false
 
 jobs:
