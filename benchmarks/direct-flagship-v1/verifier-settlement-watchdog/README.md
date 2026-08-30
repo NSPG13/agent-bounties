@@ -100,6 +100,16 @@ canonical job hash from each complete production job and normalize only the
 effective allowlisted runner/signer job states; benchmark-private `jobs` or
 `runs` wrappers are not production inputs.
 
+A GitHub job status applies only to canonical jobs proven present in that exact
+runner's bounded `regression-candidates-<run_id>` artifact. `plan-live` must
+fetch the run's artifact metadata, inspect the archive without extracting it,
+validate the exact manifest/file names and size limits, and hash each complete
+embedded production job. Signer runs must expose their upstream candidate run
+ID in the exact run name and may inherit only that runner's proven membership.
+An old run, a missing/expired artifact, a job-ID-only match, or a run timestamp
+is not processing evidence. A newly submitted job must receive a new runner
+dispatch rather than inherit status from an older workflow run.
+
 Execution must reject a different repository, stale main, a non-allowlisted
 workflow, a missing/invalid run ID, or an action whose workflow does not match
 the current GitHub run metadata before making a write request. A new runner
@@ -170,6 +180,13 @@ so provider bindings are read from their effective parsed jobs rather than raw
 text boundaries or decoy scalars. Their effective sign and relay commands must
 equal the complete precommitted argv; extra substitutions, comments, suffixes,
 or shell operators are forbidden.
+Their complete job settings and ordered step lists must equal the checked-in
+allowlist, with every third-party action commit-pinned. Signing and keeper
+private keys are forbidden at job scope and are exposed only in the `env` map
+of the single exact sign or relay command that consumes them. Extra steps,
+including a command before or after the expected pipeline command, are
+forbidden. The signer workflow run name must bind the exact upstream candidate
+runner ID so live planning can prove job membership from the runner artifact.
 
 The signer and relay paths must accept distinct provider variables for signer
 one, signer two, and relay. Their precommitted public fallbacks are respectively

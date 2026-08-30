@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import http.server
+import io
 import json
 import os
 import random
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -145,6 +147,31 @@ def normalize_production_job(item: dict[str, Any]) -> dict[str, Any]:
         "input_readiness": "ready",
         "canonical_terminal_event": None,
     }
+
+
+def candidate_archive(items: list[dict[str, Any]]) -> bytes:
+    output = io.BytesIO()
+    entries = []
+    files: dict[str, object] = {}
+    for item in items:
+        job_id = item["job_id"]
+        filename = f"candidate-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
+        entries.append({"job_id": job_id, "file": filename})
+        files[filename] = {
+            "schema": "agent-bounties/regression-candidate-v1",
+            "job": item,
+            "outcome": {"verdict": "passed", "response_hash": hash32(f"response:{job_id}")},
+            "runner_revision": MAIN_SHA,
+        }
+    files["manifest.json"] = {
+        "schema": "agent-bounties/regression-candidate-manifest-v1",
+        "network": "base-mainnet",
+        "candidates": entries,
+    }
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for name, value in sorted(files.items()):
+            bundle.writestr(name, json.dumps(value, sort_keys=True, separators=(",", ":")))
+    return output.getvalue()
 
 
 POLICY = {
@@ -655,6 +682,8 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     scheduled_jobs: object = []
     scheduled_runs: dict[str, Any] = {}
     scheduled_run_jobs: dict[int, dict[str, Any]] = {}
+    scheduled_artifacts: dict[int, dict[str, Any]] = {}
+    scheduled_archives: dict[int, bytes] = {}
     fail_post_path: str | None = None
 
     def log_message(self, _format: str, *_args: object) -> None:
@@ -671,10 +700,19 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def respond(self, status: int, payload: object | None = None) -> None:
-        body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+        body = (
+            b""
+            if payload is None
+            else payload
+            if isinstance(payload, bytes)
+            else json.dumps(payload).encode("utf-8")
+        )
         self.send_response(status)
         if body:
-            self.send_header("Content-Type", "application/json")
+            self.send_header(
+                "Content-Type",
+                "application/zip" if isinstance(payload, bytes) else "application/json",
+            )
             self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if body:
@@ -694,6 +732,22 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
         )
         if jobs_match:
             payload = self.scheduled_run_jobs.get(int(jobs_match.group(1)))
+            self.respond(200 if payload is not None else 404, payload or {"message": "not found"})
+            return
+        artifacts_match = re.fullmatch(
+            r"/repos/NSPG13/agent-bounties/actions/runs/(\d+)/artifacts\?per_page=100",
+            self.path,
+        )
+        if artifacts_match:
+            payload = self.scheduled_artifacts.get(int(artifacts_match.group(1)))
+            self.respond(200 if payload is not None else 404, payload or {"message": "not found"})
+            return
+        archive_match = re.fullmatch(
+            r"/repos/NSPG13/agent-bounties/actions/artifacts/(\d+)/zip",
+            self.path,
+        )
+        if archive_match:
+            payload = self.scheduled_archives.get(int(archive_match.group(1)))
             self.respond(200 if payload is not None else 404, payload or {"message": "not found"})
             return
         if self.path == "/repos/NSPG13/agent-bounties/branches/main":
@@ -843,7 +897,13 @@ execution_plan = {
 }
 FakeGitHubHandler.requests = []
 FakeGitHubHandler.signer_run_id = 4304
-live_production_jobs = [production_job("live-signer-gap", "2026-09-01T14:30:00Z")]
+live_production_jobs = [
+    production_job("live-signer-gap", "2026-09-01T14:30:00Z"),
+    production_job("new-after-run", "2026-09-01T14:45:00Z"),
+]
+live_production_jobs[1]["submission_evidence"]["created_at"] = int(
+    datetime.fromisoformat("2026-09-01T12:30:00+00:00").timestamp()
+)
 live_jobs = [normalize_production_job(item) for item in live_production_jobs]
 live_job = live_jobs[0]
 
@@ -912,6 +972,7 @@ FakeGitHubHandler.scheduled_runs = {
         {
             "id": 5302,
             "path": ".github/workflows/regression-verifier-signer.yml",
+            "display_title": "Regression Verifier Signer / candidate run 5301",
             "status": "completed",
             "conclusion": "failure",
             "run_attempt": 1,
@@ -935,6 +996,21 @@ FakeGitHubHandler.scheduled_run_jobs = {
         ],
     },
 }
+live_candidate_archive = candidate_archive([live_production_jobs[0]])
+FakeGitHubHandler.scheduled_artifacts = {
+    5301: {
+        "total_count": 1,
+        "artifacts": [
+            {
+                "id": 6301,
+                "name": "regression-candidates-5301",
+                "expired": False,
+                "size_in_bytes": len(live_candidate_archive),
+            }
+        ],
+    }
+}
+FakeGitHubHandler.scheduled_archives = {6301: live_candidate_archive}
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHubHandler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
@@ -959,11 +1035,20 @@ try:
     generated_execution_plan = json.loads(live_plan_path.read_text(encoding="utf-8"))
     if generated_execution_plan != live_execution_plan:
         raise SystemExit("watchdog live planner did not produce the exact executable plan")
+    live_by_id = {item["job_id"]: item for item in generated_execution_plan["jobs"]}
+    if (
+        live_by_id[live_jobs[0]["job_id"]]["next_action"] != "retry_signer_two"
+        or live_by_id[live_jobs[1]["job_id"]]["next_action"] != "dispatch_runner"
+        or live_by_id[live_jobs[1]["job_id"]]["workflow_run_id"] is not None
+    ):
+        raise SystemExit("an older candidate artifact was attached to a newly submitted job")
     requested_paths = {item["path"] for item in FakeGitHubHandler.requests}
     required_live_paths = {
         "/v1/base/autonomous-bounties/verification-jobs?network=base-mainnet",
         "/repos/NSPG13/agent-bounties/actions/runs?per_page=100",
         "/repos/NSPG13/agent-bounties/branches/main",
+        "/repos/NSPG13/agent-bounties/actions/runs/5301/artifacts?per_page=100",
+        "/repos/NSPG13/agent-bounties/actions/artifacts/6301/zip",
         "/repos/NSPG13/agent-bounties/actions/runs/5301/jobs?per_page=100",
         "/repos/NSPG13/agent-bounties/actions/runs/5302/jobs?per_page=100",
     }
@@ -1215,36 +1300,223 @@ try:
     reusable_document = json.loads(reusable_workflow)
 except json.JSONDecodeError as error:
     raise SystemExit("signer workflows must use strict JSON-syntax YAML") from error
-if set(signer_document) != {"name", "on", "permissions", "jobs"}:
+if set(signer_document) != {"name", "run-name", "on", "permissions", "jobs"}:
     raise SystemExit("signer workflow has unknown effective top-level keys")
+if signer_document["name"] != "Regression Verifier Signer":
+    raise SystemExit("signer workflow name is not exact")
+if signer_document["run-name"] != (
+    "Regression Verifier Signer / candidate run ${{ github.event.workflow_run.id }}"
+):
+    raise SystemExit("signer workflow run name must bind the candidate runner ID")
+if signer_document["on"] != {
+    "workflow_run": {
+        "workflows": ["Regression Verifier Runner"],
+        "types": ["completed"],
+        "branches": ["main"],
+    }
+}:
+    raise SystemExit("signer workflow trigger is not the exact protected runner completion")
+if signer_document["permissions"] != {"actions": "read", "contents": "read"}:
+    raise SystemExit("signer workflow permissions are not read-only")
 signer_jobs = signer_document["jobs"]
-if not isinstance(signer_jobs, dict) or not {"sign-one", "sign-two", "relay"}.issubset(signer_jobs):
-    raise SystemExit("signer workflow is missing an effective signer or relay job")
+if not isinstance(signer_jobs, dict) or set(signer_jobs) != {"sign-one", "sign-two", "relay"}:
+    raise SystemExit("signer workflow must contain exactly two signers and one relay")
+signer_guard = (
+    "github.event.workflow_run.conclusion == 'success' && "
+    "github.event.workflow_run.event == 'schedule' && "
+    "github.event.workflow_run.head_branch == 'main' && "
+    "github.event.workflow_run.head_repository.full_name == github.repository && "
+    "github.event.workflow_run.head_sha == github.sha"
+)
 expected_provider_bindings = {
     "sign-one": "${{ vars.REGRESSION_VERIFIER_ONE_RPC_URL || 'https://mainnet.base.org' }}",
     "sign-two": "${{ vars.REGRESSION_VERIFIER_TWO_RPC_URL || 'https://base-rpc.publicnode.com' }}",
 }
 for job_name, expected_binding in expected_provider_bindings.items():
     selected = signer_jobs[job_name]
-    if selected.get("uses") != "./.github/workflows/regression-verifier-signing-reusable.yml":
-        raise SystemExit(f"{job_name} does not call the reviewed reusable signer")
-    if not isinstance(selected.get("with"), dict) or selected["with"].get("rpc_url") != expected_binding:
-        raise SystemExit(f"{job_name} provider binding does not match its precommitted origin")
+    slot = "one" if job_name == "sign-one" else "two"
+    address_variable = "ONE" if slot == "one" else "TWO"
+    private_key = "ONE" if slot == "one" else "TWO"
+    expected_job = {
+        "if": signer_guard,
+        "uses": "./.github/workflows/regression-verifier-signing-reusable.yml",
+        "with": {
+            "revision": "${{ github.event.workflow_run.head_sha }}",
+            "candidate_run_id": "${{ github.event.workflow_run.id }}",
+            "signer_slot": slot,
+            "expected_signer": f"${{{{ vars.REGRESSION_VERIFIER_{address_variable}_ADDRESS }}}}",
+            "rpc_url": expected_binding,
+        },
+        "secrets": {
+            "verifier_private_key": f"${{{{ secrets.REGRESSION_VERIFIER_{private_key}_PRIVATE_KEY }}}}"
+        },
+    }
+    if selected != expected_job:
+        raise SystemExit(f"{job_name} is not the exact reviewed reusable-signer call")
 relay_job = signer_jobs["relay"]
-if not isinstance(relay_job.get("env"), dict) or relay_job["env"].get(
-    "BASE_MAINNET_RPC_URL"
-) != "${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}":
-    raise SystemExit("relay provider binding does not match its precommitted origin")
+if set(relay_job) != {
+    "if", "needs", "runs-on", "timeout-minutes", "concurrency", "env", "steps"
+}:
+    raise SystemExit("relay job has an unreviewed execution setting")
+if (
+    relay_job["if"] != signer_guard
+    or relay_job["needs"] != ["sign-one", "sign-two"]
+    or relay_job["runs-on"] != "ubuntu-latest"
+    or relay_job["timeout-minutes"] != 20
+    or relay_job["concurrency"] != {
+        "group": "regression-verifier-relay-mainnet",
+        "cancel-in-progress": False,
+    }
+    or relay_job["env"] != {
+        "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
+        "BASE_MAINNET_RPC_URL": "${{ vars.REGRESSION_VERIFIER_RELAY_RPC_URL || 'https://1rpc.io/base' }}",
+        "VERIFIER_ONE": "${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}",
+        "VERIFIER_TWO": "${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}",
+    }
+):
+    raise SystemExit("relay job does not match its exact provider and execution contract")
 
 try:
-    rpc_input = reusable_document["on"]["workflow_call"]["inputs"]["rpc_url"]
+    workflow_call = reusable_document["on"]["workflow_call"]
     reusable_job = reusable_document["jobs"]["sign"]
 except (KeyError, TypeError) as error:
     raise SystemExit("reusable signer effective input or job is missing") from error
-if rpc_input != {"required": True, "type": "string"}:
-    raise SystemExit("reusable signer rpc_url input must be a required string")
-if reusable_job.get("env", {}).get("BASE_MAINNET_RPC_URL") != "${{ inputs.rpc_url }}":
-    raise SystemExit("reusable signer does not consume its exact rpc_url input")
+required_string = {"required": True, "type": "string"}
+if (
+    set(reusable_document) != {"name", "on", "permissions", "jobs"}
+    or reusable_document["name"] != "Regression Verifier Signing Slot"
+    or reusable_document["permissions"] != {"actions": "read", "contents": "read"}
+    or set(reusable_document["jobs"]) != {"sign"}
+    or workflow_call != {
+        "inputs": {
+            "revision": required_string,
+            "candidate_run_id": required_string,
+            "signer_slot": required_string,
+            "expected_signer": required_string,
+            "rpc_url": required_string,
+        },
+        "secrets": {"verifier_private_key": {"required": True}},
+    }
+):
+    raise SystemExit("reusable signer workflow contract is not exact")
+if set(reusable_job) != {"runs-on", "timeout-minutes", "env", "steps"}:
+    raise SystemExit("reusable signer has an unreviewed execution setting")
+if (
+    reusable_job["runs-on"] != "ubuntu-latest"
+    or reusable_job["timeout-minutes"] != 20
+    or reusable_job["env"] != {
+        "API_BASE_URL": "${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}",
+        "BASE_MAINNET_RPC_URL": "${{ inputs.rpc_url }}",
+        "ATTESTATION_OUTPUT": "target/attestations-${{ inputs.signer_slot }}",
+        "EXPECTED_SIGNER": "${{ inputs.expected_signer }}",
+    }
+):
+    raise SystemExit("reusable signer environment is not exact or exposes a signing key job-wide")
+
+checkout_action = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a"
+python_action = "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
+rust_action = "dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0"
+cache_action = "Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae"
+foundry_action = "foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a"
+download_action = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+upload_action = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+sign_command = (
+    "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL "
+    "--network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL "
+    "--candidates target/regression-candidates --output $ATTESTATION_OUTPUT "
+    "--worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY "
+    "--expected-signer $EXPECTED_SIGNER"
+)
+relay_command = (
+    "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL "
+    "--network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL "
+    "--candidates target/regression-candidates --attestations target/attestations-one "
+    "--attestations target/attestations-two --verifier $VERIFIER_ONE "
+    "--verifier $VERIFIER_TWO --worker target/release/worker"
+)
+expected_signer_steps = [
+    {
+        "uses": checkout_action,
+        "with": {"ref": "${{ inputs.revision }}", "persist-credentials": False},
+    },
+    {"uses": python_action, "with": {"python-version": "3.12"}},
+    {"uses": rust_action},
+    {"uses": cache_action},
+    {"uses": foundry_action},
+    {
+        "uses": download_action,
+        "with": {
+            "name": "regression-candidates-${{ inputs.candidate_run_id }}",
+            "path": "target/regression-candidates",
+            "github-token": "${{ github.token }}",
+            "run-id": "${{ inputs.candidate_run_id }}",
+        },
+    },
+    {"run": "cargo build --release -p worker"},
+    {
+        "name": "Re-fetch state and sign one exact candidate set",
+        "run": sign_command,
+        "env": {
+            "REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"
+        },
+    },
+    {
+        "uses": upload_action,
+        "with": {
+            "name": "regression-attestations-${{ inputs.signer_slot }}-${{ inputs.candidate_run_id }}",
+            "path": "target/attestations-${{ inputs.signer_slot }}",
+            "if-no-files-found": "error",
+            "retention-days": 7,
+        },
+    },
+]
+if reusable_job["steps"] != expected_signer_steps:
+    raise SystemExit("reusable signer steps are not the complete reviewed allowlist")
+
+expected_relay_steps = [
+    {
+        "uses": checkout_action,
+        "with": {
+            "ref": "${{ github.event.workflow_run.head_sha }}",
+            "persist-credentials": False,
+        },
+    },
+    {"uses": python_action, "with": {"python-version": "3.12"}},
+    {"uses": rust_action},
+    {"uses": cache_action},
+    {"uses": foundry_action},
+    {
+        "uses": download_action,
+        "with": {
+            "name": "regression-candidates-${{ github.event.workflow_run.id }}",
+            "path": "target/regression-candidates",
+            "github-token": "${{ github.token }}",
+            "run-id": "${{ github.event.workflow_run.id }}",
+        },
+    },
+    {
+        "uses": download_action,
+        "with": {
+            "name": "regression-attestations-one-${{ github.event.workflow_run.id }}",
+            "path": "target/attestations-one",
+        },
+    },
+    {
+        "uses": download_action,
+        "with": {
+            "name": "regression-attestations-two-${{ github.event.workflow_run.id }}",
+            "path": "target/attestations-two",
+        },
+    },
+    {"run": "cargo build --release -p worker"},
+    {
+        "name": "Revalidate and relay exact quorum",
+        "run": relay_command,
+        "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},
+    },
+]
+if relay_job["steps"] != expected_relay_steps:
+    raise SystemExit("relay steps are not the complete reviewed allowlist")
 
 
 def exact_pipeline_tokens(steps: object, subcommand: str) -> list[str]:
