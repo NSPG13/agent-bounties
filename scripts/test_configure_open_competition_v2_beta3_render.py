@@ -313,7 +313,7 @@ class Beta3RenderTests(unittest.TestCase):
         self.assertEqual(environment["OPEN_COMPETITION_V2_DEPLOYMENT_BLOCK"], "123")
         self.assertNotIn("X402_RELAYER_PRIVATE_KEY", environment)
         self.assertEqual(environment["OPEN_COMPETITION_V2_REFUND_RESERVE_MIN_BASE_UNITS"], "110000")
-        self.assertEqual(environment["OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS"], "120")
+        self.assertEqual(environment["OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS"], "300")
         self.assertEqual(environment["OPEN_COMPETITION_V2_RELAYER_MAX_GAS"], "8000000")
         self.assertEqual(
             MODULE.WORKER_ENVIRONMENT[

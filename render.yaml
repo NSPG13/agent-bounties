@@ -146,7 +146,9 @@ envVarGroups:
       - key: OPEN_COMPETITION_V2_PLONK_PROOF_SLA_SECONDS
         sync: false
       - key: OPEN_COMPETITION_V2_INDEXER_AGREEMENT_MAX_AGE_SECONDS
-        value: "120"
+        # A complete independent-RPC comparison currently takes about 3.5 minutes.
+        # Keep creation fail-closed after five minutes without rejecting healthy sweeps.
+        value: "300"
       - key: OPEN_COMPETITION_V2_INDEXER_MAX_LAG_BLOCKS
         value: "64"
       - key: OPEN_COMPETITION_V2_PROVER_TIMEOUT_SECONDS
