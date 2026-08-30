@@ -254,14 +254,22 @@ allowlisting alone is insufficient because a changed executable behind the
 same command would otherwise inherit signing authority. Candidate
 revalidation runs with signing and keeper secrets removed from its environment.
 Before a private key is passed to any child process, the signer verifies Base
-chain ID 8453, nonempty code at the committed bounty contract, and an EIP-712
-attestation digest computed locally from canonical fields. The RPC contract
-digest must equal that independent local digest; disagreement fails closed.
+chain ID 8453 and, at the RPC's `safe` block, requires the exact precommitted
+canonical EIP-1167 clone runtime, factory
+`0x082c52131aaf0c56e76b075f895eab6fcab6d2f9`, and Base USDC settlement token
+`0x833589fcd6edb6e08f4c7c32d4f71b54bda02913` at the committed bounty
+contract. It also computes the EIP-712 attestation digest locally from
+canonical fields. The RPC contract digest must equal that independent local
+digest; disagreement fails closed.
 
 Before the keeper key is passed to any child process, the relay validates every
-candidate and attestation, requires Base chain ID 8453 and nonempty code at each
-exact bounty, simulates each exact settlement call from the checked-in keeper
-address, enforces a 500,000 gas ceiling, and binds the starting nonce. The
+candidate and attestation, requires Base chain ID 8453 and the same safe-block
+canonical runtime, factory, and token provenance at each exact bounty,
+simulates each exact settlement call from the checked-in keeper address, and
+enforces a 500,000 gas ceiling. It reads both the latest and pending keeper
+nonces and refuses to send unless they are equal, so it cannot replace an
+unrelated pending keeper transaction. The relay job is serialized under the
+repository-wide `regression-verifier-relay-mainnet` concurrency group. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.

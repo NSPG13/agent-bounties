@@ -35,7 +35,7 @@ jobs:
       - run: python scripts/test_regression_verifier_pipeline.py -v
       - run: python scripts/test_regression_verifier_source_guard.py -v
       - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
-      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1
+      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b8f857539fb5168f2894bf72a32859a85d8edc34e515fa4ee3cc59cff5d26ac
 
   authorize-run:
     if: >-
@@ -148,7 +148,7 @@ jobs:
       - name: Revalidate reviewed runtime after build
         run: |
           python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 6f9370dfd818959efbda012d22cabb1cb3be485e44d8dad9a183a2e04a1fd7b1
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 0e48a42ca648b00572009d70c7c4c117ee8b6a3694c5a482aacae9dbeaaaffa1
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b8f857539fb5168f2894bf72a32859a85d8edc34e515fa4ee3cc59cff5d26ac
       - name: Revalidate and relay exact quorum
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}

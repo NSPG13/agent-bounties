@@ -262,15 +262,13 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             commands.append(command)
             return {
                 "chain-id": "8453",
-                "code": "0x60016000",
                 "call": "0x",
                 "estimate": str(pipeline.RELAY_GAS_LIMIT + 1),
             }[command[1]]
 
-        with mock.patch.object(pipeline, "run", side_effect=fake_run), self.assertRaisesRegex(
-            pipeline.PipelineError,
-            "gas estimate exceeds",
-        ):
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
+            pipeline, "canonical_bounty_rpc_preflight"
+        ), self.assertRaisesRegex(pipeline.PipelineError, "gas estimate exceeds"):
             pipeline.relay_rpc_preflight(
                 Path("cast"),
                 "https://relay.invalid",
@@ -279,7 +277,140 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                 "[]",
                 {"PUBLIC_VALUE": "kept"},
             )
-        self.assertEqual([command[1] for command in commands], ["chain-id", "code", "call", "estimate"])
+        self.assertEqual([command[1] for command in commands], ["chain-id", "call", "estimate"])
+
+    def test_relay_rpc_preflight_rejects_pending_keeper_nonce(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
+            commands.append(command)
+            if command[1] == "chain-id":
+                return "8453"
+            if command[1] == "call":
+                return "0x"
+            if command[1] == "estimate":
+                return "100000"
+            if command[1] == "nonce":
+                return "7" if command[command.index("--block") + 1] == "latest" else "8"
+            self.fail(f"unexpected command: {command}")
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
+            pipeline, "canonical_bounty_rpc_preflight"
+        ), self.assertRaisesRegex(pipeline.PipelineError, "another pending transaction"):
+            pipeline.relay_rpc_preflight(
+                Path("cast"),
+                "https://relay.invalid",
+                "0x" + "1" * 40,
+                "0x" + "2" * 40,
+                "[]",
+                {"PUBLIC_VALUE": "kept"},
+            )
+        nonce_blocks = [
+            command[command.index("--block") + 1]
+            for command in commands
+            if command[1] == "nonce"
+        ]
+        self.assertEqual(nonce_blocks, ["latest", "pending"])
+
+    def test_relay_rpc_preflight_returns_nonce_only_when_latest_equals_pending(self) -> None:
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
+            return {
+                "chain-id": "8453",
+                "call": "0x",
+                "estimate": "100000",
+                "nonce": "7",
+            }[command[1]]
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
+            pipeline, "canonical_bounty_rpc_preflight"
+        ):
+            nonce = pipeline.relay_rpc_preflight(
+                Path("cast"),
+                "https://relay.invalid",
+                "0x" + "1" * 40,
+                "0x" + "2" * 40,
+                "[]",
+                {"PUBLIC_VALUE": "kept"},
+            )
+        self.assertEqual(nonce, 7)
+
+    def test_canonical_bounty_preflight_rejects_wrong_nonempty_runtime(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            self.assertNotIn("BASE_KEEPER_PRIVATE_KEY", env)
+            commands.append(command)
+            return "0x60016000"
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run), self.assertRaisesRegex(
+            pipeline.PipelineError, "not the precommitted canonical clone"
+        ):
+            pipeline.canonical_bounty_rpc_preflight(
+                Path("cast"),
+                "https://relay.invalid",
+                "0x" + "1" * 40,
+                {"PUBLIC_VALUE": "kept"},
+            )
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][1], "code")
+        self.assertEqual(commands[0][commands[0].index("--block") + 1], "safe")
+
+    def test_canonical_bounty_preflight_binds_factory_and_token(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], *, env=None) -> str:
+            commands.append(command)
+            if command[1] == "code":
+                return pipeline.CANONICAL_BOUNTY_RUNTIME
+            if command[-1] == "factory()(address)":
+                return pipeline.CANONICAL_BOUNTY_FACTORY
+            if command[-1] == "settlementToken()(address)":
+                return pipeline.CANONICAL_SETTLEMENT_TOKEN
+            self.fail(f"unexpected command: {command}")
+
+        with mock.patch.object(pipeline, "run", side_effect=fake_run):
+            pipeline.canonical_bounty_rpc_preflight(
+                Path("cast"),
+                "https://relay.invalid",
+                "0x" + "1" * 40,
+                {"PUBLIC_VALUE": "kept"},
+            )
+        self.assertEqual([command[1] for command in commands], ["code", "call", "call"])
+        self.assertTrue(
+            all(command[command.index("--block") + 1] == "safe" for command in commands)
+        )
+
+    def test_canonical_bounty_preflight_rejects_wrong_provenance(self) -> None:
+        cases = (
+            ("factory()(address)", "0x" + "3" * 40, "canonical factory"),
+            ("settlementToken()(address)", "0x" + "4" * 40, "canonical Base USDC"),
+        )
+        for wrong_field, wrong_value, expected_error in cases:
+            with self.subTest(field=wrong_field):
+                def fake_run(command: list[str], *, env=None) -> str:
+                    if command[1] == "code":
+                        return pipeline.CANONICAL_BOUNTY_RUNTIME
+                    if command[-1] == "factory()(address)":
+                        return (
+                            wrong_value
+                            if wrong_field == "factory()(address)"
+                            else pipeline.CANONICAL_BOUNTY_FACTORY
+                        )
+                    if command[-1] == "settlementToken()(address)":
+                        return wrong_value
+                    self.fail(f"unexpected command: {command}")
+
+                with mock.patch.object(pipeline, "run", side_effect=fake_run), self.assertRaisesRegex(
+                    pipeline.PipelineError, expected_error
+                ):
+                    pipeline.canonical_bounty_rpc_preflight(
+                        Path("cast"),
+                        "https://relay.invalid",
+                        "0x" + "1" * 40,
+                        {"PUBLIC_VALUE": "kept"},
+                    )
 
     def test_candidate_validation_strips_signing_secrets_from_worker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
@@ -314,8 +445,8 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             self.fail(f"unexpected command: {command}")
 
         with mock.patch.object(pipeline, "run", side_effect=fake_run), mock.patch.object(
-            pipeline, "local_attestation_digest", return_value=good
-        ):
+            pipeline, "canonical_bounty_rpc_preflight"
+        ), mock.patch.object(pipeline, "local_attestation_digest", return_value=good):
             with self.assertRaisesRegex(
                 pipeline.PipelineError,
                 "differs from the local EIP-712 digest",

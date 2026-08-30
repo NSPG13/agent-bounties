@@ -40,6 +40,12 @@ BASE_MAINNET_CHAIN_ID = 8453
 RELAY_GAS_LIMIT = 500_000
 RELAY_MAX_FEE_PER_GAS = 500_000_000
 RELAY_PRIORITY_FEE_PER_GAS = 1_000_000
+CANONICAL_BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+CANONICAL_SETTLEMENT_TOKEN = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+CANONICAL_BOUNTY_RUNTIME = (
+    "0x363d3d373d3d3d363d732fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
+    "5af43d82803e903d91602b57fd5bf3"
+)
 
 
 class PipelineError(RuntimeError):
@@ -609,9 +615,7 @@ def attestation_digest(
         raise PipelineError("RPC returned an invalid chain id") from error
     if chain_id != 8453:
         raise PipelineError("RPC is not Base mainnet")
-    code = run([str(cast), "code", "--rpc-url", rpc_url, bounty], env=environment).lower()
-    if not re.fullmatch(r"0x[0-9a-f]+", code) or code == "0x" or set(code[2:]) == {"0"}:
-        raise PipelineError("RPC returned no bounty contract code")
+    canonical_bounty_rpc_preflight(cast, rpc_url, bounty, environment)
     local_digest = local_attestation_digest(
         cast,
         current,
@@ -641,6 +645,56 @@ def attestation_digest(
     return local_digest
 
 
+def canonical_bounty_rpc_preflight(
+    cast: Path,
+    rpc_url: str,
+    bounty: str,
+    environment: dict[str, str],
+) -> None:
+    code = run(
+        [str(cast), "code", "--rpc-url", rpc_url, "--block", "safe", bounty],
+        env=environment,
+    ).strip().lower()
+    if code != CANONICAL_BOUNTY_RUNTIME:
+        raise PipelineError("RPC bounty runtime is not the precommitted canonical clone")
+    factory = normalize_address(
+        run(
+            [
+                str(cast),
+                "call",
+                "--rpc-url",
+                rpc_url,
+                "--block",
+                "safe",
+                bounty,
+                "factory()(address)",
+            ],
+            env=environment,
+        ).strip(),
+        "RPC bounty factory",
+    )
+    if factory != CANONICAL_BOUNTY_FACTORY:
+        raise PipelineError("RPC bounty factory is not the canonical factory")
+    settlement_token = normalize_address(
+        run(
+            [
+                str(cast),
+                "call",
+                "--rpc-url",
+                rpc_url,
+                "--block",
+                "safe",
+                bounty,
+                "settlementToken()(address)",
+            ],
+            env=environment,
+        ).strip(),
+        "RPC settlement token",
+    )
+    if settlement_token != CANONICAL_SETTLEMENT_TOKEN:
+        raise PipelineError("RPC bounty settlement token is not canonical Base USDC")
+
+
 def relay_rpc_preflight(
     cast: Path,
     rpc_url: str,
@@ -658,12 +712,7 @@ def relay_rpc_preflight(
         raise PipelineError("relay RPC returned an invalid chain id") from error
     if chain_id != BASE_MAINNET_CHAIN_ID:
         raise PipelineError("relay RPC is not Base mainnet")
-
-    code = run(
-        [str(cast), "code", "--rpc-url", rpc_url, bounty], env=environment
-    ).lower()
-    if not re.fullmatch(r"0x[0-9a-f]+", code) or code == "0x" or set(code[2:]) == {"0"}:
-        raise PipelineError("relay RPC returned no bounty contract code")
+    canonical_bounty_rpc_preflight(cast, rpc_url, bounty, environment)
 
     call = [
         str(cast),
@@ -698,25 +747,32 @@ def relay_rpc_preflight(
     if estimated_gas <= 0 or estimated_gas > RELAY_GAS_LIMIT:
         raise PipelineError("relay gas estimate exceeds the precommitted limit")
 
-    nonce_text = run(
-        [
-            str(cast),
-            "nonce",
-            "--rpc-url",
-            rpc_url,
-            "--block",
-            "latest",
-            expected_keeper,
-        ],
-        env=environment,
-    ).strip().lower()
-    try:
-        nonce = int(nonce_text, 0)
-    except ValueError as error:
-        raise PipelineError("relay RPC returned an invalid keeper nonce") from error
-    if nonce < 0:
-        raise PipelineError("relay RPC returned a negative keeper nonce")
-    return nonce
+    observed_nonces: dict[str, int] = {}
+    for block_tag in ("latest", "pending"):
+        nonce_text = run(
+            [
+                str(cast),
+                "nonce",
+                "--rpc-url",
+                rpc_url,
+                "--block",
+                block_tag,
+                expected_keeper,
+            ],
+            env=environment,
+        ).strip().lower()
+        try:
+            nonce = int(nonce_text, 0)
+        except ValueError as error:
+            raise PipelineError("relay RPC returned an invalid keeper nonce") from error
+        if nonce < 0:
+            raise PipelineError("relay RPC returned a negative keeper nonce")
+        observed_nonces[block_tag] = nonce
+    if observed_nonces["pending"] != observed_nonces["latest"]:
+        raise PipelineError(
+            "keeper has another pending transaction; retry after it confirms or drops"
+        )
+    return observed_nonces["latest"]
 
 
 def command_sign(args: argparse.Namespace) -> None:
