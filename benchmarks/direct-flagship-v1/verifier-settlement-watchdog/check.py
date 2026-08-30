@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -353,6 +354,101 @@ _, terminal_plan = invoke(terminal_jobs, [])
 terminal = validate(terminal_plan, terminal_jobs)
 expect(terminal["settled"], "observe_terminal", False)
 expect(terminal["expired"], "expire_submission", False)
+
+# Exercise a larger deterministic matrix with non-semantic job IDs so a solver
+# must implement the state machine rather than special-case the named examples.
+rng = random.Random(918273)
+matrix_jobs: list[dict[str, Any]] = []
+matrix_runs: list[dict[str, Any]] = []
+matrix_expected: dict[str, tuple[str, bool, str | None]] = {}
+cases = (
+    "dispatch",
+    "runner_retry",
+    "signer_one_retry",
+    "signer_two_retry",
+    "relay_retry",
+    "stale",
+    "drift",
+    "unknown",
+    "nonretryable",
+    "exhausted",
+    "unavailable",
+    "too_late",
+    "expired",
+    "terminal",
+)
+for index in range(84):
+    case = cases[index % len(cases)]
+    opaque = hashlib.sha256(f"{rng.getrandbits(128):032x}:{index}".encode()).hexdigest()[:18]
+    job_id = f"matrix-{opaque}"
+    expiry_minute = 20 + index
+    expiry_hour, expiry_minute = divmod(expiry_minute, 60)
+    expiry = f"2026-09-01T{12 + expiry_hour:02d}:{expiry_minute:02d}:00Z"
+    item = job(job_id, expiry)
+    expected: tuple[str, bool, str | None]
+    if case == "dispatch":
+        expected = ("dispatch_runner", True, None)
+    elif case == "runner_retry":
+        matrix_runs.append(run(job_id, "runner", "failure"))
+        expected = ("retry_runner", True, None)
+    elif case == "signer_one_retry":
+        matrix_runs.append(run(job_id, "runner", "success", artifact_hash=candidate_hash))
+        expected = ("retry_signer_one", True, "signer_one_secondary")
+    elif case == "signer_two_retry":
+        matrix_runs.extend(
+            [
+                run(job_id, "runner", "success", artifact_hash=candidate_hash),
+                run(job_id, "signer_one", "success", signer=ADDRESS_ONE),
+            ]
+        )
+        expected = ("retry_signer_two", True, "signer_two_secondary")
+    elif case == "relay_retry":
+        matrix_runs.extend(
+            [
+                run(job_id, "runner", "success", artifact_hash=candidate_hash),
+                run(job_id, "signer_one", "success", signer=ADDRESS_ONE),
+                run(job_id, "signer_two", "success", signer=ADDRESS_TWO),
+                run(job_id, "relay", "failure", provider_role="relay_primary"),
+            ]
+        )
+        expected = ("retry_relay", True, "relay_secondary")
+    elif case == "stale":
+        matrix_runs.append(run(job_id, "runner", "success", head_sha="b" * 40))
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "drift":
+        matrix_runs.append(
+            run(job_id, "runner", "success", canonical_job_hash=hash32(job_id + ":drift"))
+        )
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "unknown":
+        matrix_runs.append(run(job_id, "runner", "failure", workflow="unknown-release.yml"))
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "nonretryable":
+        matrix_runs.append(run(job_id, "runner", "failure", retryable=False))
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "exhausted":
+        matrix_runs.append(run(job_id, "runner", "failure", attempt=2))
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "unavailable":
+        item["input_readiness"] = "unavailable"
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "too_late":
+        item["verification_expires_at"] = "2026-09-01T12:14:59Z"
+        expected = ("escalate_no_verdict", False, None)
+    elif case == "expired":
+        item["verification_expires_at"] = "2026-09-01T11:59:59Z"
+        expected = ("expire_submission", False, None)
+    else:
+        item["status"] = "settled"
+        item["canonical_terminal_event"] = "BountySettled"
+        expected = ("observe_terminal", False, None)
+    matrix_jobs.append(item)
+    matrix_expected[job_id] = expected
+
+_, matrix_plan = invoke(matrix_jobs, matrix_runs)
+matrix = validate(matrix_plan, matrix_jobs)
+for job_id, (action, automated, provider) in matrix_expected.items():
+    expect(matrix[job_id], action, automated, provider)
 
 # The implementation must ship its own deterministic tests and the tightly
 # permissioned production workflow required by the paid outcome.
