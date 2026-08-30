@@ -42,6 +42,11 @@ job must produce exactly one record with:
 - a provider **role**, never a provider URL or secret;
 - a plain-language `reason` and exact `recheck_at` timestamp.
 
+For an allowlisted automated retry, `recheck_at` is exactly `generated_at` plus
+the policy backoff. For a terminal observation, expiry, reconciliation, or
+fail-closed escalation, it is exactly `generated_at`. Every timestamp is a
+parseable RFC 3339 UTC instant.
+
 Records are ordered by verification deadline and then job ID. Repeating the
 same command with the same inputs must produce byte-for-byte identical output.
 
@@ -71,6 +76,10 @@ signer or relay retry may call only `rerun-failed-jobs` on a run whose effective
 path is `.github/workflows/regression-verifier-signer.yml` and whose head is
 exact current main. The token is read only from the named environment variable,
 never a command-line value or output artifact.
+
+All actions in one plan are atomic at the write boundary: validate the entire
+plan, fetch current main, and fetch/revalidate every referenced workflow run
+before issuing the first POST. If any later action is unsafe, execute no action.
 
 ## Required behavior
 

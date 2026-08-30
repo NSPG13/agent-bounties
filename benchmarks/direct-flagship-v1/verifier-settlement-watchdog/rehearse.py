@@ -20,7 +20,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def parse_time(value):
@@ -83,6 +83,19 @@ if args.command == "execute":
     branch = request("GET", "/repos/NSPG13/agent-bounties/branches/main")
     if branch["commit"]["sha"] != document.get("current_main_sha"):
         raise SystemExit("plan is not bound to current main")
+    retry_metadata = {}
+    for item in automated:
+        if item["next_action"] == "dispatch_runner":
+            continue
+        run_id = item["workflow_run_id"]
+        metadata = request("GET", f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}")
+        if (
+            metadata.get("path") != ".github/workflows/" + item["target_workflow"]
+            or metadata.get("head_sha") != document["current_main_sha"]
+            or metadata.get("status") != "completed"
+        ):
+            raise SystemExit("workflow run metadata is not safe to retry")
+        retry_metadata[run_id] = metadata
     executed = []
     for item in automated:
         action = item["next_action"]
@@ -95,13 +108,6 @@ if args.command == "execute":
             )
         else:
             run_id = item["workflow_run_id"]
-            metadata = request("GET", f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}")
-            if (
-                metadata.get("path") != ".github/workflows/" + item["target_workflow"]
-                or metadata.get("head_sha") != document["current_main_sha"]
-                or metadata.get("status") != "completed"
-            ):
-                raise SystemExit("workflow run metadata is not safe to retry")
             request(
                 "POST",
                 f"/repos/NSPG13/agent-bounties/actions/runs/{run_id}/rerun-failed-jobs",
@@ -216,6 +222,11 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
             workflow_run_id = next(
                 item["workflow_run_id"] for item in reversed(job_runs) if item["stage"] == stage
             )
+    recheck_at = (
+        now + timedelta(seconds=policy["backoff_seconds"])
+        if automated
+        else now
+    ).isoformat().replace("+00:00", "Z")
     records.append({
         "job_id": job["job_id"],
         "verification_expires_at": job["verification_expires_at"],
@@ -226,7 +237,7 @@ for job in sorted(jobs_doc["jobs"], key=lambda item: (item["verification_expires
         "target_workflow": target_workflow,
         "workflow_run_id": workflow_run_id,
         "reason": reason,
-        "recheck_at": args.now,
+        "recheck_at": recheck_at,
         "idempotency_key": "sha256:" + hashlib.sha256(key_payload.encode()).hexdigest(),
     })
 print(json.dumps({
@@ -256,7 +267,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@pinned
-      - run: python scripts/regression_verifier_watchdog.py execute --execute --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml
+      - run: python scripts/regression_verifier_watchdog.py execute --plan target/watchdog-plan.json --repository "$GITHUB_REPOSITORY" --github-api-base https://api.github.com --token-env GITHUB_TOKEN --execute --allow-workflow regression-verifier-runner.yml --allow-workflow regression-verifier-signer.yml
         env:
           GITHUB_TOKEN: ${{ github.token }}
 '''

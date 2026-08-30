@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -227,8 +228,13 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
             raise SystemExit(f"watchdog record {job_id} has no next owner")
         if not str(record.get("reason", "")).strip():
             raise SystemExit(f"watchdog record {job_id} has no reason")
-        if not str(record.get("recheck_at", "")).endswith("Z"):
-            raise SystemExit(f"watchdog record {job_id} has no exact UTC recheck")
+        recheck_at = str(record.get("recheck_at", ""))
+        try:
+            parsed_recheck = datetime.fromisoformat(recheck_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise SystemExit(f"watchdog record {job_id} has no parseable UTC recheck") from error
+        if parsed_recheck.tzinfo != timezone.utc or not recheck_at.endswith("Z"):
+            raise SystemExit(f"watchdog record {job_id} recheck must be explicit UTC")
         if not HASH_RE.fullmatch(str(record.get("idempotency_key", ""))):
             raise SystemExit(f"watchdog record {job_id} has an invalid idempotency key")
         action = record.get("next_action")
@@ -253,6 +259,14 @@ def validate(plan: dict[str, Any], expected_jobs: list[dict[str, Any]]) -> dict[
                 raise SystemExit(f"watchdog retry {job_id} must bind a positive workflow run ID")
         elif target_workflow is not None or workflow_run_id is not None:
             raise SystemExit(f"non-automated watchdog record {job_id} must not target a workflow")
+        generated = datetime.fromisoformat(NOW.replace("Z", "+00:00"))
+        expected_recheck = (
+            generated + timedelta(seconds=POLICY["backoff_seconds"])
+            if record.get("automation_allowed") is True
+            else generated
+        )
+        if parsed_recheck != expected_recheck:
+            raise SystemExit(f"watchdog record {job_id} recheck does not match the policy")
         serialized = json.dumps(record, sort_keys=True).lower()
         if any(token in serialized for token in ("private_key", "seed phrase", "mnemonic", "https://", "http://")):
             raise SystemExit(f"watchdog record {job_id} exposed a secret or provider URL")
@@ -490,6 +504,7 @@ for job_id, (action, automated, provider) in matrix_expected.items():
 class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
     signer_run_id = 0
+    unsafe_run_metadata = False
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -528,7 +543,7 @@ class FakeGitHubHandler(http.server.BaseHTTPRequestHandler):
             {
                 "id": self.signer_run_id,
                 "path": ".github/workflows/regression-verifier-signer.yml",
-                "head_sha": MAIN_SHA,
+                "head_sha": "b" * 40 if self.unsafe_run_metadata else MAIN_SHA,
                 "status": "completed",
                 "conclusion": "failure",
             },
@@ -647,7 +662,16 @@ try:
         raise SystemExit("watchdog execute accepted a non-allowlisted workflow")
     if len(FakeGitHubHandler.requests) != request_count:
         raise SystemExit("watchdog execute contacted GitHub before rejecting an unknown workflow")
+
+    FakeGitHubHandler.requests = []
+    FakeGitHubHandler.unsafe_run_metadata = True
+    rejected = execute(execution_plan, api_base)
+    if rejected.returncode == 0:
+        raise SystemExit("watchdog execute accepted stale metadata in a later action")
+    if any(item["method"] == "POST" for item in FakeGitHubHandler.requests):
+        raise SystemExit("watchdog execute wrote an earlier action before all metadata passed")
 finally:
+    FakeGitHubHandler.unsafe_run_metadata = False
     server.shutdown()
     server.server_close()
     thread.join(timeout=5)
@@ -668,16 +692,67 @@ if completed.returncode != 0:
 
 workflow = require(".github/workflows/regression-verifier-watchdog.yml").read_text(encoding="utf-8")
 workflow_lower = workflow.lower()
-for phrase in ("schedule:", "workflow_dispatch:", "actions: write", "contents: read", "--execute"):
-    if phrase not in workflow_lower:
-        raise SystemExit(f"watchdog workflow is missing {phrase}")
 for forbidden in ("pull_request_target", "issue_comment:", "id-token: write", "contents: write", "secrets."):
     if forbidden in workflow_lower:
         raise SystemExit(f"watchdog workflow contains forbidden privilege or trigger: {forbidden}")
+
+
+def top_level_block(source: str, key: str) -> str:
+    lines = source.splitlines()
+    try:
+        start = next(index for index, line in enumerate(lines) if line.strip() == key and not line[:1].isspace())
+    except StopIteration as error:
+        raise SystemExit(f"watchdog workflow has no effective top-level {key}") from error
+    collected = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not line[:1].isspace():
+            break
+        collected.append(line)
+    return "\n".join(collected)
+
+
+trigger_block = top_level_block(workflow, "on:")
+trigger_keys = {
+    match.group(1)
+    for line in trigger_block.splitlines()
+    if (match := re.match(r"^  ([a-zA-Z0-9_-]+):\s*(?:#.*)?$", line))
+}
+if trigger_keys != {"schedule", "workflow_dispatch"}:
+    raise SystemExit("watchdog workflow triggers must be exactly schedule and workflow_dispatch")
+if not re.search(r'(?m)^\s{4,}-\s+cron:\s*["\'][^"\']+["\']\s*$', trigger_block):
+    raise SystemExit("watchdog schedule has no effective cron entry")
+
+jobs_block = top_level_block(workflow, "jobs:")
+job_keys = {
+    match.group(1)
+    for line in jobs_block.splitlines()
+    if (match := re.match(r"^  ([a-zA-Z0-9_-]+):\s*(?:#.*)?$", line))
+}
+if job_keys != {"watchdog"}:
+    raise SystemExit("watchdog workflow must contain exactly one effective watchdog job")
+command_matches = re.findall(r"(?m)^\s{6,}-\s+run:\s*(\S.*)$", jobs_block)
+execute_commands = [
+    command
+    for command in command_matches
+    if re.search(r"(?:^|\s)python\s+scripts/regression_verifier_watchdog\.py\s+execute(?:\s|$)", command)
+]
+if len(execute_commands) != 1:
+    raise SystemExit("scheduled watchdog job must invoke exactly one effective execute command")
+execute_command = execute_commands[0]
+for flag in ("--plan", "--repository", "--github-api-base", "--token-env", "--execute"):
+    if not re.search(rf"(?:^|\s){re.escape(flag)}(?:\s|$)", execute_command):
+        raise SystemExit(f"effective watchdog execute command is missing {flag}")
+if not re.search(
+    r"(?m)^\s{6,}GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}\s*$",
+    jobs_block,
+):
+    raise SystemExit("watchdog execute job does not bind the repository token")
 for allowed in ("regression-verifier-runner.yml", "regression-verifier-signer.yml"):
-    if allowed not in workflow:
-        raise SystemExit(f"watchdog workflow does not pin allowlisted workflow {allowed}")
-permission_block = workflow_lower.split("permissions:", 1)[1].split("jobs:", 1)[0]
+    if allowed not in execute_command:
+        raise SystemExit(f"watchdog execute command does not pin allowlisted workflow {allowed}")
+
+permission_block = top_level_block(workflow_lower, "permissions:")
 permission_lines = {
     line.strip()
     for line in permission_block.splitlines()
@@ -685,7 +760,7 @@ permission_lines = {
 }
 if permission_lines != {"contents: read", "actions: write"}:
     raise SystemExit("watchdog workflow permissions must be exactly contents: read and actions: write")
-referenced_workflows = set(re.findall(r"[a-z0-9_-]+\.ya?ml", workflow_lower))
+referenced_workflows = set(re.findall(r"[a-z0-9_-]+\.ya?ml", execute_command.lower()))
 unknown_workflows = referenced_workflows - {
     "regression-verifier-runner.yml",
     "regression-verifier-signer.yml",
