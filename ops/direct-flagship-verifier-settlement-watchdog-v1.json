@@ -1,0 +1,98 @@
+{
+  "schema": "agent-bounties/direct-flagship-verifier-watchdog-v1",
+  "status": "unfunded_precommit",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "issue": 1262,
+  "issue_url": "https://github.com/NSPG13/agent-bounties/issues/1262",
+  "maintainer_notice": "https://github.com/NSPG13/agent-bounties/issues/1261",
+  "creator": "0x884834e884d6e93462655a2820140ad03e6747bc",
+  "settlement_token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "recovered_funds": {
+    "amount_base_units": 17068098,
+    "display_amount": "17.068098 USDC",
+    "reserve_balance_at_safe_block": 0,
+    "recovery_transaction": "0xd5788e0aa8b80627c5c415fb3165162549ee01d2baa60c2fe28fb631c495a7ac",
+    "safe_block": 50642445,
+    "evidence_boundary": "This proves reserve recovery to the owner only. It is not bounty funding, GMV, payout, or settlement evidence."
+  },
+  "economics": {
+    "solver_reward_base_units": 14500000,
+    "verifier_reward_base_units": 250000,
+    "refundable_claim_bond_base_units": 250000,
+    "initial_funding_base_units": 14750000,
+    "mandatory_external_spend_base_units": 0,
+    "platform_fee_base_units": 0,
+    "owner_liquid_margin_after_funding_base_units": 2318098,
+    "profit_gate_max_solver_compute_base_units": 7250000,
+    "profit_gate": "A solver should not claim unless its own bounded compute estimate is below 7.25 USDC, preserving at least a 2x reward-to-compute ratio. Profit is not guaranteed because each solver controls its own model, compute, gas, taxes, and failure risk."
+  },
+  "lifecycle": {
+    "funding_deadline": "2026-09-30T00:00:00Z",
+    "funding_deadline_unix": 1790726400,
+    "claim_window_seconds": 345600,
+    "verification_window_seconds": 21600,
+    "competition_mode": "exclusive_claim",
+    "recovery": [
+      "The owner may cancel while the bounty is open or claimable, then withdraw its contribution.",
+      "Anyone may expire a claim after 96 hours; the bounty becomes claimable and the bond becomes completion bonus.",
+      "Anyone may expire a submission after 6 hours; the solver bond is returned and the bounty becomes claimable.",
+      "After expiry returns the bounty to claimable state, the owner may cancel and withdraw the principal."
+    ]
+  },
+  "verification": {
+    "mode": "signed_quorum",
+    "engine": "sandboxed_regression_v1",
+    "verifiers": [
+      "0xbe6292b9e465f549e2363b918d6dd9187038431e"
+    ],
+    "threshold": 1,
+    "benchmark_subdirectory": "benchmarks/direct-flagship-v1/verifier-settlement-watchdog",
+    "benchmark_digest": "sha256:d98a9800b8418ce0bcbb86161716c89dbbdd5c6c30902559c61296e543fffe82",
+    "runner_manifest": {
+      "schema_version": "agent-bounties/regression-sandbox-v1",
+      "image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
+      "command": [
+        "python",
+        "/benchmark/check.py"
+      ],
+      "workdir": "/workspace",
+      "timeout_seconds": 1200,
+      "cpu_millis": 2000,
+      "memory_bytes": 2147483648,
+      "pids_limit": 256,
+      "max_output_bytes": 1048576,
+      "tmpfs_bytes": 1073741824,
+      "max_source_bytes": 536870912,
+      "max_source_files": 50000,
+      "max_benchmark_bytes": 67108864,
+      "max_benchmark_files": 10000,
+      "platform": "linux/amd64",
+      "test_seed": 1
+    }
+  },
+  "scope": {
+    "goal": "Make valid sandboxed-regression submissions deadline-aware and resilient to isolated workflow and RPC-provider failures without delegating verdict or payment authority to the watchdog.",
+    "required_artifacts": [
+      "scripts/regression_verifier_watchdog.py",
+      "scripts/test_regression_verifier_watchdog.py",
+      "scripts/fixtures/regression_verifier_watchdog/",
+      ".github/workflows/regression-verifier-watchdog.yml",
+      "docs/sandboxed-regression-verifier.md"
+    ],
+    "overlap_boundaries": [
+      "Issue #873 and PR #1255 own read-only stalled-bounty diagnostics and must not be superseded.",
+      "PR #997 already owns the committed-subdirectory archive limit fix.",
+      "Draft PR #906 is prior art for preflight and per-job isolation; reuse equivalent behavior that reaches main instead of duplicating broad chain or API changes."
+    ]
+  },
+  "funding_gates": [
+    "The exact benchmark digest is merged through protected main.",
+    "The benchmark has deterministic known-good and known-bad rehearsal evidence.",
+    "The exact verifier address is ready on the production feed.",
+    "A live canary completes runner, signer, relay, and canonical settlement in one round.",
+    "The owner cancellation and contributor refund calls are simulated against the exact predicted bounty.",
+    "The owner explicitly confirms the exact 14.75 USDC approval and create calls in MetaMask."
+  ],
+  "evidence_boundary": "Only confirmed FundingAdded and BountyBecameClaimable events make this live. Only a confirmed canonical BountySettled event proves solver payment."
+}
