@@ -202,6 +202,8 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "duplicate-json-job.yml": '{"jobs":{"send":{"runs-on":"ubuntu-latest","concurrency":{"group":"agent-bounties-shared-base-keeper","cancel-in-progress":false},"steps":[]},"send":{"runs-on":"ubuntu-latest","env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"steps":[]}}}',
             "folded-secret-inherit.yml": """name: Folded inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: >-\n      inherit\n""",
             "tagged-secret-inherit.yml": """name: Tagged inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: !!str inherit\n""",
+            "tagged-flow-secret-inherit.yml": """name: Tagged flow inherited secrets\non: workflow_dispatch\njobs:\n  unlocked: {uses: ./.github/workflows/reusable.yml, secrets: !!str \"inherit\"}\n""",
+            "next-line-tagged-secret-inherit.yml": """name: Next-line tagged inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets:\n      !!str inherit\n""",
             "json-escaped-secret-inherit.yml": '{"jobs":{"unlocked":{"uses":"./.github/workflows/reusable.yml","secr\\u0065ts":"inh\\u0065rit"}}}',
         }
         for name, document in malicious_documents.items():

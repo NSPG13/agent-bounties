@@ -32,6 +32,10 @@ SECRET_INHERIT_TEXT = re.compile(
     r"(?:inherit|'inherit'|\"inherit\")(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
+YAML_INLINE_SECRET_VALUE = re.compile(
+    r"(?im)(?:^|[,{])[\t ]*(?:secrets|'secrets'|\"secrets\")[\t ]*:[\t ]*"
+    r"(?=[^\s#])"
+)
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
@@ -318,6 +322,7 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
     seen_jobs: set[str] = set()
     seen_job_concurrency: set[str] = set()
     seen_lock_fields: dict[str, set[str]] = {}
+    pending_secret_mapping_indent: int | None = None
 
     for line_number, raw in enumerate(workflow_text.splitlines(), 1):
         if raw[: len(raw) - len(raw.lstrip(" \t"))].find("\t") >= 0:
@@ -355,6 +360,19 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
         if not stripped or stripped.startswith("#"):
             continue
         effective = stripped.split(" #", 1)[0].rstrip()
+        if pending_secret_mapping_indent is not None:
+            if indent > pending_secret_mapping_indent:
+                pending_value = effective.casefold()
+                if (
+                    pending_value == "inherit"
+                    or pending_value in {"'inherit'", '"inherit"'}
+                    or pending_value.startswith(("!", "|", ">"))
+                ):
+                    raise GuardError(
+                        "reusable workflow secret inheritance is forbidden: "
+                        f"{workflow_name}:{line_number}"
+                    )
+            pending_secret_mapping_indent = None
         if re.match(r"^[?:](?:\s|$)", effective):
             raise GuardError(
                 f"explicit YAML mapping keys are forbidden: {workflow_name}:{line_number}"
@@ -363,6 +381,13 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
             raise GuardError(
                 f"reusable workflow secret inheritance is forbidden: {workflow_name}:{line_number}"
             )
+        if ":" in effective:
+            mapping_key, mapping_value = effective.split(":", 1)
+            if (
+                _yaml_scalar(mapping_key).casefold() == "secrets"
+                and not _yaml_scalar(mapping_value)
+            ):
+                pending_secret_mapping_indent = indent
 
         if indent == 0:
             job_concurrency = None
@@ -498,6 +523,11 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
                 workflow_text, object_pairs_hook=_json_object_without_duplicates
             )
         except ValueError:
+            if YAML_INLINE_SECRET_VALUE.search(workflow_text):
+                raise GuardError(
+                    "YAML reusable workflow secrets must use an explicit named mapping: "
+                    f"{workflow_path.name}"
+                )
             key_jobs = _validate_yaml_keeper_locks(workflow_text, workflow_path.name)
         else:
             if _contains_unsupported_secret_context(document):
