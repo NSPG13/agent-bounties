@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -45,6 +46,15 @@ RUNTIME_FILES = (
 
 class GuardError(RuntimeError):
     """Raised when a guarded source set cannot be trusted."""
+
+
+def _json_object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise GuardError(f"duplicate JSON workflow key is forbidden: {key}")
+        result[key] = value
+    return result
 
 
 def _contains_keeper_secret(value: object) -> bool:
@@ -304,6 +314,10 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
     locks: dict[str, dict[str, str]] = {}
     key_jobs: set[str] = set()
     secret_count = 0
+    jobs_mapping_seen = False
+    seen_jobs: set[str] = set()
+    seen_job_concurrency: set[str] = set()
+    seen_lock_fields: dict[str, set[str]] = {}
 
     for line_number, raw in enumerate(workflow_text.splitlines(), 1):
         if raw[: len(raw) - len(raw.lstrip(" \t"))].find("\t") >= 0:
@@ -341,6 +355,10 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
         if not stripped or stripped.startswith("#"):
             continue
         effective = stripped.split(" #", 1)[0].rstrip()
+        if re.match(r"^[?:](?:\s|$)", effective):
+            raise GuardError(
+                f"explicit YAML mapping keys are forbidden: {workflow_name}:{line_number}"
+            )
         if _yaml_is_secret_inheritance(effective):
             raise GuardError(
                 f"reusable workflow secret inheritance is forbidden: {workflow_name}:{line_number}"
@@ -350,6 +368,9 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
             job_concurrency = None
             current_job = None
             if effective == "jobs:":
+                if jobs_mapping_seen:
+                    raise GuardError(f"duplicate jobs mapping is forbidden: {workflow_name}")
+                jobs_mapping_seen = True
                 in_jobs = True
                 top_concurrency = False
                 continue
@@ -371,9 +392,17 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
                 )
             continue
 
+        if indent == 2:
+            current_job = None
+            job_concurrency = None
         job_match = re.fullmatch(r"([A-Za-z0-9_-]+):", effective) if indent == 2 else None
         if job_match:
             current_job = job_match.group(1)
+            if current_job in seen_jobs:
+                raise GuardError(
+                    f"duplicate keeper workflow job is forbidden: {workflow_name}:{current_job}"
+                )
+            seen_jobs.add(current_job)
             job_concurrency = None
             continue
         if current_job is None:
@@ -388,13 +417,32 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
             secret_count += 1
 
         if indent == 4:
-            job_concurrency = current_job if effective == "concurrency:" else None
+            if effective == "concurrency:":
+                if current_job in seen_job_concurrency:
+                    raise GuardError(
+                        f"duplicate job concurrency is forbidden: {workflow_name}:{current_job}"
+                    )
+                seen_job_concurrency.add(current_job)
+                job_concurrency = current_job
+            else:
+                job_concurrency = None
         elif job_concurrency and indent == 6:
             if effective.startswith("group:"):
+                if "group" in seen_lock_fields.setdefault(job_concurrency, set()):
+                    raise GuardError(
+                        f"duplicate job concurrency group is forbidden: {workflow_name}:{job_concurrency}"
+                    )
+                seen_lock_fields[job_concurrency].add("group")
                 locks.setdefault(job_concurrency, {})["group"] = _yaml_scalar(
                     effective.split(":", 1)[1]
                 )
             elif effective.startswith("cancel-in-progress:"):
+                if "cancel-in-progress" in seen_lock_fields.setdefault(job_concurrency, set()):
+                    raise GuardError(
+                        "duplicate job concurrency cancellation policy is forbidden: "
+                        f"{workflow_name}:{job_concurrency}"
+                    )
+                seen_lock_fields[job_concurrency].add("cancel-in-progress")
                 locks.setdefault(job_concurrency, {})["cancel-in-progress"] = _yaml_scalar(
                     effective.split(":", 1)[1]
                 ).lower()
@@ -446,7 +494,9 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
         if _has_unsupported_secret_context(workflow_text):
             raise GuardError(f"indirect secrets context access is forbidden: {workflow_path.name}")
         try:
-            document = __import__("json").loads(workflow_text)
+            document = json.loads(
+                workflow_text, object_pairs_hook=_json_object_without_duplicates
+            )
         except ValueError:
             key_jobs = _validate_yaml_keeper_locks(workflow_text, workflow_path.name)
         else:

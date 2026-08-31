@@ -295,7 +295,9 @@ wrapped access to the complete `secrets` context is also forbidden; only direct
 named access is allowed. JSON keeper references outside `jobs` fail closed so
 workflow-level inheritance cannot bypass job attribution. Actions context
 names are matched case-insensitively, and reusable-workflow `secrets: inherit`
-is forbidden because it forwards the complete caller secret set. The
+is forbidden because it forwards the complete caller secret set. Explicit YAML
+keys and duplicate JSON/YAML job or lock keys fail closed so parser overwrite
+semantics cannot pair a live key with a discarded lock. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.
