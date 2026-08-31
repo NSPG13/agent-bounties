@@ -26,6 +26,11 @@ LITERAL_SECRET_ACCESS = re.compile(
     r"\bsecrets\s*\[\s*(['\"])[A-Za-z_][A-Za-z0-9_]*\1\s*\]",
     re.IGNORECASE,
 )
+SECRET_INHERIT_TEXT = re.compile(
+    r"(?<![A-Za-z0-9_])(?:secrets|'secrets'|\"secrets\")\s*:\s*"
+    r"(?:inherit|'inherit'|\"inherit\")(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
@@ -434,6 +439,10 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
     validated: list[str] = []
     for workflow_path in paths:
         workflow_text = workflow_path.read_text(encoding="utf-8")
+        if SECRET_INHERIT_TEXT.search(workflow_text):
+            raise GuardError(
+                f"reusable workflow secret inheritance is forbidden: {workflow_path.name}"
+            )
         if _has_unsupported_secret_context(workflow_text):
             raise GuardError(f"indirect secrets context access is forbidden: {workflow_path.name}")
         try:

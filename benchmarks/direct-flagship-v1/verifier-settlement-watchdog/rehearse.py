@@ -933,7 +933,7 @@ RUNNER_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"},
         {"name": "Build isolated regression worker", "run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 b4ddbcb4b5b564d638335c4868ccf5dfd8ea7a8c2167f2876bbd4d28a76f352b"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 51b5c0bbfcd6eff172d0ac64ddf6374c57b595b4095c1492595f8e51509eed96"},
         {"name": "Run canonical jobs without signing secrets", "run": "python scripts/regression_verifier_pipeline.py run --api-base $API_BASE_URL --network base-mainnet --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --staging $RUNNER_TEMP/regression-staging --output target/regression-candidates --max-jobs 5"},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-candidates-${{ github.run_id }}", "path": "target/regression-candidates", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1055,7 +1055,7 @@ SIGNER_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"},
         {"run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 b4ddbcb4b5b564d638335c4868ccf5dfd8ea7a8c2167f2876bbd4d28a76f352b"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 51b5c0bbfcd6eff172d0ac64ddf6374c57b595b4095c1492595f8e51509eed96"},
         {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --expected-keeper $KEEPER_ADDRESS", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
       ]
     }
@@ -1098,7 +1098,7 @@ REUSABLE_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"},
         {"run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 b4ddbcb4b5b564d638335c4868ccf5dfd8ea7a8c2167f2876bbd4d28a76f352b"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 51b5c0bbfcd6eff172d0ac64ddf6374c57b595b4095c1492595f8e51509eed96"},
         {"name": "Re-fetch state and sign one exact candidate set", "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER", "env": {"REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"}},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-attestations-${{ inputs.signer_slot }}-${{ inputs.candidate_run_id }}", "path": "target/attestations-${{ inputs.signer_slot }}", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1458,6 +1458,7 @@ keeper_workflow_mutations = {
     "JSON workflow-level keeper env": '{"env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"jobs":{"locked":{"runs-on":"ubuntu-latest","concurrency":{"group":"agent-bounties-shared-base-keeper","cancel-in-progress":false},"env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"steps":[]},"unlocked":{"runs-on":"ubuntu-latest","steps":[]}}}',
     "case-insensitive complete secret context": """name: Mixed-case context\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      ALL_SECRETS: ${{ toJSON(SECRETS) }}\n    steps: []\n""",
     "reusable workflow secret inheritance": """name: Inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: inherit\n""",
+    "flow reusable workflow secret inheritance": """name: Flow inherited secrets\non: workflow_dispatch\njobs:\n  unlocked: {uses: ./.github/workflows/reusable.yml, secrets: inherit}\n""",
     "folded reusable workflow secret inheritance": """name: Folded inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: >-\n      inherit\n""",
     "JSON escaped reusable workflow secret inheritance": '{"jobs":{"unlocked":{"uses":"./.github/workflows/reusable.yml","secr\\u0065ts":"inh\\u0065rit"}}}',
 }

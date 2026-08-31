@@ -196,6 +196,7 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "case-insensitive-context.yml": """name: Mixed-case context\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      ALL_SECRETS: ${{ toJSON(SECRETS) }}\n    steps: []\n""",
             "case-insensitive-keeper.yml": """name: Mixed-case keeper\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ SeCrEtS.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
             "secret-inherit.yml": """name: Inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: inherit\n""",
+            "flow-secret-inherit.yml": """name: Flow inherited secrets\non: workflow_dispatch\njobs:\n  unlocked: {uses: ./.github/workflows/reusable.yml, secrets: inherit}\n""",
             "folded-secret-inherit.yml": """name: Folded inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: >-\n      inherit\n""",
             "tagged-secret-inherit.yml": """name: Tagged inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: !!str inherit\n""",
             "json-escaped-secret-inherit.yml": '{"jobs":{"unlocked":{"uses":"./.github/workflows/reusable.yml","secr\\u0065ts":"inh\\u0065rit"}}}',
