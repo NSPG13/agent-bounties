@@ -28,12 +28,28 @@ HASH = re.compile(r"^0x[0-9a-f]{64}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PINNED_IMAGE = re.compile(r"^[a-z0-9][a-z0-9._/:@-]{0,446}@sha256:[0-9a-f]{64}$")
+CANDIDATE_FILE = re.compile(r"^candidate-[0-9a-f]{64}\.json$")
+ATTESTATION_FILE = re.compile(r"^attestation-[0-9a-f]{64}\.json$")
 DEFAULT_API = "https://api.agentbounties.app"
 MAX_GITHUB_SOURCE_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_GITHUB_BENCHMARK_ARCHIVE_BYTES = 128 * 1024 * 1024
 MAX_GITHUB_SOURCE_ARCHIVE_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_GITHUB_BENCHMARK_ARCHIVE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_GITHUB_ARCHIVE_ENTRIES = 100_000
+BASE_MAINNET_CHAIN_ID = 8453
+RELAY_GAS_LIMIT = 500_000
+RELAY_MAX_FEE_PER_GAS = 500_000_000
+RELAY_PRIORITY_FEE_PER_GAS = 1_000_000
+KEEPER_NONCE_CONFIRMATION_RPCS = (
+    "https://mainnet.base.org",
+    "https://base-rpc.publicnode.com",
+)
+CANONICAL_BOUNTY_FACTORY = "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+CANONICAL_SETTLEMENT_TOKEN = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+CANONICAL_BOUNTY_RUNTIME = (
+    "0x363d3d373d3d3d363d732fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
+    "5af43d82803e903d91602b57fd5bf3"
+)
 
 
 class PipelineError(RuntimeError):
@@ -51,6 +67,17 @@ def write_json(path: Path, value: object) -> None:
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def manifest_file(root: Path, value: object, pattern: re.Pattern[str], field: str) -> Path:
+    name = str(value or "")
+    if not pattern.fullmatch(name):
+        raise PipelineError(f"{field} is not an exact content-addressed filename")
+    return root / name
+
+
+def content_addressed_name(prefix: str, job_id: str) -> str:
+    return f"{prefix}-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
 
 
 def normalize_address(value: object, field: str) -> str:
@@ -73,6 +100,13 @@ def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
         detail = (completed.stderr or completed.stdout).strip()[:800]
         raise PipelineError(f"command failed closed: {detail}")
     return completed.stdout.strip()
+
+
+def environment_without(*names: str) -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in names:
+        environment.pop(name, None)
+    return environment
 
 
 def fetch_json(url: str, timeout: float = 30) -> Any:
@@ -454,6 +488,8 @@ def validate_candidate(
     candidate: dict[str, Any],
     current: dict[str, Any],
     scratch: Path,
+    *,
+    secret_names: tuple[str, ...] = (),
 ) -> None:
     if candidate.get("schema") != CANDIDATE_SCHEMA:
         raise PipelineError("candidate schema is invalid")
@@ -462,34 +498,366 @@ def validate_candidate(
         request,
         {"job": candidate.get("job"), "current_job": current, "outcome": candidate.get("outcome")},
     )
-    if run([str(worker.resolve()), "--validate-regression-candidate", str(request)]) != "ok":
+    if run(
+        [str(worker.resolve()), "--validate-regression-candidate", str(request)],
+        env=environment_without(*secret_names),
+    ) != "ok":
         raise PipelineError("worker did not validate the regression candidate")
 
 
-def command_sign(args: argparse.Namespace) -> None:
-    key = os.environ.get(args.private_key_env, "").strip()
-    if not key:
-        raise PipelineError(f"{args.private_key_env} is required")
-    signer = normalize_address(
-        run([str(args.cast), "wallet", "address", "--private-key", key]), "signer"
+def checked_hash(value: object, field: str) -> str:
+    normalized = str(value or "").lower()
+    if not HASH.fullmatch(normalized):
+        raise PipelineError(f"{field} must be a bytes32 value")
+    return normalized
+
+
+def cast_keccak(cast: Path, value: str, environment: dict[str, str]) -> str:
+    digest = run([str(cast), "keccak", value], env=environment).lower()
+    if not HASH.fullmatch(digest):
+        raise PipelineError("local keccak command returned an invalid digest")
+    return digest
+
+
+def local_attestation_digest(
+    cast: Path,
+    current: dict[str, Any],
+    signer: str,
+    passed: bool,
+    response_hash: str,
+    deadline: int,
+    environment: dict[str, str],
+) -> str:
+    bounty = normalize_address(current.get("bounty_contract"), "bounty contract")
+    bounty_id = checked_hash(current.get("bounty_id"), "bounty id")
+    try:
+        round_number = int(current.get("round"))
+    except (TypeError, ValueError) as error:
+        raise PipelineError("round must be a positive integer") from error
+    if round_number <= 0 or deadline <= 0:
+        raise PipelineError("round and attestation deadline must be positive")
+    evidence = current.get("submission_evidence")
+    terms = current.get("terms")
+    if not isinstance(evidence, dict) or not isinstance(terms, dict):
+        raise PipelineError("current canonical attestation preimages are unavailable")
+    submission_hash = checked_hash(evidence.get("artifact_hash"), "submission hash")
+    evidence_hash = checked_hash(evidence.get("evidence_hash"), "evidence hash")
+    policy_hash = checked_hash(terms.get("policy_hash"), "policy hash")
+    response_hash = checked_hash(response_hash, "response hash")
+
+    domain_type_hash = cast_keccak(
+        cast,
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+        environment,
     )
+    name_hash = cast_keccak(cast, "Agent Bounties", environment)
+    version_hash = cast_keccak(cast, "1", environment)
+    domain_encoding = run(
+        [
+            str(cast),
+            "abi-encode",
+            "f(bytes32,bytes32,bytes32,uint256,address)",
+            domain_type_hash,
+            name_hash,
+            version_hash,
+            "8453",
+            bounty,
+        ],
+        env=environment,
+    ).lower()
+    domain_separator = cast_keccak(cast, domain_encoding, environment)
+
+    attestation_type_hash = cast_keccak(
+        cast,
+        "VerificationAttestation(address bounty,bytes32 bountyId,uint64 round,address verifier,bytes32 submissionHash,bytes32 evidenceHash,bytes32 policyHash,bool passed,bytes32 responseHash,uint256 deadline)",
+        environment,
+    )
+    struct_encoding = run(
+        [
+            str(cast),
+            "abi-encode",
+            "f(bytes32,address,bytes32,uint64,address,bytes32,bytes32,bytes32,bool,bytes32,uint256)",
+            attestation_type_hash,
+            bounty,
+            bounty_id,
+            str(round_number),
+            signer,
+            submission_hash,
+            evidence_hash,
+            policy_hash,
+            str(passed).lower(),
+            response_hash,
+            str(deadline),
+        ],
+        env=environment,
+    ).lower()
+    struct_hash = cast_keccak(cast, struct_encoding, environment)
+    return cast_keccak(
+        cast,
+        "0x1901" + domain_separator.removeprefix("0x") + struct_hash.removeprefix("0x"),
+        environment,
+    )
+
+
+def attestation_digest(
+    cast: Path,
+    rpc_url: str,
+    current: dict[str, Any],
+    signer: str,
+    passed: bool,
+    response_hash: str,
+    deadline: int,
+    environment: dict[str, str],
+) -> str:
+    bounty = normalize_address(current.get("bounty_contract"), "bounty contract")
+    chain_id_text = run(
+        [str(cast), "chain-id", "--rpc-url", rpc_url], env=environment
+    ).strip().lower()
+    try:
+        chain_id = int(chain_id_text, 0)
+    except ValueError as error:
+        raise PipelineError("RPC returned an invalid chain id") from error
+    if chain_id != 8453:
+        raise PipelineError("RPC is not Base mainnet")
+    canonical_bounty_rpc_preflight(cast, rpc_url, bounty, environment)
+    local_digest = local_attestation_digest(
+        cast,
+        current,
+        signer,
+        passed,
+        response_hash,
+        deadline,
+        environment,
+    )
+    remote_digest = run(
+        [
+            str(cast),
+            "call",
+            "--rpc-url",
+            rpc_url,
+            bounty,
+            "attestationDigest(address,bool,bytes32,uint256)(bytes32)",
+            signer,
+            str(passed).lower(),
+            response_hash,
+            str(deadline),
+        ],
+        env=environment,
+    ).lower()
+    if not HASH.fullmatch(remote_digest) or remote_digest != local_digest:
+        raise PipelineError("RPC attestation digest differs from the local EIP-712 digest")
+    return local_digest
+
+
+def canonical_bounty_rpc_preflight(
+    cast: Path,
+    rpc_url: str,
+    bounty: str,
+    environment: dict[str, str],
+) -> None:
+    code = run(
+        [str(cast), "code", "--rpc-url", rpc_url, "--block", "safe", bounty],
+        env=environment,
+    ).strip().lower()
+    if code != CANONICAL_BOUNTY_RUNTIME:
+        raise PipelineError("RPC bounty runtime is not the precommitted canonical clone")
+    factory = normalize_address(
+        run(
+            [
+                str(cast),
+                "call",
+                "--rpc-url",
+                rpc_url,
+                "--block",
+                "safe",
+                bounty,
+                "factory()(address)",
+            ],
+            env=environment,
+        ).strip(),
+        "RPC bounty factory",
+    )
+    if factory != CANONICAL_BOUNTY_FACTORY:
+        raise PipelineError("RPC bounty factory is not the canonical factory")
+    settlement_token = normalize_address(
+        run(
+            [
+                str(cast),
+                "call",
+                "--rpc-url",
+                rpc_url,
+                "--block",
+                "safe",
+                bounty,
+                "settlementToken()(address)",
+            ],
+            env=environment,
+        ).strip(),
+        "RPC settlement token",
+    )
+    if settlement_token != CANONICAL_SETTLEMENT_TOKEN:
+        raise PipelineError("RPC bounty settlement token is not canonical Base USDC")
+
+
+def relay_rpc_preflight(
+    cast: Path,
+    rpc_url: str,
+    bounty: str,
+    expected_keeper: str,
+    attestations: str,
+    environment: dict[str, str],
+) -> int:
+    chain_id_text = run(
+        [str(cast), "chain-id", "--rpc-url", rpc_url], env=environment
+    ).strip().lower()
+    try:
+        chain_id = int(chain_id_text, 0)
+    except ValueError as error:
+        raise PipelineError("relay RPC returned an invalid chain id") from error
+    if chain_id != BASE_MAINNET_CHAIN_ID:
+        raise PipelineError("relay RPC is not Base mainnet")
+    canonical_bounty_rpc_preflight(cast, rpc_url, bounty, environment)
+
+    call = [
+        str(cast),
+        "call",
+        "--rpc-url",
+        rpc_url,
+        "--from",
+        expected_keeper,
+        bounty,
+        "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
+        attestations,
+    ]
+    run(call, env=environment)
+    estimate_text = run(
+        [
+            str(cast),
+            "estimate",
+            "--rpc-url",
+            rpc_url,
+            "--from",
+            expected_keeper,
+            bounty,
+            "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
+            attestations,
+        ],
+        env=environment,
+    ).strip().lower()
+    try:
+        estimated_gas = int(estimate_text, 0)
+    except ValueError as error:
+        raise PipelineError("relay RPC returned an invalid gas estimate") from error
+    if estimated_gas <= 0 or estimated_gas > RELAY_GAS_LIMIT:
+        raise PipelineError("relay gas estimate exceeds the precommitted limit")
+
+    return keeper_nonce_preflight(cast, rpc_url, expected_keeper, environment)
+
+
+def keeper_nonce_preflight(
+    cast: Path,
+    rpc_url: str,
+    expected_keeper: str,
+    environment: dict[str, str],
+) -> int:
+    rpc_urls: list[str] = []
+    for candidate in (rpc_url, *KEEPER_NONCE_CONFIRMATION_RPCS):
+        normalized = candidate.rstrip("/").lower()
+        if normalized not in {value.rstrip("/").lower() for value in rpc_urls}:
+            rpc_urls.append(candidate)
+        if len(rpc_urls) == 2:
+            break
+
+    confirmed: dict[str, int] = {}
+    for nonce_rpc in rpc_urls:
+        try:
+            chain_id = int(
+                run(
+                    [str(cast), "chain-id", "--rpc-url", nonce_rpc],
+                    env=environment,
+                ),
+                0,
+            )
+        except ValueError as error:
+            raise PipelineError("nonce RPC returned an invalid chain id") from error
+        if chain_id != BASE_MAINNET_CHAIN_ID:
+            raise PipelineError("nonce RPC is not Base mainnet")
+        observed: dict[str, int] = {}
+        for block_tag in ("latest", "pending"):
+            nonce_text = run(
+                [
+                    str(cast),
+                    "nonce",
+                    "--rpc-url",
+                    nonce_rpc,
+                    "--block",
+                    block_tag,
+                    expected_keeper,
+                ],
+                env=environment,
+            ).strip().lower()
+            try:
+                nonce = int(nonce_text, 0)
+            except ValueError as error:
+                raise PipelineError("nonce RPC returned an invalid keeper nonce") from error
+            if nonce < 0:
+                raise PipelineError("nonce RPC returned a negative keeper nonce")
+            observed[block_tag] = nonce
+        if observed["pending"] != observed["latest"]:
+            raise PipelineError(
+                "keeper has another pending transaction; retry after it confirms or drops"
+            )
+        confirmed[nonce_rpc] = observed["latest"]
+    if len(set(confirmed.values())) != 1:
+        raise PipelineError("independent nonce RPCs disagree on the keeper nonce")
+    return next(iter(confirmed.values()))
+
+
+def command_sign(args: argparse.Namespace) -> None:
+    if not os.environ.get(args.private_key_env, "").strip():
+        raise PipelineError(f"{args.private_key_env} is required")
+    secret_free_environment = environment_without(args.private_key_env)
     expected = normalize_address(args.expected_signer, "expected signer")
-    if signer != expected:
-        raise PipelineError("signer private key does not match the expected public address")
     manifest = read_json(args.candidates / "manifest.json")
     if manifest.get("schema") != MANIFEST_SCHEMA:
         raise PipelineError("candidate manifest schema is invalid")
+    entries = manifest.get("candidates")
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise PipelineError("candidate manifest entries are invalid")
     args.output.mkdir(parents=True, exist_ok=True)
     signed = []
-    for entry in manifest.get("candidates", []):
-        candidate = read_json(args.candidates / entry["file"])
+    seen_jobs: set[str] = set()
+    seen_files: set[str] = set()
+    for entry in entries:
+        candidate_path = manifest_file(
+            args.candidates,
+            entry.get("file"),
+            CANDIDATE_FILE,
+            "candidate manifest file",
+        )
+        job_id = str(entry.get("job_id", ""))
+        filename = str(entry.get("file", ""))
+        if not job_id or job_id in seen_jobs or filename in seen_files:
+            raise PipelineError("candidate manifest contains duplicate or empty entries")
+        if filename != content_addressed_name("candidate", job_id):
+            raise PipelineError("candidate filename is not bound to its job")
+        seen_jobs.add(job_id)
+        seen_files.add(filename)
+        candidate = read_json(candidate_path)
         job = candidate.get("job", {})
-        job_id = str(job.get("job_id", ""))
-        if signer not in required_job_signers(job):
+        if str(job.get("job_id", "")) != job_id:
+            raise PipelineError("candidate manifest job does not match its file")
+        if expected not in required_job_signers(job):
             continue
-        current = current_job(args.api_base, args.network, signer, job_id)
+        current = current_job(args.api_base, args.network, expected, job_id)
         with tempfile.TemporaryDirectory(prefix="agent-bounties-sign-") as temporary:
-            validate_candidate(args.worker, candidate, current, Path(temporary))
+            validate_candidate(
+                args.worker,
+                candidate,
+                current,
+                Path(temporary),
+                secret_names=(args.private_key_env,),
+            )
         expiry = int(current["verification_expires_at"])
         now = int(time.time())
         deadline = min(now + 900, expiry)
@@ -501,22 +869,29 @@ def command_sign(args: argparse.Namespace) -> None:
             raise PipelineError("candidate response hash is invalid")
         passed = outcome.get("verdict") == "passed"
         bounty = normalize_address(current.get("bounty_contract"), "bounty contract")
-        digest = run(
-            [
-                str(args.cast),
-                "call",
-                "--rpc-url",
-                args.rpc_url,
-                bounty,
-                "attestationDigest(address,bool,bytes32,uint256)(bytes32)",
-                signer,
-                str(passed).lower(),
-                response_hash,
-                str(deadline),
-            ]
+        digest = attestation_digest(
+            args.cast,
+            args.rpc_url,
+            current,
+            expected,
+            passed,
+            response_hash,
+            deadline,
+            secret_free_environment,
         ).lower()
-        if not HASH.fullmatch(digest):
-            raise PipelineError("contract returned an invalid attestation digest")
+        # No child process receives the private key until the canonical job,
+        # candidate, Base chain, contract code, and independently computed
+        # EIP-712 digest have all passed validation.
+        key = os.environ.get(args.private_key_env, "").strip()
+        signer = normalize_address(
+            run(
+                [str(args.cast), "wallet", "address", "--private-key", key],
+                env=secret_free_environment,
+            ),
+            "signer",
+        )
+        if signer != expected:
+            raise PipelineError("signer private key does not match the expected public address")
         signature = run(
             [
                 str(args.cast),
@@ -526,7 +901,8 @@ def command_sign(args: argparse.Namespace) -> None:
                 "--private-key",
                 key,
                 digest,
-            ]
+            ],
+            env=secret_free_environment,
         ).lower()
         if not re.fullmatch(r"0x[0-9a-f]{130}", signature):
             raise PipelineError("signer returned an invalid signature")
@@ -548,14 +924,15 @@ def command_sign(args: argparse.Namespace) -> None:
         signed.append({"job_id": job_id, "file": name})
     write_json(
         args.output / "manifest.json",
-        {"schema": ATTESTATION_SCHEMA, "signer": signer, "attestations": signed},
+        {"schema": ATTESTATION_SCHEMA, "signer": expected, "attestations": signed},
     )
 
 
 def command_relay(args: argparse.Namespace) -> None:
-    keeper = os.environ.get(args.keeper_key_env, "").strip()
-    if not keeper:
+    if not os.environ.get(args.keeper_key_env, "").strip():
         raise PipelineError(f"{args.keeper_key_env} is required")
+    secret_free_environment = environment_without(args.keeper_key_env)
+    expected_keeper = normalize_address(args.expected_keeper, "expected keeper")
     configured = [normalize_address(value, "verifier") for value in args.verifier]
     if len(configured) not in {1, 2} or len(set(configured)) != len(configured):
         raise PipelineError("relay requires one or two distinct configured verifiers")
@@ -566,13 +943,53 @@ def command_relay(args: argparse.Namespace) -> None:
         signer = normalize_address(manifest.get("signer"), "attestation signer")
         if signer in by_signer:
             raise PipelineError("duplicate attestation signer")
-        by_signer[signer] = {entry["job_id"]: str(path / entry["file"]) for entry in manifest["attestations"]}
+        entries = manifest.get("attestations")
+        if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+            raise PipelineError("attestation manifest entries are invalid")
+        signer_entries: dict[str, str] = {}
+        for entry in entries:
+            job_id = str(entry.get("job_id", ""))
+            attestation_path = manifest_file(
+                path,
+                entry.get("file"),
+                ATTESTATION_FILE,
+                "attestation manifest file",
+            )
+            if not job_id or job_id in signer_entries:
+                raise PipelineError("attestation manifest contains duplicate or empty jobs")
+            if str(entry.get("file", "")) != content_addressed_name("attestation", job_id):
+                raise PipelineError("attestation filename is not bound to its job")
+            signer_entries[job_id] = str(attestation_path)
+        by_signer[signer] = signer_entries
     if set(by_signer) != set(configured):
         raise PipelineError("attestation artifacts do not contain every configured verifier")
 
-    for entry in candidate_manifest.get("candidates", []):
-        job_id = entry["job_id"]
-        candidate = read_json(args.candidates / entry["file"])
+    candidate_entries = candidate_manifest.get("candidates")
+    if not isinstance(candidate_entries, list) or not all(
+        isinstance(entry, dict) for entry in candidate_entries
+    ):
+        raise PipelineError("candidate manifest entries are invalid")
+    seen_candidate_jobs: set[str] = set()
+    seen_candidate_files: set[str] = set()
+    relay_plans: list[dict[str, str]] = []
+    for entry in candidate_entries:
+        job_id = str(entry.get("job_id", ""))
+        candidate_path = manifest_file(
+            args.candidates,
+            entry.get("file"),
+            CANDIDATE_FILE,
+            "candidate manifest file",
+        )
+        filename = str(entry.get("file", ""))
+        if not job_id or job_id in seen_candidate_jobs or filename in seen_candidate_files:
+            raise PipelineError("candidate manifest contains duplicate or empty entries")
+        if filename != content_addressed_name("candidate", job_id):
+            raise PipelineError("candidate filename is not bound to its job")
+        seen_candidate_jobs.add(job_id)
+        seen_candidate_files.add(filename)
+        candidate = read_json(candidate_path)
+        if str(candidate.get("job", {}).get("job_id", "")) != job_id:
+            raise PipelineError("candidate manifest job does not match its file")
         expected = required_job_signers(candidate.get("job", {}))
         if expected != configured[: len(expected)]:
             raise PipelineError("candidate verifier set is not supported by this relay")
@@ -580,7 +997,13 @@ def command_relay(args: argparse.Namespace) -> None:
         if required_job_signers(current) != expected:
             raise PipelineError("current canonical verifier set differs from the candidate")
         with tempfile.TemporaryDirectory(prefix="agent-bounties-relay-") as temporary:
-            validate_candidate(args.worker, candidate, current, Path(temporary))
+            validate_candidate(
+                args.worker,
+                candidate,
+                current,
+                Path(temporary),
+                secret_names=(args.keeper_key_env,),
+            )
         try:
             attestations = [
                 read_json(Path(by_signer[signer][job_id])) for signer in sorted(expected)
@@ -601,6 +1024,62 @@ def command_relay(args: argparse.Namespace) -> None:
             f"({item['verifier']},{str(item['passed']).lower()},{item['response_hash']},{item['deadline']},{item['signature']})"
             for item in attestations
         )
+        relay_plans.append(
+            {
+                "job_id": job_id,
+                "bounty": normalize_address(current.get("bounty_contract"), "bounty contract"),
+                "attestations": f"[{tuple_values}]",
+            }
+        )
+
+    if not relay_plans:
+        return
+
+    observed_nonce: int | None = None
+    for plan in relay_plans:
+        nonce = relay_rpc_preflight(
+            args.cast,
+            args.rpc_url,
+            plan["bounty"],
+            expected_keeper,
+            plan["attestations"],
+            secret_free_environment,
+        )
+        if observed_nonce is None:
+            observed_nonce = nonce
+        elif nonce != observed_nonce:
+            raise PipelineError("relay RPC keeper nonce changed during the pre-write preflight")
+
+    # No child process receives the keeper key until every candidate, current
+    # canonical job, exact call, chain, contract, gas bound, and starting nonce
+    # has passed validation.
+    keeper = os.environ.get(args.keeper_key_env, "").strip()
+    keeper_address = normalize_address(
+        run(
+            [
+                str(args.cast),
+                "wallet",
+                "address",
+                "--private-key",
+                keeper,
+            ],
+            env=secret_free_environment,
+        ),
+        "keeper",
+    )
+    if keeper_address != expected_keeper:
+        raise PipelineError("keeper private key does not match the expected public address")
+
+    for offset, plan in enumerate(relay_plans):
+        expected_nonce = (observed_nonce or 0) + offset
+        immediate_nonce = keeper_nonce_preflight(
+            args.cast,
+            args.rpc_url,
+            expected_keeper,
+            secret_free_environment,
+        )
+        if immediate_nonce != expected_nonce:
+            raise PipelineError("keeper nonce changed immediately before settlement send")
         transaction = run(
             [
                 str(args.cast),
@@ -608,18 +1087,29 @@ def command_relay(args: argparse.Namespace) -> None:
                 "--json",
                 "--rpc-url",
                 args.rpc_url,
+                "--chain",
+                str(BASE_MAINNET_CHAIN_ID),
+                "--nonce",
+                str(expected_nonce),
+                "--gas-limit",
+                str(RELAY_GAS_LIMIT),
+                "--gas-price",
+                str(RELAY_MAX_FEE_PER_GAS),
+                "--priority-gas-price",
+                str(RELAY_PRIORITY_FEE_PER_GAS),
                 "--private-key",
                 keeper,
-                current["bounty_contract"],
+                plan["bounty"],
                 "settleWithAttestations((address,bool,bytes32,uint256,bytes)[])",
-                f"[{tuple_values}]",
-            ]
+                plan["attestations"],
+            ],
+            env=secret_free_environment,
         )
         receipt = json.loads(transaction)
         transaction_hash = str(receipt.get("transactionHash", "")).lower()
         if not HASH.fullmatch(transaction_hash) or str(receipt.get("status", "")) not in {"0x1", "1"}:
             raise PipelineError("attestation relay did not return a successful receipt")
-        print(f"relayed {job_id}: {transaction_hash}")
+        print(f"relayed {plan['job_id']}: {transaction_hash}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -658,6 +1148,7 @@ def parser() -> argparse.ArgumentParser:
     relay_parser.add_argument("--worker", type=Path, required=True)
     relay_parser.add_argument("--cast", type=Path, default=Path("cast"))
     relay_parser.add_argument("--keeper-key-env", default="BASE_KEEPER_PRIVATE_KEY")
+    relay_parser.add_argument("--expected-keeper", required=True)
     relay_parser.set_defaults(handler=command_relay)
     return root
 

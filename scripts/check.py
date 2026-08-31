@@ -90,6 +90,11 @@ def compile_python(platform: str) -> None:
         "scripts/activate_direct_growth_v2.py",
         "scripts/test_activate_direct_growth_v2.py",
         "scripts/test_activate_direct_inventory_v1.py",
+        "scripts/test_direct_flagship_verifier_watchdog.py",
+        "scripts/regression_verifier_source_guard.py",
+        "scripts/test_regression_verifier_source_guard.py",
+        "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py",
+        "benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py",
         "scripts/direct_recovery_689.py", "scripts/test_direct_recovery_689.py",
         "scripts/test_profitable_inventory_contract.py",
         "scripts/standing_meta_v4_deploy.py", "scripts/test_standing_meta_v4_deploy.py",
@@ -142,6 +147,10 @@ scripts/activate_standing_meta_v3_replacements.py scripts/test_activate_standing
 scripts/activate_routed_v3_replacements.py scripts/test_activate_routed_v3_replacements.py
 scripts/activate_direct_growth_v2.py scripts/test_activate_direct_growth_v2.py
 scripts/test_activate_direct_inventory_v1.py
+scripts/test_direct_flagship_verifier_watchdog.py
+scripts/regression_verifier_source_guard.py scripts/test_regression_verifier_source_guard.py
+benchmarks/direct-flagship-v1/verifier-settlement-watchdog/check.py
+benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py
 scripts/direct_recovery_689.py scripts/test_direct_recovery_689.py
 scripts/test_profitable_inventory_contract.py
 scripts/standing_meta_v4_deploy.py scripts/test_standing_meta_v4_deploy.py
@@ -256,8 +265,11 @@ def main() -> int:
         "unittest",
         "scripts.test_activate_direct_growth_v2",
         "scripts.test_activate_direct_inventory_v1",
+        "scripts.test_direct_flagship_verifier_watchdog",
+        "scripts.test_regression_verifier_source_guard",
         "-v",
     )
+    py("benchmarks/direct-flagship-v1/verifier-settlement-watchdog/rehearse.py")
     py("-m", "pip", "install", "-r", "scripts/requirements-wallet.txt")
     for name in ("local_delegate_wallet", "self_heal", "leaderboard_reward_pipeline"):
         py(f"scripts/test_{name}.py", "-v")

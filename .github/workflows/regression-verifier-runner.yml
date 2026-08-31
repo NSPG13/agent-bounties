@@ -3,13 +3,24 @@ name: Regression Verifier Runner
 on:
   pull_request:
     paths:
+      - ".cargo/**"
       - ".github/workflows/regression-verifier-runner.yml"
       - ".github/workflows/regression-verifier-signer.yml"
-      - "crates/verifier-sdk/**"
-      - "crates/worker/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "bounties/**"
+      - "crates/**"
+      - "migrations/**"
+      - "ops/**"
+      - "programs/**"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - "schemas/**"
       - "scripts/regression_verifier_pipeline.py"
+      - "scripts/regression_verifier_source_guard.py"
       - "scripts/test_regression_verifier_pipeline.py"
-  workflow_dispatch:
+      - "scripts/test_regression_verifier_source_guard.py"
+      - "site/**"
   schedule:
     - cron: "7,22,37,52 * * * *"
 
@@ -33,11 +44,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           python scripts/test_regression_verifier_pipeline.py -v
+          python scripts/test_regression_verifier_source_guard.py -v
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 292a6a94be6f919122558f764505119dff90f61178f1799cc362981dcf34db12
           python -m py_compile scripts/regression_verifier_pipeline.py
           cargo test -p verifier-sdk -p worker
 
   run-no-secrets:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule'
     needs: contract
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -53,8 +67,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
 
+      - name: Verify reviewed worker build inputs
+        run: >-
+          python scripts/regression_verifier_source_guard.py
+          --scope worker-build
+          --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+
       - name: Build isolated regression worker
         run: cargo build --release -p worker
+
+      - name: Revalidate reviewed runtime after build
+        run: |
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 292a6a94be6f919122558f764505119dff90f61178f1799cc362981dcf34db12
 
       - name: Run canonical jobs without signing secrets
         run: >-

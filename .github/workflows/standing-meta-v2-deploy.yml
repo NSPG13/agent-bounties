@@ -25,10 +25,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: standing-meta-v2-deploy-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   deterministic-gates:
     runs-on: ubuntu-latest
@@ -50,6 +46,9 @@ jobs:
     needs: deterministic-gates
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       PARTICIPANT_ATTESTER_PRIVATE_KEY: ${{ secrets.PARTICIPANT_ATTESTER_PRIVATE_KEY }}
@@ -80,6 +79,9 @@ jobs:
     needs: base-sepolia-rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       PARTICIPANT_ATTESTER_ADDRESS: ${{ vars.PARTICIPANT_ATTESTER_ADDRESS }}

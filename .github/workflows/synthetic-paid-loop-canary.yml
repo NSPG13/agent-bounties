@@ -8,14 +8,13 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: synthetic-paid-loop-canary-mainnet
-  cancel-in-progress: false
-
 jobs:
   create-claim-submit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL }}
       KEEPER_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}

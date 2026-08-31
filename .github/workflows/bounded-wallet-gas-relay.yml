@@ -7,10 +7,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: autonomous-gas-relay-base-mainnet
-  cancel-in-progress: false
-
 jobs:
   relay-create:
     if: >-
@@ -24,6 +20,9 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 

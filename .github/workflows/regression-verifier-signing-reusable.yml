@@ -30,7 +30,6 @@ jobs:
     env:
       API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
       BASE_MAINNET_RPC_URL: ${{ vars.REGRESSION_VERIFIER_RPC_URL || 'https://mainnet.base.org' }}
-      REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
         with:
@@ -47,8 +46,19 @@ jobs:
           path: target/regression-candidates
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_run_id }}
+      - name: Verify reviewed worker build inputs
+        run: >-
+          python scripts/regression_verifier_source_guard.py
+          --scope worker-build
+          --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
       - run: cargo build --release -p worker
+      - name: Revalidate reviewed runtime after build
+        run: |
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 292a6a94be6f919122558f764505119dff90f61178f1799cc362981dcf34db12
       - name: Re-fetch state and sign one exact candidate set
+        env:
+          REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}
         run: >-
           python scripts/regression_verifier_pipeline.py sign
           --api-base "$API_BASE_URL"

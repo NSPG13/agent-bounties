@@ -9,10 +9,6 @@ permissions:
   contents: read
   issues: write
 
-concurrency:
-  group: standing-meta-v3-replacement-activation
-  cancel-in-progress: false
-
 jobs:
   activate:
     if: >-
@@ -25,6 +21,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     env:
       BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
       BASE_MAINNET_RPC_URL: ${{ vars.BASE_MAINNET_RPC_URL || 'https://mainnet.base.org' }}

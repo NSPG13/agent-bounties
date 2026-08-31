@@ -79,10 +79,6 @@ permissions:
   contents: read
   deployments: read
 
-concurrency:
-  group: standing-meta-v4-${{ github.event.inputs.network || github.ref }}
-  cancel-in-progress: false
-
 jobs:
   deterministic-review:
     runs-on: ubuntu-latest
@@ -137,12 +133,21 @@ jobs:
       - name: Read-only Base Sepolia release plan
         if: github.event_name == 'pull_request' || github.event.inputs.network == 'base-sepolia'
         env:
-          BASE_SEPOLIA_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
-        run: >-
-          python scripts/standing_meta_v4_deploy.py plan
-          --network base-sepolia
-          --rpc-url "$BASE_SEPOLIA_RPC_URL"
-          --output target/standing-meta-v4-base-sepolia-plan.json
+          BASE_SEPOLIA_PRIMARY_RPC_URL: ${{ vars.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' }}
+          BASE_SEPOLIA_FALLBACK_RPC_URL: https://sepolia.base.org
+        run: |
+          if python scripts/standing_meta_v4_deploy.py plan \
+            --network base-sepolia \
+            --rpc-url "$BASE_SEPOLIA_PRIMARY_RPC_URL" \
+            --output target/standing-meta-v4-base-sepolia-primary-plan.json; then
+            mv target/standing-meta-v4-base-sepolia-primary-plan.json \
+              target/standing-meta-v4-base-sepolia-plan.json
+          else
+            python scripts/standing_meta_v4_deploy.py plan \
+              --network base-sepolia \
+              --rpc-url "$BASE_SEPOLIA_FALLBACK_RPC_URL" \
+              --output target/standing-meta-v4-base-sepolia-plan.json
+          fi
 
       - name: Read-only Base mainnet release plan
         if: github.event_name == 'pull_request' || github.event.inputs.network == 'base-mainnet'
@@ -168,6 +173,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - name: Require default branch and explicit mainnet acknowledgement
         env:
@@ -243,6 +251,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: ${{ github.event.inputs.network == 'base-mainnet' && 'standing-meta-v4-mainnet' || 'standing-meta-v4-sepolia' }}
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 

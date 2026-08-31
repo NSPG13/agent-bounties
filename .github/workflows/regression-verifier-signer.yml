@@ -3,10 +3,25 @@ name: Regression Verifier Signer
 on:
   pull_request:
     paths:
+      - ".cargo/**"
       - ".github/workflows/regression-verifier-runner.yml"
       - ".github/workflows/regression-verifier-signer.yml"
+      - ".github/workflows/regression-verifier-signing-reusable.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "bounties/**"
+      - "crates/**"
+      - "migrations/**"
+      - "ops/**"
+      - "programs/**"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - "schemas/**"
       - "scripts/regression_verifier_pipeline.py"
+      - "scripts/regression_verifier_source_guard.py"
       - "scripts/test_regression_verifier_pipeline.py"
+      - "scripts/test_regression_verifier_source_guard.py"
+      - "site/**"
   workflow_run:
     workflows: ["Regression Verifier Runner"]
     types: [completed]
@@ -26,13 +41,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/test_regression_verifier_pipeline.py -v
+      - run: python scripts/test_regression_verifier_source_guard.py -v
+      - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 292a6a94be6f919122558f764505119dff90f61178f1799cc362981dcf34db12
 
   authorize-run:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
-      (github.event.workflow_run.event == 'schedule' ||
-       github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.event == 'schedule' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     needs: contract
@@ -98,12 +115,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: regression-verifier-relay-mainnet
+      group: agent-bounties-shared-base-keeper
       cancel-in-progress: false
     env:
       API_BASE_URL: ${{ vars.PRODUCTION_API_BASE_URL || 'https://api.agentbounties.app' }}
       BASE_MAINNET_RPC_URL: ${{ vars.REGRESSION_VERIFIER_RPC_URL || 'https://mainnet.base.org' }}
-      BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
+      KEEPER_ADDRESS: "0xc26a630e85134ed30968735c8e7de4576cfa5dbc"
       VERIFIER_ONE: ${{ vars.REGRESSION_VERIFIER_ONE_ADDRESS }}
       VERIFIER_TWO: ${{ vars.REGRESSION_VERIFIER_TWO_ADDRESS }}
     steps:
@@ -130,8 +147,19 @@ jobs:
         with:
           name: regression-attestations-two
           path: target/attestations-two
+      - name: Verify reviewed worker build inputs
+        run: >-
+          python scripts/regression_verifier_source_guard.py
+          --scope worker-build
+          --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
       - run: cargo build --release -p worker
+      - name: Revalidate reviewed runtime after build
+        run: |
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 292a6a94be6f919122558f764505119dff90f61178f1799cc362981dcf34db12
       - name: Revalidate and relay exact quorum
+        env:
+          BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}
         run: >-
           python scripts/regression_verifier_pipeline.py relay
           --api-base "$API_BASE_URL"
@@ -143,3 +171,4 @@ jobs:
           --verifier "$VERIFIER_ONE"
           --verifier "$VERIFIER_TWO"
           --worker target/release/worker
+          --expected-keeper "$KEEPER_ADDRESS"

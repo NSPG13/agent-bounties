@@ -122,13 +122,38 @@ a separate capability that verifies a fresh candidate against the current
 canonical job and requires exactly the verifier path or paths committed before
 funding.
 
-The signer and keeper workflows read their Base endpoint from the dedicated
-`REGRESSION_VERIFIER_RPC_URL` Actions variable and otherwise use
-`https://mainnet.base.org`. Keep this separate from the application's general
-`BASE_MAINNET_RPC_URL`: an unavailable shared provider must not disable the
-isolated verification path. Any configured endpoint remains subject to the
-same exact current-job revalidation and on-chain signature checks; an RPC
-response, signature, or broadcast is never settlement evidence.
+Each signer and keeper path has a precommitted primary Base endpoint and a
+different precommitted secondary endpoint. Attempt one uses the primary; the
+only bounded retry uses the secondary. Operators and bounty inputs cannot
+select an endpoint. The pipeline verifies chain ID 8453, nonempty code at the
+committed bounty contract, and equality between the contract's attestation
+digest and an independently computed local EIP-712 digest before exposing the
+signing key to a child process. Candidate revalidation runs with signing and
+keeper secrets removed from its environment.
+
+The production workflows also pin the complete Cargo workspace, lockfile,
+configuration, and local crate source set used to build the worker. They verify
+that digest before building and revalidate both the build inputs and the exact
+signing runtime afterward. Any new build script, dependency drift, or
+post-build mutation stops the workflow before a verifier or keeper key reaches
+a child process.
+
+The no-secrets candidate runner is schedule-only. The settlement watchdog may
+retry one exact failed GitHub job, but it cannot dispatch a workflow or rerun a
+whole workflow run. Its plan binds the workflow run, exact job, run attempt,
+current protected-main revision, every dependent job GitHub will also execute,
+and one idempotency key. A signer retry explicitly binds its dependent relay;
+an unmodeled dependency fails closed. If GitHub accepts a retry and the client
+loses the response, a higher run-wide attempt is not enough: all job attempts
+must show the exact target job at a higher attempt before the retry is recorded
+without replay.
+
+Before the keeper key reaches any child process, every relay call is validated
+against current canonical input, simulated from the exact keeper on Base chain
+8453, checked for deployed bounty code, and bounded to a 500,000 gas limit,
+0.5 gwei maximum fee, 0.001 gwei priority fee, and preflighted nonce. An RPC
+response, signature, workflow result, or broadcast is never settlement
+evidence.
 
 Only confirmed canonical `BountySettled` is payout evidence. A runner receipt,
 response hash, verifier signature, quorum plan, relay transaction hash, or

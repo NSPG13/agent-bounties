@@ -10,15 +10,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: autonomous-gas-relay-base-mainnet
-  cancel-in-progress: false
-
 jobs:
   keeper-health:
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 
@@ -50,6 +49,9 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: agent-bounties-shared-base-keeper
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
 
