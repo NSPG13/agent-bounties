@@ -17,6 +17,11 @@ KEEPER_SECRET = re.compile(
     r"\s*\[\s*['\"]BASE_KEEPER_PRIVATE_KEY['\"]\s*\])\s*\}\}"
 )
 SECRET_BRACKET_ACCESS = re.compile(r"\bsecrets\s*\[")
+SECRET_CONTEXT = re.compile(r"\bsecrets\b")
+DIRECT_SECRET_ACCESS = re.compile(r"\bsecrets\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\b")
+LITERAL_SECRET_ACCESS = re.compile(
+    r"\bsecrets\s*\[\s*(['\"])[A-Za-z_][A-Za-z0-9_]*\1\s*\]"
+)
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
@@ -50,6 +55,56 @@ def _contains_unsupported_secret_index(value: object) -> bool:
         return any(_contains_unsupported_secret_index(item) for item in value.values())
     if isinstance(value, list):
         return any(_contains_unsupported_secret_index(item) for item in value)
+    return False
+
+
+def _has_unsupported_secret_context(text: str) -> bool:
+    """Allow only direct named access to the GitHub secrets context."""
+
+    cursor = 0
+    while True:
+        start = text.find("${{", cursor)
+        if start < 0:
+            return False
+        index = start + 3
+        quote: str | None = None
+        while index < len(text):
+            character = text[index]
+            if quote:
+                if quote == '"' and character == "\\":
+                    index += 2
+                    continue
+                if character == quote:
+                    if quote == "'" and index + 1 < len(text) and text[index + 1] == "'":
+                        index += 2
+                        continue
+                    quote = None
+                index += 1
+                continue
+            if character in "'\"":
+                quote = character
+                index += 1
+                continue
+            if text.startswith("}}", index):
+                expression = text[start + 3 : index]
+                remainder = DIRECT_SECRET_ACCESS.sub("", expression)
+                remainder = LITERAL_SECRET_ACCESS.sub("", remainder)
+                if SECRET_CONTEXT.search(remainder):
+                    return True
+                cursor = index + 2
+                break
+            index += 1
+        else:
+            return bool(SECRET_CONTEXT.search(text[start + 3 :]))
+
+
+def _contains_unsupported_secret_context(value: object) -> bool:
+    if isinstance(value, str):
+        return _has_unsupported_secret_context(value)
+    if isinstance(value, dict):
+        return any(_contains_unsupported_secret_context(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_unsupported_secret_context(item) for item in value)
     return False
 
 
@@ -156,6 +211,9 @@ def _validate_json_keeper_locks(document: object, workflow_name: str) -> set[str
         raise GuardError(f"keeper workflow is not a mapping: {workflow_name}")
     if _contains_unsupported_secret_index(document):
         raise GuardError(f"dynamic secret indexing is forbidden: {workflow_name}")
+    outside_jobs = {key: value for key, value in document.items() if key != "jobs"}
+    if _contains_keeper_secret(outside_jobs):
+        raise GuardError(f"keeper secret is outside the jobs mapping: {workflow_name}")
     if _exact_shared_lock(document.get("concurrency")):
         raise GuardError(f"shared keeper lock must not be workflow-level: {workflow_name}")
     jobs = document.get("jobs")
@@ -331,11 +389,17 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
     validated: list[str] = []
     for workflow_path in paths:
         workflow_text = workflow_path.read_text(encoding="utf-8")
+        if _has_unsupported_secret_context(workflow_text):
+            raise GuardError(f"indirect secrets context access is forbidden: {workflow_path.name}")
         try:
             document = __import__("json").loads(workflow_text)
         except ValueError:
             key_jobs = _validate_yaml_keeper_locks(workflow_text, workflow_path.name)
         else:
+            if _contains_unsupported_secret_context(document):
+                raise GuardError(
+                    f"indirect secrets context access is forbidden: {workflow_path.name}"
+                )
             if _contains_unsupported_secret_index(document):
                 raise GuardError(f"dynamic secret indexing is forbidden: {workflow_path.name}")
             if not _contains_keeper_secret(document):

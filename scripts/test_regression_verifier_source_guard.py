@@ -189,6 +189,10 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "bracket-whitespace.yml": """name: Bracket whitespace\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets['BASE_KEEPER_PRIVATE_KEY' ] }}\n    steps: []\n""",
             "dynamic-secret-index.yml": """name: Dynamic index\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets[format('BASE_KEEPER_{0}', 'PRIVATE_KEY')] }}\n    steps: []\n""",
             "folded-dynamic-index.yml": """name: Folded dynamic index\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    steps:\n      - run: >-\n          echo \"${{ secrets\n          [format('BASE_KEEPER_{0}', 'PRIVATE_KEY')] }}\"\n""",
+            "indirect-secret-context.yml": """name: Indirect context\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ fromJSON(toJSON(secrets))[format('BASE_KEEPER_{0}', 'PRIVATE_KEY')] }}\n    steps: []\n""",
+            "forwarded-secret-context.yml": """name: Forwarded context\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      ALL_SECRETS: ${{ toJSON(secrets) }}\n    steps: []\n""",
+            "json-escaped-context.yml": '{"jobs":{"unlocked":{"runs-on":"ubuntu-latest","env":{"ALL_SECRETS":"${{ toJSON(secr\\u0065ts) }}"},"steps":[]}}}',
+            "json-workflow-env.yml": '{"env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"jobs":{"locked":{"runs-on":"ubuntu-latest","concurrency":{"group":"agent-bounties-shared-base-keeper","cancel-in-progress":false},"env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"steps":[]},"unlocked":{"runs-on":"ubuntu-latest","steps":[]}}}',
         }
         for name, document in malicious_documents.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
