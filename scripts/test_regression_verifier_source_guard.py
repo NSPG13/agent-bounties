@@ -183,6 +183,9 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "workflow-level.yml": """name: Starvation\non: issue_comment\nconcurrency:\n  group: agent-bounties-shared-base-keeper\n  cancel-in-progress: false\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps: []\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
             "alias.yml": """name: Alias\non: workflow_dispatch\njobs:\n  locked:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: agent-bounties-shared-base-keeper\n      cancel-in-progress: false\n    env:\n      KEY: &keeper ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: *keeper\n    steps: []\n""",
             "unicode-alias.yml": """name: Alias\non: workflow_dispatch\njobs:\n  locked:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: agent-bounties-shared-base-keeper\n      cancel-in-progress: false\n    env:\n      KEY: &κλειδί ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: *κλειδί\n    steps: []\n""",
+            "multiline-quoted.yml": "name: Folded secret\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: \"${{ secrets.BASE_KEEPER_\\\nPRIVATE_KEY }}\"\n    steps: []\n",
+            "yaml-escaped-secret.yml": "name: Escaped secret\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: \"${{ secrets.BASE_KEEPER_\\x50RIVATE_KEY }}\"\n    steps: []\n",
+            "json-escaped-secret.yml": '{"jobs":{"unlocked":{"runs-on":"ubuntu-latest","env":{"KEY":"${{ secrets.BASE_KEEPER_\\u0050RIVATE_KEY }}"},"steps":[]}}}',
         }
         for name, document in malicious_documents.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:

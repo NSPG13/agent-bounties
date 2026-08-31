@@ -32,16 +32,16 @@ ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
 PIPELINE_SHA256 = "c58602e3929f0a9b8d1cc437b58086cd6c5ac2d1194c4e89aeea97184609e140"
 PIPELINE_TEST_SHA256 = "1665f99a25f3ffdd1be1fb167e4ba9a09c729966c46ec41990629d5dd6f271e5"
-SOURCE_GUARD_SHA256 = "19a717f7716660fc48c347f4d19734560347ffd966bd23658c9882aa28edca31"
-SOURCE_GUARD_TEST_SHA256 = "c24bcc9a828b28815565451137e1335b95611108c4108eb8cedc6b6d461ba2dd"
+SOURCE_GUARD_SHA256 = "1f17c6bbecdc75ea50a01eb20906822fdb0a82e67ef5da476b34f4f87e16c492"
+SOURCE_GUARD_TEST_SHA256 = "26eac9b6c826cf4bb52b537ab091f986ff6a293db38d6c390369bba7108f5b9b"
 WORKER_BUILD_SHA256 = "f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f"
-SIGNING_RUNTIME_SHA256 = "1c0e66276450f0ebb55272b58fae23c6d78df1d74efc96ee4de6f5537eb9bdef"
+SIGNING_RUNTIME_SHA256 = "2c382ad0d469d9c2ad74819968cacbe4bd30fe430585a39bab6dfc02a0b90e63"
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "04f03c43c9ac744824afab3b34cc548851f5f1c58c339d38182f7e146a06ba38",
+    ".github/workflows/regression-verifier-runner.yml": "d9181cc986c8d1353d8ad86f4fccfd90c88d5ed40897e535b01b50909dd2d342",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "8e72f4a760f26e0451a48cdd50528487796765ed418c5a59ffc4a4354210ad7a",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "5ad0cff8d888eba3f4d8e1c814fc80489cc8756ea61d618ffc30fb317ffcefbb",
+    ".github/workflows/regression-verifier-signer.yml": "ee5f6952d15d199dd1b14551cd5c258242b4281e7b88cde323639bb0a795835c",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "9f021356ce59e70233ecb7d0435fa8f4c7ab0493f1d61d0a1fd7b43306754a71",
 }
 
 

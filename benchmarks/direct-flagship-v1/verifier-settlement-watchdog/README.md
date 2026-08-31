@@ -286,7 +286,9 @@ churn cannot occupy or replace a pending key-bearing transaction job. Both
 `.yml` and `.yaml` files are parsed structurally, and block-scalar text cannot
 impersonate concurrency keys. YAML anchors and aliases are forbidden because
 they can move a secret into a different effective job without a visible scalar
-there. The
+there. Every workflow is inspected before deciding whether it carries the key;
+escaped or multiline quoted YAML scalars are rejected, and JSON escapes are
+resolved before secret detection. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.

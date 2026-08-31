@@ -105,6 +105,39 @@ def _yaml_has_anchor_or_alias(line: str) -> bool:
     return False
 
 
+def _yaml_has_unsupported_quoted_scalar(line: str) -> bool:
+    """Reject YAML quoted scalars whose effective value needs escape/folding."""
+
+    index = 0
+    quote: str | None = None
+    while index < len(line):
+        character = line[index]
+        if quote == "'":
+            if character == "'":
+                if index + 1 < len(line) and line[index + 1] == "'":
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if character == "\\":
+                return True
+            if character == '"':
+                quote = None
+            index += 1
+            continue
+        if character == "#" and (index == 0 or line[index - 1].isspace()):
+            break
+        quote_boundary = (
+            index == 0 or line[index - 1].isspace() or line[index - 1] in ":[,{"
+        )
+        if quote_boundary and character in "'\"":
+            quote = character
+        index += 1
+    return quote is not None
+
+
 def _validate_json_keeper_locks(document: object, workflow_name: str) -> set[str]:
     if not isinstance(document, dict):
         raise GuardError(f"keeper workflow is not a mapping: {workflow_name}")
@@ -172,6 +205,11 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
         block_parent_indent = None
         block_job = None
 
+        if _yaml_has_unsupported_quoted_scalar(raw):
+            raise GuardError(
+                "escaped or multiline quoted YAML scalars are forbidden: "
+                f"{workflow_name}:{line_number}"
+            )
         if _yaml_has_anchor_or_alias(raw):
             raise GuardError(
                 f"YAML anchors and aliases are forbidden: {workflow_name}:{line_number}"
@@ -272,16 +310,16 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
     validated: list[str] = []
     for workflow_path in paths:
         workflow_text = workflow_path.read_text(encoding="utf-8")
-        if not KEEPER_SECRET.search(workflow_text):
-            continue
         try:
             document = __import__("json").loads(workflow_text)
         except ValueError:
             key_jobs = _validate_yaml_keeper_locks(workflow_text, workflow_path.name)
         else:
+            if not _contains_keeper_secret(document):
+                continue
             key_jobs = _validate_json_keeper_locks(document, workflow_path.name)
         if not key_jobs:
-            raise GuardError(f"keeper workflow has no key-bearing job: {workflow_path.name}")
+            continue
         validated.append(workflow_path.name)
     if not validated:
         raise GuardError("no keeper workflow was available for shared-lock validation")
