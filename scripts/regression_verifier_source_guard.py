@@ -11,16 +11,20 @@ from pathlib import Path
 
 
 HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
-KEEPER_KEY_NAME = re.compile(r"\bBASE_KEEPER_PRIVATE_KEY\b")
+KEEPER_KEY_NAME = re.compile(r"\bBASE_KEEPER_PRIVATE_KEY\b", re.IGNORECASE)
 KEEPER_SECRET = re.compile(
     r"\$\{\{\s*secrets(?:\s*\.\s*BASE_KEEPER_PRIVATE_KEY|"
-    r"\s*\[\s*['\"]BASE_KEEPER_PRIVATE_KEY['\"]\s*\])\s*\}\}"
+    r"\s*\[\s*['\"]BASE_KEEPER_PRIVATE_KEY['\"]\s*\])\s*\}\}",
+    re.IGNORECASE,
 )
-SECRET_BRACKET_ACCESS = re.compile(r"\bsecrets\s*\[")
-SECRET_CONTEXT = re.compile(r"\bsecrets\b")
-DIRECT_SECRET_ACCESS = re.compile(r"\bsecrets\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\b")
+SECRET_BRACKET_ACCESS = re.compile(r"\bsecrets\s*\[", re.IGNORECASE)
+SECRET_CONTEXT = re.compile(r"\bsecrets\b", re.IGNORECASE)
+DIRECT_SECRET_ACCESS = re.compile(
+    r"\bsecrets\s*\.\s*[A-Za-z_][A-Za-z0-9_]*\b", re.IGNORECASE
+)
 LITERAL_SECRET_ACCESS = re.compile(
-    r"\bsecrets\s*\[\s*(['\"])[A-Za-z_][A-Za-z0-9_]*\1\s*\]"
+    r"\bsecrets\s*\[\s*(['\"])[A-Za-z_][A-Za-z0-9_]*\1\s*\]",
+    re.IGNORECASE,
 )
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
@@ -105,6 +109,25 @@ def _contains_unsupported_secret_context(value: object) -> bool:
         return any(_contains_unsupported_secret_context(item) for item in value.values())
     if isinstance(value, list):
         return any(_contains_unsupported_secret_context(item) for item in value)
+    return False
+
+
+def _contains_secret_inheritance(value: object) -> bool:
+    """Reject forwarding the complete caller secret set to another workflow."""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if (
+                isinstance(key, str)
+                and key.casefold() == "secrets"
+                and isinstance(item, str)
+                and item.strip().casefold() == "inherit"
+            ):
+                return True
+            if _contains_secret_inheritance(item):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_secret_inheritance(item) for item in value)
     return False
 
 
@@ -206,11 +229,29 @@ def _yaml_has_unsupported_quoted_scalar(line: str) -> bool:
     return quote is not None
 
 
+def _yaml_is_secret_inheritance(effective: str) -> bool:
+    """Recognize direct or folded YAML forms that can mean `secrets: inherit`."""
+
+    if ":" not in effective:
+        return False
+    key, value = effective.split(":", 1)
+    if _yaml_scalar(key).casefold() != "secrets":
+        return False
+    scalar = _yaml_scalar(value).casefold()
+    return (
+        scalar == "inherit"
+        or scalar.startswith("!")
+        or bool(re.fullmatch(r"[|>][+\-]?\d?", scalar))
+    )
+
+
 def _validate_json_keeper_locks(document: object, workflow_name: str) -> set[str]:
     if not isinstance(document, dict):
         raise GuardError(f"keeper workflow is not a mapping: {workflow_name}")
     if _contains_unsupported_secret_index(document):
         raise GuardError(f"dynamic secret indexing is forbidden: {workflow_name}")
+    if _contains_secret_inheritance(document):
+        raise GuardError(f"reusable workflow secret inheritance is forbidden: {workflow_name}")
     outside_jobs = {key: value for key, value in document.items() if key != "jobs"}
     if _contains_keeper_secret(outside_jobs):
         raise GuardError(f"keeper secret is outside the jobs mapping: {workflow_name}")
@@ -295,6 +336,10 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
         if not stripped or stripped.startswith("#"):
             continue
         effective = stripped.split(" #", 1)[0].rstrip()
+        if _yaml_is_secret_inheritance(effective):
+            raise GuardError(
+                f"reusable workflow secret inheritance is forbidden: {workflow_name}:{line_number}"
+            )
 
         if indent == 0:
             job_concurrency = None
@@ -402,6 +447,10 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
                 )
             if _contains_unsupported_secret_index(document):
                 raise GuardError(f"dynamic secret indexing is forbidden: {workflow_path.name}")
+            if _contains_secret_inheritance(document):
+                raise GuardError(
+                    f"reusable workflow secret inheritance is forbidden: {workflow_path.name}"
+                )
             if not _contains_keeper_secret(document):
                 continue
             key_jobs = _validate_json_keeper_locks(document, workflow_path.name)

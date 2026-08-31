@@ -293,7 +293,9 @@ normal expression whitespace; any keeper-key name marks its job as
 key-bearing, and dynamic secret indexing is forbidden. Bare, serialized, or
 wrapped access to the complete `secrets` context is also forbidden; only direct
 named access is allowed. JSON keeper references outside `jobs` fail closed so
-workflow-level inheritance cannot bypass job attribution. The
+workflow-level inheritance cannot bypass job attribution. Actions context
+names are matched case-insensitively, and reusable-workflow `secrets: inherit`
+is forbidden because it forwards the complete caller secret set. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.

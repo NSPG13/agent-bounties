@@ -193,6 +193,12 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "forwarded-secret-context.yml": """name: Forwarded context\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      ALL_SECRETS: ${{ toJSON(secrets) }}\n    steps: []\n""",
             "json-escaped-context.yml": '{"jobs":{"unlocked":{"runs-on":"ubuntu-latest","env":{"ALL_SECRETS":"${{ toJSON(secr\\u0065ts) }}"},"steps":[]}}}',
             "json-workflow-env.yml": '{"env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"jobs":{"locked":{"runs-on":"ubuntu-latest","concurrency":{"group":"agent-bounties-shared-base-keeper","cancel-in-progress":false},"env":{"KEY":"${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"},"steps":[]},"unlocked":{"runs-on":"ubuntu-latest","steps":[]}}}',
+            "case-insensitive-context.yml": """name: Mixed-case context\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      ALL_SECRETS: ${{ toJSON(SECRETS) }}\n    steps: []\n""",
+            "case-insensitive-keeper.yml": """name: Mixed-case keeper\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ SeCrEtS.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+            "secret-inherit.yml": """name: Inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: inherit\n""",
+            "folded-secret-inherit.yml": """name: Folded inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: >-\n      inherit\n""",
+            "tagged-secret-inherit.yml": """name: Tagged inherited secrets\non: workflow_dispatch\njobs:\n  unlocked:\n    uses: ./.github/workflows/reusable.yml\n    secrets: !!str inherit\n""",
+            "json-escaped-secret-inherit.yml": '{"jobs":{"unlocked":{"uses":"./.github/workflows/reusable.yml","secr\\u0065ts":"inh\\u0065rit"}}}',
         }
         for name, document in malicious_documents.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
