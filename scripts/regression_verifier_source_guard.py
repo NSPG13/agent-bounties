@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+KEEPER_KEY_NAME = re.compile(r"\bBASE_KEEPER_PRIVATE_KEY\b")
 KEEPER_SECRET = re.compile(
     r"\$\{\{\s*secrets(?:\s*\.\s*BASE_KEEPER_PRIVATE_KEY|"
     r"\s*\[\s*['\"]BASE_KEEPER_PRIVATE_KEY['\"]\s*\])\s*\}\}"
@@ -34,7 +35,7 @@ class GuardError(RuntimeError):
 
 def _contains_keeper_secret(value: object) -> bool:
     if isinstance(value, str):
-        return bool(KEEPER_SECRET.search(value))
+        return bool(KEEPER_KEY_NAME.search(value))
     if isinstance(value, dict):
         return any(_contains_keeper_secret(item) for item in value.values())
     if isinstance(value, list):
@@ -205,7 +206,7 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
             raise GuardError(f"tabs are unsupported in keeper YAML: {workflow_name}:{line_number}")
         stripped = raw.strip()
         indent = len(raw) - len(raw.lstrip(" "))
-        secret_here = bool(KEEPER_SECRET.search(raw))
+        secret_here = bool(KEEPER_KEY_NAME.search(raw))
         if SECRET_BRACKET_ACCESS.search(KEEPER_SECRET.sub("", raw)):
             raise GuardError(
                 f"dynamic secret indexing is forbidden: {workflow_name}:{line_number}"
@@ -317,7 +318,9 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
             raise GuardError(
                 f"key-bearing job lacks the exact shared keeper lock: {workflow_name}:{job_name}"
             )
-    if KEEPER_SECRET.search(workflow_text) and secret_count == 0:
+    if SECRET_BRACKET_ACCESS.search(KEEPER_SECRET.sub("", workflow_text)):
+        raise GuardError(f"dynamic secret indexing is forbidden: {workflow_name}")
+    if KEEPER_KEY_NAME.search(workflow_text) and secret_count == 0:
         raise GuardError(f"keeper secret was not parsed effectively: {workflow_name}")
     return key_jobs
 
