@@ -288,7 +288,8 @@ impersonate concurrency keys. YAML anchors and aliases are forbidden because
 they can move a secret into a different effective job without a visible scalar
 there. Every workflow is inspected before deciding whether it carries the key;
 escaped or multiline quoted YAML scalars are rejected, and JSON escapes are
-resolved before secret detection. The
+resolved before secret detection. Dot and literal-bracket keeper access allow
+normal expression whitespace; dynamic secret indexing is forbidden. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.

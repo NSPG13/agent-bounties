@@ -186,6 +186,8 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "multiline-quoted.yml": "name: Folded secret\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: \"${{ secrets.BASE_KEEPER_\\\nPRIVATE_KEY }}\"\n    steps: []\n",
             "yaml-escaped-secret.yml": "name: Escaped secret\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: \"${{ secrets.BASE_KEEPER_\\x50RIVATE_KEY }}\"\n    steps: []\n",
             "json-escaped-secret.yml": '{"jobs":{"unlocked":{"runs-on":"ubuntu-latest","env":{"KEY":"${{ secrets.BASE_KEEPER_\\u0050RIVATE_KEY }}"},"steps":[]}}}',
+            "bracket-whitespace.yml": """name: Bracket whitespace\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets['BASE_KEEPER_PRIVATE_KEY' ] }}\n    steps: []\n""",
+            "dynamic-secret-index.yml": """name: Dynamic index\non: workflow_dispatch\njobs:\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets[format('BASE_KEEPER_{0}', 'PRIVATE_KEY')] }}\n    steps: []\n""",
         }
         for name, document in malicious_documents.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:

@@ -12,8 +12,10 @@ from pathlib import Path
 
 HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 KEEPER_SECRET = re.compile(
-    r"\$\{\{\s*secrets(?:\.BASE_KEEPER_PRIVATE_KEY|\[['\"]BASE_KEEPER_PRIVATE_KEY['\"]\])\s*\}\}"
+    r"\$\{\{\s*secrets(?:\s*\.\s*BASE_KEEPER_PRIVATE_KEY|"
+    r"\s*\[\s*['\"]BASE_KEEPER_PRIVATE_KEY['\"]\s*\])\s*\}\}"
 )
+SECRET_BRACKET_ACCESS = re.compile(r"\bsecrets\s*\[")
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
@@ -37,6 +39,16 @@ def _contains_keeper_secret(value: object) -> bool:
         return any(_contains_keeper_secret(item) for item in value.values())
     if isinstance(value, list):
         return any(_contains_keeper_secret(item) for item in value)
+    return False
+
+
+def _contains_unsupported_secret_index(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(SECRET_BRACKET_ACCESS.search(KEEPER_SECRET.sub("", value)))
+    if isinstance(value, dict):
+        return any(_contains_unsupported_secret_index(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_unsupported_secret_index(item) for item in value)
     return False
 
 
@@ -141,6 +153,8 @@ def _yaml_has_unsupported_quoted_scalar(line: str) -> bool:
 def _validate_json_keeper_locks(document: object, workflow_name: str) -> set[str]:
     if not isinstance(document, dict):
         raise GuardError(f"keeper workflow is not a mapping: {workflow_name}")
+    if _contains_unsupported_secret_index(document):
+        raise GuardError(f"dynamic secret indexing is forbidden: {workflow_name}")
     if _exact_shared_lock(document.get("concurrency")):
         raise GuardError(f"shared keeper lock must not be workflow-level: {workflow_name}")
     jobs = document.get("jobs")
@@ -192,6 +206,10 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
         stripped = raw.strip()
         indent = len(raw) - len(raw.lstrip(" "))
         secret_here = bool(KEEPER_SECRET.search(raw))
+        if SECRET_BRACKET_ACCESS.search(KEEPER_SECRET.sub("", raw)):
+            raise GuardError(
+                f"dynamic secret indexing is forbidden: {workflow_name}:{line_number}"
+            )
 
         if block_parent_indent is not None and (not stripped or indent > block_parent_indent):
             if secret_here:
@@ -315,6 +333,8 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
         except ValueError:
             key_jobs = _validate_yaml_keeper_locks(workflow_text, workflow_path.name)
         else:
+            if _contains_unsupported_secret_index(document):
+                raise GuardError(f"dynamic secret indexing is forbidden: {workflow_path.name}")
             if not _contains_keeper_secret(document):
                 continue
             key_jobs = _validate_json_keeper_locks(document, workflow_path.name)
