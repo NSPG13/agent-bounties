@@ -45,8 +45,8 @@ jobs:
       - run: |
           python scripts/test_regression_verifier_pipeline.py -v
           python scripts/test_regression_verifier_source_guard.py -v
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 4cf120e5a097e6bef29ed8004c256c4445b01e2d1e881f0df7a9bcd393740d3c
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 1c0e66276450f0ebb55272b58fae23c6d78df1d74efc96ee4de6f5537eb9bdef
           python -m py_compile scripts/regression_verifier_pipeline.py
           cargo test -p verifier-sdk -p worker
 
@@ -71,15 +71,15 @@ jobs:
         run: >-
           python scripts/regression_verifier_source_guard.py
           --scope worker-build
-          --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d
+          --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
 
       - name: Build isolated regression worker
         run: cargo build --release -p worker
 
       - name: Revalidate reviewed runtime after build
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 3151df6f40916ebf5b9ddcf0efa9f60840274a21d9ea9624d3008a7b74f8848d
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 4cf120e5a097e6bef29ed8004c256c4445b01e2d1e881f0df7a9bcd393740d3c
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 f16cfc1b4fbe7ea4edf49d721280ee270a24ba26186f3c0c7c9d4d2ed0ef9d0f
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 1c0e66276450f0ebb55272b58fae23c6d78df1d74efc96ee4de6f5537eb9bdef
 
       - name: Run canonical jobs without signing secrets
         run: >-

@@ -76,12 +76,33 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
                 (root / relative).write_text("changed\n", encoding="utf-8")
                 self.assertNotEqual(before, GUARD.source_digest(root, "worker-build"))
 
+    def test_line_endings_are_exact_build_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            before = GUARD.source_digest(root, "worker-build")
+            migration = root / "migrations" / "0001_core.sql"
+            migration.write_bytes(migration.read_bytes().replace(b"\n", b"\r\n"))
+            self.assertNotEqual(before, GUARD.source_digest(root, "worker-build"))
+
     def test_non_literal_compile_time_input_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.fixture(root)
             (root / "crates" / "worker" / "src" / "main.rs").write_text(
                 'const DATA: &[u8] = include_bytes!(env!("UNBOUND_FILE"));\nfn main() {}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(GUARD.GuardError, "non-literal"):
+                GUARD.source_digest(root, "worker-build")
+
+    def test_commented_macro_tokens_cannot_hide_dynamic_include(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            (root / "crates" / "worker" / "src" / "main.rs").write_text(
+                'const DATA: &[u8] = include_bytes /* nested /* legal */ comment */ '
+                '!(env!("UNBOUND_FILE"));\nfn main() {}\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(GUARD.GuardError, "non-literal"):
@@ -160,6 +181,8 @@ class RegressionVerifierSourceGuardTests(unittest.TestCase):
             "unlocked.yaml": """name: Evil\non: workflow_dispatch\njobs:\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
             "decoy.yml": """name: Decoy\non: workflow_dispatch\njobs:\n  send:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          group: agent-bounties-shared-base-keeper\n          cancel-in-progress: false\n          echo '${{ secrets.BASE_KEEPER_PRIVATE_KEY }}'\n""",
             "workflow-level.yml": """name: Starvation\non: issue_comment\nconcurrency:\n  group: agent-bounties-shared-base-keeper\n  cancel-in-progress: false\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps: []\n  send:\n    runs-on: ubuntu-latest\n    env:\n      KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n""",
+            "alias.yml": """name: Alias\non: workflow_dispatch\njobs:\n  locked:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: agent-bounties-shared-base-keeper\n      cancel-in-progress: false\n    env:\n      KEY: &keeper ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: *keeper\n    steps: []\n""",
+            "unicode-alias.yml": """name: Alias\non: workflow_dispatch\njobs:\n  locked:\n    runs-on: ubuntu-latest\n    concurrency:\n      group: agent-bounties-shared-base-keeper\n      cancel-in-progress: false\n    env:\n      KEY: &κλειδί ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}\n    steps: []\n  unlocked:\n    runs-on: ubuntu-latest\n    env:\n      KEY: *κλειδί\n    steps: []\n""",
         }
         for name, document in malicious_documents.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:

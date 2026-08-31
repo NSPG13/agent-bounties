@@ -15,11 +15,7 @@ KEEPER_SECRET = re.compile(
     r"\$\{\{\s*secrets(?:\.BASE_KEEPER_PRIVATE_KEY|\[['\"]BASE_KEEPER_PRIVATE_KEY['\"]\])\s*\}\}"
 )
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
-INCLUDE_CALL = re.compile(r"include_(?:str|bytes)!\s*\(")
-LITERAL_INCLUDE = re.compile(
-    r'include_(?:str|bytes)!\s*\(\s*"([^"\\]*)"\s*,?\s*\)',
-    re.MULTILINE,
-)
+RUST_RAW_STRING_START = re.compile(r'r(#{0,255})"')
 BUILD_ROOTS = ("Cargo.toml", "Cargo.lock", ".cargo", "crates")
 OPTIONAL_BUILD_ROOTS = ("rust-toolchain", "rust-toolchain.toml")
 RUNTIME_FILES = (
@@ -56,6 +52,57 @@ def _yaml_scalar(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         value = value[1:-1]
     return value
+
+
+def _yaml_has_anchor_or_alias(line: str) -> bool:
+    """Detect YAML anchors/aliases outside comments and quoted scalars."""
+
+    index = 0
+    in_single = False
+    in_double = False
+    while index < len(line):
+        character = line[index]
+        if in_single:
+            if character == "'":
+                if index + 1 < len(line) and line[index + 1] == "'":
+                    index += 2
+                    continue
+                in_single = False
+            index += 1
+            continue
+        if in_double:
+            if character == "\\":
+                index += 2
+                continue
+            if character == '"':
+                in_double = False
+            index += 1
+            continue
+        if character == "#" and (index == 0 or line[index - 1].isspace()):
+            break
+        if character == "'":
+            in_single = True
+            index += 1
+            continue
+        if character == '"':
+            in_double = True
+            index += 1
+            continue
+        if character in "&*":
+            prior_is_boundary = (
+                index == 0 or line[index - 1].isspace() or line[index - 1] in ":[,{"
+            )
+            next_index = index + 1
+            if (
+                prior_is_boundary
+                and next_index < len(line)
+                and line[next_index] not in "&*"
+                and not line[next_index].isspace()
+                and line[next_index] not in ",[]{}"
+            ):
+                return True
+        index += 1
+    return False
 
 
 def _validate_json_keeper_locks(document: object, workflow_name: str) -> set[str]:
@@ -124,6 +171,11 @@ def _validate_yaml_keeper_locks(workflow_text: str, workflow_name: str) -> set[s
             continue
         block_parent_indent = None
         block_job = None
+
+        if _yaml_has_anchor_or_alias(raw):
+            raise GuardError(
+                f"YAML anchors and aliases are forbidden: {workflow_name}:{line_number}"
+            )
 
         if not stripped or stripped.startswith("#"):
             continue
@@ -236,6 +288,112 @@ def validate_keeper_workflow_locks(root: Path) -> list[str]:
     return validated
 
 
+def _rust_tokens(text: str, source_name: str) -> list[tuple[str, str | None]]:
+    """Tokenize enough Rust to find built-in include macros without text bypasses."""
+
+    tokens: list[tuple[str, str | None]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        character = text[index]
+        if character.isspace():
+            index += 1
+            continue
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < length and depth:
+                if text.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif text.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            if depth:
+                raise GuardError(f"unterminated Rust comment: {source_name}")
+            continue
+
+        raw_match = RUST_RAW_STRING_START.match(text, index)
+        if raw_match:
+            hashes = raw_match.group(1)
+            content_start = raw_match.end()
+            terminator = '"' + hashes
+            content_end = text.find(terminator, content_start)
+            if content_end < 0:
+                raise GuardError(f"unterminated Rust raw string: {source_name}")
+            tokens.append(("string", text[content_start:content_end]))
+            index = content_end + len(terminator)
+            continue
+        if character == '"':
+            index += 1
+            content: list[str] = []
+            escaped = False
+            while index < length:
+                character = text[index]
+                if escaped:
+                    # Escaped include paths are legal Rust but intentionally
+                    # fail closed because this guard does not reinterpret them.
+                    content.append("\\")
+                    content.append(character)
+                    escaped = False
+                    index += 1
+                    continue
+                if character == "\\":
+                    escaped = True
+                    index += 1
+                    continue
+                if character == '"':
+                    index += 1
+                    break
+                content.append(character)
+                index += 1
+            else:
+                raise GuardError(f"unterminated Rust string: {source_name}")
+            tokens.append(("string", "".join(content)))
+            continue
+        if character.isalpha() or character == "_":
+            end = index + 1
+            while end < length and (text[end].isalnum() or text[end] == "_"):
+                end += 1
+            tokens.append(("ident", text[index:end]))
+            index = end
+            continue
+        punctuation = {"!": "bang", "(": "lparen", ")": "rparen", ",": "comma"}
+        if character in punctuation:
+            tokens.append((punctuation[character], character))
+        index += 1
+    return tokens
+
+
+def _literal_rust_includes(source: Path, root: Path) -> list[str]:
+    source_name = source.relative_to(root).as_posix()
+    tokens = _rust_tokens(source.read_text(encoding="utf-8"), source_name)
+    includes: list[str] = []
+    for index, token in enumerate(tokens):
+        if token not in {("ident", "include_str"), ("ident", "include_bytes")}:
+            continue
+        if index + 2 >= len(tokens) or tokens[index + 1][0] != "bang" or tokens[index + 2][0] != "lparen":
+            continue
+        if index + 3 >= len(tokens) or tokens[index + 3][0] != "string":
+            raise GuardError(f"non-literal or unsupported compile-time include: {source_name}")
+        literal = tokens[index + 3][1]
+        if literal is None or "\\" in literal:
+            raise GuardError(f"escaped compile-time include is unsupported: {source_name}")
+        closing = index + 4
+        if closing < len(tokens) and tokens[closing][0] == "comma":
+            closing += 1
+        if closing >= len(tokens) or tokens[closing][0] != "rparen":
+            raise GuardError(f"non-literal or unsupported compile-time include: {source_name}")
+        includes.append(literal)
+    return includes
+
+
 def _compile_time_inputs(root: Path, guarded_files: set[Path]) -> set[Path]:
     """Resolve every literal Rust include outside or inside the guarded roots.
 
@@ -247,13 +405,7 @@ def _compile_time_inputs(root: Path, guarded_files: set[Path]) -> set[Path]:
 
     inputs: set[Path] = set()
     for source in sorted(path for path in guarded_files if path.suffix == ".rs"):
-        text = source.read_text(encoding="utf-8")
-        calls = INCLUDE_CALL.findall(text)
-        literals = LITERAL_INCLUDE.findall(text)
-        if len(calls) != len(literals):
-            relative = source.relative_to(root).as_posix()
-            raise GuardError(f"non-literal or unsupported compile-time include: {relative}")
-        for literal in literals:
+        for literal in _literal_rust_includes(source, root):
             try:
                 included = (source.parent / literal).resolve(strict=True)
                 relative = included.relative_to(root)
@@ -320,10 +472,9 @@ def source_digest(root: Path, scope: str) -> str:
         raise GuardError(f"guard scope contains no files: {scope}")
     for path in files:
         relative = path.relative_to(root).as_posix().encode("utf-8")
-        # GitHub executes the guarded workflows on Linux while maintainers also
-        # rehearse them on Windows. Hash canonical LF bytes so checkout newline
-        # policy cannot create a false source drift or a Windows-only digest.
-        payload = path.read_bytes().replace(b"\r\n", b"\n")
+        # Rust include macros and cargo build scripts consume exact checkout
+        # bytes. Hash those exact bytes so line-ending changes cannot collide.
+        payload = path.read_bytes()
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
         digest.update(len(payload).to_bytes(8, "big"))

@@ -244,13 +244,14 @@ effective signer and relay command argv must consume the selected
 `BASE_MAINNET_RPC_URL`; text hidden after a shell comment does not qualify.
 Provider URLs must not appear in watchdog plan or state artifacts.
 
-The immutable checker also binds the exact newline-normalized source bytes of
-`scripts/regression_verifier_pipeline.py`, the source guard, and both security
-test suites. It binds every Cargo workspace, lockfile, configuration, local
+The immutable checker binds the exact checkout bytes of the signing runtime and
+both security test suites; line-ending-only changes therefore fail closed. It
+also binds every Cargo workspace, lockfile, configuration, local
 crate input, and any root `rust-toolchain` or `rust-toolchain.toml` override
 used to build the regression worker. It resolves every literal Rust
 `include_str!` and `include_bytes!` input, including files outside crate roots,
-and rejects dynamic include paths it cannot bind. Contract tests also require
+with a token scanner that ignores legal line and nested block comments, and
+rejects dynamic include paths it cannot bind. Contract tests also require
 both PR workflows to watch every resolved external input. The runner, both
 signers, and the relay verify that complete
 build-input digest before `cargo build`, then recheck the build inputs and
@@ -283,7 +284,9 @@ repository-wide `agent-bounties-shared-base-keeper` concurrency group; the
 lock is forbidden at workflow scope and on validation-only jobs so public event
 churn cannot occupy or replace a pending key-bearing transaction job. Both
 `.yml` and `.yaml` files are parsed structurally, and block-scalar text cannot
-impersonate concurrency keys. The
+impersonate concurrency keys. YAML anchors and aliases are forbidden because
+they can move a secret into a different effective job without a visible scalar
+there. The
 secret-bearing send explicitly sets chain 8453, the preflighted nonce, a
 500,000 gas limit, a 0.5 gwei maximum fee, and a 0.001 gwei priority fee. An
 unbounded or RPC-selected transaction parameter is forbidden.
