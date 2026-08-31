@@ -1,0 +1,17 @@
+{
+  "schema": "https://agentbounties.org/schemas/agent-discovery-manifest.v2.json",
+  "feed_url": "http://insecure.example.com/feed",
+  "network": "base-mainnet",
+  "refresh_interval_seconds": 300,
+  "discovery_fields": [
+    "bounty_id",
+    "platform",
+    "title",
+    "status"
+  ],
+  "indexed": [
+    "claimable",
+    "claimed",
+    "settled"
+  ]
+}
