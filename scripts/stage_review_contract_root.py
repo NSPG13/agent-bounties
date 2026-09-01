@@ -13,6 +13,8 @@ from pathlib import Path
 
 REQUIRED_SOURCES = (
     Path("crates/api/src/main.rs"),
+    Path("crates/api/src/discoverability.rs"),
+    Path("crates/api/src/open_competition_v2_api.rs"),
     Path("crates/mcp-server/src/main.rs"),
     Path("crates/mcp-server/fixtures/tool-registry.json"),
 )

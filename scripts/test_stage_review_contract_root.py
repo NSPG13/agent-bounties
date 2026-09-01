@@ -8,6 +8,18 @@ from stage_review_contract_root import REQUIRED_SOURCES, StageError, stage_contr
 
 
 class StageReviewContractRootTests(unittest.TestCase):
+    def test_stages_every_source_consumed_by_docs_contract_routes(self) -> None:
+        self.assertEqual(
+            REQUIRED_SOURCES,
+            (
+                Path("crates/api/src/main.rs"),
+                Path("crates/api/src/discoverability.rs"),
+                Path("crates/api/src/open_competition_v2_api.rs"),
+                Path("crates/mcp-server/src/main.rs"),
+                Path("crates/mcp-server/fixtures/tool-registry.json"),
+            ),
+        )
+
     def make_worktree(self, root: Path) -> Path:
         worktree = root / "worktree"
         for index, relative in enumerate(REQUIRED_SOURCES):
