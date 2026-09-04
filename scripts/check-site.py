@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path
@@ -484,6 +486,18 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
     )
     if "const rewards=splitReward(state.fundingUsdc)" in composer:
         fail("funding must preserve an explicitly prepared solver/verifier reward split")
+    node = shutil.which("node")
+    if not node:
+        fail("node is required for the WebMCP reward-handoff behavior check")
+    behavior = subprocess.run(
+        [node, str(repo_root / "scripts" / "check-bounty-economics.cjs")],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if behavior.returncode != 0:
+        fail(f"WebMCP reward-handoff behavior check failed:\n{behavior.stdout}{behavior.stderr}")
     workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     require_phrases("Pages analytics configuration", workflow, ["GA_MEASUREMENT_ID", "^G-[A-Z0-9]+$"])
 

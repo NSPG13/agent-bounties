@@ -19,6 +19,11 @@
     "sun", "road", "lamp", "building", "tree", "water", "screen", "document", "network", "tool", "person", "check", "bridge", "book", "chart",
   ]);
 
+  if (typeof module === "object" && module.exports) {
+    module.exports = Object.freeze({ parsePreparedRewardSplit, rewardSplitForTotal });
+    return;
+  }
+
   const ui = {
     form: document.getElementById("bounty-composer-form"),
     input: document.getElementById("bounty-composer-input"),
@@ -229,9 +234,13 @@
   }
 
   function currentRewardSplit() {
-    const total = usdcBaseUnits(state.fundingUsdc);
-    if (state.preparedRewards && state.preparedRewards.total === total) return state.preparedRewards;
-    return splitReward(state.fundingUsdc);
+    return rewardSplitForTotal(state.fundingUsdc, state.preparedRewards);
+  }
+
+  function rewardSplitForTotal(total, preparedRewards = null) {
+    const totalUnits = usdcBaseUnits(total);
+    if (preparedRewards && preparedRewards.total === totalUnits) return preparedRewards;
+    return splitReward(total);
   }
 
   function parseFunding(value) {
