@@ -461,6 +461,29 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             fail(f"analytics.js must not collect or store {forbidden}")
     if not re.search(r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"', config):
         fail("analytics-config.js must contain an empty or valid GA4 measurement ID")
+    require_phrases(
+        "WebMCP production hotpath",
+        config,
+        [
+            "document.modelContext",
+            'new URL("/competition.html", window.location.origin)',
+            'new URL("/post.html?from=webmcp", window.location.origin)',
+        ],
+    )
+    composer = (site_dir / "bounty-composer-v2.js").read_text(encoding="utf-8")
+    require_phrases(
+        "WebMCP exact reward handoff",
+        composer,
+        [
+            "function parsePreparedRewardSplit",
+            "function currentRewardSplit",
+            "state.preparedRewards = preparedRewards",
+            "const rewards=currentRewardSplit()",
+            "Verifier reward and solver bond:",
+        ],
+    )
+    if "const rewards=splitReward(state.fundingUsdc)" in composer:
+        fail("funding must preserve an explicitly prepared solver/verifier reward split")
     workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     require_phrases("Pages analytics configuration", workflow, ["GA_MEASUREMENT_ID", "^G-[A-Z0-9]+$"])
 
