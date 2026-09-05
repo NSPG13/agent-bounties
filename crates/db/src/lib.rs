@@ -2499,6 +2499,9 @@ impl PostgresStore {
             r#"
             WITH rail_names AS (
               SELECT unnest($2::text[]) AS rail
+            ), measurement_window AS (
+              SELECT MIN(first_observed_at) AS started_at
+              FROM distribution_acquisitions
             ), excluded_wallets AS (
               SELECT DISTINCT wallet_address
               FROM distribution_wallet_exclusions
@@ -2508,12 +2511,15 @@ impl PostgresStore {
                      lower(data->>'bounty_contract') AS bounty_contract,
                      lower(data->>'creator') AS creator_wallet,
                      lower(data->>'terms_hash') AS terms_hash
-              FROM autonomous_bounty_events
-              WHERE kind = 'canonical_bounty_created'
-                AND block_time_verified = TRUE
-                AND data->>'bounty_contract' IS NOT NULL
-                AND data->>'creator' IS NOT NULL
-                AND data->>'terms_hash' IS NOT NULL
+              FROM autonomous_bounty_events AS creation_event
+              CROSS JOIN measurement_window
+              WHERE creation_event.kind = 'canonical_bounty_created'
+                AND creation_event.block_time_verified = TRUE
+                AND creation_event.data->>'bounty_contract' IS NOT NULL
+                AND creation_event.data->>'creator' IS NOT NULL
+                AND creation_event.data->>'terms_hash' IS NOT NULL
+                AND measurement_window.started_at IS NOT NULL
+                AND creation_event.occurred_at >= measurement_window.started_at
             ), economics AS (
               SELECT network, bounty_id,
                      MAX((data->>'target_amount')::numeric) AS target_amount
@@ -2750,7 +2756,10 @@ impl PostgresStore {
             .sum::<u64>();
         let total_row = sqlx::query(
             r#"
-            WITH excluded_wallets AS (
+            WITH measurement_window AS (
+              SELECT MIN(first_observed_at) AS started_at
+              FROM distribution_acquisitions
+            ), excluded_wallets AS (
               SELECT DISTINCT wallet_address
               FROM distribution_wallet_exclusions
               WHERE active = TRUE AND exclusion_class = ANY($1::text[])
@@ -2759,12 +2768,15 @@ impl PostgresStore {
                      lower(data->>'bounty_contract') AS bounty_contract,
                      lower(data->>'creator') AS creator_wallet,
                      lower(data->>'terms_hash') AS terms_hash
-              FROM autonomous_bounty_events
-              WHERE kind = 'canonical_bounty_created'
-                AND block_time_verified = TRUE
-                AND data->>'bounty_contract' IS NOT NULL
-                AND data->>'creator' IS NOT NULL
-                AND data->>'terms_hash' IS NOT NULL
+              FROM autonomous_bounty_events AS creation_event
+              CROSS JOIN measurement_window
+              WHERE creation_event.kind = 'canonical_bounty_created'
+                AND creation_event.block_time_verified = TRUE
+                AND creation_event.data->>'bounty_contract' IS NOT NULL
+                AND creation_event.data->>'creator' IS NOT NULL
+                AND creation_event.data->>'terms_hash' IS NOT NULL
+                AND measurement_window.started_at IS NOT NULL
+                AND creation_event.occurred_at >= measurement_window.started_at
             ), economics AS (
               SELECT network, bounty_id,
                      MAX((data->>'target_amount')::numeric) AS target_amount
@@ -11632,6 +11644,79 @@ mod tests {
             )
             .await
             .unwrap();
+
+        let historical_creator_seed = Uuid::new_v4().simple().to_string();
+        let historical_creator = format!(
+            "0x{historical_creator_seed}{}",
+            &historical_creator_seed[..8]
+        );
+        let historical_contract_seed = Uuid::new_v4().simple().to_string();
+        let historical_contract = format!(
+            "0x{historical_contract_seed}{}",
+            &historical_contract_seed[..8]
+        );
+        let historical_bounty_id = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+        let historical_terms_hash = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+        let historical_at = now - chrono::Duration::days(365);
+        for (event_index, (kind, data)) in [
+            (
+                AutonomousBountyEventKind::CanonicalBountyCreated,
+                serde_json::json!({
+                    "bounty_contract": historical_contract.clone(),
+                    "creator": historical_creator.clone(),
+                    "terms_hash": historical_terms_hash,
+                }),
+            ),
+            (
+                AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured,
+                serde_json::json!({"target_amount": "2100000"}),
+            ),
+            (
+                AutonomousBountyEventKind::FundingAdded,
+                serde_json::json!({
+                    "contributor": historical_creator.clone(),
+                    "amount": "2100000"
+                }),
+            ),
+            (
+                AutonomousBountyEventKind::BountyBecameClaimable,
+                serde_json::json!({"funded_amount": "2100000"}),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let block_number = 50 + event_index as u64;
+            store
+                .upsert_autonomous_bounty_event(
+                    &network,
+                    &AutonomousBountyEvent {
+                        id: Uuid::new_v4(),
+                        log_key: format!("{network}:{block_number}:historical"),
+                        tx_hash: format!("0x{block_number:064x}"),
+                        block_number,
+                        log_index: 0,
+                        contract_address: if event_index == 0 {
+                            factory.clone()
+                        } else {
+                            historical_contract.clone()
+                        },
+                        bounty_id: historical_bounty_id.clone(),
+                        kind,
+                        data,
+                        occurred_at: historical_at,
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .confirm_autonomous_event_block_time(&network, block_number, historical_at,)
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
 
         for (index, (rail, excluded_subsidy)) in
             [("bankr", false), ("github", false), ("vscode", true)]
