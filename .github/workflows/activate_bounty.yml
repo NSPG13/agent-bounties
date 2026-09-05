@@ -1,0 +1,86 @@
+name: Activate Bounty
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  activate:
+    if: contains(github.event.comment.body, '/activate') && contains(github.event.issue.labels.*.name, 'draft')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate activation requirements
+        id: validate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body;
+            
+            const requiredFields = [
+              'Parent contract address:',
+              'Funding transaction:',
+              'BountyBecameClaimable transaction:'
+            ];
+            
+            const missingFields = requiredFields.filter(field => 
+              !body.includes(field) || body.includes(`${field} \`TBD\``)
+            );
+            
+            if (missingFields.length > 0) {
+              core.setFailed(`Missing required fields: ${missingFields.join(', ')}`);
+              return false;
+            }
+            
+            return true;
+
+      - name: Add activation labels
+        if: steps.validate.outputs.result == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['bounty', 'funded-live', 'claimable-live']
+            });
+            
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              name: 'draft'
+            });
+
+      - name: Update issue title
+        if: steps.validate.outputs.result == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const newTitle = issue.title.replace('[PENDING ACTIVATION]', '[ACTIVE]');
+            
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              title: newTitle
+            });
+
+      - name: Post activation comment
+        if: steps.validate.outputs.result == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '✅ Bounty activated! All requirements verified. This bounty is now claimable.'
+            });
