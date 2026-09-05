@@ -130,6 +130,8 @@ def compile_python(platform: str) -> None:
         "scripts/test_verify_open_competition_v2_metric_release.py",
         "scripts/run_open_competition_v2_mainnet_fork_replay.py",
         "scripts/test_run_open_competition_v2_mainnet_fork_replay.py",
+        "scripts/stalled_bounty_diagnostics.py",
+        "scripts/test_stalled_bounty_diagnostics.py",
     ]
     if platform == "powershell":
         first = """
