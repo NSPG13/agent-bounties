@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -15,6 +17,10 @@ import {
   verifyDirectChainInventory,
   verifyOpenCompetitionV2Inventory,
 } from "../skills/agent-bounties/scripts/check-in.mjs";
+import {
+  CLAWHUB_SKILL_SOURCE_ENTRIES,
+  prepareClawHubSkill,
+} from "./prepare-clawhub-skill.mjs";
 
 async function fixture(name) {
   return JSON.parse(
@@ -432,6 +438,33 @@ test("portable skill metadata and install contracts remain publishable", async (
   ];
   for (const path of bundleFiles) {
     await access(new URL(`../skills/agent-bounties/${path}`, import.meta.url));
+  }
+});
+
+test("ClawHub staging preserves the portable skill and excludes plugin markers", async () => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "agent-bounties-clawhub-"));
+  const outputDir = join(temporaryRoot, "agent-bounties");
+  try {
+    const result = await prepareClawHubSkill({ outputDir });
+    assert.equal(result.schema_version, "agent-bounties/clawhub-skill-stage-v1");
+    assert.deepEqual(result.source_entries, [...CLAWHUB_SKILL_SOURCE_ENTRIES]);
+    assert.deepEqual(result.excluded_source_entries, [".claude-plugin"]);
+    assert.ok(result.file_count > 0);
+    assert.ok(result.total_bytes > 0);
+    await access(join(outputDir, "SKILL.md"));
+    assert.match(
+      await readFile(join(outputDir, "LICENSE"), "utf8"),
+      /^MIT No Attribution\r?\n/,
+    );
+    await access(join(outputDir, "scripts", "check-in.mjs"));
+    await assert.rejects(access(join(outputDir, ".claude-plugin", "plugin.json")));
+    await assert.rejects(access(join(outputDir, "openclaw.plugin.json")));
+    await assert.rejects(
+      prepareClawHubSkill({ outputDir }),
+      /staging output already exists/,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
   }
 });
 
