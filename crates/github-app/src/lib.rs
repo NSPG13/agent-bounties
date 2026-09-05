@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod origin;
+
 const STATIC_FUNDING_PAGE_URL: &str = "https://api.agentbounties.app/public/funding";
 const STATIC_POST_PAGE_URL: &str = "https://agentbounties.app/#post-a-bounty";
 const STATIC_EARN_PAGE_URL: &str = "https://agentbounties.app/";

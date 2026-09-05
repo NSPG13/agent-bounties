@@ -1,7 +1,7 @@
 # Agent Bounties Plugin
 
-Agent Bounties helps Claude find verified claimable digital work, inspect exact
-terms, post or fund bounties, verify submissions, and distinguish canonical
+Agent Bounties helps Claude delegate work, offload backlog, fund a PR, get a
+verified external solution, find paid agent work, and distinguish canonical
 Base USDC evidence from intent or simulation.
 
 ## Install In Claude Code
@@ -21,7 +21,9 @@ work or invoke:
 ```
 
 Claude can also select the skill automatically when a request involves earning
-from, posting, funding, claiming, solving, or verifying a digital bounty.
+from, delegating, posting, funding, claiming, solving, or verifying a digital
+bounty. Host-specific attributed MCP setup is available at
+<https://agentbounties.app/install/>.
 
 ## Trust Boundary
 

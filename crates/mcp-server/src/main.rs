@@ -92,6 +92,7 @@ struct AppState {
     stripe_payment_method_configuration: Option<String>,
     operator_api_token: Option<String>,
     analytics_exclusion_token: Option<String>,
+    distribution_attribution_signing_secret: Option<String>,
     mcp_base_url: String,
     oauth_authorizations: Mutex<HashMap<String, PendingOAuthAuthorization>>,
     oauth_codes: Mutex<HashMap<String, OAuthAuthorizationCode>>,
@@ -1710,6 +1711,11 @@ async fn main() -> anyhow::Result<()> {
         analytics_exclusion_token: env::var("ANALYTICS_EXCLUSION_TOKEN")
             .ok()
             .and_then(non_empty_secret),
+        distribution_attribution_signing_secret: env::var(
+            "DISTRIBUTION_ATTRIBUTION_SIGNING_SECRET",
+        )
+        .ok()
+        .and_then(non_empty_secret),
         mcp_base_url: mcp_base_url_from_env().trim_end_matches('/').to_string(),
         oauth_authorizations: Mutex::new(HashMap::new()),
         oauth_codes: Mutex::new(HashMap::new()),
@@ -1759,6 +1765,12 @@ async fn main() -> anyhow::Result<()> {
             get(chatgpt_app::mcp_get)
                 .post(chatgpt_app::mcp_post)
                 .delete(chatgpt_app::mcp_delete),
+        )
+        .route(
+            "/r/:rail/mcp",
+            get(chatgpt_app::attributed_mcp_get)
+                .post(chatgpt_app::attributed_mcp_post)
+                .delete(chatgpt_app::attributed_mcp_delete),
         )
         .route(
             "/v1/onramps/moonpay/checkout",
@@ -4660,7 +4672,7 @@ async fn prepare_bounty_post(
     State(state): State<SharedState>,
     Json(args): Json<PrepareBountyPostArgs>,
 ) -> Json<serde_json::Value> {
-    match chatgpt_app::prepare_bounty_post_handoff(&state, &args).await {
+    match chatgpt_app::prepare_bounty_post_handoff(&state, &args, None).await {
         Ok(handoff) => mcp_json(handoff),
         Err(error) => mcp_error(error),
     }
@@ -8965,6 +8977,7 @@ mod tests {
             stripe_payment_method_configuration: None,
             operator_api_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             oauth_authorizations: Mutex::new(HashMap::new()),
             oauth_codes: Mutex::new(HashMap::new()),
@@ -8987,6 +9000,7 @@ mod tests {
             stripe_payment_method_configuration: Some(payment_method_configuration.to_string()),
             operator_api_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             oauth_authorizations: Mutex::new(HashMap::new()),
             oauth_codes: Mutex::new(HashMap::new()),
@@ -9007,6 +9021,7 @@ mod tests {
             stripe_payment_method_configuration: None,
             operator_api_token: Some(token.to_string()),
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             oauth_authorizations: Mutex::new(HashMap::new()),
             oauth_codes: Mutex::new(HashMap::new()),
@@ -9027,6 +9042,7 @@ mod tests {
             stripe_payment_method_configuration: None,
             operator_api_token: Some("operator-secret".to_string()),
             analytics_exclusion_token: Some(token.to_string()),
+            distribution_attribution_signing_secret: None,
             mcp_base_url: "https://mcp.agentbounties.app".to_string(),
             oauth_authorizations: Mutex::new(HashMap::new()),
             oauth_codes: Mutex::new(HashMap::new()),

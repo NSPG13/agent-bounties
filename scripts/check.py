@@ -106,6 +106,8 @@ def compile_python(platform: str) -> None:
         "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
         "scripts/check-agent-discovery-contract.py", "scripts/test_check_agent_discovery_contract.py",
         "scripts/test_check_render_blueprint.py",
+        "scripts/distribution_dashboard.py", "scripts/test_distribution_dashboard.py",
+        "scripts/distribution_gate.py", "scripts/test_distribution_gate.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
@@ -282,6 +284,13 @@ def main() -> int:
     py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     py("scripts/check-site.py")
     py("scripts/check-migration-history.py")
+    py(
+        "-m",
+        "unittest",
+        "scripts.test_distribution_dashboard",
+        "scripts.test_distribution_gate",
+        "-v",
+    )
     py("scripts/test_check_agent_discovery_contract.py", "-v")
     py("scripts/check-agent-discovery-contract.py")
     run_many([[node, *args] for args in (

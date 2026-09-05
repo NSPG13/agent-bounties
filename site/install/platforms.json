@@ -1,0 +1,361 @@
+{
+  "schema_version": "agent-bounties/install-platforms-v1",
+  "canonical_mcp_url": "https://mcp.agentbounties.app/mcp",
+  "install_hub": "https://agentbounties.app/install/",
+  "payment_boundary": "Only a confirmed canonical BountySettled event proves solver payment.",
+  "platforms": [
+    {
+      "slug": "bankr",
+      "name": "Bankr",
+      "status": "Prepared: activate after the attributed production endpoint passes its canary",
+      "summary": "Give a wallet-native Bankr agent a reviewed way to delegate backlog, fund exact bounty terms, and retrieve canonical settlement evidence.",
+      "mcp_url": "https://mcp.agentbounties.app/r/bankr/mcp",
+      "steps": [
+        "Send the install prompt in the Bankr terminal.",
+        "Review the public skill source and the MCP tools Bankr discovers.",
+        "Ask Bankr to delegate a concrete task; review every amount, term, and wallet action before approval."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy Bankr install prompt",
+          "value": "Install the Agent Bounties skill from https://github.com/NSPG13/agent-bounties/tree/main/skills/agent-bounties. Then add https://mcp.agentbounties.app/r/bankr/mcp as an MCP server named agent-bounties. Use it when I ask to delegate work, offload backlog, fund a PR, get a verified solution, or find paid agent work. Never sign or move funds without my explicit approval or an existing bounded wallet policy."
+        }
+      ],
+      "first_prompt": "Delegate this backlog item through Agent Bounties. Draft binary acceptance criteria and a verification method, then show me the exact USDC amount and terms before any wallet action.",
+      "documentation": [
+        {
+          "label": "Bankr: install a skill from GitHub",
+          "url": "https://docs.bankr.bot/skills/in-bankr/from-github/"
+        },
+        {
+          "label": "Bankr advanced MCP setup",
+          "url": "https://docs.bankr.bot/agent/advanced/"
+        }
+      ]
+    },
+    {
+      "slug": "openclaw",
+      "name": "OpenClaw",
+      "status": "Source skill available; attributed MCP and ClawHub release remain gated",
+      "summary": "Install the portable skill directly, connect the attributed MCP endpoint, and let OpenClaw recognize delegation and paid-work intents.",
+      "mcp_url": "https://mcp.agentbounties.app/r/openclaw/mcp",
+      "steps": [
+        "Install the public portable skill with the command below.",
+        "Add the attributed URL as a Streamable HTTP MCP server named agent-bounties.",
+        "Run the first prompt and approve no signature until the exact wallet request is reviewed."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy skill install command",
+          "value": "npx skills add NSPG13/agent-bounties --skill agent-bounties --yes"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy MCP setup prompt",
+          "value": "Add https://mcp.agentbounties.app/r/openclaw/mcp as a Streamable HTTP MCP server named agent-bounties. Show me the discovered tools before using a write-capable tool."
+        }
+      ],
+      "first_prompt": "Use Agent Bounties to offload this task. Prepare a bounty draft with replayable acceptance criteria; do not sign, fund, or publish it yet.",
+      "documentation": [
+        {
+          "label": "Agent Bounties OpenClaw distribution guide",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/openclaw-distribution.md"
+        }
+      ]
+    },
+    {
+      "slug": "vscode",
+      "name": "VS Code",
+      "status": "One-click configuration prepared; activate after the production route canary",
+      "summary": "Install Agent Bounties in VS Code so Copilot agents can turn repository context into reviewed, verifiable bounty drafts.",
+      "mcp_url": "https://mcp.agentbounties.app/r/vscode/mcp",
+      "steps": [
+        "Open the one-click installer and inspect the remote server URL.",
+        "Confirm trust only after reviewing the MCP tool catalog.",
+        "Start with a draft-only request and keep wallet approval outside the editor agent."
+      ],
+      "actions": [
+        {
+          "kind": "vscode_install",
+          "label": "Install in VS Code"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy .vscode/mcp.json",
+          "value": "{\n  \"servers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/vscode/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Delegate the selected issue through Agent Bounties. Use repository context to draft acceptance criteria and tests, but stop at the first-party review handoff.",
+      "documentation": [
+        {
+          "label": "VS Code MCP servers",
+          "url": "https://code.visualstudio.com/docs/agent-customization/mcp-servers"
+        }
+      ]
+    },
+    {
+      "slug": "cursor",
+      "name": "Cursor",
+      "status": "One-click configuration prepared; activate after the production route canary",
+      "summary": "Add the attributed MCP server to Cursor and delegate code backlog without moving wallet authority into the IDE.",
+      "mcp_url": "https://mcp.agentbounties.app/r/cursor/mcp",
+      "steps": [
+        "Open the one-click installer and inspect the configuration Cursor displays.",
+        "Enable only the tools needed for the task.",
+        "Ask Cursor for a draft and complete wallet review on the first-party handoff."
+      ],
+      "actions": [
+        {
+          "kind": "cursor_install",
+          "label": "Add to Cursor"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy mcp.json",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/cursor/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Offload this repository task with Agent Bounties. Draft exact success tests and show the bounty review link; do not authorize the wallet for me.",
+      "documentation": [
+        {
+          "label": "Cursor MCP install links",
+          "url": "https://prod.cursor.com/docs/mcp/install-links"
+        }
+      ]
+    },
+    {
+      "slug": "cline",
+      "name": "Cline",
+      "status": "CLI and settings configuration prepared; activate after the production route canary",
+      "summary": "Connect Cline directly to Agent Bounties with no API key, then use the repository context to prepare verifiable work.",
+      "mcp_url": "https://mcp.agentbounties.app/r/cline/mcp",
+      "steps": [
+        "Run the CLI installer or paste the JSON into Cline MCP settings.",
+        "Leave autoApprove empty and inspect the discovered tools.",
+        "Ask for a draft-only delegation before reviewing the first wallet handoff."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy Cline install command",
+          "value": "cline mcp install agent-bounties --transport http https://mcp.agentbounties.app/r/cline/mcp"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy cline_mcp_settings.json entry",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"streamableHttp\",\n      \"url\": \"https://mcp.agentbounties.app/r/cline/mcp\",\n      \"disabled\": false,\n      \"autoApprove\": []\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Use Agent Bounties to fund a verified solution for this issue. Draft the goal, deterministic checks, reward, and deadline; stop before any signature.",
+      "documentation": [
+        {
+          "label": "Cline MCP documentation",
+          "url": "https://github.com/cline/cline/blob/main/docs/mcp/mcp-overview.mdx"
+        },
+        {
+          "label": "Cline marketplace",
+          "url": "https://github.com/cline/marketplace"
+        }
+      ]
+    },
+    {
+      "slug": "github",
+      "name": "GitHub",
+      "status": "Repository configuration prepared; hosted Agent App and submission remain pending",
+      "summary": "Give GitHub Copilot cloud agent an attributed MCP server so an issue can become a reviewed bounty and later receive canonical proof.",
+      "mcp_url": "https://mcp.agentbounties.app/r/github/mcp",
+      "steps": [
+        "Open Repository settings, then Copilot, then MCP servers.",
+        "Paste the reviewed configuration and save it.",
+        "Ask Copilot to draft from an issue; the future native Agent App will remove this admin setup step."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy GitHub Copilot MCP configuration",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/github/mcp\",\n      \"tools\": [\n        \"get_bounty_feed\",\n        \"prepare_bounty_post\",\n        \"prepare_bounty_action\",\n        \"get_bounty_action_status\"\n      ]\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Turn this GitHub issue into an Agent Bounties draft. Extract the goal and acceptance tests, preserve the issue URL as origin context, and stop at wallet review.",
+      "documentation": [
+        {
+          "label": "Configure MCP for GitHub Copilot cloud agent",
+          "url": "https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers"
+        },
+        {
+          "label": "GitHub Agent Apps overview",
+          "url": "https://docs.github.com/en/copilot/concepts/agents/agent-apps"
+        }
+      ]
+    },
+    {
+      "slug": "linear",
+      "name": "Linear",
+      "status": "Attributed connector configuration prepared; native Linear Agent remains pending",
+      "summary": "Use the Linear issue URL inside an MCP-capable agent today; the native Linear Agent will later accept issue delegation directly.",
+      "mcp_url": "https://mcp.agentbounties.app/r/linear/mcp",
+      "steps": [
+        "Add the attributed endpoint to the MCP-capable agent that can read your Linear issue.",
+        "Give the agent the issue URL and copy the first prompt.",
+        "Review the generated terms and wallet handoff; do not treat a Linear status as settlement."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy generic MCP configuration",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/linear/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Delegate this Linear issue through Agent Bounties. Preserve its URL, write binary acceptance criteria and a verifier, and return only a draft plus first-party review link.",
+      "documentation": [
+        {
+          "label": "Linear Agents developer documentation",
+          "url": "https://linear.app/developers/agents"
+        }
+      ]
+    },
+    {
+      "slug": "claude-custom",
+      "name": "Claude",
+      "status": "Custom connector configuration prepared; public directory requires written policy clearance",
+      "summary": "Connect the attributed remote MCP endpoint in Claude or install the source-controlled Claude Code plugin.",
+      "mcp_url": "https://mcp.agentbounties.app/r/claude-custom/mcp",
+      "steps": [
+        "For Claude web or desktop, add a custom connector named Agent Bounties and paste the endpoint.",
+        "For Claude Code, install the repository marketplace plugin, then add the attributed endpoint when rail measurement is required.",
+        "Review every external handoff and keep wallet authorization outside Claude."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy Claude Code plugin commands",
+          "value": "claude plugin marketplace add NSPG13/agent-bounties\nclaude plugin install agent-bounties@agent-bounties --scope user"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy custom connector endpoint",
+          "value": "https://mcp.agentbounties.app/r/claude-custom/mcp"
+        }
+      ],
+      "first_prompt": "Use Agent Bounties to get a verified external solution for this task. Prepare complete terms and a review link; ask before every external or wallet action.",
+      "documentation": [
+        {
+          "label": "Claude custom connectors",
+          "url": "https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp"
+        }
+      ]
+    },
+    {
+      "slug": "chatgpt-dev",
+      "name": "ChatGPT developer mode",
+      "status": "Developer-mode configuration prepared; public directory requires written policy clearance",
+      "summary": "Connect the production MCP app in ChatGPT developer mode while public directory eligibility remains explicitly blocked.",
+      "mcp_url": "https://mcp.agentbounties.app/r/chatgpt-dev/mcp",
+      "steps": [
+        "Enable developer mode in ChatGPT settings and create an app from the endpoint.",
+        "Confirm the discovered tool catalog and test with a draft-only request.",
+        "Open first-party review pages for wallet actions; never paste wallet credentials or signatures into chat."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy ChatGPT developer MCP endpoint",
+          "value": "https://mcp.agentbounties.app/r/chatgpt-dev/mcp"
+        }
+      ],
+      "first_prompt": "Delegate this goal with Agent Bounties. Draft measurable terms and show the in-chat bounty card, but do not publish, fund, sign, or claim anything yet.",
+      "documentation": [
+        {
+          "label": "Connect an MCP app to ChatGPT",
+          "url": "https://developers.openai.com/apps-sdk/deploy/connect-chatgpt"
+        },
+        {
+          "label": "Current Agent Bounties release dossier",
+          "url": "https://github.com/NSPG13/agent-bounties/blob/main/docs/chatgpt-app-submission.md"
+        }
+      ]
+    }
+  ],
+  "paid_vendors": [
+    {
+      "slug": "glama",
+      "name": "Glama",
+      "status": "Campaign destination prepared; activate only after the attributed endpoint canary",
+      "summary": "Install Agent Bounties from the Glama listing without losing server-observed rail attribution.",
+      "mcp_url": "https://mcp.agentbounties.app/r/glama/mcp",
+      "steps": [
+        "Inspect the public server source, security model, and exact attributed URL.",
+        "Add the URL as a Streamable HTTP MCP server named agent-bounties.",
+        "Start with a draft-only delegation request and review every wallet action externally."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy generic MCP configuration",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/glama/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Delegate this task through Agent Bounties. Draft binary acceptance criteria and a verifier, then stop at the first-party wallet review handoff.",
+      "documentation": [
+        {
+          "label": "Agent Bounties source and security review",
+          "url": "https://github.com/NSPG13/agent-bounties"
+        }
+      ]
+    },
+    {
+      "slug": "mcp-so",
+      "name": "MCP.so",
+      "status": "Campaign destination prepared; activate only after the attributed endpoint canary",
+      "summary": "Install Agent Bounties from MCP.so with a dedicated source route and the same canonical bounty service.",
+      "mcp_url": "https://mcp.agentbounties.app/r/mcp-so/mcp",
+      "steps": [
+        "Inspect the public server source, security model, and exact attributed URL.",
+        "Add the URL as a Streamable HTTP MCP server named agent-bounties.",
+        "Start with a draft-only delegation request and review every wallet action externally."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy generic MCP configuration",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcp-so/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Get a verified external solution for this backlog item through Agent Bounties. Show the draft, reward, verifier, and review link before any wallet action.",
+      "documentation": [
+        {
+          "label": "Agent Bounties source and security review",
+          "url": "https://github.com/NSPG13/agent-bounties"
+        }
+      ]
+    },
+    {
+      "slug": "mcpservers",
+      "name": "MCPServers.org",
+      "status": "Campaign destination prepared; activate only after the attributed endpoint canary",
+      "summary": "Install Agent Bounties from MCPServers.org through its own measurable rail and the canonical service.",
+      "mcp_url": "https://mcp.agentbounties.app/r/mcpservers/mcp",
+      "steps": [
+        "Inspect the public server source, security model, and exact attributed URL.",
+        "Add the URL as a Streamable HTTP MCP server named agent-bounties.",
+        "Start with a draft-only delegation request and review every wallet action externally."
+      ],
+      "actions": [
+        {
+          "kind": "copy",
+          "label": "Copy generic MCP configuration",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcpservers/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Use Agent Bounties to fund a verifiable result for this goal. Prepare exact acceptance criteria and stop before signing or publishing.",
+      "documentation": [
+        {
+          "label": "Agent Bounties source and security review",
+          "url": "https://github.com/NSPG13/agent-bounties"
+        }
+      ]
+    }
+  ]
+}

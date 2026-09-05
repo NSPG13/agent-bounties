@@ -1,0 +1,119 @@
+{
+  "schema_version": "agent-bounties/vendor-orders-v1",
+  "policy_id": "external-settled-distribution-v1",
+  "currency_note": "MXN values use the policy's frozen planning FX. The invoice amount and exchange rate must be re-confirmed before approval.",
+  "orders": [
+    {
+      "vendor_id": "glama",
+      "rail_id": "glama",
+      "reservation_state": "not_contacted",
+      "purchase_state": "blocked_on_attribution_canary_and_owner_approval",
+      "maximum_initial_spend_mxn": "23779.28",
+      "planned_inventory": [
+        {
+          "product": "featured connector listing",
+          "units": 1,
+          "public_price_usd_per_unit": "600.00",
+          "public_price_status": "verified_public_rate_card"
+        },
+        {
+          "product": "sponsored category card",
+          "units": 4,
+          "public_price_usd_per_unit": "200.00",
+          "public_price_status": "verified_public_rate_card",
+          "requested_categories": [
+            "Autonomous Agents",
+            "Agent Orchestration",
+            "Developer Tools",
+            "Project Management"
+          ]
+        }
+      ],
+      "public_inventory_source": "https://glama.ai/advertise",
+      "source_endpoint": "https://mcp.agentbounties.app/r/glama/mcp",
+      "install_destination": "https://agentbounties.app/install/glama/",
+      "preferred_install_alias_after_dns": "https://install.agentbounties.app/glama",
+      "placement_copy": {
+        "headline": "Delegate backlog to paid agents",
+        "sentence": "Connect Agent Bounties, fund a task in USDC, and receive verifier evidence plus settlement proof without giving the agent wallet authority."
+      },
+      "required_before_purchase": [
+        "attribution_endpoint_deployed",
+        "dry_run_canaries_joined",
+        "two_usdc_mainnet_canary_canonically_settled",
+        "canaries_excluded_from_external_metrics",
+        "inventory_and_rotation_confirmed_in_writing",
+        "renewal_and_cancellation_terms_recorded",
+        "owner_purchase_approval_recorded"
+      ]
+    },
+    {
+      "vendor_id": "mcp-so",
+      "rail_id": "mcp-so",
+      "reservation_state": "not_contacted",
+      "purchase_state": "blocked_on_written_inventory_attribution_canary_and_owner_approval",
+      "maximum_initial_spend_mxn": "11872.65",
+      "planned_inventory": [
+        {
+          "product": "gold placement",
+          "units": 1,
+          "public_price_usd_per_unit": "699.00",
+          "public_price_status": "verified_public_rate_card"
+        }
+      ],
+      "public_inventory_source": "https://mcp.so/advertise",
+      "public_listing_note": "The public advertising page lists Gold Sponsor at 699 USD per month on listing and detail pages, rotating within the slot. This is separate from MCP.so's 39 USD one-time paid submission.",
+      "source_endpoint": "https://mcp.agentbounties.app/r/mcp-so/mcp",
+      "install_destination": "https://agentbounties.app/install/mcp-so/",
+      "preferred_install_alias_after_dns": "https://install.agentbounties.app/mcp-so",
+      "required_before_purchase": [
+        "attribution_endpoint_deployed",
+        "dry_run_canaries_joined",
+        "two_usdc_mainnet_canary_canonically_settled",
+        "canaries_excluded_from_external_metrics",
+        "gold_listing_and_detail_page_inventory_confirmed_at_checkout",
+        "source_reporting_and_link_destination_confirmed",
+        "renewal_and_cancellation_terms_recorded",
+        "owner_purchase_approval_recorded"
+      ]
+    },
+    {
+      "vendor_id": "mcpservers-org",
+      "rail_id": "mcpservers",
+      "reservation_state": "not_contacted",
+      "purchase_state": "blocked_on_written_inventory_attribution_canary_and_owner_approval",
+      "maximum_initial_spend_mxn": "10191.12",
+      "planned_inventory": [
+        {
+          "product": "sponsored finance or productivity category placement",
+          "units": 1,
+          "public_price_usd_per_unit": "600.00",
+          "public_price_status": "verified_public_from_price_requires_final_quote"
+        }
+      ],
+      "public_inventory_source": "https://mcpservers.org/advertise",
+      "public_listing_note": "The public advertising page lists exclusive category sponsorship from 600 USD per month and currently shows Productivity and Finance at 600 USD. Confirm availability and final category in writing before approval.",
+      "source_endpoint": "https://mcp.agentbounties.app/r/mcpservers/mcp",
+      "install_destination": "https://agentbounties.app/install/mcpservers/",
+      "preferred_install_alias_after_dns": "https://install.agentbounties.app/mcpservers",
+      "required_before_purchase": [
+        "attribution_endpoint_deployed",
+        "dry_run_canaries_joined",
+        "two_usdc_mainnet_canary_canonically_settled",
+        "canaries_excluded_from_external_metrics",
+        "category_position_duration_and_rotation_confirmed_in_writing",
+        "source_reporting_and_link_destination_confirmed",
+        "renewal_and_cancellation_terms_recorded",
+        "owner_purchase_approval_recorded"
+      ]
+    }
+  ],
+  "global_rejection_conditions": [
+    "impression_only_package",
+    "generic_brand_inventory_without_install_or_connection_context",
+    "vendor_refuses_attributed_destination",
+    "vendor_refuses_inventory_definition",
+    "vendor_requires wallet keys payment authority or prompt contents",
+    "critical_payment_fraud_or_security_incident"
+  ]
+}

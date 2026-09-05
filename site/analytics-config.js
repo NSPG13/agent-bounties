@@ -156,7 +156,7 @@ window.agentBountiesAnalyticsConfig = Object.freeze({
     const isV2 = String(item?.opportunity_id || "").startsWith("open-competition-v2:")
       || String(item?.next_action?.action || "").includes("open_competition_v2");
     if (isV2 && /^0x[0-9a-fA-F]{40}$/.test(String(item?.source_id || ""))) {
-      const target = new URL("competition.html", window.location.href);
+      const target = new URL("/competition.html", window.location.origin);
       target.searchParams.set("bountyContract", item.source_id);
       target.searchParams.set("network", item.network || NETWORK);
       return target.href;
@@ -318,7 +318,7 @@ window.agentBountiesAnalyticsConfig = Object.freeze({
       const draft = normalizeDraft(input);
       if (/\/post\.html$/.test(window.location.pathname)) return stageOnPostPage(draft);
       if (!persistPendingDraft(draft)) throw new Error("This browser cannot preserve the draft across navigation. Open /post.html and call this tool again.");
-      const target = new URL("post.html?from=webmcp", window.location.href).href;
+      const target = new URL("/post.html?from=webmcp", window.location.origin).href;
       window.setTimeout(() => window.location.assign(target), 0);
       return {
         status: "navigating_to_review",

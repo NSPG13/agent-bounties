@@ -1,5 +1,6 @@
 mod a2a;
 mod discoverability;
+mod distribution;
 mod github_discovery;
 mod open_competition_v2_api;
 mod opportunities;
@@ -221,6 +222,10 @@ use worker::{
         discoverability::ingest_snapshots,
         discoverability::operator_report,
         discoverability::public_summary,
+        distribution::operator_report,
+        distribution::public_summary,
+        distribution::mark_wallet_reviewed,
+        distribution::upsert_wallet_exclusion,
         create_discovery_subscription,
         get_discovery_subscription,
         delete_discovery_subscription,
@@ -487,6 +492,13 @@ use worker::{
         ,discoverability::HumanReachSummary
         ,discoverability::AutomationReachSummary
         ,discoverability::DiscoverabilityPublicSummary
+        ,distribution::DistributionRailMetrics
+        ,distribution::DistributionOperatorReport
+        ,distribution::PublicDistributionRailMetrics
+        ,distribution::DistributionPublicSummary
+        ,distribution::DistributionWalletExclusionRequest
+        ,distribution::DistributionWalletExclusionResponse
+        ,distribution::DistributionWalletReviewResponse
         ,UnfundedBountyResponse
         ,UnfundedBountyAgentSolution
         ,SubmitUnfundedBountySolutionRequest
@@ -576,6 +588,8 @@ struct AppState {
     operator_api_token: Option<String>,
     discoverability_ingest_token: Option<String>,
     analytics_exclusion_token: Option<String>,
+    distribution_attribution_signing_secret: Option<String>,
+    distribution_excluded_wallet_classes: Vec<String>,
     public_base_url: String,
     mcp_base_url: String,
     x402_relayer: X402HostedRelayerConfig,
@@ -915,6 +929,40 @@ fn non_empty_secret(secret: String) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn parse_distribution_excluded_wallet_classes(
+    configured: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
+    let defaults = db::DISTRIBUTION_EXCLUSION_CLASSES.join(",");
+    let candidates = configured
+        .unwrap_or(&defaults)
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let mut classes = BTreeSet::new();
+    for candidate in candidates {
+        let class = db::normalize_distribution_exclusion_class(candidate).ok_or_else(|| {
+            anyhow::anyhow!(
+                "DISTRIBUTION_EXCLUDED_WALLET_CLASSES contains unsupported class {candidate}"
+            )
+        })?;
+        classes.insert(class.to_string());
+    }
+    let required = db::DISTRIBUTION_EXCLUSION_CLASSES
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<BTreeSet<_>>();
+    if classes != required {
+        anyhow::bail!("DISTRIBUTION_EXCLUDED_WALLET_CLASSES must contain every required class");
+    }
+    Ok(classes.into_iter().collect())
+}
+
+fn distribution_excluded_wallet_classes_from_env() -> anyhow::Result<Vec<String>> {
+    let configured = env::var("DISTRIBUTION_EXCLUDED_WALLET_CLASSES").ok();
+    parse_distribution_excluded_wallet_classes(configured.as_deref())
 }
 
 fn optional_evm_address(key: &str) -> anyhow::Result<Option<String>> {
@@ -2170,6 +2218,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let discovery_webhooks = DiscoveryWebhookConfig::from_env()?.map(Arc::new);
     let neynar_social = NeynarSocialIngestionConfig::from_env()?.map(Arc::new);
+    let distribution_excluded_wallet_classes = distribution_excluded_wallet_classes_from_env()?;
     let state: SharedState = Arc::new(AppState {
         network: Arc::new(Mutex::new(network)),
         eval_runs: Arc::new(Mutex::new(eval_runs)),
@@ -2205,6 +2254,12 @@ async fn main() -> anyhow::Result<()> {
         analytics_exclusion_token: env::var("ANALYTICS_EXCLUSION_TOKEN")
             .ok()
             .and_then(non_empty_secret),
+        distribution_attribution_signing_secret: env::var(
+            "DISTRIBUTION_ATTRIBUTION_SIGNING_SECRET",
+        )
+        .ok()
+        .and_then(non_empty_secret),
+        distribution_excluded_wallet_classes,
         public_base_url: env::var("PUBLIC_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
         mcp_base_url: env::var("MCP_BASE_URL")
@@ -2220,6 +2275,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .merge(a2a::router())
         .merge(discoverability::router())
+        .merge(distribution::router())
         .route("/llms.txt", get(llms_txt))
         .route("/v1/legal/policy", get(legal_policy))
         .route("/v1/legal/acceptances", post(record_legal_acceptance))
@@ -14020,6 +14076,7 @@ fn autonomous_terms_record(
 #[utoipa::path(post, path = "/v1/base/autonomous-bounties/terms", responses((status = 200, description = "Content-addressed public bounty terms and contract hash commitments")))]
 async fn publish_autonomous_bounty_terms(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(request): Json<PublishAutonomousBountyTermsRequest>,
 ) -> Result<Json<AutonomousBountyTermsRecord>, AgentActionApiError> {
     let record = autonomous_terms_record(request)?;
@@ -14044,6 +14101,22 @@ async fn publish_autonomous_bounty_terms(
                 "Retry publication with the identical document. Do not alter the document or create the bounty until the terms hash can be read back.",
             )
         })?;
+    distribution::bind_terms_attribution(
+        &state,
+        &headers,
+        &record.terms_hash,
+        &record.creator_wallet,
+    )
+    .await
+    .map_err(|status| {
+        agent_action_error(
+            status,
+            "distribution_attribution_binding_failed",
+            "The supplied acquisition and handoff identifiers did not match one durable prepared handoff.",
+            status == StatusCode::SERVICE_UNAVAILABLE,
+            "Retry terms publication with the identical document and both original attribution headers. Attribution identifiers grant no wallet or payment authority.",
+        )
+    })?;
     Ok(Json(record))
 }
 
@@ -16769,6 +16842,18 @@ mod tests {
     use tower::ServiceExt;
 
     type TestHmacSha256 = Hmac<Sha256>;
+
+    #[test]
+    fn distribution_reporting_requires_every_wallet_exclusion_class() {
+        let defaults = parse_distribution_excluded_wallet_classes(None).unwrap();
+        assert_eq!(defaults.len(), db::DISTRIBUTION_EXCLUSION_CLASSES.len());
+        assert!(parse_distribution_excluded_wallet_classes(Some(
+            "maintainer,operator,test,synthetic_canary,sponsored,circular_funding,operator_funded_development"
+        ))
+        .unwrap_err()
+        .to_string()
+        .contains("every required class"));
+    }
 
     fn open_competition_heartbeat(
         now: DateTime<Utc>,
@@ -20539,6 +20624,10 @@ mod tests {
         assert!(paths.contains_key("/a2a/v1/tasks/{id}:cancel"));
         assert!(paths.contains_key("/llms.txt"));
         assert!(paths.contains_key("/schemas/discovery-manifest.v2.json"));
+        assert!(paths.contains_key("/v1/operator/distribution/report"));
+        assert!(paths.contains_key("/v1/operator/distribution/wallet-exclusions"));
+        assert!(paths.contains_key("/v1/distribution/summary"));
+        assert!(paths.contains_key("/v1/distribution/handoffs/wallet-review"));
         assert!(paths.contains_key("/v1/risk/policy"));
         assert!(paths.contains_key("/v1/readiness/live-money"));
         assert!(paths.contains_key("/v1/base/open-competition-v1/verifiers"));
@@ -22204,6 +22293,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22241,6 +22335,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22269,6 +22368,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22297,6 +22401,11 @@ mod tests {
             operator_api_token: Some(token.to_string()),
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22329,6 +22438,11 @@ mod tests {
             operator_api_token: Some(token.to_string()),
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22363,6 +22477,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22394,6 +22513,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22425,6 +22549,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),
@@ -22457,6 +22586,11 @@ mod tests {
             operator_api_token: None,
             discoverability_ingest_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
+            distribution_excluded_wallet_classes: db::DISTRIBUTION_EXCLUSION_CLASSES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             x402_relayer: X402HostedRelayerConfig::default(),

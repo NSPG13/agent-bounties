@@ -1677,6 +1677,7 @@ dependencies = [
  "chrono",
  "domain",
  "hex",
+ "hmac",
  "ledger",
  "serde",
  "serde_json",
@@ -2208,6 +2209,7 @@ version = "0.1.0"
 dependencies = [
  "domain",
  "hex",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",
@@ -2883,6 +2885,7 @@ dependencies = [
  "domain",
  "eval-harness",
  "github-app",
+ "hex",
  "hmac",
  "ledger",
  "payments-stripe",

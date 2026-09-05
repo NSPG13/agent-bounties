@@ -19,15 +19,18 @@ use super::{
 #[cfg(test)]
 use super::{AppState, ChatgptFileInput};
 use axum::{
-    extract::State,
-    http::{header::ORIGIN, HeaderMap, StatusCode},
+    extract::{Path, State},
+    http::{header::ORIGIN, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use base64::Engine as _;
-use db::NewBountyImageAsset;
+use db::{
+    distribution_acquisition_token_hash, normalize_distribution_rail,
+    sign_distribution_acquisition_token, NewBountyImageAsset,
+};
 use domain::BountyImageReference;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{env, net::IpAddr};
@@ -45,6 +48,12 @@ const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
 const MCP_METHOD_HEADER: &str = "mcp-method";
 const MCP_NAME_HEADER: &str = "mcp-name";
 const MCP_ALLOWED_ORIGINS_ENV: &str = "MCP_ALLOWED_ORIGINS";
+const ACQUISITION_HEADER: &str = "x-agent-bounties-acquisition-id";
+const ATTRIBUTION_RAIL_HEADER: &str = "x-agent-bounties-attribution-rail";
+const FIRST_TOUCH_RAIL_HEADER: &str = "x-agent-bounties-first-touch-rail";
+const CANARY_HEADER: &str = "x-agent-bounties-canary";
+const MEASUREMENT_ELIGIBLE_HEADER: &str = "x-agent-bounties-measurement-eligible";
+const INTERNAL_ATTRIBUTION_META: &str = "agentbounties.internal/attribution";
 const CHATGPT_SANDBOX_ENV: &str = "CHATGPT_APP_SANDBOX_MODE";
 const FEED_WIDGET_URI: &str = "ui://agent-bounties/live-feed-v4.html";
 const POST_PAGE_URL: &str = "https://agentbounties.app/post.html";
@@ -68,6 +77,15 @@ const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
 const CHATGPT_COMPATIBILITY_TOOL_NAMES: &[&str] = &["list_autonomous_bounties"];
 const CORE_MCP_EXTENSION_TOOL_NAMES: &[&str] =
     &["inspect_open_competition_v2", "prepare_open_competition_v2"];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct McpDistributionAttribution {
+    acquisition_id: Uuid,
+    acquisition_token: String,
+    first_touch_rail: String,
+    current_rail: String,
+    measurement_eligible: bool,
+}
 #[derive(Debug, Clone, Deserialize)]
 struct ChatgptFeedArgs {
     network: Option<String>,
@@ -277,16 +295,108 @@ fn custom_tool_descriptors() -> Vec<ToolDescriptor> {
 pub(super) async fn prepare_bounty_post_handoff(
     state: &SharedState,
     args: &PrepareBountyPostArgs,
+    attribution: Option<&McpDistributionAttribution>,
 ) -> Result<Value, String> {
     // Fail closed on every non-file field before downloading or persisting an
     // optional approved image.
     let validation_image = sandbox_bounty_image_reference(args)?;
     let validation_handoff = build_bounty_post_handoff(args, validation_image.as_ref())?;
-    if validation_image.is_none() {
-        return Ok(validation_handoff);
+    let handoff = if validation_image.is_none() {
+        validation_handoff
+    } else {
+        let image = persist_chatgpt_bounty_image(state, args).await?;
+        build_bounty_post_handoff(args, Some(&image))?
+    };
+    attach_distribution_attribution(state, args, handoff, attribution).await
+}
+
+async fn attach_distribution_attribution(
+    state: &SharedState,
+    args: &PrepareBountyPostArgs,
+    mut handoff: Value,
+    attribution: Option<&McpDistributionAttribution>,
+) -> Result<Value, String> {
+    let Some(attribution) = attribution else {
+        return Ok(handoff);
+    };
+    let store = state.store.as_ref().ok_or_else(|| {
+        "durable distribution attribution is unavailable for this rail".to_string()
+    })?;
+    let request_fingerprint = Sha256::digest(
+        serde_json::to_vec(args)
+            .map_err(|error| format!("could not fingerprint the prepared handoff: {error}"))?,
+    )
+    .iter()
+    .map(|byte| format!("{byte:02x}"))
+    .collect::<String>();
+    let reserved = store
+        .reserve_distribution_handoff(
+            attribution.acquisition_id,
+            &request_fingerprint,
+            chrono::Utc::now(),
+        )
+        .await
+        .map_err(|error| format!("could not persist the attributed handoff: {error}"))?;
+    let post_url = handoff
+        .get("post_url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "prepared handoff did not contain a post URL".to_string())?;
+    let mut post_url =
+        Url::parse(post_url).map_err(|_| "prepared handoff post URL is invalid".to_string())?;
+    post_url
+        .query_pairs_mut()
+        .append_pair("acquisition", &attribution.acquisition_token)
+        .append_pair("handoff", &reserved.id.to_string());
+    if post_url.as_str().len() > 12_000 {
+        return Err(
+            "the attributed bounty is too large for a safe browser handoff; shorten the goal or acceptance criteria"
+                .to_string(),
+        );
     }
-    let image = persist_chatgpt_bounty_image(state, args).await?;
-    build_bounty_post_handoff(args, Some(&image))
+    let object = handoff
+        .as_object_mut()
+        .ok_or_else(|| "prepared handoff is not an object".to_string())?;
+    object.insert("post_url".to_string(), Value::String(post_url.to_string()));
+    object.insert(
+        "attribution".to_string(),
+        json!({
+            "acquisition_id": attribution.acquisition_token,
+            "handoff_id": reserved.id,
+            "first_touch_rail": attribution.first_touch_rail,
+            "current_rail": attribution.current_rail,
+            "terms_publish_headers": {
+                "x-agent-bounties-acquisition-id": attribution.acquisition_token,
+                "x-agent-bounties-handoff-id": reserved.id,
+            },
+            "authority": "analytics_only"
+        }),
+    );
+    Ok(handoff)
+}
+
+fn distribution_request_fingerprint(arguments: &Value) -> String {
+    hex::encode(Sha256::digest(
+        serde_json::to_vec(arguments).unwrap_or_else(|_| b"invalid-json-value".to_vec()),
+    ))
+}
+
+async fn record_prepare_handoff_failure(
+    state: &SharedState,
+    attribution: Option<&McpDistributionAttribution>,
+    request_fingerprint: &str,
+    failure_code: &str,
+) {
+    let (Some(store), Some(attribution)) = (state.store.as_ref(), attribution) else {
+        return;
+    };
+    let _ = store
+        .record_distribution_handoff_failure(
+            attribution.acquisition_id,
+            request_fingerprint,
+            failure_code,
+            chrono::Utc::now(),
+        )
+        .await;
 }
 
 pub(super) fn build_bounty_post_handoff(
@@ -305,6 +415,9 @@ pub(super) fn build_bounty_post_handoff(
         .collect::<Result<Vec<_>, _>>()?;
     let solver_reward = parse_usdc(&args.solver_reward_usdc, "solver_reward_usdc")?;
     let verifier_reward = parse_usdc(&args.verifier_reward_usdc, "verifier_reward_usdc")?;
+    if solver_reward < 2_000_000 {
+        return Err("public bounties require at least 2 USDC for the solver".to_string());
+    }
     let target = solver_reward
         .checked_add(verifier_reward)
         .ok_or_else(|| "combined USDC target is too large".to_string())?;
@@ -601,6 +714,166 @@ pub(super) async fn mcp_post(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Response {
+    mcp_post_inner(state, headers, payload, None).await
+}
+
+pub(super) async fn attributed_mcp_post(
+    Path(rail): Path<String>,
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Response {
+    let Some(rail) = normalize_distribution_rail(&rail).map(str::to_string) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let canary_kind = match headers.get(CANARY_HEADER) {
+        None => None,
+        Some(value) => match value.to_str() {
+            Ok(kind @ ("dry-run-v1" | "mainnet-v1")) => Some(kind.to_string()),
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "x-agent-bounties-canary must be dry-run-v1 or mainnet-v1.",
+                )
+                    .into_response()
+            }
+        },
+    };
+    let requested_measurement_eligible = canary_kind.is_none();
+    let excluded = super::analytics_exclusion_is_authorized(&state, &headers);
+    if excluded {
+        return mcp_post_inner(state, headers, payload, None).await;
+    }
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Durable attribution is required on rail-specific MCP routes.",
+        )
+            .into_response();
+    };
+    let Some(signing_secret) = state.distribution_attribution_signing_secret.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Rail attribution signing is not configured.",
+        )
+            .into_response();
+    };
+    let acquisition_token = match headers.get(ACQUISITION_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) if distribution_acquisition_token_hash(value, signing_secret).is_some() => {
+                value.trim().to_string()
+            }
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Malformed x-agent-bounties-acquisition-id header.",
+                )
+                    .into_response()
+            }
+        },
+        None => sign_distribution_acquisition_token(
+            &format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
+            signing_secret,
+        )
+        .unwrap_or_default(),
+    };
+    let Some(token_hash) = distribution_acquisition_token_hash(&acquisition_token, signing_secret)
+    else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Rail attribution signing secret must contain at least 32 bytes.",
+        )
+            .into_response();
+    };
+    let acquisition = match store
+        .observe_distribution_acquisition(
+            &rail,
+            &token_hash,
+            canary_kind.as_deref(),
+            chrono::Utc::now(),
+        )
+        .await
+    {
+        Ok(acquisition) => acquisition,
+        Err(_) => {
+            let store = store.clone();
+            let rail = rail.clone();
+            tokio::spawn(async move {
+                let _ = store
+                    .record_distribution_rail_request(
+                        &rail,
+                        false,
+                        requested_measurement_eligible,
+                        chrono::Utc::now(),
+                    )
+                    .await;
+            });
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Durable attribution could not be recorded.",
+            )
+                .into_response();
+        }
+    };
+    let measurement_eligible = acquisition.measurement_eligible;
+    let attribution = McpDistributionAttribution {
+        acquisition_id: acquisition.id,
+        acquisition_token: acquisition_token.clone(),
+        first_touch_rail: acquisition.first_touch_rail.clone(),
+        current_rail: rail.clone(),
+        measurement_eligible,
+    };
+    let mut response = mcp_post_inner(state.clone(), headers, payload, Some(attribution)).await;
+    response.headers_mut().insert(
+        ACQUISITION_HEADER,
+        HeaderValue::from_str(&acquisition_token)
+            .expect("validated attribution token is a header value"),
+    );
+    if let Some(canary_kind) = &acquisition.canary_kind {
+        response.headers_mut().insert(
+            CANARY_HEADER,
+            HeaderValue::from_str(canary_kind).expect("bounded canary kind is a header value"),
+        );
+    }
+    response.headers_mut().insert(
+        MEASUREMENT_ELIGIBLE_HEADER,
+        HeaderValue::from_static(if measurement_eligible {
+            "true"
+        } else {
+            "false"
+        }),
+    );
+    response.headers_mut().insert(
+        ATTRIBUTION_RAIL_HEADER,
+        HeaderValue::from_str(&rail).expect("approved rail is a header value"),
+    );
+    response.headers_mut().insert(
+        FIRST_TOUCH_RAIL_HEADER,
+        HeaderValue::from_str(&acquisition.first_touch_rail)
+            .expect("approved first-touch rail is a header value"),
+    );
+    let succeeded = response.status().is_success();
+    let store = store.clone();
+    tokio::spawn(async move {
+        let _ = store
+            .record_distribution_rail_request(
+                &rail,
+                succeeded,
+                measurement_eligible,
+                chrono::Utc::now(),
+            )
+            .await;
+    });
+    response
+}
+
+async fn mcp_post_inner(
+    state: SharedState,
+    headers: HeaderMap,
+    mut payload: Value,
+    attribution: Option<McpDistributionAttribution>,
+) -> Response {
+    set_internal_attribution(&mut payload, attribution.as_ref());
     let era = mcp_protocol_era(&headers, &payload);
     let catalog_profile = mcp_catalog_profile(&headers, &payload);
     let excluded = super::analytics_exclusion_is_authorized(&state, &headers);
@@ -626,6 +899,40 @@ pub(super) async fn mcp_post(
         });
     }
     response
+}
+
+fn set_internal_attribution(payload: &mut Value, attribution: Option<&McpDistributionAttribution>) {
+    let requests = match payload {
+        Value::Array(requests) => requests.iter_mut().collect::<Vec<_>>(),
+        request => vec![request],
+    };
+    for request in requests {
+        let Some(object) = request.as_object_mut() else {
+            continue;
+        };
+        let params = object
+            .entry("params")
+            .or_insert_with(|| json!({}))
+            .as_object_mut();
+        let Some(params) = params else {
+            continue;
+        };
+        let metadata = params
+            .entry("_meta")
+            .or_insert_with(|| json!({}))
+            .as_object_mut();
+        let Some(metadata) = metadata else {
+            continue;
+        };
+        metadata.remove(INTERNAL_ATTRIBUTION_META);
+        if let Some(attribution) = attribution {
+            metadata.insert(
+                INTERNAL_ATTRIBUTION_META.to_string(),
+                serde_json::to_value(attribution)
+                    .expect("distribution attribution is serializable"),
+            );
+        }
+    }
 }
 
 async fn handle_mcp_post(
@@ -701,11 +1008,28 @@ pub(super) async fn mcp_get(headers: HeaderMap) -> Response {
         .into_response()
 }
 
+pub(super) async fn attributed_mcp_get(Path(rail): Path<String>, headers: HeaderMap) -> Response {
+    if normalize_distribution_rail(&rail).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    mcp_get(headers).await
+}
+
 pub(super) async fn mcp_delete(headers: HeaderMap) -> Response {
     if !mcp_origin_is_allowed(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     (StatusCode::METHOD_NOT_ALLOWED, [("allow", "POST")]).into_response()
+}
+
+pub(super) async fn attributed_mcp_delete(
+    Path(rail): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if normalize_distribution_rail(&rail).is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    mcp_delete(headers).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -985,6 +1309,11 @@ async fn handle_request(
     };
     let id = id?;
     let params = object.get("params").cloned().unwrap_or_else(|| json!({}));
+    let attribution = params
+        .get("_meta")
+        .and_then(|metadata| metadata.get(INTERNAL_ATTRIBUTION_META))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<McpDistributionAttribution>(value).ok());
 
     let result = match method {
         "server/discover" if era == McpProtocolEra::Modern => Ok(discover_result()),
@@ -1001,7 +1330,7 @@ async fn handle_request(
             }
             Ok(json!({"tools": tools}))
         }
-        "tools/call" => call_tool(state, &params).await,
+        "tools/call" => call_tool(state, &params, attribution.as_ref()).await,
         "resources/list" => Ok(json!({"resources": [feed_widget_resource_descriptor()]})),
         "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
         "resources/read" => read_resource(&params),
@@ -1018,18 +1347,23 @@ async fn handle_request(
     };
 
     Some(match result {
-        Ok(result) => (
-            StatusCode::OK,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": if era == McpProtocolEra::Modern {
-                    modern_result(method, result)
-                } else {
-                    result
-                }
-            }),
-        ),
+        Ok(mut result) => {
+            if let Some(attribution) = attribution {
+                attach_attribution_metadata(&mut result, &attribution);
+            }
+            (
+                StatusCode::OK,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": if era == McpProtocolEra::Modern {
+                        modern_result(method, result)
+                    } else {
+                        result
+                    }
+                }),
+            )
+        }
         Err(error) => (
             if era == McpProtocolEra::Modern {
                 StatusCode::BAD_REQUEST
@@ -1039,6 +1373,29 @@ async fn handle_request(
             json_rpc_error(id, -32602, &error),
         ),
     })
+}
+
+fn attach_attribution_metadata(result: &mut Value, attribution: &McpDistributionAttribution) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let metadata = object
+        .entry("_meta")
+        .or_insert_with(|| json!({}))
+        .as_object_mut();
+    if let Some(metadata) = metadata {
+        metadata.insert(
+            "agentbounties.app/acquisition".to_string(),
+            json!({
+                "acquisition_id": attribution.acquisition_token,
+                "first_touch_rail": attribution.first_touch_rail,
+                "current_rail": attribution.current_rail,
+                "measurement_eligible": attribution.measurement_eligible,
+                "request_header": ACQUISITION_HEADER,
+                "authority": "analytics_only"
+            }),
+        );
+    }
 }
 
 fn initialize_result(params: &Value) -> Value {
@@ -1377,7 +1734,11 @@ fn tool_impact(name: &str) -> (bool, bool, bool, bool) {
     }
 }
 
-async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> {
+async fn call_tool(
+    state: SharedState,
+    params: &Value,
+    attribution: Option<&McpDistributionAttribution>,
+) -> Result<Value, String> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -1756,9 +2117,33 @@ async fn call_tool(state: SharedState, params: &Value) -> Result<Value, String> 
             )
         }
         "prepare_bounty_post" => {
-            let args: PrepareBountyPostArgs = serde_json::from_value(arguments)
-                .map_err(|error| format!("invalid prepare_bounty_post arguments: {error}"))?;
-            let value = prepare_bounty_post_handoff(&state, &args).await?;
+            let request_fingerprint = distribution_request_fingerprint(&arguments);
+            let args: PrepareBountyPostArgs = match serde_json::from_value(arguments) {
+                Ok(args) => args,
+                Err(error) => {
+                    record_prepare_handoff_failure(
+                        &state,
+                        attribution,
+                        &request_fingerprint,
+                        "invalid_arguments",
+                    )
+                    .await;
+                    return Err(format!("invalid prepare_bounty_post arguments: {error}"));
+                }
+            };
+            let value = match prepare_bounty_post_handoff(&state, &args, attribution).await {
+                Ok(value) => value,
+                Err(error) => {
+                    record_prepare_handoff_failure(
+                        &state,
+                        attribution,
+                        &request_fingerprint,
+                        "preparation_failed",
+                    )
+                    .await;
+                    return Err(error);
+                }
+            };
             return Ok(tool_result(
                 value,
                 "Prepared a reviewable wallet handoff, preserving the exact approved AI-generated image when one was supplied. No bounty has been published or created yet.",
@@ -4222,6 +4607,82 @@ mod tests {
     }
 
     #[test]
+    fn internal_distribution_attribution_cannot_be_spoofed_by_mcp_clients() {
+        let mut payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {"_meta": {(INTERNAL_ATTRIBUTION_META): {
+                "acquisition_token": "client-controlled",
+                "first_touch_rail": "forged"
+            }}}
+        });
+        set_internal_attribution(&mut payload, None);
+        assert!(payload["params"]["_meta"]
+            .get(INTERNAL_ATTRIBUTION_META)
+            .is_none());
+
+        let attribution = McpDistributionAttribution {
+            acquisition_id: Uuid::nil(),
+            acquisition_token: "aba1_test.signature".to_string(),
+            first_touch_rail: "bankr".to_string(),
+            current_rail: "cursor".to_string(),
+            measurement_eligible: true,
+        };
+        set_internal_attribution(&mut payload, Some(&attribution));
+        let observed = &payload["params"]["_meta"][INTERNAL_ATTRIBUTION_META];
+        assert_eq!(observed["acquisition_id"], Uuid::nil().to_string());
+        assert_eq!(observed["first_touch_rail"], "bankr");
+        assert_eq!(observed["current_rail"], "cursor");
+    }
+
+    #[test]
+    fn public_mcp_attribution_metadata_is_analytics_only() {
+        let attribution = McpDistributionAttribution {
+            acquisition_id: Uuid::new_v4(),
+            acquisition_token: "aba1_test.signature".to_string(),
+            first_touch_rail: "github".to_string(),
+            current_rail: "github".to_string(),
+            measurement_eligible: true,
+        };
+        let mut result = json!({"tools": []});
+        attach_attribution_metadata(&mut result, &attribution);
+        let metadata = &result["_meta"]["agentbounties.app/acquisition"];
+        assert_eq!(metadata["authority"], "analytics_only");
+        assert_eq!(metadata["request_header"], ACQUISITION_HEADER);
+        assert_eq!(metadata["measurement_eligible"], true);
+        assert!(metadata.get("acquisition_id").is_some());
+        for forbidden in ["private_key", "wallet_signature", "payment_authority"] {
+            assert!(metadata.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn prepare_handoff_failure_fingerprint_is_stable_and_content_free() {
+        let first = distribution_request_fingerprint(&json!({"title": "private task"}));
+        let replay = distribution_request_fingerprint(&json!({"title": "private task"}));
+        let changed = distribution_request_fingerprint(&json!({"title": "different task"}));
+        assert_eq!(first, replay);
+        assert_ne!(first, changed);
+        assert_eq!(first.len(), 64);
+        assert!(!first.contains("private"));
+    }
+
+    #[tokio::test]
+    async fn attributed_mcp_rejects_unknown_canary_markers_before_processing() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CANARY_HEADER, HeaderValue::from_static("unbounded-marker"));
+        let response = attributed_mcp_post(
+            Path("bankr".to_string()),
+            State(public_tool_test_state()),
+            headers,
+            Json(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
     fn handoff_is_prefilled_but_never_claims_creation_or_signature() {
         let args = valid_args();
         let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
@@ -4356,6 +4817,11 @@ mod tests {
         assert!(build_bounty_post_handoff(&args, Some(&image))
             .unwrap_err()
             .contains("greater than zero"));
+
+        args.solver_reward_usdc = "1.999999".to_string();
+        assert!(build_bounty_post_handoff(&args, Some(&image))
+            .unwrap_err()
+            .contains("at least 2 USDC"));
     }
 
     #[test]
@@ -4593,6 +5059,7 @@ mod tests {
             stripe_payment_method_configuration: None,
             operator_api_token: None,
             analytics_exclusion_token: None,
+            distribution_attribution_signing_secret: None,
             mcp_base_url: "http://127.0.0.1:8090".to_string(),
             oauth_authorizations: Mutex::new(HashMap::new()),
             oauth_codes: Mutex::new(HashMap::new()),
@@ -5272,7 +5739,9 @@ mod tests {
             "name": "list_autonomous_bounties",
             "arguments": {"network": "base-mainnet", "claimable_only": true}
         });
-        let result = call_tool(public_tool_test_state(), &params).await.unwrap();
+        let result = call_tool(public_tool_test_state(), &params, None)
+            .await
+            .unwrap();
         let encoded = serde_json::to_string(&result).unwrap();
         assert!(!encoded.contains("unknown or unavailable public ChatGPT app tool"));
         assert!(encoded.contains("DATABASE_URL"));
@@ -5281,6 +5750,7 @@ mod tests {
         let error = call_tool(
             public_tool_test_state(),
             &json!({"name": "not_a_real_tool", "arguments": {}}),
+            None,
         )
         .await
         .unwrap_err();

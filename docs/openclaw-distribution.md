@@ -50,8 +50,12 @@ Until the ClawHub release is published, install directly from the public source
 repository:
 
 ```bash
-openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties
+npx skills add NSPG13/agent-bounties --skill agent-bounties --yes
 ```
+
+The cross-agent installer selects the nested
+`skills/agent-bounties/SKILL.md` bundle. A bare OpenClaw Git-repository install
+is not used because OpenClaw expects `SKILL.md` at the Git source root.
 
 The canonical source for every installer lives at
 `skills/agent-bounties/SKILL.md`. Run the deterministic inventory helper
@@ -155,4 +159,3 @@ Every channel link should carry a source/campaign identifier once the hosted
 attribution flow supports it. Measure the resulting bounty post, reconciled
 funding, verified solve, payout, star/upvote, and repeat participation as
 separate events.
-

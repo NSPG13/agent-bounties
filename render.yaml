@@ -8,6 +8,10 @@ envVarGroups:
         generateValue: true
       - key: ANALYTICS_EXCLUSION_TOKEN
         generateValue: true
+      # Shared by API verification and MCP issuance. Analytics-only; never use a
+      # wallet key, webhook secret, or payment credential for this purpose.
+      - key: DISTRIBUTION_ATTRIBUTION_SIGNING_SECRET
+        generateValue: true
 
   - name: agent-bounties-discovery
     envVars:

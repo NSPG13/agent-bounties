@@ -5,7 +5,8 @@
   const MAX_AI_ROUNDS = 3;
   const MAX_PLAN_TASKS = 6;
   const MAX_TASK_DAYS = 30;
-  const MIN_TOTAL_USDC = 0.02;
+  const MIN_TOTAL_USDC = 2.01;
+  const MIN_SOLVER_USDC_BASE_UNITS = 2_000_000n;
   const MAX_TOTAL_USDC = 9_000_000_000;
   const REGRESSION_ENGINE = "sandboxed_regression_v1";
   const REGRESSION_VERIFIERS = [
@@ -18,6 +19,15 @@
   const ALLOWED_ELEMENTS = new Set([
     "sun", "road", "lamp", "building", "tree", "water", "screen", "document", "network", "tool", "person", "check", "bridge", "book", "chart",
   ]);
+
+  if (typeof module === "object" && module.exports) {
+    module.exports = Object.freeze({
+      parseDistributionAttribution,
+      parsePreparedRewardSplit,
+      rewardSplitForTotal,
+    });
+    return;
+  }
 
   const ui = {
     form: document.getElementById("bounty-composer-form"),
@@ -91,6 +101,7 @@
     selectedTaskId: null,
     taskWindowDays: null,
     fundingUsdc: null,
+    preparedRewards: null,
     visualSpec: null,
     visualSource: "fallback",
     visualCache: new Map(),
@@ -106,6 +117,7 @@
     bountyId: null,
     speech: null,
     handoffReview: false,
+    distributionAttribution: null,
     observedWalletState: null,
   };
 
@@ -202,14 +214,49 @@
 
   function splitReward(total) {
     const totalUnits = usdcBaseUnits(total);
-    if (totalUnits < 20_000n) throw new Error("The current protocol requires at least 0.02 USDC in total.");
+    if (totalUnits < 2_010_000n) {
+      throw new Error("Public bounties require at least 2 USDC for the solver plus a verifier reserve.");
+    }
     const proportional = totalUnits / 50n;
     const verifier = proportional < 10_000n ? 10_000n : proportional;
     let cappedVerifier = verifier > totalUnits / 5n ? totalUnits / 5n : verifier;
+    if (totalUnits - cappedVerifier < MIN_SOLVER_USDC_BASE_UNITS) {
+      cappedVerifier = totalUnits - MIN_SOLVER_USDC_BASE_UNITS;
+    }
     if (cappedVerifier % 2n !== 0n) cappedVerifier -= 1n;
     const solver = totalUnits - cappedVerifier;
-    if (solver < 10_000n) throw new Error("The solver reward must remain at least 0.01 USDC.");
+    if (solver < MIN_SOLVER_USDC_BASE_UNITS || cappedVerifier < 10_000n) {
+      throw new Error("The solver reward must remain at least 2 USDC and the verifier reserve at least 0.01 USDC.");
+    }
     return { total: totalUnits, solver, verifier: cappedVerifier };
+  }
+
+  function parsePreparedRewardSplit(solverValue, verifierValue) {
+    const decimalUsdc = /^\d+(?:\.\d{1,6})?$/;
+    if (!decimalUsdc.test(String(solverValue || "").trim()) || !decimalUsdc.test(String(verifierValue || "").trim())) {
+      throw new Error("Solver and verifier rewards must be decimal USDC amounts with up to six places.");
+    }
+    const solver = usdcBaseUnits(solverValue);
+    const verifier = usdcBaseUnits(verifierValue);
+    const total = solver + verifier;
+    if (solver <= 0n || verifier <= 0n) throw new Error("Solver and verifier rewards must both be positive.");
+    if (solver < MIN_SOLVER_USDC_BASE_UNITS) {
+      throw new Error("Public bounties require at least 2 USDC for the solver.");
+    }
+    if (total < usdcBaseUnits(MIN_TOTAL_USDC) || total > usdcBaseUnits(MAX_TOTAL_USDC)) {
+      throw new Error("The combined reward is invalid.");
+    }
+    return { total, solver, verifier };
+  }
+
+  function currentRewardSplit() {
+    return rewardSplitForTotal(state.fundingUsdc, state.preparedRewards);
+  }
+
+  function rewardSplitForTotal(total, preparedRewards = null) {
+    const totalUnits = usdcBaseUnits(total);
+    if (preparedRewards && preparedRewards.total === totalUnits) return preparedRewards;
+    return splitReward(total);
   }
 
   function parseFunding(value) {
@@ -218,6 +265,20 @@
     if (!match) return null;
     const amount = Number(match[1]);
     return Number.isFinite(amount) && amount >= MIN_TOTAL_USDC && amount <= MAX_TOTAL_USDC ? amount : null;
+  }
+
+  function parseDistributionAttribution(params) {
+    const acquisition = params.get("acquisition");
+    const handoff = params.get("handoff");
+    if (!acquisition && !handoff) return null;
+    if (!acquisition || !handoff) {
+      throw new Error("The attributed handoff must include both acquisition and handoff identifiers.");
+    }
+    if (!/^aba1_[0-9a-f]{64}\.[0-9a-f]{64}$/.test(acquisition)
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handoff)) {
+      throw new Error("The attributed handoff identifiers are malformed. Return to the originating agent and prepare the bounty again.");
+    }
+    return Object.freeze({ acquisition, handoff: handoff.toLowerCase() });
   }
 
   function parseHorizon(value) {
@@ -366,9 +427,9 @@
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
 
     const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
-    const total = Number(prepared.solver_reward_usdc) + Number(prepared.verifier_reward_usdc);
+    const preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc);
+    const total = Number(preparedRewards.total) / 1_000_000;
     if (!Number.isInteger(days) || days < 1 || days > MAX_TASK_DAYS) throw new Error(`The task window must be from 1 to ${MAX_TASK_DAYS} days.`);
-    if (!Number.isFinite(total) || total < MIN_TOTAL_USDC || total > MAX_TOTAL_USDC) throw new Error("The combined reward is invalid.");
     const bountyImage = normalizeBountyImage(prepared.image);
     if (prepared.image_required === true && !bountyImage) {
       throw new Error("The prepared bounty must include the exact image generated and approved in ChatGPT.");
@@ -403,6 +464,7 @@
     state.selectedTaskId = null;
     state.taskWindowDays = days;
     state.fundingUsdc = total;
+    state.preparedRewards = preparedRewards;
     state.bountyImage = bountyImage;
     state.approved = false;
     ui.input.value = "";
@@ -551,7 +613,7 @@
       label: "Total bounty funding",
       placeholder: "Example: 25 USDC",
       button: "Create bounty card",
-      hint: "The total includes the solver reward and a small verifier reserve. Minimum: 0.02 USDC.",
+      hint: "The total includes the solver reward and a verifier reserve. Minimum: 2.01 USDC total, including at least 2 USDC for the solver.",
     });
   }
 
@@ -603,6 +665,7 @@
       state.missionPlan = null;
       state.taskWindowDays = null;
       state.fundingUsdc = parseFunding(value);
+      state.preparedRewards = null;
       requestUserOwnedAi(value);
       ui.input.value = "";
       return;
@@ -659,12 +722,13 @@
         return;
       }
       state.fundingUsdc = amount;
+      state.preparedRewards = null;
       setStatus("");
       renderPreview();
       return;
     }
     if (state.phase === "revise") {
-      const rewards = splitReward(state.fundingUsdc);
+      const rewards = currentRewardSplit();
       requestUserOwnedAi(value, {
         draft: state.draft,
         solver_reward_usdc: formatUsdc(Number(rewards.solver) / 1_000_000),
@@ -729,9 +793,10 @@
   }
 
   function renderCardText() {
+    const rewards = currentRewardSplit();
     ui.title.textContent = state.draft.title;
     ui.goal.textContent = state.draft.goal;
-    ui.reward.textContent = `${formatUsdc(state.fundingUsdc)} USDC`;
+    ui.reward.textContent = `${formatUsdc(state.fundingUsdc)} USDC (${formatUsdc(Number(rewards.solver) / 1_000_000)} solver + ${formatUsdc(Number(rewards.verifier) / 1_000_000)} verifier)`;
     ui.deadline.textContent = state.scope === "mission"
       ? `${state.taskWindowDays} days for this task · ${state.horizon.label} mission`
       : state.horizon.label;
@@ -761,7 +826,7 @@
 
   async function renderPreview() {
     if (!state.draft || state.fundingUsdc == null || !state.horizon || !state.taskWindowDays) return;
-    splitReward(state.fundingUsdc);
+    currentRewardSplit();
     state.phase = "review";
     state.approved = false;
     state.imageReady = false;
@@ -1217,8 +1282,34 @@
     document.querySelector(".composer-shell")?.scrollIntoView({behavior:"smooth",block:"center"});
   }
 
-  function openFunding() {
+  async function openFunding() {
     if (!state.approved) return;
+    const attribution = state.distributionAttribution;
+    if (attribution) {
+      ui.fund.disabled = true;
+      setStatus("Recording the attributed wallet-review boundary…", "pending");
+      try {
+        const acknowledgement = await requestJson(`${API}/v1/distribution/handoffs/wallet-review`, {
+          method: "POST",
+          headers: {
+            "x-agent-bounties-acquisition-id": attribution.acquisition,
+            "x-agent-bounties-handoff-id": attribution.handoff,
+          },
+        });
+        if (acknowledgement?.schema_version !== "agent-bounties/distribution-wallet-review-v1"
+          || acknowledgement.recorded !== true) {
+          throw new Error("The attributed wallet-review boundary was not durably acknowledged.");
+        }
+        if (!state.approved || state.distributionAttribution !== attribution) {
+          throw new Error("The bounty changed before wallet review. Review and approve it again.");
+        }
+      } catch (error) {
+        ui.fund.disabled = !state.approved;
+        setStatus(`${error.message || String(error)} No wallet interface was opened.`, "error");
+        return;
+      }
+      ui.fund.disabled = false;
+    }
     const onrampUrl = new URL("onramp.html", window.location.href);
     onrampUrl.searchParams.set("purpose", "post");
     onrampUrl.searchParams.set("amount", formatUsdc(state.fundingUsdc));
@@ -1299,12 +1390,18 @@
 
   async function fetchFeedItem(api,contract){try{const items=await requestJson(`${api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false`,{cache:"no-store"});return items.find((item)=>String(item.bounty_contract).toLowerCase()===String(contract).toLowerCase())||null;}catch(_error){return null;}}
 
-  async function fundApprovedBounty(){if(!state.approved||!state.provider||!state.account||!state.balances)return;track("canonical_post_started");ui.fundNow.disabled=true;setPaymentStatus("Preparing the exact canonical Base USDC funding request…","pending");try{await refreshWalletReadiness();if(state.balances.usdc<state.balances.required||state.balances.eth===0n)throw new Error("The wallet is not ready to fund this bounty.");if(!window.AgentBountiesLegal)throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");await window.AgentBountiesLegal.requireAcceptance({action:"post_bounty",walletAddress:state.account,scope:ui.dialog});const protocol=await loadProtocol();const api=String(protocol.api_base_url).replace(/\/$/,"");const rewards=splitReward(state.fundingUsdc);const committed=contractTerms(protocol,rewards);const document=termsDocument(committed);const terms=await requestJson(`${api}/v1/base/autonomous-bounties/terms`,{method:"POST",body:JSON.stringify({creator_wallet:state.account,document})});const create=createPayload(terms,committed);const plan=await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`,{method:"POST",body:JSON.stringify({network:"base-mainnet",create})});validateCreationPlan(plan,protocol,create);setPaymentStatus(["Review the wallet request carefully.",`Exact total funding: ${formatUsdc(state.fundingUsdc)} Base USDC.`,`Predicted bounty: ${plan.predicted_bounty_contract}`,"A signature or transaction hash is not funding evidence."].join("\n"),"pending");let transactionHash=null;if(!(await isContractAccount())&&plan.eip3009_authorization){const signature=await state.provider.request({method:"eth_signTypedData_v4",params:[state.account,JSON.stringify(plan.eip3009_authorization)]});const authorized=await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`,{method:"POST",body:JSON.stringify({network:"base-mainnet",create,signature:signatureParts(signature),relayer:state.account})});if(!authorized.relay_transaction||String(authorized.relay_transaction.to).toLowerCase()!==String(protocol.factory).toLowerCase())throw new Error("The authorized transaction does not target the canonical factory.");transactionHash=await sendTransaction(authorized.relay_transaction);await waitReceipt(transactionHash);}else{const result=await sendWalletCalls(plan.wallet_calls,protocol);if(typeof result==="string"&&result.startsWith("0x"))transactionHash=result;}state.bountyContract=plan.predicted_bounty_contract;state.bountyId=plan.bounty_id;setPaymentStatus("Transaction confirmed. Waiting for canonical FundingAdded and BountyBecameClaimable evidence…","pending");const events=await pollCreation(api,plan.bounty_id);if(!events){setPaymentStatus(["The transaction was confirmed, but canonical funding evidence is still pending.",transactionHash?`Transaction: ${protocol.explorer_url}/tx/${transactionHash}`:"Wallet batch submitted.","Do not describe the bounty as funded until FundingAdded and BountyBecameClaimable are confirmed."].join("\n"),"pending");return;}const item=await fetchFeedItem(api,state.bountyContract);if(item?.verification_ready){ui.badge.textContent="Funded · ready to earn";setPaymentStatus(["Bounty funded and ready for public earning.",`Contract: ${state.bountyContract}`,"Solver payment will be proven only by BountySettled."].join("\n"),"success");}else{ui.badge.textContent="Funded · verifier setup required";setPaymentStatus(["Canonical funding is confirmed.",`Contract: ${state.bountyContract}`,"The creator is the committed verifier. The bounty will not appear in the default ready-to-earn inventory until verifier availability is represented by the protocol.","Solver payment will be proven only by BountySettled."].join("\n"),"success");}ui.fundNow.textContent="Funded ✓";ui.fundNow.disabled=true;track("canonical_post_confirmed",{bounty_contract:state.bountyContract});}catch(error){setPaymentStatus(error.message||String(error),"error");ui.fundNow.disabled=false;}}
+  async function fundApprovedBounty(){if(!state.approved||!state.provider||!state.account||!state.balances)return;track("canonical_post_started");ui.fundNow.disabled=true;setPaymentStatus("Preparing the exact canonical Base USDC funding request…","pending");try{await refreshWalletReadiness();if(state.balances.usdc<state.balances.required||state.balances.eth===0n)throw new Error("The wallet is not ready to fund this bounty.");if(!window.AgentBountiesLegal)throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");await window.AgentBountiesLegal.requireAcceptance({action:"post_bounty",walletAddress:state.account,scope:ui.dialog});const protocol=await loadProtocol();const api=String(protocol.api_base_url).replace(/\/$/,"");const rewards=currentRewardSplit();const committed=contractTerms(protocol,rewards);const document=termsDocument(committed);const terms=await requestJson(`${api}/v1/base/autonomous-bounties/terms`,{method:"POST",headers:state.distributionAttribution?{"x-agent-bounties-acquisition-id":state.distributionAttribution.acquisition,"x-agent-bounties-handoff-id":state.distributionAttribution.handoff}:{},body:JSON.stringify({creator_wallet:state.account,document})});const create=createPayload(terms,committed);const plan=await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`,{method:"POST",body:JSON.stringify({network:"base-mainnet",create})});validateCreationPlan(plan,protocol,create);setPaymentStatus(["Review the wallet request carefully.",`Exact total funding: ${formatUsdc(state.fundingUsdc)} Base USDC.`,`Solver reward: ${formatUsdc(Number(rewards.solver)/1_000_000)} Base USDC.`,`Verifier reward and solver bond: ${formatUsdc(Number(rewards.verifier)/1_000_000)} Base USDC.`,`Predicted bounty: ${plan.predicted_bounty_contract}`,"A signature or transaction hash is not funding evidence."].join("\n"),"pending");let transactionHash=null;if(!(await isContractAccount())&&plan.eip3009_authorization){const signature=await state.provider.request({method:"eth_signTypedData_v4",params:[state.account,JSON.stringify(plan.eip3009_authorization)]});const authorized=await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`,{method:"POST",body:JSON.stringify({network:"base-mainnet",create,signature:signatureParts(signature),relayer:state.account})});if(!authorized.relay_transaction||String(authorized.relay_transaction.to).toLowerCase()!==String(protocol.factory).toLowerCase())throw new Error("The authorized transaction does not target the canonical factory.");transactionHash=await sendTransaction(authorized.relay_transaction);await waitReceipt(transactionHash);}else{const result=await sendWalletCalls(plan.wallet_calls,protocol);if(typeof result==="string"&&result.startsWith("0x"))transactionHash=result;}state.bountyContract=plan.predicted_bounty_contract;state.bountyId=plan.bounty_id;setPaymentStatus("Transaction confirmed. Waiting for canonical FundingAdded and BountyBecameClaimable evidence…","pending");const events=await pollCreation(api,plan.bounty_id);if(!events){setPaymentStatus(["The transaction was confirmed, but canonical funding evidence is still pending.",transactionHash?`Transaction: ${protocol.explorer_url}/tx/${transactionHash}`:"Wallet batch submitted.","Do not describe the bounty as funded until FundingAdded and BountyBecameClaimable are confirmed."].join("\n"),"pending");return;}const item=await fetchFeedItem(api,state.bountyContract);if(item?.verification_ready){ui.badge.textContent="Funded · ready to earn";setPaymentStatus(["Bounty funded and ready for public earning.",`Contract: ${state.bountyContract}`,"Solver payment will be proven only by BountySettled."].join("\n"),"success");}else{ui.badge.textContent="Funded · verifier setup required";setPaymentStatus(["Canonical funding is confirmed.",`Contract: ${state.bountyContract}`,"The creator is the committed verifier. The bounty will not appear in the default ready-to-earn inventory until verifier availability is represented by the protocol.","Solver payment will be proven only by BountySettled."].join("\n"),"success");}ui.fundNow.textContent="Funded ✓";ui.fundNow.disabled=true;track("canonical_post_confirmed",{bounty_contract:state.bountyContract});}catch(error){setPaymentStatus(error.message||String(error),"error");ui.fundNow.disabled=false;}}
 
   function configureSpeech(){const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Recognition){ui.mic.hidden=true;ui.hint.textContent="Type naturally. Your words are not posted until you approve the final card.";return;}const recognition=new Recognition();recognition.continuous=false;recognition.interimResults=true;recognition.lang=document.documentElement.lang||navigator.language||"en-US";let original="";recognition.addEventListener("start",()=>{original=ui.input.value.trim();ui.mic.dataset.listening="true";setStatus("Listening…","pending");});recognition.addEventListener("result",(event)=>{let transcript="";for(let index=event.resultIndex;index<event.results.length;index+=1)transcript+=event.results[index][0].transcript;ui.input.value=[original,transcript.trim()].filter(Boolean).join(original?" ":"");});recognition.addEventListener("end",()=>{ui.mic.dataset.listening="false";setStatus("Review the dictated text, then continue.");});recognition.addEventListener("error",(event)=>{ui.mic.dataset.listening="false";setStatus(event.error==="not-allowed"?"Microphone permission was not granted. You can still type.":"Dictation stopped. You can continue typing.","error");});ui.mic.addEventListener("click",()=>{if(ui.mic.dataset.listening==="true")recognition.stop();else recognition.start();});state.speech=recognition;}
 
   async function prefillFromQuery() {
     const params = new URLSearchParams(window.location.search);
+    try {
+      state.distributionAttribution = parseDistributionAttribution(params);
+    } catch (error) {
+      setStatus(error.message || String(error), "error");
+      return;
+    }
     const fromAiApp = ["ai-app", "chatgpt-app"].includes(params.get("from"));
     if (fromAiApp) { enableAiHandoffReview(); track("canonical_post_handoff_viewed"); }
     const title = params.get("title");
@@ -1352,7 +1449,14 @@
           ui.input.value = [draft.draft_objective, draft.goal, ...(draft.acceptance_criteria || [])].filter(Boolean).join("\n");
           const importedSolver = Number(draft.solver_reward && draft.solver_reward.amount || 0);
           const importedVerifier = Number(draft.verifier_reward && draft.verifier_reward.amount || 0);
-          if (Number.isSafeInteger(importedSolver) && Number.isSafeInteger(importedVerifier)) state.fundingUsdc = (importedSolver + importedVerifier) / 1_000_000;
+          if (Number.isSafeInteger(importedSolver) && importedSolver > 0 && Number.isSafeInteger(importedVerifier) && importedVerifier > 0) {
+            state.preparedRewards = {
+              solver: BigInt(importedSolver),
+              verifier: BigInt(importedVerifier),
+              total: BigInt(importedSolver + importedVerifier),
+            };
+            state.fundingUsdc = Number(state.preparedRewards.total) / 1_000_000;
+          }
           setStatus("Draft imported. It has not been posted or funded. Describe any changes, then continue.", "pending");
         }
       } catch (error) {

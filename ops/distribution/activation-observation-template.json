@@ -1,0 +1,67 @@
+{
+  "schema_version": "agent-bounties/distribution-observation-v1",
+  "evidence_scope": "operator-reviewed aggregate template; not a production observation",
+  "exclusion_review": {
+    "status": "incomplete",
+    "required_classes_reviewed": [],
+    "external_wallet_proxy_disclosed": true,
+    "operator_funded_development_excluded": true
+  },
+  "attribution": {
+    "eligible_external_funded_bounties": 0,
+    "attributed_external_funded_bounties": 0
+  },
+  "safety": {
+    "open_critical_incidents": 0
+  },
+  "rails": [
+    {
+      "rail_id": "glama",
+      "spend_mxn": "0.00",
+      "unique_external_funded_poster_wallets": 0,
+      "external_funded_canonical_settlements": 0,
+      "verified_useful_settlements": 0,
+      "verified_useful_evidence_refs": [],
+      "canary": {
+        "dry_runs_total": 0,
+        "dry_runs_joined": 0,
+        "mainnet_runs_total": 0,
+        "mainnet_runs_settled": 0,
+        "excluded_from_external_metrics": true,
+        "evidence_refs": []
+      }
+    },
+    {
+      "rail_id": "mcp-so",
+      "spend_mxn": "0.00",
+      "unique_external_funded_poster_wallets": 0,
+      "external_funded_canonical_settlements": 0,
+      "verified_useful_settlements": 0,
+      "verified_useful_evidence_refs": [],
+      "canary": {
+        "dry_runs_total": 0,
+        "dry_runs_joined": 0,
+        "mainnet_runs_total": 0,
+        "mainnet_runs_settled": 0,
+        "excluded_from_external_metrics": true,
+        "evidence_refs": []
+      }
+    },
+    {
+      "rail_id": "mcpservers",
+      "spend_mxn": "0.00",
+      "unique_external_funded_poster_wallets": 0,
+      "external_funded_canonical_settlements": 0,
+      "verified_useful_settlements": 0,
+      "verified_useful_evidence_refs": [],
+      "canary": {
+        "dry_runs_total": 0,
+        "dry_runs_joined": 0,
+        "mainnet_runs_total": 0,
+        "mainnet_runs_settled": 0,
+        "excluded_from_external_metrics": true,
+        "evidence_refs": []
+      }
+    }
+  ]
+}
