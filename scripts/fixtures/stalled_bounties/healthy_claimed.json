@@ -1,0 +1,35 @@
+{
+  "bounty_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "bounty_contract": "0x1111111111111111111111111111111111111111",
+  "status": "claimed",
+  "round": 1,
+  "solver": "0x2222222222222222222222222222222222222222",
+  "active_claim_bond": 100000,
+  "funded_amount": 1100000,
+  "target_amount": 1100000,
+  "solver_reward": 1000000,
+  "verifier_reward": 100000,
+  "claim_expires_at": 1780000000,
+  "verification_expires_at": 0,
+  "terms_valid": true,
+  "verification_ready": true,
+  "terms": {
+    "document": {
+      "title": "Healthy Claimed Task",
+      "claim_window_seconds": 604800,
+      "verification_window_seconds": 7200,
+      "contract_terms": {
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200
+      }
+    }
+  },
+  "events": [
+    {
+      "kind": "BountyClaimed",
+      "round": 1,
+      "solver": "0x2222222222222222222222222222222222222222",
+      "claim_expires_at": 1780000000
+    }
+  ]
+}

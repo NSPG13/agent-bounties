@@ -1,0 +1,51 @@
+{
+  "bounty_id": "0x5555555555555555555555555555555555555555555555555555555555555555",
+  "bounty_contract": "0x5555555555555555555555555555555555555555",
+  "status": "submitted",
+  "round": 1,
+  "solver": "0x6666666666666666666666666666666666666666",
+  "active_claim_bond": 100000,
+  "funded_amount": 1100000,
+  "target_amount": 1100000,
+  "solver_reward": 1000000,
+  "verifier_reward": 100000,
+  "claim_expires_at": 1780000000,
+  "verification_expires_at": 1780007200,
+  "submission_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+  "evidence_hash": "0x8888888888888888888888888888888888888888888888888888888888888888",
+  "terms_valid": true,
+  "verification_ready": false,
+  "verifier_fleet": {
+    "state": "unavailable",
+    "unready_claimable_count": 1,
+    "consecutive_failures": 3,
+    "last_error": "verifier service outage: connection refused"
+  },
+  "terms": {
+    "document": {
+      "title": "Submitted Work Under Verifier Fleet Outage",
+      "claim_window_seconds": 604800,
+      "verification_window_seconds": 7200,
+      "contract_terms": {
+        "claim_window_seconds": 604800,
+        "verification_window_seconds": 7200
+      }
+    }
+  },
+  "events": [
+    {
+      "kind": "BountyClaimed",
+      "round": 1,
+      "solver": "0x6666666666666666666666666666666666666666",
+      "claim_expires_at": 1780000000
+    },
+    {
+      "kind": "SubmissionAdded",
+      "round": 1,
+      "solver": "0x6666666666666666666666666666666666666666",
+      "submission_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+      "evidence_hash": "0x8888888888888888888888888888888888888888888888888888888888888888",
+      "verification_expires_at": 1780007200
+    }
+  ]
+}
