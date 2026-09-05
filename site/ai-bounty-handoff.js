@@ -90,6 +90,12 @@
       source_url: sourceUrl,
       crowdfund: Boolean(raw.crowdfund),
       discovery_source: boundedText(raw.discovery_source || "User-owned AI assistant", "Discovery source", 500),
+      benchmark: raw.benchmark && typeof raw.benchmark === "object" && !Array.isArray(raw.benchmark)
+        ? raw.benchmark
+        : null,
+      evidence_schema: raw.evidence_schema && typeof raw.evidence_schema === "object" && !Array.isArray(raw.evidence_schema)
+        ? raw.evidence_schema
+        : null,
       ...(raw.image_required === true
         ? {
             image_required: true,
@@ -125,10 +131,12 @@ If the connector is unavailable, ask concise clarifying questions and then retur
   "task_window_days": 30,
   "source_url": null,
   "crowdfund": false,
-  "discovery_source": "AI provider and account used"
+  "discovery_source": "AI provider and account used",
+  "benchmark": null,
+  "evidence_schema": null
 }
 
-Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, each <= 1000; rewards are positive USDC decimals with at most 6 places; task_window_days is 1-30; source_url is HTTPS or null. Do not claim that anything is posted, created, funded, signed, or paid. I must explicitly approve the bounty terms and separately approve any wallet transaction on Agent Bounties.`;
+Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, each <= 1000; rewards are positive USDC decimals with at most 6 places; task_window_days is 1-30; source_url is HTTPS or null. A funded coding bounty must include an exact public sandboxed_regression_v1 benchmark and matching evidence_schema; never invent a commit, digest, OCI image, command, or resource limit. Do not claim that anything is posted, created, funded, signed, or paid. I must explicitly approve the bounty terms and separately approve any wallet transaction on Agent Bounties.`;
   }
 
   function setImportStatus(message, tone = "") {

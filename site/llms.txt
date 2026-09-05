@@ -87,6 +87,12 @@ Safe-block chain manifest: https://raw.githubusercontent.com/NSPG13/agent-bounti
 Person-led: open https://agentbounties.app/#post-a-bounty or call
 `prepare_bounty_post` when the MCP session advertises it.
 
+Funding-ready coding handoffs pass `benchmark` and `evidence_schema` together.
+The benchmark must bind a public GitHub commit and normalized subdirectory to a
+complete `agent-bounties/regression-sandbox-v1` runner with a digest-pinned OCI
+image, direct argv, benchmark digest, and bounded resources. Mutable or partial
+verifier inputs must remain drafts and must not reach wallet review.
+
 Advanced:
 
 1. Define one inspectable goal and binary, replayable acceptance criteria.

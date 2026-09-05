@@ -70,12 +70,32 @@ const draft = api.parseDraft(`\`\`\`json
   "solver_reward_usdc": "4.00",
   "verifier_reward_usdc": "0.10",
   "task_window_days": 21,
-  "source_url": "https://example.com/context"
+  "source_url": "https://example.com/context",
+  "benchmark": {
+    "engine": "sandboxed_regression_v1",
+    "source": {
+      "kind": "github_commit",
+      "repository": "NSPG13/agent-bounties",
+      "commit": "0fae18cf9be464132cde52dfb9d464d836e8f024",
+      "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit"
+    },
+    "runner_manifest": {
+      "schema_version": "agent-bounties/regression-sandbox-v1"
+    }
+  },
+  "evidence_schema": {
+    "type": "object",
+    "required": ["source_snapshot_digest"]
+  }
 }
 \`\`\``);
 
 if (draft.task_window_days !== 21 || draft.acceptance_criteria.length !== 2) {
   throw new Error(`valid AI draft was not normalized: ${JSON.stringify(draft)}`);
+}
+if (draft.benchmark?.source?.commit !== "0fae18cf9be464132cde52dfb9d464d836e8f024"
+  || draft.evidence_schema?.required?.[0] !== "source_snapshot_digest") {
+  throw new Error("the exact benchmark and evidence schema were stripped from the AI draft");
 }
 
 const approvedImage = {
@@ -122,7 +142,7 @@ for (const invalid of [
 }
 
 const prompt = api.promptFor("Build a public climate dashboard");
-for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "Otherwise omit all three image fields", "Do not claim that anything is posted"]) {
+for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "Otherwise omit all three image fields", "exact public sandboxed_regression_v1 benchmark", "Do not claim that anything is posted"]) {
   if (!prompt.includes(marker)) throw new Error(`AI handoff prompt missing: ${marker}`);
 }
 

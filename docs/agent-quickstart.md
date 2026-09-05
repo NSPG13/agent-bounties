@@ -125,6 +125,10 @@ The human review entry is <https://agentbounties.app/post.html>. MCP clients may
 call `prepare_bounty_post` when that tool appears in their session. The image
 fields are an optional all-or-none group: clients that cannot supply an
 approved image can still prepare a complete provider-neutral posting handoff.
+For a funding-ready coding bounty, pass `benchmark` and `evidence_schema`
+together. The benchmark source commit, subdirectory digest, OCI image digest,
+direct command, and sandbox resource limits become immutable public terms; an
+incomplete or mutable runner is rejected before the wallet-review handoff.
 
 Advanced flow:
 
