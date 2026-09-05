@@ -536,6 +536,8 @@ tool_args! {
         #[serde(default)]
         crowdfund: bool,
         discovery_source: Option<String>,
+        benchmark: Option<Value>,
+        evidence_schema: Option<Value>,
         image_prompt: Option<String>,
         image_alt_text: Option<String>,
         bounty_image: Option<ChatgptFileInput>,
@@ -555,6 +557,8 @@ tool_args! {
             "source_url": nullable_string_property("Optional public HTTPS source issue or task URL."),
             "crowdfund": {"type": "boolean", "default": false, "description": "Keep false to fund on creation. Set true only to deposit 0 USDC now."},
             "discovery_source": nullable_string_property("Optional public attribution for how the poster found Agent Bounties."),
+            "benchmark": {"type": ["object", "null"], "description": "Optional exact public sandboxed_regression_v1 benchmark. Supply this and evidence_schema together. The source commit, benchmark digest, OCI image, command, and resource limits are immutable bounty terms."},
+            "evidence_schema": {"type": ["object", "null"], "description": "Optional public submission-evidence schema paired with benchmark. Supply both verifier fields or neither."},
             "image_prompt": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "Optional exact prompt used to generate a user-approved bounty image. Supply this, image_alt_text, and bounty_image together, or omit all three to use the deterministic fallback visual."},
             "image_alt_text": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Optional accessible description of the approved image. Supply this, image_prompt, and bounty_image together."},
             "bounty_image": {

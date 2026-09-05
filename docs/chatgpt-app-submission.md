@@ -109,6 +109,10 @@ OpenAI-hosted file URL, validates a PNG/JPEG/WebP payload of at most 5 MiB,
 stores it by SHA-256, and returns a first-party review URL. The private ChatGPT
 `file_id` is never placed in public terms. Provider-neutral clients may omit
 the image, prompt, and alt text together; partial image metadata is rejected.
+Coding bounties may also pass `benchmark` and `evidence_schema` together. The
+server validates the complete sandbox runner manifest and preserves both
+objects through the first-party review URL; partial, mutable, malformed, or
+non-executable verifier inputs are rejected before any wallet surface opens.
 Agent Bounties never generates or substitutes bounty artwork. The review URL
 renders the completed approved terms and optional image; it does not publish or
 move funds without the separate wallet-reviewed flow.

@@ -62,6 +62,7 @@ const BOUNTY_CARD_PREVIEW_HTML: &str = include_str!("../assets/chatgpt-bounty-ca
 const FEED_CARD_ART: &[u8] =
     include_bytes!("../../../site/assets/solarpunk/characters-helping.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+const REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
@@ -431,6 +432,7 @@ pub(super) fn build_bounty_post_handoff(
         .as_deref()
         .map(|value| bounded_text(value, "discovery_source", 500))
         .transpose()?;
+    validate_prepared_verifier(args.benchmark.as_ref(), args.evidence_schema.as_ref())?;
     match (
         image,
         args.image_prompt.as_deref(),
@@ -481,6 +483,21 @@ pub(super) fn build_bounty_post_handoff(
                 .as_deref()
                 .unwrap_or("AI assistant via MCP"),
         );
+        if let Some(benchmark) = args.benchmark.as_ref() {
+            query.append_pair(
+                "benchmark",
+                &serde_json::to_string(benchmark)
+                    .map_err(|_| "benchmark could not be encoded for browser review".to_string())?,
+            );
+        }
+        if let Some(evidence_schema) = args.evidence_schema.as_ref() {
+            query.append_pair(
+                "evidenceSchema",
+                &serde_json::to_string(evidence_schema).map_err(|_| {
+                    "evidence_schema could not be encoded for browser review".to_string()
+                })?,
+            );
+        }
         if let Some(image) = image {
             query.append_pair("imageUrl", &image.asset_url);
             query.append_pair("imageSha256", &image.sha256);
@@ -509,6 +526,8 @@ pub(super) fn build_bounty_post_handoff(
         "initial_funding_usdc": if args.crowdfund { "0".to_string() } else { format_usdc(target) },
         "crowdfund": args.crowdfund,
         "source_url": source_url,
+        "benchmark": args.benchmark,
+        "evidence_schema": args.evidence_schema,
         "image": image,
         "post_url": post_url.as_str(),
         "bounty_created": false,
@@ -516,6 +535,253 @@ pub(super) fn build_bounty_post_handoff(
         "next_action": "Open the secure handoff, review every field, and choose whether to deposit 0 USDC now or fully fund. Then connect the creator wallet and approve only the exact Base transaction shown by that wallet.",
         "evidence_boundary": "No bounty id or contract exists yet. Only confirmed CanonicalBountyCreated proves creation; FundingAdded and BountyBecameClaimable prove funding and claimability."
     }))
+}
+
+fn validate_prepared_verifier(
+    benchmark: Option<&Value>,
+    evidence_schema: Option<&Value>,
+) -> Result<(), String> {
+    match (benchmark, evidence_schema) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err("benchmark is required when evidence_schema is supplied".to_string())
+        }
+        (Some(_), None) => {
+            return Err("evidence_schema is required when benchmark is supplied".to_string())
+        }
+        (Some(_), Some(_)) => {}
+    }
+    let benchmark = benchmark.expect("matched benchmark presence");
+    let evidence_schema = evidence_schema.expect("matched evidence schema presence");
+    for (value, label) in [
+        (benchmark, "benchmark"),
+        (evidence_schema, "evidence_schema"),
+    ] {
+        let encoded = serde_json::to_vec(value)
+            .map_err(|_| format!("{label} could not be encoded safely"))?;
+        if encoded.len() > 20_000 {
+            return Err(format!("{label} exceeds the 20,000-byte handoff limit"));
+        }
+        if !value.is_object() {
+            return Err(format!("{label} must be an object"));
+        }
+    }
+    if benchmark.get("engine").and_then(Value::as_str) != Some(REGRESSION_ENGINE) {
+        return Err(format!("benchmark.engine must be {REGRESSION_ENGINE}"));
+    }
+    let source = benchmark
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "benchmark.source must be an object".to_string())?;
+    if source.get("kind").and_then(Value::as_str) != Some("github_commit") {
+        return Err("benchmark.source.kind must be github_commit".to_string());
+    }
+    let repository = source
+        .get("repository")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "benchmark.source.repository is required".to_string())?;
+    let repository_parts = repository.split('/').collect::<Vec<_>>();
+    if repository_parts.len() != 2
+        || repository_parts.iter().any(|part| {
+            part.is_empty()
+                || part.len() > 100
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+    {
+        return Err("benchmark.source.repository must be owner/repository".to_string());
+    }
+    let commit = source
+        .get("commit")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "benchmark.source.commit is required".to_string())?;
+    if commit.len() != 40
+        || !commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(
+            "benchmark.source.commit must be 40 lowercase hexadecimal characters".to_string(),
+        );
+    }
+    let subdirectory = source
+        .get("subdirectory")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "benchmark.source.subdirectory is required".to_string())?;
+    if subdirectory.is_empty()
+        || subdirectory.len() > 500
+        || subdirectory.starts_with('/')
+        || subdirectory.ends_with('/')
+        || subdirectory.contains('\\')
+        || subdirectory
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+    {
+        return Err("benchmark.source.subdirectory must be a normalized non-root path".to_string());
+    }
+    let runner = benchmark
+        .get("runner_manifest")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "benchmark.runner_manifest must be an object".to_string())?;
+    let expected_runner_keys = [
+        "schema_version",
+        "image",
+        "command",
+        "workdir",
+        "benchmark_digest",
+        "timeout_seconds",
+        "cpu_millis",
+        "memory_bytes",
+        "pids_limit",
+        "max_output_bytes",
+        "tmpfs_bytes",
+        "max_source_bytes",
+        "max_source_files",
+        "max_benchmark_bytes",
+        "max_benchmark_files",
+        "platform",
+        "test_seed",
+    ];
+    if runner.len() != expected_runner_keys.len()
+        || expected_runner_keys
+            .iter()
+            .any(|key| !runner.contains_key(*key))
+    {
+        return Err(
+            "benchmark.runner_manifest must contain the complete regression-sandbox-v1 field set"
+                .to_string(),
+        );
+    }
+    if runner.get("schema_version").and_then(Value::as_str)
+        != Some("agent-bounties/regression-sandbox-v1")
+    {
+        return Err(
+            "benchmark.runner_manifest.schema_version must be agent-bounties/regression-sandbox-v1"
+                .to_string(),
+        );
+    }
+    let image = runner
+        .get("image")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "benchmark.runner_manifest.image is required".to_string())?;
+    let image_parts = image.split('@').collect::<Vec<_>>();
+    if image_parts.len() != 2
+        || image_parts[0].is_empty()
+        || image_parts[0].starts_with('-')
+        || image_parts[0].contains("..")
+        || image_parts[0].bytes().any(|byte| {
+            !(byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'/' | b':' | b'_' | b'-'))
+        })
+        || !valid_sha256_digest(image_parts[1])
+    {
+        return Err(
+            "benchmark.runner_manifest.image must be one lowercase OCI reference pinned by sha256 digest"
+                .to_string(),
+        );
+    }
+    let command = runner
+        .get("command")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "benchmark.runner_manifest.command must be an array".to_string())?;
+    if command.is_empty() || command.len() > 64 {
+        return Err(
+            "benchmark.runner_manifest.command must contain 1 to 64 direct argv entries"
+                .to_string(),
+        );
+    }
+    let mut command_bytes = 0usize;
+    for argument in command {
+        let argument = argument.as_str().ok_or_else(|| {
+            "benchmark.runner_manifest.command entries must be strings".to_string()
+        })?;
+        if argument.is_empty() || argument.len() > 4_096 || argument.contains(['\0', '\n', '\r']) {
+            return Err(
+                "benchmark.runner_manifest.command contains an invalid argv entry".to_string(),
+            );
+        }
+        command_bytes = command_bytes.saturating_add(argument.len());
+    }
+    if command_bytes > 16_384 {
+        return Err("benchmark.runner_manifest.command exceeds the argv byte limit".to_string());
+    }
+    let executable = command[0]
+        .as_str()
+        .unwrap_or_default()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        executable.as_str(),
+        "sh" | "bash" | "dash" | "zsh" | "cmd" | "cmd.exe" | "powershell" | "pwsh"
+    ) {
+        return Err(
+            "benchmark.runner_manifest.command must use direct argv and cannot invoke a shell"
+                .to_string(),
+        );
+    }
+    if runner.get("workdir").and_then(Value::as_str) != Some("/workspace") {
+        return Err("benchmark.runner_manifest.workdir must be /workspace".to_string());
+    }
+    if !runner
+        .get("benchmark_digest")
+        .and_then(Value::as_str)
+        .is_some_and(valid_sha256_digest)
+    {
+        return Err(
+            "benchmark.runner_manifest.benchmark_digest must use sha256:<64 lowercase hex>"
+                .to_string(),
+        );
+    }
+    let bounds = [
+        ("timeout_seconds", 1, 900),
+        ("cpu_millis", 100, 4_000),
+        ("memory_bytes", 67_108_864, 4_294_967_296),
+        ("pids_limit", 16, 512),
+        ("max_output_bytes", 1_024, 16_777_216),
+        ("tmpfs_bytes", 67_108_864, 4_294_967_296),
+        ("max_source_bytes", 1, 2_147_483_648),
+        ("max_source_files", 1, 100_000),
+        ("max_benchmark_bytes", 1, 536_870_912),
+        ("max_benchmark_files", 1, 50_000),
+        ("test_seed", 0, 9_007_199_254_740_991),
+    ];
+    for (field, minimum, maximum) in bounds {
+        if !runner
+            .get(field)
+            .and_then(Value::as_u64)
+            .is_some_and(|value| (minimum..=maximum).contains(&value))
+        {
+            return Err(format!(
+                "benchmark.runner_manifest.{field} is outside protocol bounds"
+            ));
+        }
+    }
+    if runner["tmpfs_bytes"].as_u64() > runner["memory_bytes"].as_u64() {
+        return Err("benchmark.runner_manifest.tmpfs_bytes cannot exceed memory_bytes".to_string());
+    }
+    if !matches!(
+        runner.get("platform").and_then(Value::as_str),
+        Some("linux/amd64" | "linux/arm64")
+    ) {
+        return Err(
+            "benchmark.runner_manifest.platform must be linux/amd64 or linux/arm64".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 async fn persist_chatgpt_bounty_image(
@@ -4590,6 +4856,45 @@ mod tests {
             crowdfund: false,
             task_window_days: None,
             discovery_source: Some("ChatGPT user feedback".to_string()),
+            benchmark: Some(json!({
+                "engine": "sandboxed_regression_v1",
+                "source": {
+                    "kind": "github_commit",
+                    "repository": "NSPG13/agent-bounties",
+                    "commit": "0fae18cf9be464132cde52dfb9d464d836e8f024",
+                    "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit"
+                },
+                "runner_manifest": {
+                    "schema_version": "agent-bounties/regression-sandbox-v1",
+                    "image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
+                    "command": ["python", "/benchmark/check.py"],
+                    "workdir": "/workspace",
+                    "benchmark_digest": "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
+                    "timeout_seconds": 120,
+                    "cpu_millis": 1000,
+                    "memory_bytes": 536870912,
+                    "pids_limit": 128,
+                    "max_output_bytes": 1048576,
+                    "tmpfs_bytes": 268435456,
+                    "max_source_bytes": 67108864,
+                    "max_source_files": 1000,
+                    "max_benchmark_bytes": 1048576,
+                    "max_benchmark_files": 100,
+                    "platform": "linux/amd64",
+                    "test_seed": 1
+                }
+            })),
+            evidence_schema: Some(json!({
+                "type": "object",
+                "required": ["source_snapshot_digest"],
+                "properties": {
+                    "source_snapshot_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                },
+                "additionalProperties": false
+            })),
             image_prompt: Some(
                 "Minimal editorial illustration of a reconciliation test becoming green."
                     .to_string(),
@@ -4695,6 +5000,11 @@ mod tests {
         assert_eq!(handoff["initial_funding_usdc"], "2.1");
         assert_eq!(handoff["bounty_created"], false);
         assert_eq!(handoff["wallet_signature_requested"], false);
+        assert_eq!(handoff["benchmark"], *args.benchmark.as_ref().unwrap());
+        assert_eq!(
+            handoff["evidence_schema"],
+            *args.evidence_schema.as_ref().unwrap()
+        );
         assert_eq!(handoff["image"]["source"], "chatgpt_user_generated");
         assert!(pairs
             .iter()
@@ -4706,6 +5016,29 @@ mod tests {
             pairs.iter().filter(|(key, _)| key == "criterion").count(),
             2
         );
+        assert!(pairs.iter().any(|(key, value)| {
+            key == "benchmark"
+                && value.contains("benchmarks/distribution-v1/glama-onboarding-audit")
+        }));
+        assert!(pairs.iter().any(
+            |(key, value)| key == "evidenceSchema" && value.contains("source_snapshot_digest")
+        ));
+    }
+
+    #[test]
+    fn verifier_handoff_rejects_incomplete_or_non_executable_inputs() {
+        let mut args = valid_args();
+        args.evidence_schema = None;
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("evidence_schema is required"));
+
+        let mut args = valid_args();
+        args.benchmark.as_mut().unwrap()["runner_manifest"]["image"] =
+            json!("docker.io/library/python:latest");
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
     }
 
     #[test]

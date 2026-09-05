@@ -445,8 +445,8 @@
       acceptance_criteria: prepared.acceptance_criteria,
       questions: [],
       risk_flags: [],
-      benchmark: { type: "creator_review" },
-      evidence_schema: { type: "object", additionalProperties: true },
+      benchmark: prepared.benchmark || { type: "creator_review" },
+      evidence_schema: prepared.evidence_schema || { type: "object", additionalProperties: true },
     });
     state.draft = state.initialDraft;
     state.aiRounds = 0;
@@ -1412,6 +1412,16 @@
 
     if (title && goal && criteria.length && solver && verifier) {
       try {
+        const parseHandoffJson = (name) => {
+          const encoded = params.get(name);
+          if (!encoded) return null;
+          if (encoded.length > 20000) throw new Error(`${name} exceeds the browser handoff limit.`);
+          const value = JSON.parse(encoded);
+          if (!value || typeof value !== "object" || Array.isArray(value)) {
+            throw new Error(`${name} must be one JSON object.`);
+          }
+          return value;
+        };
         await importPreparedDraft({
           title,
           goal,
@@ -1422,6 +1432,8 @@
           source_url: params.get("sourceUrl"),
           crowdfund: params.get("crowdfund") === "true",
           discovery_source: params.get("discoverySource") || "AI assistant via MCP",
+          benchmark: parseHandoffJson("benchmark"),
+          evidence_schema: parseHandoffJson("evidenceSchema"),
           image_required: Boolean(params.get("imageUrl")),
           image: params.get("imageUrl") ? {
               source: "chatgpt_user_generated",
