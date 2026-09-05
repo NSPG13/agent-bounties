@@ -1,0 +1,72 @@
+{
+  "schema_version": "agent-bounties/glama-onboarding-audit-evidence-v1",
+  "rail": "glama",
+  "measurement_exclusion": "synthetic_canary",
+  "mcp": {
+    "endpoint": "https://mcp.agentbounties.app/r/glama/mcp",
+    "install_url": "https://agentbounties.app/install/glama/",
+    "protocol_version": "2025-06-18",
+    "first_touch_rail": "glama",
+    "current_rail": "glama",
+    "measurement_eligible_at_discovery": true,
+    "prepare_bounty_post_discoverable": true,
+    "initialize": {
+      "captured_at": "2026-09-05T04:01:00Z",
+      "request_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "response_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "redacted": true
+    },
+    "tools_list": {
+      "captured_at": "2026-09-05T04:02:00Z",
+      "request_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "response_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "redacted": true
+    }
+  },
+  "wallet_boundary": {
+    "first_party_review_url": "https://agentbounties.app/post.html?fixture=redacted",
+    "human_approval_observed": true,
+    "agent_received_private_key": false,
+    "agent_received_seed_phrase": false,
+    "agent_received_wallet_signature": false,
+    "agent_received_payout_authority": false
+  },
+  "lifecycle": {
+    "network": "base-mainnet",
+    "chain_id": 8453,
+    "bounty_contract": "0x4444444444444444444444444444444444444444",
+    "bounty_id": 1,
+    "created": {
+      "event": "CanonicalBountyCreated",
+      "transaction_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "block_number": 100,
+      "log_index": 0,
+      "explorer_url": "https://basescan.org/tx/0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "funded": {
+      "event": "FundingAdded",
+      "transaction_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "block_number": 101,
+      "log_index": 1,
+      "explorer_url": "https://basescan.org/tx/0x2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "verifier_evidence": {
+      "public_url": "https://example.com/glama-canary/verifier-evidence.json",
+      "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "settled": {
+      "event": "BountySettled",
+      "transaction_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "block_number": 102,
+      "log_index": 2,
+      "explorer_url": "https://basescan.org/tx/0x3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  },
+  "report": {
+    "public_url": "https://example.com/glama-canary/glama-onboarding-audit.md",
+    "path": "glama-onboarding-audit.md",
+    "sha256": "sha256:75ee6a50508164b0f8daa18228268131b1d8892ef1430a71be2d1018aaeb2dbc",
+    "started_at": "2026-09-05T04:00:00Z",
+    "completed_at": "2026-09-05T04:20:00Z"
+  }
+}
