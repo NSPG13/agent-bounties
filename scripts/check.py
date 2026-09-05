@@ -175,6 +175,11 @@ scripts/test_reconcile_github_bounty_labels.py scripts/validate_real_funding_reh
         py("-m", "py_compile", *sdk, *scripts)
         py("-m", "pip", "install", "-e", "crates/sdk-python")
         py("-m", "unittest", "discover", "-s", "crates/sdk-python/tests", "-t", "crates/sdk-python", "-v")
+    # Focused Taskmarket adapter suite (unit + security + process/MCP boundary
+    # + packaging smoke); registered per review feedback on PR #986.
+    py("-m", "unittest", "discover",
+       "-s", "integrations/taskmarket/tests",
+       "-t", "integrations/taskmarket", "-v")
 
 
 def check_deployment_bundles(cargo: str, platform: str) -> None:
