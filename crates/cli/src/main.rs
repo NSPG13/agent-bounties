@@ -5901,6 +5901,7 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
     for relative_path in [
         "crates/api/src/main.rs",
         "crates/api/src/discoverability.rs",
+        "crates/api/src/distribution.rs",
         "crates/api/src/open_competition_v2_api.rs",
         "crates/mcp-server/src/main.rs",
     ] {
@@ -7295,6 +7296,10 @@ mod tests {
             "/v1/operator/discoverability/snapshots",
             "/v1/operator/discoverability/report",
             "/v1/discoverability/summary",
+            "/v1/operator/distribution/report",
+            "/v1/operator/distribution/wallet-exclusions",
+            "/v1/distribution/summary",
+            "/v1/distribution/handoffs/wallet-review",
         ] {
             assert!(routes.contains(route), "missing modular API route {route}");
         }
