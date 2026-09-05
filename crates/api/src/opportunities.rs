@@ -3093,4 +3093,22 @@ mod tests {
         assert!(feeds.rss.contains("Gross cash margin (not net profit)"));
         assert!(!feeds.rss.to_ascii_lowercase().contains("guaranteed profit"));
     }
+
+    #[test]
+    fn activation_reconciliation_lifecycle_aware_bounty_735() {
+        let active_statuses = ["claimable", "claimed", "submitted", "verifying"];
+        for status in active_statuses {
+            let raw = canonical(status, "99000000", true);
+            let item = canonical_opportunity(&raw, "base-mainnet", "https://api.example").unwrap();
+            let recognized = matches!(
+                item.work_state.as_str(),
+                "claimable" | "open" | "in_progress" | "submitted" | "verifying"
+            );
+            assert!(
+                recognized,
+                "status {status} must map to an active work_state, got {}",
+                item.work_state
+            );
+        }
+    }
 }
