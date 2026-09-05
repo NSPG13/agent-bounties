@@ -167,7 +167,7 @@ COMMENT ON TABLE distribution_acquisition_handoffs IS
   'Retry-safe attribution joins from an MCP-prepared review handoff through durable wallet-review acknowledgement to immutable published terms. Canonical events remain the only funding and settlement evidence.';
 
 COMMENT ON TABLE distribution_handoff_failures IS
-  'Idempotent attributed prepare-failure signals. Stores only an opaque acquisition key, request digest, bounded failure code, timestamps, and count; never prompt or task content.';
+  'Idempotent attributed prepare-failure signals. Stores only an opaque acquisition key, request digest, bounded failure code, timestamps, and count, never prompt or task content.';
 
 COMMENT ON TABLE distribution_rail_usage_hourly IS
   'Privacy-minimized rail request totals. No IP address, user agent, prompt, wallet, task body, or raw acquisition token is stored.';
