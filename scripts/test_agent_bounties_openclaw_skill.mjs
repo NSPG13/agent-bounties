@@ -404,7 +404,7 @@ test("portable skill metadata and install contracts remain publishable", async (
     "claude plugin marketplace add NSPG13/agent-bounties",
     "claude plugin install agent-bounties@agent-bounties --scope user",
     "hermes skills install NSPG13/agent-bounties/skills/agent-bounties",
-    "openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties",
+    "npx skills add NSPG13/agent-bounties --skill agent-bounties --yes",
   ];
   for (const command of commands) {
     assert.ok(readme.includes(command), `README is missing ${command}`);

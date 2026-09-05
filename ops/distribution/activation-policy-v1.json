@@ -1,0 +1,95 @@
+{
+  "schema_version": "agent-bounties/distribution-activation-policy-v1",
+  "policy_id": "external-settled-distribution-v1",
+  "decision_mode": "event_driven",
+  "attribution": {
+    "minimum_scale_coverage": "0.95",
+    "first_touch_is_immutable": true,
+    "assists_are_separate": true,
+    "server_observed_rail_required": true
+  },
+  "evidence": {
+    "funded_event": "BountyBecameClaimable",
+    "settled_event": "BountySettled",
+    "require_valid_verifier_evidence": true,
+    "require_origin_completion_when_present": true,
+    "non_evidence": [
+      "impression",
+      "click",
+      "mcp_request",
+      "draft",
+      "wallet_connection",
+      "signature",
+      "transaction_hash",
+      "pull_request",
+      "hosted_database_row"
+    ]
+  },
+  "exclusions": {
+    "public_registry": "site/generated/public-metrics-policy.json",
+    "required_classes": [
+      "maintainer",
+      "operator",
+      "test",
+      "synthetic_canary",
+      "sponsored",
+      "circular_funding",
+      "related_party",
+      "operator_funded_development"
+    ],
+    "identity_boundary": "A wallet is an external-wallet proxy, not proof of an independent person or beneficial principal."
+  },
+  "canary": {
+    "minimum_dry_runs": 3,
+    "minimum_mainnet_settled_runs": 1,
+    "mainnet_bounty_principal_usdc": "2.00",
+    "require_all_canaries_excluded_from_external_metrics": true
+  },
+  "scale": {
+    "maximum_funded_poster_cac_mxn": "2000.00",
+    "maximum_settled_bounty_cac_mxn": "4000.00",
+    "next_tranche_multiplier": "2",
+    "require_zero_open_critical_incidents": true
+  },
+  "budget": {
+    "pricing_currency": "USD",
+    "operating_currency": "MXN",
+    "mxn_per_usd": "16.9852",
+    "minimum_spend_mxn_by_backstop": "40000.00",
+    "spend_backstop_date": "2026-11-02",
+    "deadline_is_review_cadence": false,
+    "deadline_never_overrides_evidence_gates": true,
+    "bounty_principal_is_distribution_spend": false,
+    "vendors": [
+      {
+        "vendor_id": "glama",
+        "rail_id": "glama",
+        "placement": "featured listing plus four category cards",
+        "price_usd": "1400.00",
+        "initial_spend_mxn": "23779.28",
+        "minimum_external_funded_posters": 12,
+        "minimum_verified_settlements": 6
+      },
+      {
+        "vendor_id": "mcp-so",
+        "rail_id": "mcp-so",
+        "placement": "gold placement",
+        "price_usd": "699.00",
+        "initial_spend_mxn": "11872.65",
+        "minimum_external_funded_posters": 6,
+        "minimum_verified_settlements": 3
+      },
+      {
+        "vendor_id": "mcpservers-org",
+        "rail_id": "mcpservers",
+        "placement": "finance or productivity category placement",
+        "price_usd": "600.00",
+        "initial_spend_mxn": "10191.12",
+        "minimum_external_funded_posters": 6,
+        "minimum_verified_settlements": 3
+      }
+    ],
+    "total_price_usd": "2699.00",
+    "total_initial_spend_mxn": "45843.05"
+  }
+}

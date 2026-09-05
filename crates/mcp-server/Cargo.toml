@@ -19,6 +19,7 @@ db = { path = "../db" }
 domain = { path = "../domain" }
 eval-harness = { path = "../eval-harness" }
 github-app = { path = "../github-app" }
+hex.workspace = true
 hmac.workspace = true
 ledger = { path = "../ledger" }
 payments-stripe = { path = "../payments-stripe" }

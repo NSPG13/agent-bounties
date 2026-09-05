@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urldefrag, urlparse
 
 
@@ -16,6 +18,19 @@ CANONICAL_PAGES = {
     "blog/index.html": "https://agentbounties.app/blog/",
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
     "how-to-earn-money-with-my-ai-agent.html": "https://agentbounties.app/how-to-earn-money-with-my-ai-agent.html",
+    "install/index.html": "https://agentbounties.app/install/",
+    "install/bankr/index.html": "https://agentbounties.app/install/bankr/",
+    "install/chatgpt-dev/index.html": "https://agentbounties.app/install/chatgpt-dev/",
+    "install/claude-custom/index.html": "https://agentbounties.app/install/claude-custom/",
+    "install/cline/index.html": "https://agentbounties.app/install/cline/",
+    "install/cursor/index.html": "https://agentbounties.app/install/cursor/",
+    "install/github/index.html": "https://agentbounties.app/install/github/",
+    "install/glama/index.html": "https://agentbounties.app/install/glama/",
+    "install/linear/index.html": "https://agentbounties.app/install/linear/",
+    "install/mcp-so/index.html": "https://agentbounties.app/install/mcp-so/",
+    "install/mcpservers/index.html": "https://agentbounties.app/install/mcpservers/",
+    "install/openclaw/index.html": "https://agentbounties.app/install/openclaw/",
+    "install/vscode/index.html": "https://agentbounties.app/install/vscode/",
     "authorize.html": "https://agentbounties.app/authorize.html",
     "cancel.html": "https://agentbounties.app/cancel.html",
     "earn-money-using-ai.html": "https://agentbounties.app/earn-money-using-ai.html",
@@ -36,6 +51,16 @@ INDEXABLE_PAGES = {
     "earn-money-using-ai.html",
     "how-to-earn-money-with-my-ai-agent.html",
     "index.html",
+    "install/index.html",
+    "install/bankr/index.html",
+    "install/chatgpt-dev/index.html",
+    "install/claude-custom/index.html",
+    "install/cline/index.html",
+    "install/cursor/index.html",
+    "install/github/index.html",
+    "install/linear/index.html",
+    "install/openclaw/index.html",
+    "install/vscode/index.html",
     "metrics.html",
     "post-a-bounty-with-chatgpt-claude-gemini.html",
     "privacy.html",
@@ -75,6 +100,7 @@ REQUIRED_FILES = {
     "generated/github-participation.json",
     "generated/public-metrics-policy.json",
     "index.html",
+    "install/platforms.json",
     "how-to-earn-money-with-my-ai-agent.html",
     "legal-consent.js",
     "earn-money-using-ai.html",
@@ -135,6 +161,8 @@ ALLOWED_UI_CODE = {
     "solarpunk-home.js",
     "solarpunk.css",
     "styles.css",
+    "install/install.css",
+    "install/install.js",
     "wallet-adapters.css",
 }
 EXPECTED_SCENE_ASSETS = {
@@ -461,6 +489,41 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             fail(f"analytics.js must not collect or store {forbidden}")
     if not re.search(r'googleMeasurementId:\s*"(?:|G-[A-Z0-9]+)"', config):
         fail("analytics-config.js must contain an empty or valid GA4 measurement ID")
+    require_phrases(
+        "WebMCP production hotpath",
+        config,
+        [
+            "document.modelContext",
+            'new URL("/competition.html", window.location.origin)',
+            'new URL("/post.html?from=webmcp", window.location.origin)',
+        ],
+    )
+    composer = (site_dir / "bounty-composer-v2.js").read_text(encoding="utf-8")
+    require_phrases(
+        "WebMCP exact reward handoff",
+        composer,
+        [
+            "function parsePreparedRewardSplit",
+            "function currentRewardSplit",
+            "state.preparedRewards = preparedRewards",
+            "const rewards=currentRewardSplit()",
+            "Verifier reward and solver bond:",
+        ],
+    )
+    if "const rewards=splitReward(state.fundingUsdc)" in composer:
+        fail("funding must preserve an explicitly prepared solver/verifier reward split")
+    node = shutil.which("node")
+    if not node:
+        fail("node is required for the WebMCP reward-handoff behavior check")
+    behavior = subprocess.run(
+        [node, str(repo_root / "scripts" / "check-bounty-economics.cjs")],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if behavior.returncode != 0:
+        fail(f"WebMCP reward-handoff behavior check failed:\n{behavior.stdout}{behavior.stderr}")
     workflow = (repo_root / ".github" / "workflows" / "pages.yml").read_text(encoding="utf-8")
     require_phrases("Pages analytics configuration", workflow, ["GA_MEASUREMENT_ID", "^G-[A-Z0-9]+$"])
 
@@ -834,6 +897,244 @@ def check_transactional_handoffs(site_dir: Path) -> None:
             fail(f"guild-shell.js rewrites navigation to removed page {removed}")
 
 
+def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
+    install_manifest = json_file(site_dir / "install" / "platforms.json")
+    if install_manifest.get("schema_version") != "agent-bounties/install-platforms-v1":
+        fail("install manifest has the wrong schema version")
+    if install_manifest.get("canonical_mcp_url") != "https://mcp.agentbounties.app/mcp":
+        fail("install manifest must preserve the canonical untagged MCP endpoint")
+    if install_manifest.get("install_hub") != "https://agentbounties.app/install/":
+        fail("install manifest has the wrong canonical install hub")
+
+    expected_rails = {
+        "bankr",
+        "chatgpt-dev",
+        "claude-custom",
+        "cline",
+        "cursor",
+        "github",
+        "linear",
+        "openclaw",
+        "vscode",
+    }
+    platforms = install_manifest.get("platforms")
+    if not isinstance(platforms, list):
+        fail("install manifest platforms must be an array")
+    by_slug = {platform.get("slug"): platform for platform in platforms if isinstance(platform, dict)}
+    if set(by_slug) != expected_rails or len(platforms) != len(expected_rails):
+        fail(f"install manifest rail inventory drifted: {sorted(by_slug)}")
+
+    for rail, platform in by_slug.items():
+        endpoint = f"https://mcp.agentbounties.app/r/{rail}/mcp"
+        if platform.get("mcp_url") != endpoint:
+            fail(f"{rail} install route must use its exact attributed MCP endpoint")
+        if not isinstance(platform.get("steps"), list) or len(platform["steps"]) < 3:
+            fail(f"{rail} install route needs at least three reviewable steps")
+        if not isinstance(platform.get("actions"), list) or not platform["actions"]:
+            fail(f"{rail} install route has no one-click or copy-paste action")
+        if not isinstance(platform.get("first_prompt"), str) or not platform["first_prompt"]:
+            fail(f"{rail} install route has no first useful prompt")
+        if not isinstance(platform.get("documentation"), list) or not platform["documentation"]:
+            fail(f"{rail} install route has no first-party platform documentation")
+        if "Available now:" in str(platform.get("status")):
+            fail(f"{rail} install route overstates pre-canary availability")
+
+        page = site_dir / "install" / rail / "index.html"
+        page_text = page.read_text(encoding="utf-8")
+        require_phrases(
+            f"install/{rail}/index.html",
+            page_text,
+            [
+                f'data-install-platform="{rail}"',
+                'data-install-manifest="../platforms.json"',
+                f'data-install-fallback-endpoint="{endpoint}"',
+                endpoint,
+                "Only a confirmed canonical BountySettled event proves solver payment.",
+            ],
+        )
+
+    javascript = (site_dir / "install" / "install.js").read_text(encoding="utf-8")
+    require_phrases(
+        "install/install.js",
+        javascript,
+        [
+            "vscode:mcp/install?",
+            "https://cursor.com/link/mcp/install?",
+            "navigator.clipboard?.writeText",
+            'manifest.schema_version !== "agent-bounties/install-platforms-v1"',
+        ],
+    )
+    css = (site_dir / "install" / "install.css").read_text(encoding="utf-8")
+    require_phrases(
+        "install/install.css",
+        css,
+        ["@media (max-width: 720px)", "@media (prefers-reduced-motion: reduce)", ".skip-link:focus"],
+    )
+
+    package_dir = repo_root / "distribution" / "native-directory-submission"
+    package_manifest = json_file(package_dir / "manifest.json")
+    if package_manifest.get("schema_version") != "agent-bounties/native-directory-submission-v1":
+        fail("native-directory package has the wrong schema version")
+    if package_manifest.get("release_status") != "prepared_not_submitted":
+        fail("native-directory package must not claim an external submission")
+    identity = package_manifest.get("identity", {})
+    if (
+        identity.get("privacy") != "https://agentbounties.app/privacy.html"
+        or identity.get("support") != "https://github.com/NSPG13/agent-bounties/issues"
+        or identity.get("install_hub") != "https://agentbounties.app/install/"
+    ):
+        fail("native-directory package identity links drifted")
+    native_targets = package_manifest.get("native_targets")
+    if not isinstance(native_targets, list):
+        fail("native-directory package targets must be an array")
+    target_by_id = {target.get("id"): target for target in native_targets if isinstance(target, dict)}
+    if set(target_by_id) != expected_rails:
+        fail("native-directory package and install platform rails disagree")
+    for rail in expected_rails:
+        target = target_by_id[rail]
+        if target.get("attributed_mcp_url") != by_slug[rail].get("mcp_url"):
+            fail(f"{rail} submission target drifted from its install endpoint")
+        if not str(target.get("external_state", "")).startswith("not_submitted"):
+            fail(f"{rail} submission target must remain truthfully not submitted")
+        if "deployed_attributed_endpoint" not in str(target.get("activation_gate", "")):
+            fail(f"{rail} submission target is missing the deployed endpoint gate")
+
+    paid_targets = package_manifest.get("paid_directory_targets")
+    if not isinstance(paid_targets, list):
+        fail("paid directory targets must be an array")
+    paid_by_id = {target.get("id"): target for target in paid_targets if isinstance(target, dict)}
+    expected_paid = {"glama", "mcp-so", "mcpservers"}
+    if set(paid_by_id) != expected_paid:
+        fail("paid directory rail inventory drifted")
+    paid_platforms = install_manifest.get("paid_vendors")
+    if not isinstance(paid_platforms, list):
+        fail("install manifest paid vendors must be an array")
+    paid_platform_by_slug = {
+        platform.get("slug"): platform for platform in paid_platforms if isinstance(platform, dict)
+    }
+    if set(paid_platform_by_slug) != expected_paid or len(paid_platforms) != len(expected_paid):
+        fail("install manifest paid-vendor inventory drifted")
+    for rail in expected_paid:
+        endpoint = f"https://mcp.agentbounties.app/r/{rail}/mcp"
+        campaign_url = f"https://agentbounties.app/install/{rail}/"
+        alias_url = f"https://install.agentbounties.app/{rail}"
+        if paid_by_id[rail].get("attributed_mcp_url") != endpoint:
+            fail(f"paid directory {rail} must use its exact attributed endpoint")
+        if paid_by_id[rail].get("campaign_url") != campaign_url:
+            fail(f"paid directory {rail} must use its exact deployable campaign page")
+        if paid_by_id[rail].get("preferred_alias_after_dns_activation") != alias_url:
+            fail(f"paid directory {rail} install-host alias drifted")
+        if paid_by_id[rail].get("status") != "activate_only_after_attribution_canary":
+            fail(f"paid directory {rail} must remain gated on its attribution canary")
+        platform = paid_platform_by_slug[rail]
+        if platform.get("mcp_url") != endpoint:
+            fail(f"paid install route {rail} must use its exact attributed MCP endpoint")
+        if not isinstance(platform.get("steps"), list) or len(platform["steps"]) < 3:
+            fail(f"paid install route {rail} needs at least three reviewable steps")
+        if not isinstance(platform.get("actions"), list) or not platform["actions"]:
+            fail(f"paid install route {rail} has no copy-paste action")
+        page_text = (site_dir / "install" / rail / "index.html").read_text(encoding="utf-8")
+        require_phrases(
+            f"install/{rail}/index.html",
+            page_text,
+            [
+                f'data-install-platform="{rail}"',
+                'data-install-manifest="../platforms.json"',
+                f'data-install-fallback-endpoint="{endpoint}"',
+                endpoint,
+                '<meta name="robots" content="noindex, nofollow">',
+                "Only a confirmed canonical BountySettled event proves solver payment.",
+            ],
+        )
+
+    install_host = package_manifest.get("install_host", {})
+    if (
+        install_host.get("requested_origin") != "https://install.agentbounties.app"
+        or install_host.get("current_deployable_origin") != "https://agentbounties.app/install/"
+        or install_host.get("truth_state") != "blocked_pending_dns_and_edge_binding"
+        or install_host.get("contract") != "INSTALL_SUBDOMAIN.md"
+    ):
+        fail("install subdomain must remain truthfully blocked pending DNS and edge binding")
+
+    package_files = (
+        "README.md",
+        "SECURITY.md",
+        "TESTING.md",
+        "DEMO.md",
+        "SUBMISSION_LEDGER.md",
+        "INSTALL_SUBDOMAIN.md",
+        "manifest.json",
+    )
+    combined_package = "\n".join((package_dir / name).read_text(encoding="utf-8") for name in package_files)
+    require_phrases(
+        "native-directory submission package",
+        combined_package,
+        [
+            "https://agentbounties.app/privacy.html",
+            "https://github.com/NSPG13/agent-bounties/issues",
+            "Only a confirmed canonical `BountySettled` event proves solver payment",
+            "scripts/prepare-clawhub-skill.mjs",
+            "#909",
+            "Not submitted",
+            "https://cursor.com/marketplace/publish",
+            "https://linear.app/developers/agents",
+            "blocked_pending_dns_and_edge_binding",
+            "https://install.agentbounties.app/{rail}",
+            "hard deployment blocker",
+            "distribution-rail-mcp-canary.yml",
+            "dry-run evidence only",
+            "2-USDC funded-and-settled mainnet canary",
+        ],
+    )
+    canary_workflow = (
+        repo_root / ".github" / "workflows" / "distribution-rail-mcp-canary.yml"
+    ).read_text(encoding="utf-8")
+    require_phrases(
+        "distribution rail MCP canary workflow",
+        canary_workflow,
+        [
+            'cron: "23 * * * *"',
+            "workflow_dispatch:",
+            "permissions:\n  contents: read",
+            "group: distribution-rail-mcp-dry-run-production",
+            "cancel-in-progress: true",
+            "timeout-minutes: 30",
+            "persist-credentials: false",
+            "python scripts/check-distribution-rail-mcp.py",
+            "--endpoint https://mcp.agentbounties.app",
+            "--repetitions 3",
+            "scope=initialize,tools/list; analytics-only acquisition records; no product or wallet action",
+            "dry-run only; never a substitute for the required excluded-operator 2-USDC funded-and-settled mainnet canary",
+            "target/distribution/production-rail-mcp-dry-run.txt",
+            "if: always()",
+            "if-no-files-found: error",
+            "retention-days: 30",
+        ],
+    )
+    for forbidden in (
+        "secrets.",
+        "id-token:",
+        "prepare_bounty_post",
+        "prepare_bounty_action",
+        "publish_bounty",
+        "cast send",
+        "private-key",
+    ):
+        if forbidden in canary_workflow:
+            fail(f"distribution rail MCP canary workflow contains forbidden capability: {forbidden}")
+    machine_install = (repo_root / "llms-install.md").read_text(encoding="utf-8")
+    portable_skill = (repo_root / "skills" / "agent-bounties" / "SKILL.md").read_text(encoding="utf-8")
+    for phrase in (
+        "delegate work",
+        "offload backlog",
+        "fund a PR",
+        "verified external solution",
+        "paid agent work",
+    ):
+        if phrase.casefold() not in machine_install.casefold() or phrase.casefold() not in portable_skill.casefold():
+            fail(f"universal install discovery is missing intent phrase: {phrase}")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     site_dir = repo_root / "site"
@@ -856,7 +1157,7 @@ def main() -> int:
     for relative, canonical in CANONICAL_PAGES.items():
         path = site_dir / relative
         text = path.read_text(encoding="utf-8")
-        prefix = "../" if relative.startswith("blog/") else ""
+        prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
         parser = PageParser()
         parser.feed(text)
         if parser.h1_count != 1:
@@ -917,6 +1218,7 @@ def main() -> int:
     check_a2a_card(site_dir, repo_root)
     check_analytics(site_dir, repo_root)
     check_homepage(site_dir)
+    check_install_distribution(repo_root, site_dir)
     check_marketplace(site_dir)
     check_transactional_handoffs(site_dir)
     check_metrics(site_dir)
@@ -941,7 +1243,7 @@ def main() -> int:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment",
         ],
     )
-    print("site checks passed: Home, market, competition, transactional handoffs, A2A, blog, Metrics, legal, protocol, evidence, analytics, and asset budgets intact")
+    print("site checks passed: Home, install/distribution, market, competition, transactional handoffs, A2A, blog, Metrics, legal, protocol, evidence, analytics, and asset budgets intact")
     return 0
 
 

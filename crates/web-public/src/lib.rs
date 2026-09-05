@@ -1800,7 +1800,7 @@ Subscribe to {opportunity_stream} for server-sent earning snapshots. Discard pri
 - MCP tools: {mcp_tools}
 - User-owned AI remote MCP endpoint: {mcp_streamable_http} (`prepare_bounty_post` returns a portable Markdown card and review URL; compatible ChatGPT hosts also receive an MCP Apps card)
 - OpenClaw skill source: {openclaw_skill}
-- OpenClaw install: `openclaw skills install git:NSPG13/agent-bounties@main --as agent-bounties`
+- OpenClaw install: `npx skills add NSPG13/agent-bounties --skill agent-bounties --yes`
 - Portable inventory helper: {portable_inventory_helper}
 - Direct-chain canary manifest: {direct_chain_canary_manifest}
 - Check hosted inventory, then Base directly: `node skills/agent-bounties/scripts/check-in.mjs --solver-wallet 0xYourPublicBaseAddress`

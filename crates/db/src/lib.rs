@@ -18,6 +18,7 @@ use domain::{
     RiskReviewRecord, RiskSurface, Settlement, Submission, TemplateSignal, VerificationDecision,
     VerifierKind, VerifierResult,
 };
+use hmac::{Hmac, Mac};
 use ledger::{LedgerEntry, Posting};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -80,6 +81,8 @@ pub const ONBOARDING_ANALYTICS_MIGRATION: &str =
     include_str!("../../../migrations/0028_onboarding_analytics.sql");
 pub const DISCOVERABILITY_MEASUREMENT_MIGRATION: &str =
     include_str!("../../../migrations/0029_discoverability_measurement.sql");
+pub const DISTRIBUTION_ATTRIBUTION_MIGRATION: &str =
+    include_str!("../../../migrations/0032_distribution_attribution.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -219,6 +222,8 @@ pub enum DbError {
     BountyImageAssetConflict(String),
     #[error("site account wallet conflict: {0}")]
     SiteAuthConflict(String),
+    #[error("distribution attribution conflict: {0}")]
+    DistributionAttributionConflict(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -629,6 +634,157 @@ pub struct NewDiscoverabilitySnapshot {
     pub data_through: DateTime<Utc>,
     pub payload_checksum: String,
     pub payload: serde_json::Value,
+}
+
+pub const APPROVED_DISTRIBUTION_RAILS: [&str; 12] = [
+    "bankr",
+    "openclaw",
+    "vscode",
+    "cursor",
+    "cline",
+    "github",
+    "linear",
+    "claude-custom",
+    "chatgpt-dev",
+    "glama",
+    "mcp-so",
+    "mcpservers",
+];
+
+pub const DISTRIBUTION_EXCLUSION_CLASSES: [&str; 8] = [
+    "maintainer",
+    "operator",
+    "test",
+    "synthetic_canary",
+    "sponsored",
+    "circular_funding",
+    "related_party",
+    "operator_funded_development",
+];
+
+pub fn normalize_distribution_rail(value: &str) -> Option<&'static str> {
+    APPROVED_DISTRIBUTION_RAILS
+        .iter()
+        .copied()
+        .find(|rail| value.trim().eq_ignore_ascii_case(rail))
+}
+
+pub fn normalize_distribution_exclusion_class(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "team" => Some("maintainer"),
+        "circular" => Some("circular_funding"),
+        "related" => Some("related_party"),
+        candidate => DISTRIBUTION_EXCLUSION_CLASSES
+            .iter()
+            .copied()
+            .find(|class| *class == candidate),
+    }
+}
+
+type DistributionHmacSha256 = Hmac<Sha256>;
+
+pub fn sign_distribution_acquisition_token(nonce: &str, secret: &str) -> Option<String> {
+    if nonce.len() != 64 || !nonce.bytes().all(is_lower_hex_byte) || secret.len() < 32 {
+        return None;
+    }
+    let unsigned = format!("aba1_{nonce}");
+    let mut mac = DistributionHmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(unsigned.as_bytes());
+    Some(format!(
+        "{unsigned}.{}",
+        hex::encode(mac.finalize().into_bytes())
+    ))
+}
+
+pub fn distribution_acquisition_token_hash(value: &str, secret: &str) -> Option<String> {
+    let token = value.trim();
+    let mut segments = token.split('.');
+    let (Some(unsigned), Some(signature), None) =
+        (segments.next(), segments.next(), segments.next())
+    else {
+        return None;
+    };
+    let nonce = unsigned.strip_prefix("aba1_")?;
+    if nonce.len() != 64
+        || !nonce.bytes().all(is_lower_hex_byte)
+        || signature.len() != 64
+        || !signature.bytes().all(is_lower_hex_byte)
+        || secret.len() < 32
+    {
+        return None;
+    }
+    let signature = hex::decode(signature).ok()?;
+    let mut mac = DistributionHmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(unsigned.as_bytes());
+    mac.verify_slice(&signature).ok()?;
+    Some(hex::encode(Sha256::digest(token.as_bytes())))
+}
+
+fn is_lower_hex_byte(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DistributionAcquisition {
+    pub id: Uuid,
+    pub first_touch_rail: String,
+    pub measurement_eligible: bool,
+    pub canary_kind: Option<String>,
+    pub first_observed_at: DateTime<Utc>,
+    pub last_observed_at: DateTime<Utc>,
+    pub observation_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DistributionHandoff {
+    pub id: Uuid,
+    pub acquisition_id: Uuid,
+    pub request_fingerprint: String,
+    pub terms_hash: Option<String>,
+    pub creator_wallet: Option<String>,
+    pub prepared_at: DateTime<Utc>,
+    pub wallet_reviewed_at: Option<DateTime<Utc>>,
+    pub terms_bound_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DistributionRailOutcomeStats {
+    pub rail: String,
+    pub acquisitions: u64,
+    pub assisted_acquisitions: u64,
+    pub mcp_requests: u64,
+    pub failed_mcp_requests: u64,
+    pub prepared_handoffs: u64,
+    pub wallet_reviewed_handoffs: u64,
+    pub handoff_failure_count: u64,
+    pub attributed_terms: u64,
+    pub externally_funded_bounties: u64,
+    pub unique_external_funded_posters: u64,
+    pub externally_funded_claimed_bounties: u64,
+    pub externally_funded_submitted_bounties: u64,
+    pub externally_funded_settled_bounties: u64,
+    pub verified_settlements_with_evidence: u64,
+    pub external_funding_base_units: String,
+    pub settled_gmv_base_units: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DistributionOutcomeStats {
+    pub rails: Vec<DistributionRailOutcomeStats>,
+    pub total_external_funded_bounties: u64,
+    pub unique_external_funded_posters: u64,
+    pub attributed_external_funded_bounties: u64,
+    pub attribution_coverage_basis_points: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DistributionWalletExclusion {
+    pub wallet_address: String,
+    pub exclusion_class: String,
+    pub reason: Option<String>,
+    pub active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl ObservedProtocolEra {
@@ -1306,6 +1462,10 @@ impl PostgresStore {
                 // constraints. Replaying either narrower constraint would
                 // reject valid later events before 0029 can replace it.
                 DISCOVERABILITY_MEASUREMENT_MIGRATION,
+                // 0031 is intentionally reserved for active contributor PR
+                // #910. Distribution attribution starts at 0032 to keep the
+                // histories additive and non-conflicting.
+                DISTRIBUTION_ATTRIBUTION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1984,6 +2144,701 @@ impl PostgresStore {
                 })
             })
             .collect()
+    }
+
+    pub async fn observe_distribution_acquisition(
+        &self,
+        rail: &str,
+        token_hash: &str,
+        canary_kind: Option<&str>,
+        observed_at: DateTime<Utc>,
+    ) -> DbResult<DistributionAcquisition> {
+        let rail = normalize_distribution_rail(rail).ok_or_else(|| {
+            DbError::InvalidEnum(format!("unsupported distribution rail: {rail}"))
+        })?;
+        if token_hash.len() != 64 || !token_hash.bytes().all(is_lower_hex_byte) {
+            return Err(DbError::DistributionAttributionConflict(
+                "acquisition token hash must be lowercase SHA-256".to_string(),
+            ));
+        }
+        if canary_kind.is_some_and(|kind| !matches!(kind, "dry-run-v1" | "mainnet-v1")) {
+            return Err(DbError::InvalidEnum(format!(
+                "unsupported distribution canary kind: {}",
+                canary_kind.unwrap_or_default()
+            )));
+        }
+        let measurement_eligible = canary_kind.is_none();
+        let row = sqlx::query(
+            r#"
+            INSERT INTO distribution_acquisitions
+              (id, token_hash, first_touch_rail, measurement_eligible, canary_kind,
+               first_observed_at, last_observed_at, observation_count)
+            VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
+            ON CONFLICT (token_hash) DO UPDATE SET
+              measurement_eligible = distribution_acquisitions.measurement_eligible
+                AND EXCLUDED.measurement_eligible,
+              canary_kind = COALESCE(
+                distribution_acquisitions.canary_kind,
+                EXCLUDED.canary_kind
+              ),
+              last_observed_at = GREATEST(
+                distribution_acquisitions.last_observed_at,
+                EXCLUDED.last_observed_at
+              ),
+              observation_count = distribution_acquisitions.observation_count + 1
+            RETURNING id, first_touch_rail, measurement_eligible, canary_kind,
+                      first_observed_at, last_observed_at, observation_count
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(token_hash)
+        .bind(rail)
+        .bind(measurement_eligible)
+        .bind(canary_kind)
+        .bind(observed_at)
+        .fetch_one(&self.pool)
+        .await?;
+        let acquisition = DistributionAcquisition {
+            id: row.try_get("id")?,
+            first_touch_rail: row.try_get("first_touch_rail")?,
+            measurement_eligible: row.try_get("measurement_eligible")?,
+            canary_kind: row.try_get("canary_kind")?,
+            first_observed_at: row.try_get("first_observed_at")?,
+            last_observed_at: row.try_get("last_observed_at")?,
+            observation_count: u64_from_i64(row.try_get("observation_count")?)?,
+        };
+        if acquisition.first_touch_rail != rail {
+            sqlx::query(
+                r#"
+                INSERT INTO distribution_acquisition_assists
+                  (acquisition_id, rail, first_observed_at,
+                   last_observed_at, observation_count)
+                VALUES ($1, $2, $3, $3, 1)
+                ON CONFLICT (acquisition_id, rail) DO UPDATE SET
+                  last_observed_at = GREATEST(
+                    distribution_acquisition_assists.last_observed_at,
+                    EXCLUDED.last_observed_at
+                  ),
+                  observation_count =
+                    distribution_acquisition_assists.observation_count + 1
+                "#,
+            )
+            .bind(acquisition.id)
+            .bind(rail)
+            .bind(observed_at)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(acquisition)
+    }
+
+    pub async fn record_distribution_rail_request(
+        &self,
+        rail: &str,
+        succeeded: bool,
+        measurement_eligible: bool,
+        observed_at: DateTime<Utc>,
+    ) -> DbResult<()> {
+        let rail = normalize_distribution_rail(rail).ok_or_else(|| {
+            DbError::InvalidEnum(format!("unsupported distribution rail: {rail}"))
+        })?;
+        sqlx::query(
+            r#"
+            INSERT INTO distribution_rail_usage_hourly
+              (bucket_started_at, rail, request_count, successful_request_count,
+               excluded_request_count, excluded_successful_request_count,
+               first_observed_at, last_observed_at)
+            VALUES (
+              date_trunc('hour', $1 AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+              $2, 1, CASE WHEN $3 THEN 1 ELSE 0 END,
+              CASE WHEN $4 THEN 0 ELSE 1 END,
+              CASE WHEN $3 AND NOT $4 THEN 1 ELSE 0 END,
+              $1, $1
+            )
+            ON CONFLICT (bucket_started_at, rail) DO UPDATE SET
+              request_count = distribution_rail_usage_hourly.request_count + 1,
+              successful_request_count =
+                distribution_rail_usage_hourly.successful_request_count
+                + CASE WHEN $3 THEN 1 ELSE 0 END,
+              excluded_request_count =
+                distribution_rail_usage_hourly.excluded_request_count
+                + CASE WHEN $4 THEN 0 ELSE 1 END,
+              excluded_successful_request_count =
+                distribution_rail_usage_hourly.excluded_successful_request_count
+                + CASE WHEN $3 AND NOT $4 THEN 1 ELSE 0 END,
+              first_observed_at = LEAST(
+                distribution_rail_usage_hourly.first_observed_at,
+                EXCLUDED.first_observed_at
+              ),
+              last_observed_at = GREATEST(
+                distribution_rail_usage_hourly.last_observed_at,
+                EXCLUDED.last_observed_at
+              )
+            "#,
+        )
+        .bind(observed_at)
+        .bind(rail)
+        .bind(succeeded)
+        .bind(measurement_eligible)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn reserve_distribution_handoff(
+        &self,
+        acquisition_id: Uuid,
+        request_fingerprint: &str,
+        prepared_at: DateTime<Utc>,
+    ) -> DbResult<DistributionHandoff> {
+        if request_fingerprint.len() != 64 || !request_fingerprint.bytes().all(is_lower_hex_byte) {
+            return Err(DbError::DistributionAttributionConflict(
+                "handoff request fingerprint must be lowercase SHA-256".to_string(),
+            ));
+        }
+        let row = sqlx::query(
+            r#"
+            INSERT INTO distribution_acquisition_handoffs
+              (id, acquisition_id, request_fingerprint, prepared_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (acquisition_id, request_fingerprint) DO UPDATE SET
+              request_fingerprint = distribution_acquisition_handoffs.request_fingerprint
+            RETURNING id, acquisition_id, request_fingerprint, terms_hash,
+                      creator_wallet, prepared_at, wallet_reviewed_at,
+                      terms_bound_at
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(acquisition_id)
+        .bind(request_fingerprint)
+        .bind(prepared_at)
+        .fetch_one(&self.pool)
+        .await?;
+        distribution_handoff_from_row(row)
+    }
+
+    pub async fn mark_distribution_handoff_wallet_reviewed(
+        &self,
+        token_hash: &str,
+        handoff_id: Uuid,
+        reviewed_at: DateTime<Utc>,
+    ) -> DbResult<DistributionHandoff> {
+        let row = sqlx::query(
+            r#"
+            UPDATE distribution_acquisition_handoffs AS handoff
+            SET wallet_reviewed_at = COALESCE(handoff.wallet_reviewed_at, $3)
+            WHERE handoff.id = $1
+              AND handoff.acquisition_id = (
+                SELECT acquisition.id
+                FROM distribution_acquisitions AS acquisition
+                WHERE acquisition.token_hash = $2
+              )
+            RETURNING id, acquisition_id, request_fingerprint, terms_hash,
+                      creator_wallet, prepared_at, wallet_reviewed_at,
+                      terms_bound_at
+            "#,
+        )
+        .bind(handoff_id)
+        .bind(token_hash)
+        .bind(reviewed_at)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(distribution_handoff_from_row)
+            .transpose()?
+            .ok_or_else(|| {
+                DbError::DistributionAttributionConflict(
+                    "handoff and acquisition token did not match".to_string(),
+                )
+            })
+    }
+
+    pub async fn record_distribution_handoff_failure(
+        &self,
+        acquisition_id: Uuid,
+        request_fingerprint: &str,
+        failure_code: &str,
+        observed_at: DateTime<Utc>,
+    ) -> DbResult<()> {
+        if request_fingerprint.len() != 64 || !request_fingerprint.bytes().all(is_lower_hex_byte) {
+            return Err(DbError::DistributionAttributionConflict(
+                "handoff failure fingerprint must be lowercase SHA-256".to_string(),
+            ));
+        }
+        if !matches!(failure_code, "invalid_arguments" | "preparation_failed") {
+            return Err(DbError::InvalidEnum(format!(
+                "unsupported distribution handoff failure code: {failure_code}"
+            )));
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO distribution_handoff_failures
+              (acquisition_id, request_fingerprint, failure_code,
+               first_observed_at, last_observed_at, observation_count)
+            VALUES ($1, $2, $3, $4, $4, 1)
+            ON CONFLICT (acquisition_id, request_fingerprint, failure_code) DO UPDATE SET
+              last_observed_at = GREATEST(
+                distribution_handoff_failures.last_observed_at,
+                EXCLUDED.last_observed_at
+              ),
+              observation_count = distribution_handoff_failures.observation_count + 1
+            "#,
+        )
+        .bind(acquisition_id)
+        .bind(request_fingerprint)
+        .bind(failure_code)
+        .bind(observed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn bind_distribution_handoff_terms(
+        &self,
+        token_hash: &str,
+        handoff_id: Uuid,
+        terms_hash: &str,
+        creator_wallet: &str,
+        bound_at: DateTime<Utc>,
+    ) -> DbResult<DistributionHandoff> {
+        let terms_hash = terms_hash.trim().to_ascii_lowercase();
+        let creator_wallet = creator_wallet.trim().to_ascii_lowercase();
+        let row = sqlx::query(
+            r#"
+            UPDATE distribution_acquisition_handoffs AS handoff
+            SET terms_hash = COALESCE(handoff.terms_hash, $3),
+                creator_wallet = COALESCE(handoff.creator_wallet, $4),
+                terms_bound_at = COALESCE(handoff.terms_bound_at, $5)
+            WHERE handoff.id = $1
+              AND handoff.acquisition_id = (
+                SELECT acquisition.id
+                FROM distribution_acquisitions AS acquisition
+                WHERE acquisition.token_hash = $2
+              )
+              AND (handoff.terms_hash IS NULL OR handoff.terms_hash = $3)
+              AND (handoff.creator_wallet IS NULL OR handoff.creator_wallet = $4)
+            RETURNING id, acquisition_id, request_fingerprint, terms_hash,
+                      creator_wallet, prepared_at, wallet_reviewed_at,
+                      terms_bound_at
+            "#,
+        )
+        .bind(handoff_id)
+        .bind(token_hash)
+        .bind(&terms_hash)
+        .bind(&creator_wallet)
+        .bind(bound_at)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(distribution_handoff_from_row)
+            .transpose()?
+            .ok_or_else(|| {
+                DbError::DistributionAttributionConflict(
+                    "handoff, acquisition token, or immutable terms binding did not match"
+                        .to_string(),
+                )
+            })
+    }
+
+    pub async fn upsert_distribution_wallet_exclusion(
+        &self,
+        wallet_address: &str,
+        exclusion_class: &str,
+        reason: Option<&str>,
+        active: bool,
+    ) -> DbResult<DistributionWalletExclusion> {
+        let class = normalize_distribution_exclusion_class(exclusion_class).ok_or_else(|| {
+            DbError::InvalidEnum(format!(
+                "unsupported distribution exclusion class: {exclusion_class}"
+            ))
+        })?;
+        let wallet_address = wallet_address.trim().to_ascii_lowercase();
+        let row = sqlx::query(
+            r#"
+            INSERT INTO distribution_wallet_exclusions
+              (wallet_address, exclusion_class, reason, active)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (wallet_address, exclusion_class) DO UPDATE SET
+              reason = EXCLUDED.reason,
+              active = EXCLUDED.active,
+              updated_at = NOW()
+            RETURNING wallet_address, exclusion_class, reason, active,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(&wallet_address)
+        .bind(class)
+        .bind(reason)
+        .bind(active)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(DistributionWalletExclusion {
+            wallet_address: row.try_get("wallet_address")?,
+            exclusion_class: row.try_get("exclusion_class")?,
+            reason: row.try_get("reason")?,
+            active: row.try_get("active")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+
+    pub async fn distribution_outcome_stats(
+        &self,
+        excluded_classes: &[String],
+    ) -> DbResult<DistributionOutcomeStats> {
+        for class in excluded_classes {
+            if normalize_distribution_exclusion_class(class).is_none() {
+                return Err(DbError::InvalidEnum(format!(
+                    "unsupported distribution exclusion class: {class}"
+                )));
+            }
+        }
+        let rails = APPROVED_DISTRIBUTION_RAILS
+            .iter()
+            .map(|rail| (*rail).to_string())
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(
+            r#"
+            WITH rail_names AS (
+              SELECT unnest($2::text[]) AS rail
+            ), excluded_wallets AS (
+              SELECT DISTINCT wallet_address
+              FROM distribution_wallet_exclusions
+              WHERE active = TRUE AND exclusion_class = ANY($1::text[])
+            ), creations AS (
+              SELECT DISTINCT network, bounty_id,
+                     lower(data->>'bounty_contract') AS bounty_contract,
+                     lower(data->>'creator') AS creator_wallet,
+                     lower(data->>'terms_hash') AS terms_hash
+              FROM autonomous_bounty_events
+              WHERE kind = 'canonical_bounty_created'
+                AND block_time_verified = TRUE
+                AND data->>'bounty_contract' IS NOT NULL
+                AND data->>'creator' IS NOT NULL
+                AND data->>'terms_hash' IS NOT NULL
+            ), economics AS (
+              SELECT network, bounty_id,
+                     MAX((data->>'target_amount')::numeric) AS target_amount
+              FROM autonomous_bounty_events
+              WHERE kind = 'canonical_bounty_economics_configured'
+                AND block_time_verified = TRUE
+                AND data->>'target_amount' ~ '^[0-9]+$'
+                AND (data->>'target_amount')::numeric > 0
+              GROUP BY network, bounty_id
+            ), attributed AS (
+              SELECT DISTINCT acquisition.first_touch_rail AS rail,
+                     creation.network, creation.bounty_id,
+                     creation.bounty_contract, creation.creator_wallet
+              FROM distribution_acquisition_handoffs AS handoff
+              JOIN distribution_acquisitions AS acquisition
+                ON acquisition.id = handoff.acquisition_id
+              JOIN creations AS creation
+                ON creation.terms_hash = handoff.terms_hash
+              WHERE handoff.terms_hash IS NOT NULL
+                AND handoff.creator_wallet = creation.creator_wallet
+                AND acquisition.measurement_eligible = TRUE
+                AND NOT EXISTS (
+                  SELECT 1 FROM excluded_wallets
+                  WHERE wallet_address = creation.creator_wallet
+                )
+            ), external_funding AS (
+              SELECT attributed.rail, attributed.network, attributed.bounty_id,
+                     attributed.bounty_contract, attributed.creator_wallet,
+                     SUM((funding.data->>'amount')::numeric) AS funding_base_units
+              FROM attributed
+              JOIN economics
+                ON economics.network = attributed.network
+               AND economics.bounty_id = attributed.bounty_id
+              JOIN autonomous_bounty_events AS funding
+                ON funding.network = attributed.network
+               AND funding.bounty_id = attributed.bounty_id
+               AND lower(funding.contract_address) = attributed.bounty_contract
+               AND funding.kind = 'funding_added'
+               AND funding.block_time_verified = TRUE
+              WHERE funding.data->>'contributor' IS NOT NULL
+                AND funding.data->>'amount' ~ '^[0-9]+$'
+                AND NOT EXISTS (
+                  SELECT 1 FROM excluded_wallets
+                  WHERE wallet_address = lower(funding.data->>'contributor')
+                )
+                AND EXISTS (
+                  SELECT 1
+                  FROM autonomous_bounty_events AS claimable
+                  WHERE claimable.network = attributed.network
+                    AND claimable.bounty_id = attributed.bounty_id
+                    AND lower(claimable.contract_address) = attributed.bounty_contract
+                    AND claimable.kind = 'bounty_became_claimable'
+                    AND claimable.block_time_verified = TRUE
+                )
+              GROUP BY attributed.rail, attributed.network, attributed.bounty_id,
+                       attributed.bounty_contract, attributed.creator_wallet
+              HAVING SUM((funding.data->>'amount')::numeric)
+                     >= MAX(economics.target_amount)
+            ), claimed AS (
+              SELECT DISTINCT funding.rail, funding.network, funding.bounty_id,
+                     funding.bounty_contract
+              FROM external_funding AS funding
+              JOIN autonomous_bounty_events AS claim
+                ON claim.network = funding.network
+               AND claim.bounty_id = funding.bounty_id
+               AND lower(claim.contract_address) = funding.bounty_contract
+               AND claim.kind = 'bounty_claimed'
+               AND claim.block_time_verified = TRUE
+            ), submitted AS (
+              SELECT DISTINCT funding.rail, funding.network, funding.bounty_id,
+                     funding.bounty_contract
+              FROM external_funding AS funding
+              JOIN autonomous_bounty_events AS submission
+                ON submission.network = funding.network
+               AND submission.bounty_id = funding.bounty_id
+               AND lower(submission.contract_address) = funding.bounty_contract
+               AND submission.kind = 'submission_added'
+               AND submission.block_time_verified = TRUE
+            ), settled AS (
+              SELECT DISTINCT funding.rail, funding.network, funding.bounty_id,
+                     funding.bounty_contract,
+                     settlement.data->>'round' AS round,
+                     lower(settlement.data->>'evidence_hash') AS evidence_hash,
+                     ((settlement.data->>'solver_reward')::numeric
+                       + (settlement.data->>'verifier_reward')::numeric) AS gmv_base_units
+              FROM external_funding AS funding
+              JOIN autonomous_bounty_events AS settlement
+                ON settlement.network = funding.network
+               AND settlement.bounty_id = funding.bounty_id
+               AND lower(settlement.contract_address) = funding.bounty_contract
+               AND settlement.kind = 'bounty_settled'
+               AND settlement.block_time_verified = TRUE
+              WHERE settlement.data->>'solver_reward' ~ '^[0-9]+$'
+                AND settlement.data->>'verifier_reward' ~ '^[0-9]+$'
+            ), verified AS (
+              SELECT DISTINCT settled.rail, settled.network, settled.bounty_id,
+                     settled.bounty_contract
+              FROM settled
+              JOIN autonomous_submission_evidence AS evidence
+                ON evidence.network = settled.network
+               AND evidence.bounty_id = settled.bounty_id
+               AND lower(evidence.bounty_contract) = settled.bounty_contract
+               AND evidence.round::text = settled.round
+               AND lower(evidence.evidence_hash) = settled.evidence_hash
+            ), acquisitions AS (
+              SELECT first_touch_rail AS rail, COUNT(*)::BIGINT AS count
+              FROM distribution_acquisitions
+              WHERE measurement_eligible = TRUE
+              GROUP BY first_touch_rail
+            ), assists AS (
+              SELECT assist.rail, COUNT(DISTINCT assist.acquisition_id)::BIGINT AS count
+              FROM distribution_acquisition_assists AS assist
+              JOIN distribution_acquisitions AS acquisition
+                ON acquisition.id = assist.acquisition_id
+               AND acquisition.measurement_eligible = TRUE
+              GROUP BY assist.rail
+            ), usage AS (
+              SELECT rail,
+                     SUM(request_count - excluded_request_count)::BIGINT AS requests,
+                     SUM(
+                       (request_count - excluded_request_count)
+                       - (successful_request_count - excluded_successful_request_count)
+                     )::BIGINT AS failures
+              FROM distribution_rail_usage_hourly GROUP BY rail
+            ), handoffs AS (
+              SELECT acquisition.first_touch_rail AS rail,
+                     COUNT(*)::BIGINT AS prepared,
+                     COUNT(handoff.wallet_reviewed_at)::BIGINT AS reviewed,
+                     COUNT(handoff.terms_hash)::BIGINT AS terms
+              FROM distribution_acquisition_handoffs AS handoff
+              JOIN distribution_acquisitions AS acquisition
+                ON acquisition.id = handoff.acquisition_id
+               AND acquisition.measurement_eligible = TRUE
+              GROUP BY acquisition.first_touch_rail
+            ), handoff_failures AS (
+              SELECT acquisition.first_touch_rail AS rail,
+                     COUNT(*)::BIGINT AS failures
+              FROM distribution_handoff_failures AS failure
+              JOIN distribution_acquisitions AS acquisition
+                ON acquisition.id = failure.acquisition_id
+               AND acquisition.measurement_eligible = TRUE
+              GROUP BY acquisition.first_touch_rail
+            ), funded_rollup AS (
+              SELECT rail, COUNT(*)::BIGINT AS bounties,
+                     COUNT(DISTINCT creator_wallet)::BIGINT AS posters,
+                     COALESCE(SUM(funding_base_units), 0)::TEXT AS funding
+              FROM external_funding GROUP BY rail
+            ), settled_rollup AS (
+              SELECT rail, COUNT(*)::BIGINT AS bounties,
+                     COALESCE(SUM(gmv_base_units), 0)::TEXT AS gmv
+              FROM settled GROUP BY rail
+            ), claimed_rollup AS (
+              SELECT rail, COUNT(*)::BIGINT AS bounties
+              FROM claimed GROUP BY rail
+            ), submitted_rollup AS (
+              SELECT rail, COUNT(*)::BIGINT AS bounties
+              FROM submitted GROUP BY rail
+            ), verified_rollup AS (
+              SELECT rail, COUNT(*)::BIGINT AS bounties
+              FROM verified GROUP BY rail
+            )
+            SELECT rail_names.rail,
+                   COALESCE(acquisitions.count, 0)::BIGINT AS acquisitions,
+                   COALESCE(assists.count, 0)::BIGINT AS assisted_acquisitions,
+                   COALESCE(usage.requests, 0)::BIGINT AS mcp_requests,
+                   COALESCE(usage.failures, 0)::BIGINT AS failed_mcp_requests,
+                   COALESCE(handoffs.prepared, 0)::BIGINT AS prepared_handoffs,
+                   COALESCE(handoffs.reviewed, 0)::BIGINT AS wallet_reviewed_handoffs,
+                   COALESCE(handoff_failures.failures, 0)::BIGINT AS handoff_failures,
+                   COALESCE(handoffs.terms, 0)::BIGINT AS attributed_terms,
+                   COALESCE(funded_rollup.bounties, 0)::BIGINT AS funded_bounties,
+                   COALESCE(funded_rollup.posters, 0)::BIGINT AS funded_posters,
+                   COALESCE(claimed_rollup.bounties, 0)::BIGINT AS claimed_bounties,
+                   COALESCE(submitted_rollup.bounties, 0)::BIGINT AS submitted_bounties,
+                   COALESCE(settled_rollup.bounties, 0)::BIGINT AS settled_bounties,
+                   COALESCE(verified_rollup.bounties, 0)::BIGINT AS verified_bounties,
+                   COALESCE(funded_rollup.funding, '0') AS external_funding,
+                   COALESCE(settled_rollup.gmv, '0') AS settled_gmv
+            FROM rail_names
+            LEFT JOIN acquisitions USING (rail)
+            LEFT JOIN assists USING (rail)
+            LEFT JOIN usage USING (rail)
+            LEFT JOIN handoffs USING (rail)
+            LEFT JOIN handoff_failures USING (rail)
+            LEFT JOIN funded_rollup USING (rail)
+            LEFT JOIN claimed_rollup USING (rail)
+            LEFT JOIN submitted_rollup USING (rail)
+            LEFT JOIN settled_rollup USING (rail)
+            LEFT JOIN verified_rollup USING (rail)
+            ORDER BY array_position($2::text[], rail_names.rail)
+            "#,
+        )
+        .bind(excluded_classes)
+        .bind(&rails)
+        .fetch_all(&self.pool)
+        .await?;
+        let rails = rows
+            .into_iter()
+            .map(|row| {
+                Ok(DistributionRailOutcomeStats {
+                    rail: row.try_get("rail")?,
+                    acquisitions: u64_from_i64(row.try_get("acquisitions")?)?,
+                    assisted_acquisitions: u64_from_i64(row.try_get("assisted_acquisitions")?)?,
+                    mcp_requests: u64_from_i64(row.try_get("mcp_requests")?)?,
+                    failed_mcp_requests: u64_from_i64(row.try_get("failed_mcp_requests")?)?,
+                    prepared_handoffs: u64_from_i64(row.try_get("prepared_handoffs")?)?,
+                    wallet_reviewed_handoffs: u64_from_i64(
+                        row.try_get("wallet_reviewed_handoffs")?,
+                    )?,
+                    handoff_failure_count: u64_from_i64(row.try_get("handoff_failures")?)?,
+                    attributed_terms: u64_from_i64(row.try_get("attributed_terms")?)?,
+                    externally_funded_bounties: u64_from_i64(row.try_get("funded_bounties")?)?,
+                    unique_external_funded_posters: u64_from_i64(row.try_get("funded_posters")?)?,
+                    externally_funded_claimed_bounties: u64_from_i64(
+                        row.try_get("claimed_bounties")?,
+                    )?,
+                    externally_funded_submitted_bounties: u64_from_i64(
+                        row.try_get("submitted_bounties")?,
+                    )?,
+                    externally_funded_settled_bounties: u64_from_i64(
+                        row.try_get("settled_bounties")?,
+                    )?,
+                    verified_settlements_with_evidence: u64_from_i64(
+                        row.try_get("verified_bounties")?,
+                    )?,
+                    external_funding_base_units: row.try_get("external_funding")?,
+                    settled_gmv_base_units: row.try_get("settled_gmv")?,
+                })
+            })
+            .collect::<DbResult<Vec<_>>>()?;
+        let attributed_external_funded_bounties = rails
+            .iter()
+            .map(|row| row.externally_funded_bounties)
+            .sum::<u64>();
+        let total_row = sqlx::query(
+            r#"
+            WITH excluded_wallets AS (
+              SELECT DISTINCT wallet_address
+              FROM distribution_wallet_exclusions
+              WHERE active = TRUE AND exclusion_class = ANY($1::text[])
+            ), creations AS (
+              SELECT DISTINCT network, bounty_id,
+                     lower(data->>'bounty_contract') AS bounty_contract,
+                     lower(data->>'creator') AS creator_wallet,
+                     lower(data->>'terms_hash') AS terms_hash
+              FROM autonomous_bounty_events
+              WHERE kind = 'canonical_bounty_created'
+                AND block_time_verified = TRUE
+                AND data->>'bounty_contract' IS NOT NULL
+                AND data->>'creator' IS NOT NULL
+                AND data->>'terms_hash' IS NOT NULL
+            ), economics AS (
+              SELECT network, bounty_id,
+                     MAX((data->>'target_amount')::numeric) AS target_amount
+              FROM autonomous_bounty_events
+              WHERE kind = 'canonical_bounty_economics_configured'
+                AND block_time_verified = TRUE
+                AND data->>'target_amount' ~ '^[0-9]+$'
+                AND (data->>'target_amount')::numeric > 0
+              GROUP BY network, bounty_id
+            )
+            SELECT COUNT(*)::BIGINT AS total,
+                   COUNT(DISTINCT creation.creator_wallet)::BIGINT AS posters
+            FROM creations AS creation
+            JOIN economics
+              ON economics.network = creation.network
+             AND economics.bounty_id = creation.bounty_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM excluded_wallets
+                WHERE wallet_address = creation.creator_wallet
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM distribution_acquisition_handoffs AS handoff
+                JOIN distribution_acquisitions AS acquisition
+                  ON acquisition.id = handoff.acquisition_id
+                WHERE handoff.terms_hash = creation.terms_hash
+                  AND acquisition.measurement_eligible = FALSE
+              )
+              AND (
+                SELECT COALESCE(SUM((funding.data->>'amount')::numeric), 0)
+                FROM autonomous_bounty_events AS funding
+                WHERE funding.network = creation.network
+                  AND funding.bounty_id = creation.bounty_id
+                  AND lower(funding.contract_address) = creation.bounty_contract
+                  AND funding.kind = 'funding_added'
+                  AND funding.block_time_verified = TRUE
+                  AND funding.data->>'contributor' IS NOT NULL
+                  AND funding.data->>'amount' ~ '^[0-9]+$'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM excluded_wallets
+                    WHERE wallet_address = lower(funding.data->>'contributor')
+                  )
+              ) >= economics.target_amount
+              AND EXISTS (
+                SELECT 1 FROM autonomous_bounty_events AS claimable
+                WHERE claimable.network = creation.network
+                  AND claimable.bounty_id = creation.bounty_id
+                  AND lower(claimable.contract_address) = creation.bounty_contract
+                  AND claimable.kind = 'bounty_became_claimable'
+                  AND claimable.block_time_verified = TRUE
+              )
+            "#,
+        )
+        .bind(excluded_classes)
+        .fetch_one(&self.pool)
+        .await?;
+        let total_external_funded_bounties = u64_from_i64(total_row.try_get::<i64, _>("total")?)?;
+        let unique_external_funded_posters = u64_from_i64(total_row.try_get::<i64, _>("posters")?)?;
+        let attribution_coverage_basis_points = if total_external_funded_bounties == 0 {
+            0
+        } else {
+            attributed_external_funded_bounties
+                .saturating_mul(10_000)
+                .checked_div(total_external_funded_bounties)
+                .unwrap_or(0)
+                .min(10_000)
+        };
+        Ok(DistributionOutcomeStats {
+            rails,
+            total_external_funded_bounties,
+            unique_external_funded_posters,
+            attributed_external_funded_bounties,
+            attribution_coverage_basis_points,
+        })
     }
 
     pub async fn insert_discoverability_snapshot(
@@ -9446,6 +10301,19 @@ fn autonomous_event_from_row(row: PgRow) -> DbResult<AutonomousBountyEvent> {
     })
 }
 
+fn distribution_handoff_from_row(row: PgRow) -> DbResult<DistributionHandoff> {
+    Ok(DistributionHandoff {
+        id: row.try_get("id")?,
+        acquisition_id: row.try_get("acquisition_id")?,
+        request_fingerprint: row.try_get("request_fingerprint")?,
+        terms_hash: row.try_get("terms_hash")?,
+        creator_wallet: row.try_get("creator_wallet")?,
+        prepared_at: row.try_get("prepared_at")?,
+        wallet_reviewed_at: row.try_get("wallet_reviewed_at")?,
+        terms_bound_at: row.try_get("terms_bound_at")?,
+    })
+}
+
 fn open_competition_event_from_row(row: PgRow) -> DbResult<OpenCompetitionEvent> {
     let kind_value = serde_json::Value::String(row.try_get::<String, _>("kind")?);
     let kind: OpenCompetitionEventKind = serde_json::from_value(kind_value)?;
@@ -10580,6 +11448,531 @@ mod tests {
                 "discoverability route aggregation must not persist {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn distribution_attribution_migration_is_private_retry_safe_and_bounded() {
+        for invariant in [
+            "distribution_acquisitions",
+            "token_hash TEXT NOT NULL UNIQUE",
+            "measurement_eligible BOOLEAN NOT NULL DEFAULT TRUE",
+            "canary_kind IS NULL OR canary_kind IN ('dry-run-v1', 'mainnet-v1')",
+            "(measurement_eligible = TRUE AND canary_kind IS NULL)",
+            "(measurement_eligible = FALSE AND canary_kind IS NOT NULL)",
+            "distribution_acquisition_assists",
+            "PRIMARY KEY (acquisition_id, rail)",
+            "distribution_acquisition_handoffs",
+            "wallet_reviewed_at TIMESTAMPTZ",
+            "UNIQUE (acquisition_id, request_fingerprint)",
+            "distribution_handoffs_terms_hash_idx",
+            "distribution_handoff_failures",
+            "failure_code IN ('invalid_arguments', 'preparation_failed')",
+            "distribution_rail_usage_hourly",
+            "excluded_request_count BIGINT NOT NULL DEFAULT 0",
+            "distribution_wallet_exclusions",
+            "Canonical events remain the only funding and settlement evidence",
+        ] {
+            assert!(
+                DISTRIBUTION_ATTRIBUTION_MIGRATION.contains(invariant),
+                "missing distribution attribution invariant {invariant}"
+            );
+        }
+        for rail in APPROVED_DISTRIBUTION_RAILS {
+            assert!(
+                DISTRIBUTION_ATTRIBUTION_MIGRATION.contains(&format!("'{rail}'")),
+                "missing approved distribution rail {rail}"
+            );
+        }
+        for forbidden in [
+            "raw_token",
+            "private_key",
+            "seed_phrase",
+            "ip_address",
+            "user_agent",
+            "prompt TEXT",
+            "request_body JSONB",
+        ] {
+            assert!(
+                !DISTRIBUTION_ATTRIBUTION_MIGRATION.contains(forbidden),
+                "distribution attribution must not persist {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn distribution_acquisition_tokens_are_signed_opaque_and_tamper_evident() {
+        let secret = "0123456789abcdef0123456789abcdef";
+        let nonce = "ab".repeat(32);
+        let token = sign_distribution_acquisition_token(&nonce, secret).unwrap();
+        assert!(token.starts_with("aba1_"));
+        assert_eq!(token.len(), 134);
+        assert_eq!(
+            distribution_acquisition_token_hash(&token, secret),
+            distribution_acquisition_token_hash(&token, secret)
+        );
+        let mut tampered = token.clone();
+        tampered.replace_range(5..6, "c");
+        assert!(distribution_acquisition_token_hash(&tampered, secret).is_none());
+        assert!(
+            distribution_acquisition_token_hash(&token, "fedcba9876543210fedcba9876543210")
+                .is_none()
+        );
+        assert!(sign_distribution_acquisition_token(&nonce, "too-short").is_none());
+        assert!(sign_distribution_acquisition_token(&"AB".repeat(32), secret).is_none());
+    }
+
+    #[test]
+    fn distribution_exclusion_classes_match_activation_policy() {
+        assert_eq!(
+            APPROVED_DISTRIBUTION_RAILS,
+            [
+                "bankr",
+                "openclaw",
+                "vscode",
+                "cursor",
+                "cline",
+                "github",
+                "linear",
+                "claude-custom",
+                "chatgpt-dev",
+                "glama",
+                "mcp-so",
+                "mcpservers",
+            ]
+        );
+        assert_eq!(
+            DISTRIBUTION_EXCLUSION_CLASSES,
+            [
+                "maintainer",
+                "operator",
+                "test",
+                "synthetic_canary",
+                "sponsored",
+                "circular_funding",
+                "related_party",
+                "operator_funded_development",
+            ]
+        );
+        assert_eq!(
+            normalize_distribution_exclusion_class("team"),
+            Some("maintainer")
+        );
+        assert_eq!(
+            normalize_distribution_exclusion_class("circular"),
+            Some("circular_funding")
+        );
+        assert_eq!(
+            normalize_distribution_exclusion_class("related"),
+            Some("related_party")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn distribution_attribution_is_retry_safe_and_counts_global_posters_distinctly() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let excluded = DISTRIBUTION_EXCLUSION_CLASSES
+            .iter()
+            .map(|class| (*class).to_string())
+            .collect::<Vec<_>>();
+        let baseline = store.distribution_outcome_stats(&excluded).await.unwrap();
+        let baseline_bankr = baseline
+            .rails
+            .iter()
+            .find(|row| row.rail == "bankr")
+            .unwrap()
+            .externally_funded_bounties;
+        let baseline_bankr_reviewed = baseline
+            .rails
+            .iter()
+            .find(|row| row.rail == "bankr")
+            .unwrap()
+            .wallet_reviewed_handoffs;
+        let baseline_bankr_failures = baseline
+            .rails
+            .iter()
+            .find(|row| row.rail == "bankr")
+            .unwrap()
+            .handoff_failure_count;
+        let baseline_github = baseline
+            .rails
+            .iter()
+            .find(|row| row.rail == "github")
+            .unwrap()
+            .externally_funded_bounties;
+        let baseline_vscode = baseline
+            .rails
+            .iter()
+            .find(|row| row.rail == "vscode")
+            .unwrap()
+            .externally_funded_bounties;
+        let baseline_glama = baseline
+            .rails
+            .iter()
+            .find(|row| row.rail == "glama")
+            .unwrap()
+            .clone();
+        let network = format!("distribution-test-{}", Uuid::new_v4());
+        let creator_seed = Uuid::new_v4().simple().to_string();
+        let creator = format!("0x{creator_seed}{}", &creator_seed[..8]);
+        let factory_seed = Uuid::new_v4().simple().to_string();
+        let factory = format!("0x{factory_seed}{}", &factory_seed[..8]);
+        let secret = "0123456789abcdef0123456789abcdef";
+        let now = Utc::now() - chrono::Duration::seconds(5);
+        let excluded_seed = Uuid::new_v4().simple().to_string();
+        let excluded_funder = format!("0x{excluded_seed}{}", &excluded_seed[..8]);
+        store
+            .upsert_distribution_wallet_exclusion(
+                &excluded_funder,
+                "operator",
+                Some("distribution aggregation integration test"),
+                true,
+            )
+            .await
+            .unwrap();
+
+        for (index, (rail, excluded_subsidy)) in
+            [("bankr", false), ("github", false), ("vscode", true)]
+                .into_iter()
+                .enumerate()
+        {
+            let nonce = Uuid::new_v4().simple().to_string().repeat(2);
+            let token = sign_distribution_acquisition_token(&nonce, secret).unwrap();
+            let token_hash = distribution_acquisition_token_hash(&token, secret).unwrap();
+            let acquisition = store
+                .observe_distribution_acquisition(rail, &token_hash, None, now)
+                .await
+                .unwrap();
+            if rail == "bankr" {
+                let assisted = store
+                    .observe_distribution_acquisition(
+                        "cursor",
+                        &token_hash,
+                        None,
+                        now + chrono::Duration::milliseconds(1),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(assisted.id, acquisition.id);
+                assert_eq!(assisted.first_touch_rail, "bankr");
+            }
+            let fingerprint = hex::encode(Sha256::digest(format!("{network}:{rail}").as_bytes()));
+            let handoff = store
+                .reserve_distribution_handoff(acquisition.id, &fingerprint, now)
+                .await
+                .unwrap();
+            let replay = store
+                .reserve_distribution_handoff(acquisition.id, &fingerprint, now)
+                .await
+                .unwrap();
+            assert_eq!(replay.id, handoff.id);
+            let reviewed = store
+                .mark_distribution_handoff_wallet_reviewed(&token_hash, handoff.id, now)
+                .await
+                .unwrap();
+            assert!(reviewed.terms_hash.is_none());
+            assert!(reviewed.creator_wallet.is_none());
+            let reviewed_replay = store
+                .mark_distribution_handoff_wallet_reviewed(
+                    &token_hash,
+                    handoff.id,
+                    now + chrono::Duration::seconds(1),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                reviewed.wallet_reviewed_at,
+                reviewed_replay.wallet_reviewed_at
+            );
+            let terms_hash = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+            store
+                .bind_distribution_handoff_terms(
+                    &token_hash,
+                    handoff.id,
+                    &terms_hash,
+                    &creator,
+                    now,
+                )
+                .await
+                .unwrap();
+            if rail == "bankr" {
+                let failed_fingerprint = hex::encode(Sha256::digest(b"invalid bankr handoff"));
+                store
+                    .record_distribution_handoff_failure(
+                        acquisition.id,
+                        &failed_fingerprint,
+                        "invalid_arguments",
+                        now,
+                    )
+                    .await
+                    .unwrap();
+                store
+                    .record_distribution_handoff_failure(
+                        acquisition.id,
+                        &failed_fingerprint,
+                        "invalid_arguments",
+                        now + chrono::Duration::seconds(1),
+                    )
+                    .await
+                    .unwrap();
+            }
+            let contract_seed = Uuid::new_v4().simple().to_string();
+            let bounty_contract = format!("0x{contract_seed}{}", &contract_seed[..8]);
+            let bounty_id = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+            let contributor_seed = Uuid::new_v4().simple().to_string();
+            let contributor = format!("0x{contributor_seed}{}", &contributor_seed[..8]);
+            let mut events = vec![
+                (
+                    AutonomousBountyEventKind::CanonicalBountyCreated,
+                    serde_json::json!({
+                        "bounty_contract": bounty_contract.clone(),
+                        "creator": creator.clone(),
+                        "terms_hash": terms_hash,
+                    }),
+                ),
+                (
+                    AutonomousBountyEventKind::FundingAdded,
+                    serde_json::json!({
+                        "contributor": contributor,
+                        "amount": if excluded_subsidy { "100000" } else { "2100000" }
+                    }),
+                ),
+                (
+                    AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured,
+                    serde_json::json!({"target_amount": "2100000"}),
+                ),
+                (
+                    AutonomousBountyEventKind::BountyBecameClaimable,
+                    serde_json::json!({"funded_amount": "2100000"}),
+                ),
+            ];
+            if excluded_subsidy {
+                events.push((
+                    AutonomousBountyEventKind::FundingAdded,
+                    serde_json::json!({
+                        "contributor": excluded_funder.clone(),
+                        "amount": "2000000"
+                    }),
+                ));
+            }
+            for (event_index, (kind, data)) in events.into_iter().enumerate() {
+                let block_number = 100 + index as u64 * 10 + event_index as u64;
+                store
+                    .upsert_autonomous_bounty_event(
+                        &network,
+                        &AutonomousBountyEvent {
+                            id: Uuid::new_v4(),
+                            log_key: format!("{network}:{block_number}:0"),
+                            tx_hash: format!("0x{block_number:064x}"),
+                            block_number,
+                            log_index: 0,
+                            contract_address: if event_index == 0 {
+                                factory.clone()
+                            } else {
+                                bounty_contract.clone()
+                            },
+                            bounty_id: bounty_id.clone(),
+                            kind,
+                            data,
+                            occurred_at: now,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    store
+                        .confirm_autonomous_event_block_time(&network, block_number, now)
+                        .await
+                        .unwrap(),
+                    1
+                );
+            }
+        }
+
+        let canary_nonce = Uuid::new_v4().simple().to_string().repeat(2);
+        let canary_token = sign_distribution_acquisition_token(&canary_nonce, secret).unwrap();
+        let canary_hash = distribution_acquisition_token_hash(&canary_token, secret).unwrap();
+        let canary = store
+            .observe_distribution_acquisition("glama", &canary_hash, Some("dry-run-v1"), now)
+            .await
+            .unwrap();
+        assert!(!canary.measurement_eligible);
+        assert_eq!(canary.canary_kind.as_deref(), Some("dry-run-v1"));
+        store
+            .record_distribution_rail_request("glama", true, false, now)
+            .await
+            .unwrap();
+        let canary_fingerprint = hex::encode(Sha256::digest(b"dry-run handoff"));
+        let canary_handoff = store
+            .reserve_distribution_handoff(canary.id, &canary_fingerprint, now)
+            .await
+            .unwrap();
+        store
+            .mark_distribution_handoff_wallet_reviewed(&canary_hash, canary_handoff.id, now)
+            .await
+            .unwrap();
+        let canary_terms_hash = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+        store
+            .bind_distribution_handoff_terms(
+                &canary_hash,
+                canary_handoff.id,
+                &canary_terms_hash,
+                &creator,
+                now,
+            )
+            .await
+            .unwrap();
+        store
+            .record_distribution_handoff_failure(
+                canary.id,
+                &canary_fingerprint,
+                "preparation_failed",
+                now,
+            )
+            .await
+            .unwrap();
+        let canary_contract_seed = Uuid::new_v4().simple().to_string();
+        let canary_contract = format!("0x{canary_contract_seed}{}", &canary_contract_seed[..8]);
+        let canary_bounty_id = format!("0x{}", Uuid::new_v4().simple().to_string().repeat(2));
+        for (event_index, (kind, data)) in [
+            (
+                AutonomousBountyEventKind::CanonicalBountyCreated,
+                serde_json::json!({
+                    "bounty_contract": canary_contract.clone(),
+                    "creator": creator.clone(),
+                    "terms_hash": canary_terms_hash,
+                }),
+            ),
+            (
+                AutonomousBountyEventKind::CanonicalBountyEconomicsConfigured,
+                serde_json::json!({"target_amount": "2100000"}),
+            ),
+            (
+                AutonomousBountyEventKind::FundingAdded,
+                serde_json::json!({"contributor": creator.clone(), "amount": "2100000"}),
+            ),
+            (
+                AutonomousBountyEventKind::BountyBecameClaimable,
+                serde_json::json!({"funded_amount": "2100000"}),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let block_number = 200 + event_index as u64;
+            store
+                .upsert_autonomous_bounty_event(
+                    &network,
+                    &AutonomousBountyEvent {
+                        id: Uuid::new_v4(),
+                        log_key: format!("{network}:{block_number}:0"),
+                        tx_hash: format!("0x{block_number:064x}"),
+                        block_number,
+                        log_index: 0,
+                        contract_address: if event_index == 0 {
+                            factory.clone()
+                        } else {
+                            canary_contract.clone()
+                        },
+                        bounty_id: canary_bounty_id.clone(),
+                        kind,
+                        data,
+                        occurred_at: now,
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .confirm_autonomous_event_block_time(&network, block_number, now)
+                    .await
+                    .unwrap(),
+                1
+            );
+        }
+
+        let observed = store.distribution_outcome_stats(&excluded).await.unwrap();
+        assert_eq!(
+            observed.unique_external_funded_posters,
+            baseline.unique_external_funded_posters + 1
+        );
+        assert_eq!(
+            observed.total_external_funded_bounties,
+            baseline.total_external_funded_bounties + 2,
+            "subsidized and canary lifecycle outcomes must remain outside the denominator"
+        );
+        assert_eq!(
+            observed.attributed_external_funded_bounties,
+            baseline.attributed_external_funded_bounties + 2
+        );
+        assert_eq!(
+            observed
+                .rails
+                .iter()
+                .find(|row| row.rail == "bankr")
+                .unwrap()
+                .externally_funded_bounties,
+            baseline_bankr + 1
+        );
+        assert_eq!(
+            observed
+                .rails
+                .iter()
+                .find(|row| row.rail == "bankr")
+                .unwrap()
+                .wallet_reviewed_handoffs,
+            baseline_bankr_reviewed + 1
+        );
+        assert_eq!(
+            observed
+                .rails
+                .iter()
+                .find(|row| row.rail == "bankr")
+                .unwrap()
+                .handoff_failure_count,
+            baseline_bankr_failures + 1,
+            "replayed failures must not receive duplicate conversion credit"
+        );
+        assert_eq!(
+            observed
+                .rails
+                .iter()
+                .find(|row| row.rail == "github")
+                .unwrap()
+                .externally_funded_bounties,
+            baseline_github + 1
+        );
+        assert_eq!(
+            observed
+                .rails
+                .iter()
+                .find(|row| row.rail == "vscode")
+                .unwrap()
+                .externally_funded_bounties,
+            baseline_vscode,
+            "an excluded subsidy plus insufficient external funding must not count"
+        );
+        let observed_glama = observed
+            .rails
+            .iter()
+            .find(|row| row.rail == "glama")
+            .unwrap();
+        assert_eq!(observed_glama.acquisitions, baseline_glama.acquisitions);
+        assert_eq!(observed_glama.mcp_requests, baseline_glama.mcp_requests);
+        assert_eq!(
+            observed_glama.prepared_handoffs,
+            baseline_glama.prepared_handoffs
+        );
+        assert_eq!(
+            observed_glama.handoff_failure_count,
+            baseline_glama.handoff_failure_count
+        );
+        assert_eq!(
+            observed_glama.externally_funded_bounties,
+            baseline_glama.externally_funded_bounties
+        );
     }
 
     #[test]

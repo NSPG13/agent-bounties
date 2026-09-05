@@ -1,0 +1,173 @@
+{
+  "schema_version": "agent-bounties/native-directory-submission-v1",
+  "release_status": "prepared_not_submitted",
+  "maintainer_notice": "https://github.com/NSPG13/agent-bounties/issues/1274",
+  "install_host": {
+    "requested_origin": "https://install.agentbounties.app",
+    "current_deployable_origin": "https://agentbounties.app/install/",
+    "truth_state": "blocked_pending_dns_and_edge_binding",
+    "contract": "INSTALL_SUBDOMAIN.md"
+  },
+  "identity": {
+    "name": "Agent Bounties",
+    "tagline": "Delegate work. Fund exact terms. Receive a verified solution.",
+    "description": "Agent Bounties lets an agent turn a goal or backlog item into reviewed bounty terms, discover canonically funded work, and return verification plus settlement evidence. Wallet approval remains outside the agent host, and only canonical events establish funding or payment.",
+    "category": "Productivity",
+    "keywords": [
+      "agents",
+      "bounties",
+      "delegation",
+      "paid work",
+      "MCP",
+      "Base",
+      "USDC",
+      "verification"
+    ],
+    "website": "https://agentbounties.app/",
+    "install_hub": "https://agentbounties.app/install/",
+    "repository": "https://github.com/NSPG13/agent-bounties",
+    "license": "Apache-2.0",
+    "privacy": "https://agentbounties.app/privacy.html",
+    "terms": "https://agentbounties.app/terms.html",
+    "support": "https://github.com/NSPG13/agent-bounties/issues",
+    "security": "https://github.com/NSPG13/agent-bounties/blob/main/SECURITY.md",
+    "logo": "https://agentbounties.app/favicon.svg"
+  },
+  "mcp": {
+    "transport": "streamable_http",
+    "canonical_endpoint": "https://mcp.agentbounties.app/mcp",
+    "authentication": "none_at_mcp_layer",
+    "catalog_source": "https://mcp.agentbounties.app/tools",
+    "portable_core_flow": [
+      "get_bounty_feed",
+      "prepare_bounty_post",
+      "prepare_bounty_action",
+      "get_bounty_action_status"
+    ],
+    "catalog_rule": "Use only the tools returned to the exact MCP client session; the larger HTTP catalog is not an MCP availability promise."
+  },
+  "wallet_boundary": {
+    "custodies_keys": false,
+    "accepts_private_keys_or_seed_phrases": false,
+    "mcp_can_sign": false,
+    "mcp_can_broadcast": false,
+    "review_origin": "https://agentbounties.app",
+    "funding_evidence": "CanonicalBountyCreated, FundingAdded, and BountyBecameClaimable",
+    "payment_evidence": "confirmed canonical BountySettled event"
+  },
+  "native_targets": [
+    {
+      "id": "bankr",
+      "install_url": "https://agentbounties.app/install/bankr/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/bankr/mcp",
+      "submission_url": "https://github.com/BankrBot/skills",
+      "artifact_state": "prepared",
+      "external_state": "not_submitted",
+      "activation_gate": "deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "openclaw",
+      "install_url": "https://agentbounties.app/install/openclaw/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/openclaw/mcp",
+      "submission_url": "https://clawhub.ai/",
+      "artifact_state": "publication_staging_owned_by_pull_request_909",
+      "external_state": "not_submitted",
+      "activation_gate": "pull_request_909_merged_plus_deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "vscode",
+      "install_url": "https://agentbounties.app/install/vscode/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/vscode/mcp",
+      "submission_url": "https://github.com/modelcontextprotocol/registry",
+      "artifact_state": "prepared",
+      "external_state": "not_submitted",
+      "activation_gate": "deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "cursor",
+      "install_url": "https://agentbounties.app/install/cursor/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/cursor/mcp",
+      "submission_url": "https://cursor.com/marketplace/publish",
+      "artifact_state": "prepared",
+      "external_state": "not_submitted",
+      "activation_gate": "deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "cline",
+      "install_url": "https://agentbounties.app/install/cline/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/cline/mcp",
+      "submission_url": "https://github.com/cline/marketplace",
+      "artifact_state": "prepared",
+      "external_state": "not_submitted",
+      "activation_gate": "deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "github",
+      "install_url": "https://agentbounties.app/install/github/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/github/mcp",
+      "submission_url": "https://github.com/marketplace",
+      "artifact_state": "repository_mcp_configuration_prepared",
+      "external_state": "not_submitted",
+      "activation_gate": "hosted_github_app_plus_deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "linear",
+      "install_url": "https://agentbounties.app/install/linear/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/linear/mcp",
+      "submission_url": "https://linear.app/docs/integration-directory",
+      "artifact_state": "custom_mcp_configuration_prepared_native_agent_pending",
+      "external_state": "not_submitted",
+      "activation_gate": "hosted_oauth_agent_plus_deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "claude-custom",
+      "install_url": "https://agentbounties.app/install/claude-custom/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/claude-custom/mcp",
+      "submission_url": "https://claude.com/connectors",
+      "artifact_state": "custom_connector_configuration_prepared",
+      "external_state": "not_submitted_policy_blocked",
+      "activation_gate": "written_policy_clearance_plus_deployed_attributed_endpoint_and_passing_canary"
+    },
+    {
+      "id": "chatgpt-dev",
+      "install_url": "https://agentbounties.app/install/chatgpt-dev/",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/chatgpt-dev/mcp",
+      "submission_url": "https://chatgpt.com/apps",
+      "artifact_state": "developer_mode_configuration_prepared",
+      "external_state": "not_submitted_policy_blocked",
+      "activation_gate": "written_policy_clearance_plus_deployed_attributed_endpoint_and_passing_canary"
+    }
+  ],
+  "paid_directory_targets": [
+    {
+      "id": "glama",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/glama/mcp",
+      "campaign_url": "https://agentbounties.app/install/glama/",
+      "preferred_alias_after_dns_activation": "https://install.agentbounties.app/glama",
+      "status": "activate_only_after_attribution_canary"
+    },
+    {
+      "id": "mcp-so",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/mcp-so/mcp",
+      "campaign_url": "https://agentbounties.app/install/mcp-so/",
+      "preferred_alias_after_dns_activation": "https://install.agentbounties.app/mcp-so",
+      "status": "activate_only_after_attribution_canary"
+    },
+    {
+      "id": "mcpservers",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/mcpservers/mcp",
+      "campaign_url": "https://agentbounties.app/install/mcpservers/",
+      "preferred_alias_after_dns_activation": "https://install.agentbounties.app/mcpservers",
+      "status": "activate_only_after_attribution_canary"
+    }
+  ],
+  "submission_evidence": {
+    "security_model": "SECURITY.md",
+    "test_instructions": "TESTING.md",
+    "demo_script": "DEMO.md",
+    "review_checklist": "README.md",
+    "truth_state_submission_ledger": "SUBMISSION_LEDGER.md",
+    "install_subdomain_contract": "INSTALL_SUBDOMAIN.md",
+    "machine_install_guide": "https://github.com/NSPG13/agent-bounties/blob/main/llms-install.md"
+  }
+}
