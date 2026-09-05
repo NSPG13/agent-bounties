@@ -35,7 +35,6 @@ RAIL_HEADER = "x-agent-bounties-attribution-rail"
 FIRST_TOUCH_HEADER = "x-agent-bounties-first-touch-rail"
 CANARY_HEADER = "x-agent-bounties-canary"
 MEASUREMENT_ELIGIBLE_HEADER = "x-agent-bounties-measurement-eligible"
-MEASUREMENT_ELIGIBLE_HEADER = "x-agent-bounties-measurement-eligible"
 TOKEN = re.compile(r"^aba1_[0-9a-f]{64}\.[0-9a-f]{64}$")
 
 
@@ -89,8 +88,6 @@ def check_rail(endpoint: str, rail: str, canary_kind: str) -> None:
         raise RuntimeError(f"{rail}: initialize did not attest the bounded canary kind")
     if header(headers, MEASUREMENT_ELIGIBLE_HEADER) != "false":
         raise RuntimeError(f"{rail}: initialize canary was not measurement-excluded")
-    if header(headers, MEASUREMENT_ELIGIBLE_HEADER) != "false":
-        raise RuntimeError(f"{rail}: canary acquisition was not measurement-excluded")
 
     tools_list = {
         "jsonrpc": "2.0",
@@ -118,8 +115,6 @@ def check_rail(endpoint: str, rail: str, canary_kind: str) -> None:
         raise RuntimeError(f"{rail}: tools/list did not retain the bounded canary kind")
     if header(headers, MEASUREMENT_ELIGIBLE_HEADER) != "false":
         raise RuntimeError(f"{rail}: tools/list canary was not measurement-excluded")
-    if header(headers, MEASUREMENT_ELIGIBLE_HEADER) != "false":
-        raise RuntimeError(f"{rail}: canary retry became measurement-eligible")
     attribution = (
         body.get("result", {})
         .get("_meta", {})
@@ -130,7 +125,6 @@ def check_rail(endpoint: str, rail: str, canary_kind: str) -> None:
         or attribution.get("first_touch_rail") != rail
         or attribution.get("measurement_eligible") is not False
         or attribution.get("authority") != "analytics_only"
-        or attribution.get("measurement_eligible") is not False
     ):
         raise RuntimeError(f"{rail}: MCP result attribution evidence is incomplete")
 
