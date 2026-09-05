@@ -18,6 +18,7 @@ the rail-specific apex fallback and follow [`INSTALL_SUBDOMAIN.md`](INSTALL_SUBD
 | GitHub Marketplace | Repository MCP config prepared; hosted App remains a separate workstream | **Not submitted** | [GitHub Marketplace listing requirements](https://docs.github.com/en/apps/github-marketplace/creating-apps-for-github-marketplace/requirements-for-listing-an-app) | Public functional GitHub App; valid contact, description, pricing plan, privacy and support links; working additional links; Marketplace webhook handling; logo, feature card, screenshots, and developer agreement. |
 | GitHub Agent Apps | Agent App architecture remains a separate workstream | **Not submitted / access-gated** | [GitHub Agent Apps partner path](https://github.blog/changelog/2026-06-02-extend-github-with-agent-apps/) | Obtain partner access, host a GitHub App agent, handle GitHub-issued JWT authorization at the MCP boundary, and pass issue-assignment, PR-mention, and Agents UI tests. |
 | Linear | Attributed custom-MCP route prepared; hosted OAuth agent remains a separate workstream | **Not submitted** | [Linear agent guide](https://linear.app/developers/agents) and [directory requirements](https://linear.app/docs/integration-directory) | Hosted OAuth application using `actor=app`; installable app user; native mention, assignment, comment, and result-return behavior; listing copy/assets; directory review submission. |
+| Glama connector | Remote connector form is prepared in the maintainer's Glama session with the exact attributed endpoint; HTTP claim endpoint is disabled until a real token is issued | **Not submitted** | [Glama connector directory](https://glama.ai/mcp/connectors) | Complete the excluded 2-USDC lifecycle canary; submit the prepared remote-server form; configure the Glama-issued `GLAMA_CLAIM_TOKEN`; verify `/.well-known/glama.json`; claim ownership; confirm Glama health from initialize and tools/list; only then activate paid inventory. |
 
 ## Promotion Gate
 
@@ -40,3 +41,9 @@ activate a listing or paid placement from dry-run evidence alone.
 An accepted PR, submitted form, review email, or directory draft is still not
 a live listing. Record `submitted`, `accepted`, and `live` as separate later
 events with the external URL and observed revision.
+
+For Glama, the claim token is generated only after submission. Never invent or
+commit it. Configure it as `GLAMA_CLAIM_TOKEN` on the MCP service; the public
+challenge at `https://mcp.agentbounties.app/.well-known/glama.json` returns 404
+when the variable is absent or invalid. Keep the token configured after claim so
+Glama's periodic ownership checks continue to pass.

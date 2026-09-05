@@ -144,7 +144,15 @@
       "attributed_mcp_url": "https://mcp.agentbounties.app/r/glama/mcp",
       "campaign_url": "https://agentbounties.app/install/glama/",
       "preferred_alias_after_dns_activation": "https://install.agentbounties.app/glama",
-      "status": "activate_only_after_attribution_canary"
+      "connector_submission_url": "https://glama.ai/mcp/connectors",
+      "connector_submission_kind": "remote_streamable_http",
+      "connector_form_state": "prepared_not_submitted",
+      "claim_method": "http_challenge",
+      "claim_url": "https://mcp.agentbounties.app/.well-known/glama.json",
+      "claim_token_source": "GLAMA_CLAIM_TOKEN",
+      "claim_state": "awaiting_real_token_after_submission",
+      "health_test": "initialize_then_tools_list_without_credentials",
+      "paid_campaign_state": "activate_only_after_excluded_funded_and_settled_canary"
     },
     {
       "id": "mcp-so",
