@@ -36,7 +36,6 @@ use sha2::{Digest, Sha256};
 use std::{env, net::IpAddr};
 use url::Url;
 use uuid::Uuid;
-use verifier_sdk::RegressionSandboxPolicy;
 
 const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
 const MCP_LEGACY_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -623,13 +622,166 @@ fn validate_prepared_verifier(
     }
     let runner = benchmark
         .get("runner_manifest")
-        .ok_or_else(|| "benchmark.runner_manifest is required".to_string())?;
-    let policy = serde_json::from_value::<RegressionSandboxPolicy>(runner.clone())
-        .map_err(|error| format!("benchmark.runner_manifest has an invalid shape: {error}"))?;
-    policy
-        .validate()
-        .map_err(|error| format!("benchmark.runner_manifest is not executable: {error}"))?;
+        .and_then(Value::as_object)
+        .ok_or_else(|| "benchmark.runner_manifest must be an object".to_string())?;
+    let expected_runner_keys = [
+        "schema_version",
+        "image",
+        "command",
+        "workdir",
+        "benchmark_digest",
+        "timeout_seconds",
+        "cpu_millis",
+        "memory_bytes",
+        "pids_limit",
+        "max_output_bytes",
+        "tmpfs_bytes",
+        "max_source_bytes",
+        "max_source_files",
+        "max_benchmark_bytes",
+        "max_benchmark_files",
+        "platform",
+        "test_seed",
+    ];
+    if runner.len() != expected_runner_keys.len()
+        || expected_runner_keys
+            .iter()
+            .any(|key| !runner.contains_key(*key))
+    {
+        return Err(
+            "benchmark.runner_manifest must contain the complete regression-sandbox-v1 field set"
+                .to_string(),
+        );
+    }
+    if runner.get("schema_version").and_then(Value::as_str)
+        != Some("agent-bounties/regression-sandbox-v1")
+    {
+        return Err(
+            "benchmark.runner_manifest.schema_version must be agent-bounties/regression-sandbox-v1"
+                .to_string(),
+        );
+    }
+    let image = runner
+        .get("image")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "benchmark.runner_manifest.image is required".to_string())?;
+    let image_parts = image.split('@').collect::<Vec<_>>();
+    if image_parts.len() != 2
+        || image_parts[0].is_empty()
+        || image_parts[0].starts_with('-')
+        || image_parts[0].contains("..")
+        || image_parts[0].bytes().any(|byte| {
+            !(byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'/' | b':' | b'_' | b'-'))
+        })
+        || !valid_sha256_digest(image_parts[1])
+    {
+        return Err(
+            "benchmark.runner_manifest.image must be one lowercase OCI reference pinned by sha256 digest"
+                .to_string(),
+        );
+    }
+    let command = runner
+        .get("command")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "benchmark.runner_manifest.command must be an array".to_string())?;
+    if command.is_empty() || command.len() > 64 {
+        return Err(
+            "benchmark.runner_manifest.command must contain 1 to 64 direct argv entries"
+                .to_string(),
+        );
+    }
+    let mut command_bytes = 0usize;
+    for argument in command {
+        let argument = argument.as_str().ok_or_else(|| {
+            "benchmark.runner_manifest.command entries must be strings".to_string()
+        })?;
+        if argument.is_empty() || argument.len() > 4_096 || argument.contains(['\0', '\n', '\r']) {
+            return Err(
+                "benchmark.runner_manifest.command contains an invalid argv entry".to_string(),
+            );
+        }
+        command_bytes = command_bytes.saturating_add(argument.len());
+    }
+    if command_bytes > 16_384 {
+        return Err("benchmark.runner_manifest.command exceeds the argv byte limit".to_string());
+    }
+    let executable = command[0]
+        .as_str()
+        .unwrap_or_default()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        executable.as_str(),
+        "sh" | "bash" | "dash" | "zsh" | "cmd" | "cmd.exe" | "powershell" | "pwsh"
+    ) {
+        return Err(
+            "benchmark.runner_manifest.command must use direct argv and cannot invoke a shell"
+                .to_string(),
+        );
+    }
+    if runner.get("workdir").and_then(Value::as_str) != Some("/workspace") {
+        return Err("benchmark.runner_manifest.workdir must be /workspace".to_string());
+    }
+    if !runner
+        .get("benchmark_digest")
+        .and_then(Value::as_str)
+        .is_some_and(valid_sha256_digest)
+    {
+        return Err(
+            "benchmark.runner_manifest.benchmark_digest must use sha256:<64 lowercase hex>"
+                .to_string(),
+        );
+    }
+    let bounds = [
+        ("timeout_seconds", 1, 900),
+        ("cpu_millis", 100, 4_000),
+        ("memory_bytes", 67_108_864, 4_294_967_296),
+        ("pids_limit", 16, 512),
+        ("max_output_bytes", 1_024, 16_777_216),
+        ("tmpfs_bytes", 67_108_864, 4_294_967_296),
+        ("max_source_bytes", 1, 2_147_483_648),
+        ("max_source_files", 1, 100_000),
+        ("max_benchmark_bytes", 1, 536_870_912),
+        ("max_benchmark_files", 1, 50_000),
+        ("test_seed", 0, 9_007_199_254_740_991),
+    ];
+    for (field, minimum, maximum) in bounds {
+        if !runner
+            .get(field)
+            .and_then(Value::as_u64)
+            .is_some_and(|value| (minimum..=maximum).contains(&value))
+        {
+            return Err(format!(
+                "benchmark.runner_manifest.{field} is outside protocol bounds"
+            ));
+        }
+    }
+    if runner["tmpfs_bytes"].as_u64() > runner["memory_bytes"].as_u64() {
+        return Err("benchmark.runner_manifest.tmpfs_bytes cannot exceed memory_bytes".to_string());
+    }
+    if !matches!(
+        runner.get("platform").and_then(Value::as_str),
+        Some("linux/amd64" | "linux/arm64")
+    ) {
+        return Err(
+            "benchmark.runner_manifest.platform must be linux/amd64 or linux/arm64".to_string(),
+        );
+    }
     Ok(())
+}
+
+fn valid_sha256_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 async fn persist_chatgpt_bounty_image(
@@ -4886,7 +5038,7 @@ mod tests {
             json!("docker.io/library/python:latest");
         assert!(build_bounty_post_handoff(&args, None)
             .unwrap_err()
-            .contains("not executable"));
+            .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
     }
 
     #[test]
