@@ -1,0 +1,13 @@
+{
+  "schema_version": "inventory-state-breakdown-v1",
+  "generated_at": "2026-08-19T12:00:00Z",
+  "source": "canonical-feed-snapshot",
+  "counts": {
+    "ready_to_earn": 5,
+    "in_progress": 3,
+    "submitted": 2,
+    "paid": 8,
+    "verification_unavailable": 1,
+    "total": 19
+  }
+}
