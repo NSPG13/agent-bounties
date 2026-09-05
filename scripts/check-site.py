@@ -975,8 +975,8 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
     package_manifest = json_file(package_dir / "manifest.json")
     if package_manifest.get("schema_version") != "agent-bounties/native-directory-submission-v1":
         fail("native-directory package has the wrong schema version")
-    if package_manifest.get("release_status") != "prepared_not_submitted":
-        fail("native-directory package must not claim an external submission")
+    if package_manifest.get("release_status") != "glama_submitted_pending_review":
+        fail("native-directory package must record the current Glama review state")
     identity = package_manifest.get("identity", {})
     if (
         identity.get("privacy") != "https://agentbounties.app/privacy.html"
@@ -1006,6 +1006,38 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
     expected_paid = {"glama", "mcp-so", "mcpservers"}
     if set(paid_by_id) != expected_paid:
         fail("paid directory rail inventory drifted")
+    glama_target = paid_by_id["glama"]
+    if (
+        glama_target.get("connector_form_state") != "submitted_pending_review"
+        or glama_target.get("claim_state") != "awaiting_review_and_real_token"
+        or glama_target.get("submission_observed_at_utc")
+        != "2026-09-05T02:08:46Z"
+        or glama_target.get("listing_url") is not None
+        or glama_target.get("submission_confirmation")
+        != "Your server has been submitted for review"
+    ):
+        fail("Glama connector must remain truthfully submitted and pending review")
+    glama_record_path = package_manifest.get("submission_evidence", {}).get(
+        "glama_submission_record"
+    )
+    if glama_record_path != "ops/distribution/glama-connector-submission-v1.json":
+        fail("Glama submission record path drifted")
+    glama_record = json_file(repo_root / glama_record_path)
+    if (
+        glama_record.get("schema_version")
+        != "agent-bounties/glama-connector-submission-v1"
+        or glama_record.get("external_state") != "submitted_pending_review"
+        or glama_record.get("submitted_endpoint")
+        != "https://mcp.agentbounties.app/r/glama/mcp"
+        or glama_record.get("submission_observed_at_utc")
+        != glama_target.get("submission_observed_at_utc")
+        or glama_record.get("listing_url") is not None
+        or glama_record.get("claim_state") != "awaiting_review_and_real_token"
+        or glama_record.get("health_state") != "awaiting_listing"
+        or glama_record.get("paid_campaign_state") != "not_activated"
+        or glama_record.get("sensitive_values_recorded") is not False
+    ):
+        fail("Glama submission evidence overstates or misstates external truth")
     paid_platforms = install_manifest.get("paid_vendors")
     if not isinstance(paid_platforms, list):
         fail("install manifest paid vendors must be an array")

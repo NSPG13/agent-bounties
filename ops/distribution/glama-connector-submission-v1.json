@@ -1,0 +1,19 @@
+{
+  "schema_version": "agent-bounties/glama-connector-submission-v1",
+  "vendor_id": "glama",
+  "rail_id": "glama",
+  "submission_observed_at_utc": "2026-09-05T02:08:46Z",
+  "submitted_endpoint": "https://mcp.agentbounties.app/r/glama/mcp",
+  "submission_surface": "https://glama.ai/mcp/connectors",
+  "submission_kind": "remote_streamable_http",
+  "confirmation_text": "Your server has been submitted for review",
+  "external_state": "submitted_pending_review",
+  "listing_url": null,
+  "claim_state": "awaiting_review_and_real_token",
+  "claim_url": "https://mcp.agentbounties.app/.well-known/glama.json",
+  "health_state": "awaiting_listing",
+  "canary_state": "draft_prepared_wallet_not_connected",
+  "paid_campaign_state": "not_activated",
+  "evidence_boundary": "The authenticated form confirmation proves only that Glama accepted a review submission. It does not prove acceptance, publication, ownership, connector health, funding, settlement, or paid activation.",
+  "sensitive_values_recorded": false
+}
