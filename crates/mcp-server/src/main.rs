@@ -1738,6 +1738,7 @@ async fn main() -> anyhow::Result<()> {
             "/.well-known/openai-apps-challenge",
             get(openai_apps_challenge),
         )
+        .route("/.well-known/glama.json", get(glama_claim_challenge))
         .route(
             "/schemas/discovery-manifest.v2.json",
             get(discovery_manifest_schema),
@@ -2271,6 +2272,39 @@ fn openai_apps_challenge_response(configured: Option<String>) -> (StatusCode, He
         StatusCode::OK,
         headers,
         token.expect("validated challenge token"),
+    )
+}
+
+async fn glama_claim_challenge() -> impl IntoResponse {
+    glama_claim_challenge_response(env::var("GLAMA_CLAIM_TOKEN").ok())
+}
+
+fn glama_claim_challenge_response(configured: Option<String>) -> (StatusCode, HeaderMap, String) {
+    let token = configured.map(|value| value.trim().to_string());
+    let valid = token.as_deref().is_some_and(|value| {
+        (16..=512).contains(&value.len())
+            && value.starts_with("glama_claim_")
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+    });
+    if !valid {
+        return (StatusCode::NOT_FOUND, HeaderMap::new(), String::new());
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    (
+        StatusCode::OK,
+        headers,
+        json!({
+            "$schema": "https://glama.ai/mcp/schemas/connector.json",
+            "claim": token.expect("validated Glama claim token"),
+        })
+        .to_string(),
     )
 }
 
@@ -7656,6 +7690,38 @@ mod tests {
             Some("x".repeat(513)),
         ] {
             let (status, _, body) = openai_apps_challenge_response(invalid);
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert!(body.is_empty());
+        }
+    }
+
+    #[test]
+    fn glama_claim_challenge_returns_only_valid_public_claim_json() {
+        let token = "glama_claim_test-1234567890";
+        let (status, headers, body) = glama_claim_challenge_response(Some(format!(" {token}\n")));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({
+                "$schema": "https://glama.ai/mcp/schemas/connector.json",
+                "claim": token,
+            })
+        );
+
+        for invalid in [
+            None,
+            Some(String::new()),
+            Some("wrong_prefix_1234567890".to_string()),
+            Some("glama_claim_contains whitespace".to_string()),
+            Some("glama_claim_invalid!character".to_string()),
+            Some("x".repeat(513)),
+        ] {
+            let (status, _, body) = glama_claim_challenge_response(invalid);
             assert_eq!(status, StatusCode::NOT_FOUND);
             assert!(body.is_empty());
         }

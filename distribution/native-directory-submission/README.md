@@ -50,7 +50,7 @@ for the exact bounty-and-crypto workflow is recorded.
 
 ## Review Checklist
 
-- [ ] Use the exact platform `install_url` and `attributed_mcp_url` from the manifest.
+- [ ] Use the exact platform install URL and attributed MCP URL from the submission manifest.
 - [ ] Verify the route returns the canonical MCP catalog without redirecting to an untagged rail.
 - [ ] Paste no API key, wallet secret, seed phrase, signing key, or publishing token into the package.
 - [ ] Link [`SECURITY.md`](SECURITY.md), [`TESTING.md`](TESTING.md), and [`DEMO.md`](DEMO.md).
