@@ -9,6 +9,9 @@ receive a private key, seed phrase, wallet signature, or payout authority.
 
 1. Deploy migration `0032_distribution_attribution.sql` and the same generated
    `DISTRIBUTION_ATTRIBUTION_SIGNING_SECRET` to the API and MCP services.
+   Before deployment, apply the complete migration set to a disposable
+   PostgreSQL 16 database and run the ignored database synchronization test;
+   a checksum-only validation is not sufficient.
 2. Classify every creator, funder, solver, and verifier wallet used by the
    exercise as `synthetic_canary` through the operator-only wallet-exclusion
    endpoint **before** funding. Do not put the operator token on the command
