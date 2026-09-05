@@ -152,6 +152,7 @@
       "claim_token_source": "GLAMA_CLAIM_TOKEN",
       "claim_state": "awaiting_real_token_after_submission",
       "health_test": "initialize_then_tools_list_without_credentials",
+      "status": "activate_only_after_attribution_canary",
       "paid_campaign_state": "activate_only_after_excluded_funded_and_settled_canary"
     },
     {
