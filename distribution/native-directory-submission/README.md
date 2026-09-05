@@ -2,8 +2,9 @@
 
 This directory is the reusable, source-controlled dossier for Agent Bounties
 skill, MCP, plugin, and agent-directory submissions. It prepares truthful
-materials; it does not submit a listing, spend money, approve a platform
-policy exception, or prove that a listing is live.
+materials and records external truth-state transitions; it does not itself
+submit a listing, spend money, approve a platform policy exception, or prove
+that a submitted listing is accepted or live.
 
 Public maintainer notice: [#1274](https://github.com/NSPG13/agent-bounties/issues/1274).
 
@@ -54,7 +55,7 @@ for the exact bounty-and-crypto workflow is recorded.
 - [ ] Verify the route returns the canonical MCP catalog without redirecting to an untagged rail.
 - [ ] Paste no API key, wallet secret, seed phrase, signing key, or publishing token into the package.
 - [ ] Link [`SECURITY.md`](SECURITY.md), [`TESTING.md`](TESTING.md), and [`DEMO.md`](DEMO.md).
-- [ ] Confirm the target remains `not_submitted` in [`SUBMISSION_LEDGER.md`](SUBMISSION_LEDGER.md) until the external action actually occurs.
+- [ ] Confirm the target remains `not_submitted` in [`SUBMISSION_LEDGER.md`](SUBMISSION_LEDGER.md) until the external action actually occurs, then record `submitted`, `accepted`, `live`, `claimed`, and `healthy` separately.
 - [ ] Describe wallet review as external to the agent host.
 - [ ] Describe a draft, intent, signature, transaction hash, PR, and issue status as non-settlement evidence.
 - [ ] Describe payment only after a confirmed canonical `BountySettled` event.

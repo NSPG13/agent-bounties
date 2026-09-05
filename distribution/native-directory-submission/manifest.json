@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/native-directory-submission-v1",
-  "release_status": "prepared_not_submitted",
+  "release_status": "glama_submitted_pending_review",
   "maintainer_notice": "https://github.com/NSPG13/agent-bounties/issues/1274",
   "install_host": {
     "requested_origin": "https://install.agentbounties.app",
@@ -146,11 +146,14 @@
       "preferred_alias_after_dns_activation": "https://install.agentbounties.app/glama",
       "connector_submission_url": "https://glama.ai/mcp/connectors",
       "connector_submission_kind": "remote_streamable_http",
-      "connector_form_state": "prepared_not_submitted",
+      "connector_form_state": "submitted_pending_review",
+      "submission_observed_at_utc": "2026-09-05T02:08:46Z",
+      "submission_confirmation": "Your server has been submitted for review",
+      "listing_url": null,
       "claim_method": "http_challenge",
       "claim_url": "https://mcp.agentbounties.app/.well-known/glama.json",
       "claim_token_source": "GLAMA_CLAIM_TOKEN",
-      "claim_state": "awaiting_real_token_after_submission",
+      "claim_state": "awaiting_review_and_real_token",
       "health_test": "initialize_then_tools_list_without_credentials",
       "status": "activate_only_after_attribution_canary",
       "paid_campaign_state": "activate_only_after_excluded_funded_and_settled_canary"
@@ -177,6 +180,7 @@
     "review_checklist": "README.md",
     "truth_state_submission_ledger": "SUBMISSION_LEDGER.md",
     "install_subdomain_contract": "INSTALL_SUBDOMAIN.md",
-    "machine_install_guide": "https://github.com/NSPG13/agent-bounties/blob/main/llms-install.md"
+    "machine_install_guide": "https://github.com/NSPG13/agent-bounties/blob/main/llms-install.md",
+    "glama_submission_record": "ops/distribution/glama-connector-submission-v1.json"
   }
 }
