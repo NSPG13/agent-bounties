@@ -122,6 +122,7 @@ jobs:
 
       - name: Run Postgres sync regressions
         run: |
+          cargo test -p db distribution_ -- --ignored --nocapture
           cargo test -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded -- --ignored --exact --nocapture
           cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture
           cargo test -p api tests::bounty_status_reads_base_events_from_postgres_after_cross_process_indexing -- --ignored --exact --nocapture

@@ -83,6 +83,8 @@ pub const DISCOVERABILITY_MEASUREMENT_MIGRATION: &str =
     include_str!("../../../migrations/0029_discoverability_measurement.sql");
 pub const DISTRIBUTION_ATTRIBUTION_MIGRATION: &str =
     include_str!("../../../migrations/0032_distribution_attribution.sql");
+pub const DISTRIBUTION_SOURCE_EXPANSION_MIGRATION: &str =
+    include_str!("../../../migrations/0033_distribution_source_expansion.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -636,7 +638,7 @@ pub struct NewDiscoverabilitySnapshot {
     pub payload: serde_json::Value,
 }
 
-pub const APPROVED_DISTRIBUTION_RAILS: [&str; 12] = [
+pub const APPROVED_DISTRIBUTION_RAILS: [&str; 14] = [
     "bankr",
     "openclaw",
     "vscode",
@@ -649,6 +651,8 @@ pub const APPROVED_DISTRIBUTION_RAILS: [&str; 12] = [
     "glama",
     "mcp-so",
     "mcpservers",
+    "glama-paid",
+    "mcp-so-paid",
 ];
 
 pub const DISTRIBUTION_EXCLUSION_CLASSES: [&str; 8] = [
@@ -1466,6 +1470,7 @@ impl PostgresStore {
                 // #910. Distribution attribution starts at 0032 to keep the
                 // histories additive and non-conflicting.
                 DISTRIBUTION_ATTRIBUTION_MIGRATION,
+                DISTRIBUTION_SOURCE_EXPANSION_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -11491,7 +11496,7 @@ mod tests {
         }
         for rail in APPROVED_DISTRIBUTION_RAILS {
             assert!(
-                DISTRIBUTION_ATTRIBUTION_MIGRATION.contains(&format!("'{rail}'")),
+                DISTRIBUTION_SOURCE_EXPANSION_MIGRATION.contains(&format!("'{rail}'")),
                 "missing approved distribution rail {rail}"
             );
         }
@@ -11550,6 +11555,8 @@ mod tests {
                 "glama",
                 "mcp-so",
                 "mcpservers",
+                "glama-paid",
+                "mcp-so-paid",
             ]
         );
         assert_eq!(
@@ -11577,6 +11584,83 @@ mod tests {
             normalize_distribution_exclusion_class("related"),
             Some("related_party")
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn paid_distribution_sources_preserve_first_touch_after_migration_replay() {
+        let database_url = std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap();
+        let store = PostgresStore::connect(&database_url).await.unwrap();
+        store.migrate().await.unwrap();
+        let now = Utc::now();
+        for (paid, organic) in [("glama-paid", "glama"), ("mcp-so-paid", "mcp-so")] {
+            let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let first = store
+                .observe_distribution_acquisition(paid, &token, Some("dry-run-v1"), now)
+                .await
+                .unwrap();
+            let revisit = store
+                .observe_distribution_acquisition(organic, &token, Some("dry-run-v1"), now)
+                .await
+                .unwrap();
+            assert_eq!(first.id, revisit.id);
+            assert_eq!(revisit.first_touch_rail, paid);
+            assert!(!revisit.measurement_eligible);
+            let assists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM distribution_acquisition_assists WHERE acquisition_id = $1 AND rail = $2",
+            )
+            .bind(first.id)
+            .bind(organic)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+            assert_eq!(assists, 1);
+            let organic_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let organic_first = store
+                .observe_distribution_acquisition(organic, &organic_token, Some("dry-run-v1"), now)
+                .await
+                .unwrap();
+            let paid_assist = store
+                .observe_distribution_acquisition(paid, &organic_token, Some("dry-run-v1"), now)
+                .await
+                .unwrap();
+            assert_eq!(organic_first.id, paid_assist.id);
+            assert_eq!(paid_assist.first_touch_rail, organic);
+            let paid_assists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM distribution_acquisition_assists WHERE acquisition_id = $1 AND rail = $2",
+            )
+            .bind(organic_first.id)
+            .bind(paid)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+            assert_eq!(paid_assists, 1);
+            store
+                .record_distribution_rail_request(paid, true, false, now)
+                .await
+                .unwrap();
+            let excluded_requests: i64 = sqlx::query_scalar(
+                "SELECT SUM(excluded_request_count)::bigint FROM distribution_rail_usage_hourly WHERE rail = $1",
+            )
+            .bind(paid)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+            assert!(excluded_requests >= 1);
+            // New identifiers must remain valid when startup replays all migrations.
+            store.migrate().await.unwrap();
+            let after_replay = store
+                .observe_distribution_acquisition(paid, &token, Some("dry-run-v1"), now)
+                .await
+                .unwrap();
+            assert_eq!(first.id, after_replay.id);
+            assert_eq!(after_replay.first_touch_rail, paid);
+            assert!(!after_replay.measurement_eligible);
+        }
+        assert!(store
+            .observe_distribution_acquisition("unapproved-paid", &"a".repeat(64), None, now)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

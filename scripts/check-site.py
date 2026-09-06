@@ -1047,10 +1047,11 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
     if set(paid_platform_by_slug) != expected_paid or len(paid_platforms) != len(expected_paid):
         fail("install manifest paid-vendor inventory drifted")
     for rail in expected_paid:
-        endpoint = f"https://mcp.agentbounties.app/r/{rail}/mcp"
+        source = {"glama": "glama-paid", "mcp-so": "mcp-so-paid"}.get(rail, rail)
+        endpoint = f"https://mcp.agentbounties.app/r/{source}/mcp"
         campaign_url = f"https://agentbounties.app/install/{rail}/"
         alias_url = f"https://install.agentbounties.app/{rail}"
-        if paid_by_id[rail].get("attributed_mcp_url") != endpoint:
+        if paid_by_id[rail].get("paid_mcp_url", paid_by_id[rail].get("attributed_mcp_url")) != endpoint:
             fail(f"paid directory {rail} must use its exact attributed endpoint")
         if paid_by_id[rail].get("campaign_url") != campaign_url:
             fail(f"paid directory {rail} must use its exact deployable campaign page")
