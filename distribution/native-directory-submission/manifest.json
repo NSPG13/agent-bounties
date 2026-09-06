@@ -156,14 +156,16 @@
       "claim_state": "awaiting_review_and_real_token",
       "health_test": "initialize_then_tools_list_without_credentials",
       "status": "activate_only_after_attribution_canary",
-      "paid_campaign_state": "activate_only_after_excluded_funded_and_settled_canary"
+      "paid_campaign_state": "activate_only_after_excluded_funded_and_settled_canary",
+      "paid_mcp_url": "https://mcp.agentbounties.app/r/glama-paid/mcp"
     },
     {
       "id": "mcp-so",
       "attributed_mcp_url": "https://mcp.agentbounties.app/r/mcp-so/mcp",
       "campaign_url": "https://agentbounties.app/install/mcp-so/",
       "preferred_alias_after_dns_activation": "https://install.agentbounties.app/mcp-so",
-      "status": "activate_only_after_attribution_canary"
+      "status": "activate_only_after_attribution_canary",
+      "paid_mcp_url": "https://mcp.agentbounties.app/r/mcp-so-paid/mcp"
     },
     {
       "id": "mcpservers",

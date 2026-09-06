@@ -31,6 +31,7 @@
     "0027_competition_activation_analytics.sql": "e4411c9d4b7f0b99bfa50d127d05598843bedc3fb699821ea661367f05bda9d6",
     "0028_onboarding_analytics.sql": "970867ff225a30782a8cf276bb65356566d1ac4ef8dc2d14b0b7e1631166ab3f",
     "0029_discoverability_measurement.sql": "e5a63387e1bc4beab72fa73035717488fea4d312ded3b576839452ab21b25a77",
-    "0032_distribution_attribution.sql": "5175b58667e90ef00b09560a6bf9df81080448b5fd706ce14491e23bf419e2cb"
+    "0032_distribution_attribution.sql": "5175b58667e90ef00b09560a6bf9df81080448b5fd706ce14491e23bf419e2cb",
+    "0033_distribution_source_expansion.sql": "7e3fc06ed599122e086c09277018508ea1bde1e7647d78c590f7db527df9c202"
   }
 }

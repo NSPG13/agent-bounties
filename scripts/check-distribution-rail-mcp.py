@@ -29,6 +29,8 @@ RAILS = (
     "glama",
     "mcp-so",
     "mcpservers",
+    "glama-paid",
+    "mcp-so-paid",
 )
 ACQUISITION_HEADER = "x-agent-bounties-acquisition-id"
 RAIL_HEADER = "x-agent-bounties-attribution-rail"
