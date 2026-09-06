@@ -282,6 +282,10 @@ fn build_public_summary(
     generated_at: String,
 ) -> DistributionPublicSummary {
     let overall_reported = stats.unique_external_funded_posters >= PUBLIC_MINIMUM_EXTERNAL_POSTERS;
+    let has_suppressed_nonempty_rail = stats.rails.iter().any(|rail| {
+        rail.externally_funded_bounties > 0
+            && rail.unique_external_funded_posters < PUBLIC_MINIMUM_EXTERNAL_POSTERS
+    });
     let rails: Vec<_> = stats
         .rails
         .into_iter()
@@ -298,8 +302,7 @@ fn build_public_summary(
             }
         })
         .collect();
-    let has_suppressed_rail = rails.iter().any(|rail| !rail.reported);
-    let global_reported = overall_reported && !has_suppressed_rail;
+    let global_reported = overall_reported && !has_suppressed_nonempty_rail;
     DistributionPublicSummary {
         schema_version: "agent-bounties/distribution-summary-v1".to_string(),
         status: if global_reported {
@@ -514,6 +517,28 @@ mod tests {
         );
         assert_eq!(summary.status, "insufficient_sample");
         assert_eq!(summary.attribution_coverage_basis_points, None);
+    }
+
+    #[test]
+    fn empty_rails_do_not_suppress_reportable_global_totals() {
+        let mut empty = rail("openclaw", 0, 0);
+        empty.external_funding_base_units = "0".to_string();
+        empty.settled_gmv_base_units = "0".to_string();
+        let summary = build_public_summary(
+            DistributionOutcomeStats {
+                rails: vec![rail("github", 3, 4), empty],
+                total_external_funded_bounties: 4,
+                unique_external_funded_posters: 3,
+                attributed_external_funded_bounties: 4,
+                attribution_coverage_basis_points: 10_000,
+            },
+            "2026-09-02T00:00:00Z".to_string(),
+        );
+        assert_eq!(summary.status, "ready");
+        assert_eq!(summary.total_external_funded_bounties, Some(4));
+        assert_eq!(summary.attribution_coverage_basis_points, Some(10_000));
+        assert!(!summary.rails[1].reported);
+        assert_eq!(summary.rails[1].externally_funded_bounties, None);
     }
 
     #[test]

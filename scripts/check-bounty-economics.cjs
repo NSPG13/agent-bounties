@@ -86,7 +86,20 @@ const benchmark = {
     test_seed: 1,
   },
 };
-assert.deepEqual(verificationReadiness(benchmark), { blocked: false, executable: true });
+const evidenceSchema = {
+  type: "object",
+  required: ["source_snapshot_digest"],
+  properties: {
+    source_snapshot_digest: {
+      type: "string",
+      pattern: "^sha256:[0-9a-f]{64}$",
+    },
+  },
+};
+assert.deepEqual(
+  verificationReadiness(benchmark, evidenceSchema),
+  { blocked: false, executable: true },
+);
 for (const mutate of [
   (value) => { delete value.source.commit; },
   (value) => { delete value.runner_manifest.image; },
@@ -101,9 +114,24 @@ for (const mutate of [
   const incomplete = JSON.parse(JSON.stringify(benchmark));
   mutate(incomplete);
   assert.equal(
-    verificationReadiness(incomplete).executable,
+    verificationReadiness(incomplete, evidenceSchema).executable,
     false,
     "the preview must use the same complete verifier readiness gate as funding",
+  );
+}
+for (const mutate of [
+  (value) => { value.type = "array"; },
+  (value) => { value.required = []; },
+  (value) => { delete value.properties.source_snapshot_digest; },
+  (value) => { value.properties.source_snapshot_digest.type = "number"; },
+  (value) => { value.properties.source_snapshot_digest.pattern = "^sha256:.+$"; },
+]) {
+  const incomplete = JSON.parse(JSON.stringify(evidenceSchema));
+  mutate(incomplete);
+  assert.equal(
+    verificationReadiness(benchmark, incomplete).executable,
+    false,
+    "wallet review must reject an incompatible source snapshot evidence schema",
   );
 }
 const copiedUnsafeBenchmark = JSON.parse(JSON.stringify(benchmark));
@@ -112,7 +140,7 @@ copiedUnsafeBenchmark.source.subdirectory = "different/location";
 copiedUnsafeBenchmark.runner_manifest.benchmark_digest =
   "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
 assert.deepEqual(
-  verificationReadiness(copiedUnsafeBenchmark),
+  verificationReadiness(copiedUnsafeBenchmark, evidenceSchema),
   { blocked: true, executable: false },
   "unreconciled benchmark content must remain blocked after it is copied",
 );
@@ -122,7 +150,7 @@ revisedUnsafeBenchmark.source.subdirectory =
   "benchmarks/distribution-v1/glama-onboarding-audit";
 revisedUnsafeBenchmark.runner_manifest.benchmark_digest = `sha256:${"d".repeat(64)}`;
 assert.deepEqual(
-  verificationReadiness(revisedUnsafeBenchmark),
+  verificationReadiness(revisedUnsafeBenchmark, evidenceSchema),
   { blocked: true, executable: false },
   "the canonical lifecycle benchmark must remain blocked across revisions until a reviewed reconciliation is approved",
 );

@@ -859,7 +859,7 @@
     const source = benchmark.source || {};
     const runner = benchmark.runner_manifest || {};
     const requiredEvidence = state.draft?.evidence_schema?.required || [];
-    const readiness = verificationReadiness(benchmark);
+    const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
     ui.verifierSummary.textContent = readiness.blocked
       ? "This benchmark cannot be funded until its Base lifecycle evidence is independently reconciled. Choose another reviewed benchmark before connecting a wallet."
       : readiness.executable
@@ -1251,7 +1251,7 @@
     return benchmark;
   }
 
-  function verificationReadiness(benchmark) {
+  function verificationReadiness(benchmark, evidenceSchema) {
     const source = benchmark?.source;
     const runner = benchmark?.runner_manifest;
     const sourceParts = typeof source?.subdirectory === "string"
@@ -1300,15 +1300,26 @@
     const blocked = runner?.benchmark_digest === UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST
       || (canonicalLifecycleSource
         && !RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS.has(runner?.benchmark_digest));
+    const requiredEvidence = evidenceSchema?.required;
+    const sourceSnapshotDigest = evidenceSchema?.properties?.source_snapshot_digest;
+    const evidenceReady = evidenceSchema?.type === "object"
+      && Array.isArray(requiredEvidence)
+      && requiredEvidence.includes("source_snapshot_digest")
+      && sourceSnapshotDigest?.type === "string"
+      && sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$";
     return {
       blocked,
-      executable: benchmark?.engine === REGRESSION_ENGINE && sourceReady && runnerReady && !blocked,
+      executable: benchmark?.engine === REGRESSION_ENGINE
+        && sourceReady
+        && runnerReady
+        && evidenceReady
+        && !blocked,
     };
   }
 
   function supportedVerificationPolicy() {
     const benchmark = missionBenchmark(state.draft?.benchmark || {});
-    const readiness = verificationReadiness(benchmark);
+    const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
     if (readiness.blocked) {
       throw new Error(
         "The Glama onboarding audit cannot be funded until its Base lifecycle evidence is independently reconciled. Choose another reviewed benchmark.",
@@ -1316,7 +1327,7 @@
     }
     if (!readiness.executable) {
       throw new Error(
-        "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source and complete sandbox runner manifest, then retry.",
+        "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source, complete sandbox runner manifest, and required source_snapshot_digest evidence schema, then retry.",
       );
     }
     return {
