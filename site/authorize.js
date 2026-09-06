@@ -38,13 +38,14 @@
     }
     const page = {
       post: "post.html",
-      fund: "funding.html",
-      solve: "earn.html",
-      compete: "earn.html",
-      complete: "earn.html",
-      verify: "verify.html",
+      fund: "participate.html",
+      solve: "participate.html",
+      compete: "participate.html",
+      complete: "participate.html",
+      verify: "participate.html",
     }[value.action];
     if (!page) throw new Error("This action type is not supported.");
+    params.set("network", value.network);
     return `${page}?${params}`;
   }
 

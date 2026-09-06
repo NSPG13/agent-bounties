@@ -1,9 +1,9 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./marketplace-workflow.js") : root.AgentBountiesWorkflow);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.AgentBountiesMarketplace = api;
   if (root && root.document) api.startBoard(root, root.document);
-})(typeof window !== "undefined" ? window : globalThis, function () {
+})(typeof window !== "undefined" ? window : globalThis, function (workflow) {
   "use strict";
 
   const NETWORK = "base-mainnet";
@@ -34,10 +34,7 @@
       : `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} USDC`;
   }
 
-  function isV2(item) {
-    return String(item?.opportunity_id || "").startsWith("open-competition-v2:")
-      || String(item?.next_action?.action || "").includes("open_competition_v2");
-  }
+  function isV2(item) { return workflow.isV2(item); }
 
   function amountsAgree(item) {
     const funded = amountNumber(item?.funded_amount);
@@ -45,23 +42,7 @@
     return funded !== null && target !== null && funded >= target && target > 0;
   }
 
-  function isReadyToEarn(item) {
-    if (!item || item.source_type !== "canonical_base") return false;
-    const shared = item.work_state === "claimable"
-      && item.payment_state === "escrowed"
-      && item.payment_committed === true
-      && item.verification_ready === true
-      && amountNumber(item.reward) > 0
-      && amountsAgree(item);
-    if (!shared) return false;
-    if (isV2(item)) {
-      return item.source_status === "active"
-        && ["best_score", "first_proven"].includes(item.competition_mode)
-        && Boolean(item.evidence_requirements?.program_profile)
-        && Boolean(item.evidence_requirements?.verification_policy_hash);
-    }
-    return item.source_status === "claimable" && Boolean(item.terms_hash);
-  }
+  function isReadyToEarn(item) { return workflow.ready(item); }
 
   function scoringWindow(item) {
     const window = item?.evidence_requirements?.scoring_window;
@@ -73,6 +54,7 @@
   }
 
   function timingState(item, nowMs = Date.now()) {
+    if (workflow.phase(item, nowMs) === "unavailable") return { phase: "unavailable", label: "Timing unavailable", detail: "Refresh the committed scoring window before continuing." };
     const window = scoringWindow(item);
     if (!window) return { phase: "now", label: "Ready now", detail: deadlineText(item?.deadline) };
     if (nowMs < window.startsAt) {
@@ -102,13 +84,7 @@
     return Number.isFinite(parsed) ? `Deadline ${new Date(parsed).toLocaleString()}` : "Canonical readiness confirmed";
   }
 
-  function detailUrl(item) {
-    if (isV2(item)) {
-      const network = encodeURIComponent(item.network || NETWORK);
-      return `competition.html?bountyContract=${encodeURIComponent(item.source_id)}&network=${network}`;
-    }
-    return item.public_url || item.next_action?.url || "#";
-  }
+  function detailUrl(item) { return workflow.detailUrl(item); }
 
   function text(value) {
     return String(value ?? "").replace(/[&<>'"]/g, function (character) {
@@ -150,7 +126,7 @@
     const needle = String(search || "").trim().toLowerCase();
     return items.filter((item) => {
       const phase = timingState(item, nowMs).phase;
-      if (timing === "now" && phase === "upcoming") return false;
+      if (timing === "now" && phase !== "now") return false;
       if (timing === "upcoming" && phase !== "upcoming") return false;
       if (!needle) return true;
       return [item.title, item.goal, ...(item.categories || []), ...(item.skills || [])]
@@ -159,7 +135,7 @@
   }
 
   async function loadOpportunities(win) {
-    const response = await win.fetch(opportunityFeedUrl(win.location), { credentials: "omit", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
+    const response = await win.fetch(opportunityFeedUrl(win.location), { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`Unified inventory request failed (${response.status})`);
     const payload = await response.json();
     if (payload.schema_version !== "agent-bounties/opportunity-projection-v1" || !Array.isArray(payload.items)) throw new Error("Unified inventory schema is invalid");
@@ -180,9 +156,10 @@
       const visible = filterItems(items, search?.value, timing?.value || "all", nowMs);
       list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : '<p class="market-empty">No funded opportunity matches this view.</p>';
       list.setAttribute("aria-busy", "false");
-      const nowCount = items.filter((item) => timingState(item, nowMs).phase !== "upcoming").length;
-      const futureCount = items.length - nowCount;
-      if (summary) summary.textContent = `${items.length} funded opportunities · ${nowCount} actionable now${futureCount ? ` · ${futureCount} starts later` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
+      const nowCount = items.filter((item) => timingState(item, nowMs).phase === "now").length;
+      const futureCount = items.filter((item) => timingState(item, nowMs).phase === "upcoming").length;
+      const endedCount = items.filter((item) => timingState(item, nowMs).phase === "ended").length;
+      if (summary) summary.textContent = `${items.length} funded opportunities · ${nowCount} actionable now${endedCount ? ` · ${endedCount} scoring closed` : ""}${futureCount ? ` · ${futureCount} starts later` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
     };
 
     search?.addEventListener("input", render);

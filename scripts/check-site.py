@@ -14,6 +14,7 @@ CANONICAL_PAGES = {
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
     "competition.html": "https://agentbounties.app/competition.html",
+    "participate.html": "https://agentbounties.app/participate.html",
     "about.html": "https://agentbounties.app/about.html",
     "blog/index.html": "https://agentbounties.app/blog/",
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
@@ -76,7 +77,12 @@ REQUIRED_FILES = {
     "analytics.js",
     "competition.html",
     "competition.js",
+    "competition-proof.js",
+    "marketplace-workflow.js",
+    "webmcp.js",
+    "participate.js",
     "earn.html",
+    "participate.html",
     "about.css",
     "about.html",
     "blog/agentic-economy-needs-a-market-for-work.html",
@@ -146,6 +152,10 @@ ALLOWED_UI_CODE = {
     "bounty-composer.css",
     "bounty-entry.js",
     "competition.js",
+    "competition-proof.js",
+    "marketplace-workflow.js",
+    "webmcp.js",
+    "participate.js",
     "evm.js",
     "guild-pages.css",
     "guild-shell.js",
@@ -491,10 +501,10 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         fail("analytics-config.js must contain an empty or valid GA4 measurement ID")
     require_phrases(
         "WebMCP production hotpath",
-        config,
+        (site_dir / "webmcp.js").read_text(encoding="utf-8"),
         [
             "document.modelContext",
-            'new URL("/competition.html", window.location.origin)',
+            "flow.detailUrl(item)",
             'new URL("/post.html?from=webmcp", window.location.origin)',
         ],
     )
@@ -506,7 +516,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "function parsePreparedRewardSplit",
             "function currentRewardSplit",
             "state.preparedRewards = preparedRewards",
-            "const rewards=currentRewardSplit()",
+            "const rewards = currentRewardSplit()",
             "Verifier reward and solver bond:",
         ],
     )
@@ -778,7 +788,7 @@ def check_homepage(site_dir: Path) -> None:
 def check_marketplace(site_dir: Path) -> None:
     board = (site_dir / "earn.html").read_text(encoding="utf-8")
     competition = (site_dir / "competition.html").read_text(encoding="utf-8")
-    marketplace = (site_dir / "marketplace.js").read_text(encoding="utf-8")
+    marketplace = (site_dir / "marketplace.js").read_text(encoding="utf-8") + (site_dir / "marketplace-workflow.js").read_text(encoding="utf-8")
     detail = (site_dir / "competition.js").read_text(encoding="utf-8")
     css = (site_dir / "marketplace.css").read_text(encoding="utf-8")
     require_phrases(
@@ -814,12 +824,12 @@ def check_marketplace(site_dir: Path) -> None:
         marketplace,
         [
             'item.source_status === "active"',
-            '["best_score", "first_proven"]',
+            '["first_proven", "best_score"]',
             "Boolean(item.evidence_requirements?.verification_policy_hash)",
             'item.source_status === "claimable" && Boolean(item.terms_hash)',
             "Scoring now",
             "Starts in",
-            "competition.html?bountyContract=",
+            "workflow.detailUrl(item)",
             'track("market_view")',
         ],
     )
@@ -1202,11 +1212,11 @@ def main() -> int:
                 '<meta name="description"',
                 f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
-                f'<script src="{prefix}analytics-config.js?v=2"></script>',
+                f'<script src="{prefix}analytics-config.js?v=3"></script>',
                 f'<script src="{prefix}analytics.js?v=4"></script>',
             ],
         )
-        if text.index(f'src="{prefix}analytics-config.js?v=2"') > text.index(f'src="{prefix}analytics.js?v=4"'):
+        if text.index(f'src="{prefix}analytics-config.js?v=3"') > text.index(f'src="{prefix}analytics.js?v=4"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
             fail(f"{relative}: transactional handoffs must remain noindex, nofollow")

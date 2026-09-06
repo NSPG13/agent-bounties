@@ -112,7 +112,9 @@
     for (const text of [
       "Money: check the Base network, USDC amount, and destination in your wallet before approving.",
       "Public record: your wallet, bounty, evidence, and blockchain activity may be public and permanent.",
-      "Payment: only the posted verifier and a confirmed BountySettled event prove that work was paid.",
+      root.closest("[data-proof-workspace]")
+        ? "Prize payment: only a matching confirmed CompetitionSettledV2 event proves that your entry was paid. The proof service charge does not guarantee a prize."
+        : "Payment: only the posted verifier and a confirmed BountySettled event prove that work was paid.",
       "Security: we never need your recovery phrase or private key.",
     ]) {
       points.append(createElement("li", "", text));

@@ -130,6 +130,6 @@ test("the participation manifest and prefilled child brief are contract-specific
   assert.match(child, /does not by itself prove commercial usefulness/);
   assert.equal(
     competition.childPostUrl(item),
-    "./?parentCompetition=0x1111111111111111111111111111111111111111&network=base-mainnet#post-a-bounty",
+    "post.html?parentCompetition=0x1111111111111111111111111111111111111111&network=base-mainnet&from=webmcp-child",
   );
 });
