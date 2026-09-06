@@ -74,6 +74,45 @@ const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
     "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
 ];
+const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
+const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0],
+        "benchmarks/direct-growth-v2/a2a-agent-card",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[1],
+        "benchmarks/direct-growth-v2/hermes-integration",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[2],
+        "benchmarks/direct-growth-v2/openhands-integration",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[3],
+        "benchmarks/direct-growth-v2/mini-swe-agent-environment",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[4],
+        "benchmarks/direct-inventory-v1/rpc-failover",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[5],
+        "benchmarks/direct-inventory-v1/inventory-breakdown",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[6],
+        "benchmarks/direct-inventory-v1/wallet-liquidity",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[7],
+        "benchmarks/direct-inventory-v1/replenishment-plan",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[8],
+        "benchmarks/direct-inventory-v1/stalled-work",
+    ),
+];
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
@@ -782,6 +821,20 @@ fn validate_prepared_verifier(
     if !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.contains(&benchmark_digest) {
         return Err(
             "sandboxed regression benchmark exact digest must be independently reconciled and approved before funding or verifier signing".to_string(),
+        );
+    }
+    let approved_subdirectory = RECONCILED_REGRESSION_BENCHMARK_SOURCES.iter().find_map(
+        |(digest, approved_subdirectory)| {
+            (*digest == benchmark_digest).then_some(*approved_subdirectory)
+        },
+    );
+    if !repository.eq_ignore_ascii_case("NSPG13/agent-bounties")
+        || commit != RECONCILED_REGRESSION_BENCHMARK_COMMIT
+        || approved_subdirectory != Some(subdirectory)
+    {
+        return Err(
+            "sandboxed regression benchmark immutable source tuple must match its independently approved digest"
+                .to_string(),
         );
     }
     let bounds = [
@@ -4949,7 +5002,7 @@ mod tests {
                 "source": {
                     "kind": "github_commit",
                     "repository": "NSPG13/agent-bounties",
-                    "commit": "0fae18cf9be464132cde52dfb9d464d836e8f024",
+                    "commit": "fa946859a3379b8c9128183e20dedb3b8319a646",
                     "subdirectory": "benchmarks/direct-growth-v2/openhands-integration"
                 },
                 "runner_manifest": {
@@ -5128,6 +5181,17 @@ mod tests {
             .unwrap_err()
             .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
 
+        for image in [
+            format!("docker.io/a@tag@sha256:{}", "b".repeat(64)),
+            format!("docker.io/a..b@sha256:{}", "b".repeat(64)),
+        ] {
+            let mut args = valid_args();
+            args.benchmark.as_mut().unwrap()["runner_manifest"]["image"] = json!(image);
+            assert!(build_bounty_post_handoff(&args, None)
+                .unwrap_err()
+                .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
+        }
+
         let mut args = valid_args();
         args.verifier_reward_usdc = "0.009999".to_string();
         assert!(build_bounty_post_handoff(&args, None)
@@ -5151,6 +5215,18 @@ mod tests {
         assert!(build_bounty_post_handoff(&args, None)
             .unwrap_err()
             .contains("independently reconciled"));
+
+        for (field, value) in [
+            ("repository", json!("other/repository")),
+            ("commit", json!("b".repeat(40))),
+            ("subdirectory", json!("benchmarks/copied-location")),
+        ] {
+            let mut args = valid_args();
+            args.benchmark.as_mut().unwrap()["source"][field] = value;
+            assert!(build_bounty_post_handoff(&args, None)
+                .unwrap_err()
+                .contains("immutable source tuple"));
+        }
     }
 
     #[test]

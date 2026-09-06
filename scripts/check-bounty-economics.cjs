@@ -36,6 +36,10 @@ assert.throws(
   () => parsePreparedRewardSplit("1.999999", "0.010001"),
   /at least 2 USDC for the solver/,
 );
+assert.throws(
+  () => parsePreparedRewardSplit("2.009", "0.001"),
+  /at least 0.01 USDC for the verifier/,
+);
 
 assert.deepEqual(rewardSplitForTotal(2.01), {
   total: 2_010_000n,
@@ -62,9 +66,9 @@ const benchmark = {
   engine: "sandboxed_regression_v1",
   source: {
     kind: "github_commit",
-    repository: "owner/repository",
-    commit: "a".repeat(40),
-    subdirectory: "benchmarks/task",
+    repository: "NSPG13/agent-bounties",
+    commit: "fa946859a3379b8c9128183e20dedb3b8319a646",
+    subdirectory: "benchmarks/direct-growth-v2/a2a-agent-card",
   },
   runner_manifest: {
     schema_version: "agent-bounties/regression-sandbox-v1",
@@ -134,6 +138,25 @@ for (const mutate of [
     "wallet review must reject an incompatible source snapshot evidence schema",
   );
 }
+for (const image of [
+  `docker.io/a@tag@sha256:${"b".repeat(64)}`,
+  `docker.io/a..b@sha256:${"b".repeat(64)}`,
+]) {
+  const malformedImage = JSON.parse(JSON.stringify(benchmark));
+  malformedImage.runner_manifest.image = image;
+  assert.equal(
+    verificationReadiness(malformedImage, evidenceSchema).executable,
+    false,
+    "wallet review must reject every image rejected by the server's pinned-image validator",
+  );
+}
+const wrongApprovedSource = JSON.parse(JSON.stringify(benchmark));
+wrongApprovedSource.source.commit = "a".repeat(40);
+assert.deepEqual(
+  verificationReadiness(wrongApprovedSource, evidenceSchema),
+  { blocked: true, executable: false },
+  "an approved digest must remain bound to its reviewed repository, commit, and subdirectory",
+);
 const copiedUnsafeBenchmark = JSON.parse(JSON.stringify(benchmark));
 copiedUnsafeBenchmark.source.repository = "other/copied-benchmark";
 copiedUnsafeBenchmark.source.subdirectory = "different/location";

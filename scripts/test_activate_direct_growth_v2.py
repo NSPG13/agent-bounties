@@ -36,7 +36,20 @@ class DirectGrowthActivationTests(unittest.TestCase):
         self.assertTrue(policy["self_verification_forbidden"])
         self.assertEqual(runner["command"], ["python", "/benchmark/check.py"])
         self.assertIn("@sha256:", runner["image"])
-        self.assertEqual(document["benchmark"]["source"]["commit"], commit)
+        self.assertEqual(
+            document["benchmark"]["source"]["commit"],
+            activation.RECONCILED_REGRESSION_BENCHMARK_COMMIT,
+        )
+        self.assertEqual(
+            document["benchmark"]["source"]["subdirectory"],
+            activation.RECONCILED_REGRESSION_BENCHMARK_SOURCES[
+                runner["benchmark_digest"]
+            ],
+        )
+        self.assertEqual(
+            document["evidence_schema"]["properties"]["source_snapshot_digest"],
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        )
         self.assertEqual(
             document["contract_terms"]["initial_funding"]["amount"], 2_010_000
         )
@@ -78,6 +91,17 @@ class DirectGrowthActivationTests(unittest.TestCase):
             path = Path(directory) / "manifest.json"
             path.write_text(json.dumps(source), encoding="utf-8")
             with self.assertRaisesRegex(activation.ActivationError, "benchmark digest"):
+                activation.load_manifest(path)
+
+    def test_manifest_rejects_digest_bound_to_a_different_source(self) -> None:
+        source = json.loads(activation.MANIFEST_PATH.read_text(encoding="utf-8"))
+        source["tasks"][0]["benchmark_subdirectory"] = source["tasks"][1][
+            "benchmark_subdirectory"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(activation.ActivationError, "not independently approved"):
                 activation.load_manifest(path)
 
     def test_manifest_digests_match_publishable_benchmark_files(self) -> None:

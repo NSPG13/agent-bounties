@@ -50,12 +50,12 @@ jobs:
         run: >-
           python scripts/regression_verifier_source_guard.py
           --scope worker-build
-          --expected-sha256 37572977b4c333f8f43f4da774e35bc5d7d56edb81417eef40faf3f63083bc6d
+            --expected-sha256 d91b0484e0f3ffd0600cf23dfb67708f992be0faed11f09c9f24019a5684b216
       - run: cargo build --release -p worker
       - name: Revalidate reviewed runtime after build
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 37572977b4c333f8f43f4da774e35bc5d7d56edb81417eef40faf3f63083bc6d
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 d0cef3138a530d08ba736b6b33b4bfd1f671bee6218ac5c75bfa1d55a02b2465
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 d91b0484e0f3ffd0600cf23dfb67708f992be0faed11f09c9f24019a5684b216
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 ada389f13bba3c67199f49299ceb474f75316afdb25a5f5fefe4855f26d44066
       - name: Re-fetch state and sign one exact candidate set
         env:
           REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}

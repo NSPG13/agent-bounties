@@ -1312,11 +1312,23 @@ mod tests {
             acceptance_criteria: vec!["committed tests pass".to_string()],
             benchmark: json!({
                 "engine": REGRESSION_SANDBOX_ENGINE,
+                "source": {
+                    "kind": "github_commit",
+                    "repository": "NSPG13/agent-bounties",
+                    "commit": "fa946859a3379b8c9128183e20dedb3b8319a646",
+                    "subdirectory": "benchmarks/direct-growth-v2/a2a-agent-card"
+                },
                 "runner_manifest": manifest,
             }),
             evidence_schema: json!({
                 "type": "object",
-                "required": ["source_snapshot_digest"]
+                "required": ["source_snapshot_digest"],
+                "properties": {
+                    "source_snapshot_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                }
             }),
             verification_policy: json!({
                 "mechanism": "signed_quorum",
