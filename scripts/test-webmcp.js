@@ -41,10 +41,64 @@ test("homepage advertises usable tools and one plain-language next step", async 
   const env = environment(); env.register();
   const context = env.tools.get("agent_bounties_get_page_context").execute();
   assert.ok(context.available_tools.includes("agent_bounties_start_journey"));
+  assert.ok(context.available_tools.includes("agent_bounties_start_meta_child_bounty"));
   assert.ok(!context.available_tools.includes("agent_bounties_get_bounty_review"));
   assert.ok(!context.available_tools.includes("agent_bounties_get_competition_manifest"));
   assert.match(context.guidance.autonomy, /without asking permission again/);
   assert.match(context.guidance.consent, /Never click their consent/);
+});
+
+test("meta-child navigation keeps the parent and business answers without publishing", async () => {
+  const env = environment(), client = flow.createClient(env.window);
+  client.start({ role: "earn", goal: "Earn on wallet UX", preferences: "One USDC child" });
+  const fetch = env.window.fetch;
+  env.window.fetch = async (url, options) => url.includes("/terms/")
+    ? { ok: true, json: async () => ({ document: { benchmark: { engine: "standing_meta_v3_routed_parent", minimum_child_target: 1000000, minimum_parent_gross_margin: 1000000, required_child_verifier_threshold: 2 } } }) }
+    : fetch(url, options);
+  env.register();
+  const result = await env.tools.get("agent_bounties_start_meta_child_bounty").execute({ opportunity_id: item().opportunity_id });
+  assert.equal(new URL(result.url).searchParams.get("parentBounty"), contract);
+  assert.equal(result.total_usdc, "1.00");
+  assert.equal(client.load().goal, "Earn on wallet UX");
+  assert.equal(client.load().preferences, "One USDC child");
+  assert.equal(client.load().meta_child.parent_bounty_contract, contract);
+  assert.equal(env.requests.some(r => r.method === "POST"), false);
+});
+
+test("ordinary work cannot take the meta-child shortcut", async () => {
+  const env = environment(); env.register();
+  await assert.rejects(env.tools.get("agent_bounties_start_meta_child_bounty").execute({ opportunity_id: item().opportunity_id }), /no supported 1 USDC/);
+  assert.equal(env.navigations.length, 0);
+});
+
+test("staging retains a saved meta parent and distinct solver across navigation", async () => {
+  const env = environment(), client = flow.createClient(env.window);
+  const meta_child = { parent_bounty_contract: contract, intended_child_solver: wallet };
+  client.save({ ...client.start({ role: "earn", goal: "Earn from the parent" }), meta_child });
+  env.register();
+  await env.tools.get("agent_bounties_stage_funded_bounty").execute({ title: "Child", goal: "Complete a measurable wallet fix", acceptance_criteria: ["Regression passes"], solver_reward_usdc: "0.99", verifier_reward_usdc: "0.01", task_window_days: 3 });
+  assert.deepEqual(client.load().draft.meta_child, meta_child);
+  assert.equal(client.load().draft.solver_reward_usdc, "0.99");
+  assert.equal(env.requests.some(r => r.method === "POST"), false);
+  await env.tools.get("agent_bounties_stage_funded_bounty").execute({ ...client.load().draft, meta_child: { parent_bounty_contract: contract } });
+  assert.equal(client.load().draft.meta_child.intended_child_solver, wallet);
+});
+
+test("reloading a meta-child review restores its draft and solver without borrowing consent", async () => {
+  const env = environment(`/post.html?parentBounty=${contract}`), client = flow.createClient(env.window);
+  const meta_child = { parent_bounty_contract: contract, intended_child_solver: wallet };
+  const draft = { title: "Saved child", goal: "Keep my answers", acceptance_criteria: ["Checks pass"], solver_reward_usdc: "0.99", verifier_reward_usdc: "0.01", task_window_days: 3, meta_child };
+  client.save({ ...client.start({ role: "earn" }), draft, meta_child });
+  let restored;
+  env.window.AgentBountiesMetaChild = { resolve: async v => ({ ...v, title: "Parent" }), normalize: v => meta_child };
+  env.window.AgentBountyAI = { parseDraft: v => v };
+  env.window.AgentBountiesComposer = { prepareMetaParent: async () => meta_child, stage: async v => { restored = v; }, review: () => ({ explicitly_approved: false, funding_ready: false, meta_child }) };
+  env.elements.set("#bounty-preview", env.el()); env.register();
+  const review = await env.tools.get("agent_bounties_get_bounty_review").execute();
+  assert.equal(restored.title, draft.title);
+  assert.equal(restored.meta_child.intended_child_solver, wallet);
+  assert.equal(review.explicitly_approved, false);
+  assert.equal(env.requests.some(r => r.method === "POST"), false);
 });
 test("unsupported browser preserves ordinary navigation without registering tools", () => {
   const env = environment(); delete env.document.modelContext;

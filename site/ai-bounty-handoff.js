@@ -96,6 +96,7 @@
       evidence_schema: raw.evidence_schema && typeof raw.evidence_schema === "object" && !Array.isArray(raw.evidence_schema)
         ? raw.evidence_schema
         : null,
+      meta_child: raw.meta_child == null ? null : window.AgentBountiesMetaChild?.normalize(raw.meta_child) || (() => { throw new Error("The parent-child review module is unavailable."); })(),
       ...(raw.image_required === true
         ? {
             image_required: true,
@@ -117,17 +118,17 @@
         }, null, 2)}\n\nREQUESTED CHANGE:\n${intent}`
       : `\n\nWHAT I WANT DONE:\n${intent}`;
 
-    return `Help me prepare a public Agent Bounties bounty using the context you already have about me and this request.${revision}
+    return `Help me prepare a public Agent Bounties bounty using the context you already have about me and this request.${revision}${context?.meta_child ? `\n\nQUALIFYING META CHILD: Preserve meta_child: ${JSON.stringify(context.meta_child)} in the returned JSON. Use exactly 1 USDC total, ordinarily 0.99 solver plus 0.01 shared between the two committed verifiers. Identify a distinct intended child solver before funding. Use the browser WebMCP stage tool or paste JSON into this review; do not use the ordinary hosted prepare_bounty_post path for this child.` : ""}
 
-If the Agent Bounties MCP connector is available, clarify only details that materially affect the public terms. Show me the complete terms and wait for my explicit approval. Only after I approve, call prepare_bounty_post. If this AI can generate and attach a unique image, you may show it for approval and call the tool with bounty_image, the exact image_prompt, and accessible image_alt_text. Otherwise omit all three image fields; the Agent Bounties review page will render a deterministic content-derived visual. Agent Bounties does not require or use a platform model key. The MCP endpoint is ${MCP_URL}.
+${context?.meta_child ? "Use the parent-specific browser review described above. Prepare the JSON for review without publishing it." : "If the Agent Bounties MCP connector is available, clarify only details that materially affect the public terms. Show me the complete terms and wait for my explicit approval. Only after I approve, call prepare_bounty_post."} If this AI can generate and attach a unique image, you may show it for approval and call the tool with bounty_image, the exact image_prompt, and accessible image_alt_text. Otherwise omit all three image fields; the Agent Bounties review page will render a deterministic content-derived visual. Agent Bounties does not require or use a platform model key. The MCP endpoint is ${MCP_URL}.
 
 If the connector is unavailable, ask concise clarifying questions and then return ONLY one JSON object in this exact shape so I can paste the approved terms directly into the Agent Bounties review flow:
 {
   "title": "concise public title",
   "goal": "specific public outcome",
   "acceptance_criteria": ["binary or measurable check"],
-  "solver_reward_usdc": "2.00",
-  "verifier_reward_usdc": "0.10",
+  "solver_reward_usdc": "${context?.meta_child ? "0.99" : "2.00"}",
+  "verifier_reward_usdc": "${context?.meta_child ? "0.01" : "0.10"}",
   "task_window_days": 30,
   "source_url": null,
   "crowdfund": false,

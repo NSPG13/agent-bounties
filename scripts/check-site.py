@@ -79,6 +79,7 @@ REQUIRED_FILES = {
     "competition.js",
     "competition-proof.js",
     "marketplace-workflow.js",
+    "meta-child.js",
     "webmcp.js",
     "participate.js",
     "earn.html",
@@ -142,6 +143,7 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "meta-child.js",
     "about.css",
     "ai-bounty-handoff.css",
     "ai-bounty-handoff.js",
@@ -536,7 +538,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=8',
+            'bounty-composer-v2.js?v=9',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',

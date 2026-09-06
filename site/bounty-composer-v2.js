@@ -7,6 +7,7 @@
   const MAX_TASK_DAYS = 30;
   const MIN_TOTAL_USDC = 2.01;
   const MIN_SOLVER_USDC_BASE_UNITS = 2_000_000n;
+  const metaChild = typeof module === "object" && module.exports ? require("./meta-child.js") : window.AgentBountiesMetaChild;
   const MAX_TOTAL_USDC = 9_000_000_000;
   const REGRESSION_ENGINE = "sandboxed_regression_v1";
   const REGRESSION_VERIFIERS = [
@@ -146,6 +147,7 @@
     selectedTaskId: null,
     taskWindowDays: null,
     fundingUsdc: null,
+    metaParent: null,
     preparedRewards: null,
     visualSpec: null,
     visualSource: "fallback",
@@ -279,7 +281,7 @@
     return { total: totalUnits, solver, verifier: cappedVerifier };
   }
 
-  function parsePreparedRewardSplit(solverValue, verifierValue) {
+  function parsePreparedRewardSplit(solverValue, verifierValue, parent = null) {
     const decimalUsdc = /^\d+(?:\.\d{1,6})?$/;
     if (!decimalUsdc.test(String(solverValue || "").trim()) || !decimalUsdc.test(String(verifierValue || "").trim())) {
       throw new Error("Solver and verifier rewards must be decimal USDC amounts with up to six places.");
@@ -288,6 +290,7 @@
     const verifier = usdcBaseUnits(verifierValue);
     const total = solver + verifier;
     if (solver <= 0n || verifier <= 0n) throw new Error("Solver and verifier rewards must both be positive.");
+    if (parent) return metaChild.rewards(solver, verifier, parent);
     if (solver < MIN_SOLVER_USDC_BASE_UNITS) {
       throw new Error("Public bounties require at least 2 USDC for the solver.");
     }
@@ -301,11 +304,15 @@
   }
 
   function currentRewardSplit() {
-    return rewardSplitForTotal(state.fundingUsdc, state.preparedRewards);
+    return rewardSplitForTotal(state.fundingUsdc, state.preparedRewards, state.metaParent);
   }
 
-  function rewardSplitForTotal(total, preparedRewards = null) {
+  function rewardSplitForTotal(total, preparedRewards = null, parent = null) {
     const totalUnits = usdcBaseUnits(total);
+    if (parent) {
+      if (totalUnits !== 1000000n) throw new Error("This parent's qualifying child must total exactly 1 USDC.");
+      return metaChild.rewards(preparedRewards?.solver ?? 990000n, preparedRewards?.verifier ?? 10000n, parent);
+    }
     if (preparedRewards && preparedRewards.total === totalUnits) return preparedRewards;
     return splitReward(total);
   }
@@ -315,6 +322,7 @@
     const match = cleaned.match(/(?:^|[^0-9])(\d+(?:\.\d{1,6})?)(?:\s*(?:base\s*)?usdc|\s*dollars?|\s*usd)?(?:$|[^0-9])/i);
     if (!match) return null;
     const amount = Number(match[1]);
+    if (state.metaParent) return amount === 1 ? amount : null;
     return Number.isFinite(amount) && amount >= MIN_TOTAL_USDC && amount <= MAX_TOTAL_USDC ? amount : null;
   }
 
@@ -466,6 +474,7 @@
   }
 
   function requestUserOwnedAi(intent, context = null) {
+    if (state.metaParent) context = { ...context, meta_child: metaChild.normalize(state.metaParent) };
     window.dispatchEvent(new CustomEvent("agent-bounties:request-ai-handoff", {
       detail: { intent, context },
     }));
@@ -478,7 +487,9 @@
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
 
     const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
-    const preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc);
+    const parentContext = prepared.meta_child || (new URLSearchParams(window.location.search).has("parentBounty") ? state.metaParent : null);
+    const metaParent = parentContext ? await metaChild.resolve(parentContext, window.AgentBountiesWorkflow.createClient(window)) : null;
+    const preparedRewards = parsePreparedRewardSplit(prepared.solver_reward_usdc, prepared.verifier_reward_usdc, metaParent);
     const total = Number(preparedRewards.total) / 1_000_000;
     if (!Number.isInteger(days) || days < 1 || days > MAX_TASK_DAYS) throw new Error(`The task window must be from 1 to ${MAX_TASK_DAYS} days.`);
     const bountyImage = normalizeBountyImage(prepared.image);
@@ -516,6 +527,7 @@
     state.taskWindowDays = days;
     state.fundingUsdc = total;
     state.preparedRewards = preparedRewards;
+    state.metaParent = metaParent;
     state.bountyImage = bountyImage;
     state.approved = false;
     ui.input.value = "";
@@ -769,7 +781,7 @@
     if (state.phase === "funding") {
       const amount = parseFunding(value);
       if (amount == null) {
-        setStatus(`Enter an amount from ${MIN_TOTAL_USDC.toFixed(2)} to ${MAX_TOTAL_USDC.toLocaleString()} USDC.`, "error");
+        setStatus(state.metaParent ? "This parent's qualifying child requires exactly 1 USDC total, including verifiers." : `Enter an amount from ${MIN_TOTAL_USDC.toFixed(2)} to ${MAX_TOTAL_USDC.toLocaleString()} USDC.`, "error");
         return;
       }
       state.fundingUsdc = amount;
@@ -848,6 +860,7 @@
     ui.title.textContent = state.draft.title;
     ui.goal.textContent = state.draft.goal;
     ui.reward.textContent = `${formatUsdc(state.fundingUsdc)} USDC (${formatUsdc(Number(rewards.solver) / 1_000_000)} solver + ${formatUsdc(Number(rewards.verifier) / 1_000_000)} verifier)`;
+    if (state.metaParent) ui.reward.textContent += ` · Qualifying child for: ${state.metaParent.title}`;
     ui.deadline.textContent = state.scope === "mission"
       ? `${state.taskWindowDays} days for this task · ${state.horizon.label} mission`
       : state.horizon.label;
@@ -890,6 +903,7 @@
         : "No complete executable verifier is attached. This draft cannot be funded until one is precommitted and reviewed.";
     ui.verifier.replaceChildren();
     const rows = [
+      ...(state.metaParent ? [["Parent bounty", state.metaParent.parent_bounty_contract], ["Total child funding", "1 USDC including two verifier rewards"], ["Intended child solver", state.metaParent.intended_child_solver || "The agent must identify a different participant before funding"], ["Parent claim timing", "Both participant registrations and child terms must be confirmed at an earlier timestamp"], ["Gas", "Direct wallet calls require Base ETH; wallet shows the fee"]] : []),
       ["Engine", benchmark.engine || "Not supplied"],
       ["Source", source.repository || "Not supplied"],
       ["Commit", source.commit || "Not supplied"],
@@ -1371,13 +1385,17 @@
         "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source, complete sandbox runner manifest, and required source_snapshot_digest evidence schema, then retry.",
       );
     }
+    if (state.metaParent) {
+      currentRewardSplit();
+      if (!state.metaParent.intended_child_solver) throw new Error("The agent must identify a distinct child solver and preserve both pre-claim participant registrations before funding this child.");
+    }
     return {
       mechanism: "signed_quorum",
       engine: REGRESSION_ENGINE,
       verifier_module: null,
       verifier_reward_recipient: null,
-      verifiers: REGRESSION_VERIFIERS,
-      threshold: REGRESSION_VERIFIERS.length,
+      verifiers: state.metaParent ? metaChild.VERIFIERS : REGRESSION_VERIFIERS,
+      threshold: state.metaParent ? 2 : REGRESSION_VERIFIERS.length,
       ai_provider: null,
       ai_model: null,
       ai_model_version: null,
@@ -1586,6 +1604,7 @@
     if (!state.approved || !state.provider || !state.account || !state.balances) return;
     postingBusy = true;
     const approvedDraft = state.draft;
+    const approvedAccount = state.account;
     track("canonical_post_started");
     ui.fundNow.disabled = true;
     setPaymentStatus("Preparing the exact canonical Base USDC funding request…", "pending");
@@ -1598,22 +1617,44 @@
       const protocol = await loadProtocol();
       const api = String(protocol.api_base_url).replace(/\/$/, "");
       const rewards = currentRewardSplit();
-      const committed = contractTerms(protocol, rewards);
-      const document = termsDocument(committed);
-      const terms = await requestJson(`${api}/v1/base/autonomous-bounties/terms`, {
-        method: "POST",
-        headers: state.distributionAttribution ? {
-          "x-agent-bounties-acquisition-id": state.distributionAttribution.acquisition,
-          "x-agent-bounties-handoff-id": state.distributionAttribution.handoff,
-        } : {},
-        body: JSON.stringify({ creator_wallet: state.account, document }),
-      });
-      const create = createPayload(terms, committed);
-      const plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
-        method: "POST", body: JSON.stringify({ network: "base-mainnet", create }),
-      });
+      let create, plan, childPlan = null;
+      if (state.metaParent) {
+        const parent = await metaChild.resolve(state.metaParent, window.AgentBountiesWorkflow.createClient(window));
+        if (parent.terms_hash !== state.metaParent.terms_hash) throw new Error("The parent terms changed. Review the child again.");
+        const input = metaChild.request(state.draft, parent, state.account, rewards, state.taskWindowDays, randomBytes32());
+        const retryKey = "agent-bounties:meta-child-preparation:v1";
+        const fingerprint = metaChild.canonical({ ...input, creation_nonce: null });
+        const previous = JSON.parse(window.sessionStorage.getItem(retryKey) || "null");
+        if (previous?.fingerprint === fingerprint) input.creation_nonce = previous.nonce;
+        else window.sessionStorage.setItem(retryKey, JSON.stringify({ fingerprint, nonce: input.creation_nonce }));
+        // This endpoint publishes hosted terms. It is invoked only after the
+        // person's trusted funding action and durable publication consent above.
+        childPlan = await requestJson(`${api}/v1/base/autonomous-bounties/standing-meta-v2-child-preparation`, {
+          method: "POST", body: JSON.stringify(input),
+        });
+        metaChild.validatePlan(childPlan, input, rewards, window.AgentBountiesEvm);
+        if (childPlan.hosted_terms_published !== true) throw new Error("The exact child terms were not published; no wallet action was sent.");
+        create = childPlan.child_create;
+        plan = childPlan.child_creation;
+      } else {
+        const committed = contractTerms(protocol, rewards);
+        const document = termsDocument(committed);
+        const terms = await requestJson(`${api}/v1/base/autonomous-bounties/terms`, {
+          method: "POST",
+          headers: state.distributionAttribution ? {
+            "x-agent-bounties-acquisition-id": state.distributionAttribution.acquisition,
+            "x-agent-bounties-handoff-id": state.distributionAttribution.handoff,
+          } : {},
+          body: JSON.stringify({ creator_wallet: state.account, document }),
+        });
+        create = createPayload(terms, committed);
+        plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
+          method: "POST", body: JSON.stringify({ network: "base-mainnet", create }),
+        });
+      }
       validateCreationPlan(plan, protocol, create);
       if (!state.approved || state.draft !== approvedDraft) throw new Error("The bounty changed during preparation. Review the revised commitment before funding.");
+      if (childPlan && (state.account !== approvedAccount || String(await state.provider.request({ method: "eth_chainId" })).toLowerCase() !== "0x2105")) throw new Error("The wallet or network changed. Reopen the child review before funding.");
       postingJournal.prepare(plan);
       setPaymentStatus([
         "Review the wallet request carefully.",
@@ -1624,7 +1665,10 @@
         "A signature or transaction hash is not funding evidence.",
       ].join("\n"), "pending");
       let transactionHash = null;
-      if (!(await isContractAccount()) && plan.eip3009_authorization) {
+      if (childPlan) {
+        setPaymentStatus("Create the reviewed 1 USDC child: publish its exact on-chain terms, approve only 1 USDC, then create and fully fund it. Parent claiming is a later step. These direct wallet calls require Base ETH for gas.", "pending");
+        await sendWalletCalls(childPlan.pre_claim_wallet_calls, protocol);
+      } else if (!(await isContractAccount()) && plan.eip3009_authorization) {
         postingJournal.checkpoint("signing");
         const signature = await state.provider.request({ method: "eth_signTypedData_v4", params: [state.account, JSON.stringify(plan.eip3009_authorization)] });
         postingJournal.checkpoint("authorized");
@@ -1660,6 +1704,7 @@
       ui.fundNow.textContent = "Funded ✓";
       ui.fundNow.disabled = true;
       postingJournal.checkpoint("funding_confirmed");
+      if (childPlan) setPaymentStatus("The child is canonically funded. Before claiming the parent, confirm both distinct participant registrations and the child TermsPublished event, then wait for a strictly later Base timestamp. The child must later settle to the distinct solver before the parent can pay.", "success");
       track("canonical_post_confirmed", { bounty_contract: state.bountyContract });
     } catch (error) {
       postingJournal.reject(error);
@@ -1672,7 +1717,32 @@
 
   function configureSpeech(){const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Recognition){ui.mic.hidden=true;ui.hint.textContent="Type naturally. Your words are not posted until you approve the final card.";return;}const recognition=new Recognition();recognition.continuous=false;recognition.interimResults=true;recognition.lang=document.documentElement.lang||navigator.language||"en-US";let original="";recognition.addEventListener("start",()=>{original=ui.input.value.trim();ui.mic.dataset.listening="true";setStatus("Listening…","pending");});recognition.addEventListener("result",(event)=>{let transcript="";for(let index=event.resultIndex;index<event.results.length;index+=1)transcript+=event.results[index][0].transcript;ui.input.value=[original,transcript.trim()].filter(Boolean).join(original?" ":"");});recognition.addEventListener("end",()=>{ui.mic.dataset.listening="false";setStatus("Review the dictated text, then continue.");});recognition.addEventListener("error",(event)=>{ui.mic.dataset.listening="false";setStatus(event.error==="not-allowed"?"Microphone permission was not granted. You can still type.":"Dictation stopped. You can continue typing.","error");});ui.mic.addEventListener("click",()=>{if(ui.mic.dataset.listening==="true")recognition.stop();else recognition.start();});state.speech=recognition;}
 
+  let metaContextPromise = null;
+  function prepareMetaParent() {
+    if (metaContextPromise) return metaContextPromise;
+    const params = new URLSearchParams(window.location.search);
+    const address = params.get("parentBounty");
+    if (!address) return Promise.resolve(null);
+    metaContextPromise = (async () => {
+      if (params.has("parentCompetition")) throw new Error("Choose one parent bounty or competition for this draft.");
+      const client = window.AgentBountiesWorkflow.createClient(window);
+      const journey = client.load() || client.start({ role: "earn" });
+      const existing = journey.meta_child?.parent_bounty_contract === address.toLowerCase() ? journey.meta_child : {};
+      const parent = await metaChild.resolve({ ...existing, parent_bounty_contract: address }, client);
+      state.metaParent = parent;
+      state.fundingUsdc = 1;
+      state.preparedRewards = metaChild.rewards(990000n, 10000n, parent);
+      client.save({ ...journey, meta_child: metaChild.normalize(parent) });
+      const note = document.createElement("p"); note.dataset.parentContext = ""; note.setAttribute("role", "status");
+      note.textContent = `Preparing a 1 USDC child for “${parent.title}”. The total includes both verifier rewards. A different participant must complete this child. Publish its terms and register both participants before claiming the parent. Your wallet shows any Base gas fee.`;
+      document.querySelector("main")?.prepend(note);
+      return parent;
+    })();
+    return metaContextPromise;
+  }
+
   async function prefillFromQuery() {
+    await prepareMetaParent();
     const params = new URLSearchParams(window.location.search);
     try {
       state.distributionAttribution = parseDistributionAttribution(params);
@@ -1784,6 +1854,7 @@
   let staging = Promise.resolve();
   let stagedFingerprint = null;
   window.AgentBountiesComposer = Object.freeze({
+    prepareMetaParent,
     stage(value) {
       staging = staging.catch(() => {}).then(() => {
         if (postingBusy || state.bountyContract || postingJournal.load()) throw new Error("A posting operation is in progress or recorded. Check its canonical status before preparing another draft.");
@@ -1803,6 +1874,7 @@
         blocker,
         bounty_contract: state.bountyContract || postingJournal.load()?.bounty_contract || null,
         posting_operation: postingJournal.load(),
+        meta_child: state.metaParent ? { parent_bounty_contract: state.metaParent.parent_bounty_contract, total_usdc: "1.00", intended_child_solver: state.metaParent.intended_child_solver, verifier_threshold: 2, terms_before_parent_claim: true, gas_sponsored: false } : null,
         next_action: blocker ? "The agent should prepare the missing executable verifier and restage the draft; do not ask the person for technical fields or funding yet."
           : "The person reviews the terms once, then uses the wallet confirmation. No separate approval in chat is needed.",
       };

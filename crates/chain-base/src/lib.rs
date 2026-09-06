@@ -7546,6 +7546,16 @@ mod tests {
         let routed_v3_plan = planner
             .plan_standing_meta_v2_child(&request, &routed_v3_parent, created_at)
             .unwrap();
+        // The browser independently validates these canonical bytes and wallet
+        // calls. Keep its cross-language fixture tied to the Rust planner.
+        let browser_fixture: Value = serde_json::from_str(include_str!(
+            "../../../scripts/fixtures/meta-child-plan.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&routed_v3_plan).unwrap(),
+            browser_fixture
+        );
         assert_eq!(
             routed_v3_plan.protocol_version,
             STANDING_META_V3_ROUTED_PROTOCOL_VERSION
