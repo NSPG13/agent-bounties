@@ -454,11 +454,21 @@ fn competition_preparation_binding(
     {
         return Err("creation attribution requires the supported Beta3 plan".to_string());
     }
-    let expected_network = chain_base::base_network_descriptor(&plan.network.name)
+    let network_name = match plan.network.name.as_str() {
+        "Base" => "base-mainnet",
+        "Base Sepolia" => "base-sepolia",
+        name => name,
+    };
+    let expected_network = chain_base::base_network_descriptor(network_name)
         .map_err(|_| "creation plan has an unsupported network".to_string())?;
     if plan.network.chain_id != expected_network.chain_id {
         return Err("creation plan network and chain ID disagree".to_string());
     }
+    let network = match expected_network.chain_id {
+        8_453 => "base-mainnet",
+        84_532 => "base-sepolia",
+        _ => return Err("creation plan has an unsupported chain ID".to_string()),
+    };
     let creates: Vec<_> = plan
         .wallet_calls
         .iter()
@@ -489,7 +499,7 @@ fn competition_preparation_binding(
     Ok(DistributionCompetitionBinding {
         acquisition_id: attribution.acquisition_id,
         protocol_version: plan.protocol_version,
-        network: plan.network.name,
+        network: network.to_string(),
         factory_contract: address(&create.to)?,
         bounty_id,
         competition_contract: address(&plan.predicted_competition)?,
@@ -5234,8 +5244,7 @@ mod tests {
             "plan": {
                 "schema_version": "agent-bounties/open-competition-v2-creation-plan-v1",
                 "protocol_version": "agent-bounties/open-competition-v2-beta3",
-                "network": {"name": "base-mainnet", "chain_id": 8453,
-                    "rpc_url_env": "BASE_MAINNET_RPC_URL", "native_usdc_token_address": format!("0x{}", "1".repeat(40))},
+                "network": chain_base::base_network_descriptor("base-mainnet").unwrap(),
                 "bounty_id": format!("0x{}", "2".repeat(64)),
                 "predicted_competition": format!("0x{}", "3".repeat(40)),
                 "funding_target": "2100000", "remaining_funding_after_creation": "0",
@@ -5263,6 +5272,7 @@ mod tests {
         let binding = competition_preparation_binding(&result, &attribution).unwrap();
         assert!(binding.prepared_at >= received_at);
         assert_eq!(binding.acquisition_id, attribution.acquisition_id);
+        assert_eq!(binding.network, "base-mainnet");
         for status in [json!(400), json!(503), Value::Null, json!("200")] {
             let mut invalid = result.clone();
             invalid["http_status"] = status;
@@ -5298,6 +5308,29 @@ mod tests {
             let mut invalid = result.clone();
             invalid["body"]["plan"]["wallet_calls"] = calls;
             assert!(competition_preparation_binding(&invalid, &attribution).is_err());
+        }
+    }
+
+    #[test]
+    fn distribution_competition_binding_normalizes_both_shared_network_descriptors() {
+        let attribution = McpDistributionAttribution {
+            acquisition_id: Uuid::new_v4(),
+            acquisition_token: "opaque".to_string(),
+            first_touch_rail: "mcp-so-paid".to_string(),
+            current_rail: "mcp-so-paid".to_string(),
+            measurement_eligible: false,
+        };
+        for network in ["base-mainnet", "base-sepolia"] {
+            let descriptor = chain_base::base_network_descriptor(network).unwrap();
+            let mut result = distribution_competition_fixture();
+            result["body"]["plan"]["network"] = json!(descriptor);
+            for name in [descriptor.name.as_str(), network] {
+                result["body"]["plan"]["network"]["name"] = json!(name);
+                let binding = competition_preparation_binding(&result, &attribution).unwrap();
+                assert_eq!(binding.network, network);
+            }
+            result["body"]["plan"]["network"]["chain_id"] = json!(1);
+            assert!(competition_preparation_binding(&result, &attribution).is_err());
         }
     }
 

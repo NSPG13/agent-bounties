@@ -78,6 +78,9 @@ An attributed MCP `prepare_open_competition_v2` call with `operation=create`
 also preserves its source. Only a successful Beta3 creation plan is eligible for
 an analytics-only preparation record. Its exact network, factory, bounty ID,
 predicted competition address, and creator bind to the existing acquisition.
+Bindings use `base-mainnet` or `base-sepolia`, including when the unsigned
+plan uses the shared descriptor's display name, `Base` or `Base Sepolia`.
+The network name and chain ID must still identify the same supported chain.
 Identical retries preserve the first preparation time; another acquisition or a
 changed identity cannot replace that binding. Other V2 operations and unattributed
 requests retain their existing behavior. No wallet call is executed by this step.
