@@ -27,7 +27,7 @@ use axum::{
 use base64::Engine as _;
 use db::{
     distribution_acquisition_token_hash, normalize_distribution_rail,
-    sign_distribution_acquisition_token, NewBountyImageAsset,
+    sign_distribution_acquisition_token, DistributionCompetitionBinding, NewBountyImageAsset,
 };
 use domain::BountyImageReference;
 use serde::{Deserialize, Serialize};
@@ -379,6 +379,103 @@ fn distribution_request_fingerprint(arguments: &Value) -> String {
     hex::encode(Sha256::digest(
         serde_json::to_vec(arguments).unwrap_or_else(|_| b"invalid-json-value".to_vec()),
     ))
+}
+
+fn competition_preparation_binding(
+    result: &Value,
+    attribution: &McpDistributionAttribution,
+    prepared_at: chrono::DateTime<chrono::Utc>,
+) -> Result<DistributionCompetitionBinding, String> {
+    let plan: chain_base::OpenCompetitionV2CreationPlan = serde_json::from_value(
+        result
+            .get("plan")
+            .cloned()
+            .ok_or("creation result has no plan")?,
+    )
+    .map_err(|_| "creation result has an invalid plan".to_string())?;
+    if plan.schema_version != "agent-bounties/open-competition-v2-creation-plan-v1"
+        || plan.protocol_version != "agent-bounties/open-competition-v2-beta3"
+    {
+        return Err("creation attribution requires the supported Beta3 plan".to_string());
+    }
+    let expected_network = chain_base::base_network_descriptor(&plan.network.name)
+        .map_err(|_| "creation plan has an unsupported network".to_string())?;
+    if plan.network.chain_id != expected_network.chain_id {
+        return Err("creation plan network and chain ID disagree".to_string());
+    }
+    let creates: Vec<_> = plan
+        .wallet_calls
+        .iter()
+        .filter(|call| call.function.starts_with("createCompetition("))
+        .collect();
+    if creates.len() != 1 {
+        return Err("creation plan must contain exactly one factory creation call".to_string());
+    }
+    let create = creates[0];
+    let address = |value: &str| {
+        chain_base::normalize_evm_address(value)
+            .map(|value| value.to_ascii_lowercase())
+            .map_err(|_| "creation plan has an invalid address".to_string())
+    };
+    let creator = address(
+        create
+            .from
+            .as_deref()
+            .ok_or("creation plan has no creator")?,
+    )?;
+    let bounty_id = plan.bounty_id.to_ascii_lowercase();
+    if bounty_id.len() != 66
+        || !bounty_id.starts_with("0x")
+        || !bounty_id[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("creation plan has an invalid bounty ID".to_string());
+    }
+    Ok(DistributionCompetitionBinding {
+        acquisition_id: attribution.acquisition_id,
+        protocol_version: plan.protocol_version,
+        network: plan.network.name,
+        factory_contract: address(&create.to)?,
+        bounty_id,
+        competition_contract: address(&plan.predicted_competition)?,
+        creator_wallet: creator,
+        prepared_at,
+    })
+}
+
+async fn attach_competition_preparation_attribution(
+    state: &SharedState,
+    mut result: Value,
+    attribution: Option<&McpDistributionAttribution>,
+    prepared_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, String> {
+    let Some(attribution) = attribution else {
+        return Ok(result);
+    };
+    let binding = competition_preparation_binding(&result, attribution, prepared_at)?;
+    state
+        .store
+        .as_ref()
+        .ok_or("durable competition attribution is unavailable")?
+        .bind_distribution_competition(&binding)
+        .await
+        .map_err(|_| "competition preparation attribution could not be preserved".to_string())?;
+    result.as_object_mut().ok_or("creation response is not an object")?.insert(
+        "attribution".to_string(),
+        json!({
+            "authority": "analytics_only",
+            "state": "unsigned_preparation_recorded",
+            "first_touch_rail": attribution.first_touch_rail,
+            "current_rail": attribution.current_rail,
+            "measurement_eligible": attribution.measurement_eligible,
+            "protocol_version": binding.protocol_version,
+            "network": binding.network,
+            "factory_contract": binding.factory_contract,
+            "bounty_id": binding.bounty_id,
+            "competition_contract": binding.competition_contract,
+            "evidence_boundary": "A preparation is not creation, funding, activation, or settlement. Only matching confirmed canonical events establish those outcomes."
+        }),
+    );
+    Ok(result)
 }
 
 async fn record_prepare_handoff_failure(
@@ -2209,8 +2306,21 @@ async fn call_tool(
                 serde_json::from_value(arguments).map_err(|error| {
                     format!("invalid prepare_open_competition_v2 arguments: {error}")
                 })?;
+            let is_creation = args.operation == "create";
+            let prepared_at = chrono::Utc::now();
+            let result = legacy_result(
+                prepare_open_competition_v2(State(state.clone()), Json(args))
+                    .await
+                    .0,
+            )?;
+            let result = if is_creation {
+                attach_competition_preparation_attribution(&state, result, attribution, prepared_at)
+                    .await?
+            } else {
+                result
+            };
             return Ok(tool_result(
-                legacy_result(prepare_open_competition_v2(State(state), Json(args)).await.0)?,
+                result,
                 "Prepared one exact Open Competition V2 Beta3 action. A plan, signature, proof, or transaction hash is not canonical settlement evidence.",
                 false,
             ));
@@ -4971,6 +5081,109 @@ mod tests {
         assert_ne!(first, changed);
         assert_eq!(first.len(), 64);
         assert!(!first.contains("private"));
+    }
+
+    fn distribution_competition_fixture() -> Value {
+        json!({
+            "state": "awaiting_wallet_calls",
+            "plan": {
+                "schema_version": "agent-bounties/open-competition-v2-creation-plan-v1",
+                "protocol_version": "agent-bounties/open-competition-v2-beta3",
+                "network": {"name": "base-mainnet", "chain_id": 8453,
+                    "rpc_url_env": "BASE_MAINNET_RPC_URL", "native_usdc_token_address": format!("0x{}", "1".repeat(40))},
+                "bounty_id": format!("0x{}", "2".repeat(64)),
+                "predicted_competition": format!("0x{}", "3".repeat(40)),
+                "funding_target": "2100000", "remaining_funding_after_creation": "0",
+                "profitable_if_win": true, "public_inventory_eligible_after_confirmation": true,
+                "wallet_calls": [{"from": format!("0x{}", "4".repeat(40)),
+                    "to": format!("0x{}", "5".repeat(40)), "value_wei": 0,
+                    "data": "0x", "function": "createCompetition(params,funding,nonce,risk)"}],
+                "next_action": "Review unsigned calls", "evidence_boundary": "Unsigned preparation only"
+            }
+        })
+    }
+
+    #[test]
+    fn distribution_competition_binding_uses_the_validated_creation_call() {
+        let attribution = McpDistributionAttribution {
+            acquisition_id: Uuid::new_v4(),
+            acquisition_token: "opaque".to_string(),
+            first_touch_rail: "glama-paid".to_string(),
+            current_rail: "cursor".to_string(),
+            measurement_eligible: false,
+        };
+        let result = distribution_competition_fixture();
+        let binding =
+            competition_preparation_binding(&result, &attribution, chrono::Utc::now()).unwrap();
+        assert_eq!(binding.acquisition_id, attribution.acquisition_id);
+        assert_eq!(
+            binding.creator_wallet,
+            result["plan"]["wallet_calls"][0]["from"]
+        );
+        assert_eq!(
+            binding.factory_contract,
+            result["plan"]["wallet_calls"][0]["to"]
+        );
+        assert_eq!(
+            binding.competition_contract,
+            result["plan"]["predicted_competition"]
+        );
+        for (key, value) in [
+            ("chain_id", json!(84532)),
+            ("name", json!("unsupported-chain")),
+        ] {
+            let mut invalid = result.clone();
+            invalid["plan"]["network"][key] = value;
+            assert!(
+                competition_preparation_binding(&invalid, &attribution, chrono::Utc::now())
+                    .is_err()
+            );
+        }
+        for calls in [
+            json!([]),
+            json!([
+                result["plan"]["wallet_calls"][0],
+                result["plan"]["wallet_calls"][0]
+            ]),
+        ] {
+            let mut invalid = result.clone();
+            invalid["plan"]["wallet_calls"] = calls;
+            assert!(
+                competition_preparation_binding(&invalid, &attribution, chrono::Utc::now())
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn distribution_competition_preparation_requires_durable_attribution() {
+        let state = public_tool_test_state();
+        let result = distribution_competition_fixture();
+        let unchanged = attach_competition_preparation_attribution(
+            &state,
+            result.clone(),
+            None,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged, result);
+        let attribution = McpDistributionAttribution {
+            acquisition_id: Uuid::new_v4(),
+            acquisition_token: "opaque".to_string(),
+            first_touch_rail: "mcp-so-paid".to_string(),
+            current_rail: "mcp-so-paid".to_string(),
+            measurement_eligible: false,
+        };
+        assert!(attach_competition_preparation_attribution(
+            &state,
+            result,
+            Some(&attribution),
+            chrono::Utc::now()
+        )
+        .await
+        .unwrap_err()
+        .contains("unavailable"));
     }
 
     #[tokio::test]
