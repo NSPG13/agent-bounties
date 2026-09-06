@@ -517,6 +517,8 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             "data-card-verifier",
             "function renderVerifierTerms",
+            "if (!ui.verifierSummary || !ui.verifier) return;",
+            'bounty-composer-v2.js?v=4',
             '["Source", source.repository || "Not supplied"]',
             '["Commit", source.commit || "Not supplied"]',
             '["Container image", runner.image || "Not supplied"]',

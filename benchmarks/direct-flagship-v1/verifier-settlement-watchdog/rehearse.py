@@ -933,7 +933,7 @@ RUNNER_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"},
         {"name": "Build isolated regression worker", "run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 586e8daff00a41c24dc1988a326828f612869d80f2fa6c568dff8bd64eada85b"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 59ff86782a43cc6ff6276c496c07cfde613a0d0f14d2d570e9cd55e7741714eb"},
         {"name": "Run canonical jobs without signing secrets", "run": "python scripts/regression_verifier_pipeline.py run --api-base $API_BASE_URL --network base-mainnet --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --staging $RUNNER_TEMP/regression-staging --output target/regression-candidates --max-jobs 5"},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-candidates-${{ github.run_id }}", "path": "target/regression-candidates", "if-no-files-found": "error", "retention-days": 7}}
       ]
@@ -1055,7 +1055,7 @@ SIGNER_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"},
         {"run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 586e8daff00a41c24dc1988a326828f612869d80f2fa6c568dff8bd64eada85b"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 59ff86782a43cc6ff6276c496c07cfde613a0d0f14d2d570e9cd55e7741714eb"},
         {"name": "Revalidate and relay exact quorum", "run": "python scripts/regression_verifier_pipeline.py relay --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --attestations target/attestations-one --attestations target/attestations-two --verifier $VERIFIER_ONE --verifier $VERIFIER_TWO --worker target/release/worker --expected-keeper $KEEPER_ADDRESS", "env": {"BASE_KEEPER_PRIVATE_KEY": "${{ secrets.BASE_KEEPER_PRIVATE_KEY }}"}}
       ]
     }
@@ -1098,7 +1098,7 @@ REUSABLE_WORKFLOW = '''{
         {"name": "Verify reviewed worker build inputs", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"},
         {"run": "cargo build --release -p worker"},
         {"name": "Revalidate reviewed sources after build", "run": "python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"},
-        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 586e8daff00a41c24dc1988a326828f612869d80f2fa6c568dff8bd64eada85b"},
+        {"name": "Revalidate reviewed signing runtime", "run": "python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 59ff86782a43cc6ff6276c496c07cfde613a0d0f14d2d570e9cd55e7741714eb"},
         {"name": "Re-fetch state and sign one exact candidate set", "run": "python scripts/regression_verifier_pipeline.py sign --api-base $API_BASE_URL --network base-mainnet --rpc-url $BASE_MAINNET_RPC_URL --candidates target/regression-candidates --output $ATTESTATION_OUTPUT --worker target/release/worker --private-key-env REGRESSION_VERIFIER_PRIVATE_KEY --expected-signer $EXPECTED_SIGNER", "env": {"REGRESSION_VERIFIER_PRIVATE_KEY": "${{ secrets.verifier_private_key }}"}},
         {"uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "with": {"name": "regression-attestations-${{ inputs.signer_slot }}-${{ inputs.candidate_run_id }}", "path": "target/attestations-${{ inputs.signer_slot }}", "if-no-files-found": "error", "retention-days": 7}}
       ]

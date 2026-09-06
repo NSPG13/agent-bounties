@@ -713,22 +713,23 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             pipeline.benchmark_source(job)
 
     def test_glama_lifecycle_benchmark_is_not_signable_without_canonical_reconciliation(self) -> None:
-        job = {
-            "terms": {
-                "document": {
-                    "benchmark": {
-                        "source": {
-                            "kind": "github_commit",
-                            "repository": "NSPG13/agent-bounties",
-                            "commit": "b" * 40,
-                            "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit",
+        for repository in ("NSPG13/agent-bounties", "nspg13/AGENT-BOUNTIES"):
+            job = {
+                "terms": {
+                    "document": {
+                        "benchmark": {
+                            "source": {
+                                "kind": "github_commit",
+                                "repository": repository,
+                                "commit": "b" * 40,
+                                "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit",
+                            }
                         }
                     }
                 }
             }
-        }
-        with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
-            pipeline.reject_unreconciled_canonical_lifecycle_benchmark(job)
+            with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
+                pipeline.reject_unreconciled_canonical_lifecycle_benchmark(job)
 
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {

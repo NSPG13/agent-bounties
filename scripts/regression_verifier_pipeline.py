@@ -51,7 +51,7 @@ CANONICAL_BOUNTY_RUNTIME = (
     "5af43d82803e903d91602b57fd5bf3"
 )
 UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK = (
-    "NSPG13/agent-bounties",
+    "nspg13/agent-bounties",
     "benchmarks/distribution-v1/glama-onboarding-audit",
 )
 
@@ -231,7 +231,7 @@ def reject_unreconciled_canonical_lifecycle_benchmark(job: dict[str, Any]) -> No
     )
     if not isinstance(source, dict):
         return
-    repository = str(source.get("repository", ""))
+    repository = str(source.get("repository", "")).casefold()
     subdirectory = str(source.get("subdirectory", ""))
     if (repository, subdirectory) == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK:
         raise PipelineError(

@@ -828,6 +828,7 @@
   }
 
   function renderVerifierTerms() {
+    if (!ui.verifierSummary || !ui.verifier) return;
     const benchmark = missionBenchmark(state.draft?.benchmark || {});
     const source = benchmark.source || {};
     const runner = benchmark.runner_manifest || {};
