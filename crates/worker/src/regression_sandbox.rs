@@ -1395,7 +1395,8 @@ mod tests {
     }
 
     fn benchmark_digest() -> String {
-        format!("sha256:{}", "d".repeat(64))
+        "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6"
+            .to_string()
     }
 
     fn pinned_alpine_image() -> String {
