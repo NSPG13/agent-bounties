@@ -986,7 +986,9 @@ ${competitionChildBrief(item)}`;
       });
       walletLinkButton?.addEventListener("click", async () => {
         if (!currentUser) return;
-        if (!win.ethereum || typeof win.ethereum.request !== "function") {
+        const linkProvider = win.AgentBountiesPhoneWallet?.state().connected
+          ? win.AgentBountiesPhoneWallet.provider : win.ethereum || (win.AgentBountiesPhoneWallet?.state().available ? win.AgentBountiesPhoneWallet.provider : null);
+        if (!linkProvider || typeof linkProvider.request !== "function") {
           setWalletStatus("No browser wallet was detected. Open this page in a browser with an EVM wallet extension.");
           return;
         }
@@ -994,12 +996,12 @@ ${competitionChildBrief(item)}`;
         win.agentBountiesAnalytics?.track("wallet_link_started");
         setWalletStatus("Choose the wallet address you want to link…");
         try {
-          const accounts = await win.ethereum.request({ method: "eth_requestAccounts" });
+          const accounts = await linkProvider.request({ method: "eth_requestAccounts" });
           const address = String(Array.isArray(accounts) ? accounts[0] : "").trim();
           if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw { reason: "invalid_wallet_address" };
           const challenge = await postAccountJson("/wallet/challenge", { address });
           setWalletStatus("Review the ownership-only message in your wallet. It cannot move funds or approve tokens.");
-          const signature = await win.ethereum.request({
+          const signature = await linkProvider.request({
             method: "personal_sign",
             params: [utf8Hex(challenge.message), address],
           });

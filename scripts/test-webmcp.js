@@ -333,6 +333,17 @@ test("unavailable retry storage blocks action preparation before any external wr
   await assert.rejects(flow.createClient(env.window).prepareAction({ action: "solve", opportunity_id: item().opportunity_id }), /retry checkpoint/);
   assert.equal(env.requests.filter((request) => request.method === "POST").length, 0);
 });
+test("phone WebMCP tools open a review and restore status without signing or exposing transport data", async () => {
+  const env = environment(); let opens = 0, restores = 0;
+  const snapshot = { available: true, status: "pairing", connected: false, payment_authorized: false };
+  env.window.AgentBountiesPhoneWallet = { state: () => snapshot, async openReview() { opens++; return { ...snapshot, review_open: true }; }, async restore() { restores++; } };
+  env.register();
+  const opened = await env.tools.get("agent_bounties_open_phone_wallet").execute();
+  assert.equal(opened.review_open, true); assert.equal(opened.connected, false); assert.equal(opens, 1);
+  assert.equal(await env.tools.get("agent_bounties_get_phone_wallet_status").execute(), snapshot); assert.equal(restores, 1);
+  assert.equal(env.tools.get("agent_bounties_get_page_context").execute().phone_wallet, snapshot);
+  assert.ok(![...env.tools.keys()].some((name) => /wallet_(sign|pay|approve)/.test(name)));
+});
 test("a contribution uses the exact reviewed amount and recorded transaction", async () => {
   const env = await participantFixture("fund");
   await env.click("[data-wallet-connect]"); await env.click("[data-wallet-confirm]");

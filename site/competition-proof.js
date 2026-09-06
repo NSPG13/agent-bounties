@@ -230,6 +230,9 @@
       if (!ADDRESS.test(wallet)) throw new Error("Choose a wallet account.");
       render();
     }
+    win.addEventListener("agent-bounties:phone-wallet-state", (event) => {
+      if (event.detail?.connected && !provider && !busy && win.AgentBountiesPhoneWallet) connect(win.AgentBountiesPhoneWallet.provider).catch((error) => put("[data-proof-status]", error.message));
+    });
     async function signer() {
       if (!provider) throw new Error("Connect the entrant wallet first.");
       const accounts = await provider.request({ method: "eth_accounts" });

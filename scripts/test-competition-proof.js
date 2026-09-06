@@ -17,7 +17,7 @@ function responseQuote(request) {
       extra: { maximumCharge: "110000", quoteId: q.quote_id, competition: contract, solver: request.solver, artifactHash: q.artifact_hash, proofSystem: "groth16", assetTransferMethod: "eip3009", name: "USD Coin", version: "2" } }] } };
 }
 function setup(storage = new Map(), server = {}) {
-  const elements = new Map(), calls = [], requests = [];
+  const elements = new Map(), calls = [], requests = [], windowEvents = new Map();
   const element = () => ({ hidden: false, disabled: false, textContent: "", listeners: new Map(), addEventListener(k, fn) { this.listeners.set(k, fn); }, scrollIntoView() {}, replaceChildren() {}, append() {} });
   const doc = { hidden: false, querySelector(k) { if (!elements.has(k)) elements.set(k, element()); return elements.get(k); }, createElement: element };
   server.projection ||= { competition: contract, bounty_id: hash("c"), state: "active", proof_deadline: Math.floor(Date.now() / 1000) + 3600,
@@ -38,7 +38,7 @@ function setup(storage = new Map(), server = {}) {
   const win = { document: doc, location: new URL(`https://agentbounties.app/competition.html?bountyContract=${contract}`), history: { replaceState() {} }, crypto: webcrypto,
     AgentBountiesEvm: evm, AgentBountiesWorkflow: flow, AgentBountiesLegal: { requireAcceptance: async () => ({ durable: true }) }, ethereum: provider,
     sessionStorage: { getItem: (k) => storage.get(k) || null, setItem: (k, v) => { if (server.noStorage) throw new Error("Storage unavailable"); storage.set(k, v); } },
-    addEventListener() {}, dispatchEvent() {}, Event: class {}, setInterval() {}, btoa: (s) => Buffer.from(s, "binary").toString("base64"),
+    addEventListener(name, listener) { windowEvents.set(name, listener); }, dispatchEvent(event) { windowEvents.get(event.type)?.(event); }, Event: class {}, setInterval() {}, btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     async fetch(url, options = {}) {
       requests.push({ url, ...options });
       const body = options.body && JSON.parse(options.body);
@@ -97,6 +97,14 @@ test("resuming before a proof quote returns guidance without wallet or service m
   assert.equal(e.requests.some((request) => request.method === "POST"), false);
   assert.equal(e.server.quoteCount, undefined);
   assert.equal(e.doc.querySelector("[data-proof-workspace] [data-legal-consent]").hidden, true);
+});
+test("a phone connection is adopted by the proof review without another connect click or signature", async () => {
+  const e = setup(); await e.start();
+  e.win.AgentBountiesPhoneWallet = { provider: e.win.ethereum };
+  e.win.dispatchEvent({ type: "agent-bounties:phone-wallet-state", detail: { connected: true } });
+  await new Promise(setImmediate);
+  assert.match(e.doc.querySelector("[data-proof-wallet-status]").textContent, new RegExp(wallet));
+  assert.equal(sigs(e).length, 0); assert.equal(e.calls.some((request) => request.method === "eth_requestAccounts"), false);
 });
 
 test("quote preparation derives the domain-bound UTF-8 artifact hash, reuses the job and never signs", async () => {
