@@ -282,7 +282,7 @@ fn build_public_summary(
     generated_at: String,
 ) -> DistributionPublicSummary {
     let overall_reported = stats.unique_external_funded_posters >= PUBLIC_MINIMUM_EXTERNAL_POSTERS;
-    let rails = stats
+    let rails: Vec<_> = stats
         .rails
         .into_iter()
         .map(|rail| {
@@ -298,21 +298,25 @@ fn build_public_summary(
             }
         })
         .collect();
+    let has_suppressed_rail = rails.iter().any(|rail| !rail.reported);
+    let global_reported = overall_reported && !has_suppressed_rail;
     DistributionPublicSummary {
         schema_version: "agent-bounties/distribution-summary-v1".to_string(),
-        status: if overall_reported {
+        status: if global_reported {
             "ready"
+        } else if overall_reported {
+            "partial"
         } else {
             "insufficient_sample"
         }
         .to_string(),
         generated_at,
         privacy_minimum_external_posters: PUBLIC_MINIMUM_EXTERNAL_POSTERS,
-        total_external_funded_bounties: overall_reported
+        total_external_funded_bounties: global_reported
             .then_some(stats.total_external_funded_bounties),
-        attributed_external_funded_bounties: overall_reported
+        attributed_external_funded_bounties: global_reported
             .then_some(stats.attributed_external_funded_bounties),
-        attribution_coverage_basis_points: overall_reported
+        attribution_coverage_basis_points: global_reported
             .then_some(stats.attribution_coverage_basis_points),
         rails,
         evidence_boundary: "Small rail outcomes are withheld. Reported funding and settlement values come only from confirmed canonical events and exclude configured wallet classes. Acquisition records are not people, authority, funding, verification, settlement, or payment evidence.".to_string(),
@@ -486,7 +490,10 @@ mod tests {
             },
             "2026-09-02T00:00:00Z".to_string(),
         );
-        assert_eq!(summary.status, "ready");
+        assert_eq!(summary.status, "partial");
+        assert_eq!(summary.total_external_funded_bounties, None);
+        assert_eq!(summary.attributed_external_funded_bounties, None);
+        assert_eq!(summary.attribution_coverage_basis_points, None);
         assert!(!summary.rails[0].reported);
         assert_eq!(summary.rails[0].externally_funded_bounties, None);
         assert!(summary.rails[1].reported);

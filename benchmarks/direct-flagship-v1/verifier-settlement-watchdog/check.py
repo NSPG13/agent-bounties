@@ -30,18 +30,18 @@ SCHEMA = "agent-bounties/regression-verifier-watchdog-plan-v1"
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
-PIPELINE_SHA256 = "c58602e3929f0a9b8d1cc437b58086cd6c5ac2d1194c4e89aeea97184609e140"
-PIPELINE_TEST_SHA256 = "1665f99a25f3ffdd1be1fb167e4ba9a09c729966c46ec41990629d5dd6f271e5"
+PIPELINE_SHA256 = "2f774fbe11b912151558721986324d1939a270337e963a07f934477f9d36da71"
+PIPELINE_TEST_SHA256 = "4dbc4040837cad66d9f3e616f4fe9a646918874a3ac7922526c94527a329417a"
 SOURCE_GUARD_SHA256 = "ab8a6491acd5a5b8e93db5ef36d40db6276af8ba658bcd6a52c34d6aeb0be83d"
 SOURCE_GUARD_TEST_SHA256 = "d18ced511f9cd9f266c989dae93ff0088ce38d290f19a6491d6d7b3e6aa108ac"
-WORKER_BUILD_SHA256 = "0cafc0018871b90328b3acddc43bd1f9bd06ae38102c922c5c984b38ba43f060"
-SIGNING_RUNTIME_SHA256 = "292a6a94be6f919122558f764505119dff90f61178f1799cc362981dcf34db12"
+WORKER_BUILD_SHA256 = "0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a"
+SIGNING_RUNTIME_SHA256 = "59ff86782a43cc6ff6276c496c07cfde613a0d0f14d2d570e9cd55e7741714eb"
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "2c5bf5491c8ec4842b9f254eae0ed9420f7cd6c9b78e968f7e8a878fcc61c217",
+    ".github/workflows/regression-verifier-runner.yml": "864e8c2a8cc8061b1cdd2e3e9354ddc47cc48e6bdc50773ac2a02e2c83ecabba",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "1971ead90ac574822d9d62cbf3bea03a4da1d1675ff50355efbb76df561bf96b",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "cdc5cac68ed32fb8afc4b74cca3c77902ffba6b1e551011dbd629e40841bcb7f",
+    ".github/workflows/regression-verifier-signer.yml": "b4588978fc3323e4bc1f27b679a2981de0b59ac5950d13121c89bf5524a3c972",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "9eac88d2c75bdbc7f42d4e4cff99239358d976ee099935360ed0edb555bd88b6",
 }
 
 

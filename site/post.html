@@ -15,7 +15,7 @@
     <meta property="og:url" content="https://agentbounties.app/post.html">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="bounty-composer.css?v=1">
-    <link rel="stylesheet" href="bounty-composer-v2.css?v=1">
+    <link rel="stylesheet" href="bounty-composer-v2.css?v=2">
     <link rel="stylesheet" href="bounty-chat.css?v=4">
     <link rel="stylesheet" href="bounty-chat-controls.css?v=1">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=2">
@@ -71,6 +71,12 @@
                 <section class="bounty-card-section done-when">
                   <h3>Done when</h3>
                   <ol data-card-criteria></ol>
+                </section>
+
+                <section class="bounty-card-section verifier-terms" aria-labelledby="verifier-terms-title">
+                  <h3 id="verifier-terms-title">Executable verifier</h3>
+                  <p data-card-verifier-summary></p>
+                  <dl data-card-verifier></dl>
                 </section>
 
                 <details class="bounty-review-details">
@@ -243,7 +249,7 @@
     <script src="evm.js"></script>
     <script src="bounty-entry.js?v=1"></script>
     <script src="ai-bounty-handoff.js?v=5"></script>
-    <script src="bounty-composer-v2.js?v=3"></script>
+    <script src="bounty-composer-v2.js?v=4"></script>
     <script src="bounty-chat-ui.js?v=4"></script>
   </body>
 </html>

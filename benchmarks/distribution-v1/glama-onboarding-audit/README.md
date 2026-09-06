@@ -24,16 +24,16 @@ initialize and tools/list evidence, an explicit wallet-authority boundary, a
 synthetic-canary measurement exclusion, and linked Base-mainnet creation,
 funding, verifier-evidence, and settlement proofs for one bounty contract.
 
-The verifier validates the evidence bundle's shape and internal consistency.
-The signing verifier remains responsible for reconciling the referenced
-transactions and public artifact against current canonical state before it
-signs. A passing sandbox receipt, signature, or transaction hash is not proof
-of payment. Only a confirmed canonical `BountySettled` event is settlement
-evidence.
+The verifier validates the evidence bundle's shape and internal consistency,
+but that is not enough to authorize a payment decision. This benchmark is
+therefore fail-closed in both the bounty handoff and signing pipeline until the
+referenced Base receipts and logs are independently reconciled and bound to the
+declared contract and bounty id. A passing sandbox receipt, signature, or
+transaction hash is not proof of payment. Only a confirmed canonical
+`BountySettled` event is settlement evidence.
 
 Run the deterministic known-good and known-bad rehearsal with:
 
 ```text
 python benchmarks/distribution-v1/glama-onboarding-audit/self_test.py
 ```
-

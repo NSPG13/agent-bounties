@@ -33,6 +33,11 @@ draft, start wallet review, sign, fund, or invoke any mutation tool.
 
 Safe probes send `x-agent-bounties-canary: dry-run-v1`; a mainnet lifecycle
 canary sends `x-agent-bounties-canary: mainnet-v1`. Unknown values are rejected.
+The first request receives a server-signed acquisition token bound immutably to
+that classification. Every reuse must present the same canary kind; adding,
+removing, or changing the classification returns a conflict without mutating the
+original acquisition. This keeps the canary workflow secret-free while preventing
+an existing measurement-eligible acquisition from being reclassified.
 The explicit bounded classification is retained on the acquisition, becomes
 irreversibly measurement-ineligible, and excludes that acquisition and its
 assists, rail usage, handoffs, failures, and lifecycle outcomes from every

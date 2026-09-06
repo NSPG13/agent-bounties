@@ -63,6 +63,8 @@ const FEED_CARD_ART: &[u8] =
     include_bytes!("../../../site/assets/solarpunk/characters-helping.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
+const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK: &str =
+    "benchmarks/distribution-v1/glama-onboarding-audit";
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
@@ -419,6 +421,9 @@ pub(super) fn build_bounty_post_handoff(
     if solver_reward < 2_000_000 {
         return Err("public bounties require at least 2 USDC for the solver".to_string());
     }
+    if verifier_reward < 10_000 {
+        return Err("public bounties require at least 0.01 USDC for the verifier".to_string());
+    }
     let target = solver_reward
         .checked_add(verifier_reward)
         .ok_or_else(|| "combined USDC target is too large".to_string())?;
@@ -566,6 +571,37 @@ fn validate_prepared_verifier(
             return Err(format!("{label} must be an object"));
         }
     }
+    if evidence_schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err("evidence_schema.type must be object".to_string());
+    }
+    let required = evidence_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "evidence_schema.required must include source_snapshot_digest".to_string()
+        })?;
+    if !required
+        .iter()
+        .any(|field| field.as_str() == Some("source_snapshot_digest"))
+    {
+        return Err("evidence_schema must require source_snapshot_digest".to_string());
+    }
+    let source_digest = evidence_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("source_snapshot_digest"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            "evidence_schema.properties.source_snapshot_digest is required".to_string()
+        })?;
+    if source_digest.get("type").and_then(Value::as_str) != Some("string")
+        || source_digest.get("pattern").and_then(Value::as_str) != Some("^sha256:[0-9a-f]{64}$")
+    {
+        return Err(
+            "evidence_schema.source_snapshot_digest must require sha256:<64 lowercase hex>"
+                .to_string(),
+        );
+    }
     if benchmark.get("engine").and_then(Value::as_str) != Some(REGRESSION_ENGINE) {
         return Err(format!("benchmark.engine must be {REGRESSION_ENGINE}"));
     }
@@ -619,6 +655,12 @@ fn validate_prepared_verifier(
             .any(|part| part.is_empty() || matches!(part, "." | ".."))
     {
         return Err("benchmark.source.subdirectory must be a normalized non-root path".to_string());
+    }
+    if subdirectory == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK {
+        return Err(
+            "the Glama onboarding audit cannot fund a bounty until its Base lifecycle evidence is independently reconciled"
+                .to_string(),
+        );
     }
     let runner = benchmark
         .get("runner_manifest")
@@ -1061,6 +1103,9 @@ pub(super) async fn attributed_mcp_post(
         .await
     {
         Ok(acquisition) => acquisition,
+        Err(db::DbError::DistributionAttributionConflict(message)) => {
+            return (StatusCode::CONFLICT, message).into_response();
+        }
         Err(_) => {
             let store = store.clone();
             let rail = rail.clone();
@@ -1118,7 +1163,7 @@ pub(super) async fn attributed_mcp_post(
         HeaderValue::from_str(&acquisition.first_touch_rail)
             .expect("approved first-touch rail is a header value"),
     );
-    let succeeded = response.status().is_success();
+    let succeeded = mcp_response_succeeded(&response);
     let store = store.clone();
     tokio::spawn(async move {
         let _ = store
@@ -1152,7 +1197,7 @@ async fn mcp_post_inner(
     if excluded {
         super::emit_interface_usage_excluded(protocol_era);
     } else if let Some(store) = state.store.clone() {
-        let succeeded = response.status().is_success();
+        let succeeded = mcp_response_succeeded(&response);
         tokio::spawn(async move {
             let _ = store
                 .record_interface_usage(
@@ -1230,7 +1275,12 @@ async fn handle_mcp_post(
         else {
             return StatusCode::ACCEPTED.into_response();
         };
-        return (status, Json(response)).into_response();
+        let succeeded = json_rpc_payload_succeeded(&response);
+        let mut http_response = (status, Json(response)).into_response();
+        http_response
+            .extensions_mut()
+            .insert(McpJsonRpcSucceeded(succeeded));
+        return http_response;
     }
 
     let responses = if let Some(batch) = payload.as_array() {
@@ -1259,7 +1309,31 @@ async fn handle_mcp_post(
         return StatusCode::ACCEPTED.into_response();
     };
 
-    (StatusCode::OK, Json(responses)).into_response()
+    let succeeded = json_rpc_payload_succeeded(&responses);
+    let mut response = (StatusCode::OK, Json(responses)).into_response();
+    response
+        .extensions_mut()
+        .insert(McpJsonRpcSucceeded(succeeded));
+    response
+}
+
+#[derive(Debug, Clone, Copy)]
+struct McpJsonRpcSucceeded(bool);
+
+fn json_rpc_payload_succeeded(payload: &Value) -> bool {
+    match payload {
+        Value::Array(items) => !items.is_empty() && items.iter().all(json_rpc_payload_succeeded),
+        Value::Object(object) => !object.contains_key("error"),
+        _ => false,
+    }
+}
+
+fn mcp_response_succeeded(response: &Response) -> bool {
+    response.status().is_success()
+        && response
+            .extensions()
+            .get::<McpJsonRpcSucceeded>()
+            .is_none_or(|outcome| outcome.0)
 }
 
 pub(super) async fn mcp_get(headers: HeaderMap) -> Response {
@@ -4862,7 +4936,7 @@ mod tests {
                     "kind": "github_commit",
                     "repository": "NSPG13/agent-bounties",
                     "commit": "0fae18cf9be464132cde52dfb9d464d836e8f024",
-                    "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit"
+                    "subdirectory": "benchmarks/direct-growth-v2/openhands-integration"
                 },
                 "runner_manifest": {
                     "schema_version": "agent-bounties/regression-sandbox-v1",
@@ -5018,7 +5092,7 @@ mod tests {
         );
         assert!(pairs.iter().any(|(key, value)| {
             key == "benchmark"
-                && value.contains("benchmarks/distribution-v1/glama-onboarding-audit")
+                && value.contains("benchmarks/direct-growth-v2/openhands-integration")
         }));
         assert!(pairs.iter().any(
             |(key, value)| key == "evidenceSchema" && value.contains("source_snapshot_digest")
@@ -5039,6 +5113,46 @@ mod tests {
         assert!(build_bounty_post_handoff(&args, None)
             .unwrap_err()
             .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
+
+        let mut args = valid_args();
+        args.verifier_reward_usdc = "0.009999".to_string();
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("at least 0.01 USDC"));
+
+        let mut args = valid_args();
+        args.evidence_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false
+        }));
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("must include source_snapshot_digest"));
+
+        let mut args = valid_args();
+        args.benchmark.as_mut().unwrap()["source"]["subdirectory"] =
+            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK);
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("independently reconciled"));
+    }
+
+    #[test]
+    fn legacy_json_rpc_errors_are_not_successful_requests() {
+        assert!(json_rpc_payload_succeeded(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"tools": []}
+        })));
+        assert!(!json_rpc_payload_succeeded(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32602, "message": "invalid arguments"}
+        })));
+        assert!(!json_rpc_payload_succeeded(&json!([
+            {"jsonrpc": "2.0", "id": 1, "result": {}},
+            {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "missing"}}
+        ])));
     }
 
     #[test]

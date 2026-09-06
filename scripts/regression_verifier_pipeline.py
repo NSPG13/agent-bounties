@@ -50,6 +50,10 @@ CANONICAL_BOUNTY_RUNTIME = (
     "0x363d3d373d3d3d363d732fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
     "5af43d82803e903d91602b57fd5bf3"
 )
+UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK = (
+    "nspg13/agent-bounties",
+    "benchmarks/distribution-v1/glama-onboarding-audit",
+)
 
 
 class PipelineError(RuntimeError):
@@ -218,6 +222,23 @@ def benchmark_source(job: dict[str, Any]) -> tuple[str, str, str]:
     return repository, commit, subdirectory
 
 
+def reject_unreconciled_canonical_lifecycle_benchmark(job: dict[str, Any]) -> None:
+    source = (
+        job.get("terms", {})
+        .get("document", {})
+        .get("benchmark", {})
+        .get("source", {})
+    )
+    if not isinstance(source, dict):
+        return
+    repository = str(source.get("repository", "")).casefold()
+    subdirectory = str(source.get("subdirectory", ""))
+    if (repository, subdirectory) == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK:
+        raise PipelineError(
+            "Glama onboarding audit is not signable until Base lifecycle evidence is independently reconciled"
+        )
+
+
 def validate_subdirectory(value: str) -> None:
     path = PurePosixPath(value)
     if (
@@ -374,6 +395,7 @@ def stage(
 
 
 def run_job(worker: Path, staging: Path, job: dict[str, Any], scratch: Path) -> dict[str, Any]:
+    reject_unreconciled_canonical_lifecycle_benchmark(job)
     manifest = runner_manifest(job)
     docker_binary = os.environ.get("REGRESSION_SANDBOX_DOCKER_BINARY", "docker")
     pull_pinned_image(manifest, docker_binary)
@@ -493,6 +515,7 @@ def validate_candidate(
 ) -> None:
     if candidate.get("schema") != CANDIDATE_SCHEMA:
         raise PipelineError("candidate schema is invalid")
+    reject_unreconciled_canonical_lifecycle_benchmark(current)
     request = scratch / "validate.json"
     write_json(
         request,
