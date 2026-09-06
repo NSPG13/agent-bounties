@@ -33,11 +33,10 @@
     <main class="chat-app" data-bounty-chat aria-label="Bounty creation chat">
       <section class="conversation-panel">
         <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Conversation messages">
-          <section class="ai-safety-note" aria-label="Open Competition default">
-            <strong>Approved deterministic work defaults to Open Competition.</strong>
-            The current public profile is a scope-bound hash challenge; first valid confirmed reveal wins.
-            Competitive and other digital work stays in this planner and is not represented as ready to earn without an exact approved verifier.
-            <a href="https://github.com/NSPG13/agent-bounties/issues" target="_blank" rel="noopener noreferrer">Tell us if this routes you to the wrong action.</a>
+          <section class="ai-safety-note" aria-label="Your AI can prepare the bounty" data-agent-guidance>
+            <strong>Describe the result you want. Your AI can handle the setup.</strong>
+            It prepares the work, budget, deadline and completion checks. You review the finished proposal and confirm funding in your wallet.
+            <a href="install/">Agent setup</a>
           </section>
           <section id="bounty-preview" class="bounty-preview conversation-draft" hidden aria-labelledby="bounty-card-title">
             <article id="bounty-card" class="bounty-card">
@@ -237,7 +236,8 @@
       </section>
     </main>
 
-    <script src="analytics-config.js?v=2"></script>
+    <script src="marketplace-workflow.js?v=1"></script>
+    <script src="analytics-config.js?v=3"></script>
     <script src="analytics.js?v=4"></script>
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
