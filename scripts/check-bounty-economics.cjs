@@ -5,6 +5,7 @@ const {
   parseDistributionAttribution,
   parsePreparedRewardSplit,
   rewardSplitForTotal,
+  verificationReadiness,
 } = require("../site/bounty-composer-v2.js");
 
 const staged = parsePreparedRewardSplit("9", "1");
@@ -56,5 +57,48 @@ for (const missing of ["acquisition", "handoff"]) {
 const malformed = new URLSearchParams(attributed);
 malformed.set("acquisition", "aba1_not-opaque");
 assert.throws(() => parseDistributionAttribution(malformed), /malformed/);
+
+const benchmark = {
+  engine: "sandboxed_regression_v1",
+  source: {
+    kind: "github_commit",
+    repository: "owner/repository",
+    commit: "a".repeat(40),
+    subdirectory: "benchmarks/task",
+  },
+  runner_manifest: {
+    schema_version: "agent-bounties/regression-sandbox-v1",
+    image: `docker.io/library/python@sha256:${"b".repeat(64)}`,
+    command: ["python", "/benchmark/check.py"],
+    workdir: "/workspace",
+    benchmark_digest: `sha256:${"c".repeat(64)}`,
+  },
+};
+assert.deepEqual(verificationReadiness(benchmark), { blocked: false, executable: true });
+for (const mutate of [
+  (value) => { delete value.source.commit; },
+  (value) => { delete value.runner_manifest.image; },
+  (value) => { value.runner_manifest.command = []; },
+  (value) => { delete value.runner_manifest.workdir; },
+  (value) => { delete value.runner_manifest.benchmark_digest; },
+]) {
+  const incomplete = JSON.parse(JSON.stringify(benchmark));
+  mutate(incomplete);
+  assert.equal(
+    verificationReadiness(incomplete).executable,
+    false,
+    "the preview must use the same complete verifier readiness gate as funding",
+  );
+}
+const copiedUnsafeBenchmark = JSON.parse(JSON.stringify(benchmark));
+copiedUnsafeBenchmark.source.repository = "other/copied-benchmark";
+copiedUnsafeBenchmark.source.subdirectory = "different/location";
+copiedUnsafeBenchmark.runner_manifest.benchmark_digest =
+  "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
+assert.deepEqual(
+  verificationReadiness(copiedUnsafeBenchmark),
+  { blocked: true, executable: false },
+  "unreconciled benchmark content must remain blocked after it is copied",
+);
 
 process.stdout.write("bounty economics behavior check passed\n");

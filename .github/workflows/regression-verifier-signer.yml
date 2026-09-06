@@ -42,8 +42,8 @@ jobs:
           python-version: "3.12"
       - run: python scripts/test_regression_verifier_pipeline.py -v
       - run: python scripts/test_regression_verifier_source_guard.py -v
-      - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a
-      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 59ff86782a43cc6ff6276c496c07cfde613a0d0f14d2d570e9cd55e7741714eb
+      - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 95b7989e5c9db321116132ff9fd039e84cf927185d1d338de5ef0af88205c1b6
+      - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 c1f5f1842db383cc348b37a742f3dc936639264747a2bf0363883e2b12eeff2a
 
   authorize-run:
     if: >-
@@ -151,12 +151,12 @@ jobs:
         run: >-
           python scripts/regression_verifier_source_guard.py
           --scope worker-build
-          --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a
+          --expected-sha256 95b7989e5c9db321116132ff9fd039e84cf927185d1d338de5ef0af88205c1b6
       - run: cargo build --release -p worker
       - name: Revalidate reviewed runtime after build
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 0a6fd425f4acefbb9471075358fa64ab6321728c771f666c998d511ea1101c1a
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 59ff86782a43cc6ff6276c496c07cfde613a0d0f14d2d570e9cd55e7741714eb
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 95b7989e5c9db321116132ff9fd039e84cf927185d1d338de5ef0af88205c1b6
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 c1f5f1842db383cc348b37a742f3dc936639264747a2bf0363883e2b12eeff2a
       - name: Revalidate and relay exact quorum
         env:
           BASE_KEEPER_PRIVATE_KEY: ${{ secrets.BASE_KEEPER_PRIVATE_KEY }}

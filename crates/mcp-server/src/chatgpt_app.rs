@@ -63,8 +63,8 @@ const FEED_CARD_ART: &[u8] =
     include_bytes!("../../../site/assets/solarpunk/characters-helping.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
-const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK: &str =
-    "benchmarks/distribution-v1/glama-onboarding-audit";
+const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST: &str =
+    "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
@@ -656,12 +656,6 @@ fn validate_prepared_verifier(
     {
         return Err("benchmark.source.subdirectory must be a normalized non-root path".to_string());
     }
-    if subdirectory == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK {
-        return Err(
-            "the Glama onboarding audit cannot fund a bounty until its Base lifecycle evidence is independently reconciled"
-                .to_string(),
-        );
-    }
     let runner = benchmark
         .get("runner_manifest")
         .and_then(Value::as_object)
@@ -768,13 +762,17 @@ fn validate_prepared_verifier(
     if runner.get("workdir").and_then(Value::as_str) != Some("/workspace") {
         return Err("benchmark.runner_manifest.workdir must be /workspace".to_string());
     }
-    if !runner
+    let benchmark_digest = runner
         .get("benchmark_digest")
         .and_then(Value::as_str)
-        .is_some_and(valid_sha256_digest)
-    {
-        return Err(
+        .filter(|value| valid_sha256_digest(value))
+        .ok_or_else(|| {
             "benchmark.runner_manifest.benchmark_digest must use sha256:<64 lowercase hex>"
+                .to_string()
+        })?;
+    if benchmark_digest == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST {
+        return Err(
+            "the Glama onboarding audit cannot fund a bounty until its Base lifecycle evidence is independently reconciled"
                 .to_string(),
         );
     }
@@ -5130,8 +5128,10 @@ mod tests {
             .contains("must include source_snapshot_digest"));
 
         let mut args = valid_args();
-        args.benchmark.as_mut().unwrap()["source"]["subdirectory"] =
-            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK);
+        args.benchmark.as_mut().unwrap()["source"]["repository"] = json!("other/copied-benchmark");
+        args.benchmark.as_mut().unwrap()["source"]["subdirectory"] = json!("different/location");
+        args.benchmark.as_mut().unwrap()["runner_manifest"]["benchmark_digest"] =
+            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST);
         assert!(build_bounty_post_handoff(&args, None)
             .unwrap_err()
             .contains("independently reconciled"));

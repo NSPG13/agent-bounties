@@ -50,9 +50,8 @@ CANONICAL_BOUNTY_RUNTIME = (
     "0x363d3d373d3d3d363d732fa36d2b2327642db3a6cc8cdd91544ad7484eb9"
     "5af43d82803e903d91602b57fd5bf3"
 )
-UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK = (
-    "nspg13/agent-bounties",
-    "benchmarks/distribution-v1/glama-onboarding-audit",
+UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST = (
+    "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541"
 )
 
 
@@ -223,17 +222,14 @@ def benchmark_source(job: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def reject_unreconciled_canonical_lifecycle_benchmark(job: dict[str, Any]) -> None:
-    source = (
+    digest = (
         job.get("terms", {})
         .get("document", {})
         .get("benchmark", {})
-        .get("source", {})
+        .get("runner_manifest", {})
+        .get("benchmark_digest")
     )
-    if not isinstance(source, dict):
-        return
-    repository = str(source.get("repository", "")).casefold()
-    subdirectory = str(source.get("subdirectory", ""))
-    if (repository, subdirectory) == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK:
+    if digest == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST:
         raise PipelineError(
             "Glama onboarding audit is not signable until Base lifecycle evidence is independently reconciled"
         )

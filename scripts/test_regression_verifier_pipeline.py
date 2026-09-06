@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import sys
 import tarfile
@@ -9,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from activate_direct_growth_v2 import benchmark_digest as repository_benchmark_digest
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_pipeline.py")
@@ -713,7 +716,14 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             pipeline.benchmark_source(job)
 
     def test_glama_lifecycle_benchmark_is_not_signable_without_canonical_reconciliation(self) -> None:
-        for repository in ("NSPG13/agent-bounties", "nspg13/AGENT-BOUNTIES"):
+        self.assertEqual(
+            repository_benchmark_digest("benchmarks/distribution-v1/glama-onboarding-audit"),
+            pipeline.UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST,
+        )
+        for repository, subdirectory in (
+            ("NSPG13/agent-bounties", "benchmarks/distribution-v1/glama-onboarding-audit"),
+            ("other/copied-benchmark", "different/location"),
+        ):
             job = {
                 "terms": {
                     "document": {
@@ -722,14 +732,23 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                                 "kind": "github_commit",
                                 "repository": repository,
                                 "commit": "b" * 40,
-                                "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit",
-                            }
+                                "subdirectory": subdirectory,
+                            },
+                            "runner_manifest": {
+                                "benchmark_digest": pipeline.UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST
+                            },
                         }
                     }
                 }
             }
             with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
                 pipeline.reject_unreconciled_canonical_lifecycle_benchmark(job)
+
+        safe = json.loads(json.dumps(job))
+        safe["terms"]["document"]["benchmark"]["runner_manifest"]["benchmark_digest"] = (
+            "sha256:" + "d" * 64
+        )
+        pipeline.reject_unreconciled_canonical_lifecycle_benchmark(safe)
 
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {

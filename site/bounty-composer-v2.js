@@ -12,6 +12,8 @@
   const REGRESSION_VERIFIERS = [
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
   ];
+  const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST =
+    "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
   const VISUAL_EXTENSION = "x-agent-bounties-draft-visual";
   const ALLOWED_SCENES = new Set([
     "infrastructure", "digital", "nature", "health", "research", "education", "coordination", "general",
@@ -25,6 +27,7 @@
       parseDistributionAttribution,
       parsePreparedRewardSplit,
       rewardSplitForTotal,
+      verificationReadiness,
     });
     return;
   }
@@ -833,10 +836,12 @@
     const source = benchmark.source || {};
     const runner = benchmark.runner_manifest || {};
     const requiredEvidence = state.draft?.evidence_schema?.required || [];
-    const executable = benchmark.engine === REGRESSION_ENGINE && source.kind === "github_commit" && runner.schema_version === "agent-bounties/regression-sandbox-v1";
-    ui.verifierSummary.textContent = executable
-      ? "These exact public inputs and direct command decide whether the verifier may sign. Confirm every value before connecting a wallet."
-      : "No complete executable verifier is attached. This draft cannot be funded until one is precommitted and reviewed.";
+    const readiness = verificationReadiness(benchmark);
+    ui.verifierSummary.textContent = readiness.blocked
+      ? "This benchmark cannot be funded until its Base lifecycle evidence is independently reconciled. Choose another reviewed benchmark before connecting a wallet."
+      : readiness.executable
+        ? "These exact public inputs and direct command decide whether the verifier may sign. Confirm every value before connecting a wallet."
+        : "No complete executable verifier is attached. This draft cannot be funded until one is precommitted and reviewed.";
     ui.verifier.replaceChildren();
     const rows = [
       ["Engine", benchmark.engine || "Not supplied"],
@@ -1209,10 +1214,9 @@
     return benchmark;
   }
 
-  function supportedVerificationPolicy() {
-    const benchmark = missionBenchmark(state.draft?.benchmark || {});
-    const source = benchmark.source;
-    const runner = benchmark.runner_manifest;
+  function verificationReadiness(benchmark) {
+    const source = benchmark?.source;
+    const runner = benchmark?.runner_manifest;
     const sourceReady = source?.kind === "github_commit"
       && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(source.repository || "")
       && /^[0-9a-f]{40}$/.test(source.commit || "")
@@ -1228,7 +1232,22 @@
       && runner.command.length > 0
       && runner.workdir === "/workspace"
       && /^sha256:[0-9a-f]{64}$/.test(runner.benchmark_digest || "");
-    if (benchmark.engine !== REGRESSION_ENGINE || !sourceReady || !runnerReady) {
+    const blocked = runner?.benchmark_digest === UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST;
+    return {
+      blocked,
+      executable: benchmark?.engine === REGRESSION_ENGINE && sourceReady && runnerReady && !blocked,
+    };
+  }
+
+  function supportedVerificationPolicy() {
+    const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    const readiness = verificationReadiness(benchmark);
+    if (readiness.blocked) {
+      throw new Error(
+        "The Glama onboarding audit cannot be funded until its Base lifecycle evidence is independently reconciled. Choose another reviewed benchmark.",
+      );
+    }
+    if (!readiness.executable) {
       throw new Error(
         "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source and complete sandbox runner manifest, then retry.",
       );

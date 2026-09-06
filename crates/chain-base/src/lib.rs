@@ -421,6 +421,8 @@ pub const STANDING_META_V2_PROTOCOL_VERSION: &str = "agent-bounties/independent-
 pub const STANDING_META_V3_ROUTED_PROTOCOL_VERSION: &str =
     "agent-bounties/independent-child-v3-routed";
 pub const STANDING_META_V2_REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
+const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST: &str =
+    "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER: &str =
     "0xe573cb4f471d38b5bf10ce82237251ac902c9867";
 pub const BASE_MAINNET_STANDING_META_V3_ROUTER: &str = "0x380c1af742593dd88b6f20387e9ee693a0536731";
@@ -5408,6 +5410,24 @@ pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
 }
 
+fn reject_unreconciled_canonical_lifecycle_benchmark(
+    document: &AutonomousBountyTermsDocument,
+) -> Result<(), ChainBaseError> {
+    if document
+        .benchmark
+        .get("runner_manifest")
+        .and_then(|runner| runner.get("benchmark_digest"))
+        .and_then(Value::as_str)
+        == Some(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST)
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "the Glama onboarding audit cannot fund a bounty until its Base lifecycle evidence is independently reconciled"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn build_autonomous_bounty_terms_record(
     creator_wallet: &str,
     mut document: AutonomousBountyTermsDocument,
@@ -5442,6 +5462,7 @@ pub fn build_autonomous_bounty_terms_record(
     if let Some(image) = &document.image {
         validate_bounty_image_reference(image)?;
     }
+    reject_unreconciled_canonical_lifecycle_benchmark(&document)?;
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
     validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
@@ -6293,6 +6314,7 @@ pub fn validate_autonomous_creation_against_terms(
     create: &AutonomousBountyCreate,
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(), ChainBaseError> {
+    reject_unreconciled_canonical_lifecycle_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let hashes_match = create.terms_hash.eq_ignore_ascii_case(&terms.terms_hash)
         && create.policy_hash.eq_ignore_ascii_case(&terms.policy_hash)
@@ -6514,6 +6536,7 @@ pub fn validate_autonomous_creation_for_public_earning(
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
+    reject_unreconciled_canonical_lifecycle_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
@@ -8356,9 +8379,47 @@ mod tests {
             "threshold": 2,
             "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
         });
+        let mut copied_unreconciled_document = supported_document.clone();
+        copied_unreconciled_document.benchmark["source"]["repository"] =
+            json!("other/copied-benchmark");
+        copied_unreconciled_document.benchmark["source"]["subdirectory"] =
+            json!("different/location");
+        copied_unreconciled_document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST);
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                &record.creator_wallet,
+                copied_unreconciled_document,
+                now
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
         let supported_record =
             build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
                 .unwrap();
+        let mut legacy_unreconciled_record = supported_record.clone();
+        legacy_unreconciled_record.document.benchmark["source"]["repository"] =
+            json!("other/copied-benchmark");
+        legacy_unreconciled_record.document.benchmark["source"]["subdirectory"] =
+            json!("different/location");
+        legacy_unreconciled_record.document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST);
+        let safe_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
+        assert!(matches!(
+            autonomous_bounty_create_from_terms(&legacy_unreconciled_record),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
+        assert!(matches!(
+            validate_autonomous_creation_for_public_earning(
+                "base-mainnet",
+                &safe_create,
+                &legacy_unreconciled_record,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
         let healthy_quorum = json!({
             "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
             "threshold": 2
