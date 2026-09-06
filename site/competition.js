@@ -82,7 +82,7 @@ Safety:
     const contract = String(item?.source_id || "").toLowerCase();
     const network = String(item?.network || "base-mainnet").toLowerCase();
     if (!/^0x[0-9a-f]{40}$/.test(contract) || network !== "base-mainnet") return null;
-    return `./?parentCompetition=${encodeURIComponent(contract)}&network=${encodeURIComponent(network)}#post-a-bounty`;
+    return `post.html?parentCompetition=${encodeURIComponent(contract)}&network=${encodeURIComponent(network)}&from=webmcp-child`;
   }
 
   function participationManifest(item, timing) {
@@ -206,7 +206,11 @@ Safety:
     setText(doc, "[data-machine-request]", manifest);
     const childPost = doc.querySelector("[data-child-post-started]");
     const postUrl = childPostUrl(item);
-    if (childPost && postUrl) childPost.href = postUrl;
+    if (childPost) {
+      childPost.hidden = !postUrl || timing.phase === "ended";
+      if (postUrl && timing.phase !== "ended") childPost.href = postUrl;
+      else childPost.removeAttribute("href");
+    }
     const machineSource = doc.querySelector("[data-machine-source]");
     if (machineSource) machineSource.href = marketplace.opportunityFeedUrl(win.location);
     const snapshotSource = doc.querySelector("[data-snapshot-source]");
@@ -299,6 +303,7 @@ Safety:
     doc.querySelector("[data-competition-facts]")?.setAttribute("aria-busy", "false");
     const workspace = doc.querySelector("[data-competition-app] .competition-workspace");
     if (workspace) workspace.hidden = false;
+    doc.querySelector("[data-competition-app]").dataset.state = "ready";
     const status = doc.querySelector("[data-competition-status]");
     if (status) status.textContent = `${timing.label}. Canonical state: ${item.source_status}; escrow: ${marketplace.formatUsdc(item.funded_amount)}; verification readiness: confirmed by the unified projection.`;
     win.agentBountiesAnalytics?.track("competition_view", { opportunity_id: item.opportunity_id, bounty_contract: contract });
@@ -307,11 +312,13 @@ Safety:
   async function start(win, doc) {
     const app = doc.querySelector("[data-competition-app]");
     if (!app || !marketplace) return;
+    app.dataset.state = "loading";
     const params = new URLSearchParams(win.location.search);
     const contract = String(params.get("bountyContract") || "").toLowerCase();
     const status = doc.querySelector("[data-competition-status]");
     if (!/^0x[0-9a-f]{40}$/.test(contract)) {
       if (status) { status.dataset.tone = "error"; status.textContent = "A valid Base competition contract is required. Return to the unified marketplace and select an opportunity."; }
+      app.dataset.state = "unavailable";
       return;
     }
     try {
@@ -320,6 +327,11 @@ Safety:
       if (!item) throw new Error("This contract is not currently verification-ready in the unified earning projection");
       render(item, win, doc);
     } catch (error) {
+      app.dataset.state = "unavailable";
+      doc.querySelector("[data-competition-facts]")?.setAttribute("aria-busy", "false");
+      const child = doc.querySelector("[data-child-post-started]");
+      if (child) { child.hidden = true; child.removeAttribute("href"); }
+      setText(doc, "[data-competition-phase]", "Currently unavailable");
       if (status) { status.dataset.tone = "error"; status.textContent = `${error.message}. No stale or guessed competition state is shown.`; }
     }
   }

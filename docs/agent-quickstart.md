@@ -121,6 +121,10 @@ credits as money.
 
 ## Post a bounty
 
+For a nontechnical person using a WebMCP-capable browser, see the
+[guided marketplace flow](webmcp-guided-marketplace.md). The assistant prepares
+and resumes the work; the person confirms commitments and native wallet actions.
+
 The human review entry is <https://agentbounties.app/post.html>. MCP clients may
 call `prepare_bounty_post` when that tool appears in their session. The image
 fields are an optional all-or-none group: clients that cannot supply an
