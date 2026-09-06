@@ -389,7 +389,7 @@ def contract_manifest_path(manifest: Mapping[str, Any]) -> Path:
 
 
 def terms_document(
-    manifest: Mapping[str, Any], task: Mapping[str, Any], commit: str
+    manifest: Mapping[str, Any], task: Mapping[str, Any]
 ) -> dict[str, Any]:
     issue = int(task["issue"])
     benchmark = {
@@ -602,7 +602,6 @@ def issue_body(
     manifest: Mapping[str, Any],
     task: Mapping[str, Any],
     result: Mapping[str, Any],
-    commit: str,
 ) -> str:
     criteria = "\n".join(f"- {value}" for value in task["acceptance_criteria"])
     issue = int(task["issue"])
@@ -621,7 +620,7 @@ def issue_body(
 - Solver reward: **{usdc(manifest["solver_reward"])} USDC**
 - Automated verifier reward and refundable claim bond: **{usdc(manifest["verifier_reward"])} USDC**
 - Verification: `sandboxed_regression_v1`, {int(manifest["threshold"])} of {len(manifest["verifiers"])} precommitted automated signers
-- Immutable benchmark: https://github.com/NSPG13/agent-bounties/tree/{commit}/{task["benchmark_subdirectory"]}
+- Immutable benchmark: https://github.com/NSPG13/agent-bounties/tree/{RECONCILED_REGRESSION_BENCHMARK_COMMIT}/{task["benchmark_subdirectory"]}
 
 ## Acceptance criteria
 
@@ -739,7 +738,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
     new_spend = 0
     for task in manifest["tasks"]:
         issue = int(task["issue"])
-        document = terms_document(manifest, task, commit)
+        document = terms_document(manifest, task)
         published = http_json(
             "POST",
             f"{args.api}/v1/base/autonomous-bounties/terms",
@@ -799,7 +798,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "reconciliation": reconciled,
         }
         (args.output_dir / f"issue-{issue}.md").write_text(
-            issue_body(manifest, task, result, commit), encoding="utf-8"
+            issue_body(manifest, task, result), encoding="utf-8"
         )
         results.append(result)
 
@@ -824,9 +823,10 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "bounded wallet balance delta does not match newly created bounties"
         )
     return {
-        "schema": "agent-bounties/direct-growth-activation-result-v2",
+        "schema": "agent-bounties/direct-growth-activation-result-v3",
         "network": manifest["network"],
-        "commit": commit,
+        "activation_commit": commit,
+        "benchmark_commit": RECONCILED_REGRESSION_BENCHMARK_COMMIT,
         "wallet": manifest["wallet"],
         "new_spend": new_spend,
         "total_funding": int(manifest["total_funding"]),

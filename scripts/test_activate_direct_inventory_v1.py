@@ -43,7 +43,7 @@ class DirectInventoryActivationTests(unittest.TestCase):
 
     def test_terms_use_exact_automated_quorum_and_economics(self) -> None:
         manifest = activation.load_manifest(MANIFEST)
-        document = activation.terms_document(manifest, manifest["tasks"][0], "d" * 40)
+        document = activation.terms_document(manifest, manifest["tasks"][0])
         policy = document["verification_policy"]
         terms = document["contract_terms"]
         self.assertEqual(policy["threshold"], 2)
@@ -64,12 +64,12 @@ class DirectInventoryActivationTests(unittest.TestCase):
                 "contract": "0x" + "12" * 20,
                 "transaction_hash": "0x" + "34" * 32,
             },
-            "e" * 40,
         )
         self.assertIn("1.10 / 1.10 USDC", body)
         self.assertIn("1.00 USDC", body)
         self.assertIn("0.10 USDC", body)
         self.assertIn("2 of 2 precommitted automated signers", body)
+        self.assertIn(activation.RECONCILED_REGRESSION_BENCHMARK_COMMIT, body)
 
     def test_manifest_rejects_indivisible_verifier_reward(self) -> None:
         source = json.loads(MANIFEST.read_text(encoding="utf-8"))

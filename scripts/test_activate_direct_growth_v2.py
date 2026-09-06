@@ -27,8 +27,7 @@ class DirectGrowthActivationTests(unittest.TestCase):
 
     def test_terms_use_one_pinned_sandbox_verifier(self) -> None:
         manifest = activation.load_manifest()
-        commit = "a" * 40
-        document = activation.terms_document(manifest, manifest["tasks"][0], commit)
+        document = activation.terms_document(manifest, manifest["tasks"][0])
         policy = document["verification_policy"]
         runner = document["benchmark"]["runner_manifest"]
         self.assertEqual(policy["mechanism"], "signed_quorum")
@@ -56,7 +55,7 @@ class DirectGrowthActivationTests(unittest.TestCase):
 
     def test_create_payload_copies_only_published_hashes(self) -> None:
         manifest = activation.load_manifest()
-        document = activation.terms_document(manifest, manifest["tasks"][0], "b" * 40)
+        document = activation.terms_document(manifest, manifest["tasks"][0])
         published = {
             "terms_hash": "0x" + "11" * 32,
             "policy_hash": "0x" + "22" * 32,
@@ -78,11 +77,13 @@ class DirectGrowthActivationTests(unittest.TestCase):
             "transaction_hash": "0x" + "34" * 32,
         }
         manifest = activation.load_manifest()
-        body = activation.issue_body(manifest, task, result, "c" * 40)
+        body = activation.issue_body(manifest, task, result)
         self.assertIn("Funded and claimable on Base mainnet", body)
         self.assertIn(f"/claim #{task['issue']} wallet:", body)
         self.assertIn("BountySettled", body)
         self.assertIn("Post your own bounty", body)
+        self.assertIn(activation.RECONCILED_REGRESSION_BENCHMARK_COMMIT, body)
+        self.assertNotIn("c" * 40, body)
 
     def test_manifest_rejects_duplicate_benchmark_digest(self) -> None:
         source = json.loads(activation.MANIFEST_PATH.read_text(encoding="utf-8"))

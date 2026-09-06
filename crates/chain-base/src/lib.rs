@@ -1189,9 +1189,12 @@ impl AutonomousBountyTxPlanner {
         let verifier_amount = autonomous_money_to_uint256(verifier_reward, false)?;
         let threshold = u8::try_from(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())
             .expect("canonical verifier set fits uint8");
-        if verifier_amount >= target || verifier_amount % u128::from(threshold) != 0 {
+        if verifier_amount < PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS
+            || verifier_amount >= target
+            || verifier_amount % u128::from(threshold) != 0
+        {
             return Err(ChainBaseError::InvalidVerificationConfiguration(
-                "child verifier reward must be below the parent solver reward and divide evenly across the canonical quorum"
+                "child verifier reward must be at least 0.01 USDC, remain below the parent solver reward, and divide evenly across the canonical quorum"
                     .to_string(),
             ));
         }
@@ -1341,6 +1344,7 @@ impl AutonomousBountyTxPlanner {
             threshold,
         )?;
         let child_create = autonomous_bounty_create_from_terms(&terms)?;
+        validate_autonomous_creation_for_public_earning(&network.name, &child_create, &terms)?;
         let child_creation = self.plan_creation(&network.name, &child_create)?;
         let mut pre_claim_wallet_calls = Vec::with_capacity(child_creation.wallet_calls.len() + 1);
         pre_claim_wallet_calls.push(publish_terms.clone());
@@ -7556,6 +7560,14 @@ mod tests {
             routed_v3_plan.terms.document.benchmark["parent_binding"]["protocol"],
             STANDING_META_V3_ROUTED_PROTOCOL_VERSION
         );
+
+        let mut below_floor_request = request.clone();
+        below_floor_request.verifier_reward = Some(Money::new(2, "usdc").unwrap());
+        assert!(planner
+            .plan_standing_meta_v2_child(&below_floor_request, &parent, created_at)
+            .unwrap_err()
+            .to_string()
+            .contains("at least 0.01 USDC"));
     }
 
     #[test]
