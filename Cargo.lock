@@ -5403,6 +5403,7 @@ dependencies = [
  "service-runtime",
  "sha2",
  "sha3 0.10.9",
+ "sqlx",
  "tokio",
  "uuid",
  "verifier-sdk",
