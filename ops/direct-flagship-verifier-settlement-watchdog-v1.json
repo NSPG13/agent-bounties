@@ -48,7 +48,7 @@
     ],
     "threshold": 1,
     "benchmark_subdirectory": "benchmarks/direct-flagship-v1/verifier-settlement-watchdog",
-    "benchmark_digest": "sha256:1f89515bc9c7f7c8f700845a5ad42f73a957c2a52525fc0e281e79f66300ffe0",
+    "benchmark_digest": "sha256:9e5bab6bc46c5ec7b3dba9c19fa53e763682c358b2a071628ed0623d9ac6f1dd",
     "runner_manifest": {
       "schema_version": "agent-bounties/regression-sandbox-v1",
       "image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
