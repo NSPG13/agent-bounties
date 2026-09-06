@@ -394,6 +394,19 @@
 .bounty-card-section li + li { margin-top: 7px; }
 .bounty-card-section li::marker { color: var(--composer-lime); }
 
+.verifier-terms {
+  border: 1px solid rgba(200, 255, 69, .28);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(200, 255, 69, .05);
+}
+
+.verifier-terms p { margin: 0 0 12px; }
+.verifier-terms dl { display: grid; grid-template-columns: minmax(8rem, .35fr) 1fr; gap: 8px 14px; margin: 0; }
+.verifier-terms dt { color: var(--composer-muted); font-weight: 700; }
+.verifier-terms dd { margin: 0; min-width: 0; }
+.verifier-terms code { white-space: normal; overflow-wrap: anywhere; }
+
 .bounty-card-note {
   border-left: 2px solid var(--composer-gold);
   padding-left: 13px;

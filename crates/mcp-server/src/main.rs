@@ -25,7 +25,7 @@ use chain_base::{
     fetch_transaction_receipt, normalize_evm_address,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     standing_meta_v2_parent_context, validate_attestation_request_against_feed,
-    validate_autonomous_cancel_authority, validate_autonomous_creation_against_terms,
+    validate_autonomous_cancel_authority, validate_autonomous_creation_for_public_earning,
     AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
     AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
     AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
@@ -5859,7 +5859,7 @@ async fn require_autonomous_creation_terms(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "published autonomous bounty terms are unavailable".to_string())?;
-    validate_autonomous_creation_against_terms(network, create, &terms)
+    validate_autonomous_creation_for_public_earning(network, create, &terms)
         .map_err(|error| error.to_string())
 }
 

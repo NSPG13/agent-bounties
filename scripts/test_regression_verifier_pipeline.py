@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import sys
 import tarfile
@@ -10,6 +11,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+if __package__:
+    from .activate_direct_growth_v2 import benchmark_digest as repository_benchmark_digest
+else:
+    from activate_direct_growth_v2 import benchmark_digest as repository_benchmark_digest
+
 
 SCRIPT = Path(__file__).with_name("regression_verifier_pipeline.py")
 SPEC = importlib.util.spec_from_file_location("regression_verifier_pipeline", SCRIPT)
@@ -17,6 +23,11 @@ assert SPEC and SPEC.loader
 pipeline = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = pipeline
 SPEC.loader.exec_module(pipeline)
+
+
+def approved_benchmark_source() -> tuple[str, tuple[str, str, str]]:
+    digest = sorted(pipeline.RECONCILED_REGRESSION_BENCHMARK_SOURCES)[0]
+    return digest, pipeline.RECONCILED_REGRESSION_BENCHMARK_SOURCES[digest]
 
 
 def archive(entries: list[tuple[str, bytes | None, str]]) -> bytes:
@@ -434,6 +445,25 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                     )
 
     def test_candidate_validation_strips_signing_secrets_from_worker(self) -> None:
+        digest, (repository, commit, subdirectory) = approved_benchmark_source()
+        current = {
+            "terms": {
+                "document": {
+                    "benchmark": {
+                        "engine": "sandboxed_regression_v1",
+                        "source": {
+                            "kind": "github_commit",
+                            "repository": repository,
+                            "commit": commit,
+                            "subdirectory": subdirectory,
+                        },
+                        "runner_manifest": {
+                            "benchmark_digest": digest
+                        },
+                    }
+                }
+            }
+        }
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
             os.environ,
             {"REGRESSION_VERIFIER_PRIVATE_KEY": "test-secret", "PUBLIC_VALUE": "kept"},
@@ -442,7 +472,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             pipeline.validate_candidate(
                 Path("trusted-worker"),
                 {"schema": pipeline.CANDIDATE_SCHEMA, "job": {}},
-                {},
+                current,
                 Path(temporary),
                 secret_names=("REGRESSION_VERIFIER_PRIVATE_KEY",),
             )
@@ -711,6 +741,64 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         job["terms"]["document"]["benchmark"]["source"]["branch"] = "main"
         with self.assertRaises(pipeline.PipelineError):
             pipeline.benchmark_source(job)
+
+    def test_only_exact_reconciled_benchmark_digests_are_signable(self) -> None:
+        self.assertEqual(
+            repository_benchmark_digest("benchmarks/distribution-v1/glama-onboarding-audit"),
+            "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541",
+        )
+        for digest in (
+            "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541",
+            "sha256:" + "d" * 64,
+        ):
+            job = {
+                "terms": {
+                    "document": {
+                        "benchmark": {
+                            "engine": "sandboxed_regression_v1",
+                            "source": {
+                                "kind": "github_commit",
+                                "repository": "other/copied-benchmark",
+                                "commit": "b" * 40,
+                                "subdirectory": "different/location",
+                            },
+                            "runner_manifest": {
+                                "benchmark_digest": digest
+                            },
+                        }
+                    }
+                }
+            }
+            with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
+                pipeline.require_reconciled_regression_benchmark(job)
+
+        digest, (repository, commit, subdirectory) = approved_benchmark_source()
+        approved = json.loads(json.dumps(job))
+        approved["terms"]["document"]["benchmark"]["runner_manifest"][
+            "benchmark_digest"
+        ] = digest
+        approved["terms"]["document"]["benchmark"]["source"].update(
+            {
+                "repository": repository,
+                "commit": commit,
+                "subdirectory": subdirectory,
+            }
+        )
+        pipeline.require_reconciled_regression_benchmark(approved)
+
+        unsupported = json.loads(json.dumps(approved))
+        unsupported["terms"]["document"]["benchmark"]["engine"] = "other_engine"
+        with self.assertRaisesRegex(pipeline.PipelineError, "engine is unavailable"):
+            pipeline.require_reconciled_regression_benchmark(unsupported)
+        for changed_source in (
+            {"repository": "relocated/repository"},
+            {"commit": "b" * 40},
+            {"subdirectory": "copied/path"},
+        ):
+            mismatched = json.loads(json.dumps(approved))
+            mismatched["terms"]["document"]["benchmark"]["source"].update(changed_source)
+            with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
+                pipeline.require_reconciled_regression_benchmark(mismatched)
 
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {

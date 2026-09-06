@@ -12,6 +12,48 @@
   const REGRESSION_VERIFIERS = [
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
   ];
+  const RECONCILED_REGRESSION_BENCHMARK_DIGESTS = new Set([
+    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
+    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
+    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
+    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
+    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+  ]);
+  const RECONCILED_REGRESSION_BENCHMARK_COMMIT = "fa946859a3379b8c9128183e20dedb3b8319a646";
+  const RECONCILED_REGRESSION_BENCHMARK_SOURCES = new Map([
+    ["sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6", "benchmarks/direct-growth-v2/a2a-agent-card"],
+    ["sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f", "benchmarks/direct-growth-v2/hermes-integration"],
+    ["sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2", "benchmarks/direct-growth-v2/openhands-integration"],
+    ["sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043", "benchmarks/direct-growth-v2/mini-swe-agent-environment"],
+    ["sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587", "benchmarks/direct-inventory-v1/rpc-failover"],
+    ["sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff", "benchmarks/direct-inventory-v1/inventory-breakdown"],
+    ["sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d", "benchmarks/direct-inventory-v1/wallet-liquidity"],
+    ["sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731", "benchmarks/direct-inventory-v1/replenishment-plan"],
+    ["sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7", "benchmarks/direct-inventory-v1/stalled-work"],
+  ]);
+  const RUNNER_MANIFEST_FIELDS = [
+    "schema_version", "image", "command", "workdir", "benchmark_digest",
+    "timeout_seconds", "cpu_millis", "memory_bytes", "pids_limit",
+    "max_output_bytes", "tmpfs_bytes", "max_source_bytes", "max_source_files",
+    "max_benchmark_bytes", "max_benchmark_files", "platform", "test_seed",
+  ];
+  const RUNNER_BOUNDS = {
+    timeout_seconds: [1, 900],
+    cpu_millis: [100, 4_000],
+    memory_bytes: [67_108_864, 4_294_967_296],
+    pids_limit: [16, 512],
+    max_output_bytes: [1_024, 16_777_216],
+    tmpfs_bytes: [67_108_864, 4_294_967_296],
+    max_source_bytes: [1, 2_147_483_648],
+    max_source_files: [1, 100_000],
+    max_benchmark_bytes: [1, 536_870_912],
+    max_benchmark_files: [1, 50_000],
+    test_seed: [0, Number.MAX_SAFE_INTEGER],
+  };
   const VISUAL_EXTENSION = "x-agent-bounties-draft-visual";
   const ALLOWED_SCENES = new Set([
     "infrastructure", "digital", "nature", "health", "research", "education", "coordination", "general",
@@ -25,6 +67,7 @@
       parseDistributionAttribution,
       parsePreparedRewardSplit,
       rewardSplitForTotal,
+      verificationReadiness,
     });
     return;
   }
@@ -51,6 +94,8 @@
     checks: document.querySelector("[data-card-checks]"),
     confidence: document.querySelector("[data-card-confidence]"),
     risks: document.querySelector("[data-card-risks]"),
+    verifierSummary: document.querySelector("[data-card-verifier-summary]"),
+    verifier: document.querySelector("[data-card-verifier]"),
     missionContext: document.querySelector("[data-mission-context]"),
     missionTitle: document.querySelector("[data-mission-title]"),
     missionSummary: document.querySelector("[data-mission-summary]"),
@@ -245,6 +290,9 @@
     if (solver <= 0n || verifier <= 0n) throw new Error("Solver and verifier rewards must both be positive.");
     if (solver < MIN_SOLVER_USDC_BASE_UNITS) {
       throw new Error("Public bounties require at least 2 USDC for the solver.");
+    }
+    if (verifier < 10_000n) {
+      throw new Error("Public bounties require at least 0.01 USDC for the verifier.");
     }
     if (total < usdcBaseUnits(MIN_TOTAL_USDC) || total > usdcBaseUnits(MAX_TOTAL_USDC)) {
       throw new Error("The combined reward is invalid.");
@@ -811,6 +859,7 @@
       item.textContent = criterion;
       ui.criteria.append(item);
     }
+    renderVerifierTerms();
     ui.risks.replaceChildren();
     const risks = state.draft.risk_flags || [];
     if (!risks.length) {
@@ -825,6 +874,54 @@
       }
     }
     ui.badge.textContent = state.scope === "mission" ? "Mission task draft · not posted" : "Draft · not posted";
+  }
+
+  function renderVerifierTerms() {
+    if (!ui.verifierSummary || !ui.verifier) return;
+    const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    const source = benchmark.source || {};
+    const runner = benchmark.runner_manifest || {};
+    const requiredEvidence = state.draft?.evidence_schema?.required || [];
+    const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
+    ui.verifierSummary.textContent = readiness.blocked
+      ? "This exact benchmark digest has not been independently reconciled. Choose a reviewed benchmark before connecting a wallet."
+      : readiness.executable
+        ? "These exact public inputs and direct command decide whether the verifier may sign. Confirm every value before connecting a wallet."
+        : "No complete executable verifier is attached. This draft cannot be funded until one is precommitted and reviewed.";
+    ui.verifier.replaceChildren();
+    const rows = [
+      ["Engine", benchmark.engine || "Not supplied"],
+      ["Source", source.repository || "Not supplied"],
+      ["Commit", source.commit || "Not supplied"],
+      ["Benchmark path", source.subdirectory || "Not supplied"],
+      ["Runner schema", runner.schema_version || "Not supplied"],
+      ["Container image", runner.image || "Not supplied"],
+      ["Direct command", Array.isArray(runner.command) ? JSON.stringify(runner.command) : "Not supplied"],
+      ["Working directory", runner.workdir || "Not supplied"],
+      ["Benchmark digest", runner.benchmark_digest || "Not supplied"],
+      ["Timeout (seconds)", runner.timeout_seconds ?? "Not supplied"],
+      ["CPU limit (millicores)", runner.cpu_millis ?? "Not supplied"],
+      ["Memory limit (bytes)", runner.memory_bytes ?? "Not supplied"],
+      ["Process limit", runner.pids_limit ?? "Not supplied"],
+      ["Output limit (bytes)", runner.max_output_bytes ?? "Not supplied"],
+      ["Temporary storage (bytes)", runner.tmpfs_bytes ?? "Not supplied"],
+      ["Source size limit (bytes)", runner.max_source_bytes ?? "Not supplied"],
+      ["Source file limit", runner.max_source_files ?? "Not supplied"],
+      ["Benchmark size limit (bytes)", runner.max_benchmark_bytes ?? "Not supplied"],
+      ["Benchmark file limit", runner.max_benchmark_files ?? "Not supplied"],
+      ["Platform", runner.platform || "Not supplied"],
+      ["Test seed", runner.test_seed ?? "Not supplied"],
+      ["Required evidence", Array.isArray(requiredEvidence) && requiredEvidence.length ? requiredEvidence.join(", ") : "None declared"],
+    ];
+    for (const [label, value] of rows) {
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      const code = document.createElement("code");
+      code.textContent = String(value);
+      detail.append(code);
+      ui.verifier.append(term, detail);
+    }
   }
 
   async function renderPreview() {
@@ -1185,28 +1282,93 @@
     return benchmark;
   }
 
-  function supportedVerificationPolicy() {
-    const benchmark = missionBenchmark(state.draft?.benchmark || {});
-    const source = benchmark.source;
-    const runner = benchmark.runner_manifest;
+  function verificationReadiness(benchmark, evidenceSchema) {
+    const source = benchmark?.source;
+    const runner = benchmark?.runner_manifest;
+    const sourceParts = typeof source?.subdirectory === "string"
+      ? source.subdirectory.split("/")
+      : [];
     const sourceReady = source?.kind === "github_commit"
       && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(source.repository || "")
       && /^[0-9a-f]{40}$/.test(source.commit || "")
       && typeof source.subdirectory === "string"
       && source.subdirectory.length > 0
-      && source.subdirectory !== "."
       && !source.subdirectory.startsWith("/")
-      && !source.subdirectory.includes("\\");
-    const runnerReady = runner?.schema_version === "agent-bounties/regression-sandbox-v1"
-      && typeof runner.image === "string"
-      && /@sha256:[0-9a-f]{64}$/.test(runner.image)
-      && Array.isArray(runner.command)
-      && runner.command.length > 0
+      && !source.subdirectory.endsWith("/")
+      && !source.subdirectory.includes("\\")
+      && sourceParts.every((part) => part && part !== "." && part !== "..");
+    const command = runner?.command;
+    const executable = Array.isArray(command) && typeof command[0] === "string"
+      ? command[0].split(/[\\/]/).pop().toLowerCase()
+      : "";
+    const commandReady = Array.isArray(command)
+      && command.length >= 1
+      && command.length <= 64
+      && command.every((argument) => typeof argument === "string"
+        && argument.length >= 1
+        && argument.length <= 4_096
+        && !/[\0\r\n]/.test(argument))
+      && command.reduce((total, argument) => total + argument.length, 0) <= 16_384
+      && !new Set(["sh", "bash", "dash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh"]).has(executable);
+    const boundsReady = Object.entries(RUNNER_BOUNDS).every(([field, [minimum, maximum]]) =>
+      Number.isSafeInteger(runner?.[field])
+      && runner[field] >= minimum
+      && runner[field] <= maximum);
+    const image = String(runner?.image || "");
+    const imageParts = image.split("@sha256:");
+    const imageName = imageParts[0] || "";
+    const imageReady = imageParts.length === 2
+      && !image.startsWith("-")
+      && (image.match(/@/g) || []).length === 1
+      && imageName.length > 0
+      && /^[a-z0-9./:_-]+$/.test(imageName)
+      && !imageName.includes("..")
+      && /^[0-9a-f]{64}$/.test(imageParts[1]);
+    const runnerReady = runner && Object.keys(runner).length === RUNNER_MANIFEST_FIELDS.length
+      && RUNNER_MANIFEST_FIELDS.every((field) => Object.hasOwn(runner, field))
+      && runner.schema_version === "agent-bounties/regression-sandbox-v1"
+      && imageReady
+      && commandReady
       && runner.workdir === "/workspace"
-      && /^sha256:[0-9a-f]{64}$/.test(runner.benchmark_digest || "");
-    if (benchmark.engine !== REGRESSION_ENGINE || !sourceReady || !runnerReady) {
+      && /^sha256:[0-9a-f]{64}$/.test(runner.benchmark_digest || "")
+      && boundsReady
+      && runner.tmpfs_bytes <= runner.memory_bytes
+      && new Set(["linux/amd64", "linux/arm64"]).has(runner.platform);
+    const approvedSubdirectory = RECONCILED_REGRESSION_BENCHMARK_SOURCES.get(runner?.benchmark_digest);
+    const approvedSource = typeof approvedSubdirectory === "string"
+      && String(source?.repository || "").toLowerCase() === "nspg13/agent-bounties"
+      && String(source?.commit || "").toLowerCase() === RECONCILED_REGRESSION_BENCHMARK_COMMIT
+      && source?.subdirectory === approvedSubdirectory;
+    const blocked = !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.has(runner?.benchmark_digest)
+      || !approvedSource;
+    const requiredEvidence = evidenceSchema?.required;
+    const sourceSnapshotDigest = evidenceSchema?.properties?.source_snapshot_digest;
+    const evidenceReady = evidenceSchema?.type === "object"
+      && Array.isArray(requiredEvidence)
+      && requiredEvidence.includes("source_snapshot_digest")
+      && sourceSnapshotDigest?.type === "string"
+      && sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$";
+    return {
+      blocked,
+      executable: benchmark?.engine === REGRESSION_ENGINE
+        && sourceReady
+        && runnerReady
+        && evidenceReady
+        && !blocked,
+    };
+  }
+
+  function supportedVerificationPolicy() {
+    const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
+    if (readiness.blocked) {
       throw new Error(
-        "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source and complete sandbox runner manifest, then retry.",
+        "This exact benchmark digest cannot be funded until it is independently reconciled and approved. Choose a reviewed benchmark.",
+      );
+    }
+    if (!readiness.executable) {
+      throw new Error(
+        "This draft has no executable verifier, so it cannot be funded. Add the exact public benchmark source, complete sandbox runner manifest, and required source_snapshot_digest evidence schema, then retry.",
       );
     }
     return {

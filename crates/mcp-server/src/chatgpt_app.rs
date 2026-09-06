@@ -63,6 +63,56 @@ const FEED_CARD_ART: &[u8] =
     include_bytes!("../../../site/assets/solarpunk/characters-helping.webp");
 const MAX_BOUNTY_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
+const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
+    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
+    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
+    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
+    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
+    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+];
+const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
+const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0],
+        "benchmarks/direct-growth-v2/a2a-agent-card",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[1],
+        "benchmarks/direct-growth-v2/hermes-integration",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[2],
+        "benchmarks/direct-growth-v2/openhands-integration",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[3],
+        "benchmarks/direct-growth-v2/mini-swe-agent-environment",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[4],
+        "benchmarks/direct-inventory-v1/rpc-failover",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[5],
+        "benchmarks/direct-inventory-v1/inventory-breakdown",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[6],
+        "benchmarks/direct-inventory-v1/wallet-liquidity",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[7],
+        "benchmarks/direct-inventory-v1/replenishment-plan",
+    ),
+    (
+        RECONCILED_REGRESSION_BENCHMARK_DIGESTS[8],
+        "benchmarks/direct-inventory-v1/stalled-work",
+    ),
+];
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
     "get_bounty_feed",
     "render_bounty_feed",
@@ -522,6 +572,9 @@ pub(super) fn build_bounty_post_handoff(
     if solver_reward < 2_000_000 {
         return Err("public bounties require at least 2 USDC for the solver".to_string());
     }
+    if verifier_reward < 10_000 {
+        return Err("public bounties require at least 0.01 USDC for the verifier".to_string());
+    }
     let target = solver_reward
         .checked_add(verifier_reward)
         .ok_or_else(|| "combined USDC target is too large".to_string())?;
@@ -668,6 +721,37 @@ fn validate_prepared_verifier(
         if !value.is_object() {
             return Err(format!("{label} must be an object"));
         }
+    }
+    if evidence_schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err("evidence_schema.type must be object".to_string());
+    }
+    let required = evidence_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "evidence_schema.required must include source_snapshot_digest".to_string()
+        })?;
+    if !required
+        .iter()
+        .any(|field| field.as_str() == Some("source_snapshot_digest"))
+    {
+        return Err("evidence_schema must require source_snapshot_digest".to_string());
+    }
+    let source_digest = evidence_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("source_snapshot_digest"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            "evidence_schema.properties.source_snapshot_digest is required".to_string()
+        })?;
+    if source_digest.get("type").and_then(Value::as_str) != Some("string")
+        || source_digest.get("pattern").and_then(Value::as_str) != Some("^sha256:[0-9a-f]{64}$")
+    {
+        return Err(
+            "evidence_schema.source_snapshot_digest must require sha256:<64 lowercase hex>"
+                .to_string(),
+        );
     }
     if benchmark.get("engine").and_then(Value::as_str) != Some(REGRESSION_ENGINE) {
         return Err(format!("benchmark.engine must be {REGRESSION_ENGINE}"));
@@ -829,13 +913,30 @@ fn validate_prepared_verifier(
     if runner.get("workdir").and_then(Value::as_str) != Some("/workspace") {
         return Err("benchmark.runner_manifest.workdir must be /workspace".to_string());
     }
-    if !runner
+    let benchmark_digest = runner
         .get("benchmark_digest")
         .and_then(Value::as_str)
-        .is_some_and(valid_sha256_digest)
+        .filter(|value| valid_sha256_digest(value))
+        .ok_or_else(|| {
+            "benchmark.runner_manifest.benchmark_digest must use sha256:<64 lowercase hex>"
+                .to_string()
+        })?;
+    if !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.contains(&benchmark_digest) {
+        return Err(
+            "sandboxed regression benchmark exact digest must be independently reconciled and approved before funding or verifier signing".to_string(),
+        );
+    }
+    let approved_subdirectory = RECONCILED_REGRESSION_BENCHMARK_SOURCES.iter().find_map(
+        |(digest, approved_subdirectory)| {
+            (*digest == benchmark_digest).then_some(*approved_subdirectory)
+        },
+    );
+    if !repository.eq_ignore_ascii_case("NSPG13/agent-bounties")
+        || commit != RECONCILED_REGRESSION_BENCHMARK_COMMIT
+        || approved_subdirectory != Some(subdirectory)
     {
         return Err(
-            "benchmark.runner_manifest.benchmark_digest must use sha256:<64 lowercase hex>"
+            "sandboxed regression benchmark immutable source tuple must match its independently approved digest"
                 .to_string(),
         );
     }
@@ -1164,6 +1265,9 @@ pub(super) async fn attributed_mcp_post(
         .await
     {
         Ok(acquisition) => acquisition,
+        Err(db::DbError::DistributionAttributionConflict(message)) => {
+            return (StatusCode::CONFLICT, message).into_response();
+        }
         Err(_) => {
             let store = store.clone();
             let rail = rail.clone();
@@ -1221,7 +1325,7 @@ pub(super) async fn attributed_mcp_post(
         HeaderValue::from_str(&acquisition.first_touch_rail)
             .expect("approved first-touch rail is a header value"),
     );
-    let succeeded = response.status().is_success();
+    let succeeded = mcp_response_succeeded(&response);
     let store = store.clone();
     tokio::spawn(async move {
         let _ = store
@@ -1255,7 +1359,7 @@ async fn mcp_post_inner(
     if excluded {
         super::emit_interface_usage_excluded(protocol_era);
     } else if let Some(store) = state.store.clone() {
-        let succeeded = response.status().is_success();
+        let succeeded = mcp_response_succeeded(&response);
         tokio::spawn(async move {
             let _ = store
                 .record_interface_usage(
@@ -1333,7 +1437,12 @@ async fn handle_mcp_post(
         else {
             return StatusCode::ACCEPTED.into_response();
         };
-        return (status, Json(response)).into_response();
+        let succeeded = json_rpc_payload_succeeded(&response);
+        let mut http_response = (status, Json(response)).into_response();
+        http_response
+            .extensions_mut()
+            .insert(McpJsonRpcSucceeded(succeeded));
+        return http_response;
     }
 
     let responses = if let Some(batch) = payload.as_array() {
@@ -1362,7 +1471,39 @@ async fn handle_mcp_post(
         return StatusCode::ACCEPTED.into_response();
     };
 
-    (StatusCode::OK, Json(responses)).into_response()
+    let succeeded = json_rpc_payload_succeeded(&responses);
+    let mut response = (StatusCode::OK, Json(responses)).into_response();
+    response
+        .extensions_mut()
+        .insert(McpJsonRpcSucceeded(succeeded));
+    response
+}
+
+#[derive(Debug, Clone, Copy)]
+struct McpJsonRpcSucceeded(bool);
+
+fn json_rpc_payload_succeeded(payload: &Value) -> bool {
+    match payload {
+        Value::Array(items) => !items.is_empty() && items.iter().all(json_rpc_payload_succeeded),
+        Value::Object(object) => {
+            !object.contains_key("error")
+                && object
+                    .get("result")
+                    .and_then(Value::as_object)
+                    .and_then(|result| result.get("isError"))
+                    .and_then(Value::as_bool)
+                    != Some(true)
+        }
+        _ => false,
+    }
+}
+
+fn mcp_response_succeeded(response: &Response) -> bool {
+    response.status().is_success()
+        && response
+            .extensions()
+            .get::<McpJsonRpcSucceeded>()
+            .is_none_or(|outcome| outcome.0)
 }
 
 pub(super) async fn mcp_get(headers: HeaderMap) -> Response {
@@ -4975,15 +5116,15 @@ mod tests {
                 "source": {
                     "kind": "github_commit",
                     "repository": "NSPG13/agent-bounties",
-                    "commit": "0fae18cf9be464132cde52dfb9d464d836e8f024",
-                    "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit"
+                    "commit": "fa946859a3379b8c9128183e20dedb3b8319a646",
+                    "subdirectory": "benchmarks/direct-growth-v2/openhands-integration"
                 },
                 "runner_manifest": {
                     "schema_version": "agent-bounties/regression-sandbox-v1",
                     "image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
                     "command": ["python", "/benchmark/check.py"],
                     "workdir": "/workspace",
-                    "benchmark_digest": "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
+                    "benchmark_digest": "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
                     "timeout_seconds": 120,
                     "cpu_millis": 1000,
                     "memory_bytes": 536870912,
@@ -5284,7 +5425,7 @@ mod tests {
         );
         assert!(pairs.iter().any(|(key, value)| {
             key == "benchmark"
-                && value.contains("benchmarks/distribution-v1/glama-onboarding-audit")
+                && value.contains("benchmarks/direct-growth-v2/openhands-integration")
         }));
         assert!(pairs.iter().any(
             |(key, value)| key == "evidenceSchema" && value.contains("source_snapshot_digest")
@@ -5305,6 +5446,80 @@ mod tests {
         assert!(build_bounty_post_handoff(&args, None)
             .unwrap_err()
             .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
+
+        for image in [
+            format!("docker.io/a@tag@sha256:{}", "b".repeat(64)),
+            format!("docker.io/a..b@sha256:{}", "b".repeat(64)),
+        ] {
+            let mut args = valid_args();
+            args.benchmark.as_mut().unwrap()["runner_manifest"]["image"] = json!(image);
+            assert!(build_bounty_post_handoff(&args, None)
+                .unwrap_err()
+                .contains("image must be one lowercase OCI reference pinned by sha256 digest"));
+        }
+
+        let mut args = valid_args();
+        args.verifier_reward_usdc = "0.009999".to_string();
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("at least 0.01 USDC"));
+
+        let mut args = valid_args();
+        args.evidence_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false
+        }));
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("must include source_snapshot_digest"));
+
+        let mut args = valid_args();
+        args.benchmark.as_mut().unwrap()["source"]["repository"] = json!("other/copied-benchmark");
+        args.benchmark.as_mut().unwrap()["source"]["subdirectory"] = json!("different/location");
+        args.benchmark.as_mut().unwrap()["runner_manifest"]["benchmark_digest"] =
+            json!(format!("sha256:{}", "d".repeat(64)));
+        assert!(build_bounty_post_handoff(&args, None)
+            .unwrap_err()
+            .contains("independently reconciled"));
+
+        for (field, value) in [
+            ("repository", json!("other/repository")),
+            ("commit", json!("b".repeat(40))),
+            ("subdirectory", json!("benchmarks/copied-location")),
+        ] {
+            let mut args = valid_args();
+            args.benchmark.as_mut().unwrap()["source"][field] = value;
+            assert!(build_bounty_post_handoff(&args, None)
+                .unwrap_err()
+                .contains("immutable source tuple"));
+        }
+    }
+
+    #[test]
+    fn legacy_json_rpc_errors_are_not_successful_requests() {
+        assert!(json_rpc_payload_succeeded(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"tools": []}
+        })));
+        assert!(!json_rpc_payload_succeeded(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32602, "message": "invalid arguments"}
+        })));
+        assert!(!json_rpc_payload_succeeded(&json!([
+            {"jsonrpc": "2.0", "id": 1, "result": {}},
+            {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "missing"}}
+        ])));
+        assert!(!json_rpc_payload_succeeded(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [], "isError": true}
+        })));
+        assert!(!json_rpc_payload_succeeded(&json!([
+            {"jsonrpc": "2.0", "id": 1, "result": {"content": [], "isError": false}},
+            {"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}}
+        ])));
     }
 
     #[test]

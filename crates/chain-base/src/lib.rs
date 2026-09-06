@@ -421,6 +421,58 @@ pub const STANDING_META_V2_PROTOCOL_VERSION: &str = "agent-bounties/independent-
 pub const STANDING_META_V3_ROUTED_PROTOCOL_VERSION: &str =
     "agent-bounties/independent-child-v3-routed";
 pub const STANDING_META_V2_REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
+#[cfg(test)]
+const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
+    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
+    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
+    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
+    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
+    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+];
+const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
+const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
+    (
+        "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+        "benchmarks/direct-growth-v2/a2a-agent-card",
+    ),
+    (
+        "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+        "benchmarks/direct-growth-v2/hermes-integration",
+    ),
+    (
+        "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+        "benchmarks/direct-growth-v2/openhands-integration",
+    ),
+    (
+        "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+        "benchmarks/direct-growth-v2/mini-swe-agent-environment",
+    ),
+    (
+        "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
+        "benchmarks/direct-inventory-v1/rpc-failover",
+    ),
+    (
+        "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
+        "benchmarks/direct-inventory-v1/inventory-breakdown",
+    ),
+    (
+        "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
+        "benchmarks/direct-inventory-v1/wallet-liquidity",
+    ),
+    (
+        "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
+        "benchmarks/direct-inventory-v1/replenishment-plan",
+    ),
+    (
+        "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+        "benchmarks/direct-inventory-v1/stalled-work",
+    ),
+];
+const PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS: u128 = 10_000;
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER: &str =
     "0xe573cb4f471d38b5bf10ce82237251ac902c9867";
 pub const BASE_MAINNET_STANDING_META_V3_ROUTER: &str = "0x380c1af742593dd88b6f20387e9ee693a0536731";
@@ -1137,9 +1189,12 @@ impl AutonomousBountyTxPlanner {
         let verifier_amount = autonomous_money_to_uint256(verifier_reward, false)?;
         let threshold = u8::try_from(BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())
             .expect("canonical verifier set fits uint8");
-        if verifier_amount >= target || verifier_amount % u128::from(threshold) != 0 {
+        if verifier_amount < PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS
+            || verifier_amount >= target
+            || verifier_amount % u128::from(threshold) != 0
+        {
             return Err(ChainBaseError::InvalidVerificationConfiguration(
-                "child verifier reward must be below the parent solver reward and divide evenly across the canonical quorum"
+                "child verifier reward must be at least 0.01 USDC, remain below the parent solver reward, and divide evenly across the canonical quorum"
                     .to_string(),
             ));
         }
@@ -1289,6 +1344,7 @@ impl AutonomousBountyTxPlanner {
             threshold,
         )?;
         let child_create = autonomous_bounty_create_from_terms(&terms)?;
+        validate_autonomous_creation_for_public_earning(&network.name, &child_create, &terms)?;
         let child_creation = self.plan_creation(&network.name, &child_create)?;
         let mut pre_claim_wallet_calls = Vec::with_capacity(child_creation.wallet_calls.len() + 1);
         pre_claim_wallet_calls.push(publish_terms.clone());
@@ -4191,6 +4247,18 @@ fn regression_quorum_readiness(
             "regression runner manifest is unavailable or invalid",
         );
     }
+    if validate_reconciled_regression_benchmark(&terms.document).is_err() {
+        return (
+            false,
+            "regression benchmark digest and immutable source are not approved",
+        );
+    }
+    if validate_regression_evidence_schema(&terms.document.evidence_schema).is_err() {
+        return (
+            false,
+            "regression source snapshot evidence schema is unavailable or invalid",
+        );
+    }
     if threshold == 1 {
         (
             true,
@@ -4639,7 +4707,7 @@ pub fn build_autonomous_verification_jobs(
         .collect::<HashMap<_, _>>();
     let mut jobs = Vec::new();
     for item in feed {
-        if item.status != "submitted" || !item.terms_valid {
+        if item.status != "submitted" || !item.terms_valid || !item.verification_ready {
             continue;
         }
         let terms = item.terms.clone().ok_or_else(|| {
@@ -5408,6 +5476,89 @@ pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
 }
 
+fn validate_reconciled_regression_benchmark(
+    document: &AutonomousBountyTermsDocument,
+) -> Result<(), ChainBaseError> {
+    if document.benchmark.get("engine").and_then(Value::as_str)
+        != Some(STANDING_META_V2_REGRESSION_ENGINE)
+    {
+        return Ok(());
+    }
+    let benchmark_digest = document
+        .benchmark
+        .get("runner_manifest")
+        .and_then(|runner| runner.get("benchmark_digest"))
+        .and_then(Value::as_str);
+    let approved_subdirectory = benchmark_digest.and_then(|digest| {
+        RECONCILED_REGRESSION_BENCHMARK_SOURCES.iter().find_map(
+            |(approved_digest, subdirectory)| (*approved_digest == digest).then_some(*subdirectory),
+        )
+    });
+    let source = document.benchmark.get("source");
+    let source_matches = approved_subdirectory.is_some_and(|subdirectory| {
+        source
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+            == Some("github_commit")
+            && source
+                .and_then(|value| value.get("repository"))
+                .and_then(Value::as_str)
+                .is_some_and(|repository| repository.eq_ignore_ascii_case("NSPG13/agent-bounties"))
+            && source
+                .and_then(|value| value.get("commit"))
+                .and_then(Value::as_str)
+                .is_some_and(|commit| {
+                    commit.eq_ignore_ascii_case(RECONCILED_REGRESSION_BENCHMARK_COMMIT)
+                })
+            && source
+                .and_then(|value| value.get("subdirectory"))
+                .and_then(Value::as_str)
+                == Some(subdirectory)
+    });
+    if !source_matches {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "sandboxed regression benchmark exact digest and immutable source tuple must be independently reconciled and approved before funding or verifier signing".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_regression_evidence_schema(evidence_schema: &Value) -> Result<(), ChainBaseError> {
+    if evidence_schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "regression evidence_schema.type must be object".to_string(),
+        ));
+    }
+    let requires_source_snapshot_digest = evidence_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| {
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("source_snapshot_digest"))
+        });
+    let source_snapshot_digest = evidence_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("source_snapshot_digest"));
+    if !requires_source_snapshot_digest
+        || source_snapshot_digest
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+            != Some("string")
+        || source_snapshot_digest
+            .and_then(|value| value.get("pattern"))
+            .and_then(Value::as_str)
+            != Some("^sha256:[0-9a-f]{64}$")
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "regression evidence_schema must require source_snapshot_digest as sha256:<64 lowercase hex>"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn build_autonomous_bounty_terms_record(
     creator_wallet: &str,
     mut document: AutonomousBountyTermsDocument,
@@ -5442,6 +5593,7 @@ pub fn build_autonomous_bounty_terms_record(
     if let Some(image) = &document.image {
         validate_bounty_image_reference(image)?;
     }
+    validate_reconciled_regression_benchmark(&document)?;
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
     validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
@@ -6293,6 +6445,7 @@ pub fn validate_autonomous_creation_against_terms(
     create: &AutonomousBountyCreate,
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(), ChainBaseError> {
+    validate_reconciled_regression_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let hashes_match = create.terms_hash.eq_ignore_ascii_case(&terms.terms_hash)
         && create.policy_hash.eq_ignore_ascii_case(&terms.policy_hash)
@@ -6446,10 +6599,12 @@ pub fn validate_autonomous_creation_for_public_earning(
     let target = solver_reward.checked_add(verifier_reward).ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("bounty funding target overflowed".to_string())
     })?;
-    if solver_reward == 0 || initial_funding != target {
+    if solver_reward == 0
+        || verifier_reward < PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS
+        || initial_funding != target
+    {
         return Err(ChainBaseError::InvalidTermsDocument(
-            "public earning inventory requires a positive solver reward and full atomic funding"
-                .to_string(),
+            "public earning inventory requires a positive solver reward, at least 0.01 USDC verifier reward and claim bond, and full atomic funding".to_string(),
         ));
     }
 
@@ -6471,6 +6626,7 @@ pub fn validate_autonomous_creation_for_public_earning(
             }
         }
         AutonomousVerificationMode::SignedQuorum => {
+            validate_regression_evidence_schema(&terms.document.evidence_schema)?;
             let threshold = usize::from(create.threshold);
             let exact_verifiers = (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())
                 .contains(&threshold)
@@ -6514,6 +6670,7 @@ pub fn validate_autonomous_creation_for_public_earning(
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
+    validate_reconciled_regression_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
@@ -7292,15 +7449,15 @@ mod tests {
             benchmark_source: StandingMetaV2BenchmarkSource {
                 kind: "github_commit".to_string(),
                 repository: "NSPG13/agent-bounties".to_string(),
-                commit: "a".repeat(40),
-                subdirectory: "crates/chain-base/tests".to_string(),
+                commit: RECONCILED_REGRESSION_BENCHMARK_COMMIT.to_string(),
+                subdirectory: RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].1.to_string(),
             },
             runner_manifest: RegressionSandboxPolicy {
                 schema_version: "agent-bounties/regression-sandbox-v1".to_string(),
                 image: format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
                 command: vec!["true".to_string()],
                 workdir: "/workspace".to_string(),
-                benchmark_digest: format!("sha256:{}", "c".repeat(64)),
+                benchmark_digest: RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0].to_string(),
                 timeout_seconds: 30,
                 cpu_millis: 500,
                 memory_bytes: 128 * 1024 * 1024,
@@ -7374,7 +7531,7 @@ mod tests {
         );
         assert_eq!(
             plan.terms.document.benchmark["source"]["commit"],
-            "a".repeat(40)
+            RECONCILED_REGRESSION_BENCHMARK_COMMIT
         );
         assert!(plan.parent_claim_timing.strict_timestamp_ordering);
         assert!(!plan.parent_claim_timing.same_block_claim_allowed);
@@ -7403,6 +7560,14 @@ mod tests {
             routed_v3_plan.terms.document.benchmark["parent_binding"]["protocol"],
             STANDING_META_V3_ROUTED_PROTOCOL_VERSION
         );
+
+        let mut below_floor_request = request.clone();
+        below_floor_request.verifier_reward = Some(Money::new(2, "usdc").unwrap());
+        assert!(planner
+            .plan_standing_meta_v2_child(&below_floor_request, &parent, created_at)
+            .unwrap_err()
+            .to_string()
+            .contains("at least 0.01 USDC"));
     }
 
     #[test]
@@ -7426,8 +7591,8 @@ mod tests {
             benchmark_source: StandingMetaV2BenchmarkSource {
                 kind: "github_commit".to_string(),
                 repository: "NSPG13/agent-bounties".to_string(),
-                commit: "a".repeat(40),
-                subdirectory: "crates/chain-base/tests".to_string(),
+                commit: RECONCILED_REGRESSION_BENCHMARK_COMMIT.to_string(),
+                subdirectory: RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].1.to_string(),
             },
             runner_manifest: RegressionSandboxPolicy {
                 schema_version: "agent-bounties/regression-sandbox-v1".to_string(),
@@ -8327,15 +8492,15 @@ mod tests {
             "source": {
                 "kind": "github_commit",
                 "repository": "NSPG13/agent-bounties",
-                "commit": "a".repeat(40),
-                "subdirectory": "benchmarks/regression"
+                "commit": RECONCILED_REGRESSION_BENCHMARK_COMMIT,
+                "subdirectory": RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].1
             },
             "runner_manifest": {
                 "schema_version": "agent-bounties/regression-sandbox-v1",
                 "image": format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
                 "command": ["python", "/benchmark/check.py"],
                 "workdir": "/workspace",
-                "benchmark_digest": format!("sha256:{}", "c".repeat(64)),
+                "benchmark_digest": RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0],
                 "timeout_seconds": 60,
                 "cpu_millis": 1000,
                 "memory_bytes": 134217728,
@@ -8350,15 +8515,156 @@ mod tests {
                 "test_seed": 1
             }
         });
+        supported_document.evidence_schema = json!({
+            "type": "object",
+            "required": ["source_snapshot_digest"],
+            "properties": {
+                "source_snapshot_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+            }
+        });
         supported_document.verification_policy = json!({
             "mechanism": "signed_quorum",
             "engine": STANDING_META_V2_REGRESSION_ENGINE,
             "threshold": 2,
             "verifiers": BASE_MAINNET_STANDING_META_V2_VERIFIERS
         });
+        for (field, value) in [
+            ("repository", json!("other/repository")),
+            ("commit", json!("b".repeat(40))),
+            ("subdirectory", json!("benchmarks/copied-location")),
+        ] {
+            let mut wrong_source_document = supported_document.clone();
+            wrong_source_document.benchmark["source"][field] = value;
+            assert!(matches!(
+                build_autonomous_bounty_terms_record(
+                    &record.creator_wallet,
+                    wrong_source_document,
+                    now
+                ),
+                Err(ChainBaseError::InvalidTermsDocument(message))
+                    if message.contains("immutable source tuple")
+            ));
+        }
+        let mut copied_unreconciled_document = supported_document.clone();
+        copied_unreconciled_document.benchmark["source"]["repository"] =
+            json!("other/copied-benchmark");
+        copied_unreconciled_document.benchmark["source"]["subdirectory"] =
+            json!("different/location");
+        copied_unreconciled_document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(format!("sha256:{}", "e".repeat(64)));
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                &record.creator_wallet,
+                copied_unreconciled_document,
+                now
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
+        let mut revised_unreconciled_document = supported_document.clone();
+        revised_unreconciled_document.benchmark["source"]["subdirectory"] =
+            json!("benchmarks/distribution-v1/glama-onboarding-audit");
+        revised_unreconciled_document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(format!("sha256:{}", "d".repeat(64)));
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                &record.creator_wallet,
+                revised_unreconciled_document,
+                now
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
         let supported_record =
             build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
                 .unwrap();
+        let mut legacy_unreconciled_record = supported_record.clone();
+        legacy_unreconciled_record.document.benchmark["source"]["repository"] =
+            json!("other/copied-benchmark");
+        legacy_unreconciled_record.document.benchmark["source"]["subdirectory"] =
+            json!("different/location");
+        legacy_unreconciled_record.document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(format!("sha256:{}", "e".repeat(64)));
+        let safe_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
+        let mut incomplete_evidence_document = supported_record.document.clone();
+        incomplete_evidence_document.evidence_schema = json!({
+            "type": "object",
+            "required": ["commit_sha"],
+            "properties": {"commit_sha": {"type": "string"}}
+        });
+        let incomplete_evidence_record = build_autonomous_bounty_terms_record(
+            &record.creator_wallet,
+            incomplete_evidence_document,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            regression_quorum_readiness(
+                &json!({
+                    "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                    "threshold": 2
+                }),
+                Some(&incomplete_evidence_record),
+            )
+            .1,
+            "regression source snapshot evidence schema is unavailable or invalid"
+        );
+        let incomplete_evidence_create =
+            autonomous_bounty_create_from_terms(&incomplete_evidence_record).unwrap();
+        assert!(matches!(
+            validate_autonomous_creation_for_public_earning(
+                "base-mainnet",
+                &incomplete_evidence_create,
+                &incomplete_evidence_record,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("source_snapshot_digest")
+        ));
+        let mut below_floor_document = supported_record.document.clone();
+        below_floor_document.contract_terms["verifier_reward"]["amount"] = json!(9_999);
+        below_floor_document.contract_terms["claim_bond"]["amount"] = json!(9_999);
+        below_floor_document.contract_terms["initial_funding"]["amount"] = json!(909_999);
+        let below_floor_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, below_floor_document, now)
+                .unwrap();
+        let below_floor_create = autonomous_bounty_create_from_terms(&below_floor_record).unwrap();
+        assert!(matches!(
+            validate_autonomous_creation_for_public_earning(
+                "base-mainnet",
+                &below_floor_create,
+                &below_floor_record,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("0.01 USDC")
+        ));
+        assert!(matches!(
+            autonomous_bounty_create_from_terms(&legacy_unreconciled_record),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
+        assert_eq!(
+            regression_quorum_readiness(
+                &json!({
+                    "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
+                    "threshold": 2
+                }),
+                Some(&legacy_unreconciled_record),
+            )
+            .1,
+            "regression benchmark digest and immutable source are not approved"
+        );
+        assert!(matches!(
+            validate_autonomous_creation_for_public_earning(
+                "base-mainnet",
+                &safe_create,
+                &legacy_unreconciled_record,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
         let healthy_quorum = json!({
             "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
             "threshold": 2
@@ -9056,24 +9362,30 @@ mod tests {
             Err(ChainBaseError::InvalidAttestationScope(_))
         ));
 
-        let jobs = build_autonomous_verification_jobs(
+        let evidence = AutonomousSubmissionEvidenceRecord {
+            network: "base-mainnet".to_string(),
+            bounty_contract: bounty_contract.to_string(),
+            bounty_id: format!("0x{}", "ab".repeat(32)),
+            round: 2,
+            solver_wallet: "0x5555555555555555555555555555555555555555".to_string(),
+            artifact_reference: "https://example.com/artifact".to_string(),
+            artifact_hash: format!("0x{}", "cc".repeat(32)),
+            evidence: json!({"check": "passed"}),
+            evidence_hash: format!("0x{}", "dd".repeat(32)),
+            created_at: Utc::now(),
+        };
+        let blocked_jobs = build_autonomous_verification_jobs(
             "base-mainnet",
-            vec![item],
-            vec![AutonomousSubmissionEvidenceRecord {
-                network: "base-mainnet".to_string(),
-                bounty_contract: bounty_contract.to_string(),
-                bounty_id: format!("0x{}", "ab".repeat(32)),
-                round: 2,
-                solver_wallet: "0x5555555555555555555555555555555555555555".to_string(),
-                artifact_reference: "https://example.com/artifact".to_string(),
-                artifact_hash: format!("0x{}", "cc".repeat(32)),
-                evidence: json!({"check": "passed"}),
-                evidence_hash: format!("0x{}", "dd".repeat(32)),
-                created_at: Utc::now(),
-            }],
+            vec![item.clone()],
+            vec![evidence.clone()],
             100,
         )
         .unwrap();
+        assert!(blocked_jobs.is_empty());
+        item.verification_ready = true;
+        let jobs =
+            build_autonomous_verification_jobs("base-mainnet", vec![item], vec![evidence], 100)
+                .unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].round, 2);
         assert_eq!(jobs[0].eligible_verifiers, vec![verifier.to_string()]);
