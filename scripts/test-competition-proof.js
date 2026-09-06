@@ -85,6 +85,20 @@ function proved(server) {
 }
 const input = () => ({ solver: wallet, metric: { profile_id: "structured-artifact-metric-v1", threshold: "1", artifact_utf8: "Hello 🌍", requirements: [{ kind: "utf8_contains", needle: "Hello", minimum_occurrences: 1, weight: 1 }] } });
 const sigs = (env) => env.calls.filter((r) => r.method === "eth_signTypedData_v4");
+test("resuming before a proof quote returns guidance without wallet or service mutations", async () => {
+  const e = setup(), api = await e.start();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await api.resume();
+    assert.equal(result.state, "not_quoted");
+    assert.equal(result.next_action.action, "prepare_quote");
+    assert.equal(result.proof_job_id, null);
+  }
+  assert.equal(e.calls.length, 0);
+  assert.equal(e.requests.some((request) => request.method === "POST"), false);
+  assert.equal(e.server.quoteCount, undefined);
+  assert.equal(e.doc.querySelector("[data-proof-workspace] [data-legal-consent]").hidden, true);
+});
+
 test("quote preparation derives the domain-bound UTF-8 artifact hash, reuses the job and never signs", async () => {
   const e = setup(), api = await e.start(); await api.prepareQuote(input()); await api.prepareQuote(input());
   assert.equal(e.server.quoteCount, 1); assert.equal(sigs(e).length, 0);
