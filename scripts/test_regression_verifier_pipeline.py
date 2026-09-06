@@ -11,7 +11,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from activate_direct_growth_v2 import benchmark_digest as repository_benchmark_digest
+if __package__:
+    from .activate_direct_growth_v2 import benchmark_digest as repository_benchmark_digest
+else:
+    from activate_direct_growth_v2 import benchmark_digest as repository_benchmark_digest
 
 
 SCRIPT = Path(__file__).with_name("regression_verifier_pipeline.py")
