@@ -29,14 +29,14 @@
     if (accounts.length && !liveAccounts(sdk).length) { accounts = []; phase = "disconnected"; message = "Your phone session ended. Reconnect when ready; your draft is saved."; marker(false); }
     return { available: configured, status: phase, connected: accounts.length > 0 && phase === "connected", address: accounts[0] || null,
       chain_id: accounts.length ? chain : null, review_open: Boolean(dialog?.open), message,
-      next_action: phase === "connecting" ? "Wait for the QR code to appear; no additional permission is needed to prepare it." : phase === "pairing" ? "Scan the QR code with your wallet app and approve the connection on your phone." : phase === "connected" ? "Continue the prepared review. Approve each signature or transaction on your phone." : "Open phone-wallet pairing.",
+      next_action: !configured ? "Phone pairing is unavailable here. Continue preparing the saved journey or use a browser wallet." : phase === "connecting" ? "Wait for the QR code to appear; no additional permission is needed to prepare it." : phase === "pairing" ? "Scan the QR code with your wallet app and approve the connection on your phone." : phase === "connected" ? "Continue the prepared review. Approve each signature or transaction on your phone." : "Open phone-wallet pairing.",
       connection_approval_required: phase !== "connected", payment_authorized: false };
   }
   function render() {
     const snapshot = state();
     if (statusNode) statusNode.textContent = message;
     if (launcher) launcher.textContent = phase === "connected" ? `Phone wallet ${accounts[0].slice(0, 6)}…${accounts[0].slice(-4)}` : "Connect phone wallet";
-    if (retry) { retry.hidden = phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your phone…" : "Show a new QR code"; }
+    if (retry) { retry.hidden = !configured || phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your phone…" : "Show a new QR code"; }
     if (disconnectButton) disconnectButton.hidden = !accounts.length;
     win.dispatchEvent(new win.CustomEvent("agent-bounties:phone-wallet-state", { detail: snapshot }));
   }
@@ -191,7 +191,7 @@
   }) })); };
   win.addEventListener("eip6963:requestProvider", announce); announce();
   if (doc?.body) {
-    launcher = doc.createElement("button"); launcher.type = "button"; launcher.className = "ab-phone-launcher";
+    launcher = doc.createElement("button"); launcher.type = "button"; launcher.className = "ab-phone-launcher"; launcher.hidden = !configured;
     launcher.addEventListener("click", () => { void openReview(); }); doc.body.append(launcher); render();
   }
   win.addEventListener("pagehide", () => { cancel(); clearQr(); });
