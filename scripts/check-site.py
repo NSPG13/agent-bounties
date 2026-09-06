@@ -79,6 +79,7 @@ REQUIRED_FILES = {
     "competition.js",
     "competition-proof.js",
     "marketplace-workflow.js",
+    "meta-child.js",
     "webmcp.js",
     "participate.js",
     "earn.html",
@@ -142,6 +143,7 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "meta-child.js",
     "about.css",
     "ai-bounty-handoff.css",
     "ai-bounty-handoff.js",
@@ -536,7 +538,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=8',
+            'bounty-composer-v2.js?v=9',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -1255,11 +1257,11 @@ def main() -> int:
                 '<meta name="description"',
                 f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
-                f'<script src="{prefix}analytics-config.js?v=3"></script>',
+                f'<script src="{prefix}analytics-config.js?v=4"></script>',
                 f'<script src="{prefix}analytics.js?v=4"></script>',
             ],
         )
-        if text.index(f'src="{prefix}analytics-config.js?v=3"') > text.index(f'src="{prefix}analytics.js?v=4"'):
+        if text.index(f'src="{prefix}analytics-config.js?v=4"') > text.index(f'src="{prefix}analytics.js?v=4"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
             fail(f"{relative}: transactional handoffs must remain noindex, nofollow")

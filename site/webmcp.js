@@ -107,6 +107,7 @@
       discovery_source: "WebMCP on agentbounties.app",
       benchmark: input.benchmark ? flow.publicJson(input.benchmark) : null,
       evidence_schema: input.evidence_schema ? flow.publicJson(input.evidence_schema) : null,
+      meta_child: input.meta_child ? flow.publicJson(input.meta_child) : null,
     };
   }
 
@@ -195,9 +196,15 @@
     let draft = null;
     try {
       const raw = window.sessionStorage.getItem(PENDING_DRAFT_KEY);
-      if (!raw) return;
-      window.sessionStorage.removeItem(PENDING_DRAFT_KEY);
-      draft = JSON.parse(raw);
+      if (raw) {
+        window.sessionStorage.removeItem(PENDING_DRAFT_KEY);
+        draft = JSON.parse(raw);
+      } else {
+        const saved = client.load()?.draft;
+        const parent = params.get("parentBounty");
+        if (!saved?.meta_child || !parent || saved.meta_child.parent_bounty_contract !== parent.toLowerCase() || flow.createPostingJournal(window).load()) return;
+        draft = saved;
+      }
     } catch (_error) {
       return;
     }
@@ -316,17 +323,26 @@
         source_url: { type: ["string", "null"], maxLength: 2048 },
         benchmark: { type: "object", description: "Exact executable verifier with pinned public source and runner. Prepare this for the person; do not ask them for technical fields." },
         evidence_schema: { type: "object", description: "Evidence schema paired with the benchmark. Supply both verifier fields or neither; absent verifier stays an unfundable draft." },
+        meta_child: { type: "object", description: "For a qualifying routed-V3 child, bind this draft to the canonical parent. The browser checks the parent before applying its exact 1 USDC total exception; retain the ordinary minimum otherwise. Resolve the intended distinct registered solver before funding.", properties: { parent_bounty_contract: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" }, intended_child_solver: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" } }, required: ["parent_bounty_contract"], additionalProperties: false },
       },
       required: ["title", "goal", "acceptance_criteria", "solver_reward_usdc", "verifier_reward_usdc", "task_window_days"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, untrustedContentHint: false },
     async execute(input) {
-      const draft = normalizeDraft(input);
+      await parentReady;
+      const savedParent = client.load()?.meta_child;
+      const parent = input.meta_child && savedParent?.parent_bounty_contract === input.meta_child.parent_bounty_contract?.toLowerCase()
+        ? { ...savedParent, ...input.meta_child } : input.meta_child || savedParent || null;
+      const draft = normalizeDraft({ ...input, meta_child: parent });
       if (Boolean(draft.benchmark) !== Boolean(draft.evidence_schema)) throw new Error("Supply benchmark and evidence_schema together.");
       const journey = client.load() || client.start({ role: "post" });
-      client.save({ ...journey, draft, role: "post" });
-      if (/\/post\.html$/.test(window.location.pathname)) return stageOnPostPage(draft);
+      if (isPost) {
+        const result = await stageOnPostPage(draft);
+        client.save({ ...journey, draft, meta_child: draft.meta_child, role: "post" });
+        return result;
+      }
+      client.save({ ...journey, draft, meta_child: draft.meta_child, role: "post" });
       if (!persistPendingDraft(draft)) throw new Error("This browser cannot preserve the draft across navigation. Open /post.html and call this tool again.");
       const target = new URL("/post.html?from=webmcp", window.location.origin).href;
       window.setTimeout(() => window.location.assign(target), 0);
@@ -336,6 +352,29 @@
         approval_required: true,
         wallet_confirmation_required: true,
       };
+    },
+  });
+
+  register({
+    name: "agent_bounties_start_meta_child_bounty",
+    title: "Prepare the qualifying 1 USDC child bounty",
+    description: "Start the child review for a canonically funded, claimable routed-V3 meta-bounty. Preserve the parent and existing journey, then stage the exact 1 USDC total through agent_bounties_stage_funded_bounty. Resolve the benchmark and intended distinct solver for the person. This only prepares navigation; it never publishes, registers, claims, funds or signs.",
+    inputSchema: { type: "object", properties: { opportunity_id: { type: "string", minLength: 1, maxLength: 240 } }, required: ["opportunity_id"], additionalProperties: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
+    async execute(input) {
+      const item = await client.opportunity(input.opportunity_id, true);
+      const inspected = await client.inspect(item.opportunity_id);
+      const benchmark = inspected.terms?.document?.benchmark;
+      if (benchmark?.engine !== "standing_meta_v3_routed_parent" || benchmark.minimum_child_target !== 1000000
+        || benchmark.minimum_parent_gross_margin !== 1000000 || benchmark.required_child_verifier_threshold !== 2) throw new Error("This parent has no supported 1 USDC child review.");
+      const meta_child = { parent_bounty_contract: item.source_id.toLowerCase() };
+      const journey = client.load() || client.start({ role: "earn" });
+      client.save({ ...journey, meta_child, selected: item.opportunity_id });
+      const target = new URL("/post.html", window.location.origin);
+      target.searchParams.set("parentBounty", meta_child.parent_bounty_contract);
+      window.setTimeout(() => window.location.assign(target.href), 0);
+      return { status: "navigating_to_child_review", url: target.href, meta_child, total_usdc: "1.00", user_confirmation_required: false,
+        next_action: "Stage 1 USDC total with the exact executable benchmark, evidence schema and intended distinct child solver. Publish the child terms before claiming the parent; funding, participant registration and wallet approvals remain human decisions." };
     },
   });
 
@@ -466,8 +505,9 @@
       : isParticipant ? { tool: "agent_bounties_get_work_status", input: {} }
       : posting ? { tool: "agent_bounties_get_posting_status", input: {} }
       : !journey ? { tool: "agent_bounties_start_journey", missing: "Does the person want work done, or want to earn? Infer this from their request when possible." }
-      : journey.current_intent ? { tool: "agent_bounties_check_progress", input: { intent_id: journey.current_intent } }
       : journey.draft && isPost ? { tool: "agent_bounties_get_bounty_review", input: {} }
+      : journey.meta_child && isPost ? { tool: "agent_bounties_stage_funded_bounty", missing: "Prepare the parent's qualifying 1 USDC child, executable benchmark and distinct child solver before claiming the parent.", meta_child: journey.meta_child }
+      : journey.current_intent ? { tool: "agent_bounties_check_progress", input: { intent_id: journey.current_intent } }
       : journey.draft ? { tool: "agent_bounties_stage_funded_bounty", input: journey.draft }
       : journey.selected ? { tool: "agent_bounties_inspect_opportunity", input: { opportunity_id: journey.selected } }
       : journey.role === "earn" ? { tool: "agent_bounties_list_ready_work", input: { limit: 5, timing: "now" } }
@@ -525,10 +565,15 @@
 
   window.addEventListener("pagehide", (event) => { if (!event.persisted) lifecycle.abort(); });
   Promise.allSettled(registrations).catch(reportError);
-  consumePendingDraft();
   if (isPost) {
     const parent = new URLSearchParams(window.location.search).get("parentCompetition");
-    if (parent) parentReady = (async () => {
+    const metaParent = new URLSearchParams(window.location.search).get("parentBounty");
+    if (metaParent) parentReady = (async () => {
+      const composer = await waitFor(() => window.AgentBountiesComposer, 8000);
+      if (!composer) throw new Error("The child review is still loading.");
+      return composer.prepareMetaParent();
+    })();
+    if (parent && !metaParent) parentReady = (async () => {
       if (!flow.ADDRESS.test(parent)) throw new Error("The parent competition address is invalid.");
       const item = await client.opportunity(parent, true);
       if (!flow.isV2(item) || !["now", "upcoming"].includes(flow.phase(item))) throw new Error("The parent competition no longer accepts qualifying child work.");
@@ -544,4 +589,5 @@
       reportError(error);
     });
   }
+  consumePendingDraft();
 })();

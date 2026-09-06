@@ -34,6 +34,7 @@ elements.get("[data-ai-handoff]").querySelectorAll = () => [];
 elements.get("[data-ai-handoff]").querySelector = () => null;
 
 const window = {
+  AgentBountiesMetaChild: require("../site/meta-child.js"),
   addEventListener() {},
   dispatchEvent() {},
   open() {},
@@ -93,6 +94,8 @@ const draft = api.parseDraft(`\`\`\`json
 if (draft.task_window_days !== 21 || draft.acceptance_criteria.length !== 2) {
   throw new Error(`valid AI draft was not normalized: ${JSON.stringify(draft)}`);
 }
+const child = api.parseDraft({ ...draft, solver_reward_usdc: "0.99", verifier_reward_usdc: "0.01", meta_child: { parent_bounty_contract: "0x" + "11".repeat(20), intended_child_solver: "0x" + "22".repeat(20) } });
+if (child.meta_child.intended_child_solver !== "0x" + "22".repeat(20) || child.solver_reward_usdc !== "0.99") throw new Error("The AI handoff lost the exact child context or reward.");
 if (draft.benchmark?.source?.commit !== "0fae18cf9be464132cde52dfb9d464d836e8f024"
   || draft.evidence_schema?.required?.[0] !== "source_snapshot_digest") {
   throw new Error("the exact benchmark and evidence schema were stripped from the AI draft");
