@@ -307,6 +307,63 @@ button:focus-visible {
   color: #ffd1c8;
 }
 
+[data-install-audience="task-owner"] .install-shell {
+  padding-top: clamp(2rem, 5vw, 4rem);
+}
+
+[data-install-audience="task-owner"] h1 {
+  font-size: clamp(2.65rem, 6vw, 5rem);
+}
+
+[data-install-audience="task-owner"] .install-lede {
+  margin-bottom: 1rem;
+}
+
+[data-install-audience="task-owner"] .install-status,
+[data-install-audience="task-owner"] .install-boundary {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+[data-install-audience="task-owner"] .install-status::before,
+[data-install-audience="task-owner"] .install-boundary::before {
+  display: none;
+}
+
+[data-install-audience="task-owner"] .install-detail {
+  margin-top: 1.25rem;
+}
+
+.install-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.install-manual {
+  margin-top: 1.25rem;
+}
+
+.install-manual summary {
+  width: fit-content;
+  padding: 0.5rem 0;
+  color: var(--mint);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.install-manual summary:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 4px;
+}
+
+.install-manual > p,
+.install-manual > .copy-block,
+.install-source {
+  margin-top: 1.25rem;
+}
+
 @media (max-width: 720px) {
   .install-header {
     align-items: flex-start;

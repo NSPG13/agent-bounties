@@ -87,11 +87,14 @@
 
   function renderPlatform(platform, manifest) {
     status.textContent = platform.status;
+    const taskOwner = body.dataset.installAudience === "task-owner";
     const grid = element("div", "install-grid");
 
-    const endpointPanel = element("section", "install-panel install-panel-wide");
-    endpointPanel.appendChild(element("h2", "", "Connect your AI assistant"));
-    endpointPanel.appendChild(element("p", "", "Add Agent Bounties to an assistant that supports remote MCP servers. Then give it a task, define how success will be checked, and ask for a bounty draft to review."));
+    const endpointPanel = element(taskOwner ? "details" : "section", taskOwner ? "install-manual" : "install-panel install-panel-wide");
+    endpointPanel.appendChild(element(taskOwner ? "summary" : "h2", "", taskOwner ? "Use another assistant" : "Connect your AI assistant"));
+    endpointPanel.appendChild(element("p", "", taskOwner
+      ? "Add this URL in your assistant’s remote MCP settings."
+      : "Add Agent Bounties to an assistant that supports remote MCP servers. Then give it a task, define how success will be checked, and ask for a bounty draft to review."));
     const endpointRow = element("div", "endpoint-row");
     endpointRow.appendChild(element("code", "", platform.mcp_url));
     const endpointButton = element("button", "", "Copy endpoint");
@@ -99,29 +102,34 @@
     endpointButton.addEventListener("click", () => copyText(platform.mcp_url, endpointButton));
     endpointRow.appendChild(endpointButton);
     endpointPanel.appendChild(endpointRow);
-    grid.appendChild(endpointPanel);
+    if (!taskOwner) grid.appendChild(endpointPanel);
 
     const stepsPanel = element("section", "install-panel");
     stepsPanel.appendChild(element("h2", "", "From task to funded bounty"));
     const steps = element("ol");
     platform.steps.forEach((step) => steps.appendChild(element("li", "", step)));
     stepsPanel.appendChild(steps);
-    grid.appendChild(stepsPanel);
+    if (!taskOwner) grid.appendChild(stepsPanel);
 
-    const actionsPanel = element("section", "install-panel");
-    actionsPanel.appendChild(element("h2", "", "Install"));
-    const actions = element("div", "action-stack");
-    platform.actions.forEach((action) => actions.appendChild(renderAction(action, platform)));
+    const actionsPanel = element("section", taskOwner ? "install-panel install-panel-wide install-connect" : "install-panel");
+    actionsPanel.appendChild(element("h2", "", taskOwner ? "Connect your assistant" : "Install"));
+    const actions = element("div", taskOwner ? "install-choices" : "action-stack");
+    platform.actions.forEach((action) => {
+      const destination = taskOwner && action.kind === "copy" ? endpointPanel : actions;
+      destination.appendChild(renderAction(action, platform));
+    });
     actionsPanel.appendChild(actions);
+    if (taskOwner) actionsPanel.appendChild(endpointPanel);
     grid.appendChild(actionsPanel);
 
-    const promptPanel = element("section", "install-panel install-panel-wide");
+    const promptPanel = element("section", taskOwner ? "install-panel" : "install-panel install-panel-wide");
     promptPanel.appendChild(element("h2", "", "Bring your first task"));
     promptPanel.appendChild(copyBlock("Copy this prompt", platform.first_prompt));
     grid.appendChild(promptPanel);
+    if (taskOwner) grid.appendChild(stepsPanel);
 
-    const docsPanel = element("section", "install-panel install-panel-wide");
-    docsPanel.appendChild(element("h2", "", "Review before connecting"));
+    const docsPanel = element("section", taskOwner ? "install-source" : "install-panel install-panel-wide");
+    docsPanel.appendChild(element(taskOwner ? "h3" : "h2", "", "Review before connecting"));
     const docs = element("ul", "documentation-list");
     platform.documentation.forEach((entry) => {
       const item = element("li");
@@ -133,11 +141,12 @@
       docs.appendChild(item);
     });
     docsPanel.appendChild(docs);
-    grid.appendChild(docsPanel);
+    if (taskOwner) endpointPanel.appendChild(docsPanel);
+    else grid.appendChild(docsPanel);
 
     detail.replaceChildren(grid);
     const boundary = documentObject.querySelector("[data-payment-boundary]");
-    if (boundary) boundary.textContent = manifest.payment_boundary;
+    if (boundary && !taskOwner) boundary.textContent = manifest.payment_boundary;
   }
 
   function renderHub(platforms) {
