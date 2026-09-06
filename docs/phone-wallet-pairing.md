@@ -3,7 +3,7 @@
 Agent Bounties can pair a WalletConnect-compatible phone wallet from an internal
 browser without an extension. Choose **Connect phone wallet**, scan with the
 wallet app, check `agentbounties.app`, and approve the connection. The same
-approved Base session can be used on posting, participation, competition proof,
+approved Base session can be used on the marketplace board, posting, participation, competition proof,
 onramp and account-linking pages. Each signature and transaction remains a
 separate wallet approval. Connecting does not link an account or authorize money.
 
