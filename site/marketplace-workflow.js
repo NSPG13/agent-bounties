@@ -8,6 +8,10 @@
   const ADDRESS = /^0x[0-9a-f]{40}$/i;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const SESSION_KEY = "agent-bounties.guided-journey.v1";
+  const stableJson = (value) => value && typeof value === "object"
+    ? Array.isArray(value) ? `[${value.map(stableJson).join(",")}]`
+      : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`
+    : JSON.stringify(value);
   const BOUNDARY = "Only confirmed canonical BountySettled or CompetitionSettledV2 events prove payment. A draft, approval, signature or transaction hash does not.";
   const GUIDANCE = {
     style: "Use ordinary language. Ask only for missing outcome, budget, deadline or work preferences. Suggest sensible defaults together; do not ask one technical question at a time.",
@@ -162,7 +166,7 @@
         if (BigInt(amount) > remaining) throw new Error("The contribution exceeds the remaining funding target. Refresh the amount before review.");
       }
       const body = { action: input.action, network: NETWORK, opportunity_id: item.opportunity_id, bounty_contract: item.source_id, details, ...(amount ? { amount_base_units: amount } : {}) };
-      const fingerprint = JSON.stringify(body);
+      const fingerprint = stableJson(body);
       const existing = journey.steps[fingerprint];
       // Reserve before the network call: a lost response retries the same durable key.
       const step = existing || { key: `webmcp:${journey.id}:${win.crypto.randomUUID()}` };

@@ -341,3 +341,16 @@ test("a contribution uses the exact reviewed amount and recorded transaction", a
   assert.equal(BigInt(`0x${last.data.slice(-64)}`), 10000n);
   await env.reload(); await env.click("[data-wallet-confirm]"); assert.equal(env.sent.length, 2);
 });
+test("reordering identical evidence fields reuses the existing submission review", async () => {
+  const env = environment(), original = env.window.fetch; let savedIntent;
+  env.window.fetch = async (url, options) => {
+    if (url.endsWith(`/action-intents/${intentId}`) && savedIntent) return { ok: true, json: async () => savedIntent };
+    const response = await original(url, options), payload = await response.json();
+    if (url.endsWith("/action-intents")) savedIntent = payload;
+    return { ok: true, json: async () => payload };
+  };
+  const client = flow.createClient(env.window), input = { action: "complete", opportunity_id: item().opportunity_id, artifact_reference: "https://example.com/result" };
+  await client.prepareAction({ ...input, evidence: { checks: { passed: 1, failed: 0 }, result: "ok" } });
+  await client.prepareAction({ ...input, evidence: { result: "ok", checks: { failed: 0, passed: 1 } } });
+  assert.equal(env.requests.filter((r) => r.method === "POST").length, 1);
+});
