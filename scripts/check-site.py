@@ -1120,6 +1120,15 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
             fail(f"paid install route {rail} needs at least three reviewable steps")
         if not isinstance(platform.get("actions"), list) or not platform["actions"]:
             fail(f"paid install route {rail} has no copy-paste action")
+        actions = platform["actions"]
+        if [action.get("kind") for action in actions] != ["cursor_install", "vscode_install", "copy"]:
+            fail(f"paid install route {rail} needs native assistant actions and manual setup")
+        try:
+            manual_config = json.loads(actions[2].get("value", ""))
+        except (TypeError, ValueError):
+            fail(f"paid install route {rail} has invalid manual MCP configuration")
+        if manual_config != {"mcpServers": {"agent-bounties": {"type": "http", "url": endpoint}}}:
+            fail(f"paid install route {rail} manual setup must preserve its exact MCP endpoint")
         page_text = (site_dir / "install" / rail / "index.html").read_text(encoding="utf-8")
         require_phrases(
             f"install/{rail}/index.html",
@@ -1130,7 +1139,8 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
                 f'data-install-fallback-endpoint="{endpoint}"',
                 endpoint,
                 '<meta name="robots" content="noindex, nofollow">',
-                "Only a confirmed canonical BountySettled event proves solver payment.",
+                'data-install-audience="task-owner"',
+                "Review the task, reward, and verification before you fund.",
             ],
         )
 

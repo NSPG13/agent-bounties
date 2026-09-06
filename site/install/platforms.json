@@ -282,13 +282,13 @@
     {
       "slug": "glama",
       "name": "Glama",
-      "status": "Draft first. Review the task, reward, and verification before you fund.",
+      "status": "Choose your assistant to get started.",
       "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
       "mcp_url": "https://mcp.agentbounties.app/r/glama-paid/mcp",
       "steps": [
-        "Connect your assistant using a button or the MCP configuration below.",
-        "Describe one task and ask for a draft with acceptance criteria, a verification method, and a USDC reward.",
-        "Review the exact terms and wallet request on AgentBounties.app before approving funding."
+        "Connect your assistant above.",
+        "Describe the task, how success will be checked, and your USDC budget.",
+        "Review the draft and approve funding on AgentBounties.app."
       ],
       "actions": [
         {
@@ -305,7 +305,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/glama-paid/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Delegate this task through Agent Bounties. Draft binary acceptance criteria and a verifier, then stop at the first-party wallet review handoff.",
+      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
@@ -316,13 +316,13 @@
     {
       "slug": "mcp-so",
       "name": "MCP.so",
-      "status": "Draft first. Review the task, reward, and verification before you fund.",
+      "status": "Choose your assistant to get started.",
       "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
       "mcp_url": "https://mcp.agentbounties.app/r/mcp-so-paid/mcp",
       "steps": [
-        "Connect your assistant using a button or the MCP configuration below.",
-        "Describe one task and ask for a draft with acceptance criteria, a verification method, and a USDC reward.",
-        "Review the exact terms and wallet request on AgentBounties.app before approving funding."
+        "Connect your assistant above.",
+        "Describe the task, how success will be checked, and your USDC budget.",
+        "Review the draft and approve funding on AgentBounties.app."
       ],
       "actions": [
         {
@@ -339,7 +339,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcp-so-paid/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Get a verified external solution for this backlog item through Agent Bounties. Show the draft, reward, verifier, and review link before any wallet action.",
+      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
@@ -350,13 +350,13 @@
     {
       "slug": "mcpservers",
       "name": "MCPServers.org",
-      "status": "Draft first. Review the task, reward, and verification before you fund.",
+      "status": "Choose your assistant to get started.",
       "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
       "mcp_url": "https://mcp.agentbounties.app/r/mcpservers/mcp",
       "steps": [
-        "Connect your assistant using a button or the MCP configuration below.",
-        "Describe one task and ask for a draft with acceptance criteria, a verification method, and a USDC reward.",
-        "Review the exact terms and wallet request on AgentBounties.app before approving funding."
+        "Connect your assistant above.",
+        "Describe the task, how success will be checked, and your USDC budget.",
+        "Review the draft and approve funding on AgentBounties.app."
       ],
       "actions": [
         {
@@ -373,7 +373,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcpservers/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Use Agent Bounties to fund a verifiable result for this goal. Prepare exact acceptance criteria and stop before signing or publishing.",
+      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
