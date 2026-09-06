@@ -30,18 +30,18 @@ SCHEMA = "agent-bounties/regression-verifier-watchdog-plan-v1"
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
-PIPELINE_SHA256 = "2314d4371b691665588ba75bba392b50ab2cf7ea5d77f661e95bc698aa5ed9db"
-PIPELINE_TEST_SHA256 = "4d8a82516c52770787d72fe5b6753117ffe0ff647aa8320a5f9b8be458f8369c"
+PIPELINE_SHA256 = "20f49ef088c0e5a66882e0a75632e0b5ff6d370221532557bfc889bcad110606"
+PIPELINE_TEST_SHA256 = "df0f9855dba2fdc7c4411aa436a14e50f9db8f3b2b0e35412bba6e5456087791"
 SOURCE_GUARD_SHA256 = "ab8a6491acd5a5b8e93db5ef36d40db6276af8ba658bcd6a52c34d6aeb0be83d"
-SOURCE_GUARD_TEST_SHA256 = "d18ced511f9cd9f266c989dae93ff0088ce38d290f19a6491d6d7b3e6aa108ac"
-WORKER_BUILD_SHA256 = "729292ae87e115ab2d00d7c0d580bd37e229aaea682517d2de2202942bfce064"
-SIGNING_RUNTIME_SHA256 = "0003d29adff6c0489e5323d431cdae28c129cfcc10b6c17bd0ae11d4385f235e"
+SOURCE_GUARD_TEST_SHA256 = "231070dec911062c7b5eb0c872ff0b99de1656e9ba7a94a8db8bbe4d61be6de1"
+WORKER_BUILD_SHA256 = "c5bb40418e857fb37db39d26799442b054127c6d4b3e4b0d12d407f4881b06b7"
+SIGNING_RUNTIME_SHA256 = "d0cef3138a530d08ba736b6b33b4bfd1f671bee6218ac5c75bfa1d55a02b2465"
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "9de37465f316aeec3e26413c856dd7c9b3bf4c4eaa678633cc3b94e89c56b376",
+    ".github/workflows/regression-verifier-runner.yml": "ea7ca8b1925c1053ab5a6f502126ad439008d46d6dea9299bcb1e84889805e4c",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "a5858144c19ca72721aff736e48e9583972ad4665c5652dd65a7b23a5298b783",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "a7cd1fe97c6e6d601029ff40afead2b5b4a65db84e0762d8f0e7c227f9b9b7c2",
+    ".github/workflows/regression-verifier-signer.yml": "79de91de6752d68416ee795911f720d4537c18f0dd7b663b35f8a50629d44349",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "86709b980d1f26c3988f7b4209c6c16234cf473fe5596ae3265fdf5683cfeb61",
 }
 
 
