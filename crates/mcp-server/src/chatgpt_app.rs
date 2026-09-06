@@ -4957,7 +4957,7 @@ mod tests {
                     "image": "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
                     "command": ["python", "/benchmark/check.py"],
                     "workdir": "/workspace",
-                    "benchmark_digest": "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
+                    "benchmark_digest": "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
                     "timeout_seconds": 120,
                     "cpu_millis": 1000,
                     "memory_bytes": 536870912,
