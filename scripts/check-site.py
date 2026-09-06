@@ -135,6 +135,10 @@ REQUIRED_FILES = {
     "guild-pages.css",
     "guild-shell.js",
     "wallet-adapters.css",
+    "phone-wallet.js",
+    "phone-wallet-config.js",
+    "phone-wallet.css",
+    "vendor/phone-wallet.bundle.js",
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
@@ -174,6 +178,10 @@ ALLOWED_UI_CODE = {
     "install/install.css",
     "install/install.js",
     "wallet-adapters.css",
+    "phone-wallet.js",
+    "phone-wallet-config.js",
+    "phone-wallet.css",
+    "vendor/phone-wallet.bundle.js",
 }
 EXPECTED_SCENE_ASSETS = {
     "assets/solarpunk/characters-helping.webp",

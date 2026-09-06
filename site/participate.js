@@ -165,6 +165,9 @@
       await refresh();
       await prepareWallet();
     }
+    win.addEventListener("agent-bounties:phone-wallet-state", (event) => {
+      if (event.detail?.connected && !provider && !busy && !record.finalHash && !record.sending && win.AgentBountiesPhoneWallet) connect(win.AgentBountiesPhoneWallet.provider).catch(message);
+    });
     find("[data-wallet-connect]").addEventListener("click", async (event) => {
       if (!event.isTrusted || busy) return;
       try {

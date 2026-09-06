@@ -226,10 +226,26 @@
         available_tools: names.slice(),
         guidance: flow.GUIDANCE,
         journey: client.load(),
+        phone_wallet: window.AgentBountiesPhoneWallet?.state() || { available: false },
         next_action: { tool: "agent_bounties_get_journey", input: {} },
       };
     },
   });
+
+  if (window.AgentBountiesPhoneWallet) {
+    register({ name: "agent_bounties_open_phone_wallet", title: "Connect my phone wallet with a QR code",
+      description: "Open the phone-wallet QR dialog on this page. The person scans the code and approves the connection in their wallet app. This only prepares a connection; it never signs, pays, publishes or approves a wallet request. Keep their current draft and journey. Never read, copy or transmit the QR code or pairing URI. After the person approves, check phone-wallet status and continue the existing review.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: false },
+      async execute() { return window.AgentBountiesPhoneWallet.openReview(); },
+    });
+    register({ name: "agent_bounties_get_phone_wallet_status", title: "Check my phone wallet connection",
+      description: "Read the sanitized phone-wallet state and the approved public address. Restores a previously approved session when possible; never opens a new QR or wallet prompt. Connected means the wallet approved a session, not that anything was signed or paid. Continue the prepared review without repeating business questions.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, untrustedContentHint: false },
+      async execute() { const phone = window.AgentBountiesPhoneWallet; try { await phone.restore(); } catch (_) { /* State reports the connection without leaking relay errors. */ } return phone.state(); },
+    });
+  }
 
   register({
     name: "agent_bounties_list_ready_work",
