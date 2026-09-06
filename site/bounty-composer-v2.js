@@ -51,6 +51,8 @@
     checks: document.querySelector("[data-card-checks]"),
     confidence: document.querySelector("[data-card-confidence]"),
     risks: document.querySelector("[data-card-risks]"),
+    verifierSummary: document.querySelector("[data-card-verifier-summary]"),
+    verifier: document.querySelector("[data-card-verifier]"),
     missionContext: document.querySelector("[data-mission-context]"),
     missionTitle: document.querySelector("[data-mission-title]"),
     missionSummary: document.querySelector("[data-mission-summary]"),
@@ -808,6 +810,7 @@
       item.textContent = criterion;
       ui.criteria.append(item);
     }
+    renderVerifierTerms();
     ui.risks.replaceChildren();
     const risks = state.draft.risk_flags || [];
     if (!risks.length) {
@@ -822,6 +825,37 @@
       }
     }
     ui.badge.textContent = state.scope === "mission" ? "Mission task draft · not posted" : "Draft · not posted";
+  }
+
+  function renderVerifierTerms() {
+    const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    const source = benchmark.source || {};
+    const runner = benchmark.runner_manifest || {};
+    const requiredEvidence = state.draft?.evidence_schema?.required || [];
+    const executable = benchmark.engine === REGRESSION_ENGINE && source.kind === "github_commit" && runner.schema_version === "agent-bounties/regression-sandbox-v1";
+    ui.verifierSummary.textContent = executable
+      ? "These exact public inputs and direct command decide whether the verifier may sign. Confirm every value before connecting a wallet."
+      : "No complete executable verifier is attached. This draft cannot be funded until one is precommitted and reviewed.";
+    ui.verifier.replaceChildren();
+    const rows = [
+      ["Engine", benchmark.engine || "Not supplied"],
+      ["Source", source.repository || "Not supplied"],
+      ["Commit", source.commit || "Not supplied"],
+      ["Benchmark path", source.subdirectory || "Not supplied"],
+      ["Container image", runner.image || "Not supplied"],
+      ["Direct command", Array.isArray(runner.command) ? JSON.stringify(runner.command) : "Not supplied"],
+      ["Benchmark digest", runner.benchmark_digest || "Not supplied"],
+      ["Required evidence", Array.isArray(requiredEvidence) && requiredEvidence.length ? requiredEvidence.join(", ") : "None declared"],
+    ];
+    for (const [label, value] of rows) {
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      const code = document.createElement("code");
+      code.textContent = String(value);
+      detail.append(code);
+      ui.verifier.append(term, detail);
+    }
   }
 
   async function renderPreview() {

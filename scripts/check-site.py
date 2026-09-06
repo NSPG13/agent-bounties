@@ -466,6 +466,7 @@ def check_blog(site_dir: Path) -> None:
 def check_analytics(site_dir: Path, repo_root: Path) -> None:
     javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
+    post = (site_dir / "post.html").read_text(encoding="utf-8")
     require_phrases(
         "analytics.js",
         javascript,
@@ -508,6 +509,20 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "state.preparedRewards = preparedRewards",
             "const rewards=currentRewardSplit()",
             "Verifier reward and solver bond:",
+        ],
+    )
+    require_phrases(
+        "pre-authorization executable verifier terms",
+        post + composer,
+        [
+            "data-card-verifier",
+            "function renderVerifierTerms",
+            '["Source", source.repository || "Not supplied"]',
+            '["Commit", source.commit || "Not supplied"]',
+            '["Container image", runner.image || "Not supplied"]',
+            '["Direct command", Array.isArray(runner.command)',
+            '["Benchmark digest", runner.benchmark_digest || "Not supplied"]',
+            '["Required evidence", Array.isArray(requiredEvidence)',
         ],
     )
     if "const rewards=splitReward(state.fundingUsdc)" in composer:
