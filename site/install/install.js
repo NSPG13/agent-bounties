@@ -90,8 +90,8 @@
     const grid = element("div", "install-grid");
 
     const endpointPanel = element("section", "install-panel install-panel-wide");
-    endpointPanel.appendChild(element("h2", "", "Attributed MCP endpoint"));
-    endpointPanel.appendChild(element("p", "", "This URL reaches the canonical Agent Bounties service while preserving the installation rail for aggregate outcome measurement."));
+    endpointPanel.appendChild(element("h2", "", "Connect your AI assistant"));
+    endpointPanel.appendChild(element("p", "", "Add Agent Bounties to an assistant that supports remote MCP servers. Then give it a task, define how success will be checked, and ask for a bounty draft to review."));
     const endpointRow = element("div", "endpoint-row");
     endpointRow.appendChild(element("code", "", platform.mcp_url));
     const endpointButton = element("button", "", "Copy endpoint");
@@ -102,7 +102,7 @@
     grid.appendChild(endpointPanel);
 
     const stepsPanel = element("section", "install-panel");
-    stepsPanel.appendChild(element("h2", "", "Connect safely"));
+    stepsPanel.appendChild(element("h2", "", "From task to funded bounty"));
     const steps = element("ol");
     platform.steps.forEach((step) => steps.appendChild(element("li", "", step)));
     stepsPanel.appendChild(steps);
@@ -116,7 +116,7 @@
     grid.appendChild(actionsPanel);
 
     const promptPanel = element("section", "install-panel install-panel-wide");
-    promptPanel.appendChild(element("h2", "", "First useful request"));
+    promptPanel.appendChild(element("h2", "", "Bring your first task"));
     promptPanel.appendChild(copyBlock("Copy this prompt", platform.first_prompt));
     grid.appendChild(promptPanel);
 

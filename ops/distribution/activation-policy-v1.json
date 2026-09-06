@@ -63,7 +63,7 @@
     "vendors": [
       {
         "vendor_id": "glama",
-        "rail_id": "glama",
+        "rail_id": "glama-paid",
         "placement": "featured listing plus four category cards",
         "price_usd": "1400.00",
         "initial_spend_mxn": "23779.28",
@@ -72,7 +72,7 @@
       },
       {
         "vendor_id": "mcp-so",
-        "rail_id": "mcp-so",
+        "rail_id": "mcp-so-paid",
         "placement": "gold placement",
         "price_usd": "699.00",
         "initial_spend_mxn": "11872.65",

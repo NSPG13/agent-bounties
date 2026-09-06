@@ -26,8 +26,10 @@ Subject: attributed Agent Bounties placement
 
 Until the install subdomain's DNS and edge binding pass their deployment
 checks, the order packet deliberately uses the live apex
-`https://agentbounties.app/install/<rail>/` destination. The preferred
-`install.agentbounties.app/<rail>` alias is recorded separately and must never
+`https://agentbounties.app/install/<vendor>/` destination. The vendor slugs
+remain `glama`, `mcp-so`, and `mcpservers`; the first two sponsored MCP source
+IDs are `glama-paid` and `mcp-so-paid`. The preferred
+`install.agentbounties.app/<vendor>` alias is recorded separately and must never
 replace a working campaign URL before it resolves.
 
 Add the vendor-specific proposed inventory and maximum initial spend from the

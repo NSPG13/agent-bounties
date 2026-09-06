@@ -5,7 +5,7 @@
   "orders": [
     {
       "vendor_id": "glama",
-      "rail_id": "glama",
+      "rail_id": "glama-paid",
       "reservation_state": "not_contacted",
       "purchase_state": "blocked_on_attribution_canary_and_owner_approval",
       "maximum_initial_spend_mxn": "23779.28",
@@ -30,7 +30,7 @@
         }
       ],
       "public_inventory_source": "https://glama.ai/advertise",
-      "source_endpoint": "https://mcp.agentbounties.app/r/glama/mcp",
+      "source_endpoint": "https://mcp.agentbounties.app/r/glama-paid/mcp",
       "install_destination": "https://agentbounties.app/install/glama/",
       "preferred_install_alias_after_dns": "https://install.agentbounties.app/glama",
       "placement_copy": {
@@ -49,7 +49,7 @@
     },
     {
       "vendor_id": "mcp-so",
-      "rail_id": "mcp-so",
+      "rail_id": "mcp-so-paid",
       "reservation_state": "not_contacted",
       "purchase_state": "blocked_on_written_inventory_attribution_canary_and_owner_approval",
       "maximum_initial_spend_mxn": "11872.65",
@@ -63,7 +63,7 @@
       ],
       "public_inventory_source": "https://mcp.so/advertise",
       "public_listing_note": "The public advertising page lists Gold Sponsor at 699 USD per month on listing and detail pages, rotating within the slot. This is separate from MCP.so's 39 USD one-time paid submission.",
-      "source_endpoint": "https://mcp.agentbounties.app/r/mcp-so/mcp",
+      "source_endpoint": "https://mcp.agentbounties.app/r/mcp-so-paid/mcp",
       "install_destination": "https://agentbounties.app/install/mcp-so/",
       "preferred_install_alias_after_dns": "https://install.agentbounties.app/mcp-so",
       "required_before_purchase": [

@@ -1,13 +1,14 @@
 # Paid-Rail Mainnet Canary Runbook
 
-Run this once for each paid rail (`glama`, `mcp-so`, and `mcpservers`) after the
+Run this once for each paid rail (`glama-paid`, `mcp-so-paid`, and `mcpservers`) after the
 attributed route and migration are deployed. The browser and wallet steps are
 deliberately human-controlled. No script, MCP tool, vendor, or integration may
 receive a private key, seed phrase, wallet signature, or payout authority.
 
 ## Preconditions
 
-1. Deploy migration `0032_distribution_attribution.sql` and the same generated
+1. Deploy migrations `0032_distribution_attribution.sql` and
+   `0033_distribution_source_expansion.sql`, and the same generated
    `DISTRIBUTION_ATTRIBUTION_SIGNING_SECRET` to the API and MCP services.
    Before deployment, apply the complete migration set to a disposable
    PostgreSQL 16 database and run the ignored database synchronization test;
@@ -29,6 +30,10 @@ receive a private key, seed phrase, wallet signature, or payout authority.
    bounties. Coverage of zero eligible outcomes is `0`, never an automatic pass.
 
 ## One canonical canary per rail
+
+The permanent landing pages remain `/install/glama/` and `/install/mcp-so/`.
+Their sponsored endpoints end in `/r/glama-paid/mcp` and `/r/mcp-so-paid/mcp`.
+An organic-source canary does not satisfy a sponsored-source activation check.
 
 1. Connect to `https://mcp.agentbounties.app/r/<rail>/mcp` with
    `x-agent-bounties-canary: mainnet-v1` and retain the exact signed acquisition

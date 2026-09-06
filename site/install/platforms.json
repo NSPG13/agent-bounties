@@ -282,19 +282,27 @@
     {
       "slug": "glama",
       "name": "Glama",
-      "status": "Campaign destination prepared; activate only after the attributed endpoint canary",
-      "summary": "Install Agent Bounties from the Glama listing without losing server-observed rail attribution.",
-      "mcp_url": "https://mcp.agentbounties.app/r/glama/mcp",
+      "status": "Draft first. Review the task, reward, and verification before you fund.",
+      "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
+      "mcp_url": "https://mcp.agentbounties.app/r/glama-paid/mcp",
       "steps": [
-        "Inspect the public server source, security model, and exact attributed URL.",
-        "Add the URL as a Streamable HTTP MCP server named agent-bounties.",
-        "Start with a draft-only delegation request and review every wallet action externally."
+        "Connect your assistant using a button or the MCP configuration below.",
+        "Describe one task and ask for a draft with acceptance criteria, a verification method, and a USDC reward.",
+        "Review the exact terms and wallet request on AgentBounties.app before approving funding."
       ],
       "actions": [
         {
+          "kind": "cursor_install",
+          "label": "Add to Cursor"
+        },
+        {
+          "kind": "vscode_install",
+          "label": "Install in VS Code"
+        },
+        {
           "kind": "copy",
           "label": "Copy generic MCP configuration",
-          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/glama/mcp\"\n    }\n  }\n}"
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/glama-paid/mcp\"\n    }\n  }\n}"
         }
       ],
       "first_prompt": "Delegate this task through Agent Bounties. Draft binary acceptance criteria and a verifier, then stop at the first-party wallet review handoff.",
@@ -308,19 +316,27 @@
     {
       "slug": "mcp-so",
       "name": "MCP.so",
-      "status": "Campaign destination prepared; activate only after the attributed endpoint canary",
-      "summary": "Install Agent Bounties from MCP.so with a dedicated source route and the same canonical bounty service.",
-      "mcp_url": "https://mcp.agentbounties.app/r/mcp-so/mcp",
+      "status": "Draft first. Review the task, reward, and verification before you fund.",
+      "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
+      "mcp_url": "https://mcp.agentbounties.app/r/mcp-so-paid/mcp",
       "steps": [
-        "Inspect the public server source, security model, and exact attributed URL.",
-        "Add the URL as a Streamable HTTP MCP server named agent-bounties.",
-        "Start with a draft-only delegation request and review every wallet action externally."
+        "Connect your assistant using a button or the MCP configuration below.",
+        "Describe one task and ask for a draft with acceptance criteria, a verification method, and a USDC reward.",
+        "Review the exact terms and wallet request on AgentBounties.app before approving funding."
       ],
       "actions": [
         {
+          "kind": "cursor_install",
+          "label": "Add to Cursor"
+        },
+        {
+          "kind": "vscode_install",
+          "label": "Install in VS Code"
+        },
+        {
           "kind": "copy",
           "label": "Copy generic MCP configuration",
-          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcp-so/mcp\"\n    }\n  }\n}"
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcp-so-paid/mcp\"\n    }\n  }\n}"
         }
       ],
       "first_prompt": "Get a verified external solution for this backlog item through Agent Bounties. Show the draft, reward, verifier, and review link before any wallet action.",
@@ -334,15 +350,23 @@
     {
       "slug": "mcpservers",
       "name": "MCPServers.org",
-      "status": "Campaign destination prepared; activate only after the attributed endpoint canary",
-      "summary": "Install Agent Bounties from MCPServers.org through its own measurable rail and the canonical service.",
+      "status": "Draft first. Review the task, reward, and verification before you fund.",
+      "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
       "mcp_url": "https://mcp.agentbounties.app/r/mcpservers/mcp",
       "steps": [
-        "Inspect the public server source, security model, and exact attributed URL.",
-        "Add the URL as a Streamable HTTP MCP server named agent-bounties.",
-        "Start with a draft-only delegation request and review every wallet action externally."
+        "Connect your assistant using a button or the MCP configuration below.",
+        "Describe one task and ask for a draft with acceptance criteria, a verification method, and a USDC reward.",
+        "Review the exact terms and wallet request on AgentBounties.app before approving funding."
       ],
       "actions": [
+        {
+          "kind": "cursor_install",
+          "label": "Add to Cursor"
+        },
+        {
+          "kind": "vscode_install",
+          "label": "Install in VS Code"
+        },
         {
           "kind": "copy",
           "label": "Copy generic MCP configuration",

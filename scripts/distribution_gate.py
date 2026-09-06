@@ -148,6 +148,7 @@ def validate_orders(policy: dict[str, Any], packet: dict[str, Any]) -> None:
         _require(vendor_id not in observed, "order vendors must be unique")
         observed.add(vendor_id)
         vendor = expected[vendor_id]
+        install_rail = {"glama-paid": "glama", "mcp-so-paid": "mcp-so"}.get(vendor["rail_id"], vendor["rail_id"])
         _require(order.get("rail_id") == vendor["rail_id"], f"{vendor_id} rail does not match policy")
         _require(
             _money(_decimal(order.get("maximum_initial_spend_mxn"), f"{vendor_id} maximum spend"))
@@ -190,12 +191,12 @@ def validate_orders(policy: dict[str, Any], packet: dict[str, Any]) -> None:
         )
         _require(
             order.get("install_destination")
-            == f"https://agentbounties.app/install/{vendor['rail_id']}/",
+            == f"https://agentbounties.app/install/{install_rail}/",
             f"{vendor_id} install destination is not the deployed rail-specific route",
         )
         _require(
             order.get("preferred_install_alias_after_dns")
-            == f"https://install.agentbounties.app/{vendor['rail_id']}",
+            == f"https://install.agentbounties.app/{install_rail}",
             f"{vendor_id} preferred install alias is not rail specific",
         )
         required = set(_list(order.get("required_before_purchase"), f"{vendor_id}.required_before_purchase"))

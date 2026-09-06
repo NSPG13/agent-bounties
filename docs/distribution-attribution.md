@@ -11,7 +11,13 @@ Every approved route delegates to the same canonical MCP implementation:
 `/r/{rail}/mcp`
 
 Approved rail slugs are `bankr`, `openclaw`, `vscode`, `cursor`, `cline`, `github`,
-`linear`, `claude-custom`, `chatgpt-dev`, `glama`, `mcp-so`, and `mcpservers`.
+`linear`, `claude-custom`, `chatgpt-dev`, `glama`, `mcp-so`, `mcpservers`,
+`glama-paid`, and `mcp-so-paid`.
+The two `-paid` sources distinguish installations reached through sponsored
+placements from organic directory installations. Existing source URLs remain
+valid. A source identifies an observed entry route; it does not prove that an
+advertisement caused the outcome. Reusing an acquisition token preserves its
+original first touch and records the later source as an assist.
 Unknown rails return 404. Attributed routes fail closed with 503 unless both a
 durable database and `DISTRIBUTION_ATTRIBUTION_SIGNING_SECRET` are configured. The
 same generated secret, containing at least 32 bytes, must be provided to the MCP
@@ -68,6 +74,22 @@ creator conflict.
 
 ## Reports and evidence boundaries
 
+An attributed MCP `prepare_open_competition_v2` call with `operation=create`
+also preserves its source. Only a successful Beta3 creation plan is eligible for
+an analytics-only preparation record. Its exact network, factory, bounty ID,
+predicted competition address, and creator bind to the existing acquisition.
+Identical retries preserve the first preparation time; another acquisition or a
+changed identity cannot replace that binding. Other V2 operations and unattributed
+requests retain their existing behavior. No wallet call is executed by this step.
+
+The record is an unsigned preparation observation, not proof of wallet ownership,
+creation, funding, activation, verification, or settlement. Any outcome join must
+match the exact canonical identities and require preparation before creation.
+Operator reporting and campaign calculations remain private. The shared report
+below still exposes only its explicitly declared autonomous-v1 scope; recording
+a V2 preparation does not silently expand that report or turn missing outcomes
+into zero.
+
 `GET /v1/operator/distribution/report` requires the existing operator token and
 returns one cumulative, event-driven funnel per approved rail: acquisitions,
 assists, MCP requests and failures, prepared handoffs, bound terms, externally
@@ -117,7 +139,7 @@ python scripts/check-distribution-rail-mcp.py \
   --repetitions 3 --canary-kind dry-run-v1 --json
 ```
 
-The matrix performs at least three repetitions across all 12 routes with
+The matrix performs at least three repetitions across all 14 routes with
 `initialize` and `tools/list`, emits machine-readable evidence, verifies the
 signed retry-stable acquisition header and canonical `prepare_bounty_post` catalog
 entry, and does not invoke a draft, wallet, or payment action. A paid rail should

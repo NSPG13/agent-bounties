@@ -22,9 +22,12 @@ caused the installation. Do not replace it with the untagged canonical URL:
 
 Paid directory traffic must use its own campaign page and endpoint:
 
-- Glama: `https://agentbounties.app/install/glama/` → `https://mcp.agentbounties.app/r/glama/mcp`
-- MCP.so: `https://agentbounties.app/install/mcp-so/` → `https://mcp.agentbounties.app/r/mcp-so/mcp`
+- Glama: `https://agentbounties.app/install/glama/` → `https://mcp.agentbounties.app/r/glama-paid/mcp`
+- MCP.so: `https://agentbounties.app/install/mcp-so/` → `https://mcp.agentbounties.app/r/mcp-so-paid/mcp`
 - MCPServers.org: `https://agentbounties.app/install/mcpservers/` → `https://mcp.agentbounties.app/r/mcpservers/mcp`
+
+Organic Glama and MCP.so listings retain `/r/glama/mcp` and `/r/mcp-so/mcp`.
+Do not use evidence from those organic sources to evaluate a paid-source campaign.
 
 Use Streamable HTTP. The MCP layer requires no API key. Read the tool catalog
 returned to that exact client and use only tools present there. A directory,
