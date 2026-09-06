@@ -148,7 +148,12 @@
       } catch (caught) {
         if (attempt !== current) return;
         attempt = null; win.clearTimeout(current.timer); clearQr();
-        const rejected = [4001, 5000, 5001, 5002].includes(Number(caught?.code));
+        // EthereumProvider 2.24 wraps connect rejections in Error(message),
+        // dropping the original code. Match its exact consent-rejection texts
+        // only here; transaction errors below are never reclassified.
+        const rejectionText = String(caught?.message || "").trim().toLowerCase().replace(/\.$/, "");
+        const rejected = [4001, 5000, 5001, 5002, 5003].includes(Number(caught?.code)) ||
+          ["user rejected", "user rejected chains", "user rejected methods", "user rejected events", "user rejected the request"].includes(rejectionText);
         const failure = error(rejected ? 4001 : 4900, rejected ? "Connection declined on your phone. Your draft is saved; reconnect when ready." : "Phone pairing could not connect. Check your wallet and network, then show a new QR code. Your draft is saved.");
         setState(rejected ? "cancelled" : "error", failure.message); current.reject(failure);
       }

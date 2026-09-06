@@ -34,7 +34,7 @@ function fixture({ configured = true, storage = new Map(), restored = false, fai
         on(k, fn) { listeners.set(k, fn); }, emit(k, value) { listeners.get(k)?.(value); },
         async connect() { this.connects++; const pending = new Promise((resolve, reject) => { resolveConnect = resolve; rejectConnect = reject; }); this.emit("display_uri", uri); return pending; },
         approve(account = address, chain = 8453, methods = config.optionalMethods) { this.accounts = [account]; this.session = { expiry: Date.now() / 1000 + 3600, namespaces: { eip155: { accounts: [`eip155:${chain}:${account}`], methods } } }; this.emit("accountsChanged", this.accounts); resolveConnect?.(); },
-        reject() { rejectConnect(Object.assign(new Error("User rejected"), { code: 4001 })); },
+        reject(wrapped = false) { rejectConnect(wrapped ? new Error("User rejected.") : Object.assign(new Error("User rejected"), { code: 4001 })); },
         async disconnect() { this.disconnects++; this.accounts = []; this.session = null; this.emit("disconnect"); },
         async request(request) { requests.push(request); if (this.requestError) throw this.requestError; return "confirmed wallet response"; },
       };
@@ -106,6 +106,12 @@ test("wallet rejection and uncertain transaction errors are preserved without re
     await assert.rejects(env.api.provider.request({ method: "eth_sendTransaction", params: [{ from: address }] }), (caught) => caught === original);
   }
   assert.equal(env.requests.length, 3);
+});
+test("the real SDK's code-less rejection is still a cancellation, never a relay error", async () => {
+  const env = fixture(); const pending = env.api.provider.request({ method: "eth_requestAccounts" });
+  const rejected = assert.rejects(pending, { code: 4001 }); await flush(); env.providers[0].reject(true); await rejected;
+  assert.equal(env.api.state().status, "cancelled"); assert.match(env.api.state().message, /declined on your phone/);
+  assert.equal(env.api.state().connected, false); assert.equal(env.qr().src, undefined); assert.equal(env.requests.length, 0);
 });
 test("unapproved methods fail before dispatch; unsupported batch can use existing safe fallback", async () => {
   const env = fixture(); await env.api.openReview(); await flush(); env.providers[0].approve(address, 8453, ["eth_sendTransaction"]); await flush();
