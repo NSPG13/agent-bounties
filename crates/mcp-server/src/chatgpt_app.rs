@@ -2138,7 +2138,7 @@ async fn call_tool(
                 .map_err(|error| format!("invalid get_bounty_feed arguments: {error}"))?;
             return Ok(tool_result(
                 load_bounty_feed(args, &[]).await?,
-                "Returned a fresh public opportunity projection. Funding, claimability, verification, settlement, and payment remain bound to each sourceâ€™s authoritative evidence.",
+                "Returned a fresh public opportunity projection. Funding, claimability, verification, settlement, and payment remain bound to each source’s authoritative evidence.",
                 false,
             ));
         }
@@ -6159,7 +6159,7 @@ mod tests {
 
     #[test]
     fn modern_name_header_supports_the_required_base64_sentinel() {
-        let resource_uri = "ui://agent-bounties/ä¸–ç•Œ.html";
+        let resource_uri = "ui://agent-bounties/世界.html";
         let encoded = format!(
             "=?base64?{}?=",
             base64::engine::general_purpose::STANDARD.encode(resource_uri)
@@ -6386,7 +6386,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_ascii_lowercase()
-            .contains("pokÃ©mon"));
+            .contains("pokémon"));
         for outdated_term in ["collectible", "quest card", "instagram-inspired"] {
             assert!(
                 !contents["_meta"]["openai/widgetDescription"]
@@ -6445,7 +6445,7 @@ mod tests {
         assert!(!html.contains("__CHATGPT_APP_BASE_URL_JSON__"));
         assert!(html.contains("bridgeRequest(\"tools/call\""));
         assert!(!html.contains("window.location.replace"));
-        assert!(html.contains("Preview data Â· no writes"));
+        assert!(html.contains("Preview data · no writes"));
         assert!(html.contains("Safe fixture data"));
         assert!(!html.contains("open for competition"));
         assert!(!html.contains("ready to compete"));
