@@ -423,6 +423,11 @@ pub const STANDING_META_V3_ROUTED_PROTOCOL_VERSION: &str =
 pub const STANDING_META_V2_REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
 const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST: &str =
     "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
+const CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY: &str = "NSPG13/agent-bounties";
+const CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY: &str =
+    "benchmarks/distribution-v1/glama-onboarding-audit";
+const RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS: &[&str] = &[];
+const PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS: u128 = 10_000;
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER: &str =
     "0xe573cb4f471d38b5bf10ce82237251ac902c9867";
 pub const BASE_MAINNET_STANDING_META_V3_ROUTER: &str = "0x380c1af742593dd88b6f20387e9ee693a0536731";
@@ -5413,15 +5418,65 @@ pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
 fn reject_unreconciled_canonical_lifecycle_benchmark(
     document: &AutonomousBountyTermsDocument,
 ) -> Result<(), ChainBaseError> {
-    if document
+    let benchmark_digest = document
         .benchmark
         .get("runner_manifest")
         .and_then(|runner| runner.get("benchmark_digest"))
+        .and_then(Value::as_str);
+    let source = document.benchmark.get("source");
+    let is_canonical_lifecycle_source = source
+        .and_then(|value| value.get("repository"))
         .and_then(Value::as_str)
-        == Some(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST)
+        .is_some_and(|repository| {
+            repository.eq_ignore_ascii_case(CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY)
+        })
+        && source
+            .and_then(|value| value.get("subdirectory"))
+            .and_then(Value::as_str)
+            == Some(CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY);
+    let has_reviewed_reconciliation = benchmark_digest
+        .is_some_and(|digest| RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS.contains(&digest));
+    if benchmark_digest == Some(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST)
+        || (is_canonical_lifecycle_source && !has_reviewed_reconciliation)
     {
         return Err(ChainBaseError::InvalidTermsDocument(
             "the Glama onboarding audit cannot fund a bounty until its Base lifecycle evidence is independently reconciled"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_regression_evidence_schema(evidence_schema: &Value) -> Result<(), ChainBaseError> {
+    if evidence_schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "regression evidence_schema.type must be object".to_string(),
+        ));
+    }
+    let requires_source_snapshot_digest = evidence_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| {
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("source_snapshot_digest"))
+        });
+    let source_snapshot_digest = evidence_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("source_snapshot_digest"));
+    if !requires_source_snapshot_digest
+        || source_snapshot_digest
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+            != Some("string")
+        || source_snapshot_digest
+            .and_then(|value| value.get("pattern"))
+            .and_then(Value::as_str)
+            != Some("^sha256:[0-9a-f]{64}$")
+    {
+        return Err(ChainBaseError::InvalidTermsDocument(
+            "regression evidence_schema must require source_snapshot_digest as sha256:<64 lowercase hex>"
                 .to_string(),
         ));
     }
@@ -6468,10 +6523,12 @@ pub fn validate_autonomous_creation_for_public_earning(
     let target = solver_reward.checked_add(verifier_reward).ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("bounty funding target overflowed".to_string())
     })?;
-    if solver_reward == 0 || initial_funding != target {
+    if solver_reward == 0
+        || verifier_reward < PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS
+        || initial_funding != target
+    {
         return Err(ChainBaseError::InvalidTermsDocument(
-            "public earning inventory requires a positive solver reward and full atomic funding"
-                .to_string(),
+            "public earning inventory requires a positive solver reward, at least 0.01 USDC verifier reward and claim bond, and full atomic funding".to_string(),
         ));
     }
 
@@ -6493,6 +6550,7 @@ pub fn validate_autonomous_creation_for_public_earning(
             }
         }
         AutonomousVerificationMode::SignedQuorum => {
+            validate_regression_evidence_schema(&terms.document.evidence_schema)?;
             let threshold = usize::from(create.threshold);
             let exact_verifiers = (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())
                 .contains(&threshold)
@@ -8373,6 +8431,16 @@ mod tests {
                 "test_seed": 1
             }
         });
+        supported_document.evidence_schema = json!({
+            "type": "object",
+            "required": ["source_snapshot_digest"],
+            "properties": {
+                "source_snapshot_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+            }
+        });
         supported_document.verification_policy = json!({
             "mechanism": "signed_quorum",
             "engine": STANDING_META_V2_REGRESSION_ENGINE,
@@ -8395,6 +8463,20 @@ mod tests {
             Err(ChainBaseError::InvalidTermsDocument(message))
                 if message.contains("independently reconciled")
         ));
+        let mut revised_unreconciled_document = supported_document.clone();
+        revised_unreconciled_document.benchmark["source"]["subdirectory"] =
+            json!(CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY);
+        revised_unreconciled_document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(format!("sha256:{}", "d".repeat(64)));
+        assert!(matches!(
+            build_autonomous_bounty_terms_record(
+                &record.creator_wallet,
+                revised_unreconciled_document,
+                now
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("independently reconciled")
+        ));
         let supported_record =
             build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
                 .unwrap();
@@ -8406,6 +8488,46 @@ mod tests {
         legacy_unreconciled_record.document.benchmark["runner_manifest"]["benchmark_digest"] =
             json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST);
         let safe_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
+        let mut incomplete_evidence_document = supported_record.document.clone();
+        incomplete_evidence_document.evidence_schema = json!({
+            "type": "object",
+            "required": ["commit_sha"],
+            "properties": {"commit_sha": {"type": "string"}}
+        });
+        let incomplete_evidence_record = build_autonomous_bounty_terms_record(
+            &record.creator_wallet,
+            incomplete_evidence_document,
+            now,
+        )
+        .unwrap();
+        let incomplete_evidence_create =
+            autonomous_bounty_create_from_terms(&incomplete_evidence_record).unwrap();
+        assert!(matches!(
+            validate_autonomous_creation_for_public_earning(
+                "base-mainnet",
+                &incomplete_evidence_create,
+                &incomplete_evidence_record,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("source_snapshot_digest")
+        ));
+        let mut below_floor_document = supported_record.document.clone();
+        below_floor_document.contract_terms["verifier_reward"]["amount"] = json!(9_999);
+        below_floor_document.contract_terms["claim_bond"]["amount"] = json!(9_999);
+        below_floor_document.contract_terms["initial_funding"]["amount"] = json!(909_999);
+        let below_floor_record =
+            build_autonomous_bounty_terms_record(&record.creator_wallet, below_floor_document, now)
+                .unwrap();
+        let below_floor_create = autonomous_bounty_create_from_terms(&below_floor_record).unwrap();
+        assert!(matches!(
+            validate_autonomous_creation_for_public_earning(
+                "base-mainnet",
+                &below_floor_create,
+                &below_floor_record,
+            ),
+            Err(ChainBaseError::InvalidTermsDocument(message))
+                if message.contains("0.01 USDC")
+        ));
         assert!(matches!(
             autonomous_bounty_create_from_terms(&legacy_unreconciled_record),
             Err(ChainBaseError::InvalidTermsDocument(message))

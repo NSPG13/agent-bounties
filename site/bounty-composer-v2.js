@@ -14,6 +14,29 @@
   ];
   const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST =
     "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
+  const CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY = "nspg13/agent-bounties";
+  const CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY =
+    "benchmarks/distribution-v1/glama-onboarding-audit";
+  const RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS = new Set();
+  const RUNNER_MANIFEST_FIELDS = [
+    "schema_version", "image", "command", "workdir", "benchmark_digest",
+    "timeout_seconds", "cpu_millis", "memory_bytes", "pids_limit",
+    "max_output_bytes", "tmpfs_bytes", "max_source_bytes", "max_source_files",
+    "max_benchmark_bytes", "max_benchmark_files", "platform", "test_seed",
+  ];
+  const RUNNER_BOUNDS = {
+    timeout_seconds: [1, 900],
+    cpu_millis: [100, 4_000],
+    memory_bytes: [67_108_864, 4_294_967_296],
+    pids_limit: [16, 512],
+    max_output_bytes: [1_024, 16_777_216],
+    tmpfs_bytes: [67_108_864, 4_294_967_296],
+    max_source_bytes: [1, 2_147_483_648],
+    max_source_files: [1, 100_000],
+    max_benchmark_bytes: [1, 536_870_912],
+    max_benchmark_files: [1, 50_000],
+    test_seed: [0, Number.MAX_SAFE_INTEGER],
+  };
   const VISUAL_EXTENSION = "x-agent-bounties-draft-visual";
   const ALLOWED_SCENES = new Set([
     "infrastructure", "digital", "nature", "health", "research", "education", "coordination", "general",
@@ -848,9 +871,23 @@
       ["Source", source.repository || "Not supplied"],
       ["Commit", source.commit || "Not supplied"],
       ["Benchmark path", source.subdirectory || "Not supplied"],
+      ["Runner schema", runner.schema_version || "Not supplied"],
       ["Container image", runner.image || "Not supplied"],
       ["Direct command", Array.isArray(runner.command) ? JSON.stringify(runner.command) : "Not supplied"],
+      ["Working directory", runner.workdir || "Not supplied"],
       ["Benchmark digest", runner.benchmark_digest || "Not supplied"],
+      ["Timeout (seconds)", runner.timeout_seconds ?? "Not supplied"],
+      ["CPU limit (millicores)", runner.cpu_millis ?? "Not supplied"],
+      ["Memory limit (bytes)", runner.memory_bytes ?? "Not supplied"],
+      ["Process limit", runner.pids_limit ?? "Not supplied"],
+      ["Output limit (bytes)", runner.max_output_bytes ?? "Not supplied"],
+      ["Temporary storage (bytes)", runner.tmpfs_bytes ?? "Not supplied"],
+      ["Source size limit (bytes)", runner.max_source_bytes ?? "Not supplied"],
+      ["Source file limit", runner.max_source_files ?? "Not supplied"],
+      ["Benchmark size limit (bytes)", runner.max_benchmark_bytes ?? "Not supplied"],
+      ["Benchmark file limit", runner.max_benchmark_files ?? "Not supplied"],
+      ["Platform", runner.platform || "Not supplied"],
+      ["Test seed", runner.test_seed ?? "Not supplied"],
       ["Required evidence", Array.isArray(requiredEvidence) && requiredEvidence.length ? requiredEvidence.join(", ") : "None declared"],
     ];
     for (const [label, value] of rows) {
@@ -1217,22 +1254,52 @@
   function verificationReadiness(benchmark) {
     const source = benchmark?.source;
     const runner = benchmark?.runner_manifest;
+    const sourceParts = typeof source?.subdirectory === "string"
+      ? source.subdirectory.split("/")
+      : [];
     const sourceReady = source?.kind === "github_commit"
       && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(source.repository || "")
       && /^[0-9a-f]{40}$/.test(source.commit || "")
       && typeof source.subdirectory === "string"
       && source.subdirectory.length > 0
-      && source.subdirectory !== "."
       && !source.subdirectory.startsWith("/")
-      && !source.subdirectory.includes("\\");
-    const runnerReady = runner?.schema_version === "agent-bounties/regression-sandbox-v1"
+      && !source.subdirectory.endsWith("/")
+      && !source.subdirectory.includes("\\")
+      && sourceParts.every((part) => part && part !== "." && part !== "..");
+    const command = runner?.command;
+    const executable = Array.isArray(command) && typeof command[0] === "string"
+      ? command[0].split(/[\\/]/).pop().toLowerCase()
+      : "";
+    const commandReady = Array.isArray(command)
+      && command.length >= 1
+      && command.length <= 64
+      && command.every((argument) => typeof argument === "string"
+        && argument.length >= 1
+        && argument.length <= 4_096
+        && !/[\0\r\n]/.test(argument))
+      && command.reduce((total, argument) => total + argument.length, 0) <= 16_384
+      && !new Set(["sh", "bash", "dash", "zsh", "cmd", "cmd.exe", "powershell", "pwsh"]).has(executable);
+    const boundsReady = Object.entries(RUNNER_BOUNDS).every(([field, [minimum, maximum]]) =>
+      Number.isSafeInteger(runner?.[field])
+      && runner[field] >= minimum
+      && runner[field] <= maximum);
+    const runnerReady = runner && Object.keys(runner).length === RUNNER_MANIFEST_FIELDS.length
+      && RUNNER_MANIFEST_FIELDS.every((field) => Object.hasOwn(runner, field))
+      && runner.schema_version === "agent-bounties/regression-sandbox-v1"
       && typeof runner.image === "string"
-      && /@sha256:[0-9a-f]{64}$/.test(runner.image)
-      && Array.isArray(runner.command)
-      && runner.command.length > 0
+      && /^[a-z0-9][a-z0-9._/:@-]{0,446}@sha256:[0-9a-f]{64}$/.test(runner.image)
+      && commandReady
       && runner.workdir === "/workspace"
-      && /^sha256:[0-9a-f]{64}$/.test(runner.benchmark_digest || "");
-    const blocked = runner?.benchmark_digest === UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST;
+      && /^sha256:[0-9a-f]{64}$/.test(runner.benchmark_digest || "")
+      && boundsReady
+      && runner.tmpfs_bytes <= runner.memory_bytes
+      && new Set(["linux/amd64", "linux/arm64"]).has(runner.platform);
+    const canonicalLifecycleSource = String(source?.repository || "").toLowerCase()
+        === CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY
+      && source?.subdirectory === CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY;
+    const blocked = runner?.benchmark_digest === UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST
+      || (canonicalLifecycleSource
+        && !RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS.has(runner?.benchmark_digest));
     return {
       blocked,
       executable: benchmark?.engine === REGRESSION_ENGINE && sourceReady && runnerReady && !blocked,

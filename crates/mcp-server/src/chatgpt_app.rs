@@ -1321,7 +1321,15 @@ struct McpJsonRpcSucceeded(bool);
 fn json_rpc_payload_succeeded(payload: &Value) -> bool {
     match payload {
         Value::Array(items) => !items.is_empty() && items.iter().all(json_rpc_payload_succeeded),
-        Value::Object(object) => !object.contains_key("error"),
+        Value::Object(object) => {
+            !object.contains_key("error")
+                && object
+                    .get("result")
+                    .and_then(Value::as_object)
+                    .and_then(|result| result.get("isError"))
+                    .and_then(Value::as_bool)
+                    != Some(true)
+        }
         _ => false,
     }
 }
@@ -5152,6 +5160,15 @@ mod tests {
         assert!(!json_rpc_payload_succeeded(&json!([
             {"jsonrpc": "2.0", "id": 1, "result": {}},
             {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "missing"}}
+        ])));
+        assert!(!json_rpc_payload_succeeded(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [], "isError": true}
+        })));
+        assert!(!json_rpc_payload_succeeded(&json!([
+            {"jsonrpc": "2.0", "id": 1, "result": {"content": [], "isError": false}},
+            {"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": true}}
         ])));
     }
 

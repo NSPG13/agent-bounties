@@ -53,6 +53,13 @@ CANONICAL_BOUNTY_RUNTIME = (
 UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST = (
     "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541"
 )
+CANONICAL_LIFECYCLE_BENCHMARK_SOURCE = (
+    "nspg13/agent-bounties",
+    "benchmarks/distribution-v1/glama-onboarding-audit",
+)
+# A digest belongs here only after a separately reviewed implementation proves
+# canonical Base lifecycle reconciliation. The set is intentionally empty today.
+RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS: frozenset[str] = frozenset()
 
 
 class PipelineError(RuntimeError):
@@ -222,14 +229,24 @@ def benchmark_source(job: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def reject_unreconciled_canonical_lifecycle_benchmark(job: dict[str, Any]) -> None:
-    digest = (
-        job.get("terms", {})
-        .get("document", {})
-        .get("benchmark", {})
-        .get("runner_manifest", {})
-        .get("benchmark_digest")
-    )
-    if digest == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST:
+    benchmark = job.get("terms", {}).get("document", {}).get("benchmark", {})
+    if not isinstance(benchmark, dict):
+        return
+    runner = benchmark.get("runner_manifest", {})
+    if not isinstance(runner, dict):
+        runner = {}
+    digest = runner.get("benchmark_digest")
+    source = benchmark.get("source", {})
+    if not isinstance(source, dict):
+        source = {}
+    is_canonical_lifecycle_source = (
+        str(source.get("repository", "")).lower(),
+        str(source.get("subdirectory", "")),
+    ) == CANONICAL_LIFECYCLE_BENCHMARK_SOURCE
+    if digest == UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST or (
+        is_canonical_lifecycle_source
+        and digest not in RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS
+    ):
         raise PipelineError(
             "Glama onboarding audit is not signable until Base lifecycle evidence is independently reconciled"
         )

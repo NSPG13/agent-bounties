@@ -72,6 +72,18 @@ const benchmark = {
     command: ["python", "/benchmark/check.py"],
     workdir: "/workspace",
     benchmark_digest: `sha256:${"c".repeat(64)}`,
+    timeout_seconds: 60,
+    cpu_millis: 1_000,
+    memory_bytes: 134_217_728,
+    pids_limit: 64,
+    max_output_bytes: 1_048_576,
+    tmpfs_bytes: 67_108_864,
+    max_source_bytes: 104_857_600,
+    max_source_files: 10_000,
+    max_benchmark_bytes: 1_048_576,
+    max_benchmark_files: 100,
+    platform: "linux/amd64",
+    test_seed: 1,
   },
 };
 assert.deepEqual(verificationReadiness(benchmark), { blocked: false, executable: true });
@@ -81,6 +93,10 @@ for (const mutate of [
   (value) => { value.runner_manifest.command = []; },
   (value) => { delete value.runner_manifest.workdir; },
   (value) => { delete value.runner_manifest.benchmark_digest; },
+  (value) => { delete value.runner_manifest.timeout_seconds; },
+  (value) => { value.runner_manifest.max_source_bytes = 0; },
+  (value) => { value.runner_manifest.platform = "windows/amd64"; },
+  (value) => { value.runner_manifest.test_seed = Number.MAX_SAFE_INTEGER + 1; },
 ]) {
   const incomplete = JSON.parse(JSON.stringify(benchmark));
   mutate(incomplete);
@@ -99,6 +115,16 @@ assert.deepEqual(
   verificationReadiness(copiedUnsafeBenchmark),
   { blocked: true, executable: false },
   "unreconciled benchmark content must remain blocked after it is copied",
+);
+const revisedUnsafeBenchmark = JSON.parse(JSON.stringify(benchmark));
+revisedUnsafeBenchmark.source.repository = "nSpG13/agent-bounties";
+revisedUnsafeBenchmark.source.subdirectory =
+  "benchmarks/distribution-v1/glama-onboarding-audit";
+revisedUnsafeBenchmark.runner_manifest.benchmark_digest = `sha256:${"d".repeat(64)}`;
+assert.deepEqual(
+  verificationReadiness(revisedUnsafeBenchmark),
+  { blocked: true, executable: false },
+  "the canonical lifecycle benchmark must remain blocked across revisions until a reviewed reconciliation is approved",
 );
 
 process.stdout.write("bounty economics behavior check passed\n");

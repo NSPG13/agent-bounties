@@ -750,6 +750,18 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         )
         pipeline.reject_unreconciled_canonical_lifecycle_benchmark(safe)
 
+        revised_same_source = json.loads(json.dumps(safe))
+        revised_same_source["terms"]["document"]["benchmark"]["source"].update(
+            {
+                "repository": "nSpG13/agent-bounties",
+                "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit",
+            }
+        )
+        with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
+            pipeline.reject_unreconciled_canonical_lifecycle_benchmark(
+                revised_same_source
+            )
+
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {
             "image": f"docker.io/library/python@sha256:{'a' * 64}",
