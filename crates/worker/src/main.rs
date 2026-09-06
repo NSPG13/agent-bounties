@@ -9,15 +9,15 @@ use worker::{
     dispatch_discovery_webhooks_once, indexer_error_is_retryable,
     poll_autonomous_indexer_once_with_heartbeat, poll_open_competition_indexer_once_with_heartbeat,
     poll_open_competition_v2_broker_once, poll_open_competition_v2_indexer_once_with_heartbeat,
-    poll_open_competition_v2_keeper_once, poll_open_competition_v2_shadow_once,
+    poll_open_competition_v2_keeper_once, poll_open_competition_v2_shadow_with_cache,
     redact_operational_error, run_regression_sandbox_request, snapshot_directory,
     stage_regression_input, validate_regression_candidate, AutonomousIndexerConfig,
     DiscoveryWebhookConfig, IndexerRecoveryDecision, IndexerRecoveryPolicy,
     OpenCompetitionIndexerConfig, OpenCompetitionV2BrokerChainConfig,
     OpenCompetitionV2BrokerConfig, OpenCompetitionV2IndexerConfig, OpenCompetitionV2KeeperConfig,
-    OpenCompetitionV2ShadowConfig, RegressionCandidateValidationRequest, RegressionInputKind,
-    RegressionSandboxRunRequest, REGRESSION_SANDBOX_DOCKER_BINARY_ENV,
-    REGRESSION_SANDBOX_STAGING_ROOT_ENV,
+    OpenCompetitionV2ShadowCache, OpenCompetitionV2ShadowConfig,
+    RegressionCandidateValidationRequest, RegressionInputKind, RegressionSandboxRunRequest,
+    REGRESSION_SANDBOX_DOCKER_BINARY_ENV, REGRESSION_SANDBOX_STAGING_ROOT_ENV,
 };
 
 #[tokio::main]
@@ -207,8 +207,9 @@ async fn main() -> anyhow::Result<()> {
 async fn run_open_competition_v2_shadow(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
     let config = OpenCompetitionV2ShadowConfig::from_env()?;
     let poll_seconds = env_u64("OPEN_COMPETITION_V2_SHADOW_POLL_SECONDS", 30)?.clamp(5, 300);
+    let mut cache = OpenCompetitionV2ShadowCache::default();
     loop {
-        match poll_open_competition_v2_shadow_once(store, &config).await {
+        match poll_open_competition_v2_shadow_with_cache(store, &config, &mut cache).await {
             Ok(report) => println!("{}", serde_json::to_string(&report)?),
             Err(error) => eprintln!(
                 "{}",

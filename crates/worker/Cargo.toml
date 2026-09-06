@@ -28,3 +28,4 @@ web-public = { path = "../web-public" }
 uuid.workspace = true
 
 [dev-dependencies]
+sqlx.workspace = true
