@@ -1257,11 +1257,11 @@ def main() -> int:
                 '<meta name="description"',
                 f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
-                f'<script src="{prefix}analytics-config.js?v=3"></script>',
+                f'<script src="{prefix}analytics-config.js?v=4"></script>',
                 f'<script src="{prefix}analytics.js?v=4"></script>',
             ],
         )
-        if text.index(f'src="{prefix}analytics-config.js?v=3"') > text.index(f'src="{prefix}analytics.js?v=4"'):
+        if text.index(f'src="{prefix}analytics-config.js?v=4"') > text.index(f'src="{prefix}analytics.js?v=4"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
             fail(f"{relative}: transactional handoffs must remain noindex, nofollow")
