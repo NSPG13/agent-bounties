@@ -384,11 +384,17 @@ fn distribution_request_fingerprint(arguments: &Value) -> String {
 fn competition_preparation_binding(
     result: &Value,
     attribution: &McpDistributionAttribution,
-    prepared_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<DistributionCompetitionBinding, String> {
+    if !result
+        .get("http_status")
+        .and_then(Value::as_u64)
+        .is_some_and(|status| (200..300).contains(&status))
+    {
+        return Err("creation API did not return a successful HTTP status".to_string());
+    }
     let plan: chain_base::OpenCompetitionV2CreationPlan = serde_json::from_value(
         result
-            .get("plan")
+            .pointer("/body/plan")
             .cloned()
             .ok_or("creation result has no plan")?,
     )
@@ -438,7 +444,8 @@ fn competition_preparation_binding(
         bounty_id,
         competition_contract: address(&plan.predicted_competition)?,
         creator_wallet: creator,
-        prepared_at,
+        // Timestamp the successfully parsed response, never the earlier request.
+        prepared_at: chrono::Utc::now(),
     })
 }
 
@@ -446,12 +453,11 @@ async fn attach_competition_preparation_attribution(
     state: &SharedState,
     mut result: Value,
     attribution: Option<&McpDistributionAttribution>,
-    prepared_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, String> {
     let Some(attribution) = attribution else {
         return Ok(result);
     };
-    let binding = competition_preparation_binding(&result, attribution, prepared_at)?;
+    let binding = competition_preparation_binding(&result, attribution)?;
     state
         .store
         .as_ref()
@@ -2132,7 +2138,7 @@ async fn call_tool(
                 .map_err(|error| format!("invalid get_bounty_feed arguments: {error}"))?;
             return Ok(tool_result(
                 load_bounty_feed(args, &[]).await?,
-                "Returned a fresh public opportunity projection. Funding, claimability, verification, settlement, and payment remain bound to each source’s authoritative evidence.",
+                "Returned a fresh public opportunity projection. Funding, claimability, verification, settlement, and payment remain bound to each sourceâ€™s authoritative evidence.",
                 false,
             ));
         }
@@ -2307,15 +2313,13 @@ async fn call_tool(
                     format!("invalid prepare_open_competition_v2 arguments: {error}")
                 })?;
             let is_creation = args.operation == "create";
-            let prepared_at = chrono::Utc::now();
             let result = legacy_result(
                 prepare_open_competition_v2(State(state.clone()), Json(args))
                     .await
                     .0,
             )?;
             let result = if is_creation {
-                attach_competition_preparation_attribution(&state, result, attribution, prepared_at)
-                    .await?
+                attach_competition_preparation_attribution(&state, result, attribution).await?
             } else {
                 result
             };
@@ -5084,7 +5088,7 @@ mod tests {
     }
 
     fn distribution_competition_fixture() -> Value {
-        json!({
+        let api_body = json!({
             "state": "awaiting_wallet_calls",
             "plan": {
                 "schema_version": "agent-bounties/open-competition-v2-creation-plan-v1",
@@ -5100,7 +5104,8 @@ mod tests {
                     "data": "0x", "function": "createCompetition(params,funding,nonce,risk)"}],
                 "next_action": "Review unsigned calls", "evidence_boundary": "Unsigned preparation only"
             }
-        })
+        });
+        legacy_result(crate::mcp_json(json!({"http_status": 200, "body": api_body})).0).unwrap()
     }
 
     #[test]
@@ -5113,45 +5118,45 @@ mod tests {
             measurement_eligible: false,
         };
         let result = distribution_competition_fixture();
-        let binding =
-            competition_preparation_binding(&result, &attribution, chrono::Utc::now()).unwrap();
+        let received_at = chrono::Utc::now();
+        let binding = competition_preparation_binding(&result, &attribution).unwrap();
+        assert!(binding.prepared_at >= received_at);
         assert_eq!(binding.acquisition_id, attribution.acquisition_id);
+        for status in [json!(400), json!(503), Value::Null, json!("200")] {
+            let mut invalid = result.clone();
+            invalid["http_status"] = status;
+            assert!(competition_preparation_binding(&invalid, &attribution).is_err());
+        }
         assert_eq!(
             binding.creator_wallet,
-            result["plan"]["wallet_calls"][0]["from"]
+            result["body"]["plan"]["wallet_calls"][0]["from"]
         );
         assert_eq!(
             binding.factory_contract,
-            result["plan"]["wallet_calls"][0]["to"]
+            result["body"]["plan"]["wallet_calls"][0]["to"]
         );
         assert_eq!(
             binding.competition_contract,
-            result["plan"]["predicted_competition"]
+            result["body"]["plan"]["predicted_competition"]
         );
         for (key, value) in [
             ("chain_id", json!(84532)),
             ("name", json!("unsupported-chain")),
         ] {
             let mut invalid = result.clone();
-            invalid["plan"]["network"][key] = value;
-            assert!(
-                competition_preparation_binding(&invalid, &attribution, chrono::Utc::now())
-                    .is_err()
-            );
+            invalid["body"]["plan"]["network"][key] = value;
+            assert!(competition_preparation_binding(&invalid, &attribution).is_err());
         }
         for calls in [
             json!([]),
             json!([
-                result["plan"]["wallet_calls"][0],
-                result["plan"]["wallet_calls"][0]
+                result["body"]["plan"]["wallet_calls"][0],
+                result["body"]["plan"]["wallet_calls"][0]
             ]),
         ] {
             let mut invalid = result.clone();
-            invalid["plan"]["wallet_calls"] = calls;
-            assert!(
-                competition_preparation_binding(&invalid, &attribution, chrono::Utc::now())
-                    .is_err()
-            );
+            invalid["body"]["plan"]["wallet_calls"] = calls;
+            assert!(competition_preparation_binding(&invalid, &attribution).is_err());
         }
     }
 
@@ -5159,14 +5164,9 @@ mod tests {
     async fn distribution_competition_preparation_requires_durable_attribution() {
         let state = public_tool_test_state();
         let result = distribution_competition_fixture();
-        let unchanged = attach_competition_preparation_attribution(
-            &state,
-            result.clone(),
-            None,
-            chrono::Utc::now(),
-        )
-        .await
-        .unwrap();
+        let unchanged = attach_competition_preparation_attribution(&state, result.clone(), None)
+            .await
+            .unwrap();
         assert_eq!(unchanged, result);
         let attribution = McpDistributionAttribution {
             acquisition_id: Uuid::new_v4(),
@@ -5175,15 +5175,68 @@ mod tests {
             current_rail: "mcp-so-paid".to_string(),
             measurement_eligible: false,
         };
-        assert!(attach_competition_preparation_attribution(
-            &state,
-            result,
-            Some(&attribution),
-            chrono::Utc::now()
-        )
-        .await
-        .unwrap_err()
-        .contains("unavailable"));
+        assert!(
+            attach_competition_preparation_attribution(&state, result, Some(&attribution))
+                .await
+                .unwrap_err()
+                .contains("unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn distribution_competition_reads_real_proxy_envelopes_after_response() {
+        let api_body = distribution_competition_fixture()["body"].clone();
+        let failed_body = api_body.clone();
+        let router = axum::Router::new()
+            .route(
+                "/create",
+                axum::routing::post(move || {
+                    let mut body = api_body.clone();
+                    async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        body["response_prepared_at"] = json!(chrono::Utc::now());
+                        Json(body)
+                    }
+                }),
+            )
+            .route(
+                "/unavailable",
+                axum::routing::post(move || {
+                    let body = failed_body.clone();
+                    async move { (StatusCode::SERVICE_UNAVAILABLE, Json(body)) }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let attribution = McpDistributionAttribution {
+            acquisition_id: Uuid::new_v4(),
+            acquisition_token: "opaque".to_string(),
+            first_touch_rail: "glama-paid".to_string(),
+            current_rail: "glama-paid".to_string(),
+            measurement_eligible: false,
+        };
+        for path in ["create", "unavailable"] {
+            let proxied = crate::proxy_public_json_response_with_timeout(
+                reqwest::Client::new().post(format!("http://{socket}/{path}")),
+                "fixture API",
+                5,
+            )
+            .await
+            .0;
+            let result = legacy_result(proxied).unwrap();
+            let binding = competition_preparation_binding(&result, &attribution);
+            if path == "create" {
+                let response_time = chrono::DateTime::parse_from_rfc3339(
+                    result["body"]["response_prepared_at"].as_str().unwrap(),
+                )
+                .unwrap();
+                assert!(binding.unwrap().prepared_at >= response_time);
+            } else {
+                assert!(binding.unwrap_err().contains("HTTP status"));
+            }
+        }
+        server.abort();
     }
 
     #[tokio::test]
@@ -6106,7 +6159,7 @@ mod tests {
 
     #[test]
     fn modern_name_header_supports_the_required_base64_sentinel() {
-        let resource_uri = "ui://agent-bounties/世界.html";
+        let resource_uri = "ui://agent-bounties/ä¸–ç•Œ.html";
         let encoded = format!(
             "=?base64?{}?=",
             base64::engine::general_purpose::STANDARD.encode(resource_uri)
@@ -6333,7 +6386,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_ascii_lowercase()
-            .contains("pokémon"));
+            .contains("pokÃ©mon"));
         for outdated_term in ["collectible", "quest card", "instagram-inspired"] {
             assert!(
                 !contents["_meta"]["openai/widgetDescription"]
@@ -6392,7 +6445,7 @@ mod tests {
         assert!(!html.contains("__CHATGPT_APP_BASE_URL_JSON__"));
         assert!(html.contains("bridgeRequest(\"tools/call\""));
         assert!(!html.contains("window.location.replace"));
-        assert!(html.contains("Preview data · no writes"));
+        assert!(html.contains("Preview data Â· no writes"));
         assert!(html.contains("Safe fixture data"));
         assert!(!html.contains("open for competition"));
         assert!(!html.contains("ready to compete"));
