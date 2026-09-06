@@ -476,6 +476,7 @@ def check_blog(site_dir: Path) -> None:
 def check_analytics(site_dir: Path, repo_root: Path) -> None:
     javascript = (site_dir / "analytics.js").read_text(encoding="utf-8")
     config = (site_dir / "analytics-config.js").read_text(encoding="utf-8")
+    post = (site_dir / "post.html").read_text(encoding="utf-8")
     require_phrases(
         "analytics.js",
         javascript,
@@ -518,6 +519,39 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "state.preparedRewards = preparedRewards",
             "const rewards = currentRewardSplit()",
             "Verifier reward and solver bond:",
+        ],
+    )
+    require_phrases(
+        "pre-authorization executable verifier terms",
+        post + composer,
+        [
+            "data-card-verifier",
+            "function renderVerifierTerms",
+            "if (!ui.verifierSummary || !ui.verifier) return;",
+            'bounty-composer-v2.js?v=8',
+            "function verificationReadiness",
+            "verificationReadiness(benchmark, state.draft?.evidence_schema)",
+            'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
+            "RECONCILED_REGRESSION_BENCHMARK_DIGESTS",
+            '["Source", source.repository || "Not supplied"]',
+            '["Commit", source.commit || "Not supplied"]',
+            '["Container image", runner.image || "Not supplied"]',
+            '["Direct command", Array.isArray(runner.command)',
+            '["Working directory", runner.workdir || "Not supplied"]',
+            '["Benchmark digest", runner.benchmark_digest || "Not supplied"]',
+            '["Timeout (seconds)", runner.timeout_seconds ?? "Not supplied"]',
+            '["CPU limit (millicores)", runner.cpu_millis ?? "Not supplied"]',
+            '["Memory limit (bytes)", runner.memory_bytes ?? "Not supplied"]',
+            '["Process limit", runner.pids_limit ?? "Not supplied"]',
+            '["Output limit (bytes)", runner.max_output_bytes ?? "Not supplied"]',
+            '["Temporary storage (bytes)", runner.tmpfs_bytes ?? "Not supplied"]',
+            '["Source size limit (bytes)", runner.max_source_bytes ?? "Not supplied"]',
+            '["Source file limit", runner.max_source_files ?? "Not supplied"]',
+            '["Benchmark size limit (bytes)", runner.max_benchmark_bytes ?? "Not supplied"]',
+            '["Benchmark file limit", runner.max_benchmark_files ?? "Not supplied"]',
+            '["Platform", runner.platform || "Not supplied"]',
+            '["Test seed", runner.test_seed ?? "Not supplied"]',
+            '["Required evidence", Array.isArray(requiredEvidence)',
         ],
     )
     if "const rewards=splitReward(state.fundingUsdc)" in composer:

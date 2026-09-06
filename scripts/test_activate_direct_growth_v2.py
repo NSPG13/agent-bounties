@@ -27,8 +27,7 @@ class DirectGrowthActivationTests(unittest.TestCase):
 
     def test_terms_use_one_pinned_sandbox_verifier(self) -> None:
         manifest = activation.load_manifest()
-        commit = "a" * 40
-        document = activation.terms_document(manifest, manifest["tasks"][0], commit)
+        document = activation.terms_document(manifest, manifest["tasks"][0])
         policy = document["verification_policy"]
         runner = document["benchmark"]["runner_manifest"]
         self.assertEqual(policy["mechanism"], "signed_quorum")
@@ -36,14 +35,27 @@ class DirectGrowthActivationTests(unittest.TestCase):
         self.assertTrue(policy["self_verification_forbidden"])
         self.assertEqual(runner["command"], ["python", "/benchmark/check.py"])
         self.assertIn("@sha256:", runner["image"])
-        self.assertEqual(document["benchmark"]["source"]["commit"], commit)
+        self.assertEqual(
+            document["benchmark"]["source"]["commit"],
+            activation.RECONCILED_REGRESSION_BENCHMARK_COMMIT,
+        )
+        self.assertEqual(
+            document["benchmark"]["source"]["subdirectory"],
+            activation.RECONCILED_REGRESSION_BENCHMARK_SOURCES[
+                runner["benchmark_digest"]
+            ],
+        )
+        self.assertEqual(
+            document["evidence_schema"]["properties"]["source_snapshot_digest"],
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        )
         self.assertEqual(
             document["contract_terms"]["initial_funding"]["amount"], 2_010_000
         )
 
     def test_create_payload_copies_only_published_hashes(self) -> None:
         manifest = activation.load_manifest()
-        document = activation.terms_document(manifest, manifest["tasks"][0], "b" * 40)
+        document = activation.terms_document(manifest, manifest["tasks"][0])
         published = {
             "terms_hash": "0x" + "11" * 32,
             "policy_hash": "0x" + "22" * 32,
@@ -65,11 +77,13 @@ class DirectGrowthActivationTests(unittest.TestCase):
             "transaction_hash": "0x" + "34" * 32,
         }
         manifest = activation.load_manifest()
-        body = activation.issue_body(manifest, task, result, "c" * 40)
+        body = activation.issue_body(manifest, task, result)
         self.assertIn("Funded and claimable on Base mainnet", body)
         self.assertIn(f"/claim #{task['issue']} wallet:", body)
         self.assertIn("BountySettled", body)
         self.assertIn("Post your own bounty", body)
+        self.assertIn(activation.RECONCILED_REGRESSION_BENCHMARK_COMMIT, body)
+        self.assertNotIn("c" * 40, body)
 
     def test_manifest_rejects_duplicate_benchmark_digest(self) -> None:
         source = json.loads(activation.MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -78,6 +92,17 @@ class DirectGrowthActivationTests(unittest.TestCase):
             path = Path(directory) / "manifest.json"
             path.write_text(json.dumps(source), encoding="utf-8")
             with self.assertRaisesRegex(activation.ActivationError, "benchmark digest"):
+                activation.load_manifest(path)
+
+    def test_manifest_rejects_digest_bound_to_a_different_source(self) -> None:
+        source = json.loads(activation.MANIFEST_PATH.read_text(encoding="utf-8"))
+        source["tasks"][0]["benchmark_subdirectory"] = source["tasks"][1][
+            "benchmark_subdirectory"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(activation.ActivationError, "not independently approved"):
                 activation.load_manifest(path)
 
     def test_manifest_digests_match_publishable_benchmark_files(self) -> None:

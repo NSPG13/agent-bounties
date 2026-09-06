@@ -129,6 +129,7 @@ struct LinearWebhookProjection {
     webhook_id: String,
     actor: LinearActorProjection,
     data: Value,
+    updated_from: Option<Value>,
 }
 
 pub fn authenticate_and_plan_github_webhook(
@@ -312,6 +313,24 @@ pub fn authenticate_and_plan_linear_webhook(
     let (issue, command_text, trigger, solver_reward, event_subject_id) =
         match (projection.event_type.as_str(), projection.action.as_str()) {
             ("Issue", "update") => {
+                let previous = projection
+                    .updated_from
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and_then(|updated| updated.get("assigneeId"));
+                if previous.is_none()
+                    || previous.is_some_and(|value| {
+                        !value.is_null()
+                            && value.as_str().is_none_or(|id| id == config.agent_id.trim())
+                    })
+                {
+                    return invalid_authenticated_plan(
+                        provider,
+                        Some(projection.webhook_id),
+                        "Linear Issue/update must prove an assignee transition to the configured agent"
+                            .to_string(),
+                    );
+                }
                 let issue: LinearIssueProjection = match serde_json::from_value(projection.data) {
                     Ok(issue) => issue,
                     Err(_) => {

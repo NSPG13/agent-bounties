@@ -2175,17 +2175,13 @@ impl PostgresStore {
                first_observed_at, last_observed_at, observation_count)
             VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
             ON CONFLICT (token_hash) DO UPDATE SET
-              measurement_eligible = distribution_acquisitions.measurement_eligible
-                AND EXCLUDED.measurement_eligible,
-              canary_kind = COALESCE(
-                distribution_acquisitions.canary_kind,
-                EXCLUDED.canary_kind
-              ),
               last_observed_at = GREATEST(
                 distribution_acquisitions.last_observed_at,
                 EXCLUDED.last_observed_at
               ),
               observation_count = distribution_acquisitions.observation_count + 1
+            WHERE distribution_acquisitions.measurement_eligible = EXCLUDED.measurement_eligible
+              AND distribution_acquisitions.canary_kind IS NOT DISTINCT FROM EXCLUDED.canary_kind
             RETURNING id, first_touch_rail, measurement_eligible, canary_kind,
                       first_observed_at, last_observed_at, observation_count
             "#,
@@ -2196,8 +2192,14 @@ impl PostgresStore {
         .bind(measurement_eligible)
         .bind(canary_kind)
         .bind(observed_at)
-        .fetch_one(&self.pool)
-        .await?;
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            DbError::DistributionAttributionConflict(
+                "an acquisition token cannot add, remove, or change its original canary classification"
+                    .to_string(),
+            )
+        })?;
         let acquisition = DistributionAcquisition {
             id: row.try_get("id")?,
             first_touch_rail: row.try_get("first_touch_rail")?,
@@ -11885,6 +11887,30 @@ mod tests {
             .unwrap();
         assert!(!canary.measurement_eligible);
         assert_eq!(canary.canary_kind.as_deref(), Some("dry-run-v1"));
+        let classification_change = store
+            .observe_distribution_acquisition(
+                "glama",
+                &canary_hash,
+                None,
+                now + chrono::Duration::seconds(1),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            classification_change,
+            DbError::DistributionAttributionConflict(_)
+        ));
+        let canary_replay = store
+            .observe_distribution_acquisition(
+                "glama",
+                &canary_hash,
+                Some("dry-run-v1"),
+                now + chrono::Duration::seconds(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(canary_replay.id, canary.id);
+        assert!(!canary_replay.measurement_eligible);
         store
             .record_distribution_rail_request("glama", true, false, now)
             .await

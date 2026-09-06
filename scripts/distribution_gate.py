@@ -228,6 +228,10 @@ def _canary_passes(policy: dict[str, Any], row: dict[str, Any]) -> tuple[bool, l
     _require(dry_joined <= dry_total, "joined dry runs cannot exceed total dry runs")
     _require(mainnet_settled <= mainnet_total, "settled mainnet runs cannot exceed total mainnet runs")
     refs = _list(canary.get("evidence_refs"), "canary.evidence_refs")
+    refs_are_distinct_and_inspectable = (
+        all(isinstance(reference, str) and bool(reference.strip()) for reference in refs)
+        and len(refs) == len(set(refs))
+    )
     reasons: list[str] = []
     if dry_total < requirements["minimum_dry_runs"] or dry_joined != dry_total:
         reasons.append("dry_run_canaries_incomplete")
@@ -235,7 +239,7 @@ def _canary_passes(policy: dict[str, Any], row: dict[str, Any]) -> tuple[bool, l
         reasons.append("mainnet_settlement_canary_incomplete")
     if canary.get("excluded_from_external_metrics") is not True:
         reasons.append("canaries_not_excluded_from_external_metrics")
-    if len(refs) < dry_total + mainnet_total:
+    if len(refs) < dry_total + mainnet_total or not refs_are_distinct_and_inspectable:
         reasons.append("canary_evidence_refs_incomplete")
     return not reasons, reasons
 

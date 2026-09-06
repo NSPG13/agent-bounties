@@ -28,6 +28,20 @@ ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 BYTES32_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 DIRECTORY_DIGEST_DOMAIN = b"agent-bounties/directory-v1\0"
+RECONCILED_REGRESSION_BENCHMARK_COMMIT = (
+    "fa946859a3379b8c9128183e20dedb3b8319a646"
+)
+RECONCILED_REGRESSION_BENCHMARK_SOURCES = {
+    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6": "benchmarks/direct-growth-v2/a2a-agent-card",
+    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f": "benchmarks/direct-growth-v2/hermes-integration",
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2": "benchmarks/direct-growth-v2/openhands-integration",
+    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043": "benchmarks/direct-growth-v2/mini-swe-agent-environment",
+    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587": "benchmarks/direct-inventory-v1/rpc-failover",
+    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff": "benchmarks/direct-inventory-v1/inventory-breakdown",
+    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d": "benchmarks/direct-inventory-v1/wallet-liquidity",
+    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731": "benchmarks/direct-inventory-v1/replenishment-plan",
+    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7": "benchmarks/direct-inventory-v1/stalled-work",
+}
 
 
 class ActivationError(RuntimeError):
@@ -342,6 +356,10 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
             raise ActivationError(f"issue #{task['issue']} benchmark digest is invalid")
         digests.add(digest)
         benchmark_subdirectory = str(task.get("benchmark_subdirectory", ""))
+        if RECONCILED_REGRESSION_BENCHMARK_SOURCES.get(digest) != benchmark_subdirectory:
+            raise ActivationError(
+                f"issue #{task['issue']} benchmark digest is not independently approved for this source"
+            )
         benchmark = ROOT / benchmark_subdirectory / "check.py"
         if not benchmark.is_file():
             raise ActivationError(f"issue #{task['issue']} benchmark is missing")
@@ -371,7 +389,7 @@ def contract_manifest_path(manifest: Mapping[str, Any]) -> Path:
 
 
 def terms_document(
-    manifest: Mapping[str, Any], task: Mapping[str, Any], commit: str
+    manifest: Mapping[str, Any], task: Mapping[str, Any]
 ) -> dict[str, Any]:
     issue = int(task["issue"])
     benchmark = {
@@ -379,8 +397,10 @@ def terms_document(
         "source": {
             "kind": "github_commit",
             "repository": "NSPG13/agent-bounties",
-            "commit": commit,
-            "subdirectory": task["benchmark_subdirectory"],
+            "commit": RECONCILED_REGRESSION_BENCHMARK_COMMIT,
+            "subdirectory": RECONCILED_REGRESSION_BENCHMARK_SOURCES[
+                task["benchmark_digest"]
+            ],
         },
         "runner_manifest": {
             "schema_version": "agent-bounties/regression-sandbox-v1",
@@ -439,6 +459,12 @@ def terms_document(
                 "participation_reason",
                 "improvement_feedback",
             ],
+            "properties": {
+                "source_snapshot_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                }
+            },
             "additionalProperties": True,
         },
         "verification_policy": {
@@ -576,7 +602,6 @@ def issue_body(
     manifest: Mapping[str, Any],
     task: Mapping[str, Any],
     result: Mapping[str, Any],
-    commit: str,
 ) -> str:
     criteria = "\n".join(f"- {value}" for value in task["acceptance_criteria"])
     issue = int(task["issue"])
@@ -595,7 +620,7 @@ def issue_body(
 - Solver reward: **{usdc(manifest["solver_reward"])} USDC**
 - Automated verifier reward and refundable claim bond: **{usdc(manifest["verifier_reward"])} USDC**
 - Verification: `sandboxed_regression_v1`, {int(manifest["threshold"])} of {len(manifest["verifiers"])} precommitted automated signers
-- Immutable benchmark: https://github.com/NSPG13/agent-bounties/tree/{commit}/{task["benchmark_subdirectory"]}
+- Immutable benchmark: https://github.com/NSPG13/agent-bounties/tree/{RECONCILED_REGRESSION_BENCHMARK_COMMIT}/{task["benchmark_subdirectory"]}
 
 ## Acceptance criteria
 
@@ -713,7 +738,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
     new_spend = 0
     for task in manifest["tasks"]:
         issue = int(task["issue"])
-        document = terms_document(manifest, task, commit)
+        document = terms_document(manifest, task)
         published = http_json(
             "POST",
             f"{args.api}/v1/base/autonomous-bounties/terms",
@@ -773,7 +798,7 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "reconciliation": reconciled,
         }
         (args.output_dir / f"issue-{issue}.md").write_text(
-            issue_body(manifest, task, result, commit), encoding="utf-8"
+            issue_body(manifest, task, result), encoding="utf-8"
         )
         results.append(result)
 
@@ -798,9 +823,10 @@ def activate(args: argparse.Namespace) -> dict[str, Any]:
             "bounded wallet balance delta does not match newly created bounties"
         )
     return {
-        "schema": "agent-bounties/direct-growth-activation-result-v2",
+        "schema": "agent-bounties/direct-growth-activation-result-v3",
         "network": manifest["network"],
-        "commit": commit,
+        "activation_commit": commit,
+        "benchmark_commit": RECONCILED_REGRESSION_BENCHMARK_COMMIT,
         "wallet": manifest["wallet"],
         "new_spend": new_spend,
         "total_funding": int(manifest["total_funding"]),

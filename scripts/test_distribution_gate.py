@@ -104,6 +104,20 @@ class DistributionGateTests(unittest.TestCase):
         self.assertEqual(result["decisions"][0]["decision"], "blocked_canary")
         self.assertIn("mainnet_settlement_canary_incomplete", result["decisions"][0]["reason_codes"])
 
+    def test_canary_evidence_references_must_be_nonblank_and_unique(self) -> None:
+        for references in (
+            ["fixture:dry:1", "", "fixture:dry:3", "fixture:mainnet:1"],
+            ["fixture:dry:1", "fixture:dry:1", "fixture:dry:3", "fixture:mainnet:1"],
+        ):
+            sample = observation()
+            sample["rails"][0]["canary"]["evidence_refs"] = references
+            result = gate.evaluate(POLICY, sample)
+            self.assertEqual(result["decisions"][0]["decision"], "blocked_canary")
+            self.assertIn(
+                "canary_evidence_refs_incomplete",
+                result["decisions"][0]["reason_codes"],
+            )
+
     def test_incomplete_exclusion_review_blocks_all_vendors(self) -> None:
         sample = observation()
         sample["exclusion_review"]["required_classes_reviewed"].pop()

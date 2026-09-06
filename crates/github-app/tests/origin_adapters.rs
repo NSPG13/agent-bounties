@@ -342,6 +342,7 @@ fn linear_runtime_authenticates_delegation_and_mention_projections() {
         "organizationId": "workspace-1",
         "webhookId": "webhook-1",
         "actor": { "id": "user-1" },
+        "updatedFrom": { "assigneeId": "previous-assignee" },
         "data": issue
     }))
     .unwrap();
@@ -356,6 +357,27 @@ fn linear_runtime_authenticates_delegation_and_mention_projections() {
     let draft = plan.draft_plan.unwrap().draft.expect("delegation draft");
     assert_eq!(draft.trigger, github_app::origin::OriginTrigger::Delegation);
     assert_eq!(draft.reward.solver.amount, 9_000_000);
+
+    let unrelated_update = serde_json::to_vec(&json!({
+        "action": "update",
+        "type": "Issue",
+        "organizationId": "workspace-1",
+        "webhookId": "webhook-unrelated",
+        "actor": { "id": "user-1" },
+        "updatedFrom": { "title": "Old title" },
+        "data": issue
+    }))
+    .unwrap();
+    let rejected = authenticate_and_plan_linear_webhook(
+        &unrelated_update,
+        &webhook_signature(secret, &unrelated_update, false),
+        secret,
+        &config,
+        vec![],
+    );
+    assert!(!rejected.authenticated);
+    assert!(rejected.draft_plan.is_none());
+    assert!(rejected.error.unwrap().contains("assignee transition"));
 
     let mention = serde_json::to_vec(&json!({
         "action": "create",
