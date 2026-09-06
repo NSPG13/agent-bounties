@@ -16,7 +16,7 @@
   },
   "rails": [
     {
-      "rail_id": "glama",
+      "rail_id": "glama-paid",
       "spend_mxn": "0.00",
       "unique_external_funded_poster_wallets": 0,
       "external_funded_canonical_settlements": 0,
@@ -32,7 +32,7 @@
       }
     },
     {
-      "rail_id": "mcp-so",
+      "rail_id": "mcp-so-paid",
       "spend_mxn": "0.00",
       "unique_external_funded_poster_wallets": 0,
       "external_funded_canonical_settlements": 0,

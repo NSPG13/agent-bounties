@@ -97,6 +97,23 @@ class DistributionGateTests(unittest.TestCase):
         self.assertEqual(result["decisions"][0]["proposed_next_tranche_mxn"], "23779.28")
         self.assertTrue(result["decisions"][0]["owner_purchase_approval_required"])
 
+    def test_organic_evidence_cannot_authorize_sponsored_placement(self) -> None:
+        for paid, organic in (("glama-paid", "glama"), ("mcp-so-paid", "mcp-so")):
+            with self.subTest(rail=paid):
+                sample = observation()
+                next(row for row in sample["rails"] if row["rail_id"] == paid)["rail_id"] = organic
+                with self.assertRaisesRegex(gate.DistributionGateError, f"missing {paid}"):
+                    gate.evaluate(POLICY, sample)
+
+    def test_sponsored_order_rejects_organic_mcp_endpoint(self) -> None:
+        for paid, organic in (("glama-paid", "glama"), ("mcp-so-paid", "mcp-so")):
+            with self.subTest(rail=paid):
+                orders = copy.deepcopy(ORDERS)
+                order = next(row for row in orders["orders"] if row["rail_id"] == paid)
+                order["source_endpoint"] = f"https://mcp.agentbounties.app/r/{organic}/mcp"
+                with self.assertRaisesRegex(gate.DistributionGateError, "source endpoint"):
+                    gate.validate_orders(POLICY, orders)
+
     def test_incomplete_canary_blocks_activation(self) -> None:
         sample = observation()
         sample["rails"][0]["canary"]["mainnet_runs_settled"] = 0
