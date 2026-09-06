@@ -82,9 +82,9 @@ Prepare and revise in the current assistant without repeated permission asks.
 The person reviews exact commitments, intended public evidence, costs and
 deadlines, then confirms legal terms and native wallet requests.
 
-The registry supports ready-work search, exact opportunity inspection, wallet
-readiness checks, draft staging, stable action reviews, first-party workspaces,
-canonical progress, and publication of already approved submission evidence.
-It does not provide wallet authority or invent verifier signatures. Competition
-proof payment and relay remain in the committed broker flow.
+The registry supports discovery, draft staging, stable reviews, workspaces and canonical evidence.
+For competitions use `agent_bounties_prepare_proof_quote`, `agent_bounties_open_proof_review`,
+`agent_bounties_get_proof_status` and `agent_bounties_resume_proof_service`.
+The assistant handles the broker flow; the person confirms the charge and finished proof in their wallet.
+Reuse the same job on retries. Service payment and qualification are not prize payment.
 Full protocol: https://github.com/NSPG13/agent-bounties/blob/main/docs/webmcp-guided-marketplace.md

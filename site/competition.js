@@ -87,12 +87,16 @@ Safety:
 
   function participationManifest(item, timing) {
     const base = marketplace.apiBase(typeof window !== "undefined" ? window.location : null);
+    const profile = item.evidence_requirements?.program_profile;
+    const forward = profile === "forward-canonical-gmv-attribution-metric-v2";
     return {
       schema_version: "agent-bounties/competition-participation-manifest-v1",
       generated_at: new Date().toISOString(),
       network: item.network,
       opportunity_id: item.opportunity_id,
       competition_contract: item.source_id,
+      program_profile: profile,
+      browser_workflow: { quote: "agent_bounties_prepare_proof_quote", review: "agent_bounties_open_proof_review", progress: "agent_bounties_get_proof_status", resume: "agent_bounties_resume_proof_service" },
       phase: timing.phase,
       phase_label: timing.label,
       canonical_source: marketplace.opportunityFeedUrl(typeof window !== "undefined" ? window.location : null),
@@ -106,23 +110,25 @@ Safety:
       hosted_proof_quote: {
         method: "POST",
         url: `${base}/v1/base/open-competition-v2-beta3/proof-quotes`,
-        available_after: "the scoring window closes and the published snapshot contains the exact dual-attester quorum",
+        available_after: forward ? "the scoring window closes and the published snapshot contains the exact dual-attester quorum" : "the artifact satisfies the competition's immutable machine predicates and the broker accepts this exact profile",
         request_template: {
           network: item.network,
           competition_contract: item.source_id,
           solver: "0xYOUR_BASE_WALLET",
           solver_nonce: "NEXT_UNUSED_COMPETITION_NONCE",
           relay: true,
-          metric: {
+          ...(forward ? {} : { artifact_hash: "EXACT_CANONICAL_ARTIFACT_HASH" }),
+          metric: forward ? {
             profile_id: "forward-canonical-gmv-attribution-metric-v2",
             campaign: "COPY_EXACT_SNAPSHOT.campaign",
             snapshot: "COPY_EXACT_SNAPSHOT.snapshot",
-          },
+          } : profile === "structured-artifact-metric-v1" ? { profile_id: profile, threshold: "COMMITTED_THRESHOLD", artifact_utf8: "EXACT_ENTRY_TEXT", requirements: "COPY_EXACT_COMMITTED_REQUIREMENTS" }
+            : { mode: "COMMITTED_VECTOR_MODE", threshold: "COMMITTED_THRESHOLD", vectors: "EXACT_COMMITTED_CASES_WITH_OBSERVED_VALUES" },
         },
-        derived_binding: "artifact_hash is omitted for this profile; the API validates the attested snapshot and derives the solver-specific submission hash",
+        derived_binding: forward ? "artifact_hash is omitted for this profile; the API validates the attested snapshot and derives the solver-specific submission hash" : "The browser derives the domain-bound structured-artifact hash. Public-vector input requires its canonical artifact hash. The API validates exact immutable policy and program scope before quoting.",
       },
       payment_evidence: "CompetitionSettledV2",
-      child_bounty_template: childTemplate(item),
+      child_bounty_template: forward ? childTemplate(item) : null,
       evidence_boundary: item.evidence_boundary,
     };
   }
@@ -150,7 +156,13 @@ Safety:
     if (element) element.textContent = value;
   }
 
-  function stageInstructions(timing) {
+  function stageInstructions(timing, forward = true) {
+    if (!forward) return [
+      "Have your AI read the committed machine predicates and prepare an entry that passes them.",
+      "Review the exact hosted proof and submission price, losing exposure and deadline.",
+      "Approve the service charge in your wallet. Your AI tracks proving without another permission request.",
+      "When the proof is ready, authorize the exact finished entry and wait for canonical qualification and prize settlement.",
+    ];
     if (timing.phase === "upcoming") return [
       "Prepare a useful child bounty with a named business use, deterministic acceptance criteria, and a different eligible solver.",
       "Use the same Base wallet for the funding that you will bind as the competition entrant.",
@@ -179,6 +191,7 @@ Safety:
 
   function render(item, win, doc) {
     const timing = marketplace.timingState(item);
+    const forward = item.evidence_requirements?.program_profile === "forward-canonical-gmv-attribution-metric-v2";
     const window = marketplace.scoringWindow(item);
     const prize = marketplace.amountNumber(item.reward) || 0;
     const hosted = marketplace.amountNumber(item.cash_economics?.required_external_spend) || 0;
@@ -196,9 +209,10 @@ Safety:
     setText(doc, "[data-scoring-formula]", item.evidence_requirements?.scoring_formula || "Read the immutable verification policy");
     setText(doc, "[data-entrant-binding]", item.evidence_requirements?.qualifying_action?.entrant_binding || "The solver wallet is bound by the proof.");
     setText(doc, "[data-exclusions]", (item.evidence_requirements?.qualifying_action?.excluded || []).join("; ") || "See immutable policy hashes.");
-    setText(doc, "[data-machine-note]", machineNote(timing));
+    setText(doc, "[data-machine-note]", forward ? machineNote(timing) : "The proof establishes only the immutable machine predicates. Buying a proof does not guarantee winning.");
+    if (!forward) { setText(doc, "#how-score-title", "Prepare a qualifying entry."); setText(doc, "[data-score-intro]", "Your AI prepares the exact artifact and evidence for this competition's committed verification rules."); }
     const steps = doc.querySelector("[data-participation-steps]");
-    if (steps) steps.innerHTML = stageInstructions(timing).map((step) => `<li>${String(step).replace(/[&<>]/g, (value) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[value]))}</li>`).join("");
+    if (steps) steps.innerHTML = stageInstructions(timing, forward).map((step) => `<li>${String(step).replace(/[&<>]/g, (value) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[value]))}</li>`).join("");
 
     const template = childTemplate(item);
     const manifest = JSON.stringify(participationManifest(item, timing), null, 2);
@@ -207,8 +221,8 @@ Safety:
     const childPost = doc.querySelector("[data-child-post-started]");
     const postUrl = childPostUrl(item);
     if (childPost) {
-      childPost.hidden = !postUrl || timing.phase === "ended";
-      if (postUrl && timing.phase !== "ended") childPost.href = postUrl;
+      childPost.hidden = !forward || !postUrl || timing.phase === "ended";
+      if (forward && postUrl && timing.phase !== "ended") childPost.href = postUrl;
       else childPost.removeAttribute("href");
     }
     const machineSource = doc.querySelector("[data-machine-source]");
@@ -221,6 +235,10 @@ Safety:
     }
 
     const childFunding = doc.querySelector("[data-child-funding]");
+    if (!forward) {
+      if (childFunding) childFunding.value = "0.00";
+      for (const selector of ["[data-copy-template]", "[data-child-template]"]) { const node = doc.querySelector(selector); if (node) node.hidden = true; }
+    }
     const otherCosts = doc.querySelector("[data-other-costs]");
     const probability = doc.querySelector("[data-win-probability]");
     const updateEconomics = () => {

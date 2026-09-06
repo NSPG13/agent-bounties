@@ -89,20 +89,65 @@ contract and scoring window to `/post.html`. The ordinary link preserves the
 same context. Unavailable or closed competitions cannot silently open a generic
 posting form.
 
-The browser tools prepare qualifying work and expose the exact proof handoff.
-They do not create paid proof quotes, authorize x402 payments, manufacture
-attester signatures, or relay competition proofs. Those steps still require
-the existing supported proof-broker interface and exact human payment/signing
-confirmation. If the snapshot, broker, or execution interface is unavailable,
-report that specific blocker; do not describe this path as a completed payout.
+The competition page includes a first-party proof workspace backed by the
+existing hosted broker. No separate broker UI or copied payment payload is
+required:
+
+1. Call `agent_bounties_get_proof_status`. Follow scoring preparation while a
+   forward-GMV window is open. After close, `agent_bounties_prepare_proof_quote`
+   fetches the exact published campaign and snapshot automatically. The API
+   verifies the committed dual-attester quorum before issuing a quote.
+2. For structured artifacts, provide the exact `metric` with `profile_id`,
+   `threshold`, `artifact_utf8` and committed `requirements`. The browser derives
+   the domain-bound UTF-8 submission hash. Public-vector input requires the
+   committed mode, threshold, cases/observations and canonical `artifact_hash`.
+   These are the assistant's technical preparation, not questions for the
+   person. Arbitrary machine predicates cannot be substituted for committed
+   rules. The hosted broker remains authoritative about supported profiles.
+3. A quote is free to prepare. `agent_bounties_open_proof_review` shows the exact
+   entrant, entry, proof fee, relay fee, maximum service charge, prize remaining
+   if won, losing exposure and expiry. The person accepts the applicable terms
+   and clicks **Approve service charge in wallet**. Only that trusted action can
+   request the bounded native-USDC EIP-3009 signature; the browser sends the
+   exact x402 payload directly to the existing payment endpoint.
+4. Call `agent_bounties_get_proof_status` to track payment and proving. Call
+   `agent_bounties_resume_proof_service` after a lost response to retry only the
+   already signed request. Neither operation creates new wallet authority.
+   A pending payment is reconciled through the same job, never a replacement
+   authorization. The page also refreshes every 15 seconds while visible.
+5. When `proved`, the person clicks **Authorize my finished entry**. The page
+   independently binds the 640-byte journal to this competition, solver, nonce,
+   artifact and immutable program/policy hashes, verifies proof hashes and the
+   exact `SubmitProof` typed data, then requests the solver's wallet signature.
+   The broker submits the proof using the relay fee already quoted. This second
+   wallet decision is necessary because the exact finished proof does not
+   exist at payment time. GPT does not add another approval question.
+6. Track qualification, winner selection and settlement. Qualification is not
+   a prize payment. Only matching canonical entry and `CompetitionSettledV2`
+   evidence for the same solver, nonce, artifact and winning sequence permits
+   paid language. Service payments and refunds have separate safe-block evidence.
+
+Missing snapshots, unavailable provers, unsupported profiles and closed proof
+windows remain explicit blockers before payment. A valid losing entry does not
+qualify for a broker-failure refund. The browser does not generate attester
+signatures, implement an arbitrary local prover or promise a winning score.
+The proof workspace remains visible for an existing job after its competition
+leaves the ready-work list. Its `proofJob` URL restores job tracking and an
+unexpired unsigned payment review; wallet authority is never put in that URL.
 
 ## Recovery and storage
 
 Journey/draft state, public submission preparation, and wallet checkpoints are
 stored in the browser session. Hosted intent URLs survive navigation between
 browsers until their one-hour expiry; browser-local history does not transfer.
-No private keys or reusable wallet signatures are saved by these additions.
-Closing the browser session can clear local recovery state.
+Private keys and recovery phrases are never requested or saved. The competition
+workspace temporarily saves a person's exact, short-lived signed payment or
+relay request in session storage to recover from a lost response. It deletes
+that bearer capability after the backend acknowledges the corresponding
+transition. These signatures never appear in WebMCP results, URLs, analytics,
+or public evidence. Closing the session can clear local recovery state. A lost
+wallet response keeps the same payment nonce; any repeat signature must use
+that exact authorization and cannot double-charge that nonce.
 
 Never-broadcast expired reviews can renew automatically. An observed,
 pending, or uncertain wallet step blocks renewal and duplicate sends. A
@@ -116,7 +161,7 @@ action.
 ## Verification
 
 ```powershell
-node --test scripts/test-webmcp.js scripts/test-marketplace-ui.js
+node --test scripts/test-webmcp.js scripts/test-marketplace-ui.js scripts/test-competition-proof.js
 node scripts/test-ai-bounty-handoff.js
 node scripts/check-bounty-economics.cjs
 python scripts/check-site.py

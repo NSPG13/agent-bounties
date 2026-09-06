@@ -40,6 +40,10 @@
   const isCompetition = /\/competition\.html$/.test(window.location.pathname);
   const isParticipant = /\/participate\.html$/.test(window.location.pathname);
   let parentReady = Promise.resolve();
+  async function proofWorkspace() {
+    await waitFor(() => window.AgentBountiesProofWorkspace, 8000);
+    return window.AgentBountiesProofWorkspace;
+  }
   let pendingStaging = Promise.resolve();
 
   function register(tool) {
@@ -425,9 +429,25 @@
       return result;
     },
   });
+  if (isCompetition) {
+    register({ name: "agent_bounties_prepare_proof_quote", title: "Prepare my competition entry and service price",
+      description: "Prepare an exact hosted proof-and-relay quote for the current competition. Creates a free broker job and displays its fee, losing exposure and expiry; never pays or signs. Reuses the current entry on retries. For forward GMV, fetches the published attested snapshot automatically after the scoring window; do not invent attestations. For structured artifacts supply metric profile_id, threshold, artifact_utf8 and exact committed requirements; the artifact hash is derived. Public-vector metrics require the committed metric input and artifact_hash. Do technical preparation yourself; ask the person only for business decisions or their wallet connection.",
+      inputSchema: { type: "object", properties: { solver: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" }, metric: { type: "object", description: "Exact public metric input accepted by the competition's committed profile. Omit for forward GMV." }, artifact_hash: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" } }, additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: true }, execute: async (input) => (await proofWorkspace()).prepareQuote(input) });
+    register({ name: "agent_bounties_get_proof_status", title: "Track my proof, entry and prize",
+      description: "Read the current competition proof workspace and reconcile canonical payment, entry, settlement and refund evidence. May cause the backend to reconcile an already broadcast service payment. Returns one next step; service payment and a qualified entry are not prize payment. Never returns signatures or authorizations. Poll without asking permission; report meaningful changes only.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true }, execute: async () => (await proofWorkspace()).refresh() });
+    register({ name: "agent_bounties_open_proof_review", title: "Show my competition confirmation",
+      description: "Open the current exact service-charge or finished-entry review on this page. The person confirms in their wallet. This does not pay, approve terms, sign or relay.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true }, execute: async () => (await proofWorkspace()).openReview() });
+    register({ name: "agent_bounties_resume_proof_service", title: "Continue my approved proof request",
+      description: "Retry only the same payment or relay authorization already signed by the person and saved in this browser, or reconcile the same pending payment. May submit that exact approved charge or proof. No new signature, amount, recipient, entry or consent can be supplied. Use after a lost network response; never repay a pending job. Otherwise just refreshes progress.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true }, execute: async () => (await proofWorkspace()).resume() });
+  }
   function journeyResult(journey) {
     const posting = flow.createPostingJournal(window).load();
-    const next = isParticipant ? { tool: "agent_bounties_get_work_status", input: {} }
+    const next = isCompetition ? { tool: "agent_bounties_get_proof_status", input: {} }
+      : isParticipant ? { tool: "agent_bounties_get_work_status", input: {} }
       : posting ? { tool: "agent_bounties_get_posting_status", input: {} }
       : !journey ? { tool: "agent_bounties_start_journey", missing: "Does the person want work done, or want to earn? Infer this from their request when possible." }
       : journey.current_intent ? { tool: "agent_bounties_check_progress", input: { intent_id: journey.current_intent } }

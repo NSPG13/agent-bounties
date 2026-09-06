@@ -43,12 +43,35 @@
 
       <p class="competition-status" data-competition-status aria-live="polite">Loading machine-readable participation data…</p>
 
+      <section class="competition-proof" data-proof-workspace aria-labelledby="proof-title">
+        <h2 id="proof-title">Enter with your AI</h2>
+        <p data-agent-guidance>Your AI prepares your entry, checks the proof price and tracks the result. You approve the service charge and the finished entry in your wallet.</p>
+        <p data-proof-cost>No quote or charge yet.</p>
+        <p data-proof-entry></p>
+        <output data-proof-status aria-live="polite">Ask your AI to prepare an entry for this competition.</output>
+        <p data-proof-wallet-status></p>
+        <div data-proof-wallet-choices></div>
+        <div class="participation-actions">
+          <button class="market-button" type="button" data-proof-connect>Connect wallet</button>
+          <a data-proof-wallet-setup href="onramp.html">Set up or fund a wallet</a>
+        </div>
+        <div data-legal-consent data-consent-actions="submit_result"></div>
+        <p>Paying the service does not guarantee a prize. It creates the proof and covers its submission. Service failure follows the quoted refund policy; losing with a valid entry does not.</p>
+        <div class="participation-actions">
+          <button class="market-button market-button-primary" type="button" data-proof-pay hidden>Approve service charge in wallet</button>
+          <button class="market-button market-button-primary" type="button" data-proof-relay hidden>Authorize my finished entry</button>
+          <button class="market-button" type="button" data-proof-resume hidden>Continue the same request</button>
+        </div>
+        <details><summary>Your exact entry</summary><pre class="machine-block" data-proof-artifact></pre></details>
+        <details><summary>Entry and payment evidence</summary><pre class="machine-block" data-proof-evidence></pre></details>
+      </section>
+
       <section class="competition-workspace" id="participation-workspace" hidden>
         <article class="competition-instructions">
           <section aria-labelledby="how-score-title">
             <p class="market-section-number">01 · Generate score</p>
             <h2 id="how-score-title">Create demand that settles.</h2>
-            <p>Your score is the canonically settled marketplace GMV attributable to funding from the same wallet that enters this competition.</p>
+            <p data-score-intro>Your score is the canonically settled marketplace GMV attributable to funding from the same wallet that enters this competition.</p>
             <ol class="participation-steps" data-participation-steps></ol>
             <div class="participation-actions">
               <a class="market-button market-button-primary" data-child-post-started hidden>Prepare the qualifying bounty</a>
@@ -133,5 +156,8 @@
     <script src="analytics.js?v=4"></script>
     <script src="marketplace.js?v=3"></script>
     <script src="competition.js?v=4"></script>
+    <script src="legal-consent.js"></script>
+    <script src="evm.js"></script>
+    <script src="competition-proof.js?v=1"></script>
   </body>
 </html>

@@ -12,6 +12,7 @@ on:
       - "scripts/test-metrics-dashboard.js"
       - "scripts/test-marketplace-ui.js"
       - "scripts/test-webmcp.js"
+      - "scripts/test-competition-proof.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -28,6 +29,7 @@ on:
       - "scripts/test-metrics-dashboard.js"
       - "scripts/test-marketplace-ui.js"
       - "scripts/test-webmcp.js"
+      - "scripts/test-competition-proof.js"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
       - "scripts/fixtures/github_participation_metrics.json"
@@ -65,6 +67,7 @@ jobs:
           node --check site/metrics.js
           node --check site/marketplace.js
           node --check site/competition.js
+          node --check site/competition-proof.js
           node --check site/marketplace-workflow.js
           node --check site/webmcp.js
           node --check site/participate.js
@@ -73,7 +76,7 @@ jobs:
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
-        run: node --test scripts/test-marketplace-ui.js scripts/test-webmcp.js
+        run: node --test scripts/test-marketplace-ui.js scripts/test-webmcp.js scripts/test-competition-proof.js
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v

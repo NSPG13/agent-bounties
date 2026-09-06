@@ -413,3 +413,11 @@ code, pre { font-family: var(--market-mono); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.competition-proof { width: min(1120px, calc(100% - 40px)); margin: 24px auto; padding: clamp(20px, 4vw, 40px); border: 1px solid #284137; border-radius: 20px; background: #101e18; color: #e5f1e7; overflow-wrap: anywhere; scroll-margin-top: 100px; }
+.competition-proof h2 { margin: 0 0 16px; font-size: clamp(24px, 3vw, 36px); }
+.competition-proof p { line-height: 1.65; max-width: 85ch; }
+.competition-proof output { display: block; margin: 16px 0; color: #c7f082; }
+.competition-proof details { margin-top: 20px; }
+.competition-proof a { color: #c7f082; }
+.competition-proof [hidden] { display: none !important; }
