@@ -250,7 +250,8 @@
       if (busy) throw new Error("Wait for the current wallet step to finish.");
       busy = true;
       try {
-        await refresh();
+        const refreshed = await refresh();
+        if (!job) return refreshed;
         if (record.paymentEnvelope && job.state === "quoted") await postPayment(record.paymentEnvelope);
         else if (job.state === "payment_pending") await postPayment();
         if (record.relayEnvelope && job.state === "proved") await client.request(relayPath(), record.relayEnvelope);
