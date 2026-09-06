@@ -440,6 +440,20 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
                     )
 
     def test_candidate_validation_strips_signing_secrets_from_worker(self) -> None:
+        current = {
+            "terms": {
+                "document": {
+                    "benchmark": {
+                        "engine": "sandboxed_regression_v1",
+                        "runner_manifest": {
+                            "benchmark_digest": next(
+                                iter(pipeline.RECONCILED_REGRESSION_BENCHMARK_DIGESTS)
+                            )
+                        },
+                    }
+                }
+            }
+        }
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(
             os.environ,
             {"REGRESSION_VERIFIER_PRIVATE_KEY": "test-secret", "PUBLIC_VALUE": "kept"},
@@ -448,7 +462,7 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             pipeline.validate_candidate(
                 Path("trusted-worker"),
                 {"schema": pipeline.CANDIDATE_SCHEMA, "job": {}},
-                {},
+                current,
                 Path(temporary),
                 secret_names=("REGRESSION_VERIFIER_PRIVATE_KEY",),
             )
@@ -718,52 +732,50 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.benchmark_source(job)
 
-    def test_glama_lifecycle_benchmark_is_not_signable_without_canonical_reconciliation(self) -> None:
+    def test_only_exact_reconciled_benchmark_digests_are_signable(self) -> None:
         self.assertEqual(
             repository_benchmark_digest("benchmarks/distribution-v1/glama-onboarding-audit"),
-            pipeline.UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST,
+            "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541",
         )
-        for repository, subdirectory in (
-            ("NSPG13/agent-bounties", "benchmarks/distribution-v1/glama-onboarding-audit"),
-            ("other/copied-benchmark", "different/location"),
+        for digest in (
+            "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541",
+            "sha256:" + "d" * 64,
         ):
             job = {
                 "terms": {
                     "document": {
                         "benchmark": {
+                            "engine": "sandboxed_regression_v1",
                             "source": {
                                 "kind": "github_commit",
-                                "repository": repository,
+                                "repository": "other/copied-benchmark",
                                 "commit": "b" * 40,
-                                "subdirectory": subdirectory,
+                                "subdirectory": "different/location",
                             },
                             "runner_manifest": {
-                                "benchmark_digest": pipeline.UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST
+                                "benchmark_digest": digest
                             },
                         }
                     }
                 }
             }
             with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
-                pipeline.reject_unreconciled_canonical_lifecycle_benchmark(job)
+                pipeline.require_reconciled_regression_benchmark(job)
 
-        safe = json.loads(json.dumps(job))
-        safe["terms"]["document"]["benchmark"]["runner_manifest"]["benchmark_digest"] = (
-            "sha256:" + "d" * 64
-        )
-        pipeline.reject_unreconciled_canonical_lifecycle_benchmark(safe)
+        approved = json.loads(json.dumps(job))
+        approved["terms"]["document"]["benchmark"]["runner_manifest"][
+            "benchmark_digest"
+        ] = next(iter(pipeline.RECONCILED_REGRESSION_BENCHMARK_DIGESTS))
+        pipeline.require_reconciled_regression_benchmark(approved)
 
-        revised_same_source = json.loads(json.dumps(safe))
-        revised_same_source["terms"]["document"]["benchmark"]["source"].update(
-            {
-                "repository": "nSpG13/agent-bounties",
-                "subdirectory": "benchmarks/distribution-v1/glama-onboarding-audit",
-            }
+        unsupported = json.loads(json.dumps(approved))
+        unsupported["terms"]["document"]["benchmark"]["engine"] = "other_engine"
+        with self.assertRaisesRegex(pipeline.PipelineError, "engine is unavailable"):
+            pipeline.require_reconciled_regression_benchmark(unsupported)
+        approved["terms"]["document"]["benchmark"]["source"].update(
+            {"repository": "relocated/repository", "subdirectory": "copied/path"}
         )
-        with self.assertRaisesRegex(pipeline.PipelineError, "independently reconciled"):
-            pipeline.reject_unreconciled_canonical_lifecycle_benchmark(
-                revised_same_source
-            )
+        pipeline.require_reconciled_regression_benchmark(approved)
 
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {

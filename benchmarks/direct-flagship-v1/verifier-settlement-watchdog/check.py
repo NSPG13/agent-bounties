@@ -30,18 +30,18 @@ SCHEMA = "agent-bounties/regression-verifier-watchdog-plan-v1"
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ADDRESS_ONE = "0x" + "11" * 20
 ADDRESS_TWO = "0x" + "22" * 20
-PIPELINE_SHA256 = "b305fd700f982e4ccba01101e9488c14dca4bd35c5d01dd7d85d2d546f14039a"
-PIPELINE_TEST_SHA256 = "98f98a008520776c0c0823f6076a70348facfb35d6da3c5edec106625d4150bd"
+PIPELINE_SHA256 = "2314d4371b691665588ba75bba392b50ab2cf7ea5d77f661e95bc698aa5ed9db"
+PIPELINE_TEST_SHA256 = "4d8a82516c52770787d72fe5b6753117ffe0ff647aa8320a5f9b8be458f8369c"
 SOURCE_GUARD_SHA256 = "ab8a6491acd5a5b8e93db5ef36d40db6276af8ba658bcd6a52c34d6aeb0be83d"
 SOURCE_GUARD_TEST_SHA256 = "d18ced511f9cd9f266c989dae93ff0088ce38d290f19a6491d6d7b3e6aa108ac"
-WORKER_BUILD_SHA256 = "d5408c829f52dfc66591b9bad51e4a61c1e9d2fc74bf80f91263daf4cc4c9cf0"
-SIGNING_RUNTIME_SHA256 = "e541692d5fadedccaeec803ea7ee466cdcc3036b4e11b9c48c58aa2821067652"
+WORKER_BUILD_SHA256 = "729292ae87e115ab2d00d7c0d580bd37e229aaea682517d2de2202942bfce064"
+SIGNING_RUNTIME_SHA256 = "0003d29adff6c0489e5323d431cdae28c129cfcc10b6c17bd0ae11d4385f235e"
 SHARED_KEEPER_CONCURRENCY = "agent-bounties-shared-base-keeper"
 CANONICAL_WORKFLOW_SHA256 = {
-    ".github/workflows/regression-verifier-runner.yml": "77826082018474cabf1e61013739c2d78c1fc284a5e6a1e1c9f890ece0f751c7",
+    ".github/workflows/regression-verifier-runner.yml": "9de37465f316aeec3e26413c856dd7c9b3bf4c4eaa678633cc3b94e89c56b376",
     ".github/workflows/regression-verifier-watchdog.yml": "2cc7333b9fa5d613c1f84416bfd5593ef6c7416fc916e5157a3e43eac89b0d68",
-    ".github/workflows/regression-verifier-signer.yml": "558a35209b352837e158caee3233446be98b54d0f117fa2f3b1afb046bee704e",
-    ".github/workflows/regression-verifier-signing-reusable.yml": "c64c332ed1302520f6f6dbca4417d847342d54b72fd775b24b031866b3168d70",
+    ".github/workflows/regression-verifier-signer.yml": "a5858144c19ca72721aff736e48e9583972ad4665c5652dd65a7b23a5298b783",
+    ".github/workflows/regression-verifier-signing-reusable.yml": "a7cd1fe97c6e6d601029ff40afead2b5b4a65db84e0762d8f0e7c227f9b9b7c2",
 }
 
 

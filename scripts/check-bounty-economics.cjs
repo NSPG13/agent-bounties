@@ -71,7 +71,7 @@ const benchmark = {
     image: `docker.io/library/python@sha256:${"b".repeat(64)}`,
     command: ["python", "/benchmark/check.py"],
     workdir: "/workspace",
-    benchmark_digest: `sha256:${"c".repeat(64)}`,
+    benchmark_digest: "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
     timeout_seconds: 60,
     cpu_millis: 1_000,
     memory_bytes: 134_217_728,
@@ -153,6 +153,15 @@ assert.deepEqual(
   verificationReadiness(revisedUnsafeBenchmark, evidenceSchema),
   { blocked: true, executable: false },
   "the canonical lifecycle benchmark must remain blocked across revisions until a reviewed reconciliation is approved",
+);
+const relocatedAlteredBenchmark = JSON.parse(JSON.stringify(benchmark));
+relocatedAlteredBenchmark.source.repository = "other/copied-benchmark";
+relocatedAlteredBenchmark.source.subdirectory = "different/location";
+relocatedAlteredBenchmark.runner_manifest.benchmark_digest = `sha256:${"d".repeat(64)}`;
+assert.deepEqual(
+  verificationReadiness(relocatedAlteredBenchmark, evidenceSchema),
+  { blocked: true, executable: false },
+  "relocating and altering an unreviewed benchmark must not bypass the digest allowlist",
 );
 
 process.stdout.write("bounty economics behavior check passed\n");

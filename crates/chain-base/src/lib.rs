@@ -421,12 +421,17 @@ pub const STANDING_META_V2_PROTOCOL_VERSION: &str = "agent-bounties/independent-
 pub const STANDING_META_V3_ROUTED_PROTOCOL_VERSION: &str =
     "agent-bounties/independent-child-v3-routed";
 pub const STANDING_META_V2_REGRESSION_ENGINE: &str = "sandboxed_regression_v1";
-const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST: &str =
-    "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
-const CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY: &str = "NSPG13/agent-bounties";
-const CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY: &str =
-    "benchmarks/distribution-v1/glama-onboarding-audit";
-const RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS: &[&str] = &[];
+const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
+    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
+    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
+    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
+    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
+    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+];
 const PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS: u128 = 10_000;
 pub const BASE_MAINNET_STANDING_META_V2_VERIFIER: &str =
     "0xe573cb4f471d38b5bf10ce82237251ac902c9867";
@@ -5415,33 +5420,24 @@ pub fn sha256_canonical_json(value: &Value) -> Result<String, ChainBaseError> {
     Ok(format!("0x{}", hex::encode(Sha256::digest(bytes))))
 }
 
-fn reject_unreconciled_canonical_lifecycle_benchmark(
+fn validate_reconciled_regression_benchmark(
     document: &AutonomousBountyTermsDocument,
 ) -> Result<(), ChainBaseError> {
+    if document.benchmark.get("engine").and_then(Value::as_str)
+        != Some(STANDING_META_V2_REGRESSION_ENGINE)
+    {
+        return Ok(());
+    }
     let benchmark_digest = document
         .benchmark
         .get("runner_manifest")
         .and_then(|runner| runner.get("benchmark_digest"))
         .and_then(Value::as_str);
-    let source = document.benchmark.get("source");
-    let is_canonical_lifecycle_source = source
-        .and_then(|value| value.get("repository"))
-        .and_then(Value::as_str)
-        .is_some_and(|repository| {
-            repository.eq_ignore_ascii_case(CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY)
-        })
-        && source
-            .and_then(|value| value.get("subdirectory"))
-            .and_then(Value::as_str)
-            == Some(CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY);
-    let has_reviewed_reconciliation = benchmark_digest
-        .is_some_and(|digest| RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS.contains(&digest));
-    if benchmark_digest == Some(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST)
-        || (is_canonical_lifecycle_source && !has_reviewed_reconciliation)
+    if !benchmark_digest
+        .is_some_and(|digest| RECONCILED_REGRESSION_BENCHMARK_DIGESTS.contains(&digest))
     {
         return Err(ChainBaseError::InvalidTermsDocument(
-            "the Glama onboarding audit cannot fund a bounty until its Base lifecycle evidence is independently reconciled"
-                .to_string(),
+            "sandboxed regression benchmark exact digest must be independently reconciled and approved before funding or verifier signing".to_string(),
         ));
     }
     Ok(())
@@ -5517,7 +5513,7 @@ pub fn build_autonomous_bounty_terms_record(
     if let Some(image) = &document.image {
         validate_bounty_image_reference(image)?;
     }
-    reject_unreconciled_canonical_lifecycle_benchmark(&document)?;
+    validate_reconciled_regression_benchmark(&document)?;
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
     validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
@@ -6369,7 +6365,7 @@ pub fn validate_autonomous_creation_against_terms(
     create: &AutonomousBountyCreate,
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<(), ChainBaseError> {
-    reject_unreconciled_canonical_lifecycle_benchmark(&terms.document)?;
+    validate_reconciled_regression_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let hashes_match = create.terms_hash.eq_ignore_ascii_case(&terms.terms_hash)
         && create.policy_hash.eq_ignore_ascii_case(&terms.policy_hash)
@@ -6594,7 +6590,7 @@ pub fn validate_autonomous_creation_for_public_earning(
 pub fn autonomous_bounty_create_from_terms(
     terms: &AutonomousBountyTermsRecord,
 ) -> Result<AutonomousBountyCreate, ChainBaseError> {
-    reject_unreconciled_canonical_lifecycle_benchmark(&terms.document)?;
+    validate_reconciled_regression_benchmark(&terms.document)?;
     validate_known_deterministic_module_semantics(&terms.document)?;
     let contract_terms = terms.document.contract_terms.as_object().ok_or_else(|| {
         ChainBaseError::InvalidTermsDocument("published contract_terms are unavailable".to_string())
@@ -8416,7 +8412,7 @@ mod tests {
                 "image": format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
                 "command": ["python", "/benchmark/check.py"],
                 "workdir": "/workspace",
-                "benchmark_digest": format!("sha256:{}", "c".repeat(64)),
+                "benchmark_digest": RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0],
                 "timeout_seconds": 60,
                 "cpu_millis": 1000,
                 "memory_bytes": 134217728,
@@ -8453,7 +8449,7 @@ mod tests {
         copied_unreconciled_document.benchmark["source"]["subdirectory"] =
             json!("different/location");
         copied_unreconciled_document.benchmark["runner_manifest"]["benchmark_digest"] =
-            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST);
+            json!(format!("sha256:{}", "e".repeat(64)));
         assert!(matches!(
             build_autonomous_bounty_terms_record(
                 &record.creator_wallet,
@@ -8465,7 +8461,7 @@ mod tests {
         ));
         let mut revised_unreconciled_document = supported_document.clone();
         revised_unreconciled_document.benchmark["source"]["subdirectory"] =
-            json!(CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY);
+            json!("benchmarks/distribution-v1/glama-onboarding-audit");
         revised_unreconciled_document.benchmark["runner_manifest"]["benchmark_digest"] =
             json!(format!("sha256:{}", "d".repeat(64)));
         assert!(matches!(
@@ -8486,7 +8482,7 @@ mod tests {
         legacy_unreconciled_record.document.benchmark["source"]["subdirectory"] =
             json!("different/location");
         legacy_unreconciled_record.document.benchmark["runner_manifest"]["benchmark_digest"] =
-            json!(UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST);
+            json!(format!("sha256:{}", "e".repeat(64)));
         let safe_create = autonomous_bounty_create_from_terms(&supported_record).unwrap();
         let mut incomplete_evidence_document = supported_record.document.clone();
         incomplete_evidence_document.evidence_schema = json!({

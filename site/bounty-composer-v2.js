@@ -12,12 +12,17 @@
   const REGRESSION_VERIFIERS = [
     "0xbe6292b9e465f549e2363b918d6dd9187038431e",
   ];
-  const UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST =
-    "sha256:240a940036f8af4937657d369a2abe2ecd6f0b47a1c6d68c71d8123d980db541";
-  const CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY = "nspg13/agent-bounties";
-  const CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY =
-    "benchmarks/distribution-v1/glama-onboarding-audit";
-  const RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS = new Set();
+  const RECONCILED_REGRESSION_BENCHMARK_DIGESTS = new Set([
+    "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
+    "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f",
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2",
+    "sha256:6c7a300bcdd84f125bf9811297d72f3717d5ebd65f326c5e23687f44ba553043",
+    "sha256:94eff483d0fbba47037a1dedaae1e9339e23f218eb29ea3182fbc256e7e1c587",
+    "sha256:63e28323ea17da7ef0fb79e447256540e28f9c7525a8657707aea1598ce05bff",
+    "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
+    "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
+    "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+  ]);
   const RUNNER_MANIFEST_FIELDS = [
     "schema_version", "image", "command", "workdir", "benchmark_digest",
     "timeout_seconds", "cpu_millis", "memory_bytes", "pids_limit",
@@ -861,7 +866,7 @@
     const requiredEvidence = state.draft?.evidence_schema?.required || [];
     const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
     ui.verifierSummary.textContent = readiness.blocked
-      ? "This benchmark cannot be funded until its Base lifecycle evidence is independently reconciled. Choose another reviewed benchmark before connecting a wallet."
+      ? "This exact benchmark digest has not been independently reconciled. Choose a reviewed benchmark before connecting a wallet."
       : readiness.executable
         ? "These exact public inputs and direct command decide whether the verifier may sign. Confirm every value before connecting a wallet."
         : "No complete executable verifier is attached. This draft cannot be funded until one is precommitted and reviewed.";
@@ -1294,12 +1299,7 @@
       && boundsReady
       && runner.tmpfs_bytes <= runner.memory_bytes
       && new Set(["linux/amd64", "linux/arm64"]).has(runner.platform);
-    const canonicalLifecycleSource = String(source?.repository || "").toLowerCase()
-        === CANONICAL_LIFECYCLE_BENCHMARK_REPOSITORY
-      && source?.subdirectory === CANONICAL_LIFECYCLE_BENCHMARK_SUBDIRECTORY;
-    const blocked = runner?.benchmark_digest === UNRECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGEST
-      || (canonicalLifecycleSource
-        && !RECONCILED_CANONICAL_LIFECYCLE_BENCHMARK_DIGESTS.has(runner?.benchmark_digest));
+    const blocked = !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.has(runner?.benchmark_digest);
     const requiredEvidence = evidenceSchema?.required;
     const sourceSnapshotDigest = evidenceSchema?.properties?.source_snapshot_digest;
     const evidenceReady = evidenceSchema?.type === "object"
@@ -1322,7 +1322,7 @@
     const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
     if (readiness.blocked) {
       throw new Error(
-        "The Glama onboarding audit cannot be funded until its Base lifecycle evidence is independently reconciled. Choose another reviewed benchmark.",
+        "This exact benchmark digest cannot be funded until it is independently reconciled and approved. Choose a reviewed benchmark.",
       );
     }
     if (!readiness.executable) {
