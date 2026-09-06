@@ -7377,7 +7377,7 @@ mod tests {
                 image: format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
                 command: vec!["true".to_string()],
                 workdir: "/workspace".to_string(),
-                benchmark_digest: format!("sha256:{}", "c".repeat(64)),
+                benchmark_digest: RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0].to_string(),
                 timeout_seconds: 30,
                 cpu_millis: 500,
                 memory_bytes: 128 * 1024 * 1024,
