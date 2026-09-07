@@ -46,6 +46,27 @@ requires a new review. Merely reopening the same review does not.
    for another task can use `start_journey(new_task: true)` after the previous
    posting's funding is confirmed.
 
+### Rejected wallet batches
+
+Posting sends EIP-5792 version 2.0.0 calls with the required
+`atomicRequired: false`: the wallet may execute the reviewed calls sequentially,
+in their supplied order. Only an explicit unsupported-method response permits
+the direct-transaction fallback. A batch ID is not funding evidence.
+
+For an older request rejected with code `-32602` and the exact error
+`atomicRequired - Expected a value of type boolean, but received undefined`,
+use `agent_bounties_recover_rejected_posting_batch` on the posting page. Pass the
+recorded bounty contract and ID plus the person's verbatim wallet error
+(including its original punctuation). The tool requires a matching operation
+without an authorization or submission, checks both canonical events and feed,
+and archives the rejected attempt locally before reopening preparation. It
+preserves the draft and does not grant consent or send a wallet request.
+The person confirms any subsequent request themselves. Network failures,
+changed operations, canonical activity, other parameter errors, and lost or
+pending wallet replies remain blocked; absence of chain activity alone never
+authorizes a retry. New requests also retain the wallet method and this exact
+validation error, so a user report cannot replace an uncertain recorded reply.
+
 ## Earning and contributions
 
 ### Qualifying 1 USDC meta-bounty children

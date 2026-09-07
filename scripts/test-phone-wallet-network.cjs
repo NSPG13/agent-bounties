@@ -15,18 +15,25 @@ const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"),
 const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function configureSpeech", start);
 assert.ok(start >= 0 && end > start);
 const fundingFunction = source.slice(start, end) + "; fundApprovedBounty";
+const batchFunction = source.slice(source.indexOf("  async function sendWalletCalls("), source.indexOf("  function contractTerms("));
+const atomicError = { code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`" };
 
-async function fixture({ adapted = true, change = null, uncertain = false } = {}) {
+async function fixture({ adapted = true, change = null, uncertain = false, batch = false, legacy = false, pending = false } = {}) {
   const storage = new Map(), signing = [], statuses = [], network = [];
   const store = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   store.setItem("agent-bounties-phone-connected-v1", "ab-phone-12345678-1234-1234-1234-123456789012");
-  const namespace = { chains: ["eip155:8453"], accounts: [`eip155:8453:${address}`], methods: ["eth_signTypedData_v4"], events: [], rpcMap: { "eip155:8453": "http://127.0.0.1:1" } };
+  const namespace = { chains: ["eip155:8453"], accounts: [`eip155:8453:${address}`], methods: ["eth_signTypedData_v4", "wallet_sendCalls"], events: [], rpcMap: { "eip155:8453": "http://127.0.0.1:1" } };
   const universal = new UniversalProvider({ logger: "silent", disableProviderPing: true });
   universal.client = {
     core: { projectId: "0".repeat(32), storage: { getItem: async key => storage.get(key), setItem: async (key, value) => storage.set(key, value) } },
     request: async request => {
       signing.push(request);
       if (uncertain) throw new Error("Fixture wallet response was lost");
+      if (batch) {
+        assert.equal(request.request.method, "wallet_sendCalls");
+        if (typeof request.request.params[0].atomicRequired !== "boolean") throw Object.assign(new Error(atomicError.message), atomicError);
+        return { id: "synthetic-batch-id" };
+      }
       throw Object.assign(new Error("Fixture user rejected the wallet request"), { code: 4001 });
     },
   };
@@ -49,11 +56,12 @@ async function fixture({ adapted = true, change = null, uncertain = false } = {}
   const journal = createPostingJournal(win);
   const state = { approved: true, provider, account: address, balances: { usdc: 1000000n, required: 1000000n, eth: 1n }, draft: { title: "Synthetic review" }, fundingUsdc: 1 };
   const authorization = { domain: { chainId: 8453 }, primaryType: "ReceiveWithAuthorization", message: { value: "1000000" } };
-  const plan = { bounty_id: "0x" + "56".repeat(32), predicted_bounty_contract: "0x" + "78".repeat(20), eip3009_authorization: authorization };
-  const run = vm.runInNewContext(fundingFunction, {
-    postingBusy: false, postingJournal: journal, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {} },
+  const calls = [{ to: other, data: "0x010203" }, { to: address, data: "0x040506" }];
+  const plan = { bounty_id: "0x" + "56".repeat(32), predicted_bounty_contract: "0x" + "78".repeat(20), eip3009_authorization: authorization, wallet_calls: calls };
+  const run = vm.runInNewContext((legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + fundingFunction, {
+    postingBusy: false, postingJournal: journal, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
     track() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
-    loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20) }),
+    loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20), chain_id_hex: "0x2105" }),
     currentRewardSplit: () => ({ solver: "900000", verifier: "100000", total: "1000000" }),
     contractTerms: () => ({}), termsDocument: () => ({}), createPayload: () => ({}), validateCreationPlan() {}, formatUsdc: String,
     requestJson: async url => {
@@ -63,11 +71,39 @@ async function fixture({ adapted = true, change = null, uncertain = false } = {}
       if (change === "chain") { sdk.chainId = 1; universal.rpcProviders.eip155.chainId = 1; }
       return plan;
     },
-    isContractAccount: async () => false,
+    isContractAccount: async () => batch,
+    pollCreation: async () => pending ? null : [{ kind: "canonical_bounty_created" }, { kind: "funding_added" }, { kind: "bounty_became_claimable" }],
+    fetchFeedItem: async () => ({ terms_valid: true, verification_ready: true }),
     sendTransaction: async () => { throw new Error("No transaction may follow the rejected fixture signature"); },
   });
-  return { sdk, provider, run, signing, statuses, network, journal, authorization };
+  return { sdk, provider, run, signing, statuses, network, journal, authorization, calls };
 }
+
+test("the old batch reproduces the wallet's exact atomicRequired schema rejection through the pinned SDK", async () => {
+  const env = await fixture({ batch: true, legacy: true }); await env.run();
+  assert.equal(env.signing.length, 1); assert.equal(env.statuses.at(-1), atomicError.message);
+  assert.equal(env.journal.load().wallet_error.code, -32602);
+  assert.equal(env.journal.load().transactions.length, 0);
+  await env.run(); assert.equal(env.signing.length, 1, "no automatic replay or transaction fallback");
+});
+
+for (const pending of [false, true]) test(`a smart-wallet batch passes the real SDK with canonical funding ${pending ? "pending" : "confirmed"}`, async () => {
+  const env = await fixture({ batch: true, pending }); await env.run();
+  assert.equal(env.signing.length, 1); assert.equal(env.network.length, 0);
+  const wire = env.signing[0]; assert.equal(wire.chainId, "eip155:8453");
+  assert.deepEqual(JSON.parse(JSON.stringify(wire.request)), { method: "wallet_sendCalls", params: [{ version: "2.0.0", atomicRequired: false,
+    chainId: "0x2105", from: address, calls: env.calls.map(call => ({ ...call, value: "0x0" })) }] });
+  assert.equal(env.journal.load().transactions[0].id, "synthetic-batch-id");
+  assert.equal(env.journal.load().phase, pending ? "batch_submitted" : "funding_confirmed");
+  await env.run(); assert.equal(env.signing.length, 1, "neither pending nor confirmed funding is repeated");
+});
+
+test("a lost smart-wallet batch reply stays recorded and cannot dispatch a second request", async () => {
+  const env = await fixture({ batch: true, uncertain: true }); await env.run();
+  assert.match(env.statuses.at(-1), /response was lost/); assert.equal(env.journal.load().phase, "sending");
+  assert.equal(env.journal.load().wallet_error, undefined);
+  await env.run(); assert.equal(env.signing.length, 1); assert.equal(env.network.length, 0);
+});
 
 test("the real pinned SDK reproduces the false network-change stop before adaptation", async () => {
   const env = await fixture({ adapted: false });

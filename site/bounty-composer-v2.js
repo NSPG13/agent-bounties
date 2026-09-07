@@ -1592,13 +1592,14 @@
   async function copyUsdcAddress(){const protocol=await loadProtocol();await navigator.clipboard.writeText(protocol.native_usdc);setPaymentStatus("Base USDC contract address copied. Verify the network and address inside your wallet before acquiring tokens.","success");}
 
   function signatureParts(signature){const value=String(signature).replace(/^0x/,"");if(value.length!==130)throw new Error("The wallet returned an invalid signature.");return{r:`0x${value.slice(0,64)}`,s:`0x${value.slice(64,128)}`,v:Number.parseInt(value.slice(128,130),16)};}
-  async function sendTransaction(transaction){if(!transaction||!transaction.to||!transaction.data||Number(transaction.value_wei||0)!==0)throw new Error("The planned transaction is invalid.");postingJournal.checkpoint("sending");const hash=await state.provider.request({method:"eth_sendTransaction",params:[{from:state.account,to:transaction.to,data:transaction.data,value:"0x0"}]});if(!/^0x[0-9a-fA-F]{64}$/.test(hash))throw new Error("The wallet response is uncertain. Check the recorded posting before retrying.");postingJournal.checkpoint("submitted",hash);return hash;}
+  async function sendTransaction(transaction){if(!transaction||!transaction.to||!transaction.data||Number(transaction.value_wei||0)!==0)throw new Error("The planned transaction is invalid.");postingJournal.checkpoint("sending",null,"eth_sendTransaction");const hash=await state.provider.request({method:"eth_sendTransaction",params:[{from:state.account,to:transaction.to,data:transaction.data,value:"0x0"}]});if(!/^0x[0-9a-fA-F]{64}$/.test(hash))throw new Error("The wallet response is uncertain. Check the recorded posting before retrying.");postingJournal.checkpoint("submitted",hash);return hash;}
   async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){if(receipt.status!=="0x1")throw new Error(`The Base transaction reverted: ${hash}`);return receipt;}await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
   async function isContractAccount(){const code=await state.provider.request({method:"eth_getCode",params:[state.account,"latest"]});return code&&code!=="0x"&&code!=="0x0";}
   async function sendWalletCalls(calls,protocol){
-    postingJournal.checkpoint("sending");
+    postingJournal.checkpoint("sending",null,"wallet_sendCalls");
     try {
-      const batch=await state.provider.request({method:"wallet_sendCalls",params:[{version:"2.0.0",chainId:protocol.chain_id_hex,from:state.account,calls:calls.map((call)=>({to:call.to,data:call.data,value:"0x0"}))}]});
+      // EIP-5792 requires this boolean even when sequential execution is allowed.
+      const batch=await state.provider.request({method:"wallet_sendCalls",params:[{version:"2.0.0",atomicRequired:false,chainId:protocol.chain_id_hex,from:state.account,calls:calls.map((call)=>({to:call.to,data:call.data,value:"0x0"}))}]});
       postingJournal.checkpoint("batch_submitted",batch);return batch;
     } catch(error) {
       // Only explicit lack of method support permits a fallback. A lost reply can conceal a submitted batch.
@@ -1619,6 +1620,28 @@
   async function pollCreation(api,bountyId,timeoutMs=100000){const started=Date.now();while(Date.now()-started<timeoutMs){const events=await requestJson(`${api}/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=${encodeURIComponent(bountyId)}`,{cache:"no-store"});const created=events.some((event)=>event.kind==="canonical_bounty_created");const funded=events.some((event)=>event.kind==="funding_added");const claimable=events.some((event)=>event.kind==="bounty_became_claimable");if(created&&funded&&claimable)return events;await new Promise((resolve)=>setTimeout(resolve,2500));}return null;}
 
   async function fetchFeedItem(api,contract){try{const items=await requestJson(`${api}/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false`,{cache:"no-store"});return items.find((item)=>String(item.bounty_contract).toLowerCase()===String(contract).toLowerCase())||null;}catch(_error){return null;}}
+
+  async function recoverRejectedBatch(input) {
+    if (postingBusy || state.bountyContract) throw new Error("A posting request is active or returned a wallet result. Check its canonical status.");
+    const snapshot = postingJournal.validateRejectedBatch(input, input.wallet_error);
+    const client = window.AgentBountiesWorkflow.createClient(window);
+    // Absence alone never permits recovery: the exact pre-submission schema
+    // rejection above is required, and both canonical reads must succeed.
+    const [items, events] = await Promise.all([
+      client.request("/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false"),
+      client.request(`/v1/base/autonomous-bounties/events?network=base-mainnet&bounty_id=${encodeURIComponent(snapshot.bounty_id)}`),
+    ]);
+    if (!Array.isArray(items) || !Array.isArray(events)) throw new Error("Canonical posting status is unavailable. Keep the recorded request.");
+    if (events.length || items.some(item => item.bounty_id === snapshot.bounty_id || String(item.bounty_contract).toLowerCase() === snapshot.bounty_contract.toLowerCase()))
+      throw new Error("Canonical activity exists for this posting. Reconcile it before any further wallet request.");
+    if (postingBusy || state.bountyContract) throw new Error("The posting state changed during recovery. Check its status.");
+    const archived = postingJournal.archiveRejectedBatch(input, input.wallet_error, snapshot);
+    for (const field of ui.form.querySelectorAll("input, textarea, button")) field.disabled = false;
+    ui.fundNow.disabled = !state.approved;
+    setPaymentStatus("The wallet rejected the previous batch before accepting it. The rejected attempt is saved. Your draft is unchanged; review it and confirm the new request in your wallet when ready.", "pending");
+    return { status: "rejected_batch_archived", archived_operation: archived, funded: false, paid: false,
+      user_confirmation_required: true, next_action: "Read the preserved bounty review, then open its funding review. The person confirms; recovery sends no wallet request." };
+  }
 
   async function fundApprovedBounty() {
     if (postingBusy) return;
@@ -1886,6 +1909,7 @@
   let stagedFingerprint = null;
   window.AgentBountiesComposer = Object.freeze({
     prepareMetaParent,
+    recoverRejectedBatch,
     invalidate() {
       if (!state.draft || postingBusy || postingJournal.load()) return;
       state.reviewStale = true; state.approved = false; stagedFingerprint = null;
