@@ -248,6 +248,20 @@ ${competitionChildBrief(item)}`;
     return messages[reason] || "The wallet could not be linked. Please try again.";
   }
 
+  function accountSetupStatus(payload, wallets) {
+    const count = wallets.length;
+    // During a rolling release, the prior API still provides authoritative
+    // ownership receipts. Never turn a bare address or an empty 200 into proof.
+    if (payload && (Object.hasOwn(payload, "account_status") || Object.hasOwn(payload, "account_complete"))) {
+      if (payload.account_status === "ready" && payload.account_complete === true && count) return "ready";
+      if (payload.account_status === "wallet_required" && payload.account_complete === false && !count) return "wallet_required";
+      return "unavailable";
+    }
+    if (count && (payload?.identity_link_status === "verified" || payload?.linked === true || payload?.unlinked === true)) return "ready";
+    if (!count && (payload?.unlinked === true || payload?.reason === "marketplace_identity_unlinked")) return "wallet_required";
+    return "unavailable";
+  }
+
   function accountDashboardView(payload) {
     const normalizeWallets = (items) => {
       if (!Array.isArray(items)) return [];
@@ -850,8 +864,7 @@ ${competitionChildBrief(item)}`;
       const renderAccountDashboard = (payload) => {
         const view = accountDashboardView(payload);
         renderWallets(view.wallets);
-        renderSetup(payload?.account_status === "ready" && payload.account_complete === true && view.wallets.length
-          ? "ready" : payload?.account_status === "wallet_required" && !view.wallets.length ? "wallet_required" : "unavailable");
+        renderSetup(accountSetupStatus(payload, view.wallets));
         if (accountStats) accountStats.setAttribute("aria-busy", "false");
         if (accountParticipating) accountParticipating.textContent = view.participating;
         if (accountCompletedPosts) accountCompletedPosts.textContent = view.completedPosts;
@@ -1099,8 +1112,8 @@ ${competitionChildBrief(item)}`;
           });
           if (currentUser !== linkingUser) throw { code: 4001 };
           const linkedWallets = accountDashboardView(verification).wallets;
-          if (verification.linked !== true || verification.account_complete !== true
-            || verification.account_status !== "ready" || !linkedWallets.some(wallet => wallet.address === address)) {
+          if (verification.linked !== true || accountSetupStatus(verification, linkedWallets) !== "ready"
+            || !linkedWallets.some(wallet => wallet.address === address)) {
             throw { reason: "wallet_link_store_unavailable" };
           }
           // The successful verify response is authoritative even if activity refresh fails.
@@ -1443,6 +1456,7 @@ ${competitionChildBrief(item)}`;
   return {
     BOUNTY_POSTING_PROMPT,
     accountDashboardView,
+    accountSetupStatus,
     authApiPath,
     authProviderPath,
     authResultMessage,

@@ -50,7 +50,7 @@ async function openAccount(page) {
   await accountLink.click();
 }
 
-async function account({ installed = true, linked = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false } = {}) {
+async function account({ installed = true, linked = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false } = {}) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const proofs = [], errors = [];
@@ -80,6 +80,13 @@ async function account({ installed = true, linked = false, mobile = false, adapt
     if (pathname.endsWith("/wallet/unlink")) {
       wallets = wallets.filter(wallet => wallet.address !== route.request().postDataJSON().address);
       body = { wallets, unlinked: true, account_status: wallets.length ? "ready" : "wallet_required", account_complete: wallets.length > 0 };
+    }
+    if (legacy) {
+      delete body.account_status; delete body.account_complete;
+      if (pathname.endsWith('/account')) {
+        body.identity_link_status = wallets.length ? 'verified' : 'unlinked';
+        body.reason = wallets.length ? 'marketplace_evidence_unavailable' : 'marketplace_identity_unlinked';
+      }
     }
     await route.fulfill({ json: body });
   });
@@ -136,8 +143,8 @@ test("pending setup is resumable and never shows activity before wallet proof", 
   } finally { await context.close(); }
 });
 
-for (const linked of [false, true]) test(`phone wallet is available through ${linked ? 'Link another' : 'Link wallet'}`, async () => {
-  const {context,page,link,proofs} = await account({phone:true,installed:false,linked,mobile:true});
+for (const legacy of [false, true]) for (const linked of [false, true]) test(`phone wallet is available through ${linked ? 'Link another' : 'Link wallet'} (${legacy ? 'prior' : 'current'} API)`, async () => {
+  const {context,page,link,proofs} = await account({phone:true,installed:false,linked,mobile:true,legacy});
   try {
     assert.equal(await page.locator('.ab-phone-launcher').count(),0);
     await link.click();

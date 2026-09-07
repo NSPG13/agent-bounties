@@ -21,3 +21,5 @@ Session, account, successful verification and unlink responses include:
 `authenticated` continues to describe the signed-in identity so pending users can request a wallet challenge and finish setup. It is not an account-completion flag. Website clients must use the server's completion fields and verified wallet list before showing a completed account. The session's opaque `user.id` binds resumable setup to the same identity.
 
 An unavailable marketplace activity feed does not revoke a verified link. Account completion and activity availability are separate. Signature and transaction confirmations remain in the user's wallet. These account links grant no authority to spend, fund, publish or settle work.
+
+During a rolling deployment, the website also understands the previous API's explicit verified-identity and wallet-link receipts. New completion fields take precedence when present. A wallet address or empty successful response alone never completes setup.
