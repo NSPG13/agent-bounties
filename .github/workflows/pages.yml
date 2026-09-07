@@ -17,6 +17,7 @@ on:
       - "scripts/fixtures/meta-child-plan.json"
       - "scripts/test-competition-proof.js"
       - "scripts/test-phone-wallet.js"
+      - "scripts/test-phone-wallet-network.cjs"
       - "scripts/test-phone-wallet-storage.cjs"
       - "scripts/test-posting-layout.cjs"
       - "tools/browser-layout/**"
@@ -46,6 +47,7 @@ on:
       - "scripts/fixtures/meta-child-plan.json"
       - "scripts/test-competition-proof.js"
       - "scripts/test-phone-wallet.js"
+      - "scripts/test-phone-wallet-network.cjs"
       - "scripts/test-phone-wallet-storage.cjs"
       - "scripts/test-posting-layout.cjs"
       - "tools/browser-layout/**"
@@ -121,7 +123,7 @@ jobs:
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
-        run: node --test scripts/test-marketplace-ui.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js
+        run: node --test scripts/test-marketplace-ui.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js scripts/test-phone-wallet-network.cjs
       - name: Test posting and wallet actions in real browser viewports
         working-directory: tools/browser-layout
         run: |
@@ -269,7 +271,7 @@ jobs:
           grep -q '<h1>Privacy policy</h1>' /tmp/live-privacy.html
           grep -q '<h1>Terms of use</h1>' /tmp/live-terms.html
           grep -q 'discovery-manifest.v2.json' /tmp/live-discovery.json
-          grep -q 'phone-wallet.js?v=2' /tmp/live-index.html
+          grep -q 'phone-wallet.js?v=3' /tmp/live-index.html
           curl --fail --silent --show-error "https://agentbounties.app/phone-wallet-config.js?verify=${nonce}" -o /tmp/live-phone-wallet-config.js
           grep -Eq 'projectId: "[a-fA-F0-9]{32}"' /tmp/live-phone-wallet-config.js
           python scripts/check-public-handoffs.py --base-url https://agentbounties.app

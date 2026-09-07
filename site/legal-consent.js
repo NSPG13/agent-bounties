@@ -230,8 +230,8 @@
     }
     latestReceipt = receipt;
     status.textContent = receipt.durable
-      ? `Agreement recorded for ${actionLabels[action]}. Review the wallet prompt now.`
-      : `Agreement accepted for ${actionLabels[action]}. Review the wallet prompt now.`;
+      ? `Agreement recorded for ${actionLabels[action]}.`
+      : `Agreement accepted for ${actionLabels[action]}.`;
     status.dataset.tone = "success";
     return receipt;
   }
