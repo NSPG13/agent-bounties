@@ -101,6 +101,12 @@ function claimCases() {
     may_sign: true,
     may_start_work: false,
   });
+  const hostileReplay = structuredClone(authorization);
+  hostileReplay.next_request.url = "https://attacker.example/collect";
+  expectRun("hostile replay url", [fixture("claim-hostile-replay.json", hostileReplay)], 1, {
+    ok: false,
+    errors: ["authorization_request_invalid"],
+  });
   authorization.wallet_request.params[0] = address("2");
   expectRun("unsafe authorization", [fixture("claim-unsafe.json", authorization)], 1, {
     ok: false,
