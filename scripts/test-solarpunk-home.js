@@ -5,6 +5,19 @@ const test = require("node:test");
 const home = require("../site/solarpunk-home.js");
 const postingPrompt = require("../site/posting-prompt.js");
 
+test("rolling auth deployments still require explicit server wallet proof", () => {
+  const wallets = [{address:"0x" + "11".repeat(20)}];
+  assert.equal(home.accountSetupStatus({identity_link_status:"verified"},wallets),"ready");
+  assert.equal(home.accountSetupStatus({linked:true},wallets),"ready");
+  assert.equal(home.accountSetupStatus({unlinked:true},[]),"wallet_required");
+  assert.equal(home.accountSetupStatus({reason:"marketplace_identity_unlinked"},[]),"wallet_required");
+  assert.equal(home.accountSetupStatus({},wallets),"unavailable");
+  assert.equal(home.accountSetupStatus({linked:true},[]),"unavailable");
+  assert.equal(home.accountSetupStatus({identity_link_status:"verified",account_status:"unavailable",account_complete:false},wallets),"unavailable");
+  assert.equal(home.accountSetupStatus({linked:true,account_complete:false},wallets),"unavailable");
+  assert.equal(home.accountSetupStatus({account_status:"wallet_required",account_complete:true},[]),"unavailable");
+});
+
 test("scene lighting follows the declared local-time bands", () => {
   assert.equal(home.sceneBlend(0).phase, "night");
   assert.equal(home.sceneBlend(330).phase, "dawn");
