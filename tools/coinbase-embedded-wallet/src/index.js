@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CDPReactProvider,
@@ -8,7 +8,7 @@ import {
   LinkAuthFlowBackButton,
   LinkAuthTitle,
 } from "@coinbase/cdp-react";
-import { AuthButton } from "@coinbase/cdp-react/components/AuthButton";
+import { SignIn, SignInBackButton, SignInDescription, SignInForm, SignInAuthMethodButtons, SignInFooter } from "@coinbase/cdp-react/components/SignIn";
 import { useCurrentUser, useIsInitialized, useIsSignedIn } from "@coinbase/cdp-hooks";
 import {
   createCDPEmbeddedWallet,
@@ -141,6 +141,7 @@ function AuthBridge() {
   const { isSignedIn: signedIn } = useIsSignedIn();
   const { currentUser } = useCurrentUser();
   const [panel, setPanel] = useState({ visible: false, view: "signin", notice: "" });
+  const dialogRef = useRef(null);
   const address = accountAddress(currentUser);
   const methods = useMemo(() => linkedAuthMethods(currentUser), [currentUser]);
 
@@ -166,10 +167,14 @@ function AuthBridge() {
     setPanel({ visible: true, view: "review", notice: "Wallet connected. Review recovery access before continuing." });
   }, [panel.visible, panel.view, signedIn, address]);
 
+  useEffect(() => {
+    if (panel.visible && dialogRef.current && !dialogRef.current.open) dialogRef.current.showModal();
+  }, [panel.visible]);
+
   if (!panel.visible) return null;
 
   const close = () => {
-    if (authReject) rejectPendingAuth(new Error("Wallet sign-in was cancelled."));
+    if (authReject) rejectPendingAuth(Object.assign(new Error("Wallet sign-in was cancelled."), { code: 4001 }));
     else hidePanel();
   };
   const continueWithWallet = () => {
@@ -193,13 +198,22 @@ function AuthBridge() {
       React.createElement(
         "p",
         null,
-        "Coinbase provides the non-custodial wallet and maintained sign-in interface. Agent Bounties never receives your one-time code, social password, seed phrase, or private key.",
+        "Create a wallet with email or social sign-in. Coinbase secures your wallet; you control it.",
       ),
-      React.createElement(AuthButton, null),
+      React.createElement(SignIn, { className: "wallet-auth-signin" },
+        React.createElement(SignInBackButton, null),
+        React.createElement(SignInForm, null, ({ authMethod, step, Form }) => React.createElement(
+          React.Fragment, null,
+          React.createElement(SignInDescription, { authMethod, step }),
+          Form,
+          step === "credentials" ? React.createElement(SignInAuthMethodButtons, { activeMethod: authMethod }) : null,
+        )),
+        React.createElement(SignInFooter, null),
+      ),
       React.createElement(
         "p",
         { className: "wallet-auth-method-warning" },
-        "Use the same sign-in method you used before. An unlinked email, phone number, or social account can create a separate Coinbase user and a different wallet.",
+        "Returning user? Use the same sign-in method to access your existing wallet.",
       ),
     );
   } else if (panel.view === "link") {
@@ -322,15 +336,12 @@ function AuthBridge() {
   }
 
   return React.createElement(
-    "div",
-    { className: "wallet-auth-overlay", role: "presentation" },
+    "dialog",
+    { ref: dialogRef, className: "wallet-auth-overlay", "aria-labelledby": "coinbase-wallet-auth-title", onCancel: (event) => { event.preventDefault(); close(); } },
     React.createElement(
       "section",
       {
         className: "wallet-auth-panel",
-        role: "dialog",
-        "aria-modal": "true",
-        "aria-labelledby": "coinbase-wallet-auth-title",
       },
       React.createElement(
         "div",
@@ -360,7 +371,7 @@ function AuthBridge() {
       React.createElement(
         "p",
         { className: "wallet-auth-boundary" },
-        "Authentication and linking never authorize a bounty payment. Agent Bounties sponsors gas only for supported, bounded relay actions; canonical events remain the authority.",
+        "Creating or linking a wallet does not authorize a payment. You review any payment separately.",
       ),
     ),
   );

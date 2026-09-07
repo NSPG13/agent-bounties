@@ -1,0 +1,32 @@
+.wallet-link-dialog {
+  box-sizing: border-box;
+  width: min(32rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  color: #edf1e6;
+  background: #08180f;
+  border: 1px solid #526537;
+  border-radius: .3rem 2rem .3rem 2rem;
+  font-family: inherit;
+  box-shadow: 0 2rem 5rem #0008;
+}
+.wallet-link-dialog::backdrop { background: #020803b8; backdrop-filter: blur(5px); }
+.wallet-link-dialog header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.wallet-link-dialog h2 { margin: .4rem 0 0; font: 700 clamp(1.8rem, 5vw, 2.4rem)/1.12 Georgia, serif; }
+.wallet-link-dialog h3 { margin: 1.5rem 0 .75rem; font-size: .95rem; }
+.wallet-link-dialog p { color: #b6c2b2; line-height: 1.5; }
+.wallet-link-dialog .wallet-link-eyebrow { margin: 0; color: #badd6c; font-size: .72rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.wallet-link-close { flex: 0 0 2.75rem; width: 2.75rem; height: 2.75rem; border: 0; background: transparent; color: #b6c2b2; font-size: 1.8rem; cursor: pointer; }
+.wallet-choice { display: grid; gap: .4rem; box-sizing: border-box; width: 100%; min-height: 3rem; padding: 1rem; text-align: left; color: inherit; background: #ffffff04; border: 1px solid #35452f; border-radius: .25rem 1rem .25rem 1rem; font: inherit; cursor: pointer; transition: border-color 120ms, background 120ms; }
+.wallet-choice span { color: #b6c2b2; font-size: .85rem; line-height: 1.5; }
+.wallet-choice strong { font-size: .98rem; }
+.wallet-choice-create { border-color: #829d4c; background: #badd6c0c; }
+.wallet-choice:hover { background: #badd6c15; border-color: #badd6c; }
+.wallet-choice:disabled { opacity: .6; cursor: wait; }
+.wallet-link-dialog button:focus-visible { outline: 2px solid #c5eb7d; outline-offset: 3px; }
+[data-wallet-choices] { display: grid; gap: .65rem; }
+.wallet-link-dialog .wallet-link-note { padding-top: 1rem; border-top: 1px solid #35452f; margin-bottom: 0; font-size: .75rem; }
+.wallet-link-status { font-size: .85rem; }
+.wallet-link-status:empty { display: none; }
+@media (prefers-reduced-motion: reduce) { .wallet-choice { transition: none; } }

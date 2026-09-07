@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
@@ -142,6 +143,9 @@ REQUIRED_FILES = {
     "guild-pages.css",
     "guild-shell.js",
     "wallet-adapters.css",
+    "wallet-link.js",
+    "wallet-link.css",
+    "wallet-config.js",
     "phone-wallet.js",
     "phone-wallet-config.js",
     "phone-wallet.css",
@@ -191,6 +195,9 @@ ALLOWED_UI_CODE = {
     "install/install.css",
     "install/install.js",
     "wallet-adapters.css",
+    "wallet-link.js",
+    "wallet-link.css",
+    "wallet-config.js",
     "phone-wallet.js",
     "phone-wallet-config.js",
     "phone-wallet.css",
@@ -1262,6 +1269,13 @@ def main() -> int:
     if html_files != set(CANONICAL_PAGES):
         fail(f"site HTML inventory does not match canonical page policy; found {sorted(html_files)}")
     ui_code = {path.relative_to(site_dir).as_posix() for pattern in ("*.js", "*.css") for path in site_dir.rglob(pattern)}
+    generated_wallet = {"vendor/coinbase-embedded-wallet.bundle.js", "vendor/coinbase-embedded-wallet.bundle.css"}
+    present_wallet = ui_code & generated_wallet
+    if present_wallet and present_wallet != generated_wallet:
+        fail("embedded wallet build is incomplete")
+    if "--require-wallet-bundle" in sys.argv and present_wallet != generated_wallet:
+        fail("build the embedded wallet bundle before publishing the account chooser")
+    ui_code -= generated_wallet
     if ui_code != ALLOWED_UI_CODE:
         fail(f"orphaned or missing UI code: extra={sorted(ui_code - ALLOWED_UI_CODE)} missing={sorted(ALLOWED_UI_CODE - ui_code)}")
     images = {path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*.webp")}

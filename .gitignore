@@ -20,3 +20,5 @@ contracts/**/cache/
 /cache/
 broadcast/
 /tools/coinbase-embedded-wallet/.build-check
+/site/vendor/coinbase-embedded-wallet.bundle.js
+/site/vendor/coinbase-embedded-wallet.bundle.css

@@ -21,44 +21,52 @@ The EOA is intentional. Agent Bounties' existing claim and funding relays requir
 
 A future smart-account adapter may be added independently, but it must not silently replace the user's EOA or change the address to which an on-ramp delivers assets.
 
-## Preserved adapter design
+## Account wallet linking
 
-The public on-ramp page links to Coinbase's own Base wallet surface as one of
-three external wallet/top-up variations. It does not load the embedded-wallet
-adapter or claim sponsored funding. The adapter source and locked dependencies
-remain available for a future separately reviewed first-party wallet surface.
+The homepage account panel opens a chooser for both **Link wallet** and
+**Link another**, even when MetaMask is the only installed wallet. Discovery
+uses EIP-6963 announcements and legacy injected-provider fallbacks without
+requesting accounts or signatures. Phone pairing remains an explicit choice
+when configured.
 
-The intended embedded-adapter user experience remains:
+**I don’t have a wallet — create one** loads Coinbase's maintained `SignIn`
+components inside a modal. Email, Google, and Apple sign-in create or restore a
+user-controlled EOA without an extension or recovery phrase. The SDK's
+stylesheet and script load only after this choice. Cancelling returns to the
+account panel; load failures allow an explicit retry.
 
-1. A user may browse, draft, and inspect bounties without a wallet.
-2. At the first action requiring an onchain identity, the wallet selector includes **Agent Bounties embedded wallet** beside injected wallets.
-3. Selecting it opens Coinbase's maintained `AuthButton` interface.
-4. The user signs in with an enabled method: email, SMS, Google, Apple, X, or Telegram.
-5. Coinbase creates or restores the user's non-custodial Base-capable EOA. No browser extension or recovery phrase is required.
-6. Agent Bounties receives only the EIP-1193 provider and public wallet address. It does not receive the user's OTP, social password, seed phrase, or private key.
-7. When the wallet lacks Base USDC, MoonPay can deliver Base USDC to that same EOA. The supported funding and claim paths already sponsor gas, so the user is not asked to buy ETH.
-8. For an existing-bounty contribution, the wallet signs the exact EIP-3009 authorization. The Agent Bounties gas-only relayer broadcasts `fundWithAuthorization` and pays ETH gas.
-9. Only confirmed canonical `FundingAdded` changes funded state.
+After the user completes Coinbase authentication, the account handler uses
+that selected provider for the existing ownership-only EIP-191 challenge and
+server verification. Linking never authorizes a transaction, transfer, token
+approval, or delegated action. The linked-wallet list refreshes after server
+verification. The marketplace account login and Coinbase wallet login remain
+separate identities; a matching email alone does not prove wallet ownership.
 
-Authentication never authorizes a transfer. Acquiring Base USDC and committing it to a bounty remain separate, explicit decisions.
+This activation is scoped to account linking. The public on-ramp page still
+uses its existing external wallet/top-up variations. Creating a wallet does
+not imply that every marketplace action supports that provider or sponsors gas.
 
 ## Adapter boundary
 
-The vendor-neutral adapter implementation remains in
-`tools/coinbase-embedded-wallet/src/index.js`. Its build is deliberately written
-to `target/coinbase-embedded-wallet/`, outside `site/`, so validating the dormant
-adapter cannot republish a deleted browser surface. `COINBASE_WALLET_OUTDIR` may
-select another disposable output directory in CI.
+The adapter source is `tools/coinbase-embedded-wallet/src/index.js`. Builds
+still default to `target/coinbase-embedded-wallet/`. The explicit
+`COINBASE_WALLET_OUTDIR=site/vendor` option builds the account assets for Pages;
+relative output paths resolve from the repository root. Generated assets are
+excluded from Git and rebuilt from the locked dependencies for deployment.
 
-The CDP Project ID is public client configuration, not a server secret. The
-configuration helper and its tests are retained so a future reviewed interface
-can restore the adapter without changing custody or exact-origin rules.
+The Pages build supplies the public CDP project ID in `site/wallet-config.js`
+and verifies the exact production origin before publishing. A deployment with
+no configured project shows wallet creation as unavailable and never falls
+back to an installed wallet automatically. `check-site.py --require-wallet-bundle`
+requires both generated assets during the Pages validation job.
 
-Server-side CDP API secrets, wallet secrets, private keys, and seed phrases must never enter a bundle or public configuration. A future public surface must pin the SDK secure iframe to `https://secure-wallet.cdp.coinbase.com` and permit only that frame origin plus the documented CDP API and Base RPC connections.
+Server-side CDP API secrets, wallet secrets, private keys, and seed phrases must
+never enter a bundle or public configuration. The SDK secure iframe is pinned
+to `https://secure-wallet.cdp.coinbase.com`.
 
 ## Authentication and account continuity
 
-When the adapter is reintroduced, its reviewed configuration may enable:
+The provider supports the following methods; the account surface currently enables email, Google, and Apple:
 
 ```text
 email
@@ -93,7 +101,7 @@ SMS is convenient but is more exposed to SIM-swap attacks. The linking screen st
 The restored `authorize.html` review handoff preserves the durable action-intent
 identifier and canonical evidence boundary. The current Coinbase variation
 opens Coinbase's maintained public wallet surface and then returns to the
-provider-neutral on-ramp/posting flow; it does not mount the embedded adapter.
+provider-neutral on-ramp/posting flow; account linking is the separate embedded-wallet entry.
 No wallet credential or signature may enter ChatGPT.
 
 ## Gas sponsorship
@@ -125,7 +133,7 @@ The Coinbase adapter therefore rejects direct transaction methods for now instea
 Two cross-origin boundaries are verified separately:
 
 1. The Agent Bounties API uses Tower HTTP's `CorsLayer::permissive()`, permitting the website to issue x402 requests and read `payment-required` and `payment-response`.
-2. Coinbase must authorize the exact production origin for its locked SDK routes. Before a future production build, check:
+2. Coinbase must authorize the exact production origin for its locked SDK routes. Before a production build, check:
    - `GET https://api.cdp.coinbase.com/platform/v2/embedded-wallet-api/projects/{project}/config`;
    - unauthenticated `POST` preflight for `content-type` and `x-idempotency-key`; and
    - signed-in linking preflight for `content-type` and `x-wallet-auth`.
@@ -174,7 +182,7 @@ COINBASE_CDP_PROJECT_ID=<public project id>
 # Node.js 22 or newer
 npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
 npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
-npm run build --prefix tools/coinbase-embedded-wallet
+COINBASE_WALLET_OUTDIR=site/vendor npm run build --prefix tools/coinbase-embedded-wallet
 ```
 
 7. Run the retained source and configuration gates:
@@ -184,7 +192,7 @@ python scripts/test_configure_wallet_providers.py
 npm run check --prefix tools/coinbase-embedded-wallet
 ```
 
-8. Add a reviewed first-party embedded-wallet surface and its page-specific tests before deploying the adapter. The external Coinbase on-ramp link is not an embedded-wallet live-browser canary.
+8. Run `node --test scripts/test-wallet-link.js`, then `npm run test:browser --prefix tools/coinbase-embedded-wallet` with Playwright Chromium installed. The browser regressions exercise both account link labels with and without an injected wallet. They stub the provider and account service; a real account-creation canary remains separate.
 9. Human-test one account for every enabled authentication method. Verify that each intended linked method restores the same wallet and that unlinked methods are clearly distinguished.
 10. Buy a bounded amount of Base USDC through MoonPay to the embedded EOA.
 11. Fund an existing bounty through the gas-only x402 relay.
@@ -196,7 +204,7 @@ Coinbase benefits when more users authenticate and keep wallets inside its ecosy
 
 ## Rollback
 
-The current public site does not load the adapter, so no runtime rollback is
-required. If a future surface enables it, disabling its provider configuration
-must remove it from EIP-6963 discovery without changing the protocol or other
-wallets. Existing users retain control of their Coinbase-provided wallets.
+Disable the embedded provider in `site/wallet-config.js` to stop new embedded
+connections while preserving the chooser and external-wallet paths. This does
+not change the protocol or existing wallet ownership. Existing users retain
+control of their Coinbase-provided wallets.
