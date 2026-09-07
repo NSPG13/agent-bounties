@@ -91,11 +91,12 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     AgentBountiesWorkflow: { createClient: () => ({}) }, AgentBountiesEvm: evm };
   const journal = require("../site/marketplace-workflow.js").createPostingJournal(win);
   const parent = { terms_hash: "fixed-parent" };
-  const state = { approved: true, provider: { request: async () => "0x2105" }, account: fixture.parent_solver,
+  const fields = [{ disabled: false }, { disabled: false }];
+  const state = { approved: true, provider: { request: async ({ method }) => method === "eth_accounts" ? [fixture.parent_solver] : "0x2105" }, account: fixture.parent_solver,
     balances: { usdc: 1000000n, required: 1000000n, eth: 1n }, draft: fixture.terms.document, metaParent: parent, fundingUsdc: 1, taskWindowDays: 3 };
   let fail = true, nonces = 0;
   const run = vm.runInNewContext(source.slice(start, end) + "; fundApprovedBounty", {
-    postingBusy: false, postingJournal: journal, state, window: win, ui: { fundNow: {}, badge: {} },
+    postingBusy: false, postingJournal: journal, state, window: win, ui: { form: { querySelectorAll: () => fields }, fundNow: {}, badge: {} },
     track() {}, setPaymentStatus() {}, refreshWalletReadiness: async () => {}, loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: fixture.child_creation.factory_contract, chain_id: 8453 }),
     currentRewardSplit: () => split, randomBytes32: () => nonces++ ? "0x" + "77".repeat(32) : fixture.child_create.creation_nonce,
     metaChild: { ...helper, resolve: async () => parent, request: (_draft, _parent, _wallet, _split, _days, nonce) => ({ ...inputFor(), creation_nonce: nonce }), validatePlan: fixedHelper.validatePlan },
@@ -108,9 +109,10 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     sendWalletCalls: async calls => { sent.push(calls); journal.checkpoint("batch_submitted", { id: "test-only" }); },
     pollCreation: async () => true, fetchFeedItem: async () => ({ verification_ready: true }),
   });
-  await run(); assert.equal(sent.length, 0); assert.equal(journal.load(), null);
+  await run(); assert.equal(sent.length, 0); assert.equal(journal.load(), null); assert.ok(fields.every(field => !field.disabled));
   await run(); assert.equal(sent.length, 1); assert.deepEqual(sent[0], fixture.pre_claim_wallet_calls);
   assert.equal(requests[0].creation_nonce, requests[1].creation_nonce);
   assert.equal(journal.load().phase, "funding_confirmed");
+  assert.ok(fields.every(field => field.disabled));
   await run(); assert.equal(sent.length, 1);
 });
