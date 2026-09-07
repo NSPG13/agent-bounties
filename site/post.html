@@ -20,6 +20,7 @@
     <link rel="stylesheet" href="bounty-chat-controls.css?v=1">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=2">
     <link rel="stylesheet" href="phone-wallet.css?v=1">
+    <link rel="stylesheet" href="posting-workspace.css?v=1">
   </head>
   <body class="composer-page chat-app-page">
     <header class="chat-app-header">
@@ -31,14 +32,23 @@
       <a class="chat-app-close" href="./" aria-label="Close and return home">×</a>
     </header>
 
-    <main class="chat-app" data-bounty-chat aria-label="Bounty creation chat">
+    <main class="posting-workspace" aria-label="Bounty draft and review">
       <section class="conversation-panel">
-        <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Conversation messages">
-          <section class="ai-safety-note" aria-label="Your AI can prepare the bounty" data-agent-guidance>
-            <strong>Describe the result you want. Your AI can handle the setup.</strong>
-            It prepares the work, budget, deadline and completion checks. You review the finished proposal and confirm funding in your wallet.
-            <a href="install/">Agent setup</a>
-          </section>
+        <form id="bounty-composer-form" class="chat-composer-form">
+          <h2 class="brief-heading">Your bounty brief</h2>
+          <p class="brief-help" data-agent-guidance>Work with your AI in your current conversation. This page keeps the brief and displays the proposal for your review.</p>
+          <label for="bounty-composer-input" data-composer-label>What do you want delivered?</label>
+          <textarea id="bounty-composer-input" maxlength="4000" rows="4" required placeholder="Describe the result you need."></textarea>
+          <div class="brief-fields">
+            <div><label for="brief-budget">Total budget (USDC)</label><input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00"></div>
+            <div><label for="brief-deadline">Delivery deadline</label><input id="brief-deadline" data-brief-deadline type="datetime-local"><small data-brief-timezone></small></div>
+          </div>
+          <div class="brief-actions"><button class="button secondary" type="submit" data-composer-submit>Save brief</button><button class="button secondary" type="button" data-export-draft>Download draft</button></div>
+          <output class="brief-status" data-brief-status aria-live="polite">Your brief is saved as you type. Nothing is published yet.</output>
+          <output class="composer-status" data-composer-status aria-live="polite"></output>
+          <span data-composer-hint hidden></span><button data-dictate type="button" hidden>Dictate</button>
+        </form>
+        <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Bounty proposal">
           <section id="bounty-preview" class="bounty-preview conversation-draft" hidden aria-labelledby="bounty-card-title">
             <article id="bounty-card" class="bounty-card">
               <div class="bounty-card-visual">
@@ -74,7 +84,7 @@
                 </section>
 
                 <section class="bounty-card-section verifier-terms" aria-labelledby="verifier-terms-title">
-                  <h3 id="verifier-terms-title">Executable verifier</h3>
+                  <h3 id="verifier-terms-title">How completion is reviewed</h3>
                   <p data-card-verifier-summary></p>
                   <dl data-card-verifier></dl>
                 </section>
@@ -83,23 +93,25 @@
                   <summary>Details to review</summary>
                   <ul data-card-risks></ul>
                   <p><strong>Publish only a complete paid loop.</strong> The artifact, binary checks, live verifier, positive solver net value, and full funding are fixed before signing.</p>
-                  <p>The verifier named in the immutable terms executes the published checks. Unsupported review-only drafts cannot be funded or listed as ready to earn.</p>
+                  <p>The named verifier and review method are fixed before funding. Creator review requires your signed verdict; automated review requires a supported benchmark.</p>
                 </details>
 
                 <div class="bounty-card-actions chat-draft-actions">
-                  <button class="button secondary" type="button" data-revise-card>Edit in chat</button>
+                  <button class="button secondary" type="button" data-revise-card>Edit brief</button>
                   <button type="button" data-share-card hidden>Share draft</button>
                   <button class="button secondary" type="button" data-approve-card data-approved="false">Approve</button>
                   <button class="button primary" type="button" data-open-funding disabled>Connect wallet</button>
+                  <a class="button primary" data-posted-bounty hidden>Open your bounty</a>
                 </div>
               </div>
             </article>
           </section>
 
-          <section class="ai-handoff" data-ai-handoff hidden aria-labelledby="ai-handoff-title">
+          <details data-ai-options><summary>AI setup or import a prepared draft</summary>
+          <section class="ai-handoff" data-ai-handoff aria-labelledby="ai-handoff-title">
             <div class="ai-handoff-heading">
               <p class="ai-handoff-eyebrow">Your AI, your context</p>
-              <h2 id="ai-handoff-title">Continue in the AI account that already knows you</h2>
+              <h2 id="ai-handoff-title">Prepare this brief with your AI</h2>
               <p>We copy the posting prompt with your request and draft. Agent Bounties does not call a model or need your provider API key.</p>
             </div>
 
@@ -152,6 +164,7 @@
 
             <p class="ai-safety-note">Nothing is posted, funded, or signed until you review the card and explicitly approve the wallet transaction.</p>
           </section>
+          </details>
         </div>
 
         <div class="conversation-thinking" data-assistant-thinking hidden aria-label="AI is thinking">
@@ -166,20 +179,7 @@
           <li data-progress-step="fund">Connect</li>
         </ol>
 
-        <form id="bounty-composer-form" class="chat-composer-form">
-          <label class="sr-only" for="bounty-composer-input" data-composer-label>Your message</label>
-          <div class="chat-composer-input-wrap">
-            <textarea id="bounty-composer-input" maxlength="12000" rows="1" required placeholder="Message Agent Bounties"></textarea>
-            <button class="composer-mic" type="button" data-dictate aria-label="Dictate your message" title="Dictate your message">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
-            </button>
-            <button class="chat-send" type="submit" data-composer-submit aria-label="Send message">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg>
-            </button>
-          </div>
-          <p class="sr-only" data-composer-hint>You can keep revising the draft by continuing the conversation.</p>
-          <output class="composer-status" data-composer-status aria-live="polite"></output>
-        </form>
+
       </section>
 
       <dialog id="funding-dialog" class="payment-dialog chat-wallet-dialog" aria-labelledby="funding-dialog-title">
@@ -249,15 +249,16 @@
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=1"></script>
     <script src="marketplace-workflow.js?v=1"></script>
-    <script src="analytics-config.js?v=5"></script>
+    <script src="analytics-config.js?v=6"></script>
     <script src="analytics.js?v=4"></script>
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
     <script src="meta-child.js?v=1"></script>
     <script src="bounty-entry.js?v=1"></script>
-    <script src="posting-prompt.js?v=1"></script>
-    <script src="ai-bounty-handoff.js?v=8"></script>
-    <script src="bounty-composer-v2.js?v=10"></script>
-    <script src="bounty-chat-ui.js?v=4"></script>
+    <script src="posting-prompt.js?v=2"></script>
+    <script src="creator-review.js?v=1"></script>
+    <script src="ai-bounty-handoff.js?v=9"></script>
+    <script src="bounty-composer-v2.js?v=11"></script>
+    <script src="posting-workspace.js?v=1"></script>
   </body>
 </html>

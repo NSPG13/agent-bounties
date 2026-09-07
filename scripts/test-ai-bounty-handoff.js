@@ -46,6 +46,7 @@ const copies = [];
 const navigator = { clipboard: { async writeText(text) { copies.push(text); } } };
 const window = {
   AgentBountiesPostingPrompt: postingPrompt,
+  AgentBountiesCreatorReview: require("../site/creator-review.js"),
   AgentBountiesMetaChild: require("../site/meta-child.js"),
   addEventListener() {},
   dispatchEvent() {},

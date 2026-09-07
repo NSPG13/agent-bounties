@@ -38,6 +38,12 @@
           <details><summary>Exact prepared details</summary><pre data-action-details class="machine-block"></pre></details>
           <button class="market-button market-button-primary" type="button" data-wallet-confirm disabled>Confirm in wallet</button>
         </section>
+        <section data-creator-review hidden aria-label="Creator completion review">
+          <h2>Review the submitted work</h2>
+          <p>Your AI can prepare the checks. You decide the verdict and confirm it in your wallet.</p>
+          <ol></ol><p data-review-cost></p><output aria-live="polite"></output>
+          <button class="market-button market-button-primary" type="button" disabled>Confirm verdict in wallet</button>
+        </section>
         <button class="market-button" type="button" data-work-refresh>Refresh progress</button>
         <p>After you confirm, your AI can continue without asking again. Only confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> events prove payment.</p>
         <details><summary>Evidence and verifier details</summary><pre data-work-evidence class="machine-block"></pre></details>
@@ -46,10 +52,11 @@
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=1"></script>
     <script src="marketplace-workflow.js?v=1"></script>
-    <script src="analytics-config.js?v=5"></script>
+    <script src="analytics-config.js?v=6"></script>
     <script src="analytics.js?v=4"></script>
     <script src="legal-consent.js"></script>
     <script src="evm.js"></script>
-    <script src="participate.js?v=3"></script>
+    <script src="participate.js?v=4"></script>
+    <script src="creator-review-workspace.js?v=1"></script>
   </body>
 </html>

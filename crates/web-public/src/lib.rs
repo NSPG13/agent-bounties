@@ -1035,7 +1035,8 @@ pub fn discovery_manifest(api_base_url: &str, mcp_base_url: &str) -> DiscoveryMa
                 "default_for_new_bounties": true,
                 "default_threshold": 1,
                 "default_verifiers": ["0xbe6292b9e465f549e2363b918d6dd9187038431e"],
-                "earning_inventory": "ready when the one precommitted verifier service and exact sandbox benchmark are available",
+                "earning_inventory": "ready when the precommitted service and exact sandbox benchmark are available, or for an explicitly disclosed creator_review_v1 with creator as sole signer and a future delivery cutoff",
+                "creator_review": {"engine":"creator_review_v1", "webmcp_review_mode":"creator", "delivery_deadline":"required ISO timestamp with timezone offset; immutable benchmark stores Unix seconds", "authority":"creator wallet only; human review is not independent or automated", "evidence":["artifact_url","artifact_sha256"], "scope":"digital deliverables including design and CAD; excluded from qualifying meta children"},
                 "settlement": "The precommitted verifier signs the exact round, solver, submission, evidence, result, response, and deadline. Multi-verifier review is optional for higher-risk work."
             }),
             serde_json::json!({

@@ -23,6 +23,7 @@ use uuid::Uuid;
 use verifier_sdk::RegressionSandboxPolicy;
 
 mod agent_wallet_readiness;
+mod creator_review;
 mod open_competition;
 mod open_competition_v2;
 mod open_competition_v2_planner;
@@ -3996,7 +3997,15 @@ impl AutonomousBountyRecoveryReservations {
 }
 
 pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bool {
-    item.status == "claimable" && item.terms_valid && item.verification_ready
+    item.status == "claimable"
+        && item.terms_valid
+        && item.verification_ready
+        && !item.terms.as_ref().is_some_and(|terms| {
+            terms.document.benchmark["engine"] == creator_review::ENGINE
+                && terms.document.benchmark["delivery_deadline"]
+                    .as_u64()
+                    .is_none_or(|deadline| deadline <= Utc::now().timestamp().max(0) as u64)
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4445,6 +4454,15 @@ pub fn validate_attestation_request_against_feed(
                 "submission verification deadline is missing".to_string(),
             )
         })?;
+    if request.passed
+        && terms.document.benchmark["engine"] == creator_review::ENGINE
+        && (creator_review::validate(&terms.document).is_err()
+            || !creator_review::submission_on_time(&terms.document, verification_expires_at))
+    {
+        return Err(ChainBaseError::InvalidAttestationScope(
+            "creator review cannot pass an invalid policy or late canonical submission".to_string(),
+        ));
+    }
     if !matches_round || !matches_submission || !matches_evidence {
         return Err(ChainBaseError::InvalidAttestationScope(
             "attestation does not match the current submission round and hashes".to_string(),
@@ -5387,6 +5405,32 @@ pub fn build_autonomous_bounty_feed(
         let gross_cash_margin = i128::from(solver_reward) - i128::from(required_external_spend);
         let (verification_ready, verification_readiness_reason) = if !terms_valid {
             (false, "content-addressed terms are invalid or unavailable")
+        } else if verification_mode == "signed_quorum"
+            && terms_record
+                .as_ref()
+                .is_some_and(|terms| terms.document.benchmark["engine"] == creator_review::ENGINE)
+        {
+            if terms_record
+                .as_ref()
+                .is_some_and(|terms| creator_review::validate(&terms.document).is_ok())
+            {
+                if status == "claimable"
+                    && terms_record.as_ref().is_some_and(|terms| {
+                        terms.document.benchmark["delivery_deadline"]
+                            .as_u64()
+                            .is_none_or(|cutoff| cutoff <= Utc::now().timestamp().max(0) as u64)
+                    })
+                {
+                    (false, "the creator-review delivery deadline passed; cancel and recover unclaimed funds")
+                } else {
+                    (true, "creator-signed human review is supported; completion requires the creator's verdict")
+                }
+            } else {
+                (
+                    false,
+                    "creator review authority, deadline or evidence terms are invalid",
+                )
+            }
         } else if verification_mode == "signed_quorum" {
             regression_quorum_readiness(&creation_data, terms_record.as_ref())
         } else if verification_mode != "deterministic_module" {
@@ -5611,6 +5655,11 @@ pub fn build_autonomous_bounty_terms_record(
     }
     validate_reconciled_regression_benchmark(&document)?;
     validate_contract_terms_document(&normalized_creator, &document.contract_terms, created_at)?;
+    if document.benchmark["engine"] == creator_review::ENGINE
+        || document.verification_policy["engine"] == creator_review::ENGINE
+    {
+        creator_review::validate(&document)?;
+    }
     validate_known_deterministic_module_semantics(&document)?;
     validate_claim_metadata(&mut document)?;
     let document_value = serde_json::to_value(&document)
@@ -6642,6 +6691,10 @@ pub fn validate_autonomous_creation_for_public_earning(
             }
         }
         AutonomousVerificationMode::SignedQuorum => {
+            if terms.document.benchmark["engine"] == creator_review::ENGINE {
+                creator_review::validate(&terms.document)?;
+                return Ok(());
+            }
             validate_regression_evidence_schema(&terms.document.evidence_schema)?;
             let threshold = usize::from(create.threshold);
             let exact_verifiers = (1..=BASE_MAINNET_STANDING_META_V2_VERIFIERS.len())

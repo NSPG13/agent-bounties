@@ -7,9 +7,9 @@
 
   const PROMPT = `Help me create, fund and publicly post a bounty on Agent Bounties.
 
-1. Use https://agentbounties.app/post.html in @Browser, preserving existing page context. Discover WebMCP tools and read page context; confirm actual access. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. If needed, use connected official MCP tools. If neither is available, prepare a portable draft and explain that posting and funding remain incomplete; do not request API keys.
+1. Use https://agentbounties.app/post.html in @Browser, preserving existing page context. Discover WebMCP tools and read page context; confirm actual access. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. Fallback to connected official MCP tools; otherwise prepare a portable draft and say posting and funding remain incomplete. Never request API keys.
 
-2. Save and resume my posting journey; preserve my answers and draft. Ask together only for missing business decisions: outcome, total USDC budget and deadline. Propose deliverables and measurable checks, prepare a supported reviewed verifier, stage the draft and check funding readiness. Resolve blockers or explain unsupported work; never invent verifier details.
+2. Save and resume my posting journey; preserve my answers and draft. Ask together only for missing business decisions: outcome, total USDC budget and deadline. Propose deliverables and measurable checks. Use a supported reviewed verifier; for design work, propose creator review with my exact calendar deadline and explain that I confirm the verdict. Stage the draft and check funding readiness. Never invent verifier details or replace a calendar deadline with days after claim.
 
 3. Show one review of public terms, rewards, fees, total cost and deadline. Leave publication, legal, funding and payment consent to me. Reuse unchanged approvals; handle routine preparation yourself.
 
@@ -17,9 +17,9 @@
 
 5. After my confirmations, resume automatically. Reconcile the same posting operation; never repeat uncertain transactions. Confirm canonical creation, funding and claimability, then find the exact bounty in public ready-to-earn inventory. Return its public link and confirmed status, or the precise unfinished step. A draft, signature or transaction hash is not completion; only tool results and confirmed canonical Base USDC evidence prove actions and payments.
 
-Only when tools are unavailable, return JSON for the website's draft import using this shape:
+Without tools, return importable JSON:
 {"title":"...","goal":"...","acceptance_criteria":["..."],"solver_reward_usdc":"2.00","verifier_reward_usdc":"0.10","task_window_days":30,"source_url":null,"benchmark":null,"evidence_schema":null}
-Replace example amounts and days with my agreed terms. Preserve parent bindings and approved image fields. Null verification stays unfundable; this JSON does not post or fund anything.`;
+Use my agreed amounts and days. For creator review add "review_mode":"creator" and "delivery_deadline" as the agreed ISO timestamp with timezone offset; omit automated benchmark fields. Preserve parent bindings and approved image fields. Missing verification stays unfundable; JSON is not publication or funding.`;
 
   function build(context = null) {
     if (!context || !Object.keys(context).length) return PROMPT;
