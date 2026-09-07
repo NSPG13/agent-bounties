@@ -24,19 +24,24 @@
   let currentContext = null;
   let currentPrompt = "";
 
-  function providerLinks(provider, prompt, context = null) {
-    if (!Object.hasOwn(PROVIDERS, provider) || !String(prompt || "").trim()) return null;
-    if (provider !== "chatgpt") return { webUrl: PROVIDERS[provider], desktopUrl: null };
+  function reviewDestination(context) {
     const browserUrl = new URL("https://agentbounties.app/post.html?from=webmcp");
     const parent = context?.meta_child?.parent_bounty_contract;
     if (parent != null) {
       if (!/^0x[0-9a-fA-F]{40}$/.test(parent)) throw new Error("The parent bounty address is invalid.");
       browserUrl.searchParams.set("parentBounty", parent.toLowerCase());
     }
+    return window.agentBountiesAnalytics?.handoffUrl?.(browserUrl.href) || browserUrl.href;
+  }
+
+  function providerLinks(provider, prompt, context = null) {
+    if (!Object.hasOwn(PROVIDERS, provider) || !String(prompt || "").trim()) return null;
+    if (provider !== "chatgpt") return { webUrl: PROVIDERS[provider], desktopUrl: null };
+    const browserUrl = reviewDestination(context);
     // OpenAI Learn uses this registered desktop route for a draft + browser tab.
     const desktop = new URL("codex://threads/new");
     desktop.searchParams.set("prompt", prompt);
-    desktop.searchParams.set("browserUrl", browserUrl.href);
+    desktop.searchParams.set("browserUrl", browserUrl);
     const web = new URL(PROVIDERS.chatgpt);
     web.searchParams.set("prompt", prompt);
     return { desktopUrl: desktop.href, webUrl: web.href };
@@ -144,7 +149,8 @@
       };
     }
     if (context?.meta_child || context?.draft?.meta_child) data.meta_child = context.meta_child || context.draft.meta_child;
-    return window.AgentBountiesPostingPrompt.build(data);
+    return window.AgentBountiesPostingPrompt.build(data,
+      window.agentBountiesAnalytics ? reviewDestination(context) : null);
   }
 
   function setImportStatus(message, tone = "") {
@@ -203,6 +209,8 @@
       const provider = button.dataset.aiProvider;
       let links;
       try {
+        if (currentIntent) currentPrompt = promptFor(currentIntent, currentContext);
+        promptPreview.value = currentPrompt;
         links = providerLinks(provider, currentPrompt, currentContext);
       } catch (error) {
         setImportStatus(error.message || "The desktop handoff could not be prepared.", "error");
@@ -243,8 +251,21 @@
     }
   });
 
+  webFallback?.addEventListener("click", (event) => {
+    try {
+      currentPrompt = promptFor(currentIntent, currentContext);
+      promptPreview.value = currentPrompt;
+      webFallback.href = providerLinks("chatgpt", currentPrompt, currentContext).webUrl;
+    } catch (_error) {
+      event.preventDefault();
+      setImportStatus("The handoff could not be refreshed. Reopen AI setup for this draft.", "error");
+    }
+  });
+
   panel.querySelector("[data-copy-ai-prompt]")?.addEventListener("click", async () => {
     try {
+      if (currentIntent) currentPrompt = promptFor(currentIntent, currentContext);
+      promptPreview.value = currentPrompt;
       await copyText(currentPrompt);
       setImportStatus("AI prompt copied.", "success");
     } catch (_error) {

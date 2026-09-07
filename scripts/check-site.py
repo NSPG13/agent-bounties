@@ -1288,6 +1288,7 @@ def main() -> int:
         path = site_dir / relative
         text = path.read_text(encoding="utf-8")
         prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
+        analytics_version = 5 if relative in {"index.html", "post.html"} else 4
         parser = PageParser()
         parser.feed(text)
         if parser.h1_count != 1:
@@ -1301,10 +1302,10 @@ def main() -> int:
                 f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
                 f'<script src="{prefix}analytics-config.js?v=',
-                f'<script src="{prefix}analytics.js?v=4"></script>',
+                f'<script src="{prefix}analytics.js?v={analytics_version}"></script>',
             ],
         )
-        if text.index(f'src="{prefix}analytics-config.js?v=') > text.index(f'src="{prefix}analytics.js?v=4"'):
+        if text.index(f'src="{prefix}analytics-config.js?v=') > text.index(f'src="{prefix}analytics.js?v={analytics_version}"'):
             fail(f"{relative}: analytics config must load before analytics.js")
         if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
             fail(f"{relative}: transactional handoffs must remain noindex, nofollow")

@@ -289,6 +289,30 @@
     return pattern.test(normalized) ? normalized : null;
   }
 
+  function handoffUrl(value) {
+    try {
+      const url = new URL(value);
+      if (url.origin !== "https://agentbounties.app" || url.username || url.password) return value;
+      if (!enabled()) {
+        if (privacySignalEnabled() || explicitOptOut()) url.searchParams.set("analytics", "off");
+        return url.href;
+      }
+      // Preserve an explicit destination source as one pair, never mix campaigns.
+      if (url.searchParams.has("utm_source") || url.searchParams.has("utm_campaign")) return url.href;
+      const attribution = currentAttribution();
+      const source = safeToken(attribution.source);
+      const campaign = safeToken(attribution.campaign);
+      if (source && (source !== "direct" || campaign)) {
+        url.searchParams.set("utm_source", source);
+        if (campaign) url.searchParams.set("utm_campaign", campaign);
+      }
+      return url.href;
+    } catch (_error) {
+      // A referral helper must not block the person's existing posting flow.
+      return value;
+    }
+  }
+
   function track(eventName, details) {
     if (!enabled() || !EVENTS.has(eventName)) return false;
     const visitorId = browserId();
@@ -366,7 +390,7 @@
     };
   }
 
-  const analytics = { track, optOut, optIn, status };
+  const analytics = { track, optOut, optIn, status, handoffUrl };
   window.agentBountiesAnalytics = analytics;
   window.bountyBoardAnalytics = analytics;
 

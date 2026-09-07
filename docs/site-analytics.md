@@ -38,6 +38,22 @@ GA4 disabled without affecting first-party analytics.
 
 The aggregate endpoint is public and never returns event-level identifiers.
 
+## Assistant return links
+
+The website launcher preserves bounded `utm_source` and `utm_campaign` values
+in its first-party posting return link. The same link appears in the assistant
+prompt, desktop browser destination, copied instructions and web fallback.
+An unexpired first touch wins over a later visit; an explicit destination source
+is kept as one source/campaign pair. Global Privacy Control, Do Not Track and
+the local analytics opt-out carry `analytics=off` to the return page.
+
+This transfer does not include browser or session IDs, full referrers, arbitrary
+query parameters, wallet data or signed MCP acquisitions. A different browser
+still has a different local visitor ID. Forwarded tags describe a referral and
+can be copied or changed; they do not authenticate a customer, prove an ad caused
+a purchase, or establish canonical funding. Operator outcome joins remain
+private and must independently reconcile canonical events and customer identity.
+
 ## External interface usage contract
 
 The `interfaces` array registers external observed requests after deployment:
