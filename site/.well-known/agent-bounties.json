@@ -251,8 +251,19 @@
       "default_verifiers": [
         "0xbe6292b9e465f549e2363b918d6dd9187038431e"
       ],
-      "earning_inventory": "ready when the one precommitted verifier service and exact sandbox benchmark are available",
-      "settlement": "The precommitted verifier signs the exact bounty, round, solver, submission, evidence, result, response, and deadline. Multi-verifier review is optional for higher-risk work."
+      "earning_inventory": "ready when the precommitted service and exact sandbox benchmark are available, or for an explicitly disclosed creator_review_v1 with creator as sole signer and a future delivery cutoff",
+      "settlement": "The precommitted verifier signs the exact bounty, round, solver, submission, evidence, result, response, and deadline. Multi-verifier review is optional for higher-risk work.",
+      "creator_review": {
+        "engine": "creator_review_v1",
+        "webmcp_review_mode": "creator",
+        "delivery_deadline": "required ISO timestamp with timezone offset; immutable benchmark stores Unix seconds",
+        "authority": "creator wallet only; human review is not independent or automated",
+        "evidence": [
+          "artifact_url",
+          "artifact_sha256"
+        ],
+        "scope": "digital deliverables including design and CAD; excluded from qualifying meta children"
+      }
     },
     {
       "name": "ai_judge_quorum",
