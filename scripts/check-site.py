@@ -93,6 +93,7 @@ REQUIRED_FILES = {
     "blog/posts.json",
     "ai-bounty-handoff.css",
     "ai-bounty-handoff.js",
+    "posting-prompt.js",
     "authorize.html",
     "authorize.js",
     "bounty-chat-controls.css",
@@ -144,6 +145,7 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "posting-prompt.js",
     "meta-child.js",
     "about.css",
     "ai-bounty-handoff.css",
@@ -642,6 +644,12 @@ def check_metrics(site_dir: Path) -> None:
 def check_homepage(site_dir: Path) -> None:
     page = (site_dir / "index.html").read_text(encoding="utf-8")
     javascript = (site_dir / "solarpunk-home.js").read_text(encoding="utf-8")
+    for entry, consumer in (("index.html", "solarpunk-home.js"), ("post.html", "ai-bounty-handoff.js")):
+        entry_source = (site_dir / entry).read_text(encoding="utf-8")
+        shared_script = re.findall(r'<script src="posting-prompt\.js\?v=\d+"></script>', entry_source)
+        consumer_script = re.search(r'<script src="' + re.escape(consumer) + r'\?v=\d+"></script>', entry_source)
+        if len(shared_script) != 1 or not consumer_script or entry_source.index(shared_script[0]) > consumer_script.start():
+            fail(f"{entry} must load the single canonical posting prompt before {consumer}")
     css = (site_dir / "solarpunk.css").read_text(encoding="utf-8")
     require_phrases(
         "index.html",

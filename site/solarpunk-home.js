@@ -1,9 +1,10 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports
+    ? require("./posting-prompt.js") : root.AgentBountiesPostingPrompt);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.SolarpunkHome = api;
   if (root && root.document) api.start(root, root.document);
-})(typeof window !== "undefined" ? window : globalThis, function () {
+})(typeof window !== "undefined" ? window : globalThis, function (postingPrompt) {
   "use strict";
 
   const PHASES = ["dawn", "day", "dusk", "night"];
@@ -15,17 +16,7 @@
     google: "Google",
     microsoft: "Microsoft",
   };
-  const BOUNTY_POSTING_PROMPT = `Help me create a bounty on Agent Bounties and guide me through completion.
-
-First discover your actual access. In the desktop app, open https://agentbounties.app/post.html in the built-in browser (@Browser), discover its WebMCP site tools, and read the page context. Tell me whether you can actually call them. Opening a web chat or reading a page alone does not establish WebMCP access.
-
-Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. If site tools are unavailable, discover any connected official Agent Bounties MCP tools. If neither is callable, explain the limitation once and prepare a portable draft for the website; do not invent access or ask me for API keys.
-
-Reuse and preserve my existing answers and draft. Handle navigation, preparation and staging yourself. Ask only for missing business decisions: the outcome, budget and deadline. Propose deliverables, measurable acceptance checks and the exact reviewed verifier yourself; do not ask me for technical hashes or commands. Never invent verifier details or gas sponsorship.
-
-Show one complete review before publication or funding. Leave publication consent, funding, payment, legal consent and wallet confirmations to me. Reuse consent within its approved scope; do not ask permission again for routine preparation. Never ask for a seed phrase or private key. Explain each wallet request's amount, network, recipient, expiry and purpose.
-
-Report actions only when tool results confirm them. Only confirmed canonical Base USDC evidence proves funding or payment; a draft, signature or transaction hash does not. If the outcome is still missing after reading context, ask what I want agents to deliver.`;
+  const BOUNTY_POSTING_PROMPT = postingPrompt.build();
 
   function clamp(value, minimum = 0, maximum = 1) {
     return Math.min(maximum, Math.max(minimum, value));

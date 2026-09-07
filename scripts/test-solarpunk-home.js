@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const home = require("../site/solarpunk-home.js");
+const postingPrompt = require("../site/posting-prompt.js");
 
 test("scene lighting follows the declared local-time bands", () => {
   assert.equal(home.sceneBlend(0).phase, "night");
@@ -41,15 +42,25 @@ test("OAuth provider routes and callback messages are bounded", () => {
 
 test("bounty assistant handoffs carry one bounded initialization message", () => {
   const prompt = home.BOUNTY_POSTING_PROMPT;
+  assert.equal(prompt, postingPrompt.build());
   assert.match(prompt, /agentbounties\.app\/.well-known\/agent-bounties\.json/i);
   assert.match(prompt, /agentbounties\.app\/llms\.txt/i);
-  assert.match(prompt, /Leave publication consent, funding, payment, legal consent and wallet confirmations to me/i);
-  assert.match(prompt, /discover.*WebMCP site tools/i);
-  assert.match(prompt, /preserve my existing answers/i);
+  assert.match(prompt, /Leave publication, legal, funding and payment consent to me/i);
+  assert.match(prompt, /Leave wallet confirmations to me/i);
+  assert.match(prompt, /discover WebMCP tools/i);
+  assert.match(prompt, /preserve my answers and draft/i);
   assert.match(prompt, /only for missing business decisions/i);
-  assert.match(prompt, /never ask for a seed phrase or private key/i);
+  assert.match(prompt, /Never request private keys or seed phrases/i);
   assert.match(prompt, /confirmed canonical Base USDC evidence/i);
-  assert.ok(prompt.length < 2000);
+  assert.match(prompt, /check funding readiness/);
+  assert.match(prompt, /phone-wallet QR pairing/);
+  assert.match(prompt, /resume automatically/);
+  assert.match(prompt, /never repeat uncertain transactions/);
+  assert.match(prompt, /canonical creation, funding and claimability/);
+  assert.match(prompt, /public ready-to-earn inventory/);
+  assert.match(prompt, /Return its public link/);
+  assert.match(prompt, /posting and funding remain incomplete/);
+  assert.ok(prompt.length < 2500);
 
   const gpt = home.bountyAssistantLinks("GPT");
   const claude = home.bountyAssistantLinks("claude");
