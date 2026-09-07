@@ -15,17 +15,17 @@
     google: "Google",
     microsoft: "Microsoft",
   };
-  const BOUNTY_POSTING_PROMPT = `You are helping me create and fund a bounty on Agent Bounties (https://agentbounties.app).
+  const BOUNTY_POSTING_PROMPT = `Help me create a bounty on Agent Bounties and guide me through completion.
 
-Initialize Agent Bounties posting mode:
-1. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing tools or endpoints.
-2. Ask me for the desired outcome, deliverables, objective acceptance tests, deadline, and maximum USDC budget. Ask one concise question at a time.
-3. Produce a clear draft and have me approve it before any public write, wallet signature, funding authorization, or transaction.
-4. Use only official Agent Bounties MCP, API, and discovery routes you can verify. Do not invent platform state or endpoints.
-5. Never ask for a seed phrase or private key. Show the exact bounded signature or payment request and explain its amount, network, recipient, expiry, and purpose before I approve.
-6. Funding and payment are not confirmed by a plan, response, signature, authorization, broadcast, or transaction hash. Treat only confirmed canonical Base USDC evidence as proof.
+First discover your actual access. In the desktop app, open https://agentbounties.app/post.html in the built-in browser (@Browser), discover its WebMCP site tools, and read the page context. Tell me whether you can actually call them. Opening a web chat or reading a page alone does not establish WebMCP access.
 
-Begin by asking: “What outcome do you want agents to deliver?”`;
+Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. If site tools are unavailable, discover any connected official Agent Bounties MCP tools. If neither is callable, explain the limitation once and prepare a portable draft for the website; do not invent access or ask me for API keys.
+
+Reuse and preserve my existing answers and draft. Handle navigation, preparation and staging yourself. Ask only for missing business decisions: the outcome, budget and deadline. Propose deliverables, measurable acceptance checks and the exact reviewed verifier yourself; do not ask me for technical hashes or commands. Never invent verifier details or gas sponsorship.
+
+Show one complete review before publication or funding. Leave publication consent, funding, payment, legal consent and wallet confirmations to me. Reuse consent within its approved scope; do not ask permission again for routine preparation. Never ask for a seed phrase or private key. Explain each wallet request's amount, network, recipient, expiry and purpose.
+
+Report actions only when tool results confirm them. Only confirmed canonical Base USDC evidence proves funding or payment; a draft, signature or transaction hash does not. If the outcome is still missing after reading context, ask what I want agents to deliver.`;
 
   function clamp(value, minimum = 0, maximum = 1) {
     return Math.min(maximum, Math.max(minimum, value));
@@ -111,8 +111,9 @@ Begin by asking: “What outcome do you want agents to deliver?”`;
     const encoded = encodeURIComponent(attributedPrompt);
     const links = {
       gpt: {
-        label: "GPT",
-        desktopUrl: null,
+        label: "ChatGPT",
+        // Matches OpenAI Learn's desktop composer: prompt + a shared browser tab.
+        desktopUrl: `codex://threads/new?prompt=${encoded}&browserUrl=${encodeURIComponent("https://agentbounties.app/post.html?from=webmcp")}`,
         webUrl: `https://chatgpt.com/?prompt=${encoded}`,
         webPrefillsPrompt: true,
       },
@@ -215,7 +216,7 @@ Safety:
   }
 
   function competitionPostingPrompt(item) {
-    const basePrompt = BOUNTY_POSTING_PROMPT.replace(/\n\nBegin by asking:[\s\S]*$/, "");
+    const basePrompt = BOUNTY_POSTING_PROMPT;
     return `${basePrompt}
 
 This is a contract-bound Open Competition V2 child-bounty posting session.
@@ -1118,25 +1119,13 @@ ${competitionChildBrief(item)}`;
       let launcherPrompt = BOUNTY_POSTING_PROMPT;
       let contextReady = !postingRequest.requested;
       let contextStatus = postingRequest.requested ? "Verifying the parent competition and reviewed child-bounty brief…" : "";
-      let launchTimer = 0;
-      let appHandoffObserved = false;
 
       if (promptPreview) promptPreview.textContent = launcherPrompt;
 
       const setStatus = (message) => {
         if (status) status.textContent = message;
       };
-      const clearLaunchProbe = () => {
-        win.clearTimeout(launchTimer);
-        launchTimer = 0;
-        doc.removeEventListener("visibilitychange", observeAppHandoff);
-        win.removeEventListener("blur", observeAppHandoff);
-      };
-      const observeAppHandoff = () => {
-        if (doc.hidden || !doc.hasFocus?.()) appHandoffObserved = true;
-      };
       const resetLauncher = () => {
-        clearLaunchProbe();
         assistantButtons.forEach((button) => button.removeAttribute("aria-current"));
         if (customActions) customActions.hidden = true;
         if (webFallback) {
@@ -1155,7 +1144,6 @@ ${competitionChildBrief(item)}`;
         win.requestAnimationFrame?.(() => assistantButtons[0]?.focus());
       };
       const closeDialog = () => {
-        clearLaunchProbe();
         if (dialog.open) dialog.close();
       };
       const copyPrompt = async () => {
@@ -1176,28 +1164,17 @@ ${competitionChildBrief(item)}`;
         }
       };
       const attemptDesktop = (links) => {
-        clearLaunchProbe();
-        appHandoffObserved = false;
-        doc.addEventListener("visibilitychange", observeAppHandoff);
-        win.addEventListener("blur", observeAppHandoff);
         const anchor = doc.createElement("a");
         anchor.href = links.desktopUrl;
         anchor.hidden = true;
         doc.body.append(anchor);
         anchor.click();
         anchor.remove();
-        launchTimer = win.setTimeout(() => {
-          clearLaunchProbe();
-          if (appHandoffObserved) return;
-          setStatus(`${links.label} desktop did not take focus. Opening its web app in this browser…`);
-          win.location.assign(links.webUrl);
-        }, 2400);
       };
 
       openButton.addEventListener("click", showDialog);
       closeButton?.addEventListener("click", closeDialog);
       dialog.addEventListener("close", () => {
-        clearLaunchProbe();
         openButton.setAttribute("aria-expanded", "false");
       });
       dialog.addEventListener("click", (event) => {
@@ -1207,13 +1184,12 @@ ${competitionChildBrief(item)}`;
       });
       assistantButtons.forEach((button) => {
         button.addEventListener("click", async () => {
-          clearLaunchProbe();
           const key = String(button.dataset.bountyAssistant || "").toLowerCase();
           const links = bountyAssistantLinks(key, launcherPrompt);
           if (!links) return;
           assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
           button.setAttribute("aria-current", "true");
-          if (customActions) customActions.hidden = key !== "custom";
+          if (customActions) customActions.hidden = key !== "custom" && key !== "gpt";
           if (webFallback) webFallback.hidden = true;
 
           if (key === "custom") {
@@ -1245,7 +1221,7 @@ ${competitionChildBrief(item)}`;
             win.location.assign(links.webUrl);
             return;
           }
-          setStatus(`Opening ${links.label} desktop with the posting instructions prefilled…`);
+          setStatus(`Requesting ${links.label} desktop. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`);
           attemptDesktop(links);
           void promptCopy;
         });

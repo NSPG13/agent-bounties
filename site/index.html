@@ -307,11 +307,17 @@
         <span id="bounty-launcher-description">Start with the assistant you already use. The posting instructions will be waiting in a new chat.</span>
       </header>
 
+      <p class="bounty-launch-status" data-bounty-launch-status aria-live="polite"></p>
+      <div class="bounty-launch-actions" data-bounty-custom-actions hidden>
+        <button type="button" data-bounty-copy>Copy instructions</button>
+      </div>
+      <a class="bounty-web-fallback" data-bounty-web-fallback hidden target="_blank" rel="noopener noreferrer">Use the web app instead</a>
+
       <div class="bounty-assistant-list" aria-label="AI assistant choices">
         <button type="button" data-bounty-assistant="gpt">
           <span class="assistant-mark assistant-mark--openai" aria-hidden="true"><img src="assets/solarpunk/provider-openai.svg" alt=""></span>
-          <span><strong>GPT</strong><small>Prefilled ChatGPT handoff</small></span>
-          <em>Web session</em>
+          <span><strong>ChatGPT</strong><small>Desktop app with a shared browser</small></span>
+          <em>App first</em>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"></path></svg>
         </button>
         <button type="button" data-bounty-assistant="claude">
@@ -339,12 +345,8 @@
         <pre data-bounty-prompt></pre>
       </details>
 
-      <div class="bounty-launch-actions" data-bounty-custom-actions hidden>
-        <button type="button" data-bounty-copy>Copy instructions</button>
-      </div>
-      <a class="bounty-web-fallback" data-bounty-web-fallback hidden target="_blank" rel="noopener noreferrer">Use the web app instead</a>
+      <p class="bounty-launch-note">ChatGPT site tools work in the desktop app's built-in browser with Work or Codex, when available. Web chat can use a connected MCP integration or help draft. <a href="https://learn.chatgpt.com/docs/webmcp" target="_blank" rel="noopener noreferrer">Check availability</a>.</p>
       <p class="bounty-launch-note">The prompt is never submitted automatically. The selected provider uses the account already active in its app or browser; if none is active, sign in before continuing.</p>
-      <p class="bounty-launch-status" data-bounty-launch-status aria-live="polite"></p>
     </dialog>
 
     <footer class="site-footer">
@@ -363,6 +365,6 @@
     <script src="marketplace-workflow.js?v=1"></script>
     <script src="analytics-config.js?v=5"></script>
     <script src="analytics.js?v=4"></script>
-    <script src="solarpunk-home.js?v=10"></script>
+    <script src="solarpunk-home.js?v=11"></script>
   </body>
 </html>

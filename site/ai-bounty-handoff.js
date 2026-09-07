@@ -16,12 +16,31 @@
   const importInput = document.querySelector("[data-ai-draft-import]");
   const importStatus = document.querySelector("[data-ai-import-status]");
   const composerStatus = document.querySelector("[data-composer-status]");
+  const webFallback = document.querySelector("[data-ai-web-fallback]");
 
   if (!panel || !log || !original || !promptPreview || !importInput) return;
 
   let currentIntent = "";
   let currentContext = null;
   let currentPrompt = "";
+
+  function providerLinks(provider, prompt, context = null) {
+    if (!Object.hasOwn(PROVIDERS, provider) || !String(prompt || "").trim()) return null;
+    if (provider !== "chatgpt") return { webUrl: PROVIDERS[provider], desktopUrl: null };
+    const browserUrl = new URL("https://agentbounties.app/post.html?from=webmcp");
+    const parent = context?.meta_child?.parent_bounty_contract;
+    if (parent != null) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(parent)) throw new Error("The parent bounty address is invalid.");
+      browserUrl.searchParams.set("parentBounty", parent.toLowerCase());
+    }
+    // OpenAI Learn uses this registered desktop route for a draft + browser tab.
+    const desktop = new URL("codex://threads/new");
+    desktop.searchParams.set("prompt", prompt);
+    desktop.searchParams.set("browserUrl", browserUrl.href);
+    const web = new URL(PROVIDERS.chatgpt);
+    web.searchParams.set("prompt", prompt);
+    return { desktopUrl: desktop.href, webUrl: web.href };
+  }
 
   function boundedText(value, label, maximum) {
     const text = String(value || "").trim();
@@ -115,14 +134,22 @@
           solver_reward_usdc: context.solver_reward_usdc,
           verifier_reward_usdc: context.verifier_reward_usdc,
           task_window_days: context.task_window_days,
+          source_url: context.source_url ?? context.draft.source_url,
+          benchmark: context.benchmark ?? context.draft.benchmark,
+          evidence_schema: context.evidence_schema ?? context.draft.evidence_schema,
+          crowdfund: context.crowdfund,
         }, null, 2)}\n\nREQUESTED CHANGE:\n${intent}`
       : `\n\nWHAT I WANT DONE:\n${intent}`;
 
     return `Help me prepare a public Agent Bounties bounty using the context you already have about me and this request.${revision}${context?.meta_child ? `\n\nQUALIFYING META CHILD: Preserve meta_child: ${JSON.stringify(context.meta_child)} in the returned JSON. Use exactly 1 USDC total, ordinarily 0.99 solver plus 0.01 shared between the two committed verifiers. Identify a distinct intended child solver before funding. Use the browser WebMCP stage tool or paste JSON into this review; do not use the ordinary hosted prepare_bounty_post path for this child.` : ""}
 
-${context?.meta_child ? "Use the parent-specific browser review described above. Prepare the JSON for review without publishing it." : "If the Agent Bounties MCP connector is available, clarify only details that materially affect the public terms. Show me the complete terms and wait for my explicit approval. Only after I approve, call prepare_bounty_post."} If this AI can generate and attach a unique image, you may show it for approval and call the tool with bounty_image, the exact image_prompt, and accessible image_alt_text. Otherwise omit all three image fields; the Agent Bounties review page will render a deterministic content-derived visual. Agent Bounties does not require or use a platform model key. The MCP endpoint is ${MCP_URL}.
+First discover actual access. In the desktop app, open Agent Bounties in the built-in browser (@Browser), discover its WebMCP site tools and read the current page context. Tell me whether those tools are actually callable. A web chat alone does not establish WebMCP access. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. If site tools are unavailable, check for connected official Agent Bounties MCP tools; otherwise explain the limitation once and use the portable draft below.
 
-If the connector is unavailable, ask concise clarifying questions and then return ONLY one JSON object in this exact shape so I can paste the approved terms directly into the Agent Bounties review flow:
+Preserve my existing answers and exact draft fields. Handle navigation, preparation and staging yourself; ask only for missing business decisions such as the outcome, budget and deadline. Propose measurable checks and prepare the reviewed verifier yourself, without asking me for technical hashes or commands. Leave publication consent, funding, payment, legal consent and wallet confirmations to me, and reuse approvals within their agreed scope. Never ask for a seed phrase or private key, invent gas sponsorship, or report an action completed without a confirming tool result. Only confirmed canonical events prove funding or payment.
+
+${context?.meta_child ? "Use the parent-specific browser review described above. Prepare the JSON for review without publishing it." : "Prefer the discovered WebMCP staging tools. If only the Agent Bounties MCP connector is available, show me the complete terms and reuse my approval if already given. After approval, call prepare_bounty_post."} If this AI can generate and attach a unique image, you may show it for approval and call the tool with bounty_image, the exact image_prompt, and accessible image_alt_text. Otherwise omit all three image fields; the Agent Bounties review page will render a deterministic content-derived visual. Agent Bounties does not require or use a platform model key. The MCP endpoint is ${MCP_URL}.
+
+If neither site tools nor the connector are available, resolve only missing business decisions and then return ONLY one JSON object in this exact shape so I can paste the approved terms directly into the Agent Bounties review flow:
 {
   "title": "concise public title",
   "goal": "specific public outcome",
@@ -158,8 +185,11 @@ Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, ea
     helper.style.opacity = "0";
     document.body.append(helper);
     helper.select();
-    document.execCommand("copy");
-    helper.remove();
+    try {
+      if (!document.execCommand("copy")) throw new Error("Clipboard access is unavailable.");
+    } finally {
+      helper.remove();
+    }
   }
 
   function show(intent, context = null) {
@@ -168,6 +198,10 @@ Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, ea
     currentPrompt = promptFor(currentIntent, currentContext);
     original.textContent = currentIntent;
     promptPreview.value = currentPrompt;
+    if (webFallback) {
+      webFallback.hidden = true;
+      webFallback.removeAttribute("href");
+    }
     panel.hidden = false;
     log.append(panel);
     requestAnimationFrame(() => {
@@ -187,14 +221,35 @@ Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, ea
   for (const button of panel.querySelectorAll("[data-ai-provider]")) {
     button.addEventListener("click", async () => {
       const provider = button.dataset.aiProvider;
-      const destination = PROVIDERS[provider];
-      if (!destination || !currentPrompt) return;
-      const providerTab = window.open(destination, "_blank", "noopener,noreferrer");
+      let links;
+      try {
+        links = providerLinks(provider, currentPrompt, currentContext);
+      } catch (error) {
+        setImportStatus(error.message || "The desktop handoff could not be prepared.", "error");
+        return;
+      }
+      if (!links) return;
+      if (webFallback) {
+        webFallback.href = links.webUrl;
+        webFallback.hidden = !links.desktopUrl;
+      }
+      if (links.desktopUrl) {
+        const anchor = document.createElement("a");
+        anchor.href = links.desktopUrl;
+        anchor.hidden = true;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+      } else {
+        window.open(links.webUrl, "_blank", "noopener,noreferrer");
+      }
       try {
         await copyText(currentPrompt);
-        setImportStatus(`${providerTab ? "Prompt copied." : "Prompt copied, but your browser blocked the new tab."} Paste it into ${button.dataset.providerLabel || provider}.`, "success");
+        setImportStatus(links.desktopUrl
+          ? "Desktop launch requested. Accept your browser's Open app prompt if shown. Your prompt is also copied; if the app does not open, use ChatGPT web or paste it manually. Nothing is sent automatically."
+          : `Prompt copied. Requested ${button.dataset.providerLabel || provider} in a new tab; paste the prompt there.`, "success");
       } catch (_error) {
-        setImportStatus("The prompt could not be copied automatically. Copy it from the expandable prompt below.", "error");
+        setImportStatus("Launch requested, but clipboard access was unavailable. The exact prompt remains below for manual copying; the ChatGPT launch links also contain it.", "error");
       }
     });
   }
@@ -240,6 +295,7 @@ Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, ea
     mcpUrl: MCP_URL,
     parseDraft,
     promptFor,
+    providerLinks,
     show,
   });
 })();
