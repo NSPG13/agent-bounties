@@ -30,6 +30,7 @@ CANONICAL_PAGES = {
     "install/linear/index.html": "https://agentbounties.app/install/linear/",
     "install/mcp-so/index.html": "https://agentbounties.app/install/mcp-so/",
     "install/mcpservers/index.html": "https://agentbounties.app/install/mcpservers/",
+    "install/mcpmarket/index.html": "https://agentbounties.app/install/mcpmarket/",
     "install/openclaw/index.html": "https://agentbounties.app/install/openclaw/",
     "install/vscode/index.html": "https://agentbounties.app/install/vscode/",
     "authorize.html": "https://agentbounties.app/authorize.html",
@@ -1057,7 +1058,7 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
     if not isinstance(paid_targets, list):
         fail("paid directory targets must be an array")
     paid_by_id = {target.get("id"): target for target in paid_targets if isinstance(target, dict)}
-    expected_paid = {"glama", "mcp-so", "mcpservers"}
+    expected_paid = {"glama", "mcp-so", "mcpservers", "mcpmarket"}
     if set(paid_by_id) != expected_paid:
         fail("paid directory rail inventory drifted")
     glama_target = paid_by_id["glama"]
@@ -1101,7 +1102,7 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
     if set(paid_platform_by_slug) != expected_paid or len(paid_platforms) != len(expected_paid):
         fail("install manifest paid-vendor inventory drifted")
     for rail in expected_paid:
-        source = {"glama": "glama-paid", "mcp-so": "mcp-so-paid"}.get(rail, rail)
+        source = {"glama": "glama-paid", "mcp-so": "mcp-so-paid", "mcpmarket": "mcpmarket-paid"}.get(rail, rail)
         endpoint = f"https://mcp.agentbounties.app/r/{source}/mcp"
         campaign_url = f"https://agentbounties.app/install/{rail}/"
         alias_url = f"https://install.agentbounties.app/{rail}"

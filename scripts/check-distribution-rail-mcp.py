@@ -31,6 +31,8 @@ RAILS = (
     "mcpservers",
     "glama-paid",
     "mcp-so-paid",
+    "mcpmarket",
+    "mcpmarket-paid",
 )
 ACQUISITION_HEADER = "x-agent-bounties-acquisition-id"
 RAIL_HEADER = "x-agent-bounties-attribution-rail"

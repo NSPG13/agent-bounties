@@ -380,6 +380,40 @@
           "url": "https://github.com/NSPG13/agent-bounties"
         }
       ]
+    },
+    {
+      "slug": "mcpmarket",
+      "name": "MCPMarket",
+      "status": "Choose your assistant to get started.",
+      "summary": "Turn a task into a funded bounty with clear success criteria and a reviewed payment flow.",
+      "mcp_url": "https://mcp.agentbounties.app/r/mcpmarket-paid/mcp",
+      "steps": [
+        "Connect your assistant above.",
+        "Describe the task, how success will be checked, and your USDC budget.",
+        "Review the draft and approve funding on AgentBounties.app."
+      ],
+      "actions": [
+        {
+          "kind": "cursor_install",
+          "label": "Add to Cursor"
+        },
+        {
+          "kind": "vscode_install",
+          "label": "Install in VS Code"
+        },
+        {
+          "kind": "copy",
+          "label": "Copy generic MCP configuration",
+          "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcpmarket-paid/mcp\"\n    }\n  }\n}"
+        }
+      ],
+      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
+      "documentation": [
+        {
+          "label": "Agent Bounties source and security review",
+          "url": "https://github.com/NSPG13/agent-bounties"
+        }
+      ]
     }
   ]
 }
