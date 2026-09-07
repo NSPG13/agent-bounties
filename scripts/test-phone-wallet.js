@@ -36,7 +36,7 @@ function fixture({ configured = true, storage = new Map(), restored = false, fai
         approve(account = address, chain = 8453, methods = config.optionalMethods) { this.accounts = [account]; this.session = { expiry: Date.now() / 1000 + 3600, namespaces: { eip155: { accounts: [`eip155:${chain}:${account}`], methods } } }; this.emit("accountsChanged", this.accounts); resolveConnect?.(); },
         reject(wrapped = false) { rejectConnect(wrapped ? new Error("User rejected.") : Object.assign(new Error("User rejected"), { code: 4001 })); },
         async disconnect() { this.disconnects++; this.accounts = []; this.session = null; this.emit("disconnect"); },
-        async request(request) { requests.push(request); if (this.requestError) throw this.requestError; return "confirmed wallet response"; },
+        async request(request) { requests.push(request); if (this.requestError) throw this.requestError; if (request.method === "eth_chainId") return "chainResponse" in this ? this.chainResponse : this.chainId; return "confirmed wallet response"; },
       };
       if (restored) sdk.approve(); providers.push(sdk); return sdk;
     } };
@@ -156,4 +156,21 @@ test("storage failures explain read recovery but never replay or mask a financia
   assert.equal(env.requests[1], request);
   assert.equal(env.api.state().connected, true);
   assert.equal(env.providers.length, 1);
+});
+
+test("phone-wallet chain IDs use canonical hex without disguising a wrong or invalid network", async () => {
+  const env = fixture(); await env.api.openReview(); await flush(); env.providers[0].approve(); await flush();
+  for (const value of [8453, "8453", "0x2105", "0X02105"]) {
+    env.providers[0].chainResponse = value;
+    assert.equal(await env.api.provider.request({ method: "eth_chainId" }), "0x2105");
+  }
+  for (const value of [1, "1", "0x1"]) {
+    env.providers[0].chainResponse = value;
+    assert.equal(await env.api.provider.request({ method: "eth_chainId" }), "0x1");
+  }
+  for (const value of [null, undefined, true, {}, [], "", "0x", "eip155:8453", "8.453e3", "8453.0", 0, -1, 8453.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    env.providers[0].chainResponse = value;
+    await assert.rejects(env.api.provider.request({ method: "eth_chainId" }), { code: 4901 });
+  }
+  assert.ok(env.requests.every(request => request.method === "eth_chainId"));
 });

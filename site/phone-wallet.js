@@ -16,6 +16,13 @@
   const projectId = String(win.agentBountiesPhoneWalletConfig?.projectId || "");
   const configured = PROJECT.test(projectId);
   function error(code, message) { return Object.assign(new Error(message), { code }); }
+  function chainIdHex(value) {
+    // WalletConnect 2.24 returns a number for eth_chainId. EIP-1193 consumers
+    // expect a hexadecimal string; preserve the actual chain, never assume Base.
+    const valid = typeof value === "number" ? Number.isSafeInteger(value) : typeof value === "string" && /^(?:0x[0-9a-f]+|[0-9]+)$/i.test(value);
+    if (!valid || BigInt(value) <= 0n) throw error(4901, "Your phone wallet returned an invalid network. Reconnect it before continuing.");
+    return `0x${BigInt(value).toString(16)}`;
+  }
   function emit(name, value) { for (const listener of listeners.get(name) || []) listener(value); }
   function marker(value) { try { if (value) win.localStorage.setItem(MARKER, activePrefix); else win.localStorage.removeItem(MARKER); } catch (_) { /* Session remains usable in this tab. */ } }
   function remembered() { try { const value = win.localStorage.getItem(MARKER); return /^ab-phone-[a-f0-9-]{36}$/.test(value || "") ? value : null; } catch (_) { return null; } }
@@ -188,7 +195,10 @@
       }
       // Preserve rejection, unsupported-method, and uncertain-response errors.
       // The existing payment journals decide whether a retry is permissible.
-      try { return await sdk.request(request); }
+      try {
+        const result = await sdk.request(request);
+        return request.method === "eth_chainId" ? chainIdHex(result) : result;
+      }
       catch (failure) {
         // Safe read failures can explain recovery without exposing browser
         // internals. Financial errors stay intact for the payment journal.
