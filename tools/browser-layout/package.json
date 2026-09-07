@@ -1,0 +1,8 @@
+{
+  "name": "agent-bounties-browser-layout",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": { "test": "node ../../scripts/test-posting-layout.cjs" },
+  "devDependencies": { "playwright": "1.62.1" },
+  "engines": { "node": ">=22" }
+}

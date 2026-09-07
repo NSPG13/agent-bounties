@@ -16,19 +16,18 @@
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="bounty-composer.css?v=1">
     <link rel="stylesheet" href="bounty-composer-v2.css?v=2">
-    <link rel="stylesheet" href="bounty-chat.css?v=4">
-    <link rel="stylesheet" href="bounty-chat-controls.css?v=1">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=2">
     <link rel="stylesheet" href="phone-wallet.css?v=1">
-    <link rel="stylesheet" href="posting-workspace.css?v=1">
+    <link rel="stylesheet" href="posting-workspace.css?v=2">
   </head>
-  <body class="composer-page chat-app-page">
+  <body class="composer-page posting-page">
     <header class="chat-app-header">
       <a class="chat-app-brand" href="./" aria-label="Agent Bounties home">
         <span aria-hidden="true">A</span>
         <strong>Agent Bounties</strong>
       </a>
       <h1 class="chat-app-title">New bounty</h1>
+      <div class="posting-wallet" data-posting-wallet></div>
       <a class="chat-app-close" href="./" aria-label="Close and return home">×</a>
     </header>
 
@@ -65,8 +64,8 @@
                 </div>
 
                 <div class="bounty-card-stats" aria-label="Bounty summary">
-                  <div class="bounty-stat"><span>Reward</span><strong data-card-reward>—</strong></div>
-                  <div class="bounty-stat"><span>Time</span><strong data-card-deadline>—</strong></div>
+                  <div class="bounty-stat"><span>Total budget</span><strong data-card-reward>—</strong></div>
+                  <div class="bounty-stat"><span>Delivery</span><strong data-card-deadline>—</strong></div>
                   <div class="bounty-stat"><span>Checks</span><strong data-card-checks>—</strong></div>
                   <strong class="sr-only" data-card-confidence>—</strong>
                 </div>
@@ -96,7 +95,7 @@
                   <p>The named verifier and review method are fixed before funding. Creator review requires your signed verdict; automated review requires a supported benchmark.</p>
                 </details>
 
-                <div class="bounty-card-actions chat-draft-actions">
+                <div class="bounty-card-actions chat-draft-actions" aria-label="Proposal actions">
                   <button class="button secondary" type="button" data-revise-card>Edit brief</button>
                   <button type="button" data-share-card hidden>Share draft</button>
                   <button class="button secondary" type="button" data-approve-card data-approved="false">Approve</button>
@@ -197,7 +196,7 @@
           <section class="wallet-picker-panel" data-wallet-panel hidden>
             <p data-wallet-message>Looking for wallets…</p>
             <div class="wallet-options" data-wallet-options></div>
-            <a class="button secondary" href="onramp.html?purpose=post" target="_blank" rel="noopener noreferrer" data-onramp-link data-walletless-onramp-link>Create or fund a wallet with Base USDC</a>
+            <p class="wallet-alternative">Need a wallet or USDC? <a href="onramp.html?purpose=post" target="_blank" rel="noopener noreferrer" data-onramp-link data-walletless-onramp-link>View setup options ↗</a></p>
           </section>
 
           <section class="wallet-readiness" data-wallet-readiness hidden aria-label="Wallet readiness">
@@ -258,7 +257,7 @@
     <script src="posting-prompt.js?v=2"></script>
     <script src="creator-review.js?v=1"></script>
     <script src="ai-bounty-handoff.js?v=9"></script>
-    <script src="bounty-composer-v2.js?v=11"></script>
-    <script src="posting-workspace.js?v=1"></script>
+    <script src="bounty-composer-v2.js?v=12"></script>
+    <script src="posting-workspace.js?v=2"></script>
   </body>
 </html>

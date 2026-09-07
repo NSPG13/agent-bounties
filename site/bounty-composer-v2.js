@@ -523,7 +523,7 @@
       kind: "date",
       date: deadline,
       days,
-      label: prepared.delivery_deadline ? `${deadline.toLocaleString()} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` : `${days} days after claim`,
+      label: prepared.delivery_deadline ? `${deadline.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` : `${days} days after claim`,
     };
     state.missionPlan = null;
     state.selectedTaskId = null;
@@ -1485,9 +1485,7 @@
     // The card confirmation leads straight to wallet review; no duplicate chat approval.
     openFunding().catch((error) => setPaymentStatus(error.message, "error"));
     setProgress("fund");
-    setStatus(state.bountyImage
-      ? "Card approved with the exact supplied image. Funding still requires a separate wallet review and signature."
-      : "Card approved with a deterministic content-derived visual. Funding still requires a separate wallet review and signature.", "success");
+    setStatus("Proposal approved. Review funding in your wallet before posting.", "success");
   }
 
   function reviseCard() {
@@ -1499,7 +1497,7 @@
     setComposer({ phase:"revise", prompt:"Edit your brief, then continue with your AI in this conversation.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Save brief", hint:"Your AI uses the saved brief to update the proposal." });
     ui.input.value = savedGoal || state.draft?.goal || state.originalRequest;
     ui.form.scrollIntoView({behavior:"smooth",block:"start"});
-    ui.input.focus();
+    ui.input.focus({ preventScroll: true });
     setStatus("Edit the saved brief above and ask your AI to update the proposal in your current conversation.", "pending");
   }
 
@@ -1537,7 +1535,7 @@
     onrampUrl.searchParams.set("return", window.location.href);
     for (const link of ui.onramps) link.href = onrampUrl.href;
     ui.dialog.showModal();
-    setPaymentStatus("Choose a detected wallet or open the Base USDC handoff in a separate tab.");
+    setPaymentStatus("");
     ui.walletPanel.hidden = false;
     ui.readiness.hidden = true;
     ui.fundNow.disabled = true;
@@ -1569,7 +1567,7 @@
     ui.walletMessage.textContent="Looking for wallets on this device…";
     const providers=await discoverWallets();
     if(!providers.length){ui.walletMessage.textContent="No compatible browser wallet was detected. Use the Base USDC handoff below to create or fund a wallet, then reopen this review in a browser where that wallet can sign. Never enter a recovery phrase on this website.";track("wallet_missing_detected");return;}
-    ui.walletMessage.textContent=providers.length===1?"One wallet is available.":`${providers.length} wallets are available. Choose which one to use.`;
+    ui.walletMessage.textContent="Choose a wallet to continue.";
     for(const item of providers){const button=document.createElement("button");button.type="button";button.className="wallet-option";const name=document.createElement("strong");name.textContent=providerName(item);const note=document.createElement("small");note.textContent="Connect and check Base USDC";button.append(name,note);button.addEventListener("click",()=>connectWallet(item));ui.walletOptions.append(button);}
   }
 
