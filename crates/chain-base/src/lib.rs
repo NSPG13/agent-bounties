@@ -3895,7 +3895,7 @@ pub const BUILTIN_STANDING_META_V2_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 5]
     "0x43b23888d90b36448ee4f4a1919f004c14b6bc53",
 ];
 
-pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 14] = [
+pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 13] = [
     "0x680030abf3ffffbc8d0a550b6355a8713c54d3c8",
     "0x3137e6c0f44b940580ea7efc5f8cc6c6c0bda3f1",
     "0xb35b94e1225b66e50644a331feccdab0439e63d7",
@@ -3909,7 +3909,6 @@ pub const BUILTIN_RECOVERY_RESERVED_BOUNTY_CONTRACTS: [&str; 14] = [
     "0xf2e47a253988e98f535ab60f4b9bd7f8975c1263",
     "0x2afb91d160200fac4b91e6134b2cc9d9bff86f42",
     "0xc710d54d192ffb0b84cd6e051754ab70acf1130c",
-    "0xd15306a8cc4274ec46d913817ca4490c4fc41303",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9039,7 +9038,8 @@ mod tests {
     #[test]
     fn recovery_reservations_fail_closed_and_filter_earning_inventory() {
         let reserved_contract = "0x2222222222222222222222222222222222222222";
-        let available_contract = "0x3333333333333333333333333333333333333333";
+        // The recovered routed-V3 API parent is governed by ordinary readiness again.
+        let available_contract = "0xd15306a8cc4274ec46d913817ca4490c4fc41303";
         let reservations = AutonomousBountyRecoveryReservations::parse_csv(Some(&format!(
             " 0x{} , {available_contract} ",
             "22".repeat(20).to_ascii_uppercase()
@@ -9110,6 +9110,26 @@ mod tests {
         only_reserved.exclude_from_verification_jobs(&mut verification_feed);
         assert_eq!(verification_feed.len(), 1);
         assert_eq!(verification_feed[0].bounty_contract, available_contract);
+
+        // Removing a historical hold must not override other readiness failures.
+        let mut unavailable = item(available_contract);
+        unavailable.verification_ready = false;
+        unavailable.verification_readiness_reason = "verifier unavailable".to_string();
+        let mut unready_feed = vec![unavailable];
+        only_reserved.apply(&mut unready_feed, false);
+        assert!(!unready_feed[0].verification_ready);
+        assert_eq!(
+            unready_feed[0].verification_readiness_reason,
+            "verifier unavailable"
+        );
+        only_reserved.apply(&mut unready_feed, true);
+        assert!(unready_feed.is_empty());
+
+        let mut claimed = item(available_contract);
+        claimed.status = "claimed".to_string();
+        let mut claimed_feed = vec![claimed];
+        only_reserved.apply(&mut claimed_feed, true);
+        assert!(claimed_feed.is_empty());
     }
 
     #[test]
