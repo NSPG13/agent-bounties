@@ -13,7 +13,7 @@ test("public dashboard presents one marketplace without mechanism counters", () 
   assert.doesNotMatch(html, /Open Competition V[12]/i);
   assert.doesNotMatch(html, /standing meta/i);
   assert.doesNotMatch(html, /autonomous inventory/i);
-  assert.match(html, /Active funded opportunities/i);
+  assert.match(html, /Funded opportunities/i);
 });
 
 function platform(overrides = {}) {

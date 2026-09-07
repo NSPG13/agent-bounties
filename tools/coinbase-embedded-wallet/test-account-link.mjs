@@ -43,6 +43,13 @@ after(async () => {
   if (server) await new Promise((resolve) => server.close(resolve));
 });
 
+async function openAccount(page) {
+  const accountLink = page.getByRole("link", { name: "Account", exact: true });
+  const menu = page.getByRole("button", { name: "Menu", exact: false });
+  if (await menu.isVisible() && await menu.getAttribute("aria-expanded") !== "true") await menu.click();
+  await accountLink.click();
+}
+
 async function account({ installed = true, linked = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false } = {}) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } });
   const page = await context.newPage();
@@ -92,7 +99,7 @@ async function account({ installed = true, linked = false, mobile = false, adapt
     } } };`,
   }));
   await page.goto(origin);
-  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await openAccount(page);
   const link = page.locator("[data-wallet-link]");
   await page.waitForFunction(() => document.querySelector("[data-wallet-list]").textContent !== "Checking verified wallets…");
   return { context, page, proofs, errors, link };
@@ -175,7 +182,7 @@ for (const redirect of [false, true]) {
       await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('already verified and linked'));
       assert.equal(proofs.length,2);
       await page.reload();
-      await page.getByRole('button',{name:'Account',exact:true}).click();
+      await openAccount(page);
       await page.waitForFunction(()=>document.querySelector('[data-wallet-list]').textContent.includes('Verified'));
       assert.equal(proofs.length,2);
       assert.deepEqual(errors,[]);

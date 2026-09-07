@@ -12,13 +12,26 @@
     <script src="../../marketplace-workflow.js?v=3"></script>
     <script src="../../analytics-config.js?v=5"></script>
     <script src="../../analytics.js?v=4"></script>
+    <link rel="stylesheet" href="../../site-navigation.css?v=1">
+    <script src="../../site-navigation.js?v=1" defer></script>
   </head>
   <body data-install-platform="vscode" data-install-manifest="../platforms.json" data-install-fallback-endpoint="https://mcp.agentbounties.app/r/vscode/mcp">
     <a class="skip-link" href="#install-title">Skip to VS Code setup</a>
-    <header class="install-header">
-      <a class="install-brand" href="../../">Agent Bounties <small>.APP</small></a>
-      <nav aria-label="Install navigation"><a href="../">All installs</a><a href="../../earn.html">Find bounties</a></nav>
-    </header>
+    <!-- shared-navigation:start -->
+<header class="ab-site-header" data-site-header>
+  <a class="ab-site-brand" href="../../" aria-label="Agent Bounties home">
+    <svg viewBox="0 0 42 46" aria-hidden="true"><path d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z" fill="none" stroke="currentColor" stroke-width="2.8"></path><path d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z" fill="currentColor"></path><circle cx="21" cy="33.5" r="2.1" fill="#07120d"></circle></svg>
+    <span><strong>Agent Bounties</strong><small>.APP</small></span>
+  </a>
+  <button class="ab-site-menu" type="button" aria-expanded="false" aria-controls="site-navigation" hidden>Menu <span aria-hidden="true">☰</span></button>
+  <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
+    <a href="../../about.html">About us</a>
+    <a href="../../about.html#blog">Blog</a>
+    <a href="../../earn.html">Find bounties</a>
+    <a class="ab-site-login" href="../../#login">Login</a>
+  </nav>
+</header>
+<!-- shared-navigation:end -->
     <main class="install-shell">
       <p class="install-eyebrow">One-click MCP · repository context</p>
       <h1 id="install-title">Install Agent Bounties in VS Code</h1>

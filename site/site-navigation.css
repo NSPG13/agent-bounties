@@ -1,0 +1,54 @@
+/* One homepage navigation, scoped away from older page and wallet styles. */
+:root { --site-header-height: 88px; }
+html { scroll-padding-top: calc(var(--site-header-height) + 20px); }
+.ab-site-header, .ab-site-header * { box-sizing: border-box; }
+.ab-site-header {
+  position: sticky; top: 0; z-index: 80; display: flex; align-items: center;
+  justify-content: space-between; gap: 24px; width: 100%; min-height: var(--site-header-height);
+  margin: 0; padding: 0 max(24px, calc((100vw - 1180px) / 2));
+  border-bottom: 1px solid rgba(215, 233, 196, .16);
+  background: linear-gradient(180deg, rgba(3, 10, 7, .96), rgba(3, 10, 7, .88));
+  color: #f1f3eb; backdrop-filter: blur(14px); font: 400 16px/1.4 system-ui, sans-serif;
+}
+.ab-site-header .ab-site-brand { display: inline-flex; align-items: center; flex-shrink: 0; gap: 12px; width: max-content; color: #f1f3eb; text-decoration: none; }
+.ab-site-brand svg { width: 46px; height: 46px; color: #d5ef86; filter: drop-shadow(0 0 15px #59d8d347); }
+.ab-site-brand > span { display: grid; gap: 2px; }
+.ab-site-brand strong { font: 700 19px/1 Georgia, "Times New Roman", serif; letter-spacing: .01em; }
+.ab-site-brand small { color: #a8b5a6; font: 800 9px/1.4 system-ui, sans-serif; letter-spacing: .18em; }
+.ab-site-header .ab-site-nav { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin: 0; padding: 0; }
+.ab-site-header .ab-site-nav a, .ab-site-header .ab-site-menu {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
+  padding: 0 10px; border: 0; border-bottom: 1px solid #dfead53d; border-radius: 0;
+  background: transparent; color: #d8dfd5; font: 720 13px/1.4 system-ui, sans-serif;
+  letter-spacing: .02em; text-decoration: none; cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+.ab-site-header .ab-site-nav a:hover { color: #eff8d7; border-color: #d5f178b8; background: #d5f1780a; }
+.ab-site-header .ab-site-nav .ab-site-login { min-width: 92px; border: 1px solid #ddedcd5c; border-radius: 2px 15px 2px 15px; background: #07150e7a; }
+.ab-site-header .ab-site-nav .ab-site-login:hover { border-color: #d5f178b8; background: #1a341fb8; }
+.ab-site-header :is(a, button):focus-visible { outline: 2px solid #d5ef86; outline-offset: 4px; }
+.ab-site-header .ab-site-menu { display: none; gap: 12px; border: 1px solid #ddedcd5c; border-radius: 8px; }
+.ab-site-header [hidden] { display: none; }
+/* Keep preparation and wallet utilities local, below the primary navigation. */
+.posting-page .chat-app-header { position: static; }
+.posting-page .chat-app-brand { display: none; }
+.posting-page .chat-app-title { margin-left: 0; }
+.market-work-actions { display: flex; justify-content: flex-end; gap: 16px; max-width: 1200px; margin: 18px auto 0; padding: 0 24px; }
+.feed-heading-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 700px) {
+  :root { --site-header-height: 70px; }
+  .ab-site-header { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
+  .ab-site-brand svg { width: 36px; height: 36px; }
+  .ab-site-header .ab-site-brand { gap: 8px; }
+  .ab-site-brand strong { font-size: 16px; }
+  .ab-site-brand small { display: none; }
+  .ab-site-header .ab-site-nav { width: 100%; justify-content: flex-start; gap: 8px; }
+  .ab-site-header.is-enhanced .ab-site-menu { display: inline-flex; }
+  .ab-site-header.is-enhanced .ab-site-nav { display: none; position: absolute; top: 100%; left: 0; padding: 16px; background: #09160e; border-bottom: 1px solid #ddedcd5c; max-height: calc(100dvh - var(--site-header-height)); overflow-y: auto; overscroll-behavior: contain; }
+  .ab-site-header.is-enhanced[data-menu-open] .ab-site-nav { display: grid; grid-template-columns: 1fr; animation: ab-menu-reveal 150ms ease-out; }
+  .ab-site-header .ab-site-nav a { justify-content: flex-start; min-height: 48px; padding: 10px 14px; }
+  .ab-site-header .ab-site-nav .ab-site-login { margin-top: 4px; }
+  .feed-heading { flex-wrap: wrap; }
+}
+@keyframes ab-menu-reveal { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .ab-site-header * { animation: none !important; transition: none !important; } }

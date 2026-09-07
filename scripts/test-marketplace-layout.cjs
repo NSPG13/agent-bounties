@@ -96,7 +96,7 @@ async function main() {
           journal.prepare({ predicted_bounty_contract: contract, bounty_id: id }); journal.checkpoint("funding_confirmed");
           window.AgentBountiesWorkflow.createClient(window).start({ role: "post", goal: "Previous completed task" });
         }, { contract, id: item.bounty_id });
-        await page.locator(".market-header [data-new-bounty]").click();
+        await page.locator(".feed-heading [data-new-bounty]").click();
         await page.waitForURL("**/post.html");
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createPostingJournal(window).load()), null);
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().goal), "");
@@ -106,7 +106,7 @@ async function main() {
           flow.createClient(window).start({ role: "post", goal: "Pending original task" });
         }, { contract, id: item.bounty_id });
         await page.goto(`${origin}/earn.html`);
-        await page.locator(".market-header [data-new-bounty]").click();
+        await page.locator(".feed-heading [data-new-bounty]").click();
         await page.waitForURL("**/post.html");
         await page.locator("[data-recorded-posting]").waitFor();
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createPostingJournal(window).load().phase), "authorized");

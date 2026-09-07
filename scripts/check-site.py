@@ -73,6 +73,8 @@ INDEXABLE_PAGES = {
     "terms.html",
 }
 REQUIRED_FILES = {
+    "site-navigation.css",
+    "site-navigation.js",
     "funded.html",
     "funded.js",
     "marketplace-theme.css",
@@ -163,6 +165,8 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "site-navigation.css",
+    "site-navigation.js",
     "funded.js",
     "marketplace-theme.css",
     "marketplace-navigation.js",
@@ -623,21 +627,21 @@ def check_metrics(site_dir: Path) -> None:
         "metrics.html",
         page,
         [
-            "External active identities",
-            "Marketplace payout volume",
-            "Mature claim-to-settlement",
+            "Participating accounts",
+            "Money paid out",
+            "Claim completion rate",
             "Counts are external requests, not unique people, agents, clients, or sessions",
             "Verify every payout",
-            "Policy-excluded value",
-            "Delayed discoverability scorecard",
-            "Captured ChatGPT referrals",
+            "Excluded test payments",
+            "Discovery data",
+            "Visits from ChatGPT",
             "GitHub unique cloners",
             'href="generated/public-metrics-policy.json"',
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment, depending on the protocol version",
-            '<a href="./">Home</a><a href="metrics.html" aria-current="page">Metrics</a>',
+            'data-site-header',
         ],
     )
-    for removed in ("earn.html", "how-it-works.html"):
+    for removed in ("how-it-works.html",):
         if removed in page:
             fail(f"metrics.html still links to removed page {removed}")
     require_phrases(
@@ -718,7 +722,7 @@ def check_homepage(site_dir: Path) -> None:
     stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
     if not stylesheet_version or int(stylesheet_version.group(1)) < 14:
         fail("the homepage must load the flow-layout stylesheet through a cache-busted URL")
-    header_start = page.find('<header class="scene-header">')
+    header_start = page.find('<header class="ab-site-header" data-site-header>')
     header_end = page.find("</header>", header_start)
     market_volume = page.find("data-market-volume")
     metrics_start = page.find('<section class="market-proof"')
@@ -829,7 +833,6 @@ def check_homepage(site_dir: Path) -> None:
     if "margin-top: clamp(32px, 4vh, 40px)" not in hero_action_css.group("body"):
         fail("the desktop bounty CTA must retain breathing room below the headline")
     for selector, label in (
-        (r"\.scene-nav \.login-preview", "login"),
         (r"\.hero-action button", "post-a-bounty"),
     ):
         match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
@@ -838,7 +841,7 @@ def check_homepage(site_dir: Path) -> None:
     desktop_title_css = re.search(r"@media\s*\(min-width:\s*821px\)\s*\{\s*\.stone-title\s*\{(?P<body>[^}]*)\}", css)
     if not desktop_title_css or "line-height: 1" not in desktop_title_css.group("body"):
         fail("the desktop hero title must retain its increased line spacing")
-    scene_header_css = re.search(r"\.scene-header\s*\{(?P<body>[^}]*)\}", css)
+    scene_header_css = re.search(r"\.ab-site-header\s*\{(?P<body>[^}]*)\}", (site_dir / "site-navigation.css").read_text(encoding="utf-8"))
     if not scene_header_css or "position: sticky" not in scene_header_css.group("body") or "top: 0" not in scene_header_css.group("body"):
         fail("the homepage navigation must remain sticky at the top of the viewport")
     for selector in (r"\.stone-title span:nth-child\(1\)", r"\.stone-title span:nth-child\(3\)", r"\.stone-title em"):
@@ -987,7 +990,7 @@ def check_transactional_handoffs(site_dir: Path) -> None:
     require_phrases(
         "guild-shell.js",
         shell,
-        ['["post.html", "Post"]', '["onramp.html", "Add Base USDC"]', '["metrics.html", "Metrics"]'],
+        ['document.querySelector("[data-site-header]")'],
     )
     for removed in ("how-it-works.html",):
         if removed in shell:
@@ -1369,6 +1372,7 @@ def main() -> int:
     check_install_distribution(repo_root, site_dir)
     check_marketplace(site_dir)
     check_transactional_handoffs(site_dir)
+    subprocess.run([sys.executable, str(repo_root / "scripts/sync-site-navigation.py"), "--check"], check=True)
     check_metrics(site_dir)
     check_blog(site_dir)
     privacy = (site_dir / "privacy.html").read_text(encoding="utf-8")
