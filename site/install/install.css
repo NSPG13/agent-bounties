@@ -345,6 +345,29 @@ button:focus-visible {
   margin-top: 1.25rem;
 }
 
+.install-setup-choice[aria-expanded="true"] {
+  border-color: var(--mint);
+  background: var(--panel-strong);
+  box-shadow: 0 0 0 0.2rem rgba(142, 224, 203, 0.13);
+}
+
+.install-setup {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.install-setup h3 {
+  margin-bottom: 0.75rem;
+}
+
+.install-setup-docs {
+  display: inline-block;
+  margin-top: 1rem;
+  color: var(--mint);
+  text-underline-offset: 0.2rem;
+}
+
 .install-manual summary {
   width: fit-content;
   padding: 0.5rem 0;
