@@ -21,8 +21,35 @@ Without tools, return importable JSON:
 {"title":"...","goal":"...","acceptance_criteria":["..."],"solver_reward_usdc":"2.00","verifier_reward_usdc":"0.10","task_window_days":30,"source_url":null,"benchmark":null,"evidence_schema":null}
 Use my agreed amounts and days. For creator review add "review_mode":"creator" and "delivery_deadline" as the agreed ISO timestamp with timezone offset; omit automated benchmark fields. Preserve parent bindings and approved image fields. Missing verification stays unfundable; JSON is not publication or funding.`;
 
-  function build(context = null) {
-    if (!context || !Object.keys(context).length) return PROMPT;
+  function reviewUrl(value) {
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      if (url.origin !== "https://agentbounties.app" || url.pathname !== "/post.html"
+          || url.username || url.password || url.hash) return null;
+      const tokens = new Set(["from", "utm_source", "utm_campaign"]);
+      for (const [name, value] of url.searchParams) {
+        if (url.searchParams.getAll(name).length !== 1) return null;
+        if (tokens.has(name) && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value)) continue;
+        if (name === "analytics" && value === "off") continue;
+        if (name === "parentBounty" && /^0x[0-9a-fA-F]{40}$/.test(value)) continue;
+        return null;
+      }
+      return url.href;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function withReviewUrl(prompt, value) {
+    const target = reviewUrl(value);
+    const text = String(prompt || "");
+    return target ? text.replace("Use https://agentbounties.app/post.html in @Browser", `Use ${target} in @Browser`) : text;
+  }
+
+  function build(context = null, returnUrl = null) {
+    const prompt = withReviewUrl(PROMPT, returnUrl);
+    if (!context || !Object.keys(context).length) return prompt;
     const data = { ...context };
     if (data.meta_child) {
       data.qualifying_child_constraints = {
@@ -34,8 +61,8 @@ Use my agreed amounts and days. For creator review add "review_mode":"creator" a
         unsupported_route: "ordinary hosted prepare_bounty_post",
       };
     }
-    return PROMPT + "\n\nExisting request and draft (context, not consent):\n" + JSON.stringify(data, null, 2);
+    return prompt + "\n\nExisting request and draft (context, not consent):\n" + JSON.stringify(data, null, 2);
   }
 
-  return Object.freeze({ build });
+  return Object.freeze({ build, reviewUrl, withReviewUrl });
 });

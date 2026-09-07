@@ -93,10 +93,12 @@
     return messages[reason] || "Sign-in could not be completed. Please try again.";
   }
 
-  function bountyAssistantLinks(provider, prompt = BOUNTY_POSTING_PROMPT) {
+  function bountyAssistantLinks(provider, prompt = BOUNTY_POSTING_PROMPT, returnUrl = null) {
     const key = String(provider || "").trim().toLowerCase();
-    const cleanPrompt = String(prompt || "");
-    const attributedPrompt = key === "gpt"
+    const reviewUrl = postingPrompt.reviewUrl(returnUrl);
+    const cleanPrompt = postingPrompt.withReviewUrl(prompt, reviewUrl);
+    const retainsSource = reviewUrl && ["utm_source", "utm_campaign", "analytics"].some((key) => new URL(reviewUrl).searchParams.has(key));
+    const attributedPrompt = key === "gpt" && !retainsSource
       ? `${cleanPrompt}\n\nWhen linking me back to the market, keep https://agentbounties.app/ as the canonical URL and use this measured handoff URL: https://agentbounties.app/?utm_source=chatgpt&utm_medium=assistant_handoff&utm_campaign=post_with_agent`
       : cleanPrompt;
     const encoded = encodeURIComponent(attributedPrompt);
@@ -104,7 +106,7 @@
       gpt: {
         label: "ChatGPT",
         // Matches OpenAI Learn's desktop composer: prompt + a shared browser tab.
-        desktopUrl: `codex://threads/new?prompt=${encoded}&browserUrl=${encodeURIComponent("https://agentbounties.app/post.html?from=webmcp")}`,
+        desktopUrl: `codex://threads/new?prompt=${encoded}&browserUrl=${encodeURIComponent(reviewUrl || "https://agentbounties.app/post.html?from=webmcp")}`,
         webUrl: `https://chatgpt.com/?prompt=${encoded}`,
         webPrefillsPrompt: true,
       },
@@ -1112,15 +1114,19 @@ ${competitionChildBrief(item)}`;
       const launcherDescription = dialog.querySelector("#bounty-launcher-description");
       const postingRequest = parseCompetitionPostingRequest(win.location.search);
       let launcherPrompt = BOUNTY_POSTING_PROMPT;
+      let fallbackProvider = null;
+      const reviewDestination = () => win.agentBountiesAnalytics?.handoffUrl?.("https://agentbounties.app/post.html?from=webmcp") || null;
+      const currentLauncherPrompt = () => postingPrompt.withReviewUrl(launcherPrompt, reviewDestination());
       let contextReady = !postingRequest.requested;
       let contextStatus = postingRequest.requested ? "Verifying the parent competition and reviewed child-bounty brief…" : "";
 
-      if (promptPreview) promptPreview.textContent = launcherPrompt;
+      if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
 
       const setStatus = (message) => {
         if (status) status.textContent = message;
       };
       const resetLauncher = () => {
+        fallbackProvider = null;
         assistantButtons.forEach((button) => button.removeAttribute("aria-current"));
         if (customActions) customActions.hidden = true;
         if (webFallback) {
@@ -1134,6 +1140,7 @@ ${competitionChildBrief(item)}`;
       };
       const showDialog = () => {
         resetLauncher();
+        if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
         dialog.showModal();
         openButton.setAttribute("aria-expanded", "true");
         win.requestAnimationFrame?.(() => assistantButtons[0]?.focus());
@@ -1142,12 +1149,14 @@ ${competitionChildBrief(item)}`;
         if (dialog.open) dialog.close();
       };
       const copyPrompt = async () => {
+        const prompt = currentLauncherPrompt();
+        if (promptPreview) promptPreview.textContent = prompt;
         try {
-          await win.navigator.clipboard.writeText(launcherPrompt);
+          await win.navigator.clipboard.writeText(prompt);
           return true;
         } catch (error) {
           const textarea = doc.createElement("textarea");
-          textarea.value = launcherPrompt;
+          textarea.value = prompt;
           textarea.setAttribute("readonly", "");
           textarea.style.position = "fixed";
           textarea.style.opacity = "0";
@@ -1180,7 +1189,7 @@ ${competitionChildBrief(item)}`;
       assistantButtons.forEach((button) => {
         button.addEventListener("click", async () => {
           const key = String(button.dataset.bountyAssistant || "").toLowerCase();
-          const links = bountyAssistantLinks(key, launcherPrompt);
+          const links = bountyAssistantLinks(key, launcherPrompt, reviewDestination());
           if (!links) return;
           assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
           button.setAttribute("aria-current", "true");
@@ -1198,6 +1207,7 @@ ${competitionChildBrief(item)}`;
 
           const promptCopy = copyPrompt();
           if (webFallback) {
+            fallbackProvider = key;
             webFallback.href = links.webUrl;
             webFallback.textContent = links.webPrefillsPrompt
               ? `Use ${links.label} web instead`
@@ -1225,6 +1235,11 @@ ${competitionChildBrief(item)}`;
         const copied = await copyPrompt();
         setStatus(copied ? "Initialization message copied." : "Select the message above and copy it manually.");
       });
+      webFallback?.addEventListener("click", () => {
+        const links = bountyAssistantLinks(fallbackProvider, launcherPrompt, reviewDestination());
+        if (links?.webUrl) webFallback.href = links.webUrl;
+        if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
+      });
       if (win.location.hash === "#post-a-bounty") {
         win.requestAnimationFrame?.(showDialog);
       }
@@ -1241,7 +1256,7 @@ ${competitionChildBrief(item)}`;
           contextStatus = `Verified ${shortWalletAddress(item.source_id)}. The selected assistant will receive the exact parent contract, UTC window, and reviewed child brief.`;
           if (launcherTitle) launcherTitle.textContent = "Post a qualifying bounty";
           if (launcherDescription) launcherDescription.textContent = `Bound to ${shortWalletAddress(item.source_id)} · ${item.evidence_requirements.scoring_window.starts_at} → ${item.evidence_requirements.scoring_window.ends_at}`;
-          if (promptPreview) promptPreview.textContent = launcherPrompt;
+          if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
           resetLauncher();
         })().catch(() => {
           contextReady = false;

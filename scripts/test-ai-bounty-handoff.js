@@ -216,6 +216,32 @@ async function verifyDesktopHandoff() {
   assert.equal(api.providerLinks("unknown", "draft"), null);
   assert.equal(api.providerLinks("chatgpt", ""), null);
   assert.throws(() => api.providerLinks("chatgpt", "draft", { meta_child: { parent_bounty_contract: "https://evil.example" } }));
+  let optedOut = false;
+  window.agentBountiesAnalytics = {
+    handoffUrl(value) {
+      const url = new URL(value);
+      if (optedOut) url.searchParams.set("analytics", "off");
+      else { url.searchParams.set("utm_source", "example-source"); url.searchParams.set("utm_campaign", "example-campaign"); }
+      return url.href;
+    },
+  };
+  navigator.clipboard.writeText = async text => copies.push(text);
+  api.show("Preserve the parent and review terms.", context);
+  await chatgptButton.handlers.click();
+  const attributed = new URL(desktopLaunches.at(-1));
+  assert.equal(new URL(attributed.searchParams.get("browserUrl")).searchParams.get("parentBounty"), child.meta_child.parent_bounty_contract);
+  assert.ok(attributed.searchParams.get("prompt").includes(attributed.searchParams.get("browserUrl")));
+  assert.match(copies.at(-1), /utm_source=example-source/);
+  optedOut = true;
+  fallback.handlers.click({ preventDefault() { throw new Error("valid fallback must remain usable"); } });
+  assert.match(new URL(fallback.href).searchParams.get("prompt"), /analytics=off/);
+  assert.doesNotMatch(new URL(fallback.href).searchParams.get("prompt"), /utm_source=example-source/);
+  await chatgptButton.handlers.click();
+  const disabled = new URL(desktopLaunches.at(-1));
+  assert.equal(new URL(disabled.searchParams.get("browserUrl")).searchParams.get("analytics"), "off");
+  assert.equal(disabled.searchParams.get("prompt"), copies.at(-1));
+  assert.match(copies.at(-1), /analytics=off/);
+  assert.doesNotMatch(copies.at(-1), /utm_source=example-source/);
   console.log("user-owned AI handoff validates drafts, desktop launch, explicit fallback, preserved context and clipboard recovery");
 }
 verifyDesktopHandoff().catch((error) => { console.error(error); process.exitCode = 1; });
