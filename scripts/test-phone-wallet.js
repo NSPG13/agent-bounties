@@ -144,3 +144,16 @@ test("disconnect failure is explicit and cannot be mistaken for confirmed revoca
   const result = await env.api.disconnect(); assert.equal(result.status, "error"); assert.match(result.message, /could not confirm disconnection/);
   await assert.rejects(env.api.provider.request({ method: "personal_sign", params: ["0x1234", address] }), { code: 4900 });
 });
+
+test("storage failures explain read recovery but never replay or mask a financial request", async () => {
+  const env = fixture(); await env.api.openReview(); await flush(); env.providers[0].approve(); await flush();
+  const failure = new DOMException("The database connection is closing.", "InvalidStateError");
+  env.providers[0].requestError = failure;
+  await assert.rejects(env.api.provider.request({ method: "eth_getBalance", params: [address, "latest"] }), { code: 4900, message: /Refresh this page and reconnect/ });
+  const request = { method: "eth_sendTransaction", params: [{ from: address }] };
+  await assert.rejects(env.api.provider.request(request), actual => actual === failure);
+  assert.equal(env.requests.length, 2);
+  assert.equal(env.requests[1], request);
+  assert.equal(env.api.state().connected, true);
+  assert.equal(env.providers.length, 1);
+});

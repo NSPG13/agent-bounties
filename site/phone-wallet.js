@@ -46,7 +46,7 @@
     accounts = []; marker(false); clearQr(); setState("disconnected", text); emit("accountsChanged", []); emit("disconnect", { code: 4900, message: "Phone wallet disconnected." });
   }
   async function vendor() {
-    if (!vendorPromise) vendorPromise = (dependencies.loadVendor ? dependencies.loadVendor() : import("./vendor/phone-wallet.bundle.js?v=1")).catch(() => { vendorPromise = null; throw error(4900, "Phone pairing could not load. Check your connection and try again; your draft is saved."); });
+    if (!vendorPromise) vendorPromise = (dependencies.loadVendor ? dependencies.loadVendor() : import("./vendor/phone-wallet.bundle.js?v=2")).catch(() => { vendorPromise = null; throw error(4900, "Phone pairing could not load. Check your connection and try again; your draft is saved."); });
     return vendorPromise;
   }
   async function initialize() {
@@ -188,7 +188,13 @@
       }
       // Preserve rejection, unsupported-method, and uncertain-response errors.
       // The existing payment journals decide whether a retry is permissible.
-      return sdk.request(request);
+      try { return await sdk.request(request); }
+      catch (failure) {
+        // Safe read failures can explain recovery without exposing browser
+        // internals. Financial errors stay intact for the payment journal.
+        if (reads.has(request.method) && failure?.name === "InvalidStateError") throw error(4900, "Your browser closed the phone-wallet connection. Refresh this page and reconnect; your draft is saved. Check any pending wallet request before trying it again.");
+        throw failure;
+      }
     },
   });
   const announce = () => { if (configured) win.dispatchEvent(new win.CustomEvent("eip6963:announceProvider", { detail: Object.freeze({
