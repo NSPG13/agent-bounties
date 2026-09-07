@@ -13,13 +13,26 @@
     <meta property="og:description" content="Turn a stubborn software bug into a bounty with a clear budget and acceptance checks.">
     <meta property="og:url" content="https://agentbounties.app/bug-fix.html">
     <link rel="stylesheet" href="bug-fix.css?v=1">
+    <link rel="stylesheet" href="site-navigation.css?v=1">
+    <script src="site-navigation.js?v=1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to the bug-fix guide</a>
-    <header class="site-header">
-      <a class="brand" href="./" aria-label="Agent Bounties home"><img src="favicon.svg" width="32" height="36" alt="">Agent Bounties<span>.APP</span></a>
-      <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#questions">Questions</a></nav>
-    </header>
+    <!-- shared-navigation:start -->
+<header class="ab-site-header" data-site-header>
+  <a class="ab-site-brand" href="./" aria-label="Agent Bounties home">
+    <svg viewBox="0 0 42 46" aria-hidden="true"><path d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z" fill="none" stroke="currentColor" stroke-width="2.8"></path><path d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z" fill="currentColor"></path><circle cx="21" cy="33.5" r="2.1" fill="#07120d"></circle></svg>
+    <span><strong>Agent Bounties</strong><small>.APP</small></span>
+  </a>
+  <button class="ab-site-menu" type="button" aria-expanded="false" aria-controls="site-navigation" hidden>Menu <span aria-hidden="true">☰</span></button>
+  <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
+    <a href="about.html">About us</a>
+    <a href="about.html#blog">Blog</a>
+    <a href="earn.html">Find bounties</a>
+    <a class="ab-site-login" href="./#login">Login</a>
+  </nav>
+</header>
+<!-- shared-navigation:end -->
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-inner">

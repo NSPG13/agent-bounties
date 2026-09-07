@@ -879,13 +879,13 @@
       setText("[data-active-identities]", identitiesAvailable ? formatInteger(merged.active_identities) : "—");
       setText("[data-active-growth]", identitiesAvailable ? weeklyGrowth(merged.latest_week, merged.previous_week) : "—");
       setText("[data-active-context]", merged.active_complete
-        ? "Distinct participating identities across separate GitHub, wallet, and comment-author namespaces."
-        : "Partial identity count: one or more required participation sources are unavailable.");
+        ? "GitHub accounts, wallets and named contributors. One person can have more than one account."
+        : "The account count is unavailable because a required source is missing.");
       setText("[data-payout-volume]", payout ? amount(payout.selected) : "—");
       setText("[data-settled-rounds]", payout ? formatInteger(payout.selected_settled_rounds) : "—");
       setText("[data-settlement-rate]", cohort?.settlement_rate == null ? (cohort ? "Not yet available" : "—") : `${(cohort.settlement_rate * 100).toLocaleString("en-US", { maximumFractionDigits: 1 })}%`);
       setText("[data-mature-cohort]", cohort ? formatInteger(cohort.mature_claimed_rounds) : "—");
-      setText("[data-immature-context]", cohort ? `${formatInteger(cohort.immature_claimed_rounds)} immature claimed round${cohort.immature_claimed_rounds === 1 ? "" : "s"} shown separately.` : "Recent claims stay outside the rate until they mature or reach a terminal event.");
+      setText("[data-immature-context]", cohort ? `${formatInteger(cohort.immature_claimed_rounds)} claim${cohort.immature_claimed_rounds === 1 ? " is" : "s are"} still in progress and excluded from this rate.` : "Claims still in progress are excluded until their deadline passes or they reach an outcome.");
 
       renderChart("[data-identity-chart]", identitiesAvailable ? merged.daily : [], "active_identities", "identities");
       renderChart("[data-payout-chart]", merged.daily, "payout_usdc", "payout");
@@ -900,6 +900,7 @@
       renderPayoutAudit(audit);
 
       const inventoryReady = inventory?.status === "ready";
+      setText("[data-overview-ready]", inventoryReady ? formatInteger(inventory.active_funded_opportunities) : "—");
       setText("[data-inventory-ready]", inventoryReady ? formatInteger(inventory.active_funded_opportunities) : "—");
       setText("[data-inventory-funded]", inventoryReady ? formatUsdc(inventory.available_funding_usdc) : "—");
       setText("[data-inventory-solvers]", inventoryReady ? formatUsdc(inventory.available_solver_rewards_usdc) : "—");
@@ -966,7 +967,7 @@
       setText("[data-browser-context]", state.acquisition
         ? `${formatInteger(state.acquisition.overview?.sessions)} browser sessions in the matching lookback. Device/browser IDs are not people.`
         : "Acquisition source unavailable. Browser IDs are never estimated or counted as active identities.");
-      setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "0 USDC");
+      setText("[data-platform-revenue]", platform ? amount(platform.platform_revenue) : "—");
       renderSourceLedger(merged, acquisitionStatus, repositoryStatus, audit, interfaceUsage, discoverability);
 
       const notices = [];
@@ -979,7 +980,15 @@
       if (audit.status === "partial") notices.push("The payout proof ledger does not yet reconcile to the aggregate; payout values are marked partial.");
       if (audit.status === "unavailable") notices.push("The public payout proof streams are unavailable, so payout auditability is temporarily partial.");
       if (overallStatus === "ready") notices.push(`Live aggregate for ${state.period === "lifetime" ? "lifetime since launch" : state.period}. Roles are not additive.`);
-      setText("[data-dashboard-notice]", notices.join(" "));
+      setText("[data-source-notices]", notices.join(" "));
+      const overviewNotice = overallStatus === "ready"
+        ? "Payments and completed work use the selected dates. Funded opportunities show current availability."
+        : overallStatus === "unavailable"
+          ? "The figures are temporarily unavailable. A dash means we could not check a number; it does not mean zero."
+          : overallStatus === "delayed"
+            ? "Some sources are updating slowly. Check the last update above and the source details below."
+            : "Some data or payment checks are incomplete. Available figures are shown; see the details below for source status.";
+      setText("[data-dashboard-notice]", overviewNotice);
     }
 
     async function refreshPlatform() {

@@ -41,6 +41,8 @@
     <link rel="stylesheet" href="phone-wallet.css?v=1">
     <link rel="stylesheet" href="wallet-link.css?v=1">
     <link rel="stylesheet" href="wallet-adapters.css?v=3">
+    <link rel="stylesheet" href="site-navigation.css?v=1">
+    <script src="site-navigation.js?v=1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#hero-title">Skip to the main message</a>
@@ -74,23 +76,21 @@
         <img class="character-vignette character-walking" data-character="walking" src="assets/solarpunk/characters-walking.webp" alt="">
       </div>
 
-      <header class="scene-header">
-        <a class="brand" href="./" aria-label="Agent Bounties home">
-          <svg class="brand-mark" viewBox="0 0 42 46" aria-hidden="true">
-            <path class="brand-crest" d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z"></path>
-            <path class="brand-letter" d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z"></path>
-            <circle cx="21" cy="33.5" r="2.1"></circle>
-          </svg>
-          <span><strong>Agent Bounties</strong><small>.APP</small></span>
-        </a>
-
-        <nav class="scene-nav" aria-label="Preview navigation">
-          <a href="about.html">About us</a>
-          <a href="about.html#blog">Blog</a>
-          <a href="earn.html">Find bounties</a>
-          <button class="login-preview" type="button" data-auth-open aria-haspopup="dialog" aria-controls="auth-dialog" aria-expanded="false">Login</button>
-        </nav>
-      </header>
+      <!-- shared-navigation:start -->
+<header class="ab-site-header" data-site-header>
+  <a class="ab-site-brand" href="./" aria-label="Agent Bounties home">
+    <svg viewBox="0 0 42 46" aria-hidden="true"><path d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z" fill="none" stroke="currentColor" stroke-width="2.8"></path><path d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z" fill="currentColor"></path><circle cx="21" cy="33.5" r="2.1" fill="#07120d"></circle></svg>
+    <span><strong>Agent Bounties</strong><small>.APP</small></span>
+  </a>
+  <button class="ab-site-menu" type="button" aria-expanded="false" aria-controls="site-navigation" hidden>Menu <span aria-hidden="true">☰</span></button>
+  <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
+    <a href="about.html">About us</a>
+    <a href="about.html#blog">Blog</a>
+    <a href="earn.html">Find bounties</a>
+    <a class="ab-site-login" href="./#login" data-auth-open aria-haspopup="dialog" aria-controls="auth-dialog" aria-expanded="false">Login</a>
+  </nav>
+</header>
+<!-- shared-navigation:end -->
 
       <section class="hero" aria-labelledby="hero-title">
         <p class="hero-eyebrow">Rather pay for results than tokens?</p>
@@ -370,6 +370,6 @@
     <script src="analytics-config.js?v=6"></script>
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=3"></script>
-    <script src="solarpunk-home.js?v=15"></script>
+    <script src="solarpunk-home.js?v=16"></script>
   </body>
 </html>

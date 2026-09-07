@@ -978,7 +978,8 @@ ${competitionChildBrief(item)}`;
         }
       };
 
-      openButton.addEventListener("click", () => {
+      openButton.addEventListener("click", (event) => {
+        event.preventDefault();
         setStatus("");
         setWalletStatus("");
         showDialog();
@@ -992,6 +993,7 @@ ${competitionChildBrief(item)}`;
       dialog.addEventListener("close", () => {
         openButton.setAttribute("aria-expanded", "false");
         openButton.focus();
+        if (win.location.hash === "#login") win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
       });
       dialog.addEventListener("click", (event) => {
         if (event.target !== dialog) return;
@@ -1152,6 +1154,10 @@ ${competitionChildBrief(item)}`;
       });
 
       renderProviderAvailability();
+      // Interior pages use the same real login entry point, without duplicating auth.
+      const openLoginHash = () => { if (win.location.hash === "#login") openButton.click(); };
+      win.addEventListener("hashchange", openLoginHash);
+      openLoginHash();
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
       loadSession().then(() => {
