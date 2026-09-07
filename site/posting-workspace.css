@@ -24,3 +24,7 @@
 .posting-workspace .bounty-preview { scroll-margin-top: 90px; }
 .posting-workspace .verifier-terms { border: 0; border-top: 1px solid #354238; background: transparent; border-radius: 0; padding: 22px 0 0; }
 .posting-workspace .bounty-stat { border: 0; border-radius: 0; background: transparent; padding: 0 16px 0 0; }
+
+.posting-workspace #bounty-composer-form { scroll-margin-top: 88px; }
+.posting-workspace #bounty-composer-input { border: 1px solid #405044; background: #101f16; border-radius: 8px; min-height: 130px; max-height: none; padding: 12px; }
+.posting-workspace #bounty-composer-input:focus { outline: 2px solid #c4f43b; outline-offset: 2px; }

@@ -1495,8 +1495,9 @@
     ui.approve.dataset.approved = "false";
     ui.approve.textContent = "Approve bounty card";
     ui.fund.disabled = true;
-    setComposer({ phase:"revise", prompt:"What should the AI change about this bounty or mission plan?", label:"Revision request", placeholder:"Example: Split the research into its own task and extend the mission horizon to one year.", button:"Update card", hint:"Changing the card removes approval until you review it again." });
-    ui.input.value = state.draft?.goal || state.originalRequest;
+    const savedGoal = ui.input.value;
+    setComposer({ phase:"revise", prompt:"Edit your brief, then continue with your AI in this conversation.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Save brief", hint:"Your AI uses the saved brief to update the proposal." });
+    ui.input.value = savedGoal || state.draft?.goal || state.originalRequest;
     ui.form.scrollIntoView({behavior:"smooth",block:"start"});
     ui.input.focus();
     setStatus("Edit the saved brief above and ask your AI to update the proposal in your current conversation.", "pending");
