@@ -415,7 +415,7 @@ test("an already open funding review is idempotent", async () => {
 test("posting batch fallback occurs only for explicit unsupported-method errors", async () => {
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
   const fn = source.slice(source.indexOf("  async function sendWalletCalls("), source.indexOf("  function contractTerms("));
-  for (const code of [-32601, 4200, 4001, -32000, undefined]) {
+  for (const code of [-32601, 4200, 4001, -32602, -32000, undefined]) {
     const env = environment(), journal = flow.createPostingJournal(env.window); journal.prepare({ predicted_bounty_contract: contract, bounty_id: "batch" });
     let sends = 0;
     const send = vm.runInNewContext(`${fn}; sendWalletCalls`, { postingJournal: journal,
@@ -426,6 +426,73 @@ test("posting batch fallback occurs only for explicit unsupported-method errors"
     else { await assert.rejects(send(calls, protocol), /wallet error/); assert.equal(sends, 0); assert.equal(journal.load().phase, "sending"); }
   }
 });
+
+function rejectedBatchFixture() {
+  const env = environment("/post.html"), journal = flow.createPostingJournal(env.window);
+  const input = { bounty_contract: contract, bounty_id: "0x" + "ab".repeat(32), wallet_error: {
+    code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`",
+  } };
+  journal.prepare({ predicted_bounty_contract: contract, bounty_id: input.bounty_id }); journal.checkpoint("sending");
+  const state = { approved: true, draft: { title: "Preserve my draft" } }, statuses = [], field = { disabled: true }, fundNow = { disabled: true };
+  const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
+  const fn = source.slice(source.indexOf("  async function recoverRejectedBatch("), source.indexOf("  async function fundApprovedBounty("));
+  env.window.fetch = async (url, options) => { env.requests.push({ url, ...options }); return { ok: true, json: async () => [] }; };
+  const context = { postingBusy: false, postingJournal: journal, state, window: env.window,
+    ui: { form: { querySelectorAll: () => [field] }, fundNow }, setPaymentStatus: text => statuses.push(text) };
+  const recoverRejectedBatch = vm.runInNewContext(`${fn}; recoverRejectedBatch`, context);
+  env.window.AgentBountiesComposer = { recoverRejectedBatch }; env.register();
+  return { ...env, journal, input, context, state, statuses, field, fundNow,
+    recover: value => env.tools.get("agent_bounties_recover_rejected_posting_batch").execute(value || input) };
+}
+
+test("WebMCP archives only the explicitly rejected legacy batch, preserves the draft and updates its visible review without wallet access", async () => {
+  const env = rejectedBatchFixture(), draft = env.state.draft;
+  const result = await env.recover();
+  assert.equal(result.status, "rejected_batch_archived"); assert.equal(result.funded, false); assert.equal(result.paid, false);
+  assert.equal(result.user_confirmation_required, true); assert.equal(env.journal.load(), null);
+  assert.equal(result.archived_operation.evidence_source, "user_reported_wallet_response");
+  assert.equal(env.state.draft, draft); assert.equal(env.state.approved, true); assert.equal(env.field.disabled, false); assert.equal(env.fundNow.disabled, false);
+  assert.match(env.statuses.at(-1), /rejected attempt is saved/);
+  assert.equal(JSON.parse(env.storage.get("agent-bounties.posting-operation.v1.rejected")).length, 1);
+  assert.equal(env.requests.length, 2); assert.ok(env.requests.every(r => !r.method || r.method === "GET"));
+  await assert.rejects(env.recover(), /does not match/);
+});
+
+test("recovery does not grant missing card approval", async () => {
+  const env = rejectedBatchFixture(); env.state.approved = false; await env.recover();
+  assert.equal(env.state.approved, false); assert.equal(env.fundNow.disabled, true);
+});
+
+for (const kind of ["wrong code", "different params", "different operation", "authorization", "submitted", "lost reply", "different method"]) {
+  test(`recovery refuses ${kind} without changing the journal or requesting canonical data`, async () => {
+    const env = rejectedBatchFixture(), input = structuredClone(env.input);
+    if (kind === "wrong code") input.wallet_error.code = -32000;
+    if (kind === "different params") input.wallet_error.message = "Invalid params: nonce";
+    if (kind === "different operation") input.bounty_contract = wallet;
+    if (kind === "authorization") { env.journal.checkpoint("authorized"); env.journal.checkpoint("sending"); }
+    if (kind === "submitted") env.journal.checkpoint("batch_submitted", { id: "pending" });
+    if (kind === "lost reply") env.journal.checkpoint("sending", null, "wallet_sendCalls");
+    if (kind === "different method") env.journal.checkpoint("sending", null, "eth_sendTransaction");
+    const before = JSON.stringify(env.journal.load());
+    await assert.rejects(env.recover(input)); assert.equal(JSON.stringify(env.journal.load()), before); assert.equal(env.requests.length, 0);
+  });
+}
+
+for (const kind of ["existing feed item", "existing event", "unavailable feed", "unavailable events", "changed operation", "busy", "archive storage failure"]) {
+  test(`recovery retains the journal on ${kind}`, async () => {
+    const env = rejectedBatchFixture(), fetch = env.window.fetch;
+    env.window.fetch = async (url, options) => {
+      if (kind === "existing feed item" && url.includes("/feed?")) return { ok: true, json: async () => [{ bounty_contract: contract }] };
+      if (kind === "existing event" && url.includes("/events?")) return { ok: true, json: async () => [{ kind: "canonical_bounty_created" }] };
+      if (kind === "unavailable feed" && url.includes("/feed?") || kind === "unavailable events" && url.includes("/events?")) throw new Error("offline");
+      if (kind === "changed operation") env.journal.checkpoint("batch_submitted", { id: "new-result" });
+      if (kind === "busy") env.context.postingBusy = true;
+      return fetch(url, options);
+    };
+    if (kind === "archive storage failure") env.window.sessionStorage.setItem = () => { throw new Error("storage unavailable"); };
+    await assert.rejects(env.recover()); assert.ok(env.journal.load()); assert.equal(env.statuses.length, 0); assert.equal(env.fundNow.disabled, true);
+  });
+}
 test("tracking verification never asks for a new wallet approval", async () => {
   const env = environment("/", [item({ source_status: "submitted", work_state: "in_progress" })]);
   const result = await flow.createClient(env.window).prepareAction({ action: "verify", opportunity_id: item().opportunity_id });

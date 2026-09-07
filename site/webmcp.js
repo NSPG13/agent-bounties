@@ -546,6 +546,14 @@
     annotations: { readOnlyHint: false, untrustedContentHint: true }, async execute(input) { const result = await client.prepareAction(input); return { ...result, authorization_url: result.authorization_url ? new URL(`/${result.authorization_url}`, window.location.origin).href : null }; } });
   register({ name: "agent_bounties_check_progress", title: "Check confirmation and continue", description: "Reconcile a prepared action against canonical evidence. Reuse the intent and poll at the returned interval without asking again. Prepared, broadcast and submitted do not mean paid. No signatures or wallet transactions.",
     inputSchema: { type: "object", properties: { intent_id: { type: "string", format: "uuid" } }, required: ["intent_id"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true }, execute(input) { return client.progress(input.intent_id); } });
+  if (isPost) register({ name: "agent_bounties_recover_rejected_posting_batch", title: "Recover a rejected posting request",
+    description: "Preparation only: archive a legacy batch rejected with the exact missing atomicRequired boolean error the person reported. Requires the recorded bounty address and ID, no authorization or submission, and successful canonical checks. Preserves the attempt and draft, updates the visible review, and sends no wallet request. Never use for a lost reply, pending batch or other error. The person must confirm any subsequent wallet request.",
+    inputSchema: { type: "object", properties: {
+      bounty_contract: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" }, bounty_id: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" },
+      wallet_error: { type: "object", properties: { code: { type: "integer", enum: [-32602] }, message: { type: "string", maxLength: 500 } }, required: ["code", "message"], additionalProperties: false },
+    }, required: ["bounty_contract", "bounty_id", "wallet_error"], additionalProperties: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: true },
+    async execute(input) { const composer = await waitFor(() => window.AgentBountiesComposer, 8000); if (!composer) throw new Error("The posting review is still loading."); return composer.recoverRejectedBatch(input); } });
   register({ name: "agent_bounties_get_posting_status", title: "Check the bounty I posted", description: "Resume a recorded posting wallet step after navigation or a lost response. Read canonical creation and funding evidence and save the confirmed checkpoint locally. Never opens a wallet or repeats funding.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true },
     async execute() {
