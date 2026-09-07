@@ -265,6 +265,11 @@ class WalletLinkStore:
             return [dict(wallet) for wallet in wallets]
 
 
+def account_setup(wallet_count: int | None) -> dict[str, Any]:
+    status = "unavailable" if wallet_count is None else "ready" if wallet_count else "wallet_required"
+    return {"account_status": status, "account_complete": status == "ready"}
+
+
 def unavailable_account_dashboard(reason: str, wallets: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     linked_wallets = wallets or []
     return {
@@ -272,6 +277,7 @@ def unavailable_account_dashboard(reason: str, wallets: list[dict[str, Any]] | N
         "data_status": "unavailable",
         "reason": reason,
         "identity_link_status": "verified" if linked_wallets else "unlinked",
+        **account_setup(len(linked_wallets) if linked_wallets or reason == "marketplace_identity_unlinked" else None),
         "wallets": linked_wallets,
         "stats": {
             "participating_bounties": None,
@@ -559,6 +565,7 @@ def build_linked_account_dashboard(
         "data_status": "available",
         "reason": None,
         "identity_link_status": "verified",
+        **account_setup(len(wallets)),
         "wallets": wallets,
         "stats": {
             "participating_bounties": len(participating),
@@ -759,12 +766,19 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/auth/session":
             user = self.current_user()
+            try:
+                setup = account_setup(len(self.wallet_store.wallets_for(user))) if user else {
+                    "account_status": "signed_out", "account_complete": False,
+                }
+            except (OSError, ValueError, json.JSONDecodeError):
+                setup = account_setup(None)
             self.send_json(
                 HTTPStatus.OK,
                 {
                     "authenticated": bool(user),
                     "user": user if user else None,
                     "providers": configured_providers(self.auth_env),
+                    **setup,
                 },
             )
             return
@@ -915,7 +929,7 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
         except OSError:
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "wallet_link_store_unavailable"})
             return
-        self.send_json(HTTPStatus.OK, {"linked": True, "wallets": wallets})
+        self.send_json(HTTPStatus.OK, {"linked": True, "wallets": wallets, **account_setup(len(wallets))})
 
     def unlink_wallet(self) -> None:
         context = self.wallet_request_context()
@@ -930,7 +944,7 @@ class LocalAuthHandler(SimpleHTTPRequestHandler):
         except OSError:
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "wallet_link_store_unavailable"})
             return
-        self.send_json(HTTPStatus.OK, {"unlinked": True, "wallets": wallets})
+        self.send_json(HTTPStatus.OK, {"unlinked": True, "wallets": wallets, **account_setup(len(wallets))})
 
     def begin_oauth(self, provider: str) -> None:
         config = provider_config(self.auth_env, provider)

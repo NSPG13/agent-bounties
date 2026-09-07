@@ -31,6 +31,21 @@ function harness(configured = true) {
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+test("phone pairing is one contextual choice even when announced and injected", async () => {
+  const h = harness();
+  const phone = { request() { throw new Error("selection must not request a signature"); } };
+  h.win.AgentBountiesPhoneWallet = { provider: phone, state: () => ({ available: true }) };
+  h.win.ethereum.providers = [h.win.ethereum, phone];
+  const event = new Event("eip6963:announceProvider");
+  event.detail = { provider: phone, info: { name: "Phone wallet (QR)" } };
+  h.win.dispatchEvent(event);
+  assert.equal(h.chooser.choices().filter(item => item.provider === phone).length, 1);
+  const selected = h.chooser.select();
+  h.dialog().querySelector("[data-wallet-choices]").children[1].click();
+  assert.equal((await selected).provider, phone);
+  assert.deepEqual(h.calls, []);
+});
+
 test("discovery and opening never wake MetaMask, even as the only wallet", async () => {
   const h = harness();
   assert.equal(h.chooser.choices()[0].label, "MetaMask");

@@ -1,14 +1,12 @@
-.ab-phone-launcher { position: fixed; right: 1rem; bottom: 1rem; z-index: 45; padding: .75rem 1rem; border: 1px solid #174d43; border-radius: 999px; background: #f5fff7; color: #123c33; box-shadow: 0 2px 12px #123c3326; font: 600 .9rem/1.3 system-ui, sans-serif; cursor: pointer; }
 .ab-phone-dialog { box-sizing: border-box; width: min(94vw, 440px); max-height: 90dvh; overflow: auto; padding: 1.5rem; border: 1px solid #b8d2c6; border-radius: 20px; background: #fcfff9; color: #16382f; font: 1rem/1.5 system-ui, sans-serif; box-shadow: 0 20px 70px #092d3659; }
 .ab-phone-dialog::backdrop { background: #09292299; }
 .ab-phone-dialog h2 { margin: 0 2rem .5rem 0; font: 700 1.45rem/1.25 system-ui, sans-serif; color: inherit; }
 .ab-phone-dialog p { color: inherit; margin: .75rem 0; }
 .ab-phone-dialog button { padding: .65rem 1rem; border: 1px solid #729688; border-radius: 9px; background: #edf8ee; color: #16382f; font: 600 .95rem/1.4 system-ui, sans-serif; cursor: pointer; }
-.ab-phone-dialog button:focus-visible, .ab-phone-launcher:focus-visible { outline: 3px solid #a85613; outline-offset: 3px; }
+.ab-phone-dialog button:focus-visible { outline: 3px solid #a85613; outline-offset: 3px; }
 .ab-phone-dialog button:disabled { opacity: .6; cursor: wait; }
 .ab-phone-close { float: right; }
 .ab-phone-qr { display: block; width: min(100%, 290px); height: auto; margin: 1rem auto; border: 10px solid white; border-radius: 8px; box-sizing: border-box; }
 .ab-phone-qr[hidden], .ab-phone-dialog [hidden] { display: none; }
 .ab-phone-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
 .ab-phone-note { font-size: .85rem; }
-@media (max-width: 500px) { .ab-phone-launcher { bottom: .6rem; right: .6rem; max-width: calc(100vw - 1.2rem); } }

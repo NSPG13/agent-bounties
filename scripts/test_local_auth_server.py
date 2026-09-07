@@ -314,6 +314,8 @@ class LocalAuthTests(unittest.TestCase):
                 session_body = session_response.read().decode("utf-8")
                 self.assertEqual(session_response.status, 200)
                 self.assertIn('"authenticated":true', session_body)
+                self.assertEqual(json.loads(session_body)["account_status"], "wallet_required")
+                self.assertFalse(json.loads(session_body)["account_complete"])
                 self.assertIn('"provider":"google"', session_body)
                 self.assertNotIn("provider-token", session_body)
 
@@ -323,6 +325,7 @@ class LocalAuthTests(unittest.TestCase):
                 self.assertEqual(account_response.status, 200)
                 self.assertEqual(account_payload["data_status"], "unavailable")
                 self.assertEqual(account_payload["reason"], "marketplace_identity_unlinked")
+                self.assertFalse(account_payload["account_complete"])
                 self.assertIsNone(account_payload["stats"]["earned_usdc"])
                 self.assertNotIn("email", account_payload)
                 self.assertNotIn("sub", account_payload)
@@ -371,8 +374,23 @@ class LocalAuthTests(unittest.TestCase):
                 verify_payload = json.loads(verify_response.read().decode("utf-8"))
                 self.assertEqual(verify_response.status, 200)
                 self.assertTrue(verify_payload["linked"])
+                self.assertTrue(verify_payload["account_complete"])
+                self.assertEqual(verify_payload["account_status"], "ready")
                 self.assertEqual(verify_payload["wallets"][0]["address"], wallet_address)
                 self.assertEqual(server.wallet_store.wallets_for(profile)[0]["address"], wallet_address)
+
+                connection.request("GET", "/auth/session", headers={"Cookie": session_cookie})
+                ready_session = json.loads(connection.getresponse().read())
+                self.assertTrue(ready_session["account_complete"])
+                connection.request("POST", "/auth/wallet/unlink", body=challenge_body, headers={
+                    "Content-Type": "application/json", "Cookie": session_cookie, "Origin": origin,
+                })
+                removed = json.loads(connection.getresponse().read())
+                self.assertTrue(removed["unlinked"])
+                self.assertFalse(removed["account_complete"])
+                self.assertEqual(removed["account_status"], "wallet_required")
+                connection.request("GET", "/auth/session", headers={"Cookie": session_cookie})
+                self.assertFalse(json.loads(connection.getresponse().read())["account_complete"])
 
                 connection.request("GET", f"/auth/callback/google?state={state}&code=replayed-code")
                 replay_response = connection.getresponse()

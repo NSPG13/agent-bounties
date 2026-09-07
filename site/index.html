@@ -37,8 +37,8 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=15">
-    <link rel="stylesheet" href="phone-wallet.css?v=1">
+    <link rel="stylesheet" href="solarpunk.css?v=16">
+    <link rel="stylesheet" href="phone-wallet.css?v=2">
     <link rel="stylesheet" href="wallet-link.css?v=1">
     <link rel="stylesheet" href="wallet-adapters.css?v=3">
     <link rel="stylesheet" href="site-navigation.css?v=1">
@@ -85,7 +85,6 @@
   <button class="ab-site-menu" type="button" aria-expanded="false" aria-controls="site-navigation" hidden>Menu <span aria-hidden="true">☰</span></button>
   <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
     <a href="about.html">About us</a>
-    <a href="about.html#blog">Blog</a>
     <a href="earn.html">Find bounties</a>
     <a class="ab-site-login" href="./#login" data-auth-open aria-haspopup="dialog" aria-controls="auth-dialog" aria-expanded="false">Login</a>
   </nav>
@@ -161,8 +160,13 @@
       <header class="auth-heading">
         <p>Agent Bounties access</p>
         <h2 id="auth-title">Sign in</h2>
-        <span id="auth-description">Sign in to manage bounties, evidence, and collaboration.</span>
+        <span id="auth-description">Sign in, then link a wallet to finish creating your account.</span>
       </header>
+
+      <ol class="account-setup-steps" data-account-setup-steps aria-label="Account setup">
+        <li data-setup-signin aria-current="step"><span>1</span> Sign in</li>
+        <li data-setup-wallet><span>2</span> Link a wallet</li>
+      </ol>
 
       <section class="account-dashboard" data-account-dashboard data-auth-session hidden tabindex="-1" aria-label="Account activity">
         <div class="account-identity">
@@ -182,7 +186,7 @@
           <header>
             <div>
               <h3 id="linked-wallets-title">Linked wallets</h3>
-              <p>Verify an EVM address to connect its Base activity to this account.</p>
+              <p>Use a phone wallet, a browser wallet, or create one here.</p>
             </div>
             <button type="button" data-wallet-link>Link wallet</button>
           </header>
@@ -192,6 +196,9 @@
           <p class="wallet-proof-note">Ownership proof only—this signature cannot move funds, approve tokens, or post a bounty.</p>
           <p class="wallet-status" data-wallet-status aria-live="polite"></p>
         </section>
+
+        <p class="account-setup-note" data-account-setup-note aria-live="polite">Checking your account setup…</p>
+        <button class="account-setup-retry" type="button" data-account-setup-retry hidden>Check again</button>
 
         <dl class="account-stats" data-account-stats aria-busy="true">
           <div>
@@ -285,7 +292,7 @@
           </button>
         </div>
 
-        <p class="auth-switch">New to Agent Bounties? <button type="button" data-auth-unavailable>Create an account</button></p>
+        <p class="auth-switch">New to Agent Bounties? <button type="button" data-auth-create>Create an account</button></p>
         <p class="auth-legal">By continuing, you agree to the <a href="terms.html">Terms</a> and acknowledge the <a href="privacy.html">Privacy Policy</a>.</p>
       </form>
       <p class="auth-status" data-auth-status aria-live="polite"></p>
@@ -363,13 +370,13 @@
 
     <noscript><p class="noscript-note">JavaScript is required for the living scene and live marketplace metrics.</p></noscript>
     <script src="phone-wallet-config.js?v=1"></script>
-    <script src="phone-wallet.js?v=4"></script>
+    <script src="phone-wallet.js?v=5"></script>
     <script src="wallet-config.js?v=1"></script>
-    <script src="wallet-link.js?v=2"></script>
+    <script src="wallet-link.js?v=3"></script>
     <script src="marketplace-workflow.js?v=3"></script>
     <script src="analytics-config.js?v=6"></script>
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=3"></script>
-    <script src="solarpunk-home.js?v=16"></script>
+    <script src="solarpunk-home.js?v=17"></script>
   </body>
 </html>

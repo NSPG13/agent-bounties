@@ -24,7 +24,7 @@
     const injected = Array.isArray(win.ethereum?.providers) && win.ethereum.providers.length
       ? win.ethereum.providers : [win.ethereum];
     for (const provider of injected) {
-      if (!provider || typeof provider.request !== "function" || result.some((item) => item.provider === provider)) continue;
+      if (!provider || provider === phone?.provider || typeof provider.request !== "function" || result.some((item) => item.provider === provider)) continue;
       result.push({ provider, kind: "browser", label: provider.isMetaMask ? "MetaMask" : provider.isCoinbaseWallet ? "Coinbase Wallet" : "Browser wallet" });
     }
     if (phone?.state().available) result.push({ provider: phone.provider, kind: "phone", label: "Use a phone wallet" });

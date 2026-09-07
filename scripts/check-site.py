@@ -710,7 +710,6 @@ def check_homepage(site_dir: Path) -> None:
         page,
         [
             '<a href="about.html">About us</a>',
-            '<a href="about.html#blog">Blog</a>',
             '<a href="earn.html">Find bounties</a>',
         ],
     )

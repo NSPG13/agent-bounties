@@ -166,12 +166,15 @@ async function main() {
       await hitTarget(page, "[data-close-funding]");
       await hitTarget(page, "[data-fund-now]");
       await page.locator("[data-close-funding]").click();
-      await page.locator(".ab-phone-launcher").click();
+      assert.equal(await page.locator(".ab-phone-launcher").count(), 0);
+      await page.locator("[data-open-funding]").click();
+      await page.getByRole("button", { name: "Phone wallet (QR)", exact: false }).click();
       await page.locator(".ab-phone-qr").waitFor({ state: "visible" });
       await modalBounds(page, ".ab-phone-dialog");
       await wheelToEnd(page, ".ab-phone-dialog");
       await hitTarget(page, ".ab-phone-close");
       await page.locator(".ab-phone-close").click();
+      await page.locator("[data-close-funding]").click();
       await page.keyboard.press("Tab");
       await page.locator("[data-revise-card]").click();
       assert.equal(await page.locator("#bounty-composer-input").inputValue(), fixture.goal);
