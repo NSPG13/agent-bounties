@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
+const postingPrompt = require("../site/posting-prompt.js");
 
 const source = fs.readFileSync(
   path.join(__dirname, "..", "site", "ai-bounty-handoff.js"),
@@ -44,6 +45,7 @@ const webLaunches = [];
 const copies = [];
 const navigator = { clipboard: { async writeText(text) { copies.push(text); } } };
 const window = {
+  AgentBountiesPostingPrompt: postingPrompt,
   AgentBountiesMetaChild: require("../site/meta-child.js"),
   addEventListener() {},
   dispatchEvent() {},
@@ -161,9 +163,8 @@ for (const invalid of [
 }
 
 const prompt = api.promptFor("Build a public climate dashboard");
-for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON object", "Otherwise omit all three image fields", "exact public sandboxed_regression_v1 benchmark", "Do not claim that anything is posted"]) {
-  if (!prompt.includes(marker)) throw new Error(`AI handoff prompt missing: ${marker}`);
-}
+assert.equal(api.promptFor(), postingPrompt.build(), "both entry points must use the same canonical prompt");
+assert.equal(prompt, postingPrompt.build({ request: "Build a public climate dashboard" }));
 
 async function verifyDesktopHandoff() {
   const context = {
@@ -174,10 +175,14 @@ async function verifyDesktopHandoff() {
     meta_child: child.meta_child,
   };
   const preparedPrompt = api.show('Keep the tests; change the title to "A & B".', context);
-  assert.match(preparedPrompt, /First discover actual access/);
-  assert.match(preparedPrompt, /Preserve my existing answers/);
+  assert.match(preparedPrompt, /Discover WebMCP tools/);
+  assert.match(preparedPrompt, /preserve my answers and draft/);
   assert.match(preparedPrompt, /only for missing business decisions/);
-  assert.match(preparedPrompt, /QUALIFYING META CHILD/);
+  assert.ok(preparedPrompt.startsWith(postingPrompt.build()));
+  assert.match(preparedPrompt, /qualifying_child_constraints/);
+  assert.match(preparedPrompt, /"total_funding_usdc": "1.00"/);
+  assert.match(preparedPrompt, /distinct_intended_child_solver_required/);
+  assert.match(preparedPrompt, /ordinary hosted prepare_bounty_post/);
   assert.ok(preparedPrompt.includes(draft.benchmark.source.commit));
   assert.ok(preparedPrompt.includes(draft.source_url));
   await chatgptButton.handlers.click();

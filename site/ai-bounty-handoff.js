@@ -126,45 +126,22 @@
   }
 
   function promptFor(intent, context) {
-    const revision = context?.draft
-      ? `\n\nCURRENT DRAFT TO REVISE:\n${JSON.stringify({
-          title: context.draft.title,
-          goal: context.draft.goal,
-          acceptance_criteria: context.draft.acceptance_criteria,
-          solver_reward_usdc: context.solver_reward_usdc,
-          verifier_reward_usdc: context.verifier_reward_usdc,
-          task_window_days: context.task_window_days,
-          source_url: context.source_url ?? context.draft.source_url,
-          benchmark: context.benchmark ?? context.draft.benchmark,
-          evidence_schema: context.evidence_schema ?? context.draft.evidence_schema,
-          crowdfund: context.crowdfund,
-        }, null, 2)}\n\nREQUESTED CHANGE:\n${intent}`
-      : `\n\nWHAT I WANT DONE:\n${intent}`;
-
-    return `Help me prepare a public Agent Bounties bounty using the context you already have about me and this request.${revision}${context?.meta_child ? `\n\nQUALIFYING META CHILD: Preserve meta_child: ${JSON.stringify(context.meta_child)} in the returned JSON. Use exactly 1 USDC total, ordinarily 0.99 solver plus 0.01 shared between the two committed verifiers. Identify a distinct intended child solver before funding. Use the browser WebMCP stage tool or paste JSON into this review; do not use the ordinary hosted prepare_bounty_post path for this child.` : ""}
-
-First discover actual access. In the desktop app, open Agent Bounties in the built-in browser (@Browser), discover its WebMCP site tools and read the current page context. Tell me whether those tools are actually callable. A web chat alone does not establish WebMCP access. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. If site tools are unavailable, check for connected official Agent Bounties MCP tools; otherwise explain the limitation once and use the portable draft below.
-
-Preserve my existing answers and exact draft fields. Handle navigation, preparation and staging yourself; ask only for missing business decisions such as the outcome, budget and deadline. Propose measurable checks and prepare the reviewed verifier yourself, without asking me for technical hashes or commands. Leave publication consent, funding, payment, legal consent and wallet confirmations to me, and reuse approvals within their agreed scope. Never ask for a seed phrase or private key, invent gas sponsorship, or report an action completed without a confirming tool result. Only confirmed canonical events prove funding or payment.
-
-${context?.meta_child ? "Use the parent-specific browser review described above. Prepare the JSON for review without publishing it." : "Prefer the discovered WebMCP staging tools. If only the Agent Bounties MCP connector is available, show me the complete terms and reuse my approval if already given. After approval, call prepare_bounty_post."} If this AI can generate and attach a unique image, you may show it for approval and call the tool with bounty_image, the exact image_prompt, and accessible image_alt_text. Otherwise omit all three image fields; the Agent Bounties review page will render a deterministic content-derived visual. Agent Bounties does not require or use a platform model key. The MCP endpoint is ${MCP_URL}.
-
-If neither site tools nor the connector are available, resolve only missing business decisions and then return ONLY one JSON object in this exact shape so I can paste the approved terms directly into the Agent Bounties review flow:
-{
-  "title": "concise public title",
-  "goal": "specific public outcome",
-  "acceptance_criteria": ["binary or measurable check"],
-  "solver_reward_usdc": "${context?.meta_child ? "0.99" : "2.00"}",
-  "verifier_reward_usdc": "${context?.meta_child ? "0.01" : "0.10"}",
-  "task_window_days": 30,
-  "source_url": null,
-  "crowdfund": false,
-  "discovery_source": "AI provider and account used",
-  "benchmark": null,
-  "evidence_schema": null
-}
-
-Constraints: title <= 200 characters; goal <= 4000; 1-20 acceptance criteria, each <= 1000; rewards are positive USDC decimals with at most 6 places; task_window_days is 1-30; source_url is HTTPS or null. A funded coding bounty must include an exact public sandboxed_regression_v1 benchmark and matching evidence_schema; never invent a commit, digest, OCI image, command, or resource limit. Do not claim that anything is posted, created, funded, signed, or paid. I must explicitly approve the bounty terms and separately approve any wallet transaction on Agent Bounties.`;
+    const data = {};
+    if (intent) data.request = String(intent);
+    if (context?.draft) {
+      data.draft = {
+        ...context.draft,
+        solver_reward_usdc: context.solver_reward_usdc ?? context.draft.solver_reward_usdc,
+        verifier_reward_usdc: context.verifier_reward_usdc ?? context.draft.verifier_reward_usdc,
+        task_window_days: context.task_window_days ?? context.draft.task_window_days,
+        source_url: context.source_url ?? context.draft.source_url,
+        benchmark: context.benchmark ?? context.draft.benchmark,
+        evidence_schema: context.evidence_schema ?? context.draft.evidence_schema,
+        crowdfund: context.crowdfund ?? context.draft.crowdfund,
+      };
+    }
+    if (context?.meta_child || context?.draft?.meta_child) data.meta_child = context.meta_child || context.draft.meta_child;
+    return window.AgentBountiesPostingPrompt.build(data);
   }
 
   function setImportStatus(message, tone = "") {
