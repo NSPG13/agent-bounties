@@ -48,7 +48,7 @@ jobs:
       - name: Prepare reviewed esbuild binary
         run: npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
 
-      - name: Build the dormant adapter outside the public site
+      - name: Build the adapter in an isolated output directory
         env:
           COINBASE_WALLET_OUTDIR: /tmp/coinbase-wallet
         run: |

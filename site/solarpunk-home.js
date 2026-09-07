@@ -241,6 +241,7 @@ ${competitionChildBrief(item)}`;
       wallet_linked_to_another_account: "That wallet is already linked to another account.",
       wallet_limit_reached: "This account has reached its linked-wallet limit.",
       wallet_signature_invalid: "The signature did not prove control of that wallet.",
+      wallet_selector_unavailable: "The wallet chooser could not load. Reload the page and try again.",
     };
     return messages[reason] || "The wallet could not be linked. Please try again.";
   }
@@ -977,18 +978,19 @@ ${competitionChildBrief(item)}`;
         setStatus("Email and password accounts are not configured yet. Use a connected provider.");
       });
       walletLinkButton?.addEventListener("click", async () => {
-        if (!currentUser) return;
-        const linkProvider = win.AgentBountiesPhoneWallet?.state().connected
-          ? win.AgentBountiesPhoneWallet.provider : win.ethereum || (win.AgentBountiesPhoneWallet?.state().available ? win.AgentBountiesPhoneWallet.provider : null);
-        if (!linkProvider || typeof linkProvider.request !== "function") {
-          setWalletStatus("No browser wallet was detected. Open this page in a browser with an EVM wallet extension.");
-          return;
-        }
+        if (!currentUser || walletLinkButton.disabled) return;
+        const linkingUser = currentUser;
         walletLinkButton.disabled = true;
-        win.agentBountiesAnalytics?.track("wallet_link_started");
-        setWalletStatus("Choose the wallet address you want to link…");
+        setWalletStatus("");
         try {
+          if (!win.AgentBountiesWalletLink) throw { reason: "wallet_selector_unavailable" };
+          const selection = await win.AgentBountiesWalletLink.select();
+          const linkProvider = selection.provider;
+          if (currentUser !== linkingUser) throw { code: 4001 };
+          win.agentBountiesAnalytics?.track("wallet_link_started");
+          setWalletStatus("Choose the wallet address you want to link…");
           const accounts = await linkProvider.request({ method: "eth_requestAccounts" });
+          if (currentUser !== linkingUser) throw { code: 4001 };
           const address = String(Array.isArray(accounts) ? accounts[0] : "").trim();
           if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw { reason: "invalid_wallet_address" };
           const challenge = await postAccountJson("/wallet/challenge", { address });
@@ -997,6 +999,7 @@ ${competitionChildBrief(item)}`;
             method: "personal_sign",
             params: [utf8Hex(challenge.message), address],
           });
+          if (currentUser !== linkingUser) throw { code: 4001 };
           await postAccountJson("/wallet/verify", {
             challenge_id: challenge.challenge_id,
             address,
@@ -1009,6 +1012,7 @@ ${competitionChildBrief(item)}`;
           setWalletStatus(walletLinkErrorMessage(error));
         } finally {
           walletLinkButton.disabled = false;
+          if (dialog.open) walletLinkButton.focus();
         }
       });
       walletList?.addEventListener("click", async (event) => {

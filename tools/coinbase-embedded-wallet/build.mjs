@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
 const outdir = process.env.COINBASE_WALLET_OUTDIR
-  ? path.resolve(process.env.COINBASE_WALLET_OUTDIR)
+  ? path.resolve(root, process.env.COINBASE_WALLET_OUTDIR)
   : path.join(root, "target", "coinbase-embedded-wallet");
 const outfile = path.join(outdir, "coinbase-embedded-wallet.bundle.js");
 const cssfile = path.join(outdir, "coinbase-embedded-wallet.bundle.css");

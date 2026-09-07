@@ -18,6 +18,9 @@ on:
       - "scripts/test-competition-proof.js"
       - "scripts/test-phone-wallet.js"
       - "scripts/configure-phone-wallet.py"
+      - "scripts/configure-wallet-providers.py"
+      - "scripts/test-wallet-link.js"
+      - "tools/coinbase-embedded-wallet/**"
       - "tools/phone-wallet/**"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
@@ -41,6 +44,9 @@ on:
       - "scripts/test-competition-proof.js"
       - "scripts/test-phone-wallet.js"
       - "scripts/configure-phone-wallet.py"
+      - "scripts/configure-wallet-providers.py"
+      - "scripts/test-wallet-link.js"
+      - "tools/coinbase-embedded-wallet/**"
       - "tools/phone-wallet/**"
       - "scripts/github_audience_audit.py"
       - "scripts/test_github_audience_audit.py"
@@ -74,8 +80,21 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-fund
           npm run check
+      - name: Build and verify the account embedded wallet
+        env:
+          COINBASE_WALLET_OUTDIR: site/vendor
+        run: |
+          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+          npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+          npm run check --prefix tools/coinbase-embedded-wallet
+          npm run build --prefix tools/coinbase-embedded-wallet
+          python scripts/test_configure_wallet_providers.py
+          node --test scripts/test-wallet-link.js
+          cd tools/coinbase-embedded-wallet
+          npx playwright install --with-deps chromium
+          npm run test:browser
       - name: Validate the reduced public site
-        run: python scripts/check-site.py
+        run: python scripts/check-site.py --require-wallet-bundle
       - name: Check retained browser JavaScript
         run: |
           node --check site/analytics-config.js
@@ -155,6 +174,20 @@ jobs:
         with:
           python-version: "3.12"
       - uses: actions/configure-pages@v6
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "22"
+      - name: Build and configure account embedded-wallet creation
+        env:
+          COINBASE_CDP_PROJECT_ID: ${{ vars.COINBASE_CDP_PROJECT_ID }}
+          COINBASE_WALLET_OUTDIR: site/vendor
+        run: |
+          npm ci --prefix tools/coinbase-embedded-wallet --ignore-scripts --no-audit --no-fund
+          npm rebuild --prefix tools/coinbase-embedded-wallet esbuild
+          npm run build --prefix tools/coinbase-embedded-wallet
+          python scripts/configure-wallet-providers.py --verify-origin https://agentbounties.app
+          test -s site/vendor/coinbase-embedded-wallet.bundle.js
+          test -s site/vendor/coinbase-embedded-wallet.bundle.css
       - name: Configure phone-wallet pairing
         env:
           WALLETCONNECT_PROJECT_ID: ${{ vars.WALLETCONNECT_PROJECT_ID }}

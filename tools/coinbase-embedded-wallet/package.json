@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "test:browser": "node --test test-account-link.mjs",
     "check": "node --check src/index.js && node --check build.mjs && node test-dependency-compat.mjs"
   },
   "dependencies": {
@@ -16,7 +17,8 @@
     "viem": "2.55.8"
   },
   "devDependencies": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "playwright": "1.62.1"
   },
   "overrides": {
     "jayson": {
