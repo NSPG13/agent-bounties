@@ -714,6 +714,8 @@ ${competitionChildBrief(item)}`;
       let providerAvailability = {};
       let currentUser = null;
       let accountLoadId = 0;
+      let verifiedWallets = [];
+      let embeddedAddress = null;
 
       const setStatus = (message) => {
         if (status) status.textContent = message;
@@ -752,13 +754,15 @@ ${competitionChildBrief(item)}`;
 
       const renderWallets = (wallets, loading = false) => {
         if (!walletList) return;
+        if (!loading) verifiedWallets = wallets;
+        const unverifiedEmbedded = embeddedAddress && !wallets.some((wallet) => wallet.address === embeddedAddress);
         walletList.replaceChildren();
-        if (loading) {
+        if (loading && !wallets.length && !unverifiedEmbedded) {
           const item = doc.createElement("li");
           item.className = "wallet-empty";
           item.textContent = "Checking verified wallets…";
           walletList.append(item);
-        } else if (!wallets.length) {
+        } else if (!wallets.length && !unverifiedEmbedded) {
           const item = doc.createElement("li");
           item.className = "wallet-empty";
           item.textContent = "No verified wallet linked.";
@@ -779,10 +783,35 @@ ${competitionChildBrief(item)}`;
             remove.textContent = "Remove";
             remove.setAttribute("aria-label", `Remove linked wallet ${wallet.label}`);
             item.append(address, verified, remove);
+            if (wallet.address === embeddedAddress) {
+              const access = doc.createElement("button");
+              access.type = "button";
+              access.className = "wallet-remove";
+              access.dataset.walletAccess = "true";
+              access.textContent = "Recovery settings";
+              item.append(access);
+            }
             walletList.append(item);
           });
         }
-        if (walletLinkButton) walletLinkButton.textContent = wallets.length ? "Link another" : "Link wallet";
+        if (unverifiedEmbedded) {
+          const item = doc.createElement("li");
+          const address = doc.createElement("code");
+          address.textContent = shortWalletAddress(embeddedAddress);
+          address.title = embeddedAddress;
+          const state = doc.createElement("span");
+          state.className = "wallet-pending";
+          state.textContent = "Ready to verify";
+          const finish = doc.createElement("button");
+          finish.type = "button";
+          finish.className = "wallet-remove";
+          finish.dataset.walletFinish = "true";
+          finish.textContent = "Finish linking";
+          finish.disabled = Boolean(walletLinkButton?.disabled);
+          item.append(address, state, finish);
+          walletList.append(item);
+        }
+        if (walletLinkButton) walletLinkButton.textContent = wallets.length || unverifiedEmbedded ? "Link another" : "Link wallet";
       };
 
       const renderAccountDashboard = (payload) => {
@@ -821,7 +850,7 @@ ${competitionChildBrief(item)}`;
         if (accountCompletedCount) accountCompletedCount.textContent = "— settled";
         replaceActivityList(accountParticipatingList, [], "Checking marketplace activity…");
         replaceActivityList(accountCompletedList, [], "Checking settlement evidence…");
-        renderWallets([], true);
+        renderWallets(verifiedWallets, true);
         if (accountEvidence) accountEvidence.textContent = "Verifying marketplace activity…";
       };
 
@@ -840,6 +869,10 @@ ${competitionChildBrief(item)}`;
       const renderSession = (payload) => {
         providerAvailability = payload?.providers || providerAvailability;
         const user = payload?.authenticated ? payload.user : null;
+        if (currentUser?.id !== user?.id) {
+          verifiedWallets = [];
+          embeddedAddress = null;
+        }
         currentUser = user;
         dialog.dataset.view = user ? "account" : "login";
         if (form) form.hidden = Boolean(user);
@@ -854,6 +887,7 @@ ${competitionChildBrief(item)}`;
         openButton.title = user?.name ? `Signed in as ${user.name}` : "Sign in";
         if (!user) {
           accountLoadId += 1;
+          embeddedAddress = null;
           renderWallets([]);
           setWalletStatus("");
           renderProviderAvailability();
@@ -919,7 +953,7 @@ ${competitionChildBrief(item)}`;
           }
           return payload;
         } catch (error) {
-          if (requestId === accountLoadId && currentUser) renderAccountDashboard(null);
+          if (requestId === accountLoadId && currentUser) renderAccountDashboard({ wallets: verifiedWallets });
           return null;
         }
       };
@@ -979,23 +1013,43 @@ ${competitionChildBrief(item)}`;
         if (!form.reportValidity()) return;
         setStatus("Email and password accounts are not configured yet. Use a connected provider.");
       });
-      walletLinkButton?.addEventListener("click", async () => {
+      const linkWallet = async (resuming = false) => {
         if (!currentUser || walletLinkButton.disabled) return;
         const linkingUser = currentUser;
         walletLinkButton.disabled = true;
         setWalletStatus("");
+        let selection;
         try {
           if (!win.AgentBountiesWalletLink) throw { reason: "wallet_selector_unavailable" };
-          const selection = await win.AgentBountiesWalletLink.select();
+          if (resuming) {
+            showDialog();
+            setWalletStatus("Restoring your wallet after sign-in…");
+            const provider = await win.AgentBountiesWalletLink.loadEmbedded();
+            const accounts = await provider.request({ method: "eth_accounts" });
+            if (!accounts?.length) throw { code: 4001 };
+            selection = { provider, accounts, kind: "embedded" };
+          } else selection = await win.AgentBountiesWalletLink.select();
           const linkProvider = selection.provider;
           if (currentUser !== linkingUser) throw { code: 4001 };
+          if (selection.kind === "embedded") win.AgentBountiesWalletLink.beginPending(linkingUser.id);
           win.agentBountiesAnalytics?.track("wallet_link_started");
           setWalletStatus("Choose the wallet address you want to link…");
-          const accounts = await linkProvider.request({ method: "eth_requestAccounts" });
+          const accounts = selection.accounts || await linkProvider.request({ method: "eth_requestAccounts" });
           if (currentUser !== linkingUser) throw { code: 4001 };
-          const address = String(Array.isArray(accounts) ? accounts[0] : "").trim();
+          const address = String(Array.isArray(accounts) ? accounts[0] : "").trim().toLowerCase();
           if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw { reason: "invalid_wallet_address" };
+          if (selection.kind === "embedded") {
+            embeddedAddress = address;
+            renderWallets(verifiedWallets);
+            showDialog();
+            setWalletStatus("Your wallet is ready. Confirm ownership to finish linking it to your account.");
+            if (verifiedWallets.some((wallet) => wallet.address === address)) {
+              setWalletStatus(`${shortWalletAddress(address)} is already verified and linked. Your wallet is ready.`);
+              return;
+            }
+          }
           const challenge = await postAccountJson("/wallet/challenge", { address });
+          if (currentUser !== linkingUser) throw { code: 4001 };
           setWalletStatus("Review the ownership-only message in your wallet. It cannot move funds or approve tokens.");
           const signature = await linkProvider.request({
             method: "personal_sign",
@@ -1007,17 +1061,30 @@ ${competitionChildBrief(item)}`;
             address,
             signature,
           });
+          if (currentUser !== linkingUser) throw { code: 4001 };
+          // The successful verify response is authoritative even if activity refresh fails.
+          verifiedWallets = [...verifiedWallets.filter((wallet) => wallet.address !== address), { address, label: shortWalletAddress(address) }];
+          renderWallets(verifiedWallets);
           await loadAccount();
+          if (currentUser !== linkingUser) return;
+          showDialog();
           setWalletStatus(`${shortWalletAddress(address)} is verified and linked.`);
           win.agentBountiesAnalytics?.track("wallet_link_confirmed");
         } catch (error) {
-          setWalletStatus(walletLinkErrorMessage(error));
+          if (currentUser === linkingUser) setWalletStatus(embeddedAddress && !verifiedWallets.some((wallet) => wallet.address === embeddedAddress)
+            ? `Your wallet is ready, but account linking is not finished. ${walletLinkErrorMessage(error)} Select Finish linking to retry.`
+            : walletLinkErrorMessage(error));
         } finally {
+          win.AgentBountiesWalletLink?.clearPending();
           walletLinkButton.disabled = false;
+          if (currentUser === linkingUser) renderWallets(verifiedWallets);
           if (dialog.open) walletLinkButton.focus();
         }
-      });
+      };
+      walletLinkButton?.addEventListener("click", () => linkWallet());
       walletList?.addEventListener("click", async (event) => {
+        if (event.target.closest?.("[data-wallet-finish]")) { await linkWallet(true); return; }
+        if (event.target.closest?.("[data-wallet-access]")) { await win.AgentBountiesCoinbaseEmbeddedWallet?.manageAccess(); return; }
         const button = event.target.closest?.("[data-wallet-unlink]");
         if (!button || button.disabled || !currentUser) return;
         if (button.dataset.confirming !== "true") {
@@ -1034,6 +1101,7 @@ ${competitionChildBrief(item)}`;
         button.disabled = true;
         try {
           await postAccountJson("/wallet/unlink", { address: button.dataset.walletUnlink });
+          if (embeddedAddress === button.dataset.walletUnlink) embeddedAddress = null;
           await loadAccount();
           setWalletStatus("Wallet unlinked from this account. No onchain state changed.");
         } catch (error) {
@@ -1069,6 +1137,7 @@ ${competitionChildBrief(item)}`;
           });
           if (!response.ok) throw new Error(`logout ${response.status}`);
           renderSession({ authenticated: false, user: null, providers: providerAvailability });
+          win.AgentBountiesWalletLink?.clearPending();
           setStatus("Signed out from this session.");
         } catch (error) {
           setStatus("The session could not be signed out. Please try again.");
@@ -1086,6 +1155,7 @@ ${competitionChildBrief(item)}`;
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
       loadSession().then(() => {
+        if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) void linkWallet(true);
         if (authResult !== "success" && authResult !== "error") return;
         setStatus(authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
         if (authResult === "success") win.agentBountiesAnalytics?.track("auth_completed");

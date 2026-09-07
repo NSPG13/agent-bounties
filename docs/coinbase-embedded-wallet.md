@@ -192,11 +192,17 @@ python scripts/test_configure_wallet_providers.py
 npm run check --prefix tools/coinbase-embedded-wallet
 ```
 
-8. Run `node --test scripts/test-wallet-link.js`, then `npm run test:browser --prefix tools/coinbase-embedded-wallet` with Playwright Chromium installed. The browser regressions exercise both account link labels with and without an injected wallet. They stub the provider and account service; a real account-creation canary remains separate.
+8. Run `node --test scripts/test-wallet-link.js`, then `npm run test:browser --prefix tools/coinbase-embedded-wallet` with Playwright Chromium installed. The browser regressions exercise both account link labels with and without an injected wallet, same-page authentication, a full-page OAuth return, ownership-review cancellation, retry, and an unavailable activity refresh. The redirect tests run the real adapter and React UI against a test CDP boundary and account service; a real account-creation canary remains separate.
 9. Human-test one account for every enabled authentication method. Verify that each intended linked method restores the same wallet and that unlinked methods are clearly distinguished.
 10. Buy a bounded amount of Base USDC through MoonPay to the embedded EOA.
 11. Fund an existing bounty through the gas-only x402 relay.
 12. Confirm the matching indexed `FundingAdded` before calling the bounty funded.
+
+## Account-link completion
+
+Account linking saves a 30-minute, tab-scoped intent before opening embedded-wallet sign-in. After a social-login redirect, the homepage checks the same site account, reloads the CDP adapter, and reopens the account dialog. An expired or different-account intent cannot resume access. The stored intent contains only the site account ID and start time; it is not proof of wallet ownership.
+
+A signed-in wallet appears immediately as **Ready to verify**. The user reviews the exact ownership message and selects **Verify and link wallet** before the adapter signs it. Only a successful server verification changes the row to **Verified** and displays the confirmation. Cancelled or failed verification keeps the address visible with **Finish linking**. A failed activity refresh does not erase an already-confirmed link. Recovery-method management is a separate **Recovery settings** action after linking.
 
 ## Provider incentives and portability
 

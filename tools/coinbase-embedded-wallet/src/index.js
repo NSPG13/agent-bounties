@@ -50,6 +50,8 @@ let registered = false;
 let authRequest = null;
 let authResolve = null;
 let authReject = null;
+let authReview = null;
+let authReviewMessage = "";
 let panelControl = null;
 let sdkReadyResolve = null;
 let sdkReadyReject = null;
@@ -118,6 +120,7 @@ function rejectPendingAuth(error) {
   authRequest = null;
   authResolve = null;
   authReject = null;
+  authReview = null;
   hidePanel();
   if (rejecter) rejecter(error instanceof Error ? error : new Error(String(error)));
 }
@@ -127,6 +130,7 @@ function resolvePendingAuth(address) {
   authRequest = null;
   authResolve = null;
   authReject = null;
+  authReview = null;
   hidePanel();
   emit("coinbase-embedded-authenticated", { address });
   if (resolver) resolver(address);
@@ -149,6 +153,7 @@ function AuthBridge() {
     panelControl = Object.freeze({
       showSignIn: () => setPanel({ visible: true, view: "signin", notice: "" }),
       showReview: () => setPanel({ visible: true, view: "review", notice: "" }),
+      showOwnership: () => setPanel({ visible: true, view: "ownership", notice: "" }),
       showLink: () => setPanel({ visible: true, view: "link", notice: "" }),
       hide: () => setPanel((value) => ({ ...value, visible: false, notice: "" })),
     });
@@ -164,7 +169,8 @@ function AuthBridge() {
 
   useEffect(() => {
     if (!panel.visible || !signedIn || !address || panel.view !== "signin") return;
-    setPanel({ visible: true, view: "review", notice: "Wallet connected. Review recovery access before continuing." });
+    if (!authReview) resolvePendingAuth(address);
+    else setPanel({ visible: true, view: authReview, notice: "Wallet ready." });
   }, [panel.visible, panel.view, signedIn, address]);
 
   useEffect(() => {
@@ -214,6 +220,20 @@ function AuthBridge() {
         "p",
         { className: "wallet-auth-method-warning" },
         "Returning user? Use the same sign-in method to access your existing wallet.",
+      ),
+    );
+  } else if (panel.view === "ownership") {
+    body = React.createElement(React.Fragment, null,
+      React.createElement("p", { className: "wallet-auth-notice", role: "status" }, "Your wallet is ready. Confirm ownership to finish linking it to your Agent Bounties account."),
+      React.createElement("div", { className: "wallet-auth-account" },
+        React.createElement("span", null, "Wallet"),
+        React.createElement("strong", null, address),
+      ),
+      React.createElement("p", null, "Review the message below. Signing proves you own this address; it does not authorize a payment."),
+      React.createElement("pre", { className: "wallet-auth-message" }, authReviewMessage),
+      React.createElement("div", { className: "wallet-auth-actions" },
+        React.createElement("button", { type: "button", className: "button secondary", onClick: close }, "Not now"),
+        React.createElement("button", { type: "button", className: "button primary", disabled: !address, onClick: continueWithWallet }, "Verify and link wallet"),
       ),
     );
   } else if (panel.view === "link") {
@@ -349,11 +369,11 @@ function AuthBridge() {
         React.createElement(
           "div",
           null,
-          React.createElement("p", { className: "eyebrow" }, panel.view === "review" ? "Your wallet, your recovery paths" : "No extension or recovery phrase"),
+          React.createElement("p", { className: "eyebrow" }, panel.view === "ownership" ? "Wallet ready" : panel.view === "review" ? "Your wallet, your recovery paths" : "No extension or recovery phrase"),
           React.createElement(
             "h2",
             { id: "coinbase-wallet-auth-title" },
-            panel.view === "link" ? "Link another way to sign in" : panel.view === "review" ? "Protect access to this wallet" : "Create or access your wallet",
+            panel.view === "ownership" ? "Confirm wallet ownership" : panel.view === "link" ? "Link another way to sign in" : panel.view === "review" ? "Protect access to this wallet" : "Create or access your wallet",
           ),
         ),
         React.createElement(
@@ -452,21 +472,31 @@ async function accessMethods() {
   return linkedAuthMethods(await getCurrentUser());
 }
 
-async function ensureAuthenticated() {
+async function ensureAuthenticated({ review = "review", message = "" } = {}) {
   await waitForSdk();
-  if (authRequest) return authRequest;
+  const pendingRequest = () => {
+    if (review) throw Object.assign(new Error("Finish the current wallet request before reviewing another message."), { code: -32002 });
+    return authRequest;
+  };
+  if (authRequest) return pendingRequest();
   const existing = await currentAddress();
+  if (authRequest) return pendingRequest();
+  if (existing && !review) return existing;
+  authReview = review;
+  authReviewMessage = message;
   authRequest = new Promise((resolve, reject) => {
     authResolve = resolve;
     authReject = reject;
   });
+  const request = authRequest;
   if (!panelControl) {
     rejectPendingAuth(new Error("Coinbase wallet authentication UI is not ready. Reload and try again."));
-    return authRequest;
+    return request;
   }
-  if (existing) panelControl.showReview();
+  if (existing && review === "ownership") panelControl.showOwnership();
+  else if (existing) panelControl.showReview();
   else panelControl.showSignIn();
-  return authRequest;
+  return request;
 }
 
 async function manageAccess() {
@@ -497,7 +527,16 @@ const provider = {
       return (await innerProvider()).request(args);
     }
     if (method === "eth_requestAccounts") {
-      await ensureAuthenticated();
+      await ensureAuthenticated({ review: null });
+      return (await innerProvider()).request(args);
+    }
+    if (method === "personal_sign") {
+      const raw = String(args?.params?.[0] || "");
+      let message = raw;
+      if (/^0x(?:[0-9a-fA-F]{2})*$/.test(raw)) {
+        message = new TextDecoder().decode(Uint8Array.from(raw.slice(2).match(/../g) || [], (byte) => parseInt(byte, 16)));
+      }
+      await ensureAuthenticated({ review: message.startsWith("Agent Bounties wallet ownership verification\n\n") ? "ownership" : "review", message });
       return (await innerProvider()).request(args);
     }
     if (method === "wallet_addEthereumChain") {
