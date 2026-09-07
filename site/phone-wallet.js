@@ -16,6 +16,21 @@
   const projectId = String(win.agentBountiesPhoneWalletConfig?.projectId || "");
   const configured = PROJECT.test(projectId);
   function error(code, message) { return Object.assign(new Error(message), { code }); }
+  function normalizeWalletError(failure) {
+    // Some wallets serialize the entire RPC error into message (or a string).
+    // Decode a complete, bounded envelope only. Never mine prose for a code or
+    // override a specific outer error / response data that might signal a send.
+    if (failure?.code !== undefined && ![-32000, -32603].includes(failure.code)) return failure;
+    if (failure?.data != null) return failure;
+    const raw = typeof failure === "string" ? failure : failure?.message;
+    if (typeof raw !== "string" || raw.length > 2048) return failure;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || Array.isArray(parsed) || Object.keys(parsed).sort().join(",") !== "code,message"
+        || !Number.isInteger(parsed.code) || typeof parsed.message !== "string" || !parsed.message.trim()) return failure;
+      return error(parsed.code, parsed.message);
+    } catch (_) { return failure; }
+  }
   function chainIdHex(value) {
     // WalletConnect 2.24 returns a number for eth_chainId. EIP-1193 consumers
     // expect a hexadecimal string; preserve the actual chain, never assume Base.
@@ -157,7 +172,7 @@
         attempt = null; win.clearTimeout(current.timer); clearQr();
         // EthereumProvider 2.24 wraps connect rejections in Error(message),
         // dropping the original code. Match its exact consent-rejection texts
-        // only here; transaction errors below are never reclassified.
+        // only here; transaction errors below require a structured RPC envelope.
         const rejectionText = String(caught?.message || "").trim().toLowerCase().replace(/\.$/, "");
         const rejected = [4001, 5000, 5001, 5002, 5003].includes(Number(caught?.code)) ||
           ["user rejected", "user rejected chains", "user rejected methods", "user rejected events", "user rejected the request"].includes(rejectionText);
@@ -203,7 +218,7 @@
         // Safe read failures can explain recovery without exposing browser
         // internals. Financial errors stay intact for the payment journal.
         if (reads.has(request.method) && failure?.name === "InvalidStateError") throw error(4900, "Your browser closed the phone-wallet connection. Refresh this page and reconnect; your draft is saved. Check any pending wallet request before trying it again.");
-        throw failure;
+        throw normalizeWalletError(failure);
       }
     },
   });

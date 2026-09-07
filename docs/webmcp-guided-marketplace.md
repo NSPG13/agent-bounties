@@ -53,6 +53,12 @@ Posting sends EIP-5792 version 2.0.0 calls with the required
 in their supplied order. Only an explicit unsupported-method response permits
 the direct-transaction fallback. A batch ID is not funding evidence.
 
+An ordinary EOA or an account with the exact EIP-7702 delegation indicator can
+use the existing bounded USDC authorization followed by one factory transaction.
+Delegation retains the EOA signing key; it must not be mistaken for a separate
+contract wallet solely because `eth_getCode` is nonempty. Other contract code
+keeps the batch route, and an invalid account-code response stops preparation.
+
 For an older request rejected with code `-32602` and the exact error
 `atomicRequired - Expected a value of type boolean, but received undefined`,
 use `agent_bounties_recover_rejected_posting_batch` on the posting page. Pass the
@@ -66,6 +72,20 @@ changed operations, canonical activity, other parameter errors, and lost or
 pending wallet replies remain blocked; absence of chain activity alone never
 authorizes a retry. New requests also retain the wallet method and this exact
 validation error, so a user report cannot replace an uncertain recorded reply.
+
+The same recovery tool accepts the exact legacy MetaMask error with code `4001`
+and message `MetaMask Tx Signature: User denied transaction signature.` only for
+an unsubmitted batch from a release that did not capture structured errors. This
+is the wallet's report, not proof the person saw or declined a prompt. New
+requests cannot borrow this legacy report to clear an uncertain response.
+
+The phone adapter decodes a complete JSON error envelope containing only an
+integer code and message when the outer error has no code or a generic RPC code
+and no response data. It never extracts codes from prose or overrides specific
+outer errors, transaction data, or batch results. An explicit rejection before
+any authorization or submission leaves preparation available, with neutral
+guidance to open the phone wallet. Nothing is retried automatically. A rejection
+after a USDC signature retains the existing authorization for reconciliation.
 
 ## Earning and contributions
 

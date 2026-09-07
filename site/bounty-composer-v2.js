@@ -1594,7 +1594,14 @@
   function signatureParts(signature){const value=String(signature).replace(/^0x/,"");if(value.length!==130)throw new Error("The wallet returned an invalid signature.");return{r:`0x${value.slice(0,64)}`,s:`0x${value.slice(64,128)}`,v:Number.parseInt(value.slice(128,130),16)};}
   async function sendTransaction(transaction){if(!transaction||!transaction.to||!transaction.data||Number(transaction.value_wei||0)!==0)throw new Error("The planned transaction is invalid.");postingJournal.checkpoint("sending",null,"eth_sendTransaction");const hash=await state.provider.request({method:"eth_sendTransaction",params:[{from:state.account,to:transaction.to,data:transaction.data,value:"0x0"}]});if(!/^0x[0-9a-fA-F]{64}$/.test(hash))throw new Error("The wallet response is uncertain. Check the recorded posting before retrying.");postingJournal.checkpoint("submitted",hash);return hash;}
   async function waitReceipt(hash,timeoutMs=150000){const started=Date.now();while(Date.now()-started<timeoutMs){const receipt=await state.provider.request({method:"eth_getTransactionReceipt",params:[hash]});if(receipt){if(receipt.status!=="0x1")throw new Error(`The Base transaction reverted: ${hash}`);return receipt;}await new Promise((resolve)=>setTimeout(resolve,1600));}throw new Error("The transaction is still pending. Check the wallet or Base explorer before trying again.");}
-  async function isContractAccount(){const code=await state.provider.request({method:"eth_getCode",params:[state.account,"latest"]});return code&&code!=="0x"&&code!=="0x0";}
+  async function isContractAccount() {
+    const code = await state.provider.request({ method: "eth_getCode", params: [state.account, "latest"] });
+    if (code === "0x" || code === "0x0") return false;
+    if (typeof code !== "string" || !/^0x(?:[0-9a-f]{2})+$/i.test(code)) throw new Error("The wallet account type could not be checked. No signature was requested.");
+    // EIP-7702 delegates code but retains the EOA's signing key and transaction
+    // authority. It can use the same bounded USDC authorization as an EOA.
+    return !/^0xef0100[0-9a-f]{40}$/i.test(code);
+  }
   async function sendWalletCalls(calls,protocol){
     postingJournal.checkpoint("sending",null,"wallet_sendCalls");
     try {
@@ -1638,7 +1645,7 @@
     const archived = postingJournal.archiveRejectedBatch(input, input.wallet_error, snapshot);
     for (const field of ui.form.querySelectorAll("input, textarea, button")) field.disabled = false;
     ui.fundNow.disabled = !state.approved;
-    setPaymentStatus("The wallet rejected the previous batch before accepting it. The rejected attempt is saved. Your draft is unchanged; review it and confirm the new request in your wallet when ready.", "pending");
+    setPaymentStatus("The reported wallet rejection has been recorded and the rejected attempt is saved. Your draft is unchanged; review it and confirm the new request in your wallet when ready.", "pending");
     return { status: "rejected_batch_archived", archived_operation: archived, funded: false, paid: false,
       user_confirmation_required: true, next_action: "Read the preserved bounty review, then open its funding review. The person confirms; recovery sends no wallet request." };
   }
@@ -1761,7 +1768,9 @@
       track("canonical_post_confirmed", { bounty_contract: state.bountyContract });
     } catch (error) {
       postingJournal.reject(error);
-      setPaymentStatus(error.message || String(error), "error");
+      setPaymentStatus(error.code === 4001 && !postingJournal.load()
+        ? "Your wallet did not approve the request. Your draft is saved. Open your phone wallet, then choose Review and post when ready."
+        : error.message || String(error), "error");
       ui.fundNow.disabled = Boolean(postingJournal.load());
     } finally {
       postingBusy = false;
