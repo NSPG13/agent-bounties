@@ -12,6 +12,7 @@ from urllib.parse import urldefrag, urlparse
 
 
 CANONICAL_PAGES = {
+    "bug-fix.html": "https://agentbounties.app/bug-fix.html",
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
     "competition.html": "https://agentbounties.app/competition.html",
@@ -46,6 +47,7 @@ CANONICAL_PAGES = {
     "terms.html": "https://agentbounties.app/terms.html",
 }
 INDEXABLE_PAGES = {
+    "bug-fix.html",
     "about.html",
     "blog/agentic-economy-needs-a-market-for-work.html",
     "blog/index.html",
@@ -70,6 +72,9 @@ INDEXABLE_PAGES = {
     "terms.html",
 }
 REQUIRED_FILES = {
+    "bug-fix.html",
+    "bug-fix.css",
+    "bug-fix.js",
     ".nojekyll",
     ".well-known/agent-bounties.json",
     ".well-known/agent-card.json",
@@ -153,6 +158,8 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "bug-fix.css",
+    "bug-fix.js",
     "posting-prompt.js",
     "posting-workspace.js",
     "posting-workspace.css",
@@ -1288,7 +1295,7 @@ def main() -> int:
         path = site_dir / relative
         text = path.read_text(encoding="utf-8")
         prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
-        analytics_version = 5 if relative in {"index.html", "post.html"} else 4
+        analytics_version = 5 if relative in {"index.html", "post.html", "bug-fix.html"} else 4
         parser = PageParser()
         parser.feed(text)
         if parser.h1_count != 1:
