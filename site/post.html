@@ -19,6 +19,7 @@
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=2">
     <link rel="stylesheet" href="phone-wallet.css?v=1">
     <link rel="stylesheet" href="posting-workspace.css?v=2">
+    <link rel="stylesheet" href="marketplace-theme.css?v=1">
   </head>
   <body class="composer-page posting-page">
     <header class="chat-app-header">
@@ -33,6 +34,7 @@
 
     <main class="posting-workspace" aria-label="Bounty draft and review">
       <section class="conversation-panel">
+        <p class="posting-receipt" data-recorded-posting hidden>A wallet step is recorded. <a data-posting-receipt-link>Check funding and return to the board →</a></p>
         <form id="bounty-composer-form" class="chat-composer-form">
           <h2 class="brief-heading">Your bounty brief</h2>
           <p class="brief-help" data-agent-guidance>Work with your AI in your current conversation. This page keeps the brief and displays the proposal for your review.</p>
@@ -257,7 +259,7 @@
     <script src="posting-prompt.js?v=3"></script>
     <script src="creator-review.js?v=1"></script>
     <script src="ai-bounty-handoff.js?v=10"></script>
-    <script src="bounty-composer-v2.js?v=14"></script>
+    <script src="bounty-composer-v2.js?v=15"></script>
     <script src="posting-workspace.js?v=2"></script>
   </body>
 </html>

@@ -17,6 +17,7 @@ CANONICAL_PAGES = {
     "earn.html": "https://agentbounties.app/earn.html",
     "competition.html": "https://agentbounties.app/competition.html",
     "participate.html": "https://agentbounties.app/participate.html",
+    "funded.html": "https://agentbounties.app/funded.html",
     "about.html": "https://agentbounties.app/about.html",
     "blog/index.html": "https://agentbounties.app/blog/",
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
@@ -72,6 +73,10 @@ INDEXABLE_PAGES = {
     "terms.html",
 }
 REQUIRED_FILES = {
+    "funded.html",
+    "funded.js",
+    "marketplace-theme.css",
+    "marketplace-navigation.js",
     "bug-fix.html",
     "bug-fix.css",
     "bug-fix.js",
@@ -158,6 +163,9 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "funded.js",
+    "marketplace-theme.css",
+    "marketplace-navigation.js",
     "bug-fix.css",
     "bug-fix.js",
     "posting-prompt.js",
@@ -563,7 +571,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=14',
+            'bounty-composer-v2.js?v=15',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -872,7 +880,9 @@ def check_marketplace(site_dir: Path) -> None:
         "earn.html",
         board,
         [
-            "Funded work,<br>one market.",
+            "Bounty board",
+            "data-posted-notice",
+            "data-new-bounty",
             "Every visible opportunity passes the readiness rules for its own settlement mechanism.",
             "data-opportunity-list",
             "data-market-timing",

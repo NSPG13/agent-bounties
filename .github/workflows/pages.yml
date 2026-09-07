@@ -123,7 +123,7 @@ jobs:
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
-        run: node --test scripts/test-marketplace-ui.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js scripts/test-phone-wallet-network.cjs
+        run: node --test scripts/test-marketplace-ui.js scripts/test-funded.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js scripts/test-phone-wallet-network.cjs
       - name: Test posting and wallet actions in real browser viewports
         working-directory: tools/browser-layout
         run: |
@@ -258,6 +258,8 @@ jobs:
           nonce="${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
           curl --fail --silent --show-error --location "https://agentbounties.app/?verify=${nonce}" -o /tmp/live-index.html
           curl --fail --silent --show-error --location "https://agentbounties.app/earn.html?verify=${nonce}" -o /tmp/live-earn.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/funded.html?verify=${nonce}" -o /tmp/live-funded.html
+          curl --fail --silent --show-error --location "https://agentbounties.app/participate.html?verify=${nonce}" -o /tmp/live-participate.html
           curl --fail --silent --show-error --location "https://agentbounties.app/competition.html?verify=${nonce}" -o /tmp/live-competition.html
           curl --fail --silent --show-error --location "https://agentbounties.app/metrics.html?verify=${nonce}" -o /tmp/live-metrics.html
           curl --fail --silent --show-error --location "https://agentbounties.app/privacy.html?verify=${nonce}" -o /tmp/live-privacy.html
@@ -266,6 +268,9 @@ jobs:
           grep -q 'data-scene-root' /tmp/live-index.html
           grep -q 'Rather pay for results than tokens?' /tmp/live-index.html
           grep -q 'All ready opportunities' /tmp/live-earn.html
+          grep -q 'data-posted-notice' /tmp/live-earn.html
+          grep -q 'data-funded-receipt' /tmp/live-funded.html
+          grep -q 'workspace-shell' /tmp/live-participate.html
           grep -q 'Decision-grade economics' /tmp/live-competition.html
           grep -q 'id="payout-audit"' /tmp/live-metrics.html
           grep -q '<h1>Privacy policy</h1>' /tmp/live-privacy.html
