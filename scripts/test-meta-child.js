@@ -85,10 +85,10 @@ test("altered funding, chain, quorum, preimages and wallet calls fail before sig
 test("the confirmed funding branch uses the bounded child plan and retries a lost preparation with the same nonce", async () => {
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
   const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function configureSpeech", start);
-  const storage = new Map(), requests = [], sent = [], consents = [];
+  const storage = new Map(), requests = [], sent = [], consents = [], navigations = [];
   const win = { sessionStorage: { getItem: key => storage.get(key) || null, setItem: (key, val) => storage.set(key, val), removeItem: key => storage.delete(key) },
     AgentBountiesLegal: { requireAcceptance: async () => { consents.push("human commitment"); return { durable: true }; } },
-    AgentBountiesWorkflow: { createClient: () => ({}) }, AgentBountiesEvm: evm };
+    AgentBountiesWorkflow: { createClient: () => ({}) }, AgentBountiesEvm: evm, location: { assign: url => navigations.push(url) } };
   const journal = require("../site/marketplace-workflow.js").createPostingJournal(win);
   const parent = { terms_hash: "fixed-parent" };
   const fields = [{ disabled: false }, { disabled: false }];
@@ -110,9 +110,11 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     pollCreation: async () => true, fetchFeedItem: async () => ({ verification_ready: true }),
   });
   await run(); assert.equal(sent.length, 0); assert.equal(journal.load(), null); assert.ok(fields.every(field => !field.disabled));
+  assert.equal(navigations.length, 0);
   await run(); assert.equal(sent.length, 1); assert.deepEqual(sent[0], fixture.pre_claim_wallet_calls);
   assert.equal(requests[0].creation_nonce, requests[1].creation_nonce);
   assert.equal(journal.load().phase, "funding_confirmed");
+  assert.deepEqual(navigations, [`funded.html?bountyContract=${fixture.child_creation.predicted_bounty_contract}&network=base-mainnet`]);
   assert.ok(fields.every(field => field.disabled));
   await run(); assert.equal(sent.length, 1);
 });

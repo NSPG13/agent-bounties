@@ -115,10 +115,14 @@
     const decision = decisionContext(item);
     const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : "Open participation";
     const categories = Array.isArray(item.categories) ? item.categories.slice(0, 3) : [];
-    return `<article class="opportunity-row" data-phase="${timing.phase}" style="animation-delay:${Math.min(index * 45, 360)}ms">
-      <div class="opportunity-timing" data-phase="${timing.phase}"><strong>${text(timing.label)}</strong><time>${text(timing.detail)}</time></div>
-      <div class="opportunity-main"><h2>${text(item.title)}</h2><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
-      <div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))} <small>USDC prize</small></span>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}<a class="market-button market-button-primary" href="${text(detailUrl(item))}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">Calculate and participate</a></div>
+    const scene = ["day", "dawn", "dusk", "night"][Array.from(String(item.source_id)).reduce((sum, c) => sum + c.charCodeAt(0), 0) % 4];
+    const url = text(detailUrl(item));
+    return `<article class="opportunity-row" id="bounty-${text(item.source_id)}" data-phase="${timing.phase}" style="animation-delay:${Math.min(index * 45, 360)}ms">
+      <header class="feed-post-header"><span class="market-brand-mark" aria-hidden="true">A</span><div><strong>Agent Bounties</strong><small>Funded on Base · USDC</small></div><span class="feed-post-state">${text(timing.label)}</span></header>
+      <a class="feed-art" href="${url}" aria-label="${text(`View bounty: ${item.title}`)}"><img src="assets/solarpunk/scene-${scene}.webp?v=2" alt="" width="1536" height="1024" loading="${index ? "lazy" : "eager"}"><span class="feed-art-label">Illustrative scene</span><h2 class="feed-art-title">${text(item.title)}</h2></a>
+      <div class="feed-post-body"><div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))}<small>USDC ${isV2(item) ? "prize" : "solver reward"}</small></span><a class="market-button market-button-primary" href="${url}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">${isV2(item) ? "Calculate and participate" : "View bounty →"}</a></div>
+      <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
+      <div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}</div>
     </article>`;
   }
 
@@ -148,33 +152,59 @@
     const summary = doc.querySelector("[data-market-summary]");
     const search = doc.querySelector("[data-market-search]");
     const timing = doc.querySelector("[data-market-timing]");
+    const refresh = doc.querySelector("[data-market-refresh]");
+    const notice = doc.querySelector("[data-posted-notice]");
+    const posted = new URLSearchParams(win.location.search).get("posted")?.toLowerCase();
+    const postedContract = workflow.ADDRESS.test(posted || "") ? posted : null;
     let items = [];
     let generatedAt = null;
+    let loading = true, failure = null;
 
     const render = () => {
       const nowMs = Date.now();
+      if (loading) return;
+      if (failure) {
+        list.setAttribute("aria-busy", "false");
+        list.innerHTML = '<div class="market-empty"><h2>The board couldn’t refresh.</h2><p>We couldn’t check the latest funded bounties. Use Refresh to try again.</p></div>';
+        if (summary) summary.textContent = "Live inventory unavailable. No stale bounties shown.";
+        if (notice) notice.hidden = true;
+        return;
+      }
       const visible = filterItems(items, search?.value, timing?.value || "all", nowMs);
-      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : '<p class="market-empty">No funded opportunity matches this view.</p>';
+      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : '<div class="market-empty"><h2>No bounties in this view.</h2><p>Try another search or availability filter, or post your own bounty.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear filters</button></div>';
+      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (timing) timing.value = "all"; render(); search?.focus(); });
       list.setAttribute("aria-busy", "false");
       const nowCount = items.filter((item) => timingState(item, nowMs).phase === "now").length;
       const futureCount = items.filter((item) => timingState(item, nowMs).phase === "upcoming").length;
       const endedCount = items.filter((item) => timingState(item, nowMs).phase === "ended").length;
       if (summary) summary.textContent = `${items.length} funded opportunities · ${nowCount} actionable now${endedCount ? ` · ${endedCount} scoring closed` : ""}${futureCount ? ` · ${futureCount} starts later` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
+      if (notice && postedContract) {
+        const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
+        notice.hidden = false;
+        notice.innerHTML = match ? `On the board: <strong>${text(match.title)}</strong><a href="${text(detailUrl(match))}">View bounty →</a>`
+          : `This bounty isn’t in the current open feed. <a href="participate.html?bountyContract=${postedContract}&amp;network=base-mainnet">Check its progress →</a>`;
+      }
     };
 
     search?.addEventListener("input", render);
     timing?.addEventListener("change", render);
-    loadOpportunities(win).then(({ payload, items: ready }) => {
-      items = ready;
-      generatedAt = payload.generated_at;
-      render();
-      win.agentBountiesAnalytics?.track("market_view");
-    }).catch((error) => {
-      list.setAttribute("aria-busy", "false");
-      list.innerHTML = `<p class="market-empty">Live funded inventory is unavailable. ${text(error.message)} No stale opportunity is shown.</p>`;
-      if (summary) summary.textContent = "Canonical inventory unavailable";
-    });
-    win.setInterval(render, 60_000);
+    const reload = async () => {
+      loading = true; failure = null;
+      list.setAttribute("aria-busy", "true");
+      if (refresh) refresh.disabled = true;
+      try {
+        const { payload, items: ready } = await loadOpportunities(win);
+        items = ready;
+        // Pin only an exact match from current ready inventory, never a URL claim.
+        if (postedContract) items.sort((a, b) => Number(b.source_id.toLowerCase() === postedContract) - Number(a.source_id.toLowerCase() === postedContract));
+        generatedAt = payload.generated_at;
+      } catch (error) { items = []; failure = error; }
+      finally { loading = false; if (refresh) refresh.disabled = false; render(); }
+    };
+    refresh?.addEventListener("click", () => { if (!loading) reload(); });
+    reload().then(() => win.agentBountiesAnalytics?.track("market_view"));
+    // Reconcile freshness, not just the clock, without replacing a focused card.
+    win.setInterval(() => { if (!loading && doc.visibilityState !== "hidden" && !list.contains?.(doc.activeElement)) reload(); }, 60_000);
   }
 
   return { amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
