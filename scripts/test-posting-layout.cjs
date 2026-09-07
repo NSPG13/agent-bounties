@@ -151,6 +151,8 @@ async function main() {
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, "wallet-" + size.width + "x" + size.height + ".png") });
       await page.getByRole("button", { name: "MetaMask", exact: false }).click();
       await page.locator("[data-wallet-readiness]").waitFor({ state: "visible" });
+      assert.equal(await page.locator("#funding-dialog .legal-consent").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(19, 37, 26)");
+      assert.equal(await page.locator("#funding-dialog .legal-consent h3").evaluate(el => getComputedStyle(el).color), "rgb(237, 241, 232)");
       await page.locator(".funding-help > summary").click();
       if (size.width === 1440) {
         await page.setViewportSize({ width: 390, height: 320 });

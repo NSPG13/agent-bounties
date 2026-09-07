@@ -1766,6 +1766,9 @@
       postingJournal.checkpoint("funding_confirmed");
       if (childPlan) setPaymentStatus("The child is canonically funded. Before claiming the parent, confirm both distinct participant registrations and the child TermsPublished event, then wait for a strictly later Base timestamp. The child must later settle to the distinct solver before the parent can pay.", "success");
       track("canonical_post_confirmed", { bounty_contract: state.bountyContract });
+      // Navigation follows canonical creation + funding evidence. A URL or wallet
+      // response never supplies success; the receipt independently reconciles it.
+      window.location.assign(`funded.html?bountyContract=${encodeURIComponent(state.bountyContract)}&network=base-mainnet${childPlan && state.metaParent?.parent_bounty_contract ? `&parentBounty=${encodeURIComponent(state.metaParent.parent_bounty_contract)}` : ""}`);
     } catch (error) {
       postingJournal.reject(error);
       setPaymentStatus(error.code === 4001 && !postingJournal.load()
@@ -1956,5 +1959,19 @@
 
   configureSpeech();
   setProgress("describe");
+  const recordedPosting = postingJournal.load();
+  if (recordedPosting) {
+    const recordedNotice = document.querySelector("[data-recorded-posting]");
+    if (recordedNotice) {
+      recordedNotice.hidden = false;
+      recordedNotice.querySelector("a").href = `funded.html?bountyContract=${encodeURIComponent(recordedPosting.bounty_contract)}&network=base-mainnet`;
+    }
+    const receipt = document.querySelector("[data-posted-bounty]");
+    if (receipt) {
+      receipt.href = `funded.html?bountyContract=${encodeURIComponent(recordedPosting.bounty_contract)}&network=base-mainnet`;
+      receipt.textContent = "Check funding and return to the board";
+      receipt.hidden = false;
+    }
+  }
   prefillFromQuery().catch((error) => setStatus(error.message || String(error), "error"));
 })();
