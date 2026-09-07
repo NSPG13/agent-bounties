@@ -12,7 +12,7 @@
   const listeners = new Map();
   const doc = win.document;
   let sdk, sdkPromise, vendorPromise, attempt, generation = 0, activePrefix, accounts = [], chain = CHAIN;
-  let phase = "disconnected", message = "Scan with your phone wallet. Approve the connection on your phone.", dialog, qr, statusNode, retry, disconnectButton, launcher;
+  let phase = "disconnected", message = "Scan with your phone wallet. Approve the connection on your phone.", dialog, qr, statusNode, retry, disconnectButton;
   const projectId = String(win.agentBountiesPhoneWalletConfig?.projectId || "");
   const configured = PROJECT.test(projectId);
   function error(code, message) { return Object.assign(new Error(message), { code }); }
@@ -57,7 +57,6 @@
   function render() {
     const snapshot = state();
     if (statusNode) statusNode.textContent = message;
-    if (launcher) launcher.textContent = phase === "connected" ? `Phone wallet ${accounts[0].slice(0, 6)}…${accounts[0].slice(-4)}` : "Connect phone wallet";
     if (retry) { retry.hidden = !configured || phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your phone…" : "Show a new QR code"; }
     if (disconnectButton) disconnectButton.hidden = !accounts.length;
     win.dispatchEvent(new win.CustomEvent("agent-bounties:phone-wallet-state", { detail: snapshot }));
@@ -226,10 +225,9 @@
     info: Object.freeze({ uuid: "c1ae1723-39a9-4b06-843c-c4c3ad0967a6", name: "Phone wallet (QR)", rdns: "app.agentbounties.phone", icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect x='10' y='3' width='20' height='34' rx='4' fill='%23174d43'/><path d='M16 31h8' stroke='white' stroke-width='2'/></svg>" }), provider,
   }) })); };
   win.addEventListener("eip6963:requestProvider", announce); announce();
-  if (doc?.body) {
-    launcher = doc.createElement("button"); launcher.type = "button"; launcher.className = "ab-phone-launcher"; launcher.hidden = !configured;
-    launcher.addEventListener("click", () => { void openReview(); }); doc.body.append(launcher); render();
-  }
+  // Pairing is opened by the contextual wallet chooser or a WebMCP review.
+  // Publishing discovery/state must never create a competing floating action.
+  render();
   win.addEventListener("pagehide", () => { cancel(); clearQr(); });
   return Object.freeze({ provider, state, openReview, restore, disconnect });
 });

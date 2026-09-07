@@ -257,14 +257,32 @@ async fn healthz(Extension(service): Extension<SiteAuthService>) -> Response {
 
 async fn session(Extension(service): Extension<SiteAuthService>, headers: HeaderMap) -> Response {
     let user = service.current_user(&headers);
-    no_store_json(
-        StatusCode::OK,
+    let account_id = user.as_ref().and_then(|user| service.account_id(user));
+    let wallet_count = match (account_id.as_deref(), service.inner.store.as_ref()) {
+        (Some(id), Some(store)) => store
+            .list_site_auth_wallets(id)
+            .await
+            .ok()
+            .map(|wallets| wallets.len()),
+        _ => None,
+    };
+    let mut browser_user = serde_json::to_value(&user).expect("session user serializes");
+    if let Some(profile) = browser_user.as_object_mut() {
+        profile.insert("id".to_string(), json!(account_id));
+    }
+    let mut payload = with_account_setup(
         json!({
+            // Authentication permits setup/challenge access; it does not complete an account.
             "authenticated": user.is_some(),
-            "user": user,
+            "user": browser_user,
             "providers": service.configured_providers(),
         }),
-    )
+        wallet_count,
+    );
+    if user.is_none() {
+        payload["account_status"] = json!("signed_out");
+    }
+    no_store_json(StatusCode::OK, payload)
 }
 
 async fn account(Extension(service): Extension<SiteAuthService>, headers: HeaderMap) -> Response {
@@ -594,13 +612,19 @@ async fn finish_wallet_link(
         .link_site_auth_wallet(&account_id, &address, BASE_CHAIN_ID)
         .await
     {
-        Ok(wallets) => no_store_json(
-            StatusCode::OK,
-            json!({
-                "linked": true,
-                "wallets": wallets.into_iter().map(browser_wallet).collect::<Vec<_>>(),
-            }),
-        ),
+        Ok(wallets) => {
+            let count = wallets.len();
+            no_store_json(
+                StatusCode::OK,
+                with_account_setup(
+                    json!({
+                        "linked": true,
+                        "wallets": wallets.into_iter().map(browser_wallet).collect::<Vec<_>>(),
+                    }),
+                    Some(count),
+                ),
+            )
+        }
         Err(DbError::SiteAuthConflict(reason)) => error_json(StatusCode::CONFLICT, &reason),
         Err(_) => error_json(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -634,13 +658,19 @@ async fn unlink_wallet(
         );
     };
     match store.unlink_site_auth_wallet(&account_id, &address).await {
-        Ok(wallets) => no_store_json(
-            StatusCode::OK,
-            json!({
-                "unlinked": true,
-                "wallets": wallets.into_iter().map(browser_wallet).collect::<Vec<_>>(),
-            }),
-        ),
+        Ok(wallets) => {
+            let count = wallets.len();
+            no_store_json(
+                StatusCode::OK,
+                with_account_setup(
+                    json!({
+                        "unlinked": true,
+                        "wallets": wallets.into_iter().map(browser_wallet).collect::<Vec<_>>(),
+                    }),
+                    Some(count),
+                ),
+            )
+        }
         Err(_) => error_json(
             StatusCode::SERVICE_UNAVAILABLE,
             "wallet_link_store_unavailable",
@@ -1189,6 +1219,8 @@ fn build_linked_account_dashboard(
         "data_status": "available",
         "reason": null,
         "identity_link_status": "verified",
+        "account_status": "ready",
+        "account_complete": true,
         "wallets": wallets,
         "stats": {
             "participating_bounties": participating_count,
@@ -1206,22 +1238,43 @@ fn build_linked_account_dashboard(
 }
 
 fn unavailable_account_dashboard(reason: &str, wallets: Vec<BrowserWallet>) -> Value {
-    json!({
-        "schema_version": "agent-bounties/account-dashboard-v1",
-        "data_status": "unavailable",
-        "reason": reason,
-        "identity_link_status": if wallets.is_empty() { "unlinked" } else { "verified" },
-        "wallets": wallets,
-        "stats": {
-            "participating_bounties": null,
-            "completed_posted_bounties": null,
-            "earned_usdc": null,
-            "spent_usdc": null,
-            "leaderboard_rank": null,
-        },
-        "activities": { "participating": [], "completed_posts": [] },
-        "evidence_boundary": "OAuth authentication alone does not prove ownership of a marketplace wallet. Personal values are shown only after address control is verified and every required canonical evidence source loads.",
-    })
+    let wallet_count = if !wallets.is_empty() || reason == "marketplace_identity_unlinked" {
+        Some(wallets.len())
+    } else {
+        None
+    };
+    with_account_setup(
+        json!({
+            "schema_version": "agent-bounties/account-dashboard-v1",
+            "data_status": "unavailable",
+            "reason": reason,
+            "identity_link_status": if wallets.is_empty() { "unlinked" } else { "verified" },
+            "wallets": wallets,
+            "stats": {
+                "participating_bounties": null,
+                "completed_posted_bounties": null,
+                "earned_usdc": null,
+                "spent_usdc": null,
+                "leaderboard_rank": null,
+            },
+            "activities": { "participating": [], "completed_posts": [] },
+            "evidence_boundary": "OAuth authentication alone does not prove ownership of a marketplace wallet. Personal values are shown only after address control is verified and every required canonical evidence source loads.",
+        }),
+        wallet_count,
+    )
+}
+
+// The server alone decides completion, using persisted ownership-verified links.
+// A missing store is unknown, never a completed account or an empty wallet list.
+fn with_account_setup(mut payload: Value, verified_wallet_count: Option<usize>) -> Value {
+    let status = match verified_wallet_count {
+        Some(0) => "wallet_required",
+        Some(_) => "ready",
+        None => "unavailable",
+    };
+    payload["account_status"] = json!(status);
+    payload["account_complete"] = json!(status == "ready");
+    payload
 }
 
 fn sign_session(mut user: SessionUser, secret: &[u8], now: DateTime<Utc>) -> String {
@@ -1573,6 +1626,32 @@ mod tests {
     use super::*;
     use alloy::signers::{local::PrivateKeySigner, SignerSync};
     use chrono::TimeZone;
+
+    #[test]
+    fn account_completion_requires_a_verified_link_and_survives_evidence_outage() {
+        let pending = unavailable_account_dashboard("marketplace_identity_unlinked", vec![]);
+        assert_eq!(pending["account_status"], "wallet_required");
+        assert_eq!(pending["account_complete"], false);
+        let unknown = unavailable_account_dashboard("wallet_link_store_unavailable", vec![]);
+        assert_eq!(unknown["account_status"], "unavailable");
+        assert_eq!(unknown["account_complete"], false);
+        let linked = unavailable_account_dashboard(
+            "marketplace_evidence_unavailable",
+            vec![BrowserWallet {
+                address: "0x1111111111111111111111111111111111111111".to_string(),
+                label: "Test wallet".to_string(),
+                chain_id: BASE_CHAIN_ID,
+                linked_at: Utc::now(),
+                proof: "eip191".to_string(),
+            }],
+        );
+        assert_eq!(linked["account_status"], "ready");
+        assert_eq!(linked["account_complete"], true);
+        assert!(linked["stats"]["earned_usdc"].is_null());
+        let removed = with_account_setup(json!({"unlinked": true, "wallets": []}), Some(0));
+        assert_eq!(removed["account_status"], "wallet_required");
+        assert_eq!(removed["account_complete"], false);
+    }
 
     fn test_user() -> SessionUser {
         SessionUser {

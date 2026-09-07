@@ -50,6 +50,7 @@ test("discovery and status load no relay or wallet, and advertise an EIP-6963 pr
   env.win.dispatchEvent({ type: "eip6963:requestProvider" });
   assert.equal(announced.provider, env.api.provider); assert.equal(announced.info.name, "Phone wallet (QR)");
   assert.equal(env.api.state().connected, false); assert.equal(env.loads(), 0);
+  assert.equal(env.win.document.body.children.length, 0, "No standalone phone-wallet button");
 });
 test("QR creation is preparation and returns no pairing secrets", async () => {
   const env = fixture(); const opened = await env.api.openReview(); await flush();

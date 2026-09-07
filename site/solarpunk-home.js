@@ -703,6 +703,10 @@ ${competitionChildBrief(item)}`;
       const walletLinkButton = dialog.querySelector("[data-wallet-link]");
       const walletList = dialog.querySelector("[data-wallet-list]");
       const walletStatus = dialog.querySelector("[data-wallet-status]");
+      const setupSteps = dialog.querySelector("[data-account-setup-steps]");
+      const setupNote = dialog.querySelector("[data-account-setup-note]");
+      const setupRetry = dialog.querySelector("[data-account-setup-retry]");
+      const accountActivity = dialog.querySelector(".account-activity");
       const heading = dialog.querySelector("#auth-title");
       const description = dialog.querySelector("#auth-description");
       const email = form?.elements.email;
@@ -716,6 +720,7 @@ ${competitionChildBrief(item)}`;
       let accountLoadId = 0;
       let verifiedWallets = [];
       let embeddedAddress = null;
+      let accountStatus = "checking";
 
       const setStatus = (message) => {
         if (status) status.textContent = message;
@@ -729,6 +734,34 @@ ${competitionChildBrief(item)}`;
       };
       const closeDialog = () => {
         if (dialog.open) dialog.close();
+      };
+
+      const renderSetup = (state) => {
+        accountStatus = state;
+        const ready = Boolean(currentUser && state === "ready");
+        dialog.dataset.view = currentUser ? ready ? "account" : "setup" : "login";
+        dialog.dataset.accountStatus = currentUser ? state : "signed_out";
+        if (heading) heading.textContent = currentUser ? ready ? "Your activity" : "Finish your account" : "Sign in";
+        if (description) description.textContent = currentUser
+          ? ready ? "Your bounties and payments, all in one place."
+            : "Link a wallet to finish setup. You can use one you have or create one here."
+          : "Sign in, then link a wallet to finish creating your account.";
+        openButton.textContent = currentUser ? ready ? "Account" : "Finish setup" : "Login";
+        if (setupSteps) {
+          setupSteps.hidden = ready;
+          setupSteps.querySelector("[data-setup-signin]")?.toggleAttribute("data-complete", Boolean(currentUser));
+          setupSteps.querySelector("[data-setup-signin]")?.setAttribute("aria-current", currentUser ? "false" : "step");
+          setupSteps.querySelector("[data-setup-wallet]")?.setAttribute("aria-current", currentUser ? "step" : "false");
+        }
+        [accountStats, accountActivity, accountEvidence].forEach(node => { if (node) node.hidden = !ready; });
+        if (setupNote) {
+          setupNote.hidden = ready;
+          setupNote.textContent = state === "checking" ? "Checking your account setup…"
+            : state === "unavailable" ? "We couldn’t check your linked wallets. Your setup is saved. Check again to continue."
+              : "Your account is not ready yet. Confirm wallet ownership to finish. No payment or deposit is needed.";
+        }
+        if (setupRetry) setupRetry.hidden = state !== "unavailable";
+        if (walletLinkButton) walletLinkButton.hidden = state === "checking" || state === "unavailable";
       };
 
       const replaceActivityList = (list, items, emptyMessage) => {
@@ -817,6 +850,8 @@ ${competitionChildBrief(item)}`;
       const renderAccountDashboard = (payload) => {
         const view = accountDashboardView(payload);
         renderWallets(view.wallets);
+        renderSetup(payload?.account_status === "ready" && payload.account_complete === true && view.wallets.length
+          ? "ready" : payload?.account_status === "wallet_required" && !view.wallets.length ? "wallet_required" : "unavailable");
         if (accountStats) accountStats.setAttribute("aria-busy", "false");
         if (accountParticipating) accountParticipating.textContent = view.participating;
         if (accountCompletedPosts) accountCompletedPosts.textContent = view.completedPosts;
@@ -874,16 +909,9 @@ ${competitionChildBrief(item)}`;
           embeddedAddress = null;
         }
         currentUser = user;
-        dialog.dataset.view = user ? "account" : "login";
         if (form) form.hidden = Boolean(user);
         if (accountDashboard) accountDashboard.hidden = !user;
-        if (heading) heading.textContent = user ? "Your activity" : "Sign in";
-        if (description) {
-          description.textContent = user
-            ? "Your bounties, confirmed money flow, and platform standing in one private view."
-            : "Sign in to manage bounties, evidence, and collaboration.";
-        }
-        openButton.textContent = user ? "Account" : "Login";
+        renderSetup("checking");
         openButton.title = user?.name ? `Signed in as ${user.name}` : "Sign in";
         if (!user) {
           accountLoadId += 1;
@@ -953,10 +981,16 @@ ${competitionChildBrief(item)}`;
           }
           return payload;
         } catch (error) {
-          if (requestId === accountLoadId && currentUser) renderAccountDashboard({ wallets: verifiedWallets });
+          if (requestId === accountLoadId && currentUser) renderAccountDashboard({
+            wallets: verifiedWallets,
+            account_status: ["ready", "wallet_required"].includes(accountStatus) ? accountStatus : "unavailable",
+            account_complete: verifiedWallets.length > 0 && accountStatus === "ready",
+          });
           return null;
         }
       };
+
+      setupRetry?.addEventListener("click", () => loadAccount());
 
       const loadSession = async () => {
         try {
@@ -1045,10 +1079,10 @@ ${competitionChildBrief(item)}`;
             renderWallets(verifiedWallets);
             showDialog();
             setWalletStatus("Your wallet is ready. Confirm ownership to finish linking it to your account.");
-            if (verifiedWallets.some((wallet) => wallet.address === address)) {
-              setWalletStatus(`${shortWalletAddress(address)} is already verified and linked. Your wallet is ready.`);
-              return;
-            }
+          }
+          if (verifiedWallets.some((wallet) => wallet.address === address)) {
+            setWalletStatus(`${shortWalletAddress(address)} is already verified and linked. Your wallet is ready.`);
+            return;
           }
           const challenge = await postAccountJson("/wallet/challenge", { address });
           if (currentUser !== linkingUser) throw { code: 4001 };
@@ -1058,19 +1092,27 @@ ${competitionChildBrief(item)}`;
             params: [utf8Hex(challenge.message), address],
           });
           if (currentUser !== linkingUser) throw { code: 4001 };
-          await postAccountJson("/wallet/verify", {
+          const verification = await postAccountJson("/wallet/verify", {
             challenge_id: challenge.challenge_id,
             address,
             signature,
           });
           if (currentUser !== linkingUser) throw { code: 4001 };
+          const linkedWallets = accountDashboardView(verification).wallets;
+          if (verification.linked !== true || verification.account_complete !== true
+            || verification.account_status !== "ready" || !linkedWallets.some(wallet => wallet.address === address)) {
+            throw { reason: "wallet_link_store_unavailable" };
+          }
           // The successful verify response is authoritative even if activity refresh fails.
-          verifiedWallets = [...verifiedWallets.filter((wallet) => wallet.address !== address), { address, label: shortWalletAddress(address) }];
+          verifiedWallets = linkedWallets;
           renderWallets(verifiedWallets);
+          renderSetup("ready");
           await loadAccount();
           if (currentUser !== linkingUser) return;
           showDialog();
-          setWalletStatus(`${shortWalletAddress(address)} is verified and linked.`);
+          setWalletStatus(accountStatus === "ready" && verifiedWallets.some(wallet => wallet.address === address)
+            ? `${shortWalletAddress(address)} is verified and linked. Your account is ready.`
+            : "Wallet ownership was confirmed. Recheck your account setup to continue.");
           win.agentBountiesAnalytics?.track("wallet_link_confirmed");
         } catch (error) {
           if (currentUser === linkingUser) setWalletStatus(embeddedAddress && !verifiedWallets.some((wallet) => wallet.address === embeddedAddress)
@@ -1092,7 +1134,9 @@ ${competitionChildBrief(item)}`;
         if (button.dataset.confirming !== "true") {
           button.dataset.confirming = "true";
           button.textContent = "Remove?";
-          setWalletStatus("Select Remove? again to unlink this address. No onchain action will occur.");
+          setWalletStatus(verifiedWallets.length === 1
+            ? "Removing your last wallet returns your account to setup. Select Remove? to confirm."
+            : "Select Remove? again to unlink this address. No onchain action will occur.");
           win.setTimeout(() => {
             if (!button.isConnected) return;
             button.dataset.confirming = "false";
@@ -1101,13 +1145,19 @@ ${competitionChildBrief(item)}`;
           return;
         }
         button.disabled = true;
+        const unlinkingUser = currentUser;
         try {
-          await postAccountJson("/wallet/unlink", { address: button.dataset.walletUnlink });
+          const result = await postAccountJson("/wallet/unlink", { address: button.dataset.walletUnlink });
+          if (currentUser !== unlinkingUser) return;
+          if (result.unlinked !== true) throw { reason: "wallet_link_store_unavailable" };
+          renderAccountDashboard(result);
           if (embeddedAddress === button.dataset.walletUnlink) embeddedAddress = null;
           await loadAccount();
-          setWalletStatus("Wallet unlinked from this account. No onchain state changed.");
+          if (currentUser === unlinkingUser) setWalletStatus(verifiedWallets.length
+            ? "Wallet removed from this account."
+            : "Wallet removed. Link a wallet to finish your account setup again.");
         } catch (error) {
-          setWalletStatus(walletLinkErrorMessage(error));
+          if (currentUser === unlinkingUser) setWalletStatus(walletLinkErrorMessage(error));
           button.disabled = false;
         }
       });
@@ -1152,6 +1202,11 @@ ${competitionChildBrief(item)}`;
           setStatus("Account recovery and creation will be connected in a later phase.");
         });
       });
+      dialog.querySelector("[data-auth-create]")?.addEventListener("click", () => {
+        if (heading) heading.textContent = "Create your account";
+        setStatus("Choose a sign-in provider above. Next, link or create a wallet to finish your account.");
+        providerButtons.find(button => button.getAttribute("aria-disabled") !== "true")?.focus();
+      });
 
       renderProviderAvailability();
       // Interior pages use the same real login entry point, without duplicating auth.
@@ -1163,7 +1218,9 @@ ${competitionChildBrief(item)}`;
       loadSession().then(() => {
         if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) void linkWallet(true);
         if (authResult !== "success" && authResult !== "error") return;
-        setStatus(authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
+        setStatus(authResult === "success" && accountStatus !== "ready"
+          ? "You’re signed in. Link a wallet to finish your account."
+          : authResultMessage(authResult, authParams.get("provider"), authParams.get("reason")));
         if (authResult === "success") win.agentBountiesAnalytics?.track("auth_completed");
         showDialog();
         authParams.delete("auth");

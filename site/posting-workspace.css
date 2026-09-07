@@ -20,7 +20,6 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
 .posting-page .chat-app-title { margin: 0 auto 0 12px; font-size: 14px; font-weight: 500; color: #b4c1b8; }
 .posting-page .chat-app-close { display: grid; place-items: center; width: 44px; height: 44px; color: #b4c1b8; text-decoration: none; font-size: 24px; }
 .posting-wallet { min-width: 0; }
-.posting-page .ab-phone-launcher { position: static; max-width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid #425348; border-radius: 8px; box-shadow: none; background: transparent; color: #dce6df; font: 500 13px/1.4 system-ui, sans-serif; overflow-wrap: anywhere; }
 .posting-workspace { display: block; width: 100%; max-width: 880px; margin: auto; padding: 36px 24px calc(var(--posting-actions-height, 88px) + 48px); }
 .posting-workspace .conversation-panel, .posting-workspace .conversation-log { display: block; overflow: visible; height: auto; padding: 0; }
 .posting-workspace .chat-composer-form { position: static; border: 0; background: none; padding: 0; margin: 0 0 32px; }
@@ -119,7 +118,6 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
   .posting-page .chat-app-title { margin-left: auto; }
   .posting-wallet { order: 4; flex-basis: 100%; }
   .posting-wallet:empty, .posting-wallet:has([hidden]) { display: none; }
-  .posting-page .ab-phone-launcher { width: 100%; }
   .posting-workspace { padding: 24px 16px calc(var(--posting-actions-height, 88px) + 32px); }
   .brief-fields { grid-template-columns: minmax(0, 1fr); }
   .posting-workspace .bounty-card-stats { grid-template-columns: 1fr 1fr; }

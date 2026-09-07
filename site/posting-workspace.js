@@ -10,9 +10,6 @@
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   document.querySelector("[data-brief-timezone]").textContent = timezone;
   let restoring = false;
-  // Keep the wallet utility in the header, clear of proposal actions.
-  const launcher = document.querySelector(".ab-phone-launcher");
-  if (launcher) document.querySelector("[data-posting-wallet]").append(launcher);
   const actions = document.querySelector(".bounty-card-actions");
   if (actions) {
     const measureActions = () => document.documentElement.style.setProperty("--posting-actions-height", `${Math.ceil(actions.getBoundingClientRect().height)}px`);
