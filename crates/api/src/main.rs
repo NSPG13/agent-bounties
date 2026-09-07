@@ -13741,7 +13741,9 @@ async fn relay_autonomous_timeout(
         Ok(Err(error)) => return Err(timeout_relay_status(&error)),
         Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
     };
-    release_result?;
+    if release_result.is_err() {
+        eprintln!("timeout relay lease release failed after broadcast; preserve transaction for reconciliation");
+    }
 
     let confirmation = wait_for_timeout_confirmation(
         &rpc_url,
@@ -13751,24 +13753,15 @@ async fn relay_autonomous_timeout(
         state.x402_relayer.confirmations,
         state.x402_relayer.wait_seconds,
     )
-    .await?;
-    let response = RelayAutonomousTimeoutResponse {
-        network: network.to_string(),
+    .await;
+    let response = timeout_response_after_broadcast(
+        network,
         bounty_contract,
-        action: request.action,
-        previous_bounty_state: request.action.previous_bounty_state().to_string(),
-        expected_bounty_state: request.action.expected_bounty_state().to_string(),
-        expected_canonical_event: request.action.expected_event_name().to_string(),
-        transaction_hash: transaction.tx_hash,
-        relayer: transaction.relayer,
-        confirmed: confirmation.confirmed,
-        confirmed_block: confirmation.confirmed_block,
-        canonical_event_id: confirmation.canonical_event_id,
-        evidence_boundary: format!(
-            "Only a confirmed {} event proves this timeout transition. It is bond/lifecycle evidence, not bounty payout or BountySettled evidence.",
-            request.action.expected_event_name()
-        ),
-    };
+        request.action,
+        transaction.tx_hash,
+        transaction.relayer,
+        confirmation,
+    );
     Ok((
         if response.confirmed {
             StatusCode::OK
@@ -13778,6 +13771,38 @@ async fn relay_autonomous_timeout(
         Json(response),
     )
         .into_response())
+}
+
+fn timeout_response_after_broadcast(
+    network: &str,
+    bounty_contract: String,
+    action: AutonomousTimeoutAction,
+    transaction_hash: String,
+    relayer: String,
+    observation: Result<TimeoutRelayConfirmation, StatusCode>,
+) -> RelayAutonomousTimeoutResponse {
+    let confirmation = observation.unwrap_or(TimeoutRelayConfirmation {
+        confirmed: false,
+        confirmed_block: None,
+        canonical_event_id: None,
+    });
+    RelayAutonomousTimeoutResponse {
+        network: network.to_string(),
+        bounty_contract,
+        action,
+        previous_bounty_state: action.previous_bounty_state().to_string(),
+        expected_bounty_state: action.expected_bounty_state().to_string(),
+        expected_canonical_event: action.expected_event_name().to_string(),
+        transaction_hash,
+        relayer,
+        confirmed: confirmation.confirmed,
+        confirmed_block: confirmation.confirmed_block,
+        canonical_event_id: confirmation.canonical_event_id,
+        evidence_boundary: format!(
+            "A transaction was broadcast. Reconcile this exact hash before any retry, including after a confirmation-read failure. Only a confirmed {} event proves this timeout transition. It is bond/lifecycle evidence, not bounty payout or BountySettled evidence.",
+            action.expected_event_name()
+        ),
+    }
 }
 
 impl AutonomousTimeoutAction {
@@ -17885,6 +17910,51 @@ mod tests {
             validate_legal_acceptance_request(&request, now),
             Err(StatusCode::BAD_REQUEST)
         );
+    }
+
+    #[test]
+    fn timeout_confirmation_failure_preserves_broadcast_without_claiming_expiry() {
+        let hash = format!("0x{}", "ab".repeat(32));
+        for observation in [
+            Err(StatusCode::SERVICE_UNAVAILABLE),
+            Err(StatusCode::BAD_GATEWAY),
+            Ok(TimeoutRelayConfirmation {
+                confirmed: false,
+                confirmed_block: None,
+                canonical_event_id: None,
+            }),
+        ] {
+            let response = timeout_response_after_broadcast(
+                "base-mainnet",
+                "bounty".into(),
+                AutonomousTimeoutAction::ExpireClaim,
+                hash.clone(),
+                "relayer".into(),
+                observation,
+            );
+            assert_eq!(response.transaction_hash, hash);
+            assert!(!response.confirmed);
+            assert!(response.confirmed_block.is_none());
+            assert!(response.canonical_event_id.is_none());
+            assert_eq!(response.expected_canonical_event, "ClaimExpired");
+            assert!(response.evidence_boundary.contains("before any retry"));
+        }
+        let confirmed = timeout_response_after_broadcast(
+            "base-mainnet",
+            "bounty".into(),
+            AutonomousTimeoutAction::ExpireSubmission,
+            hash.clone(),
+            "relayer".into(),
+            Ok(TimeoutRelayConfirmation {
+                confirmed: true,
+                confirmed_block: Some(42),
+                canonical_event_id: Some("event".into()),
+            }),
+        );
+        assert_eq!(confirmed.transaction_hash, hash);
+        assert!(confirmed.confirmed);
+        assert_eq!(confirmed.confirmed_block, Some(42));
+        assert_eq!(confirmed.canonical_event_id.as_deref(), Some("event"));
     }
 
     #[test]
