@@ -6,7 +6,7 @@ The wallet connection is followed by one bounded ownership message. The server v
 
 ## API contract
 
-The website uses `/v1/site-auth/session`, `/v1/site-auth/account`, `/v1/site-auth/wallet/challenge`, `/v1/site-auth/wallet/verify` and `/v1/site-auth/wallet/unlink`. The loopback development server provides equivalent routes below `/auth`.
+The website's internal session, account and wallet-link handlers are defined in [site_auth.rs](../crates/api/src/site_auth.rs). The [loopback development server](../scripts/serve-solarpunk-auth.py) provides equivalent handlers. These browser-session routes are separate from the public marketplace API.
 
 Session, account, successful verification and unlink responses include:
 
