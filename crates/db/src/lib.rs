@@ -87,6 +87,8 @@ pub const DISTRIBUTION_SOURCE_EXPANSION_MIGRATION: &str =
     include_str!("../../../migrations/0033_distribution_source_expansion.sql");
 pub const DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION: &str =
     include_str!("../../../migrations/0034_distribution_competition_bindings.sql");
+pub const DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION: &str =
+    include_str!("../../../migrations/0035_distribution_mcpmarket_sources.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -640,7 +642,7 @@ pub struct NewDiscoverabilitySnapshot {
     pub payload: serde_json::Value,
 }
 
-pub const APPROVED_DISTRIBUTION_RAILS: [&str; 14] = [
+pub const APPROVED_DISTRIBUTION_RAILS: [&str; 16] = [
     "bankr",
     "openclaw",
     "vscode",
@@ -655,6 +657,8 @@ pub const APPROVED_DISTRIBUTION_RAILS: [&str; 14] = [
     "mcpservers",
     "glama-paid",
     "mcp-so-paid",
+    "mcpmarket",
+    "mcpmarket-paid",
 ];
 
 pub const DISTRIBUTION_EXCLUSION_CLASSES: [&str; 8] = [
@@ -1485,7 +1489,9 @@ impl PostgresStore {
                 // #910. Distribution attribution starts at 0032 to keep the
                 // histories additive and non-conflicting.
                 DISTRIBUTION_ATTRIBUTION_MIGRATION,
-                DISTRIBUTION_SOURCE_EXPANSION_MIGRATION,
+                // 0035 is a strict superset of 0033. Replaying 0033 would
+                // reject valid MCPMarket rows on subsequent startups.
+                DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION,
                 DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION,
             ] {
                 for statement in migration
@@ -11552,7 +11558,7 @@ mod tests {
         }
         for rail in APPROVED_DISTRIBUTION_RAILS {
             assert!(
-                DISTRIBUTION_SOURCE_EXPANSION_MIGRATION.contains(&format!("'{rail}'")),
+                DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION.contains(&format!("'{rail}'")),
                 "missing approved distribution rail {rail}"
             );
         }
@@ -11613,6 +11619,8 @@ mod tests {
                 "mcpservers",
                 "glama-paid",
                 "mcp-so-paid",
+                "mcpmarket",
+                "mcpmarket-paid",
             ]
         );
         assert_eq!(
@@ -11731,7 +11739,11 @@ mod tests {
         let store = PostgresStore::connect(&database_url).await.unwrap();
         store.migrate().await.unwrap();
         let now = Utc::now();
-        for (paid, organic) in [("glama-paid", "glama"), ("mcp-so-paid", "mcp-so")] {
+        for (paid, organic) in [
+            ("glama-paid", "glama"),
+            ("mcp-so-paid", "mcp-so"),
+            ("mcpmarket-paid", "mcpmarket"),
+        ] {
             let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
             let first = store
                 .observe_distribution_acquisition(paid, &token, Some("dry-run-v1"), now)

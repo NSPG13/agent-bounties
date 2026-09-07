@@ -173,6 +173,14 @@
       "campaign_url": "https://agentbounties.app/install/mcpservers/",
       "preferred_alias_after_dns_activation": "https://install.agentbounties.app/mcpservers",
       "status": "activate_only_after_attribution_canary"
+    },
+    {
+      "id": "mcpmarket",
+      "attributed_mcp_url": "https://mcp.agentbounties.app/r/mcpmarket/mcp",
+      "campaign_url": "https://agentbounties.app/install/mcpmarket/",
+      "preferred_alias_after_dns_activation": "https://install.agentbounties.app/mcpmarket",
+      "status": "activate_only_after_attribution_canary",
+      "paid_mcp_url": "https://mcp.agentbounties.app/r/mcpmarket-paid/mcp"
     }
   ],
   "submission_evidence": {
