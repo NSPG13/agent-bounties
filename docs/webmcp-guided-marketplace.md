@@ -202,6 +202,13 @@ Execution needs the person's review, and only a confirmed `ClaimExpired` or
 and recovery reservations remain visible blockers. Cancellation and each
 contributor's `RefundWithdrawn` evidence are separate from solver payment.
 
+The hosted timeout relay preserves a known broadcast hash in a `202` response
+if confirmation reads fail after sending. Lease cleanup failures also preserve
+the transaction and its observed confirmation state. Reconcile that hash
+and the expected canonical event before any retry. A pending response does not
+prove expiry, and a failed receipt is not a reason to repeat a financial action
+without first checking the current round and deadline.
+
 ```powershell
 node --test scripts/test-webmcp.js scripts/test-marketplace-ui.js scripts/test-competition-proof.js
 node scripts/test-ai-bounty-handoff.js
