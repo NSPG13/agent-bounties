@@ -110,7 +110,7 @@
 
             <div class="ai-provider-grid" aria-label="Choose an AI provider">
               <button type="button" data-ai-provider="chatgpt" data-provider-label="ChatGPT">
-                <strong>ChatGPT</strong><span>Copy prompt &amp; open</span>
+                <strong>ChatGPT</strong><span>Open desktop app &amp; shared browser</span>
               </button>
               <button type="button" data-ai-provider="claude" data-provider-label="Claude">
                 <strong>Claude</strong><span>Copy prompt &amp; open</span>
@@ -119,6 +119,9 @@
                 <strong>Gemini</strong><span>Copy prompt &amp; open</span>
               </button>
             </div>
+
+            <p class="ai-safety-note">ChatGPT site tools work in the desktop app's built-in browser with Work or Codex, when available. <a href="https://learn.chatgpt.com/docs/webmcp" target="_blank" rel="noopener noreferrer">Check availability</a>. Web chat can use a connected MCP integration or help draft.</p>
+            <a class="ai-web-fallback" data-ai-web-fallback hidden target="_blank" rel="noopener noreferrer">Use ChatGPT web instead</a>
 
             <details class="ai-connector-setup">
               <summary>Connect Agent Bounties to your AI once</summary>
@@ -252,7 +255,7 @@
     <script src="evm.js"></script>
     <script src="meta-child.js?v=1"></script>
     <script src="bounty-entry.js?v=1"></script>
-    <script src="ai-bounty-handoff.js?v=6"></script>
+    <script src="ai-bounty-handoff.js?v=7"></script>
     <script src="bounty-composer-v2.js?v=10"></script>
     <script src="bounty-chat-ui.js?v=4"></script>
   </body>

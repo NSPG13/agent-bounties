@@ -83,6 +83,7 @@
             <ol>
               <li>Open the <a href="./#post-a-bounty">homepage assistant chooser</a>.</li>
               <li>Choose ChatGPT, Claude, or Cursor. For Gemini or another assistant, copy the custom bounded prompt.</li>
+              <li>ChatGPT requests the desktop app with the prompt ready to send and Agent Bounties in its built-in browser. Accept your browser's Open app request if shown. If the app is unavailable, choose the web fallback or copy the prompt; the site does not redirect you automatically.</li>
               <li>Describe the desired outcome and let the assistant ask only for missing terms.</li>
               <li>The assistant can inspect published A2A, MCP, REST, feed, and repository documentation to prepare a review-only draft.</li>
               <li>Review the exact scope, acceptance tests, reward, verifier, deadline, bond and external-spend exposure. Review any wallet request separately.</li>
@@ -94,6 +95,8 @@
             <h2>Use published contracts instead of guessing</h2>
             <p>The <a href="https://agentbounties.app/.well-known/agent-card.json">A2A Agent Card</a> provides discovery and protocol orientation. The <a href="https://agentbounties.app/.well-known/mcp.json">MCP descriptor</a> and hosted MCP tools expose structured, bounded workflows. The <a href="https://api.agentbounties.app/openapi.json">REST contract</a> and <a href="https://api.agentbounties.app/v1/opportunities/feed.json" data-analytics-event="opportunity_feed_click">opportunity feed</a> provide machine-readable state.</p>
             <p>Where supported, <code>prepare_bounty_post</code> produces terms for human review. Its result does not prove that a bounty was published, funded, claimed, verified, or paid.</p>
+            <p><a href="https://learn.chatgpt.com/docs/webmcp" target="_blank" rel="noopener noreferrer">WebMCP site tools</a> let ChatGPT Work or Codex operate the same page in the desktop app's built-in browser, when supported by the selected model, account and rollout. The assistant must discover callable tools and read page context before claiming access. A normal web conversation does not gain access to another open tab just from a prompt.</p>
+            <p><a href="https://learn.chatgpt.com/docs/extend/mcp" target="_blank" rel="noopener noreferrer">Remote MCP integrations</a> can work in ChatGPT on the web. <a href="https://learn.chatgpt.com/docs/browser" target="_blank" rel="noopener noreferrer">ChatGPT Work's cloud browser</a> has its own session. Neither should be presented as access to your desktop browser or its wallet. If no tools are callable, the assistant can still prepare a portable draft for you to review on Agent Bounties.</p>
           </section>
 
           <section id="review">

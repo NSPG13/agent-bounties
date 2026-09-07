@@ -9,6 +9,7 @@ on:
       - "site/**"
       - "scripts/check-site.py"
       - "scripts/test-solarpunk-home.js"
+      - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
       - "scripts/test-marketplace-ui.js"
       - "scripts/test-webmcp.js"
@@ -31,6 +32,7 @@ on:
       - "site/**"
       - "scripts/check-site.py"
       - "scripts/test-solarpunk-home.js"
+      - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
       - "scripts/test-marketplace-ui.js"
       - "scripts/test-webmcp.js"
@@ -89,6 +91,8 @@ jobs:
           node --check site/phone-wallet.js
       - name: Test the living scene and marketplace evidence states
         run: node --test scripts/test-solarpunk-home.js
+      - name: Test assistant desktop handoff and draft preservation
+        run: node scripts/test-ai-bounty-handoff.js
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics

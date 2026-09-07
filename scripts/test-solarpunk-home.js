@@ -43,7 +43,10 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   const prompt = home.BOUNTY_POSTING_PROMPT;
   assert.match(prompt, /agentbounties\.app\/.well-known\/agent-bounties\.json/i);
   assert.match(prompt, /agentbounties\.app\/llms\.txt/i);
-  assert.match(prompt, /approve it before any public write/i);
+  assert.match(prompt, /Leave publication consent, funding, payment, legal consent and wallet confirmations to me/i);
+  assert.match(prompt, /discover.*WebMCP site tools/i);
+  assert.match(prompt, /preserve my existing answers/i);
+  assert.match(prompt, /only for missing business decisions/i);
   assert.match(prompt, /never ask for a seed phrase or private key/i);
   assert.match(prompt, /confirmed canonical Base USDC evidence/i);
   assert.ok(prompt.length < 2000);
@@ -52,12 +55,18 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   const claude = home.bountyAssistantLinks("claude");
   const cursor = home.bountyAssistantLinks("cursor");
   const custom = home.bountyAssistantLinks("custom");
-  assert.equal(gpt.desktopUrl, null);
+  const desktop = new URL(gpt.desktopUrl);
+  assert.equal(desktop.protocol, "codex:");
+  assert.equal(desktop.hostname, "threads");
+  assert.equal(desktop.pathname, "/new");
+  assert.equal(desktop.searchParams.get("browserUrl"), "https://agentbounties.app/post.html?from=webmcp");
   assert.equal(new URL(gpt.webUrl).origin, "https://chatgpt.com");
   const gptPrompt = new URL(gpt.webUrl).searchParams.get("prompt");
   assert.ok(gptPrompt.startsWith(prompt));
   assert.match(gptPrompt, /utm_source=chatgpt/);
   assert.match(gptPrompt, /canonical URL/);
+  assert.equal(desktop.searchParams.get("prompt"), gptPrompt);
+  assert.equal(desktop.searchParams.has("submit"), false);
   assert.equal(gpt.webPrefillsPrompt, true);
   assert.equal(claude.desktopUrl, `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`);
   assert.equal(new URL(claude.webUrl).origin, "https://claude.ai");
@@ -68,6 +77,15 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(cursor.webPrefillsPrompt, true);
   assert.equal(custom.webUrl, null);
   assert.equal(home.bountyAssistantLinks("unknown"), null);
+});
+
+test("desktop handoff keeps arbitrary prompt text inside one prompt parameter", () => {
+  const prompt = 'A & B? #launch "prototype"\nBudget: 3 USDC; deadline: mañana';
+  const links = home.bountyAssistantLinks("gpt", prompt);
+  const desktop = new URL(links.desktopUrl);
+  assert.ok(desktop.searchParams.get("prompt").startsWith(prompt));
+  assert.deepEqual([...desktop.searchParams.keys()], ["prompt", "browserUrl"]);
+  assert.equal(desktop.searchParams.get("prompt"), new URL(links.webUrl).searchParams.get("prompt"));
 });
 
 test("competition posting handoffs preserve only live canonical context", () => {

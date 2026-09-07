@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const assert = require("node:assert/strict");
 
 const source = fs.readFileSync(
   path.join(__dirname, "..", "site", "ai-bounty-handoff.js"),
@@ -15,7 +16,10 @@ function element() {
     hidden: true,
     textContent: "",
     value: "",
-    addEventListener() {},
+    style: {},
+    handlers: {},
+    addEventListener(name, callback) { this.handlers[name] = callback; },
+    removeAttribute(name) { delete this[name]; },
     scrollIntoView() {},
   };
 }
@@ -29,25 +33,37 @@ const elements = new Map([
   ["[data-ai-import-status]", element()],
   ["[data-composer-status]", element()],
   ["[data-assistant-prompt]", element()],
+  ["[data-ai-web-fallback]", element()],
 ]);
-elements.get("[data-ai-handoff]").querySelectorAll = () => [];
+const chatgptButton = { ...element(), dataset: { aiProvider: "chatgpt", providerLabel: "ChatGPT" } };
+elements.get("[data-ai-handoff]").querySelectorAll = () => [chatgptButton];
 elements.get("[data-ai-handoff]").querySelector = () => null;
 
+const desktopLaunches = [];
+const webLaunches = [];
+const copies = [];
+const navigator = { clipboard: { async writeText(text) { copies.push(text); } } };
 const window = {
   AgentBountiesMetaChild: require("../site/meta-child.js"),
   addEventListener() {},
   dispatchEvent() {},
-  open() {},
+  open(...args) { webLaunches.push(args); },
 };
 const document = {
   documentElement: { dataset: {} },
   querySelector(selector) { return elements.get(selector) || null; },
+  body: { append() {} },
+  createElement(tag) {
+    assert.equal(tag, "a");
+    return { click() { desktopLaunches.push(this.href); }, remove() {} };
+  },
 };
 
 vm.runInNewContext(source, {
   window,
   document,
-  navigator: {},
+  navigator,
+  requestAnimationFrame(callback) { callback(); },
   URL,
   JSON,
   Number,
@@ -149,4 +165,51 @@ for (const marker of ["prepare_bounty_post", api.mcpUrl, "return ONLY one JSON o
   if (!prompt.includes(marker)) throw new Error(`AI handoff prompt missing: ${marker}`);
 }
 
-console.log("user-owned AI handoff validates portable drafts and preserves the MCP path");
+async function verifyDesktopHandoff() {
+  const context = {
+    draft,
+    solver_reward_usdc: "0.99",
+    verifier_reward_usdc: "0.01",
+    task_window_days: 3,
+    meta_child: child.meta_child,
+  };
+  const preparedPrompt = api.show('Keep the tests; change the title to "A & B".', context);
+  assert.match(preparedPrompt, /First discover actual access/);
+  assert.match(preparedPrompt, /Preserve my existing answers/);
+  assert.match(preparedPrompt, /only for missing business decisions/);
+  assert.match(preparedPrompt, /QUALIFYING META CHILD/);
+  assert.ok(preparedPrompt.includes(draft.benchmark.source.commit));
+  assert.ok(preparedPrompt.includes(draft.source_url));
+  await chatgptButton.handlers.click();
+  assert.equal(desktopLaunches.length, 1);
+  assert.equal(webLaunches.length, 0, "desktop selection must not open a web conversation");
+  const desktop = new URL(desktopLaunches[0]);
+  assert.equal(desktop.protocol, "codex:");
+  assert.equal(desktop.hostname, "threads");
+  assert.equal(desktop.pathname, "/new");
+  assert.equal(desktop.searchParams.get("prompt"), preparedPrompt);
+  const browser = new URL(desktop.searchParams.get("browserUrl"));
+  assert.equal(browser.origin, "https://agentbounties.app");
+  assert.equal(browser.pathname, "/post.html");
+  assert.equal(browser.searchParams.get("parentBounty"), child.meta_child.parent_bounty_contract);
+  const fallback = elements.get("[data-ai-web-fallback]");
+  assert.equal(fallback.hidden, false);
+  assert.equal(new URL(fallback.href).searchParams.get("prompt"), preparedPrompt);
+  assert.equal(copies[0], preparedPrompt);
+  assert.match(elements.get("[data-ai-import-status]").textContent, /launch requested/i);
+  assert.doesNotMatch(elements.get("[data-ai-import-status]").textContent, /app opened|blocked the new tab/i);
+  api.show("A different outcome");
+  assert.equal(fallback.hidden, true, "new drafts must clear old fallback links");
+  assert.equal(fallback.href, undefined);
+  navigator.clipboard.writeText = async () => { throw new Error("clipboard denied"); };
+  await chatgptButton.handlers.click();
+  assert.equal(desktopLaunches.length, 2, "clipboard denial must not prevent the prefilled launch");
+  assert.equal(webLaunches.length, 0);
+  assert.equal(new URL(desktopLaunches[1]).searchParams.get("prompt"), elements.get("[data-ai-prompt]").value);
+  assert.match(elements.get("[data-ai-import-status]").textContent, /clipboard access was unavailable/i);
+  assert.equal(api.providerLinks("unknown", "draft"), null);
+  assert.equal(api.providerLinks("chatgpt", ""), null);
+  assert.throws(() => api.providerLinks("chatgpt", "draft", { meta_child: { parent_bounty_contract: "https://evil.example" } }));
+  console.log("user-owned AI handoff validates drafts, desktop launch, explicit fallback, preserved context and clipboard recovery");
+}
+verifyDesktopHandoff().catch((error) => { console.error(error); process.exitCode = 1; });

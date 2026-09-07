@@ -754,6 +754,8 @@ def check_homepage(site_dir: Path) -> None:
             "authApiPath",
             "authProviderPath",
             "bountyAssistantLinks",
+            "codex://threads/new?prompt=",
+            "browserUrl=",
             "https://chatgpt.com/?prompt=",
             "https://cursor.com/link/prompt?text=",
             "claude://claude.ai/new?q=",
