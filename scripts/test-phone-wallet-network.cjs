@@ -16,24 +16,34 @@ const start = source.indexOf("  async function fundApprovedBounty()"), end = sou
 assert.ok(start >= 0 && end > start);
 const fundingFunction = source.slice(start, end) + "; fundApprovedBounty";
 const batchFunction = source.slice(source.indexOf("  async function sendWalletCalls("), source.indexOf("  function contractTerms("));
+const walletFunctions = source.slice(source.indexOf("  function signatureParts("), source.indexOf("  async function sendWalletCalls("));
 const atomicError = { code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`" };
+const rejection = { code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." };
+const syntheticSignature = "0x" + "12".repeat(64) + "1b", transactionHash = "0x" + "ab".repeat(32);
 
-async function fixture({ adapted = true, change = null, uncertain = false, batch = false, legacy = false, pending = false } = {}) {
+async function fixture({ adapted = true, change = null, uncertain = false, batch = false, legacy = false, pending = false,
+  accountCode = batch ? "0x6001600055" : "0x", approveAuthorization = false, wrapped = false, rejectTransaction = false } = {}) {
   const storage = new Map(), signing = [], statuses = [], network = [];
   const store = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   store.setItem("agent-bounties-phone-connected-v1", "ab-phone-12345678-1234-1234-1234-123456789012");
-  const namespace = { chains: ["eip155:8453"], accounts: [`eip155:8453:${address}`], methods: ["eth_signTypedData_v4", "wallet_sendCalls"], events: [], rpcMap: { "eip155:8453": "http://127.0.0.1:1" } };
+  const namespace = { chains: ["eip155:8453"], accounts: [`eip155:8453:${address}`], methods: ["eth_signTypedData_v4", "wallet_sendCalls", "eth_sendTransaction"], events: [], rpcMap: { "eip155:8453": "http://127.0.0.1:1" } };
   const universal = new UniversalProvider({ logger: "silent", disableProviderPing: true });
   universal.client = {
     core: { projectId: "0".repeat(32), storage: { getItem: async key => storage.get(key), setItem: async (key, value) => storage.set(key, value) } },
     request: async request => {
       signing.push(request);
       if (uncertain) throw new Error("Fixture wallet response was lost");
+      if (request.request.method === "eth_sendTransaction") {
+        if (rejectTransaction) throw new Error(JSON.stringify(rejection));
+        return transactionHash;
+      }
+      if (wrapped) throw new Error(JSON.stringify(rejection));
       if (batch) {
         assert.equal(request.request.method, "wallet_sendCalls");
         if (typeof request.request.params[0].atomicRequired !== "boolean") throw Object.assign(new Error(atomicError.message), atomicError);
         return { id: "synthetic-batch-id" };
       }
+      if (approveAuthorization) return syntheticSignature;
       throw Object.assign(new Error("Fixture user rejected the wallet request"), { code: 4001 });
     },
   };
@@ -41,7 +51,11 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
   universal.session = { topic: "synthetic-session", expiry: Date.now() / 1000 + 3600, namespaces: { eip155: namespace } };
   universal.createProviders();
   // Make accidental HTTP reads fail immediately, even if a fixture regresses.
-  universal.rpcProviders.eip155.httpProviders[8453].request = async request => { network.push(request); throw new Error("Unexpected RPC call in offline fixture"); };
+  universal.rpcProviders.eip155.httpProviders[8453].request = async request => {
+    if (request.method === "eth_getCode") { assert.deepEqual(Array.from(request.params), [address, "latest"]); return accountCode; }
+    if (request.method === "eth_getTransactionReceipt") { assert.equal(request.params[0], transactionHash); return { status: "0x1" }; }
+    network.push(request); throw new Error("Unexpected RPC call in offline fixture");
+  };
   const sdk = new EthereumProvider(); sdk.signer = universal; sdk.chainId = 8453; sdk.accounts = [address];
   const win = {
     document: null, crypto: webcrypto, localStorage: store, sessionStorage: store, location: new URL("https://agentbounties.app/post.html"),
@@ -58,23 +72,25 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
   const authorization = { domain: { chainId: 8453 }, primaryType: "ReceiveWithAuthorization", message: { value: "1000000" } };
   const calls = [{ to: other, data: "0x010203" }, { to: address, data: "0x040506" }];
   const plan = { bounty_id: "0x" + "56".repeat(32), predicted_bounty_contract: "0x" + "78".repeat(20), eip3009_authorization: authorization, wallet_calls: calls };
-  const run = vm.runInNewContext((legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + fundingFunction, {
+  const run = vm.runInNewContext(walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + fundingFunction, {
     postingBusy: false, postingJournal: journal, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
     track() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
     loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20), chain_id_hex: "0x2105" }),
     currentRewardSplit: () => ({ solver: "900000", verifier: "100000", total: "1000000" }),
     contractTerms: () => ({}), termsDocument: () => ({}), createPayload: () => ({}), validateCreationPlan() {}, formatUsdc: String,
-    requestJson: async url => {
+    requestJson: async (url, options) => {
       if (url.endsWith("/terms")) return {};
+      if (url.endsWith("/authorized-creation-plan")) {
+        assert.equal(JSON.parse(options.body).signature.v, 27);
+        return { relay_transaction: { to: "0x" + "90".repeat(20), data: "0xaabbcc", value_wei: 0 } };
+      }
       assert.ok(url.endsWith("/creation-plan"));
       if (change === "account") { sdk.accounts = [other]; universal.session.namespaces.eip155.accounts = [`eip155:8453:${other}`]; }
       if (change === "chain") { sdk.chainId = 1; universal.rpcProviders.eip155.chainId = 1; }
       return plan;
     },
-    isContractAccount: async () => batch,
     pollCreation: async () => pending ? null : [{ kind: "canonical_bounty_created" }, { kind: "funding_added" }, { kind: "bounty_became_claimable" }],
     fetchFeedItem: async () => ({ terms_valid: true, verification_ready: true }),
-    sendTransaction: async () => { throw new Error("No transaction may follow the rejected fixture signature"); },
   });
   return { sdk, provider, run, signing, statuses, network, journal, authorization, calls };
 }
@@ -105,6 +121,44 @@ test("a lost smart-wallet batch reply stays recorded and cannot dispatch a secon
   await env.run(); assert.equal(env.signing.length, 1); assert.equal(env.network.length, 0);
 });
 
+for (const accountCode of ["0x", "0xef0100" + "34".repeat(20)]) {
+  for (const pending of [false, true]) test(`EOA authorization completes without a batch for ${accountCode === "0x" ? "ordinary" : "delegated"} account; canonical pending=${pending}`, async () => {
+    const env = await fixture({ accountCode, approveAuthorization: true, pending }); await env.run();
+    assert.deepEqual(env.signing.map(call => call.request.method), ["eth_signTypedData_v4", "eth_sendTransaction"]);
+    assert.deepEqual(Array.from(env.signing[0].request.params), [address, JSON.stringify(env.authorization)]);
+    assert.deepEqual(JSON.parse(JSON.stringify(env.signing[1].request.params)), [{ from: address, to: "0x" + "90".repeat(20), data: "0xaabbcc", value: "0x0" }]);
+    assert.equal(env.journal.load().authorizationIssued, true); assert.equal(env.journal.load().transactions[0], transactionHash);
+    assert.equal(env.journal.load().phase, pending ? "submitted" : "funding_confirmed");
+    await env.run(); assert.equal(env.signing.length, 2); assert.equal(env.network.length, 0);
+  });
+}
+
+test("wrapped MetaMask rejection ends one request and reopens preparation without automatic retries", async () => {
+  for (const batch of [false, true]) {
+    const env = await fixture({ batch, wrapped: true }); await env.run();
+    assert.equal(env.signing.length, 1); assert.equal(env.journal.load(), null);
+    assert.match(env.statuses.at(-1), /wallet did not approve/); assert.equal(env.network.length, 0);
+  }
+});
+
+test("a wrapped rejection after a USDC signature preserves the live authorization and prevents a second signing request", async () => {
+  const env = await fixture({ accountCode: "0xef0100" + "34".repeat(20), approveAuthorization: true, rejectTransaction: true }); await env.run();
+  assert.equal(env.signing.length, 2); assert.equal(env.journal.load().authorizationIssued, true);
+  assert.equal(env.journal.load().phase, "sending"); assert.equal(env.journal.load().wallet_method, "eth_sendTransaction");
+  await env.run(); assert.equal(env.signing.length, 2);
+});
+
+test("invalid account code cannot request a signature and other contracts cannot borrow EOA authorization", async () => {
+  for (const accountCode of [null, undefined, true, "", "0xnothex", "0xef010"]) {
+    const env = await fixture({ accountCode: accountCode === undefined ? {} : accountCode }); await env.run();
+    assert.match(env.statuses.at(-1), /account type could not be checked/); assert.equal(env.signing.length, 0);
+  }
+  for (const accountCode of ["0xef0100", "0xef0100" + "34".repeat(21), "0xef0101" + "34".repeat(20), "0x6001600055"]) {
+    const env = await fixture({ batch: true, accountCode }); await env.run();
+    assert.equal(env.signing[0].request.method, "wallet_sendCalls");
+  }
+});
+
 test("the real pinned SDK reproduces the false network-change stop before adaptation", async () => {
   const env = await fixture({ adapted: false });
   assert.equal(await env.sdk.request({ method: "eth_chainId" }), 8453);
@@ -121,7 +175,7 @@ test("the unchanged posting guard reaches one signature request through the adap
   assert.equal(env.signing[0].chainId, "eip155:8453");
   assert.equal(env.signing[0].request.method, "eth_signTypedData_v4");
   assert.deepEqual(Array.from(env.signing[0].request.params), [address, JSON.stringify(env.authorization)]);
-  assert.match(env.statuses.at(-1), /Fixture user rejected/);
+  assert.match(env.statuses.at(-1), /wallet did not approve/);
   assert.equal(env.network.length, 0);
   assert.equal(env.journal.load(), null, "An explicit rejection authorizes no payment and leaves the review available");
 });

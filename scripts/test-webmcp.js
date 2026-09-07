@@ -433,6 +433,9 @@ function rejectedBatchFixture() {
     code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`",
   } };
   journal.prepare({ predicted_bounty_contract: contract, bounty_id: input.bounty_id }); journal.checkpoint("sending");
+  // Preserve the exact journal shape written by the pre-error-capture release.
+  const legacy = journal.load(); delete legacy.error_capture_version;
+  env.storage.set("agent-bounties.posting-operation.v1", JSON.stringify(legacy));
   const state = { approved: true, draft: { title: "Preserve my draft" } }, statuses = [], field = { disabled: true }, fundNow = { disabled: true };
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
   const fn = source.slice(source.indexOf("  async function recoverRejectedBatch("), source.indexOf("  async function fundApprovedBounty("));
@@ -461,6 +464,15 @@ test("WebMCP archives only the explicitly rejected legacy batch, preserves the d
 test("recovery does not grant missing card approval", async () => {
   const env = rejectedBatchFixture(); env.state.approved = false; await env.recover();
   assert.equal(env.state.approved, false); assert.equal(env.fundNow.disabled, true);
+});
+
+test("the exact legacy MetaMask rejection reopens preparation, but a newly captured uncertain response cannot borrow that report", async () => {
+  const env = rejectedBatchFixture(); env.journal.checkpoint("sending", null, "wallet_sendCalls");
+  env.input.wallet_error = { code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." };
+  const result = await env.recover(); assert.equal(result.archived_operation.phase, "batch_wallet_rejected");
+  assert.equal(result.archived_operation.evidence_source, "user_reported_wallet_response");
+  env.journal.prepare({ predicted_bounty_contract: contract, bounty_id: env.input.bounty_id }); env.journal.checkpoint("sending", null, "wallet_sendCalls");
+  await assert.rejects(env.recover(), /cannot be cleared/); assert.ok(env.journal.load());
 });
 
 for (const kind of ["wrong code", "different params", "different operation", "authorization", "submitted", "lost reply", "different method"]) {

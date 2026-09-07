@@ -215,14 +215,19 @@
     const save = (value) => { win.sessionStorage.setItem(key, JSON.stringify(value)); return value; };
     const atomicParamsRejected = (error) => error?.code === -32602 && typeof error.message === "string"
       && error.message.replace(/\s+/g, " ").trim() === "Invalid params 0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`";
+    const metaMaskBatchRejected = (error) => error?.code === 4001 && error.message === "MetaMask Tx Signature: User denied transaction signature.";
     function validateRejectedBatch(expected, error) {
       const current = load();
-      if (!atomicParamsRejected(error)) throw new Error("Only the wallet's exact missing atomicRequired validation error can recover this legacy batch. Keep uncertain requests recorded.");
+      if (!atomicParamsRejected(error) && !metaMaskBatchRejected(error)) throw new Error("Only the wallet's exact missing atomicRequired validation error or MetaMask signature rejection can recover this legacy batch. Keep uncertain requests recorded.");
       if (!current || !ADDRESS.test(expected?.bounty_contract || "") || !/^0x[0-9a-fA-F]{64}$/.test(expected?.bounty_id || "")
         || current.bounty_contract.toLowerCase() !== expected.bounty_contract.toLowerCase() || current.bounty_id !== expected.bounty_id)
         throw new Error("The rejected batch does not match the recorded posting operation.");
+      const capturedMatches = current.wallet_error?.code === error.code
+        && (atomicParamsRejected(current.wallet_error) && atomicParamsRejected(error) || metaMaskBatchRejected(current.wallet_error) && metaMaskBatchRejected(error));
+      const legacyReport = !current.error_capture_version && (atomicParamsRejected(error) && !current.wallet_method
+        || metaMaskBatchRejected(error) && current.wallet_method === "wallet_sendCalls");
       if (current.phase !== "sending" || current.authorizationIssued || !Array.isArray(current.transactions) || current.transactions.length
-        || current.wallet_method && (current.wallet_method !== "wallet_sendCalls" || !atomicParamsRejected(current.wallet_error)))
+        || current.wallet_method && current.wallet_method !== "wallet_sendCalls" || !capturedMatches && !legacyReport)
         throw new Error("An authorized, submitted or uncertain posting step cannot be cleared by this recovery.");
       return current;
     }
@@ -234,7 +239,7 @@
         if (JSON.stringify(current) !== JSON.stringify(snapshot)) throw new Error("The posting operation changed during recovery. Check its status again.");
         const historyKey = `${key}.rejected`;
         const history = JSON.parse(win.sessionStorage.getItem(historyKey) || "[]");
-        const archived = { ...current, phase: "batch_params_rejected", wallet_error: { code: error.code, message: error.message },
+        const archived = { ...current, phase: atomicParamsRejected(error) ? "batch_params_rejected" : "batch_wallet_rejected", wallet_error: { code: error.code, message: error.message },
           evidence_source: current.wallet_error ? "wallet_response" : "user_reported_wallet_response", archived_at: new Date().toISOString() };
         win.sessionStorage.setItem(historyKey, JSON.stringify([...history, archived]));
         win.sessionStorage.removeItem(key);
@@ -242,7 +247,7 @@
       },
       prepare(plan) {
         if (load()) throw new Error("A posting wallet step is already recorded. Check its canonical status before starting another.");
-        return save({ bounty_contract: plan.predicted_bounty_contract, bounty_id: plan.bounty_id, phase: "prepared", transactions: [] });
+        return save({ bounty_contract: plan.predicted_bounty_contract, bounty_id: plan.bounty_id, phase: "prepared", transactions: [], error_capture_version: 1 });
       },
       checkpoint(phase, hash, walletMethod) {
         const current = load();

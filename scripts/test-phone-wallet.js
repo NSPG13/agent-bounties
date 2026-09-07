@@ -107,6 +107,28 @@ test("wallet rejection and uncertain transaction errors are preserved without re
   }
   assert.equal(env.requests.length, 3);
 });
+
+test("complete JSON RPC errors recover numeric codes without interpreting prose or conflicting evidence", async () => {
+  const env = fixture(); await env.api.openReview(); await flush(); env.providers[0].approve(); await flush();
+  const request = { method: "eth_sendTransaction", params: [{ from: address }] };
+  const wrapped = JSON.stringify({ code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." });
+  for (const original of [wrapped, new Error(wrapped), Object.assign(new Error(wrapped), { code: -32000 }), Object.assign(new Error(wrapped), { code: -32603 })]) {
+    env.providers[0].requestError = original;
+    await assert.rejects(env.api.provider.request(request), { code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." });
+  }
+  const untouched = [
+    new Error("Relay lost: " + wrapped), new Error("request 4001 was lost"),
+    Object.assign(new Error(wrapped), { code: 4900 }), Object.assign(new Error(wrapped), { code: -32000, data: { transactionHash: "0x1234" } }),
+    new Error(JSON.stringify({ code: 4001, message: "rejected", result: "batch-id" })),
+    new Error(JSON.stringify({ code: "4001", message: "rejected" })), new Error(JSON.stringify({ code: 4001 })),
+    new Error(JSON.stringify([{ code: 4001, message: "rejected" }])), new Error(" ".repeat(2049) + wrapped),
+  ];
+  for (const original of untouched) {
+    env.providers[0].requestError = original;
+    await assert.rejects(env.api.provider.request(request), error => error === original);
+  }
+  assert.equal(env.requests.length, 4 + untouched.length, "normalization never retries a wallet request");
+});
 test("the real SDK's code-less rejection is still a cancellation, never a relay error", async () => {
   const env = fixture(); const pending = env.api.provider.request({ method: "eth_requestAccounts" });
   const rejected = assert.rejects(pending, { code: 4001 }); await flush(); env.providers[0].reject(true); await rejected;
