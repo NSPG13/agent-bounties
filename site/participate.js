@@ -8,6 +8,33 @@
   const HASH = /^0x[0-9a-f]{64}$/i;
   const lower = (value) => String(value || "").toLowerCase();
   const stable = (value) => value && typeof value === "object" ? Array.isArray(value) ? `[${value.map(stable).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}` : JSON.stringify(value);
+  function recoveryStatus(item, now = Math.floor(Date.now() / 1000)) {
+    if (["paid", "cancelled"].includes(item.status)) return null;
+    const events = (item.events || []).filter((event) => lower(event.contract_address) === lower(item.bounty_contract)
+      && event.bounty_id === item.bounty_id && event.id && Number.isSafeInteger(event.block_number) && event.block_number > 0
+      && Number.isSafeInteger(event.log_index) && event.log_index >= 0)
+      .sort((a, b) => b.block_number - a.block_number || b.log_index - a.log_index);
+    const claim = events.find((event) => event.kind === "bounty_claimed");
+    const submission = events.find((event) => event.kind === "submission_added"
+      && event.data?.round === claim?.data?.round && lower(event.data?.solver) === lower(claim?.data?.solver));
+    const active = item.status === "claimed" ? claim : item.status === "submitted" ? submission : null;
+    const deadline = active?.data?.[item.status === "claimed" ? "claim_expires_at" : "verification_expires_at"];
+    if (Number.isSafeInteger(deadline) && deadline > 0 && Number.isSafeInteger(now) && now > deadline) {
+      const isClaim = item.status === "claimed", action = isClaim ? "expire_claim" : "expire_submission";
+      return { action, status: "timeout_review_available", deadline, round: active.data.round,
+        plan_endpoint: `/v1/base/autonomous-bounties/${isClaim ? "expire-claim-plan" : "expire-submission-plan"}`,
+        effect: isClaim ? "The work deadline passed. Expiry releases the claim and moves its bond to the bounty bonus pool."
+          : "The verification deadline passed. Expiry returns the bond to the original solver and releases the submission.",
+        instructions: "Prepare the exact timeout review. The contract rechecks its deadline and current state; a plan is not an executed expiry. Do not keep working or wait indefinitely for a verifier after expiry.",
+        expected_event: isClaim ? "claim_expired" : "submission_expired", confirmed: false };
+    }
+    if (["claimed", "submitted"].includes(item.status) && (!active || !Number.isSafeInteger(deadline) || deadline <= 0)) {
+      return { action: "refresh_canonical_state", status: "recovery_evidence_unavailable", instructions: "Current round and deadline evidence is incomplete. Refresh canonical state before proposing recovery or more work.", confirmed: false };
+    }
+    if (item.verification_ready !== true) return { action: "resolve_verification_blocker", status: "verification_blocked",
+      instructions: item.verification_readiness_reason || "Restore the exact committed verifier or prepare an owner-authorized cancellation when the contract allows it. Do not claim, fund a child, or replace immutable verifier authority.", confirmed: false };
+    return null;
+  }
   function validateSubmission(submission, details, contract, wallet, bountyId) {
     const evidence = submission?.evidence_publication;
     if (submission?.network?.chain_id !== 8453 || lower(submission.bounty_contract) !== contract || lower(submission.solver) !== wallet
@@ -64,6 +91,7 @@
       const criteria = find("[data-work-criteria]"); criteria.replaceChildren();
       for (const criterion of terms.acceptance_criteria) { const li = doc.createElement("li"); li.textContent = criterion; criteria.append(li); }
       const events = scopeEvents(item.events || []);
+      const recovery = recoveryStatus(item);
       const claim = events.filter((event) => event.kind === "bounty_claimed").sort((a, b) => b.block_number - a.block_number || b.log_index - a.log_index)[0];
       const claimOwner = lower(claim?.data?.solver) || null;
       const ownsClaim = Boolean(record.wallet && claimOwner === record.wallet);
@@ -99,14 +127,20 @@
         put("[data-work-status]", intent.paid ? "Payment confirmed for this review." : `${intent.status.replaceAll("_", " ")}. ${intent.next_step || ""}`);
       } else put("[data-work-status]", `Current work status: ${item.status}.`);
       if (paidEvent) put("[data-work-status]", `Payment confirmed: ${Number(paidEvent.data.solver_payout) / 1e6} USDC to your submission wallet.`);
+      if (recovery) {
+        put("[data-work-status]", recovery.effect || recovery.instructions);
+        if (recovery.deadline) put("[data-work-deadline]", `The ${item.status === "claimed" ? "work" : "verification"} deadline was ${new Date(recovery.deadline * 1000).toLocaleString()}. Expiry still requires a confirmed on-chain event.`);
+      }
       const claimable = item.status === "claimable" && item.verification_ready === true;
       find("[data-work-prepare]").hidden = Boolean(intentId) || !claimable;
-      put("[data-step-title]", item.status === "paid" ? "Canonical result" : item.status === "claimed" ? "Track the agreed work" : item.status === "submitted" ? "Verification in progress" : "Review the next step");
-      put("[data-step-summary]", item.verification_ready ? "Your AI can read the exact requirements and prepare the next action."
+      put("[data-step-title]", recovery ? "Review recovery" : item.status === "paid" ? "Canonical result" : item.status === "claimed" ? "Track the agreed work" : item.status === "submitted" ? "Verification in progress" : "Review the next step");
+      put("[data-step-summary]", recovery ? recovery.instructions : item.verification_ready ? "Your AI can read the exact requirements and prepare the next action."
         : item.verification_readiness_reason || "The verifier is not ready. Do not commit to new work yet.");
       put("[data-work-evidence]", JSON.stringify({ verification: terms.verification_policy, benchmark: terms.benchmark, evidence_schema: terms.evidence_schema, events, jobs }, null, 2));
       const next = paidEvent ? null
         : item.status === "paid" ? { action: "show_canonical_result", instructions: "Show the recorded settlement and its actual recipient. This is not a claim that the current person earned money unless their wallet and submission are matched." }
+        : item.status === "cancelled" ? { action: "review_contributor_refunds", instructions: "The bounty was cancelled. Each contributor must reconcile their own RefundWithdrawn event; cancellation alone is not a refund." }
+        : recovery ? recovery
         : intent?.status === "confirmed" && intent.action === "complete" && !record.evidencePublished ? { tool: "agent_bounties_publish_confirmed_evidence", input: {} }
         : item.status === "claimed" && ownsClaim ? { action: "complete_agreed_work", instructions: "Use the current assistant's execution tools to complete and test the exact accepted work. Prepare action complete with the public artifact and evidence when it passes. No permission is needed for routine preparation." }
         : item.status === "claimed" ? { action: "track_claimed_work", instructions: "This work is reserved by the displayed claim owner. Track that solver's progress; do not start duplicate work or represent the claim as yours without matching the person's wallet." }
@@ -114,7 +148,20 @@
         : { action: "review_current_requirements", instructions: "Resolve the listed prerequisites before preparing a claim. If posting, wait for a solver or continue preparing an authorized contribution." };
       return { bounty_contract: contract, bounty_id: item.bounty_id, status: item.status, terms, events, claim_owner: claimOwner, claim_owned_by_review_wallet: ownsClaim, verification_jobs: jobs,
         action: intent, paid: Boolean(paidEvent), payment_evidence: paidEvent || null, wallet_connected: Boolean(wallet), poll_after_seconds: 15, evidence_boundary: flow.BOUNDARY,
-        next_action: next };
+        recovery, next_action: next };
+    }
+    async function prepareRecovery(input = {}) {
+      const current = await refresh(), recovery = current.recovery;
+      if (!recovery?.plan_endpoint) return { status: recovery?.status || "no_timeout_recovery", next_action: current.next_action, paid: false };
+      if (input.caller && !flow.ADDRESS.test(input.caller)) throw new Error("A valid caller wallet is required.");
+      const plan = await client.request(recovery.plan_endpoint, { network, bounty_contract: contract, ...(input.caller ? { caller: input.caller } : {}) });
+      const signature = recovery.action === "expire_claim" ? "expireClaim()" : "expireSubmission()";
+      const selector = evm.keccak256Hex(evm.textHex(signature)).slice(0, 10);
+      if (lower(plan.to) !== contract || String(plan.value_wei) !== "0" || lower(plan.data) !== selector
+        || lower(plan.from) !== lower(input.caller) || plan.function !== signature) throw new Error("The recovery plan differs from the current bounty and timeout action.");
+      return { status: "recovery_prepared", network, bounty_contract: contract, round: recovery.round, deadline: recovery.deadline,
+        plan, effect: recovery.effect, expected_event: recovery.expected_event, confirmed: false, paid: false,
+        user_confirmation_required: true, next_action: "Review the exact expiry and its bond effect before authorizing execution. No wallet, relay or payment was invoked." };
     }
     async function publishEvidence() {
       await refresh();
@@ -253,9 +300,9 @@
       } catch (error) { message(error); }
     });
     find("[data-work-refresh]").addEventListener("click", () => refresh().catch(message));
-    win.AgentBountiesParticipation = Object.freeze({ refresh, publishEvidence });
+    win.AgentBountiesParticipation = Object.freeze({ refresh, publishEvidence, prepareRecovery });
     try { await refresh(); } catch (error) { message(error); }
     win.setInterval(() => { if (!doc.hidden && !busy && intentId) refresh().catch(message); }, 15000);
   }
-  return { validateCalls, validateSubmission, start };
+  return { validateCalls, validateSubmission, recoveryStatus, start };
 });

@@ -14002,7 +14002,54 @@ async fn plan_bounded_wallet_cancel_refund(
         ),
         _ => return Err(StatusCode::CONFLICT),
     };
-    plan.map(Json).map_err(|_| StatusCode::BAD_REQUEST)
+    let plan = plan.map_err(|_| StatusCode::BAD_REQUEST)?;
+    // A V1 wallet can be the canonical creator but cannot call either V2
+    // recovery method. Simulate the exact owner call before offering a plan.
+    use chain_base::JsonRpcTransport;
+    use serde_json::json;
+    let (_, rpc_url) = state
+        .base_rpc_urls
+        .resolve(network)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let safe = fetch_safe_block_identity(&rpc_url, 1)
+        .await
+        .map_err(|error| base_rpc_fetch_status(&error))?;
+    let response = chain_base::ReqwestJsonRpcTransport::default()
+        .post_json_value(
+            &rpc_url,
+            &json!({ "jsonrpc": "2.0", "id": 2, "method": "eth_call", "params": [
+            { "from": plan.from, "to": plan.to, "data": plan.data, "value": "0x0" },
+            format!("0x{:x}", safe.number)
+        ] }),
+        )
+        .await
+        .map_err(|error| base_rpc_fetch_status(&error))?;
+    validate_bounded_wallet_recovery_simulation(&response)?;
+    Ok(Json(plan))
+}
+
+fn validate_bounded_wallet_recovery_simulation(
+    response: &serde_json::Value,
+) -> Result<(), StatusCode> {
+    if response["jsonrpc"] != "2.0" || response["id"] != 2 {
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+    if response.get("error").is_some() {
+        return Err(StatusCode::CONFLICT);
+    }
+    let value = response
+        .get("result")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(StatusCode::BAD_GATEWAY)?;
+    // Both deployed V2 methods return the positive amount actually received.
+    let encoded = value.strip_prefix("0x").ok_or(StatusCode::BAD_GATEWAY)?;
+    if encoded.len() != 64 || !encoded.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(StatusCode::CONFLICT);
+    }
+    if encoded.bytes().all(|b| b == b'0') {
+        return Err(StatusCode::CONFLICT);
+    }
+    Ok(())
 }
 
 fn autonomous_item_mode(item: &AutonomousBountyFeedItem) -> Result<&str, StatusCode> {
@@ -17935,6 +17982,25 @@ mod tests {
         assert!(!should_use_atomic_sponsorship(false, None));
         sponsorship.claim_candidate_id = Uuid::new_v4();
         assert_ne!(first, atomic_sponsorship_grant_nonce(&sponsorship));
+    }
+
+    #[test]
+    fn bounded_wallet_recovery_requires_a_successful_nonempty_refund_simulation() {
+        use serde_json::json;
+        assert!(validate_bounded_wallet_recovery_simulation(&json!({
+            "jsonrpc": "2.0", "id": 2, "result": format!("0x{:064x}", 1_000_000)
+        }))
+        .is_ok());
+        for response in [
+            json!({ "jsonrpc": "2.0", "id": 2, "error": { "code": 3, "message": "execution reverted" } }),
+            json!({ "jsonrpc": "2.0", "id": 2, "result": "0x" }),
+            json!({ "jsonrpc": "2.0", "id": 2, "result": format!("0x{:064x}", 0) }),
+            json!({ "jsonrpc": "2.0", "id": 2, "result": "0x01" }),
+            json!({ "jsonrpc": "2.0", "id": 3, "result": format!("0x{:064x}", 100) }),
+            json!({ "jsonrpc": "2.0", "id": 2 }),
+        ] {
+            assert!(validate_bounded_wallet_recovery_simulation(&response).is_err());
+        }
     }
 
     #[test]

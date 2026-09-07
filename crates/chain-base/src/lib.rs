@@ -434,6 +434,11 @@ const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
 ];
 const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
+// This older immutable tuple contains exactly the reviewed OpenHands tree.
+// Keep the alias scoped to that digest/path; it is not approval of the whole commit.
+const RECONCILED_OPENHANDS_ORIGINAL_COMMIT: &str = "aa28ec742efd4063260653510ba324e291267515";
+const RECONCILED_OPENHANDS_ORIGINAL_TERMS: &str =
+    "0x29c3a5f5be3e506ead7e8cd02fd6c78e823e8d22fe18b3a15d79f53703688dbb";
 const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
     (
         "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
@@ -4253,7 +4258,17 @@ fn regression_quorum_readiness(
             "regression benchmark digest and immutable source are not approved",
         );
     }
-    if validate_regression_evidence_schema(&terms.document.evidence_schema).is_err() {
+    // The original funded terms require the snapshot digest but predate the
+    // JSON-schema pattern. The worker still validates and hashes the real input.
+    // Bind this compatibility case to recomputed immutable terms, never a label.
+    let original_openhands_schema = terms.terms_hash == RECONCILED_OPENHANDS_ORIGINAL_TERMS
+        && serde_json::to_value(&terms.document)
+            .ok()
+            .and_then(|value| keccak256_canonical_json(&value).ok())
+            .is_some_and(|hash| hash == RECONCILED_OPENHANDS_ORIGINAL_TERMS);
+    if validate_regression_evidence_schema(&terms.document.evidence_schema).is_err()
+        && !original_openhands_schema
+    {
         return (
             false,
             "regression source snapshot evidence schema is unavailable or invalid",
@@ -5509,6 +5524,8 @@ fn validate_reconciled_regression_benchmark(
                 .and_then(Value::as_str)
                 .is_some_and(|commit| {
                     commit.eq_ignore_ascii_case(RECONCILED_REGRESSION_BENCHMARK_COMMIT)
+                        || (commit.eq_ignore_ascii_case(RECONCILED_OPENHANDS_ORIGINAL_COMMIT)
+                            && subdirectory == "benchmarks/direct-growth-v2/openhands-integration")
                 })
             && source
                 .and_then(|value| value.get("subdirectory"))
@@ -8354,6 +8371,41 @@ mod tests {
     }
 
     #[test]
+    fn original_openhands_terms_retain_verifier_readiness_without_weakening_new_funding() {
+        let terms: AutonomousBountyTermsRecord = serde_json::from_str(include_str!(
+            "../tests/fixtures/legacy-openhands-terms.json"
+        ))
+        .unwrap();
+        let rebuilt = build_autonomous_bounty_terms_record(
+            &terms.creator_wallet,
+            terms.document.clone(),
+            terms.created_at,
+        )
+        .unwrap();
+        assert_eq!(rebuilt.terms_hash, RECONCILED_OPENHANDS_ORIGINAL_TERMS);
+        assert_eq!(rebuilt.benchmark_hash, terms.benchmark_hash);
+        assert_eq!(rebuilt.evidence_schema_hash, terms.evidence_schema_hash);
+        let quorum = json!({ "threshold": 1, "verifier_set_hash": BASE_MAINNET_DEFAULT_REGRESSION_VERIFIER_SET_HASH });
+        assert!(regression_quorum_readiness(&quorum, Some(&terms)).0);
+        let create = autonomous_bounty_create_from_terms(&terms).unwrap();
+        assert!(
+            validate_autonomous_creation_for_public_earning("base-mainnet", &create, &terms)
+                .is_err()
+        );
+        for pointer in [
+            "/evidence_schema/required",
+            "/title",
+            "/benchmark/source/commit",
+        ] {
+            let mut value = serde_json::to_value(&terms.document).unwrap();
+            *value.pointer_mut(pointer).unwrap() = json!("altered");
+            let mut altered = terms.clone();
+            altered.document = serde_json::from_value(value).unwrap();
+            assert!(!regression_quorum_readiness(&quorum, Some(&altered)).0);
+        }
+    }
+
+    #[test]
     fn builds_content_addressed_autonomous_terms_commitments() {
         let now = Utc::now();
         let document = AutonomousBountyTermsDocument {
@@ -8669,6 +8721,35 @@ mod tests {
             "verifier_set_hash": BASE_MAINNET_STANDING_META_V2_VERIFIER_SET_HASH,
             "threshold": 2
         });
+        let mut original_openhands = supported_record.clone();
+        original_openhands.document.benchmark["source"]["commit"] =
+            json!(RECONCILED_OPENHANDS_ORIGINAL_COMMIT);
+        original_openhands.document.benchmark["source"]["subdirectory"] =
+            json!(RECONCILED_REGRESSION_BENCHMARK_SOURCES[2].1);
+        original_openhands.document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(RECONCILED_REGRESSION_BENCHMARK_SOURCES[2].0);
+        assert!(regression_quorum_readiness(&healthy_quorum, Some(&original_openhands)).0);
+        for (pointer, value) in [
+            ("/source/commit", json!("main")),
+            ("/source/commit", json!("a".repeat(40))),
+            ("/source/repository", json!("other/agent-bounties")),
+            (
+                "/source/subdirectory",
+                json!(RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].1),
+            ),
+            (
+                "/runner_manifest/benchmark_digest",
+                json!(RECONCILED_REGRESSION_BENCHMARK_SOURCES[0].0),
+            ),
+        ] {
+            let mut altered = original_openhands.clone();
+            *altered.document.benchmark.pointer_mut(pointer).unwrap() = value;
+            assert!(!regression_quorum_readiness(&healthy_quorum, Some(&altered)).0);
+        }
+        let mut other_original_task = supported_record.clone();
+        other_original_task.document.benchmark["source"]["commit"] =
+            json!(RECONCILED_OPENHANDS_ORIGINAL_COMMIT);
+        assert!(!regression_quorum_readiness(&healthy_quorum, Some(&other_original_task)).0);
         assert_eq!(
             regression_quorum_readiness(&healthy_quorum, Some(&supported_record)),
             (

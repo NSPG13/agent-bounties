@@ -158,6 +158,13 @@ assert.deepEqual(
   "an approved digest must remain bound to its reviewed repository, commit, and subdirectory",
 );
 const copiedUnsafeBenchmark = JSON.parse(JSON.stringify(benchmark));
+const originalOpenHands = JSON.parse(JSON.stringify(benchmark));
+originalOpenHands.source.commit = "aa28ec742efd4063260653510ba324e291267515";
+assert.equal(verificationReadiness(originalOpenHands, evidenceSchema).executable, false);
+originalOpenHands.source.subdirectory = "benchmarks/direct-growth-v2/openhands-integration";
+originalOpenHands.runner_manifest.benchmark_digest = "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2";
+assert.equal(verificationReadiness(originalOpenHands, evidenceSchema).executable, true);
+assert.equal(verificationReadiness(originalOpenHands, { type: "object", required: ["source_snapshot_digest"] }).executable, false);
 copiedUnsafeBenchmark.source.repository = "other/copied-benchmark";
 copiedUnsafeBenchmark.source.subdirectory = "different/location";
 copiedUnsafeBenchmark.runner_manifest.benchmark_digest =
