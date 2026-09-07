@@ -17,6 +17,8 @@ on:
       - "scripts/fixtures/meta-child-plan.json"
       - "scripts/test-competition-proof.js"
       - "scripts/test-phone-wallet.js"
+      - "scripts/test-posting-layout.cjs"
+      - "tools/browser-layout/**"
       - "scripts/configure-phone-wallet.py"
       - "tools/phone-wallet/**"
       - "scripts/github_audience_audit.py"
@@ -40,6 +42,8 @@ on:
       - "scripts/fixtures/meta-child-plan.json"
       - "scripts/test-competition-proof.js"
       - "scripts/test-phone-wallet.js"
+      - "scripts/test-posting-layout.cjs"
+      - "tools/browser-layout/**"
       - "scripts/configure-phone-wallet.py"
       - "tools/phone-wallet/**"
       - "scripts/github_audience_audit.py"
@@ -97,6 +101,12 @@ jobs:
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
         run: node --test scripts/test-marketplace-ui.js scripts/test-webmcp.js scripts/test-meta-child.js scripts/test-competition-proof.js scripts/test-phone-wallet.js
+      - name: Test posting and wallet actions in real browser viewports
+        working-directory: tools/browser-layout
+        run: |
+          npm ci --ignore-scripts --no-fund
+          npx playwright install --with-deps chromium
+          npm test
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v
