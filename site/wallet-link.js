@@ -43,9 +43,9 @@
         let failed = false;
         const stylesheet = doc.createElement("link");
         stylesheet.rel = "stylesheet";
-        stylesheet.href = new URL("vendor/coinbase-embedded-wallet.bundle.css?v=1", doc.baseURI).href;
+        stylesheet.href = new URL("vendor/coinbase-embedded-wallet.bundle.css?v=2", doc.baseURI).href;
         const script = doc.createElement("script");
-        script.src = new URL("vendor/coinbase-embedded-wallet.bundle.js?v=1", doc.baseURI).href;
+        script.src = new URL("vendor/coinbase-embedded-wallet.bundle.js?v=2", doc.baseURI).href;
         script.async = true;
         const fail = () => { failed = true; win.clearTimeout(timer); script.remove(); stylesheet.remove(); reject(new Error("Wallet creation could not load. Check your connection and try again.")); };
         const timer = win.setTimeout(fail, 20000);
@@ -144,5 +144,22 @@
     return request.promise;
   }
 
-  return Object.freeze({ select, choices, cancel: () => finish() });
+  // This tab-scoped intent only resumes the UI; it is never ownership evidence.
+  const intentKey = "agentbounties:pending-embedded-account-link";
+  function clearPending() {
+    try { win.sessionStorage.removeItem(intentKey); } catch (_) { /* Storage may be disabled. */ }
+  }
+  function beginPending(userId) {
+    try { win.sessionStorage.setItem(intentKey, JSON.stringify({ userId: String(userId), startedAt: Date.now() })); } catch (_) { /* Same-page linking still works. */ }
+  }
+  function hasPending(userId) {
+    try {
+      const intent = JSON.parse(win.sessionStorage.getItem(intentKey));
+      if (intent && intent.userId === String(userId) && Date.now() - intent.startedAt >= 0 && Date.now() - intent.startedAt < 30 * 60 * 1000) return true;
+    } catch (_) { /* Ignore expired or malformed intent. */ }
+    clearPending();
+    return false;
+  }
+
+  return Object.freeze({ select, choices, loadEmbedded, beginPending, hasPending, clearPending, cancel: () => finish() });
 });

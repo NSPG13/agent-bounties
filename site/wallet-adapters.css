@@ -127,6 +127,20 @@
   flex: 1 1 12rem;
 }
 
+.wallet-auth-actions > button {
+  min-height: 2.75rem;
+  padding: .65rem 1rem;
+  border: 1px solid rgba(201, 245, 72, .4);
+  border-radius: .5rem;
+  font: inherit;
+  color: #f4f6ef;
+  background: #18321f;
+  cursor: pointer;
+}
+.wallet-auth-actions > button.primary { color: #102015; background: #c3e66a; }
+.wallet-auth-actions > button:disabled { opacity: .5; cursor: default; }
+.wallet-auth-message { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font-size: .8rem; }
+
 .wallet-auth-back,
 .wallet-auth-signout {
   justify-self: start;

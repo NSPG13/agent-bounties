@@ -1407,6 +1407,9 @@ html[data-scene-ready="false"] .scene-plate {
   text-transform: uppercase;
 }
 
+.wallet-pending { color: #dbca91; font-size: .65rem; }
+.account-wallets [data-wallet-access] { grid-column: 1 / -1; justify-self: start; }
+
 .account-wallets .wallet-remove {
   padding: 4px 6px;
   border: 0;
