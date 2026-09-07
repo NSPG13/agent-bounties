@@ -80,6 +80,16 @@ RECONCILED_REGRESSION_BENCHMARK_SOURCES: dict[str, tuple[str, str, str]] = {
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7": ("nspg13/agent-bounties", RECONCILED_REGRESSION_BENCHMARK_COMMIT, "benchmarks/direct-inventory-v1/stalled-work"),
 }
 
+# The original OpenHands publication has byte-identical benchmark contents.
+# Keep this exception bound to all four immutable source fields.
+RECONCILED_REGRESSION_BENCHMARK_SOURCE_ALIASES: dict[str, tuple[str, str, str]] = {
+    "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2": (
+        "nspg13/agent-bounties",
+        "aa28ec742efd4063260653510ba324e291267515",
+        "benchmarks/direct-growth-v2/openhands-integration",
+    ),
+}
+
 
 class PipelineError(RuntimeError):
     pass
@@ -262,7 +272,11 @@ def require_reconciled_regression_benchmark(job: dict[str, Any]) -> None:
             "sandboxed regression benchmark exact digest must be independently reconciled and approved before verifier signing"
         )
     repository, commit, subdirectory = benchmark_source(job)
-    if (repository.lower(), commit, subdirectory) != RECONCILED_REGRESSION_BENCHMARK_SOURCES.get(digest):
+    source_tuple = (repository.lower(), commit, subdirectory)
+    if source_tuple not in (
+        RECONCILED_REGRESSION_BENCHMARK_SOURCES.get(digest),
+        RECONCILED_REGRESSION_BENCHMARK_SOURCE_ALIASES.get(digest),
+    ):
         raise PipelineError(
             "sandboxed regression benchmark immutable source tuple does not match the independently approved digest"
         )

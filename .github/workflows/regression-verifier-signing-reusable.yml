@@ -55,7 +55,7 @@ jobs:
       - name: Revalidate reviewed runtime after build
         run: |
           python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 c4850fc0edf6786462a80a8d51c8e76b5c38cd8c1952192953973424b8ad1228
-          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 ada389f13bba3c67199f49299ceb474f75316afdb25a5f5fefe4855f26d44066
+          python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 89d3a481511c5cc2130673088ed3fd2361eae3a3c7f47d13eb72b6000e341125
       - name: Re-fetch state and sign one exact candidate set
         env:
           REGRESSION_VERIFIER_PRIVATE_KEY: ${{ secrets.verifier_private_key }}

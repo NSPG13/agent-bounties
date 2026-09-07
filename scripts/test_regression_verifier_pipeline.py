@@ -800,6 +800,31 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
                 pipeline.require_reconciled_regression_benchmark(mismatched)
 
+    def test_original_openhands_terms_use_only_the_exact_reconciled_alias(self) -> None:
+        fixture = SCRIPT.parent.parent / "crates/chain-base/tests/fixtures/legacy-openhands-terms.json"
+        job = {"terms": json.loads(fixture.read_text(encoding="utf-8"))}
+        pipeline.require_reconciled_regression_benchmark(job)
+        benchmark = job["terms"]["document"]["benchmark"]
+        self.assertEqual(
+            benchmark["runner_manifest"]["benchmark_digest"],
+            repository_benchmark_digest("benchmarks/direct-growth-v2/openhands-integration"),
+        )
+        for key, value in (
+            ("repository", "relocated/repository"),
+            ("commit", "b" * 40),
+            ("subdirectory", "benchmarks/direct-growth-v2/hermes-integration"),
+        ):
+            changed = json.loads(json.dumps(job))
+            changed["terms"]["document"]["benchmark"]["source"][key] = value
+            with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
+                pipeline.require_reconciled_regression_benchmark(changed)
+        changed = json.loads(json.dumps(job))
+        changed["terms"]["document"]["benchmark"]["runner_manifest"]["benchmark_digest"] = (
+            "sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f"
+        )
+        with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
+            pipeline.require_reconciled_regression_benchmark(changed)
+
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {
             "image": f"docker.io/library/python@sha256:{'a' * 64}",
