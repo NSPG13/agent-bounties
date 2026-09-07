@@ -1351,7 +1351,9 @@
     const approvedSubdirectory = RECONCILED_REGRESSION_BENCHMARK_SOURCES.get(runner?.benchmark_digest);
     const approvedSource = typeof approvedSubdirectory === "string"
       && String(source?.repository || "").toLowerCase() === "nspg13/agent-bounties"
-      && String(source?.commit || "").toLowerCase() === RECONCILED_REGRESSION_BENCHMARK_COMMIT
+      && (String(source?.commit || "").toLowerCase() === RECONCILED_REGRESSION_BENCHMARK_COMMIT
+        || String(source?.commit || "").toLowerCase() === "aa28ec742efd4063260653510ba324e291267515"
+          && approvedSubdirectory === "benchmarks/direct-growth-v2/openhands-integration")
       && source?.subdirectory === approvedSubdirectory;
     const blocked = !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.has(runner?.benchmark_digest)
       || !approvedSource;

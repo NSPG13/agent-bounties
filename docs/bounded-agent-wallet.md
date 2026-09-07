@@ -170,6 +170,16 @@ fresh policy-period counter; the review page must disclose that before signing.
 
 ## Activation State
 
+Recovery planning now simulates the exact owner call at a pinned safe block.
+An unsupported V1 selector, non-owner caller, active claim, missing contribution,
+or failed refund returns a conflict instead of a signable V2 plan. An empty
+successful EOA call is not a refund simulation. The V1 wallet is immutable and
+does not gain V2 methods through an application update. Its owner can withdraw
+uncommitted wallet tokens, but that does not withdraw its bounty contributions.
+Never cancel a V1-funded bounty on the assumption that its wallet can later
+pull a refund. A successful simulation remains preparation; only canonical
+`BountyCancelled` and `RefundWithdrawn` events prove the respective actions.
+
 New activation plans use the V2 deterministic contract manifest:
 [`deployments/bounded-agent-wallet-v2-base-mainnet.json`](../deployments/bounded-agent-wallet-v2-base-mainnet.json).
 The historical V1 manifest remains at

@@ -190,6 +190,18 @@ action.
 
 ## Verification
 
+The work status tool prioritizes expired claims and submissions over an
+unavailable verifier. At the exact deadline the contract still permits work;
+the timeout path becomes available strictly after it. A displayed expired
+deadline does not change canonical state. `agent_bounties_prepare_work_recovery`
+prepares and validates the existing timeout-plan endpoint's exact call without
+opening a wallet or invoking the hosted relay. Claim expiry forfeits the bond
+to the bonus pool; submission expiry returns it to the original solver.
+Execution needs the person's review, and only a confirmed `ClaimExpired` or
+`SubmissionExpired` event proves that it happened. Unsupported verification
+and recovery reservations remain visible blockers. Cancellation and each
+contributor's `RefundWithdrawn` evidence are separate from solver payment.
+
 ```powershell
 node --test scripts/test-webmcp.js scripts/test-marketplace-ui.js scripts/test-competition-proof.js
 node scripts/test-ai-bounty-handoff.js

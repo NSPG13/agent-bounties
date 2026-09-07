@@ -32,6 +32,23 @@ or payment evidence.
 
 ## Immutable Terms
 
+Already-funded source compatibility is exact and content-addressed. The
+OpenHands benchmark at commit `aa28ec742efd4063260653510ba324e291267515`, path
+`benchmarks/direct-growth-v2/openhands-integration`, has directory digest
+`sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2`.
+Its Git tree and directory digest match the same path at reviewed commit
+`fa946859a3379b8c9128183e20dedb3b8319a646`. This permits only that older
+repository/commit/path/digest tuple, not arbitrary content from the old commit.
+
+The original OpenHands terms hash
+`0x29c3a5f5be3e506ead7e8cd02fd6c78e823e8d22fe18b3a15d79f53703688dbb`
+requires `source_snapshot_digest` but predates its JSON-schema pattern. Existing
+verification accepts this exact recomputed terms document; the worker continues
+to validate the actual digest and hash the staged source. New funding still
+requires the complete typed evidence schema. The immutable terms fixture tests
+both compatibility and rejection of altered documents. No deadline, authority,
+benchmark, or verdict is changed by compatibility.
+
 The default verification policy names one verifier:
 
 ```json

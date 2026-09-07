@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const { webcrypto } = require("node:crypto");
 const flow = require("../site/marketplace-workflow.js");
 const market = require("../site/marketplace.js");
-const { validateCalls, start: startParticipant } = require("../site/participate.js");
+const { validateCalls, recoveryStatus, start: startParticipant } = require("../site/participate.js");
 const contract = "0x" + "11".repeat(20), wallet = "0x" + "22".repeat(20);
 const intentId = "10000000-0000-4000-8000-000000000001";
 const amount = (n) => ({ amount: String(n), unit: "base_units", decimals: 6, currency: "USDC" });
@@ -262,6 +262,56 @@ async function participantFixture(action = "solve") {
   const click = (selector, trusted = true) => env.elements.get(selector).listeners.get("click")({ isTrusted: trusted });
   return { ...env, state, sent, observations, publications, submission, click, reload: () => startParticipant(env.window, env.document) };
 }
+
+test("expired work takes precedence over verifier outages and does not imply recovery executed", () => {
+  const claim = { id: "claim", block_number: 10, log_index: 0, bounty_id: "bounty", contract_address: contract, kind: "bounty_claimed", data: { round: 2, solver: wallet, claim_expires_at: 100 } };
+  const submission = { ...claim, id: "submission", block_number: 11, kind: "submission_added", data: { round: 2, solver: wallet, verification_expires_at: 200 } };
+  const base = { bounty_contract: contract, bounty_id: "bounty", status: "claimed", verification_ready: true, events: [submission, claim] };
+  assert.equal(recoveryStatus(base, 99), null);
+  assert.equal(recoveryStatus(base, 100), null);
+  assert.equal(recoveryStatus(base, 101).action, "expire_claim");
+  assert.equal(recoveryStatus({ ...base, status: "submitted" }, 200), null);
+  const expired = recoveryStatus({ ...base, status: "submitted", verification_ready: false }, 201);
+  assert.equal(expired.action, "expire_submission"); assert.equal(expired.confirmed, false);
+  assert.equal(recoveryStatus({ ...base, status: "paid" }, 201), null);
+  assert.equal(recoveryStatus({ ...base, status: "cancelled" }, 201), null);
+  for (const invalid of [{ contract_address: wallet }, { bounty_id: "other" }, { id: null }, { data: { ...claim.data, claim_expires_at: null } }]) {
+    assert.equal(recoveryStatus({ ...base, events: [{ ...claim, ...invalid }] }, 201).action, "refresh_canonical_state");
+  }
+  const wrongRound = { ...submission, data: { ...submission.data, round: 1 } };
+  assert.equal(recoveryStatus({ ...base, status: "submitted", events: [claim, wrongRound] }, 201).action, "refresh_canonical_state");
+  assert.equal(recoveryStatus({ ...base, status: "claimable", verification_ready: false }, 201).action, "resolve_verification_blocker");
+});
+
+test("workspace and WebMCP expose a bounded timeout plan without wallet or relay calls", async () => {
+  const env = await participantFixture();
+  env.state.feed.status = "claimed";
+  env.state.feed.verification_ready = false;
+  env.state.feed.events = [{ id: "claim", block_number: 10, log_index: 0, bounty_id: "test-bounty", contract_address: contract, kind: "bounty_claimed", data: { round: 2, solver: wallet, claim_expires_at: 100 } }];
+  const request = env.window.fetch;
+  let altered = false, prepared = 0;
+  env.window.fetch = async (url, options) => {
+    if (!url.endsWith("/expire-claim-plan")) return request(url, options);
+    prepared++;
+    assert.equal(JSON.parse(options.body).bounty_contract, contract);
+    const evm = env.window.AgentBountiesEvm;
+    return { ok: true, json: async () => ({ from: wallet, to: altered ? wallet : contract, value_wei: 0,
+      function: "expireClaim()", data: evm.keccak256Hex(evm.textHex("expireClaim()")).slice(0, 10) }) };
+  };
+  env.register();
+  const current = await env.window.AgentBountiesParticipation.refresh();
+  assert.equal(current.next_action.action, "expire_claim");
+  assert.equal(env.elements.get("[data-step-title]").textContent, "Review recovery");
+  const tool = env.tools.get("agent_bounties_prepare_work_recovery");
+  const result = await tool.execute({ caller: wallet });
+  assert.equal(result.status, "recovery_prepared"); assert.equal(result.confirmed, false); assert.equal(result.paid, false);
+  assert.equal(prepared, 1); assert.equal(env.sent.length, 0);
+  altered = true;
+  await assert.rejects(tool.execute({ caller: wallet }), /differs/);
+  env.state.feed.status = "cancelled";
+  assert.equal((await tool.execute({ caller: wallet })).status, "no_timeout_recovery");
+  assert.equal(prepared, 2); assert.equal(env.sent.length, 0);
+});
 
 test("one human confirmation completes ordered claim calls and retries cannot repeat payment", async () => {
   const env = await participantFixture();

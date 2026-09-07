@@ -563,6 +563,10 @@
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true },
     async execute() { const controller = await waitFor(() => window.AgentBountiesParticipation, 8000); if (!controller) throw new Error("The workspace is still loading."); return controller.publishEvidence(); } });
 
+  if (isParticipant) register({ name: "agent_bounties_prepare_work_recovery", title: "Prepare expired work recovery", description: "Read fresh canonical work state and prepare the exact expired claim or submission transaction. Explains the bond effect and expected event. Does not connect a wallet, call a relay, sign, expire work, cancel a bounty or move funds. Execution still needs the person's approval. Unknown, reserved and nonexpired states return their blocker instead of an executable plan.",
+    inputSchema: { type: "object", properties: { caller: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$", description: "Already-known wallet that would submit the recovery transaction." } }, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true },
+    async execute(input) { const controller = await waitFor(() => window.AgentBountiesParticipation, 8000); if (!controller) throw new Error("The workspace is still loading."); return controller.prepareRecovery(input); } });
+
   window.addEventListener("pagehide", (event) => { if (!event.persisted) lifecycle.abort(); });
   Promise.allSettled(registrations).catch(reportError);
   if (isPost) {
