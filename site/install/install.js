@@ -85,6 +85,60 @@
     throw new Error(`Unsupported install action: ${action.kind}`);
   }
 
+  function renderAssistantSetups(actions, panel, platform) {
+    const setups = [
+      {
+        name: "Claude Code",
+        instructions: "Run this in your terminal, then start Claude Code. Use /mcp to check the connection.",
+        label: "Terminal command",
+        value: `claude mcp add --transport http --scope user agent-bounties ${platform.mcp_url}`,
+        docs: "https://code.claude.com/docs/en/mcp",
+      },
+      {
+        name: "Codex",
+        instructions: "Run this in a terminal with Codex CLI installed, then start a new Codex session.",
+        label: "Terminal command",
+        value: `codex mcp add agent-bounties --url ${platform.mcp_url}`,
+        docs: "https://developers.openai.com/codex/mcp",
+      },
+      {
+        name: "Antigravity",
+        instructions: "Open MCP Servers → Manage MCP Servers → View raw config. Add this server to mcp_config.json, keeping any existing servers. Save and refresh.",
+        label: "MCP configuration",
+        value: JSON.stringify({ mcpServers: { "agent-bounties": { serverUrl: platform.mcp_url } } }, null, 2),
+        docs: "https://antigravity.google/docs/mcp",
+      },
+    ];
+    const setupPanel = element("section", "install-setup");
+    setupPanel.id = "install-assistant-setup";
+    setupPanel.hidden = true;
+    setupPanel.setAttribute("aria-labelledby", "install-assistant-setup-title");
+    const buttons = [];
+    setups.forEach((setup) => {
+      const button = element("button", "install-setup-choice", setup.name);
+      button.type = "button";
+      button.setAttribute("aria-controls", setupPanel.id);
+      button.setAttribute("aria-expanded", "false");
+      button.addEventListener("click", () => {
+        const opening = button.getAttribute("aria-expanded") !== "true";
+        buttons.forEach((choice) => choice.setAttribute("aria-expanded", "false"));
+        setupPanel.hidden = !opening;
+        if (!opening) return;
+        button.setAttribute("aria-expanded", "true");
+        const heading = element("h3", "", `Set up ${setup.name}`);
+        heading.id = "install-assistant-setup-title";
+        const docs = element("a", "install-setup-docs", `${setup.name} setup guide`);
+        docs.href = setup.docs;
+        docs.target = "_blank";
+        docs.rel = "noopener noreferrer";
+        setupPanel.replaceChildren(heading, element("p", "", setup.instructions), copyBlock(setup.label, setup.value), docs);
+      });
+      buttons.push(button);
+      actions.appendChild(button);
+    });
+    panel.appendChild(setupPanel);
+  }
+
   function renderPlatform(platform, manifest) {
     status.textContent = platform.status;
     const taskOwner = body.dataset.installAudience === "task-owner";
@@ -119,7 +173,10 @@
       destination.appendChild(renderAction(action, platform));
     });
     actionsPanel.appendChild(actions);
-    if (taskOwner) actionsPanel.appendChild(endpointPanel);
+    if (taskOwner) {
+      renderAssistantSetups(actions, actionsPanel, platform);
+      actionsPanel.appendChild(endpointPanel);
+    }
     grid.appendChild(actionsPanel);
 
     const promptPanel = element("section", taskOwner ? "install-panel" : "install-panel install-panel-wide");
