@@ -106,6 +106,8 @@
       solver_reward_usdc: solver,
       verifier_reward_usdc: verifier,
       task_window_days: days,
+      review_mode: raw.review_mode === "creator" ? "creator" : "automated",
+      delivery_deadline: window.AgentBountiesCreatorReview.deadline(raw.delivery_deadline),
       source_url: sourceUrl,
       crowdfund: Boolean(raw.crowdfund),
       discovery_source: boundedText(raw.discovery_source || "User-owned AI assistant", "Discovery source", 500),
@@ -128,6 +130,7 @@
   function promptFor(intent, context) {
     const data = {};
     if (intent) data.request = String(intent);
+    if (context?.brief) data.brief = context.brief;
     if (context?.draft) {
       data.draft = {
         ...context.draft,
@@ -180,7 +183,7 @@
       webFallback.removeAttribute("href");
     }
     panel.hidden = false;
-    log.append(panel);
+    // Keep AI setup in its optional disclosure; never create a second chat.
     requestAnimationFrame(() => {
       const previousScrollBehavior = log.style.scrollBehavior;
       log.style.scrollBehavior = "auto";
@@ -189,7 +192,7 @@
     });
     document.documentElement.dataset.aiInterface = "user-owned";
     if (composerStatus) {
-      composerStatus.textContent = "No Agent Bounties model key is being used. Continue in your AI account, then return with its prepared draft.";
+      composerStatus.textContent = "Brief saved. Your current AI can continue here; setup and import are optional.";
       composerStatus.dataset.tone = "success";
     }
     return currentPrompt;
@@ -249,12 +252,13 @@
     }
   });
 
-  panel.querySelector("[data-import-ai-draft]")?.addEventListener("click", () => {
+  panel.querySelector("[data-import-ai-draft]")?.addEventListener("click", async () => {
     try {
       const draft = parseDraft(importInput.value);
+      if (!window.AgentBountiesComposer) throw new Error("The draft controller is still loading. Retry the same import.");
+      await window.AgentBountiesComposer.stage(draft);
       setImportStatus("Draft imported locally. Review every field before approving it.", "success");
       panel.hidden = true;
-      window.dispatchEvent(new CustomEvent("agent-bounties:prepared-draft", { detail: draft }));
     } catch (error) {
       setImportStatus(error.message || String(error), "error");
     }

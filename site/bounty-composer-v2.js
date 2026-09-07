@@ -481,11 +481,12 @@
   }
 
   async function importPreparedDraft(value) {
-    const prepared = window.AgentBountyAI?.parseDraft
+    let prepared = window.AgentBountyAI?.parseDraft
       ? window.AgentBountyAI.parseDraft(value)
       : value;
     if (!prepared || typeof prepared !== "object") throw new Error("The prepared bounty draft is invalid.");
 
+    prepared = window.AgentBountiesCreatorReview.prepare(prepared);
     const days = Number(prepared.task_window_days || MAX_TASK_DAYS);
     const parentContext = prepared.meta_child || (new URLSearchParams(window.location.search).has("parentBounty") ? state.metaParent : null);
     const metaParent = parentContext ? await metaChild.resolve(parentContext, window.AgentBountiesWorkflow.createClient(window)) : null;
@@ -497,9 +498,11 @@
       throw new Error("The prepared bounty must include the exact image generated and approved in ChatGPT.");
     }
 
-    const deadline = new Date(Date.now() + days * 86_400_000);
+    const deadline = prepared.delivery_deadline ? new Date(prepared.delivery_deadline) : new Date(Date.now() + days * 86_400_000);
+    state.deliveryDeadline = prepared.delivery_deadline || null;
     state.phase = "review";
     state.originalRequest = prepared.goal;
+    state.reviewStale = false;
     state.context = [];
     state.initialDraft = normalizeDraft({
       title: prepared.title,
@@ -520,7 +523,7 @@
       kind: "date",
       date: deadline,
       days,
-      label: `${days} day${days === 1 ? "" : "s"}`,
+      label: prepared.delivery_deadline ? `${deadline.toLocaleString()} (${Intl.DateTimeFormat().resolvedOptions().timeZone})` : `${days} days after claim`,
     };
     state.missionPlan = null;
     state.selectedTaskId = null;
@@ -530,13 +533,16 @@
     state.metaParent = metaParent;
     state.bountyImage = bountyImage;
     state.approved = false;
-    ui.input.value = "";
+    ui.input.value = prepared.goal;
     ui.prompt.textContent = state.handoffReview
       ? (state.bountyImage
           ? "Review the exact image and bounty terms you approved in your AI conversation. Agent Bounties cannot edit or replace them."
           : "Review the exact bounty terms you approved in your AI conversation. This card uses a deterministic content-derived visual.")
       : "Review the bounty card your AI prepared. You can approve it or ask your AI for a revision.";
     await renderPreview();
+    const client = window.AgentBountiesWorkflow.createClient(window);
+    const journey = client.load() || client.start({ role: "post" });
+    client.save({ ...journey, role: "post", goal: prepared.goal, draft: prepared, draft_stale: false, brief: { ...journey.brief, goal: prepared.goal, budget_usdc: String(total), deadline_at: prepared.delivery_deadline || journey.brief?.deadline_at || null } });
   }
 
   function queueQuestions(questions) {
@@ -852,7 +858,7 @@
 
   function riskSummary() {
     const risks = state.draft.risk_flags || [];
-    return risks.length ? `${risks.length} item${risks.length === 1 ? "" : "s"} to review` : "No AI blocker flagged";
+    return risks.length ? `${risks.length} item${risks.length === 1 ? "" : "s"} to review` : "Review required";
   }
 
   function renderCardText() {
@@ -892,6 +898,15 @@
   function renderVerifierTerms() {
     if (!ui.verifierSummary || !ui.verifier) return;
     const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    if (benchmark.engine === "creator_review_v1") {
+      const reward = currentRewardSplit();
+      ui.verifierSummary.textContent = `You review the delivered files and confirm the verdict in your wallet. The ${formatUsdc(Number(reward.verifier) / 1_000_000)} USDC verifier reward is paid to you on pass or fail. This is your review; no independent automated verifier is involved.`;
+      ui.verifier.replaceChildren();
+      for (const [label, value] of [["Reviewer", "You, using the wallet that funds this bounty"], ["Due", state.horizon.label], ["Evidence", "Public deliverable URL and SHA-256 digest"], ["Review window", "48 hours after submission"], ["Wallet cost", "Base gas is additional; this route does not promise sponsorship"]]) {
+        const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = label; dd.textContent = value; ui.verifier.append(dt, dd);
+      }
+      return;
+    }
     const source = benchmark.source || {};
     const runner = benchmark.runner_manifest || {};
     const requiredEvidence = state.draft?.evidence_schema?.required || [];
@@ -1375,7 +1390,13 @@
   }
 
   function supportedVerificationPolicy() {
+    if (state.reviewStale) throw new Error("The saved brief changed. Update the proposal from its current outcome, budget and deadline before approval.");
     const benchmark = missionBenchmark(state.draft?.benchmark || {});
+    if (benchmark.engine === "creator_review_v1") {
+      if (state.metaParent || !window.AgentBountiesCreatorReview.ready(benchmark, state.draft?.evidence_schema)) throw new Error("Creator review needs a future agreed deadline and public artifact evidence. It cannot be used for a qualifying meta child.");
+      return window.AgentBountiesCreatorReview.policy(state.account);
+    }
+    if (state.deliveryDeadline) throw new Error("This automated benchmark does not enforce the requested calendar deadline. Propose creator review or agree a relative work window; do not silently change the deadline.");
     const readiness = verificationReadiness(benchmark, state.draft?.evidence_schema);
     if (readiness.blocked) {
       throw new Error(
@@ -1474,8 +1495,12 @@
     ui.approve.dataset.approved = "false";
     ui.approve.textContent = "Approve bounty card";
     ui.fund.disabled = true;
-    setComposer({ phase:"revise", prompt:"What should the AI change about this bounty or mission plan?", label:"Revision request", placeholder:"Example: Split the research into its own task and extend the mission horizon to one year.", button:"Update card", hint:"Changing the card removes approval until you review it again." });
-    document.querySelector(".composer-shell")?.scrollIntoView({behavior:"smooth",block:"center"});
+    const savedGoal = ui.input.value;
+    setComposer({ phase:"revise", prompt:"Edit your brief, then continue with your AI in this conversation.", label:"What do you want delivered?", placeholder:"Describe the result you need.", button:"Save brief", hint:"Your AI uses the saved brief to update the proposal." });
+    ui.input.value = savedGoal || state.draft?.goal || state.originalRequest;
+    ui.form.scrollIntoView({behavior:"smooth",block:"start"});
+    ui.input.focus();
+    setStatus("Edit the saved brief above and ask your AI to update the proposal in your current conversation.", "pending");
   }
 
   async function openFunding() {
@@ -1585,11 +1610,11 @@
     }
   }
 
-  function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(rewards.total),currency:"usdc"},funding_deadline:now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
+  function contractTerms(protocol,rewards){const now=Math.floor(Date.now()/1000);return{protocol_version:protocol.protocol_version,creator_wallet:state.account,network:protocol.network,settlement_token:protocol.native_usdc,solver_reward:{amount:Number(rewards.solver),currency:"usdc"},verifier_reward:{amount:Number(rewards.verifier),currency:"usdc"},claim_bond:{amount:Number(rewards.verifier),currency:"usdc"},initial_funding:{amount:Number(rewards.total),currency:"usdc"},funding_deadline:state.deliveryDeadline?Math.floor(Date.parse(state.deliveryDeadline)/1000):now+30*86400,claim_window_seconds:state.taskWindowDays*86400,verification_window_seconds:48*3600,creation_nonce:randomBytes32()};}
 
   function termsDocument(committed){const document={schema_version:"agent-bounties/terms-v1",contract_terms:committed,title:state.draft.title,goal:state.draft.goal,acceptance_criteria:state.draft.acceptance_criteria,benchmark:canonicalJsonValue(missionBenchmark(state.draft.benchmark||{})),evidence_schema:canonicalJsonValue(stripVisualExtension(state.draft.evidence_schema)),verification_policy:supportedVerificationPolicy(),source_url:null,discovery_source:state.bountyImage?"ai_assistant_approved_image_handoff":"ai_assistant_terms_handoff"};if(state.bountyImage)document.image=canonicalJsonValue(state.bountyImage);return document;}
 
-  function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:REGRESSION_VERIFIERS,threshold:REGRESSION_VERIFIERS.length,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
+  function createPayload(terms,committed){return{creator:state.account,solver_reward:committed.solver_reward,verifier_reward:committed.verifier_reward,terms_hash:terms.terms_hash,policy_hash:terms.policy_hash,acceptance_criteria_hash:terms.acceptance_criteria_hash,benchmark_hash:terms.benchmark_hash,evidence_schema_hash:terms.evidence_schema_hash,funding_deadline:committed.funding_deadline,claim_window_seconds:committed.claim_window_seconds,verification_window_seconds:committed.verification_window_seconds,verification_mode:"signed_quorum",verifier_module:null,verifier_reward_recipient:null,verifiers:supportedVerificationPolicy().verifiers,threshold:supportedVerificationPolicy().threshold,initial_funding:committed.initial_funding,creation_nonce:committed.creation_nonce};}
 
   function validateCreationPlan(plan,protocol,create){if(!plan||!/^0x[0-9a-fA-F]{40}$/.test(plan.predicted_bounty_contract||""))throw new Error("The creation plan did not return a valid bounty address.");if(Number(plan.network&&plan.network.chain_id)!==Number(protocol.chain_id))throw new Error("The creation plan targets the wrong network.");if(String(plan.factory_contract||"").toLowerCase()!==String(protocol.factory).toLowerCase())throw new Error("The creation plan does not use the canonical factory.");const target=Number(create.solver_reward.amount)+Number(create.verifier_reward.amount);if(Number(create.initial_funding.amount)!==target)throw new Error("The creation plan is not fully funded.");}
 
@@ -1605,6 +1630,7 @@
     }
     if (!state.approved || !state.provider || !state.account || !state.balances) return;
     postingBusy = true;
+    for (const field of ui.form.querySelectorAll("input, textarea, button")) field.disabled = true;
     const approvedDraft = state.draft;
     const approvedAccount = state.account;
     track("canonical_post_started");
@@ -1656,7 +1682,7 @@
       }
       validateCreationPlan(plan, protocol, create);
       if (!state.approved || state.draft !== approvedDraft) throw new Error("The bounty changed during preparation. Review the revised commitment before funding.");
-      if (childPlan && (state.account !== approvedAccount || String(await state.provider.request({ method: "eth_chainId" })).toLowerCase() !== "0x2105")) throw new Error("The wallet or network changed. Reopen the child review before funding.");
+      if (state.account !== approvedAccount || String((await state.provider.request({ method: "eth_accounts" }))[0]).toLowerCase() !== String(approvedAccount).toLowerCase() || String(await state.provider.request({ method: "eth_chainId" })).toLowerCase() !== "0x2105") throw new Error("The wallet or network changed. Reopen the same review before funding.");
       postingJournal.prepare(plan);
       setPaymentStatus([
         "Review the wallet request carefully.",
@@ -1697,6 +1723,10 @@
         return;
       }
       const item = await fetchFeedItem(api, state.bountyContract);
+      if (item?.terms_valid && item.verification_ready) {
+        const link = document.querySelector("[data-posted-bounty]");
+        if (link) { link.href = `participate.html?bountyContract=${encodeURIComponent(state.bountyContract)}&network=base-mainnet`; link.hidden = false; }
+      }
       ui.badge.textContent = item?.verification_ready ? "Funded · ready to earn" : "Funded · verifier readiness pending";
       setPaymentStatus([
         item?.verification_ready ? "Bounty funded and ready for public earning." : "Canonical funding is confirmed. The committed verifier must be ready before this bounty appears in ready-to-earn inventory.",
@@ -1714,6 +1744,7 @@
       ui.fundNow.disabled = Boolean(postingJournal.load());
     } finally {
       postingBusy = false;
+      if (!postingJournal.load()) for (const field of ui.form.querySelectorAll("input, textarea, button")) field.disabled = false;
     }
   }
 
@@ -1857,6 +1888,11 @@
   let stagedFingerprint = null;
   window.AgentBountiesComposer = Object.freeze({
     prepareMetaParent,
+    invalidate() {
+      if (!state.draft || postingBusy || postingJournal.load()) return;
+      state.reviewStale = true; state.approved = false; stagedFingerprint = null;
+      ui.approve.dataset.approved = "false"; ui.approve.disabled = true; ui.fund.disabled = true; ui.fundNow.disabled = true;
+    },
     stage(value) {
       staging = staging.catch(() => {}).then(() => {
         if (postingBusy || state.bountyContract || postingJournal.load()) throw new Error("A posting operation is in progress or recorded. Check its canonical status before preparing another draft.");
@@ -1868,7 +1904,7 @@
     },
     review() {
       let blocker = null;
-      try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; }
+      if (state.draft) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
       return {
         status: state.bountyContract ? "created_check_canonical_funding" : state.draft ? "staged" : "no_staged_bounty",
         explicitly_approved: state.approved === true,
@@ -1877,7 +1913,11 @@
         bounty_contract: state.bountyContract || postingJournal.load()?.bounty_contract || null,
         posting_operation: postingJournal.load(),
         meta_child: state.metaParent ? { parent_bounty_contract: state.metaParent.parent_bounty_contract, total_usdc: "1.00", intended_child_solver: state.metaParent.intended_child_solver, verifier_threshold: 2, terms_before_parent_claim: true, gas_sponsored: false } : null,
-        next_action: blocker ? "The agent should prepare the missing executable verifier and restage the draft; do not ask the person for technical fields or funding yet."
+        review_mode: state.draft?.benchmark?.engine === "creator_review_v1" ? "creator" : "automated",
+        delivery_deadline: state.deliveryDeadline || null,
+        saved_brief: window.AgentBountiesWorkflow.createClient(window).load()?.brief || null,
+        next_action: !state.draft || state.reviewStale ? "Prepare or update the proposal using saved_brief. Preserve its outcome, budget and deadline. Ask only for missing business decisions."
+          : blocker ? "For non-software work, propose review_mode=creator with the agreed delivery_deadline and no automated benchmark, then stage it for the person’s review. Meta children still require their automated verifier. Never invent benchmark details."
           : "The person reviews the terms once, then uses the wallet confirmation. No separate approval in chat is needed.",
       };
     },

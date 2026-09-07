@@ -363,6 +363,37 @@ parent claim timestamp. Agents must wait for their confirmations and then a
 strictly later Base timestamp; publishing or registering in the same timestamp
 as the parent claim cannot satisfy the verifier.
 
+### Creator review for digital deliverables
+
+Design and CAD bounties may explicitly commit `creator_review_v1` under
+`signed_quorum` with the creator as the sole verifier, threshold one. This is
+human review, not an automated or independent verifier service. The creator
+signs the verdict after reviewing every published acceptance criterion; an AI
+may prepare the assessment but cannot approve it. The positive verifier reward
+is paid to the creator on either verdict. Rejection uses the solver bond and
+leaves the bounty fully funded; verification timeout returns the bond.
+
+The benchmark commits `reviewer: "creator"`,
+`acceptance: "all_published_criteria"`, and `delivery_deadline` in Unix seconds,
+matching the immutable funding deadline. The evidence schema requires an HTTPS
+`artifact_url` and `artifact_sha256` with the exact SHA-256 pattern. WebMCP accepts
+`review_mode: "creator"` and an ISO `delivery_deadline` with timezone offset,
+then derives these technical fields. This option is excluded from qualifying
+meta children, which retain their committed automated verifier requirements.
+
+The delivery cutoff is enforced by the signed reviewer against canonical
+submission time (the emitted verification expiry minus the immutable review
+window). The contract's relative claim timeout is separate; it does not become
+a calendar deadline. After the delivery cutoff, unclaimed work leaves earning
+inventory and may be cancelled for contributor refunds. An on-time submission
+may still be reviewed within its original verification window.
+
+The participation workspace exposes `agent_bounties_get_creator_review` and
+`agent_bounties_stage_creator_verdict`. The creator confirms the exact verdict
+in the page and wallet; a signature or broadcast is not a completed payment.
+Only the matching canonical `BountySettled` proves payout. Existing signature
+and settlement planner APIs and MCP tools also support this committed policy.
+
 ### AI Judge Quorum
 
 AI judging uses the signed-quorum path and requires threshold two or greater.

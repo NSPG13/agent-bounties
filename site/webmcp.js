@@ -50,6 +50,8 @@
     if (["agent_bounties_get_bounty_review", "agent_bounties_open_funding_review"].includes(tool.name) && !isPost) return;
     if (["agent_bounties_get_competition_manifest", "agent_bounties_start_competition_child_bounty"].includes(tool.name) && !isCompetition) return;
     try {
+      const execute = tool.execute;
+      tool.execute = (...args) => { window.dispatchEvent(new CustomEvent("agent-bounties:site-tool-used")); return execute(...args); };
       const registered = context.registerTool(tool, { signal: lifecycle.signal });
       names.push(tool.name);
       registrations.push(
@@ -102,6 +104,8 @@
       solver_reward_usdc: positiveUsdc(input?.solver_reward_usdc, "Solver reward"),
       verifier_reward_usdc: positiveUsdc(input?.verifier_reward_usdc, "Verifier reward"),
       task_window_days: days,
+      review_mode: input.review_mode === "creator" ? "creator" : "automated",
+      delivery_deadline: input.delivery_deadline || null,
       source_url: sourceUrl,
       crowdfund: false,
       discovery_source: "WebMCP on agentbounties.app",
@@ -200,9 +204,11 @@
         window.sessionStorage.removeItem(PENDING_DRAFT_KEY);
         draft = JSON.parse(raw);
       } else {
-        const saved = client.load()?.draft;
+        const journey = client.load();
+        if (journey?.draft_stale) return;
+        const saved = journey?.draft;
         const parent = params.get("parentBounty");
-        if (!saved?.meta_child || !parent || saved.meta_child.parent_bounty_contract !== parent.toLowerCase() || flow.createPostingJournal(window).load()) return;
+        if (!saved || (parent && saved.meta_child?.parent_bounty_contract !== parent.toLowerCase()) || flow.createPostingJournal(window).load()) return;
         draft = saved;
       }
     } catch (_error) {
@@ -233,6 +239,7 @@
         available_tools: names.slice(),
         guidance: flow.GUIDANCE,
         journey: client.load(),
+        posting: window.AgentBountiesComposer?.review?.() || null,
         phone_wallet: window.AgentBountiesPhoneWallet?.state() || { available: false },
         next_action: { tool: "agent_bounties_get_journey", input: {} },
       };
@@ -307,6 +314,18 @@
     },
   });
 
+  if (isParticipant) {
+    register({ name: "agent_bounties_get_creator_review", title: "Read creator review and payment status",
+      description: "Read the current creator-review submission, its exact terms, artifact evidence and any recorded verdict transaction. No signature or payment is made. Use canonical status after the person confirms; do not repeat a pending wallet request.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true },
+      async execute() { await waitFor(() => window.AgentBountiesCreatorReviewWorkspace, 8000); return window.AgentBountiesCreatorReviewWorkspace.refresh(); } });
+    register({ name: "agent_bounties_stage_creator_verdict", title: "Prepare the creator's completion review",
+      description: "After inspecting the exact submitted artifacts, assess every published criterion in order with evidence-based reasons. This stages a proposed verdict for the creator, never signs it or authorizes payment. The page also checks the committed calendar delivery cutoff against canonical submission time. The person confirms the verdict and payment in their wallet.",
+      inputSchema: { type: "object", properties: { checks: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", properties: { criterion: { type: "string", maxLength: 1000 }, passed: { type: "boolean" }, reason: { type: "string", minLength: 1, maxLength: 1000 } }, required: ["criterion", "passed", "reason"], additionalProperties: false } } }, required: ["checks"], additionalProperties: false },
+      annotations: { readOnlyHint: false, untrustedContentHint: true },
+      async execute(input) { await waitFor(() => window.AgentBountiesCreatorReviewWorkspace, 8000); return window.AgentBountiesCreatorReviewWorkspace.stage(input); } });
+  }
+
   register({
     name: "agent_bounties_stage_funded_bounty",
     title: "Stage a funded bounty for review",
@@ -320,6 +339,8 @@
         solver_reward_usdc: { type: "string", pattern: "^\\d+(?:\\.\\d{1,6})?$" },
         verifier_reward_usdc: { type: "string", pattern: "^\\d+(?:\\.\\d{1,6})?$" },
         task_window_days: { type: "integer", minimum: 1, maximum: 30 },
+        review_mode: { type: "string", enum: ["automated", "creator"], description: "For design work without a supported automated benchmark, explicitly propose creator review: the poster signs the completion verdict. It is not automatic or independent verification. Meta children still require automated review." },
+        delivery_deadline: { type: "string", description: "Exact agreed ISO timestamp with timezone offset. Required for creator review; preserve the person’s calendar deadline." },
         source_url: { type: ["string", "null"], maxLength: 2048 },
         benchmark: { type: "object", description: "Exact executable verifier with pinned public source and runner. Prepare this for the person; do not ask them for technical fields." },
         evidence_schema: { type: "object", description: "Evidence schema paired with the benchmark. Supply both verifier fields or neither; absent verifier stays an unfundable draft." },
@@ -339,10 +360,10 @@
       const journey = client.load() || client.start({ role: "post" });
       if (isPost) {
         const result = await stageOnPostPage(draft);
-        client.save({ ...journey, draft, meta_child: draft.meta_child, role: "post" });
+        client.save({ ...journey, draft, draft_stale: false, goal: draft.goal, brief: { ...journey.brief, goal: draft.goal, budget_usdc: String(Number(draft.solver_reward_usdc) + Number(draft.verifier_reward_usdc)), deadline_at: draft.delivery_deadline || journey.brief?.deadline_at || null }, meta_child: draft.meta_child, role: "post" });
         return result;
       }
-      client.save({ ...journey, draft, meta_child: draft.meta_child, role: "post" });
+      client.save({ ...journey, draft, draft_stale: false, goal: draft.goal, brief: { ...journey.brief, goal: draft.goal, budget_usdc: String(Number(draft.solver_reward_usdc) + Number(draft.verifier_reward_usdc)), deadline_at: draft.delivery_deadline || journey.brief?.deadline_at || null }, meta_child: draft.meta_child, role: "post" });
       if (!persistPendingDraft(draft)) throw new Error("This browser cannot preserve the draft across navigation. Open /post.html and call this tool again.");
       const target = new URL("/post.html?from=webmcp", window.location.origin).href;
       window.setTimeout(() => window.location.assign(target), 0);
@@ -505,13 +526,14 @@
       : isParticipant ? { tool: "agent_bounties_get_work_status", input: {} }
       : posting ? { tool: "agent_bounties_get_posting_status", input: {} }
       : !journey ? { tool: "agent_bounties_start_journey", missing: "Does the person want work done, or want to earn? Infer this from their request when possible." }
+      : journey.draft_stale ? { tool: "agent_bounties_stage_funded_bounty", missing: "The brief changed. Update the existing proposal from journey.brief and restage it; do not reuse the old draft amounts or deadline." }
       : journey.draft && isPost ? { tool: "agent_bounties_get_bounty_review", input: {} }
       : journey.meta_child && isPost ? { tool: "agent_bounties_stage_funded_bounty", missing: "Prepare the parent's qualifying 1 USDC child, executable benchmark and distinct child solver before claiming the parent.", meta_child: journey.meta_child }
       : journey.current_intent ? { tool: "agent_bounties_check_progress", input: { intent_id: journey.current_intent } }
       : journey.draft ? { tool: "agent_bounties_stage_funded_bounty", input: journey.draft }
       : journey.selected ? { tool: "agent_bounties_inspect_opportunity", input: { opportunity_id: journey.selected } }
       : journey.role === "earn" ? { tool: "agent_bounties_list_ready_work", input: { limit: 5, timing: "now" } }
-      : { tool: "agent_bounties_stage_funded_bounty", missing: "Draft the outcome, measurable checks, total budget and work window. Prepare an executable benchmark and evidence schema before wallet review. Ask only for missing business decisions." };
+      : { tool: "agent_bounties_stage_funded_bounty", missing: "Use the saved brief to prepare deliverables and checks. For design work, propose explicit creator review and the agreed calendar delivery deadline; for automated work, prepare a supported benchmark. Ask only for missing business decisions." };
     return { journey, next_action: next, guidance: flow.GUIDANCE, user_confirmation_required: false, storage: "this browser session; no wallet authority" };
   }
   register({ name: "agent_bounties_get_journey", title: "Continue my marketplace task", description: "Resume the current posting or earning journey. Returns the saved outcome and one next action; do not restart the interview or repeat earlier approvals.",

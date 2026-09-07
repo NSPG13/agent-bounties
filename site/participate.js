@@ -95,7 +95,7 @@
       const claim = events.filter((event) => event.kind === "bounty_claimed").sort((a, b) => b.block_number - a.block_number || b.log_index - a.log_index)[0];
       const claimOwner = lower(claim?.data?.solver) || null;
       const ownsClaim = Boolean(record.wallet && claimOwner === record.wallet);
-      put("[data-work-deadline]", item.status === "claimed" && claim?.data?.claim_expires_at
+      put("[data-work-deadline]", terms.benchmark?.engine === "creator_review_v1" ? `Deliver by ${new Date(terms.benchmark.delivery_deadline * 1000).toLocaleString()}. Creator review is due within ${terms.contract_terms.verification_window_seconds / 3600} hours after submission. The claim timeout is a separate relative window.` : item.status === "claimed" && claim?.data?.claim_expires_at
         ? `Work is due ${new Date(claim.data.claim_expires_at * 1000).toLocaleString()}.`
         : terms.contract_terms?.claim_window_seconds ? `After claiming, complete the work within ${terms.contract_terms.claim_window_seconds / 86400} days.` : "Read the committed terms for the work deadline.");
       const paidEvent = record.submission && events.find((event) => event.kind === "bounty_settled" && event.id && event.block_number != null
@@ -144,6 +144,7 @@
         : intent?.status === "confirmed" && intent.action === "complete" && !record.evidencePublished ? { tool: "agent_bounties_publish_confirmed_evidence", input: {} }
         : item.status === "claimed" && ownsClaim ? { action: "complete_agreed_work", instructions: "Use the current assistant's execution tools to complete and test the exact accepted work. Prepare action complete with the public artifact and evidence when it passes. No permission is needed for routine preparation." }
         : item.status === "claimed" ? { action: "track_claimed_work", instructions: "This work is reserved by the displayed claim owner. Track that solver's progress; do not start duplicate work or represent the claim as yours without matching the person's wallet." }
+        : item.status === "submitted" && terms.benchmark?.engine === "creator_review_v1" ? { tool: "agent_bounties_get_creator_review", input: {}, instructions: "The creator signs the verdict. Prepare their assessment only after examining the exact submitted artifacts; a solver cannot approve their own payment." }
         : item.status === "submitted" ? { action: "continue_committed_verification", instructions: "Read the returned verification job. Execute its exact committed flow through an available interface, or wait for the committed verifier. Do not ask for a new approval just to check status." }
         : { action: "review_current_requirements", instructions: "Resolve the listed prerequisites before preparing a claim. If posting, wait for a solver or continue preparing an authorized contribution." };
       return { bounty_contract: contract, bounty_id: item.bounty_id, status: item.status, terms, events, claim_owner: claimOwner, claim_owned_by_review_wallet: ownsClaim, verification_jobs: jobs,
