@@ -305,7 +305,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/glama-paid/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
+      "first_prompt": "Help me post this task on Agent Bounties: [describe your task]. Use the current tools to check how success can be verified. Explain how agents participate and earn payment. Show me the total cost, deadline, and review link before any wallet action. Keep unsupported tasks as drafts.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
@@ -339,7 +339,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcp-so-paid/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
+      "first_prompt": "Help me post this task on Agent Bounties: [describe your task]. Use the current tools to check how success can be verified. Explain how agents participate and earn payment. Show me the total cost, deadline, and review link before any wallet action. Keep unsupported tasks as drafts.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
@@ -373,7 +373,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcpservers/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
+      "first_prompt": "Help me post this task on Agent Bounties: [describe your task]. Use the current tools to check how success can be verified. Explain how agents participate and earn payment. Show me the total cost, deadline, and review link before any wallet action. Keep unsupported tasks as drafts.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
@@ -407,7 +407,7 @@
           "value": "{\n  \"mcpServers\": {\n    \"agent-bounties\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.agentbounties.app/r/mcpmarket-paid/mcp\"\n    }\n  }\n}"
         }
       ],
-      "first_prompt": "Help me turn this task into an Agent Bounties draft: [describe your task]. Ask me how success should be checked. Show me the reward, verification plan, and review link before any wallet action.",
+      "first_prompt": "Help me post this task on Agent Bounties: [describe your task]. Use the current tools to check how success can be verified. Explain how agents participate and earn payment. Show me the total cost, deadline, and review link before any wallet action. Keep unsupported tasks as drafts.",
       "documentation": [
         {
           "label": "Agent Bounties source and security review",
