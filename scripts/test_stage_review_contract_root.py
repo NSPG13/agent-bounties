@@ -4,10 +4,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stage_review_contract_root import REQUIRED_SOURCES, StageError, stage_contract_root
+from stage_review_contract_root import (
+    OPTIONAL_BASE_SOURCES,
+    REQUIRED_SOURCES,
+    StageError,
+    stage_contract_root,
+)
 
 
 class StageReviewContractRootTests(unittest.TestCase):
+    def test_stages_every_source_consumed_by_docs_contract_routes(self) -> None:
+        self.assertEqual(
+            REQUIRED_SOURCES,
+            (
+                Path("crates/api/src/main.rs"),
+                Path("crates/api/src/discoverability.rs"),
+                Path("crates/api/src/distribution.rs"),
+                Path("crates/api/src/open_competition_v2_api.rs"),
+                Path("crates/mcp-server/src/main.rs"),
+                Path("crates/mcp-server/fixtures/tool-registry.json"),
+            ),
+        )
+
     def make_worktree(self, root: Path) -> Path:
         worktree = root / "worktree"
         for index, relative in enumerate(REQUIRED_SOURCES):
@@ -31,6 +49,24 @@ class StageReviewContractRootTests(unittest.TestCase):
                     (output / relative).read_bytes(),
                     (worktree / relative).read_bytes(),
                 )
+
+    def test_skips_modular_api_sources_absent_from_an_older_trusted_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            worktree = self.make_worktree(root)
+            for relative in OPTIONAL_BASE_SOURCES:
+                (worktree / relative).unlink()
+
+            report = stage_contract_root(worktree, root / "staged")
+
+            self.assertEqual(
+                [item["path"] for item in report],
+                [
+                    relative.as_posix()
+                    for relative in REQUIRED_SOURCES
+                    if relative not in OPTIONAL_BASE_SOURCES
+                ],
+            )
 
     def test_rejects_missing_required_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

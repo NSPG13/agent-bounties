@@ -13,8 +13,18 @@ from pathlib import Path
 
 REQUIRED_SOURCES = (
     Path("crates/api/src/main.rs"),
+    Path("crates/api/src/discoverability.rs"),
+    Path("crates/api/src/distribution.rs"),
+    Path("crates/api/src/open_competition_v2_api.rs"),
     Path("crates/mcp-server/src/main.rs"),
     Path("crates/mcp-server/fixtures/tool-registry.json"),
+)
+OPTIONAL_BASE_SOURCES = frozenset(
+    {
+        Path("crates/api/src/discoverability.rs"),
+        Path("crates/api/src/distribution.rs"),
+        Path("crates/api/src/open_competition_v2_api.rs"),
+    }
 )
 MAX_SOURCE_BYTES = 5 * 1024 * 1024
 
@@ -63,6 +73,10 @@ def stage_contract_root(
         source = worktree_root / relative
         try:
             source_stat = source.lstat()
+        except FileNotFoundError as error:
+            if relative in OPTIONAL_BASE_SOURCES:
+                continue
+            raise StageError(f"required PR contract source is missing: {relative}") from error
         except OSError as error:
             raise StageError(f"required PR contract source is missing: {relative}") from error
         if stat.S_ISLNK(source_stat.st_mode):
