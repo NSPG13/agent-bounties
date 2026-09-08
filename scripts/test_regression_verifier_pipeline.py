@@ -825,6 +825,36 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
             pipeline.require_reconciled_regression_benchmark(changed)
 
+    def test_glama_canary_uses_only_the_rehearsed_historical_tuple(self) -> None:
+        digest = "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656"
+        repository, commit, subdirectory = pipeline.RECONCILED_REGRESSION_BENCHMARK_SOURCES[digest]
+        job = {
+            "terms": {
+                "document": {
+                    "benchmark": {
+                        "engine": "sandboxed_regression_v1",
+                        "source": {
+                            "kind": "github_commit",
+                            "repository": repository,
+                            "commit": commit,
+                            "subdirectory": subdirectory,
+                        },
+                        "runner_manifest": {"benchmark_digest": digest},
+                    }
+                }
+            }
+        }
+        pipeline.require_reconciled_regression_benchmark(job)
+        for key, value in (
+            ("repository", "relocated/repository"),
+            ("commit", pipeline.RECONCILED_REGRESSION_BENCHMARK_COMMIT),
+            ("subdirectory", "benchmarks/copied-location"),
+        ):
+            changed = json.loads(json.dumps(job))
+            changed["terms"]["document"]["benchmark"]["source"][key] = value
+            with self.assertRaisesRegex(pipeline.PipelineError, "immutable source tuple"):
+                pipeline.require_reconciled_regression_benchmark(changed)
+
     def test_runner_pulls_only_the_exact_committed_image(self) -> None:
         manifest = {
             "image": f"docker.io/library/python@sha256:{'a' * 64}",

@@ -165,6 +165,27 @@ originalOpenHands.source.subdirectory = "benchmarks/direct-growth-v2/openhands-i
 originalOpenHands.runner_manifest.benchmark_digest = "sha256:30bb17e3e3916747144c7087f49fb1ce41ddaf1aec4d717f878d2840203895a2";
 assert.equal(verificationReadiness(originalOpenHands, evidenceSchema).executable, true);
 assert.equal(verificationReadiness(originalOpenHands, { type: "object", required: ["source_snapshot_digest"] }).executable, false);
+const glamaCanary = JSON.parse(JSON.stringify(benchmark));
+glamaCanary.source.commit = "0fae18cf9be464132cde52dfb9d464d836e8f024";
+glamaCanary.source.subdirectory = "benchmarks/distribution-v1/glama-onboarding-audit";
+glamaCanary.runner_manifest.benchmark_digest = "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656";
+assert.deepEqual(
+  verificationReadiness(glamaCanary, evidenceSchema),
+  { blocked: false, executable: true },
+  "the independently rehearsed Glama canary tuple must reach wallet review",
+);
+for (const mutate of [
+  (value) => { value.source.commit = "fa946859a3379b8c9128183e20dedb3b8319a646"; },
+  (value) => { value.source.subdirectory = "benchmarks/copied-location"; },
+]) {
+  const alteredGlamaCanary = JSON.parse(JSON.stringify(glamaCanary));
+  mutate(alteredGlamaCanary);
+  assert.deepEqual(
+    verificationReadiness(alteredGlamaCanary, evidenceSchema),
+    { blocked: true, executable: false },
+    "Glama canary approval must remain bound to its exact historical source tuple",
+  );
+}
 copiedUnsafeBenchmark.source.repository = "other/copied-benchmark";
 copiedUnsafeBenchmark.source.subdirectory = "different/location";
 copiedUnsafeBenchmark.runner_manifest.benchmark_digest =

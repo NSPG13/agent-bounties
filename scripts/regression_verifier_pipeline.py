@@ -52,8 +52,9 @@ CANONICAL_BOUNTY_RUNTIME = (
 )
 # Every digest accepted by the trusted signer must have a separately reviewed
 # semantic benchmark. These entries are the checked-in direct inventory and
-# direct growth benchmarks; a relocated or modified copy has a different digest
-# and remains ineligible until that exact content is reviewed.
+# direct growth benchmarks plus the pinned historical Glama canary; a relocated
+# or modified copy has a different digest and remains ineligible until that
+# exact content is reviewed.
 RECONCILED_REGRESSION_BENCHMARK_DIGESTS: frozenset[str] = frozenset(
     {
         "sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6",
@@ -65,6 +66,7 @@ RECONCILED_REGRESSION_BENCHMARK_DIGESTS: frozenset[str] = frozenset(
         "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
         "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
         "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+        "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
     }
 )
 RECONCILED_REGRESSION_BENCHMARK_COMMIT = "fa946859a3379b8c9128183e20dedb3b8319a646"
@@ -78,6 +80,7 @@ RECONCILED_REGRESSION_BENCHMARK_SOURCES: dict[str, tuple[str, str, str]] = {
     "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d": ("nspg13/agent-bounties", RECONCILED_REGRESSION_BENCHMARK_COMMIT, "benchmarks/direct-inventory-v1/wallet-liquidity"),
     "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731": ("nspg13/agent-bounties", RECONCILED_REGRESSION_BENCHMARK_COMMIT, "benchmarks/direct-inventory-v1/replenishment-plan"),
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7": ("nspg13/agent-bounties", RECONCILED_REGRESSION_BENCHMARK_COMMIT, "benchmarks/direct-inventory-v1/stalled-work"),
+    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656": ("nspg13/agent-bounties", "0fae18cf9be464132cde52dfb9d464d836e8f024", "benchmarks/distribution-v1/glama-onboarding-audit"),
 }
 
 # The original OpenHands publication has byte-identical benchmark contents.

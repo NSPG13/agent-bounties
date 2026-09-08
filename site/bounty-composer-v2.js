@@ -23,8 +23,12 @@
     "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
     "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
   ]);
   const RECONCILED_REGRESSION_BENCHMARK_COMMIT = "fa946859a3379b8c9128183e20dedb3b8319a646";
+  // The paid-rail canary is pinned to the independently rehearsed historical tree.
+  const RECONCILED_GLAMA_CANARY_COMMIT = "0fae18cf9be464132cde52dfb9d464d836e8f024";
+  const RECONCILED_GLAMA_CANARY_DIGEST = "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656";
   const RECONCILED_REGRESSION_BENCHMARK_SOURCES = new Map([
     ["sha256:b61a96a7d07ca01337ea3576de734f5b62ccab966a6d0da42a8736cfc0287ce6", "benchmarks/direct-growth-v2/a2a-agent-card"],
     ["sha256:b9b0d026347a2922f913e9a8ed3651dd74e7eba930598981a169da3bf42e7c3f", "benchmarks/direct-growth-v2/hermes-integration"],
@@ -35,6 +39,7 @@
     ["sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d", "benchmarks/direct-inventory-v1/wallet-liquidity"],
     ["sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731", "benchmarks/direct-inventory-v1/replenishment-plan"],
     ["sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7", "benchmarks/direct-inventory-v1/stalled-work"],
+    [RECONCILED_GLAMA_CANARY_DIGEST, "benchmarks/distribution-v1/glama-onboarding-audit"],
   ]);
   const RUNNER_MANIFEST_FIELDS = [
     "schema_version", "image", "command", "workdir", "benchmark_digest",
@@ -1364,11 +1369,20 @@
       && runner.tmpfs_bytes <= runner.memory_bytes
       && new Set(["linux/amd64", "linux/arm64"]).has(runner.platform);
     const approvedSubdirectory = RECONCILED_REGRESSION_BENCHMARK_SOURCES.get(runner?.benchmark_digest);
+    const sourceCommit = String(source?.commit || "").toLowerCase();
+    const approvedCommit = (
+      sourceCommit === RECONCILED_REGRESSION_BENCHMARK_COMMIT
+        && runner?.benchmark_digest !== RECONCILED_GLAMA_CANARY_DIGEST
+    ) || (
+      sourceCommit === "aa28ec742efd4063260653510ba324e291267515"
+        && approvedSubdirectory === "benchmarks/direct-growth-v2/openhands-integration"
+    ) || (
+      sourceCommit === RECONCILED_GLAMA_CANARY_COMMIT
+        && runner?.benchmark_digest === RECONCILED_GLAMA_CANARY_DIGEST
+    );
     const approvedSource = typeof approvedSubdirectory === "string"
       && String(source?.repository || "").toLowerCase() === "nspg13/agent-bounties"
-      && (String(source?.commit || "").toLowerCase() === RECONCILED_REGRESSION_BENCHMARK_COMMIT
-        || String(source?.commit || "").toLowerCase() === "aa28ec742efd4063260653510ba324e291267515"
-          && approvedSubdirectory === "benchmarks/direct-growth-v2/openhands-integration")
+      && approvedCommit
       && source?.subdirectory === approvedSubdirectory;
     const blocked = !RECONCILED_REGRESSION_BENCHMARK_DIGESTS.has(runner?.benchmark_digest)
       || !approvedSource;
