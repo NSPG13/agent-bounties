@@ -108,6 +108,11 @@ def compile_python(platform: str) -> None:
         "scripts/test_check_render_blueprint.py",
         "scripts/distribution_dashboard.py", "scripts/test_distribution_dashboard.py",
         "scripts/distribution_gate.py", "scripts/test_distribution_gate.py",
+        "scripts/qicswu_metric.py", "scripts/qicswu_verify_baseline.py",
+        "scripts/qicswu_evidence.py", "scripts/test_qicswu_evidence.py",
+        "scripts/qicswu_shadow.py", "scripts/test_qicswu_shadow.py",
+        "scripts/qicswu_rollout_control.py", "scripts/test_qicswu_metric.py",
+        "scripts/test_qicswu_rollout_control.py",
         "scripts/review_external_pr.py", "scripts/test_review_external_pr.py",
         "scripts/stage_review_contract_root.py", "scripts/test_stage_review_contract_root.py",
         "scripts/validate_real_funding_rehearsal.py", "scripts/rehearse_autonomous_activation.py",
@@ -289,6 +294,10 @@ def main() -> int:
         "unittest",
         "scripts.test_distribution_dashboard",
         "scripts.test_distribution_gate",
+        "scripts.test_qicswu_metric",
+        "scripts.test_qicswu_evidence",
+        "scripts.test_qicswu_rollout_control",
+        "scripts.test_qicswu_shadow",
         "-v",
     )
     py("scripts/test_check_agent_discovery_contract.py", "-v")

@@ -1,0 +1,44 @@
+{
+  "schema_version": "agent-bounties/qicswu-rpc-provider-registry-v1",
+  "registry_id": "qicswu-base-mainnet-rpc-providers-candidate-v1",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "status": "candidate",
+  "providers": [
+    {
+      "provider_id": "base_official",
+      "endpoint_authority": "mainnet.base.org",
+      "operator_name": "Coinbase Technologies, Inc. / Base",
+      "control_principal_id": "organization:coinbase-technologies",
+      "archive_reads_supported": true,
+      "operator_evidence_refs": [
+        "https://docs.base.org/base-chain/api-reference/rpc-overview",
+        "https://docs.base.org/terms-of-service"
+      ],
+      "evidence_boundary": "Base documents mainnet.base.org as its standard Base mainnet RPC and identifies Coinbase Technologies, Inc. as the counterparty for the Coinbase-operated Base services. This is a candidate control classification pending independent data-owner and security/privacy review."
+    },
+    {
+      "provider_id": "tenderly_gateway",
+      "endpoint_authority": "base.gateway.tenderly.co",
+      "operator_name": "Tenderly",
+      "control_principal_id": "organization:tenderly",
+      "archive_reads_supported": true,
+      "operator_evidence_refs": [
+        "https://tenderly.co/blog/changelog/tenderly-now-supports-base-mainnet-goerli-testnet/",
+        "https://tenderly.co/blog/introducing-web3-gateway-to-all-in-one-developer-platform/"
+      ],
+      "evidence_boundary": "Tenderly documents base.gateway.tenderly.co as its Base mainnet production node and describes its gateway as a Tenderly-operated node service with archival reads. This is a candidate control classification pending independent data-owner and security/privacy review."
+    }
+  ],
+  "approval": {
+    "status": "pending",
+    "registry_body_hash": "sha256:64f0d0e9f148604445d2aa520c2279d3a768520a947d90a3ebbd821cc1bae69b",
+    "required_roles": [
+      "data_owner",
+      "security_privacy"
+    ],
+    "approvals": [],
+    "boundary": "The author of this candidate cannot self-approve organizational independence. Approval requires two distinct named reviewers, one for data ownership and one for security/privacy, bound to the exact registry body hash."
+  },
+  "evidence_boundary": "Different HTTPS authorities alone do not prove different controlling organizations. The proposed control-principal mapping is evidence-backed but remains unapproved; captures made against it cannot authorize QICSWU publication or deployment."
+}

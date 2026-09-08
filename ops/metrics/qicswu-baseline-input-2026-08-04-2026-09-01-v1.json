@@ -1,0 +1,1164 @@
+{
+  "schema_version": "agent-bounties/qicswu-evaluation-input-v1",
+  "input_id": "qicswu-frozen-baseline-2026-08-04-2026-09-01-v1",
+  "policy_id": "qicswu-base-mainnet-v1.2.0",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "frozen_at": "2026-09-02T17:30:00Z",
+  "window": {
+    "started_at": "2026-08-04T00:00:00Z",
+    "ended_at": "2026-09-01T00:00:00Z",
+    "boundary": "[started_at,ended_at)",
+    "complete_utc_days": 28
+  },
+  "source_reconciliation": {
+    "status": "settlement_aggregate_reconciled_qualification_inputs_incomplete",
+    "raw_evidence_retained": true,
+    "raw_evidence_retention_scope": "All artifacts used to construct the 28 retained candidate rows are present. The rolling aggregate response is hash-anchored but not retained, and historical-factory source coverage outside the August 20–22 snapshot epoch is incomplete.",
+    "reason_codes": [
+      "aggregate_window_not_exact_complete_utc_days",
+      "candidate_lifecycle_evidence_incomplete",
+      "dual_rpc_finality_evidence_incomplete"
+    ],
+    "reconciliation_reason_codes": [
+      "public_current_factory_stream_omits_historical_factory",
+      "historical_factory_gap_recovered_from_dual_rpc_snapshot",
+      "declared_historical_canaries_retained_but_excluded_from_aggregate"
+    ],
+    "source_observations_path": "ops/metrics/qicswu-baseline-source-observations-v1.json",
+    "source_observations_file_sha256": "sha256:e9695c1e1f3cc185824500266bf57244acbe212ea496ec85df009179ded3b7fc",
+    "aggregate_observation": {
+      "endpoint": "https://api.agentbounties.app/v1/metrics/platform?period=28d",
+      "generated_at": "2026-09-01T19:41:49.392199351+00:00",
+      "response_canonical_json_sha256_at_capture": "sha256:c4180a850f232735113516694e75e9f9f91692539774daac7f8b716717674aba",
+      "full_response_retained": false,
+      "rolling_window": {
+        "started_at": "2026-08-04T19:41:49.392199351+00:00",
+        "ended_at": "2026-09-01T19:41:49.392199351+00:00"
+      },
+      "selected_settled_rounds": 26,
+      "selected_gmv_base_units": 36465000,
+      "warning": "This is a rolling 28-day projection, not the required complete-UTC-day baseline window."
+    },
+    "protocols": [
+      {
+        "protocol": "autonomous",
+        "factory_contracts": [
+          "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+        ],
+        "coverage_started_at": "2026-08-04T00:00:00Z",
+        "coverage_ended_at": "2026-09-01T00:00:00Z",
+        "raw_response_retained": true,
+        "independent_rpc_observation_count": 1,
+        "safe_block_hash": null
+      },
+      {
+        "protocol": "open_competition_v1",
+        "factory_contracts": [
+          "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
+        ],
+        "coverage_started_at": "2026-08-04T00:00:00Z",
+        "coverage_ended_at": "2026-09-01T00:00:00Z",
+        "raw_response_retained": true,
+        "independent_rpc_observation_count": 1,
+        "safe_block_hash": null
+      },
+      {
+        "protocol": "open_competition_v2",
+        "factory_contracts": [
+          "0x29d0e39e0c03797c690633535722e6b34a69a78a"
+        ],
+        "coverage_started_at": "2026-08-04T00:00:00Z",
+        "coverage_ended_at": "2026-09-01T00:00:00Z",
+        "raw_response_retained": true,
+        "independent_rpc_observation_count": 1,
+        "safe_block_hash": null
+      },
+      {
+        "protocol": "open_competition_v2",
+        "factory_contracts": [
+          "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4"
+        ],
+        "coverage_started_at": "2026-08-20T00:00:00Z",
+        "coverage_ended_at": "2026-08-22T00:00:00Z",
+        "raw_response_retained": true,
+        "independent_rpc_observation_count": 2,
+        "safe_block_hash": "0x5ca8c09dff7b3d394874c21d8060e2c3b830c10cbe30e97a38bced71dae9bcff"
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xe376d929745ca7419826e376ffd9a805571c2ff5",
+      "bounty_id": "0x4f74d65a765cc9d552142307ef4ccc4c360f0576836418aacaa1d5df73f2452e",
+      "round": 2,
+      "transaction_hash": "0xd5bcc2c670047e87dfa98aa10335671ef8594e9df4eceb5a8c5b424cffac169f",
+      "log_index": 457,
+      "block_number": 49613721,
+      "block_hash": null,
+      "occurred_at": "2026-08-06T11:46:29Z",
+      "solver_wallet": "0xeb76f3442eaf192ebddbc1f7eebd59cde5e00d35",
+      "solver_payout_base_units": 990000,
+      "promised_reward_principal_base_units": 990000,
+      "settled_gmv_base_units": 1000000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[0]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xbf026b9b40505cf34fe78576050410e5def695e5",
+      "bounty_id": "0x15511b145aa3c553e88d1a4de7e8e74a163619f0dba633f96051cfe9a496d455",
+      "round": 1,
+      "transaction_hash": "0xcfdff9ae98dcf1225a3a697d5b64a6c93c54b39b150024d825c7b8eae1e391c4",
+      "log_index": 133,
+      "block_number": 49672467,
+      "block_hash": null,
+      "occurred_at": "2026-08-07T20:24:41Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 990000,
+      "promised_reward_principal_base_units": 990000,
+      "settled_gmv_base_units": 1000000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[1]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x41f7f2722f0af7289c2f2eea6afed6f4873f722a",
+      "bounty_id": "0xeba5dad578290281d78a230169b3c6bf53abc3d06292f927b8d66aaf53f55304",
+      "round": 1,
+      "transaction_hash": "0x0a5bfb2014118d9d6c536d818bf7bd183fcc65a35e1cfda852adddbfa40925f4",
+      "log_index": 160,
+      "block_number": 49673117,
+      "block_hash": null,
+      "occurred_at": "2026-08-07T20:46:21Z",
+      "solver_wallet": "0x820a7bf90d944bb26bfd9b62ab172fc3a0829cb9",
+      "solver_payout_base_units": 2000000,
+      "promised_reward_principal_base_units": 2000000,
+      "settled_gmv_base_units": 2010000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[2]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xc0b2ab593373f2d448eee05a7e8873be10e760fe",
+      "bounty_id": "0x9a81831b0af1634042e03c014c49f156f84aa324414051774b8f9f315d822e2d",
+      "round": 1,
+      "transaction_hash": "0xfbdf2ee08090da9796b4c08604870aa9eb0a73377efbf377237df0a077b85a11",
+      "log_index": 400,
+      "block_number": 49806260,
+      "block_hash": null,
+      "occurred_at": "2026-08-10T22:44:27Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 990000,
+      "promised_reward_principal_base_units": 990000,
+      "settled_gmv_base_units": 1000000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[3]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x2b0856b5ec229cbb0a5bcfaa825e7d6c03cffaaf",
+      "bounty_id": "0x5dfa3c356d4c13b81ef40facc1086e82e24da437e1d10ad6d10d355d6319b933",
+      "round": 4,
+      "transaction_hash": "0xe60b9a066efd6595ecd6b5e1d19d322e94507929de366d8744087a756e3600e2",
+      "log_index": 728,
+      "block_number": 50242454,
+      "block_hash": null,
+      "occurred_at": "2026-08-21T01:04:15Z",
+      "solver_wallet": "0x075af58d07dd5f0dfa41e8d10d6af3a28ac37dd1",
+      "solver_payout_base_units": 1000000,
+      "promised_reward_principal_base_units": 1000000,
+      "settled_gmv_base_units": 1100000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[4]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x9baa8a4a2ad3096c6ebfb2c994a93afb7a299274",
+      "bounty_id": "0x34e8d16cdbfff635e77ce703cc6efea8fc64a3adb1ee2ef293c604b85bb6a8cb",
+      "round": 12,
+      "transaction_hash": "0x8085af681c95d8df24048986fcd55260dc001202fb987a0b1c195861394a771b",
+      "log_index": 389,
+      "block_number": 50248956,
+      "block_hash": null,
+      "occurred_at": "2026-08-21T04:40:59Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 2000000,
+      "promised_reward_principal_base_units": 2000000,
+      "settled_gmv_base_units": 2010000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[5]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x9df0c38c005cb187353828d2cf32198a4b779a1a",
+      "bounty_id": "0xf2b5e2af7742db63bfaedf65f6fc243a512ffd3864d7181d4593cd783d6a9883",
+      "round": 4,
+      "transaction_hash": "0x87f3daf7e17e3dc0d45f2f4f4289fcd9aa920326a86a3f26e1e0609f290b7ab4",
+      "log_index": 284,
+      "block_number": 50255681,
+      "block_hash": null,
+      "occurred_at": "2026-08-21T08:25:09Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 2010000,
+      "promised_reward_principal_base_units": 2000000,
+      "settled_gmv_base_units": 2020000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[6]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x8e242a9397b14255f5c426032b202ca04ee2bfae",
+      "bounty_id": "0x19008aa4d2a2dd4238bf21178f1a08d44221ffebc5c1171c553466d85cf22bcf",
+      "round": 4,
+      "transaction_hash": "0xadd997fa0b63e916eec244e09f4be20bd452b6d6e426e9261e49bf75852eedfd",
+      "log_index": 3263,
+      "block_number": 50393005,
+      "block_hash": null,
+      "occurred_at": "2026-08-24T12:42:37Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 2010000,
+      "promised_reward_principal_base_units": 2000000,
+      "settled_gmv_base_units": 2020000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[7]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xbd5ab1cd1a0b4cfb55137cec37cafca109bb8fb3",
+      "bounty_id": "0xb5460b0dd38bfd1dece1949bdfedbbdb583ce63d1ee07f9e302b5f183ea5675a",
+      "round": 2,
+      "transaction_hash": "0x22853eb379adea08cdc00327ab82485d73c342122e39a5af1d0287eb83aca2b7",
+      "log_index": 138,
+      "block_number": 50399677,
+      "block_hash": null,
+      "occurred_at": "2026-08-24T16:25:01Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 2000000,
+      "promised_reward_principal_base_units": 2000000,
+      "settled_gmv_base_units": 2010000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[8]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xeb5ee90fa328608aa1e49c32d339bc5e64b1e58c",
+      "bounty_id": "0x0a14dfe14f70157c05a30605c5586d58b2fd87d936e8bd3aecb3eaf95940d553",
+      "round": 1,
+      "transaction_hash": "0x3de5cec9d688e1476505a4a8f2deb9330092aaed0e99f547423d74de60816607",
+      "log_index": 197,
+      "block_number": 50447054,
+      "block_hash": null,
+      "occurred_at": "2026-08-25T18:44:15Z",
+      "solver_wallet": "0xb4fba0ed4cc89944392e2dbdde184f9dc805531c",
+      "solver_payout_base_units": 500000,
+      "promised_reward_principal_base_units": 500000,
+      "settled_gmv_base_units": 510000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[9]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x5dfcb9e153fb215f5f2c62269ee4888484107763",
+      "bounty_id": "0xa63145c8678882f0bd5ead03bfc52aa2b56ed3f0731103ff7dba192e3269a60f",
+      "round": 2,
+      "transaction_hash": "0x6704e60b3ee103aa39dc18a03a9ffdc631ee48aa88c5e452070fb53e38eeb631",
+      "log_index": 337,
+      "block_number": 50554277,
+      "block_hash": null,
+      "occurred_at": "2026-08-28T06:18:21Z",
+      "solver_wallet": "0x1e59553f1c9283cde70e7d008602e24eac51e627",
+      "solver_payout_base_units": 100000,
+      "promised_reward_principal_base_units": 100000,
+      "settled_gmv_base_units": 110000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[10]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xf4492edc8d16649cd92e6875471a8ff76b7fdca3",
+      "bounty_id": "0x7945e35adae352bc5c354ffec2af4bb260a504ac8520bdd955182e33fece968f",
+      "round": 2,
+      "transaction_hash": "0x533c13a178449e499b401f3aa14af069aaa7fb9e268d942ea59668d306a1488b",
+      "log_index": 1002,
+      "block_number": 50560345,
+      "block_hash": null,
+      "occurred_at": "2026-08-28T09:40:37Z",
+      "solver_wallet": "0x1e59553f1c9283cde70e7d008602e24eac51e627",
+      "solver_payout_base_units": 990000,
+      "promised_reward_principal_base_units": 990000,
+      "settled_gmv_base_units": 1000000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[11]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x2b3a0e86969d22cbbbaf8c85b4b3ce456907548d",
+      "bounty_id": "0x661a43f286508a5292e7645a6bb99f7b4a7ac0e90a168a873e895c1885427f3d",
+      "round": 3,
+      "transaction_hash": "0x76667a62d7acd245282f589d35dbb779db874127d257994b2450746be140f155",
+      "log_index": 187,
+      "block_number": 50567503,
+      "block_hash": null,
+      "occurred_at": "2026-08-28T13:39:13Z",
+      "solver_wallet": "0xb4fba0ed4cc89944392e2dbdde184f9dc805531c",
+      "solver_payout_base_units": 990000,
+      "promised_reward_principal_base_units": 990000,
+      "settled_gmv_base_units": 1000000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[12]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xa067be3a248beb204213222cab2b1c3a2b8746fe",
+      "bounty_id": "0x01a75717ba92b862bdaa21f328bc775fa62a53b00627b6e7abe709569a06ef68",
+      "round": 1,
+      "transaction_hash": "0x4a763d115553e9a65aa563403a31600c57936fa774712a97fa60a457a259da90",
+      "log_index": 289,
+      "block_number": 50574916,
+      "block_hash": null,
+      "occurred_at": "2026-08-28T17:46:19Z",
+      "solver_wallet": "0xb4fba0ed4cc89944392e2dbdde184f9dc805531c",
+      "solver_payout_base_units": 990000,
+      "promised_reward_principal_base_units": 990000,
+      "settled_gmv_base_units": 1000000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[13]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "autonomous",
+      "protocol_version": "agent-bounties/autonomous-v1",
+      "factory_contract": "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x22cec92c195a6dc0f7aeaf850e7f2cacb3b6de33",
+      "bounty_id": "0x51408b922225594472fd1a55798209f813554c58714e7ad442177181697eba69",
+      "round": 10,
+      "transaction_hash": "0x56338f1b323082a20ba064995d00bbf2347f4bae071effb2f41b2dbe36c05888",
+      "log_index": 457,
+      "block_number": 50622844,
+      "block_hash": null,
+      "occurred_at": "2026-08-29T20:23:55Z",
+      "solver_wallet": "0xe7b9b67d612ef380ac6a8aaff41f1386d70795d8",
+      "solver_payout_base_units": 1000000,
+      "promised_reward_principal_base_units": 1000000,
+      "settled_gmv_base_units": 1100000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[0].selected_settlement_rows[14]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v1",
+      "protocol_version": "agent-bounties/open-competition-v1",
+      "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0xb307ab8e3205cfe89200877a9195a7c5c33254bb",
+      "bounty_id": "0x078d1d7cb973c093c4a3f9a6ce9cd0cd1996ee6ad8f6552613eaa3f28dff3d92",
+      "round": null,
+      "transaction_hash": "0x12bab153424dbd4cd5fb0d9b0c6f4e4ff2ff4623b88703ad3f99afb9f7e279e5",
+      "log_index": 217,
+      "block_number": 49664756,
+      "block_hash": null,
+      "occurred_at": "2026-08-07T16:07:39Z",
+      "solver_wallet": "0xb87c9679a14e082e92c103f66327fd1f1e846087",
+      "solver_payout_base_units": 1000000,
+      "promised_reward_principal_base_units": 1000000,
+      "settled_gmv_base_units": 1100000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[1].selected_settlement_rows[0]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v1",
+      "protocol_version": "agent-bounties/open-competition-v1",
+      "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x3a6de8db2c7df42f4ea966e26bd9e3dd045ff61e",
+      "bounty_id": "0x0cf19da2c5a0af9a2cc7fc65775a243e622f7ee9d48c82146b8aa32e013ac2b2",
+      "round": null,
+      "transaction_hash": "0xc45404babb1b143d267c182ada921ad0e8b073f76e83795d746fa98577f0abe4",
+      "log_index": 136,
+      "block_number": 49756109,
+      "block_hash": null,
+      "occurred_at": "2026-08-09T18:52:45Z",
+      "solver_wallet": "0xcb6e4f10e109b04b0efbe6ea70b3bda1ab7e42c8",
+      "solver_payout_base_units": 80000,
+      "promised_reward_principal_base_units": 80000,
+      "settled_gmv_base_units": 90000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[1].selected_settlement_rows[1]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v1",
+      "protocol_version": "agent-bounties/open-competition-v1",
+      "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x3551ca7bb9090fb8c1648eea40837c8a1cbcc973",
+      "bounty_id": "0x5be117671b7cc50b2b9d204854fff4ee0af0065cf27e98445667e66461c7862b",
+      "round": null,
+      "transaction_hash": "0xc5cfdfb4024ac5d6f1011121cf6e2e7c78c5e8ca7f57f8d70cf52e5336265f35",
+      "log_index": 195,
+      "block_number": 49799885,
+      "block_hash": null,
+      "occurred_at": "2026-08-10T19:11:57Z",
+      "solver_wallet": "0xbf9f9bd46a553d8dcb6297bfa9d168ffad7f2cd1",
+      "solver_payout_base_units": 500000,
+      "promised_reward_principal_base_units": 500000,
+      "settled_gmv_base_units": 550000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[1].selected_settlement_rows[2]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v1",
+      "protocol_version": "agent-bounties/open-competition-v1",
+      "factory_contract": "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5",
+      "event_kind": "bounty_settled",
+      "bounty_contract": "0x60820f98bd004123d5d03ac9c0131d1021a8aac4",
+      "bounty_id": "0xbe3ad8d6d6f1c53a607c6ac8ad5c0b8f8a02907a64eb18ce95d8730f5de2391d",
+      "round": null,
+      "transaction_hash": "0x2c3524f27e051459ff50fe5adfb53e18d64942f1cf72187f6314862a40009ca0",
+      "log_index": 411,
+      "block_number": 49902420,
+      "block_hash": null,
+      "occurred_at": "2026-08-13T04:09:47Z",
+      "solver_wallet": "0xad6ccaefc5678ce2c17e9a9e9926d4f43732320e",
+      "solver_payout_base_units": 100000,
+      "promised_reward_principal_base_units": 100000,
+      "settled_gmv_base_units": 110000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[1].selected_settlement_rows[3]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x5cf577877c099eb3cdef844793dac152e7f598b5",
+      "bounty_id": "0x50facc990cbd8e335989159d5f074f626f9b24eb87578d674198594d51687e1e",
+      "round": null,
+      "transaction_hash": "0xc77a2689894c849c215885f63d6e09c1d5432d665d730f2021312994501ce259",
+      "log_index": 281,
+      "block_number": 50343439,
+      "block_hash": null,
+      "occurred_at": "2026-08-23T09:10:25Z",
+      "solver_wallet": "0x74e0789533abcb89ee07ca826a5618cbeba381b2",
+      "solver_payout_base_units": 250000,
+      "promised_reward_principal_base_units": 250000,
+      "settled_gmv_base_units": 262500,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[2].selected_settlement_rows[0]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0x29d0e39e0c03797c690633535722e6b34a69a78a",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x3a943ff8e67f4eeb497626ba20d3a0b40abc15ee",
+      "bounty_id": "0xf0a48b9f2ba82bcfeab79e18ea39fdb791bf81c8bccd3a80898ac2a2f4f72efa",
+      "round": null,
+      "transaction_hash": "0x9b5f2fb1eb9e6840f369360ba84529126a3cfd2f4f95b5f5f78a7458fd7348f2",
+      "log_index": 1010,
+      "block_number": 50343933,
+      "block_hash": null,
+      "occurred_at": "2026-08-23T09:26:53Z",
+      "solver_wallet": "0x4d381d4dcf82f06275533aaff880b17d03c80d2d",
+      "solver_payout_base_units": 250000,
+      "promised_reward_principal_base_units": 250000,
+      "settled_gmv_base_units": 262500,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": null,
+        "receipt_status": null,
+        "settlement_event_matches_receipt": null,
+        "contract_state_reconciled": null,
+        "removed": null,
+        "reorg_detected": null,
+        "rpc_block_observations": [],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#public_event_stream_observations[2].selected_settlement_rows[1]"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x3e052b933628b960d61654a68fca23d869d8989f",
+      "bounty_id": "0xcd8d8fb9755ab634ee0eeaea63fc5e618439ee687ec9d6b17c8cc8a95df4525a",
+      "round": null,
+      "transaction_hash": "0x830e856ddbade328a0715e47e3aaa36f6363c6be71c18bd20f0baaab75aed4f3",
+      "log_index": 2997,
+      "block_number": 50213121,
+      "block_hash": "0x2dcf5aa7c6a7cdf850dcd2989d4860225a98903d4bfd63bc4206aacc10b74e81",
+      "occurred_at": "2026-08-20T08:46:29Z",
+      "solver_wallet": "0xe5a48f761d02ecd880ee10d3fff7f66418e3b1a7",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 262500,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50213121,
+            "block_hash": "0x2dcf5aa7c6a7cdf850dcd2989d4860225a98903d4bfd63bc4206aacc10b74e81"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50213121,
+            "block_hash": "0x2dcf5aa7c6a7cdf850dcd2989d4860225a98903d4bfd63bc4206aacc10b74e81"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[0]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "bounty_id": "0x202437363e36d066dd82dfd40b10b9c86b75ed6586890c63b8a271e95f0af1d5",
+      "round": null,
+      "transaction_hash": "0x25dc0c1beca65bcc94e472305c46a50814d6d64b52fbae56477905dcfced2633",
+      "log_index": 347,
+      "block_number": 50222174,
+      "block_hash": "0x9cf33f6fd763263a727008c3f300a46c593093cd40c302045bf08dc7e324b916",
+      "occurred_at": "2026-08-20T13:48:15Z",
+      "solver_wallet": "0x21f071a4610bff0cac428152384036f56881a8b2",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 262500,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50222174,
+            "block_hash": "0x9cf33f6fd763263a727008c3f300a46c593093cd40c302045bf08dc7e324b916"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50222174,
+            "block_hash": "0x9cf33f6fd763263a727008c3f300a46c593093cd40c302045bf08dc7e324b916"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[1]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x740bbea2c8075e699c50c20ce71be0a88d6263ec",
+      "bounty_id": "0x6fc6bb1edaef22851ccd26d5820de923d43b3924d8f912374a8586db7449a607",
+      "round": null,
+      "transaction_hash": "0x1633d8d73340deee23554db53436380936542452a529644fe4d822ff5e76eb14",
+      "log_index": 271,
+      "block_number": 50237202,
+      "block_hash": "0xf3ff764d7d8c1b7b99cf2a8593d79ecd498ae0f93ca8de4596c868d6e14bd04c",
+      "occurred_at": "2026-08-20T22:09:11Z",
+      "solver_wallet": "0x7d9a02c1046e82d56c1fd7128c1b476673022cdb",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 3040000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50237202,
+            "block_hash": "0xf3ff764d7d8c1b7b99cf2a8593d79ecd498ae0f93ca8de4596c868d6e14bd04c"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50237202,
+            "block_hash": "0xf3ff764d7d8c1b7b99cf2a8593d79ecd498ae0f93ca8de4596c868d6e14bd04c"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[2]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x0618b169c3c878a0386b5da7b54713f60baa1ec2",
+      "bounty_id": "0xe5a73bf7669a2c3fa66ae38a47383bfa8f05448ba54e07a9af1a4013deb30f19",
+      "round": null,
+      "transaction_hash": "0x7d694958e97da5299aedddc73316e66aa3e3dac621de02f7f1bceb881e99d50a",
+      "log_index": 435,
+      "block_number": 50238417,
+      "block_hash": "0x212e7451a72b7f1c1a14130a14eac37bb390afaf57a4eb824fe5036fb1619cba",
+      "occurred_at": "2026-08-20T22:49:41Z",
+      "solver_wallet": "0x6e19c5a629cc9e0e31bb22f2024ba481688729c0",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 3040000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50238417,
+            "block_hash": "0x212e7451a72b7f1c1a14130a14eac37bb390afaf57a4eb824fe5036fb1619cba"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50238417,
+            "block_hash": "0x212e7451a72b7f1c1a14130a14eac37bb390afaf57a4eb824fe5036fb1619cba"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[3]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0xb9bea3cb1c91c3725961b28f5578a3b43e3eb603",
+      "bounty_id": "0x1a072fa044f46cbe95659745ca4bcb9450b0e8f1962765870279351dde9e8333",
+      "round": null,
+      "transaction_hash": "0xd38b4e1c6d0d6ca6d6618edb390851125269177cfe9ad84f8f1e1fa200270be8",
+      "log_index": 65,
+      "block_number": 50238983,
+      "block_hash": "0x32a93c3a17c2ec4515caeac81ded43f4ddc8d8cf42ad7a5ed4cab9f140fe49d2",
+      "occurred_at": "2026-08-20T23:08:33Z",
+      "solver_wallet": "0x6e19c5a629cc9e0e31bb22f2024ba481688729c0",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 3040000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50238983,
+            "block_hash": "0x32a93c3a17c2ec4515caeac81ded43f4ddc8d8cf42ad7a5ed4cab9f140fe49d2"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50238983,
+            "block_hash": "0x32a93c3a17c2ec4515caeac81ded43f4ddc8d8cf42ad7a5ed4cab9f140fe49d2"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[4]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0x2d484cdc61218fbcc079488b47471223af170a21",
+      "bounty_id": "0x1257f1b3a66a35cca1cd47b9af982edca9bc3bbe581c15d1b004bb2f49a47ff8",
+      "round": null,
+      "transaction_hash": "0x50b3f131d52d8b2c93ad4a1c157ecd03261f3d6c3a6f62a08a2c6374e99d4b5f",
+      "log_index": 441,
+      "block_number": 50239555,
+      "block_hash": "0x0b2cb76326680d34c0e456a0372bde9a29c71e088af796fc012cd4d84cc979db",
+      "occurred_at": "2026-08-20T23:27:37Z",
+      "solver_wallet": "0x6e19c5a629cc9e0e31bb22f2024ba481688729c0",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 3040000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50239555,
+            "block_hash": "0x0b2cb76326680d34c0e456a0372bde9a29c71e088af796fc012cd4d84cc979db"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50239555,
+            "block_hash": "0x0b2cb76326680d34c0e456a0372bde9a29c71e088af796fc012cd4d84cc979db"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[5]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    },
+    {
+      "network": "base-mainnet",
+      "chain_id": 8453,
+      "protocol": "open_competition_v2",
+      "protocol_version": "agent-bounties/open-competition-v2-beta3",
+      "factory_contract": "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+      "event_kind": "competition_settled",
+      "bounty_contract": "0xbeed3ee13db5ff84dd0f98c7418facc730ea15f4",
+      "bounty_id": "0xf198adda3799e3ba9eccd5c0a705ee137534c4adb1a9b7e0dc2206fd92899268",
+      "round": null,
+      "transaction_hash": "0xc2f19c257fc875f5ea35f6ecaa8726b4012cf9abb628dcd031fa3d4cedb72581",
+      "log_index": 90,
+      "block_number": 50239837,
+      "block_hash": "0x394719469b383d9022bcc6665b6622d3af067d9b072bd2d19a00f499f2998d6b",
+      "occurred_at": "2026-08-20T23:37:01Z",
+      "solver_wallet": "0x6e19c5a629cc9e0e31bb22f2024ba481688729c0",
+      "solver_payout_base_units": null,
+      "promised_reward_principal_base_units": null,
+      "settled_gmv_base_units": 3040000,
+      "participation_event": null,
+      "funding_events": [],
+      "funding_reconciled_to_contract": false,
+      "canonicality": {
+        "finality_status": "safe",
+        "receipt_status": null,
+        "settlement_event_matches_receipt": true,
+        "contract_state_reconciled": null,
+        "removed": false,
+        "reorg_detected": false,
+        "rpc_block_observations": [
+          {
+            "provider_id": "primary_rpc",
+            "block_number": 50239837,
+            "block_hash": "0x394719469b383d9022bcc6665b6622d3af067d9b072bd2d19a00f499f2998d6b"
+          },
+          {
+            "provider_id": "shadow_rpc",
+            "block_number": 50239837,
+            "block_hash": "0x394719469b383d9022bcc6665b6622d3af067d9b072bd2d19a00f499f2998d6b"
+          }
+        ],
+        "raw_evidence_refs": [
+          "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.historical_factory_settlement_rows_retained_in_snapshot[6]",
+          "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json"
+        ]
+      }
+    }
+  ],
+  "candidate_set_boundary": {
+    "raw_canonical_settlement_rows": 28,
+    "public_current_scope_rows": 21,
+    "historical_factory_rows": 7,
+    "declared_historical_canary_rows": 2,
+    "aggregate_aligned_noncanary_rows": 26,
+    "note": "All 28 observed settlement rows are retained as candidates. Two are known declared canary contracts and must be excluded by policy; the other 26 remain unknown until qualification evidence is complete."
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "schema_version": "agent-bounties/qicswu-policy-v1",
+  "policy_id": "qicswu-base-mainnet-v1.2.0",
+  "metric_contract_version": "1.1.0",
+  "release_status": "draft_release_candidate",
+  "publication_gate": {
+    "required_for_available_metric": true,
+    "status": "blocked",
+    "reason_codes": [
+      "raw_evidence_resolution_not_implemented",
+      "rpc_provider_registry_not_approved"
+    ],
+    "boundary": "The evaluator consumes adjudicated decoded views. Production publication remains fail-closed until a separate approved verifier resolves every content-addressed raw event, receipt, and state observation and validates independently controlled RPC providers."
+  },
+  "metric_name": "Policy-Qualified Independently Funded Canonical Settled Root Work Units per Complete UTC Day",
+  "effective_at": "2026-09-02T17:30:00Z",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "settlement_asset": {
+    "symbol": "USDC",
+    "contract": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "decimals": 6
+  },
+  "canonical_settlement_protocols": [
+    {
+      "protocol": "autonomous",
+      "accepted_protocol_versions": [
+        "agent-bounties/autonomous-v1"
+      ],
+      "accepted_factory_contracts": [
+        "0x082c52131aaf0c56e76b075f895eab6fcab6d2f9"
+      ],
+      "canonical_settlement_event_kinds": [
+        "bounty_settled"
+      ],
+      "round_semantics": "required_positive_integer",
+      "returned_bond_semantics": "event_reported",
+      "participation_event_kind": "bounty_claimed",
+      "funding_event_kind": "funding_added"
+    },
+    {
+      "protocol": "open_competition_v1",
+      "accepted_protocol_versions": [
+        "agent-bounties/open-competition-v1"
+      ],
+      "accepted_factory_contracts": [
+        "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5"
+      ],
+      "canonical_settlement_event_kinds": [
+        "bounty_settled"
+      ],
+      "round_semantics": "must_be_null",
+      "returned_bond_semantics": "event_reported",
+      "participation_event_kind": "solution_committed",
+      "funding_event_kind": "funding_added"
+    },
+    {
+      "protocol": "open_competition_v2",
+      "accepted_protocol_versions": [
+        "agent-bounties/open-competition-v2-beta3"
+      ],
+      "accepted_factory_contracts": [
+        "0xa45c6636d75fc94eec8cf6f6a34308c687e42ce4",
+        "0x29d0e39e0c03797c690633535722e6b34a69a78a"
+      ],
+      "factory_scope_note": "Both the historical Beta3 factory and the current public Beta3 factory are required. A current-factory-only endpoint omits settled historical-factory work.",
+      "canonical_settlement_event_kinds": [
+        "competition_settled"
+      ],
+      "round_semantics": "must_be_null",
+      "returned_bond_semantics": "must_be_zero",
+      "participation_event_kind": "entry_qualified",
+      "funding_event_kind": "funding_added"
+    }
+  ],
+  "canonicality": {
+    "accepted_finality_statuses": [
+      "safe",
+      "finalized"
+    ],
+    "minimum_independent_rpc_observations": 2,
+    "require_exact_block_number_and_hash_agreement": true,
+    "require_successful_transaction_receipt": true,
+    "require_settlement_log_receipt_match": true,
+    "require_contract_state_reconciliation": true,
+    "reject_removed_or_reorged_logs": true,
+    "duplicate_identity": [
+      "network",
+      "chain_id",
+      "transaction_hash",
+      "log_index"
+    ],
+    "reject_conflicting_cross_candidate_log_reuse": true
+  },
+  "product_path_priority": {
+    "primary_participation_path": "open_competition",
+    "primary_protocol": "open_competition_v2",
+    "open_competition_protocols": [
+      "open_competition_v1",
+      "open_competition_v2"
+    ],
+    "compatibility_protocols": [
+      "open_competition_v1"
+    ],
+    "legacy_supported_path": "autonomous_exclusive_claim",
+    "measurement_boundary": "Open Competition V2 is the primary protocol for new work. V1 remains measured for compatibility and historical continuity, and autonomous exclusive claims remain measured as a legacy path. These roles do not exclude or reweight otherwise qualifying canonical settlements."
+  },
+  "qualification": {
+    "require_positive_solver_payout": true,
+    "funding_cutoff": "strictly_before_first_claim_or_competition_participation_event",
+    "minimum_independent_funding": "at_least_promised_reward_principal_base_units",
+    "solver_payout_rule": "Actual solver payout must be positive and equal across separately retained settlement-event, successful USDC receipt-transfer net of the event-reported returned bond, and dual-RPC contract-state views at the settlement block. The event base reward must equal promised reward principal; returned claim or entry bonds are not reward principal.",
+    "solver_payout_reconciliation": {
+      "required_views": [
+        "settlement_event",
+        "receipt_transfer",
+        "contract_state"
+      ],
+      "bind_candidate_scope_and_solver": true,
+      "bind_settlement_transaction_log_block_and_hash": true,
+      "receipt_asset_must_equal_settlement_asset": true,
+      "receipt_from_bounty_contract_to_solver": true,
+      "require_successful_receipt": true,
+      "require_distinct_raw_evidence_refs_per_view": true,
+      "event_returned_bond_must_match_receipt_decomposition": true,
+      "event_base_reward_must_equal_promised_reward_principal": true,
+      "contract_state_observation_at_settlement_block": true,
+      "contract_state_minimum_independent_rpc_observations": 2
+    },
+    "identity_unit": "documented_beneficial_principal_not_wallet",
+    "funder_must_differ_from_solver_principal": true,
+    "operator_or_affiliate_solver_qualifies": false,
+    "operator_or_affiliate_funding_is_independent": false,
+    "known_or_suspected_reimbursement_is_independent": false,
+    "missing_reimbursement_review": "unknown",
+    "missing_principal_root_or_standalone_evidence": "unknown",
+    "root_deduplication": "count_only_the_all_history_earliest_policy_qualifying_settlement_of_each_root_work_id; later_windows_do_not_recount"
+  },
+  "excluded_operator_principal_ids": [
+    "principal:agent-bounties-operator",
+    "principal:agent-bounties-operator-affiliate"
+  ],
+  "excluded_operator_wallets": [
+    "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "0x884834e884d6e93462655a2820140ad03e6747bc",
+    "0xfb58949365e3a30fd62e86edb0daffccf4ef7477",
+    "0xfd7be4c69541ab297aece2a674fc1418b898cc0a"
+  ],
+  "excluded_wallet_boundary": "These known operator wallets are a one-way exclusion control, never proof that another wallet is independent or a unique principal.",
+  "excluded_bounty_contracts": [
+    "0x3e052b933628b960d61654a68fca23d869d8989f",
+    "0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+    "0xaa4a9300bb1c90f93b4048fd83298da6c6145734",
+    "0xf8c8897e748e4057d52182c27beb4025f4d49d68"
+  ],
+  "excluded_contract_boundary": "Declared synthetic canary and prior metric-reward contracts are always excluded. An unlisted contract still requires standalone-value adjudication.",
+  "qualifying_standalone_value_classification": "standalone_end_customer_value",
+  "excluded_standalone_value_classifications": [
+    "synthetic_canary",
+    "platform_maintenance",
+    "meta_self_generated_demand",
+    "benchmark_only",
+    "rehearsal"
+  ],
+  "publication_rule": "Publish a numeric value, including zero, only when every required protocol stream and every candidate qualification input is reconciled. Otherwise publish status=unavailable and null metric values.",
+  "change_control": "Any semantic change requires a new policy_id and a restated historical series; never rewrite this policy in place after release."
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": "agent-bounties/release-package-v1",
+  "release_id": "qicswu-growth-release-v1",
+  "status": "release_candidate_pending_final_verification_and_approval",
+  "north_star": {
+    "name": "policy_qualified_independently_funded_canonical_settled_root_work_units_per_complete_utc_day",
+    "policy_id": "qicswu-base-mainnet-v1.2.0",
+    "baseline_window": {
+      "started_at": "2026-08-04T00:00:00Z",
+      "ended_at": "2026-09-01T00:00:00Z",
+      "boundary": "[started_at,ended_at)",
+      "complete_utc_days": 28
+    },
+    "baseline_status": "unavailable",
+    "baseline_value": null,
+    "publication_gate": {
+      "status": "blocked",
+      "reason_codes": [
+        "raw_evidence_resolution_not_implemented",
+        "rpc_provider_registry_not_approved"
+      ],
+      "numeric_publication_allowed": false
+    },
+    "gross_observation_only": {
+      "settlements": 26,
+      "settled_gmv_usdc": "36.465",
+      "coverage_boundary": "Aggregate-aligned diagnostic evidence only; historical-factory coverage is retained for the August 20–22 snapshot epoch, not the complete baseline window."
+    }
+  },
+  "slices": [
+    {
+      "order": 1,
+      "id": "qicswu-metric-v1",
+      "runbook": "01-qicswu-metric.md",
+      "independently_reversible": true
+    },
+    {
+      "order": 2,
+      "id": "truthful-ready-to-earn-v1",
+      "runbook": "02-truthful-ready-to-earn.md",
+      "independently_reversible": true
+    },
+    {
+      "order": 3,
+      "id": "pinned-regression-post-fund-handoff-v1",
+      "runbook": "03-pinned-regression-post-fund-handoff.md",
+      "application_behavior_reversible": true,
+      "database_migration": {
+        "file": "../../../migrations/0030_site_analytics_transition_outcomes.sql",
+        "rollback": "forward_only_inert_allowlist_superset"
+      }
+    }
+  ],
+  "production_execution": {
+    "deployed": false,
+    "live_funds_moved": false,
+    "production_uplift_observed": false
+  },
+  "catalog_activation": {
+    "catalog_version": "agent-bounties/pinned-regression-catalog-v1",
+    "mcp_status": "inactive_preconditions_unmet",
+    "browser_status": "inactive_preconditions_unmet",
+    "authoritative_activation_contract": "pinned-regression-catalog-activation-v1.json",
+    "required_gate_evidence_complete": false,
+    "production_activation_authorized": false,
+    "boundary": "This release is draft-only. A separately versioned and approved activation release is required before production wallet continuation or live funding."
+  },
+  "evidence_report": "../../../docs/qicswu-growth-release-evidence.md"
+}
