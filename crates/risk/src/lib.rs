@@ -96,6 +96,7 @@ impl Default for DirectBountyEvidenceChecklist {
                 "mutable artifact references such as branch names, tags, releases, query refs, encoded lookalikes, or unpinned download URLs are rejected".to_string(),
                 "evidence fields from mismatched repositories or mismatched source commits are rejected".to_string(),
                 "payment evidence without a matching canonical BountySettled event is rejected".to_string(),
+                "check-run URLs must be GitHub Actions or Checks run URLs; issue, PR, blob, and release URLs are rejected as check-run evidence".to_string(),
             ],
         }
     }
@@ -116,7 +117,14 @@ pub struct DirectBountyEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct DirectBountyEvidenceReport {
     pub checklist: DirectBountyEvidenceChecklist,
+    /// True when all structural evidence fields are present, valid, and internally consistent.
+    /// This does NOT indicate payment has been made or verified.
+    pub structure_valid: bool,
+    /// True only when `structure_valid` is true AND a canonical `BountySettled` event has been
+    /// verified. Currently always `false` because automated settlement verification is not
+    /// implemented; callers must not treat `accepted` as payment evidence.
     pub accepted: bool,
+    /// Human-readable settlement verification status.
     pub payment_settlement_status: String,
     pub errors: Vec<String>,
     pub evidence_boundary: String,
@@ -137,12 +145,20 @@ pub fn validate_direct_bounty_evidence(
     require_non_empty(&mut errors, "pull_request_url", &evidence.pull_request_url);
     require_non_empty(&mut errors, "artifact_url", &evidence.artifact_url);
     require_non_empty(&mut errors, "artifact_sha256", &evidence.artifact_sha256);
-    require_non_empty(&mut errors, "bounty_settled_url", &evidence.bounty_settled_url);
+    require_non_empty(
+        &mut errors,
+        "bounty_settled_url",
+        &evidence.bounty_settled_url,
+    );
 
     require_https(&mut errors, "repository_url", &evidence.repository_url);
     require_https(&mut errors, "pull_request_url", &evidence.pull_request_url);
     require_https(&mut errors, "artifact_url", &evidence.artifact_url);
-    require_https(&mut errors, "bounty_settled_url", &evidence.bounty_settled_url);
+    require_https(
+        &mut errors,
+        "bounty_settled_url",
+        &evidence.bounty_settled_url,
+    );
 
     if evidence.check_run_urls.is_empty() {
         errors.push("check_run_urls must contain at least one HTTPS check-run URL".to_string());
@@ -150,6 +166,16 @@ pub fn validate_direct_bounty_evidence(
     for (index, url) in evidence.check_run_urls.iter().enumerate() {
         require_non_empty(&mut errors, &format!("check_run_urls[{index}]"), url);
         require_https(&mut errors, &format!("check_run_urls[{index}]"), url);
+        // Reject same-repository issue, PR, blob, and release URLs as check-run evidence.
+        // Only GitHub Actions run URLs and Checks run URLs are accepted.
+        if url.starts_with("https://") && !is_github_check_run_url(url) {
+            errors.push(format!(
+                "check_run_urls[{index}] must be a GitHub Actions or Checks run URL \
+                 (https://github.com/{{owner}}/{{repo}}/actions/runs/{{id}} or \
+                 https://github.com/{{owner}}/{{repo}}/runs/{{id}}); \
+                 issue, PR, blob, and release URLs are not accepted as check-run evidence"
+            ));
+        }
     }
 
     let is_valid_source_commit = is_hex_sha(&evidence.source_commit, 40);
@@ -157,30 +183,51 @@ pub fn validate_direct_bounty_evidence(
         errors.push("source_commit must be a full 40-character hexadecimal commit SHA".to_string());
     }
     if !is_hex_sha(&evidence.artifact_sha256, 64) {
-        errors.push("artifact_sha256 must be a 64-character hexadecimal SHA-256 digest".to_string());
+        errors
+            .push("artifact_sha256 must be a 64-character hexadecimal SHA-256 digest".to_string());
     }
 
     let repo_canonical = parse_github_repo(&evidence.repository_url);
-    if repo_canonical.is_none() && evidence.repository_url.starts_with("https://") && !evidence.repository_url.trim().is_empty() {
-        errors.push("repository_url must be a valid GitHub repository URL (https://github.com/owner/repo)".to_string());
+    if repo_canonical.is_none()
+        && evidence.repository_url.starts_with("https://")
+        && !evidence.repository_url.trim().is_empty()
+    {
+        errors.push(
+            "repository_url must be a valid GitHub repository URL (https://github.com/owner/repo)"
+                .to_string(),
+        );
     }
 
     if let Some((owner, repo)) = &repo_canonical {
         if let Some((pr_owner, pr_repo)) = parse_github_pr_repo(&evidence.pull_request_url) {
             if pr_owner != *owner || pr_repo != *repo {
-                errors.push("pull_request_url must belong to the same repository as repository_url".to_string());
+                errors.push(
+                    "pull_request_url must belong to the same repository as repository_url"
+                        .to_string(),
+                );
             }
-        } else if evidence.pull_request_url.starts_with("https://") && !evidence.pull_request_url.trim().is_empty() {
-            errors.push("pull_request_url must be a valid pull request URL for repository_url".to_string());
+        } else if evidence.pull_request_url.starts_with("https://")
+            && !evidence.pull_request_url.trim().is_empty()
+        {
+            errors.push(
+                "pull_request_url must be a valid pull request URL for repository_url".to_string(),
+            );
         }
 
         for (index, cr_url) in evidence.check_run_urls.iter().enumerate() {
-            if let Some((cr_owner, cr_repo)) = parse_github_repo_from_any_url(cr_url) {
-                if cr_owner != *owner || cr_repo != *repo {
-                    errors.push(format!("check_run_urls[{index}] must belong to the same repository as repository_url"));
+            // Only validate repository binding for URLs that passed the check-run format check.
+            if is_github_check_run_url(cr_url) {
+                if let Some((cr_owner, cr_repo)) = parse_github_repo_from_check_run_url(cr_url) {
+                    if cr_owner != *owner || cr_repo != *repo {
+                        errors.push(format!(
+                            "check_run_urls[{index}] must belong to the same repository as repository_url"
+                        ));
+                    }
+                } else if cr_url.starts_with("https://") && !cr_url.trim().is_empty() {
+                    errors.push(format!(
+                        "check_run_urls[{index}] must belong to the same repository as repository_url"
+                    ));
                 }
-            } else if cr_url.starts_with("https://") && !cr_url.trim().is_empty() {
-                errors.push(format!("check_run_urls[{index}] must belong to the same repository as repository_url"));
             }
         }
     }
@@ -192,7 +239,11 @@ pub fn validate_direct_bounty_evidence(
                     errors.push("artifact_url repository must match repository_url".to_string());
                 }
             }
-            if is_valid_source_commit && !artifact.commit.eq_ignore_ascii_case(&evidence.source_commit) {
+            if is_valid_source_commit
+                && !artifact
+                    .commit
+                    .eq_ignore_ascii_case(&evidence.source_commit)
+            {
                 errors.push("artifact_url commit SHA must match source_commit".to_string());
             }
             if artifact.path.trim().is_empty() {
@@ -204,10 +255,20 @@ pub fn validate_direct_bounty_evidence(
         }
     }
 
+    let structure_valid = errors.is_empty();
+    // `accepted` requires both structural validity AND verified canonical settlement.
+    // Settlement verification is not automated, so `accepted` is always false here.
+    let accepted = false;
+
     DirectBountyEvidenceReport {
         checklist: DirectBountyEvidenceChecklist::default(),
-        accepted: errors.is_empty(),
-        payment_settlement_status: "unverified: structural checklist references provided; requires canonical BountySettled event verification".to_string(),
+        structure_valid,
+        accepted,
+        payment_settlement_status: if structure_valid {
+            "unverified: structural checklist references provided; requires canonical BountySettled event verification".to_string()
+        } else {
+            "invalid: structural evidence errors must be resolved before settlement verification".to_string()
+        },
         errors,
         evidence_boundary: "Submission, verification, and payment evidence are separate. Only canonical BountySettled proves payment.".to_string(),
     }
@@ -476,7 +537,25 @@ fn parse_github_pr_repo(url: &str) -> Option<(String, String)> {
     }
 }
 
-fn parse_github_repo_from_any_url(url: &str) -> Option<(String, String)> {
+/// Returns true only for GitHub Actions run URLs and GitHub Checks run URLs.
+///
+/// Accepted patterns:
+/// - `https://github.com/{owner}/{repo}/actions/runs/{id}[/...]`
+/// - `https://github.com/{owner}/{repo}/runs/{id}[/...]`
+///
+/// Explicitly rejected as check-run evidence (even when in the same repository):
+/// - issue URLs   (`/issues/{n}`)
+/// - PR URLs      (`/pull/{n}`)
+/// - blob/raw URLs (`/blob/`, `/raw/`)
+/// - release URLs (`/releases/`)
+/// - tree/commit URLs (`/tree/`, `/commit/`)
+fn is_github_check_run_url(url: &str) -> bool {
+    parse_github_repo_from_check_run_url(url).is_some()
+}
+
+/// Parses (owner, repo) from a GitHub Actions or Checks run URL.
+/// Returns `None` for issue, PR, blob, release, or other non-check-run GitHub URLs.
+fn parse_github_repo_from_check_run_url(url: &str) -> Option<(String, String)> {
     if !url.starts_with("https://github.com/") {
         return None;
     }
@@ -485,11 +564,27 @@ fn parse_github_repo_from_any_url(url: &str) -> Option<(String, String)> {
     }
     let rest = url.strip_prefix("https://github.com/")?;
     let parts: Vec<&str> = rest.split('/').filter(|p| !p.is_empty()).collect();
-    if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-        Some((parts[0].to_ascii_lowercase(), sanitize_repo_name(parts[1])))
-    } else {
-        None
+    // Minimum: owner / repo / (actions/) runs / id  → at least 4 parts
+    if parts.len() < 4 || parts[0].is_empty() || parts[1].is_empty() {
+        return None;
     }
+    let owner = parts[0].to_ascii_lowercase();
+    let repo = sanitize_repo_name(parts[1]);
+
+    // Pattern: /actions/runs/{numeric-id}[/...]
+    if parts[2] == "actions" && parts.len() >= 4 && parts[3] == "runs" {
+        if parts.len() >= 5 && parts[4].chars().all(|c| c.is_ascii_digit()) {
+            return Some((owner, repo));
+        }
+        return None;
+    }
+
+    // Pattern: /runs/{numeric-id}[/...]  (GitHub Checks API URLs)
+    if parts[2] == "runs" && parts[3].chars().all(|c| c.is_ascii_digit()) {
+        return Some((owner, repo));
+    }
+
+    None
 }
 
 fn parse_immutable_artifact_url(url: &str) -> Option<ParsedArtifactUrl> {
@@ -629,15 +724,22 @@ mod tests {
                     .to_string(),
         });
 
-        assert!(report.accepted, "{:?}", report.errors);
+        assert!(report.structure_valid, "{:?}", report.errors);
         assert!(report.errors.is_empty());
+        // `accepted` is always false: settlement is never auto-verified.
+        assert!(
+            !report.accepted,
+            "accepted must be false until settlement is verified"
+        );
         assert!(report.payment_settlement_status.contains("unverified"));
         assert!(report
             .checklist
             .payment
             .iter()
             .any(|item| item.contains("BountySettled")));
-        assert!(report.evidence_boundary.contains("Only canonical BountySettled"));
+        assert!(report
+            .evidence_boundary
+            .contains("Only canonical BountySettled"));
     }
 
     #[test]
@@ -653,6 +755,7 @@ mod tests {
             bounty_settled_url: "ipfs://settled".to_string(),
         });
 
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
         assert!(report
             .errors
@@ -686,25 +789,43 @@ mod tests {
         assert!(is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/raw/0123456789abcdef0123456789abcdef01234567/crates/risk/report.json"));
 
         // Mutable branch URLs -> Denied
-        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/raw/main/report.json"));
-        assert!(!is_immutable_artifact_url("https://raw.githubusercontent.com/agent-bounties/agent-bounties/master/report.json"));
+        assert!(!is_immutable_artifact_url(
+            "https://github.com/agent-bounties/agent-bounties/raw/main/report.json"
+        ));
+        assert!(!is_immutable_artifact_url(
+            "https://raw.githubusercontent.com/agent-bounties/agent-bounties/master/report.json"
+        ));
         assert!(!is_immutable_artifact_url("https://raw.githubusercontent.com/agent-bounties/agent-bounties/feature-branch/report.json"));
 
         // Replaceable release assets and tags -> Denied
-        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/releases/download/v1.0.0/report.json"));
-        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/releases/tag/v1.0.0"));
-        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/tags/v1.0.0"));
+        assert!(!is_immutable_artifact_url(
+            "https://github.com/agent-bounties/agent-bounties/releases/download/v1.0.0/report.json"
+        ));
+        assert!(!is_immutable_artifact_url(
+            "https://github.com/agent-bounties/agent-bounties/releases/tag/v1.0.0"
+        ));
+        assert!(!is_immutable_artifact_url(
+            "https://github.com/agent-bounties/agent-bounties/tags/v1.0.0"
+        ));
 
         // Query parameters, fragments, and lookalikes -> Denied
-        assert!(!is_immutable_artifact_url("https://example.com/report.json?commit=0123456789abcdef0123456789abcdef01234567"));
+        assert!(!is_immutable_artifact_url(
+            "https://example.com/report.json?commit=0123456789abcdef0123456789abcdef01234567"
+        ));
         assert!(!is_immutable_artifact_url("https://github.com/org/repo/raw/0123456789abcdef0123456789abcdef01234567/report.json?v=latest"));
         assert!(!is_immutable_artifact_url("https://github.com/org/repo/raw/0123456789abcdef0123456789abcdef01234567%2Freport.json"));
 
         // Generic unpinned URLs, IPFS, Arweave or other mutable paths -> Denied
-        assert!(!is_immutable_artifact_url("https://example.com/report.json"));
+        assert!(!is_immutable_artifact_url(
+            "https://example.com/report.json"
+        ));
         assert!(!is_immutable_artifact_url("https://example.com/ipfs/bafy"));
-        assert!(!is_immutable_artifact_url("https://example.com/arweave/abcdef"));
-        assert!(!is_immutable_artifact_url("https://ipfs.io/ipfs/QmT78zSuBKGvaFFB8JNjAYAkChFSFCZa17z5W33cyS2PHe/report.json"));
+        assert!(!is_immutable_artifact_url(
+            "https://example.com/arweave/abcdef"
+        ));
+        assert!(!is_immutable_artifact_url(
+            "https://ipfs.io/ipfs/QmT78zSuBKGvaFFB8JNjAYAkChFSFCZa17z5W33cyS2PHe/report.json"
+        ));
         assert!(!is_immutable_artifact_url("http://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/report.json"));
     }
 
@@ -727,60 +848,239 @@ mod tests {
                     .to_string(),
         });
 
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
         assert!(report
             .errors
             .iter()
             .any(|error| error.contains("check_run_urls must contain at least one")));
     }
+
     #[test]
     fn direct_bounty_evidence_rejects_cross_binding_mismatches() {
         let base_evidence = DirectBountyEvidence {
             repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             subdirectory: "crates/risk".to_string(),
-            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686"
+                .to_string(),
             check_run_urls: vec![
-                "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789".to_string(),
+                "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789"
+                    .to_string(),
             ],
             artifact_url: "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/crates/risk/tests/fixtures/report.json".to_string(),
-            artifact_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            artifact_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
             bounty_settled_url: "https://basescan.org/tx/0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         };
 
         // Mismatched PR repository -> Denied
         let mut pr_mismatch = base_evidence.clone();
-        pr_mismatch.pull_request_url = "https://github.com/other-org/other-repo/pull/686".to_string();
+        pr_mismatch.pull_request_url =
+            "https://github.com/other-org/other-repo/pull/686".to_string();
         let report = validate_direct_bounty_evidence(&pr_mismatch);
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
-        assert!(report.errors.iter().any(|e| e.contains("pull_request_url must belong to the same repository")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("pull_request_url must belong to the same repository")));
 
         // Mismatched artifact repository -> Denied
         let mut art_repo_mismatch = base_evidence.clone();
         art_repo_mismatch.artifact_url = "https://raw.githubusercontent.com/other-org/other-repo/0123456789abcdef0123456789abcdef01234567/report.json".to_string();
         let report = validate_direct_bounty_evidence(&art_repo_mismatch);
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
-        assert!(report.errors.iter().any(|e| e.contains("artifact_url repository must match repository_url")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("artifact_url repository must match repository_url")));
 
         // Mismatched artifact commit SHA -> Denied
         let mut art_commit_mismatch = base_evidence.clone();
         art_commit_mismatch.artifact_url = "https://raw.githubusercontent.com/agent-bounties/agent-bounties/fedcba9876543210fedcba9876543210fedcba98/crates/risk/tests/fixtures/report.json".to_string();
         let report = validate_direct_bounty_evidence(&art_commit_mismatch);
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
-        assert!(report.errors.iter().any(|e| e.contains("artifact_url commit SHA must match source_commit")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("artifact_url commit SHA must match source_commit")));
 
-        // Unrelated check-run URL -> Denied
+        // Unrelated check-run URL from different repo -> Denied
         let mut check_mismatch = base_evidence.clone();
-        check_mismatch.check_run_urls = vec!["https://github.com/unrelated-org/unrelated-repo/actions/runs/999".to_string()];
+        check_mismatch.check_run_urls =
+            vec!["https://github.com/unrelated-org/unrelated-repo/actions/runs/999".to_string()];
         let report = validate_direct_bounty_evidence(&check_mismatch);
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
-        assert!(report.errors.iter().any(|e| e.contains("check_run_urls[0] must belong to the same repository")));
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("check_run_urls[0] must belong to the same repository")));
 
         // Empty artifact path -> Denied
         let mut empty_path = base_evidence.clone();
         empty_path.artifact_url = "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/".to_string();
         let report = validate_direct_bounty_evidence(&empty_path);
+        assert!(!report.structure_valid);
         assert!(!report.accepted);
-        assert!(report.errors.iter().any(|e| e.contains("artifact_url must specify a non-empty file path") || e.contains("artifact_url must be immutable")));
+        assert!(report.errors.iter().any(|e| e
+            .contains("artifact_url must specify a non-empty file path")
+            || e.contains("artifact_url must be immutable")));
+    }
+
+    /// Adversarial: same-repository issue URL must be rejected as check-run evidence.
+    #[test]
+    fn direct_bounty_evidence_rejects_same_repo_issue_url_as_check_run() {
+        let report = validate_direct_bounty_evidence(&DirectBountyEvidence {
+            repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subdirectory: "crates/risk".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686"
+                .to_string(),
+            // Same repository, but an issue URL — not a valid check-run URL.
+            check_run_urls: vec![
+                "https://github.com/agent-bounties/agent-bounties/issues/686".to_string(),
+            ],
+            artifact_url: "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/crates/risk/tests/fixtures/report.json".to_string(),
+            artifact_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            bounty_settled_url: "https://basescan.org/tx/0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        });
+
+        assert!(
+            !report.structure_valid,
+            "issue URL must not be accepted as check-run evidence"
+        );
+        assert!(!report.accepted);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("GitHub Actions or Checks run URL")),
+            "error must explain that only Actions/Checks run URLs are accepted; got: {:?}",
+            report.errors
+        );
+    }
+
+    /// Adversarial: same-repository PR URL must be rejected as check-run evidence.
+    #[test]
+    fn direct_bounty_evidence_rejects_same_repo_pr_url_as_check_run() {
+        let report = validate_direct_bounty_evidence(&DirectBountyEvidence {
+            repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subdirectory: "crates/risk".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686"
+                .to_string(),
+            // Same repository, but a PR URL — not a valid check-run URL.
+            check_run_urls: vec![
+                "https://github.com/agent-bounties/agent-bounties/pull/948".to_string(),
+            ],
+            artifact_url: "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/crates/risk/tests/fixtures/report.json".to_string(),
+            artifact_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            bounty_settled_url: "https://basescan.org/tx/0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        });
+
+        assert!(
+            !report.structure_valid,
+            "PR URL must not be accepted as check-run evidence"
+        );
+        assert!(!report.accepted);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("GitHub Actions or Checks run URL")),
+            "error must explain that only Actions/Checks run URLs are accepted; got: {:?}",
+            report.errors
+        );
+    }
+
+    /// Adversarial: arbitrary HTTPS bounty_settled_url must not make `accepted` true.
+    #[test]
+    fn direct_bounty_evidence_arbitrary_https_settlement_url_does_not_set_accepted() {
+        let report = validate_direct_bounty_evidence(&DirectBountyEvidence {
+            repository_url: "https://github.com/agent-bounties/agent-bounties".to_string(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            subdirectory: "crates/risk".to_string(),
+            pull_request_url: "https://github.com/agent-bounties/agent-bounties/pull/686"
+                .to_string(),
+            check_run_urls: vec![
+                "https://github.com/agent-bounties/agent-bounties/actions/runs/123456789"
+                    .to_string(),
+            ],
+            artifact_url: "https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/crates/risk/tests/fixtures/report.json".to_string(),
+            artifact_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            // Arbitrary HTTPS URL that is NOT a canonical BountySettled event reference.
+            bounty_settled_url: "https://example.com/definitely-not-a-settlement".to_string(),
+        });
+
+        // structure_valid may be true (all structural fields are present and valid),
+        // but `accepted` must remain false because settlement is not verified.
+        assert!(
+            !report.accepted,
+            "accepted must be false regardless of bounty_settled_url content"
+        );
+        assert!(
+            report.payment_settlement_status.contains("unverified"),
+            "payment_settlement_status must indicate unverified; got: {}",
+            report.payment_settlement_status
+        );
+    }
+
+    /// Check-run URL format allow/deny table.
+    #[test]
+    fn check_run_url_allow_deny_table() {
+        // Allowed: GitHub Actions run URLs
+        assert!(is_github_check_run_url(
+            "https://github.com/owner/repo/actions/runs/123456789"
+        ));
+        assert!(is_github_check_run_url(
+            "https://github.com/owner/repo/actions/runs/123456789/jobs/987654321"
+        ));
+
+        // Allowed: GitHub Checks run URLs
+        assert!(is_github_check_run_url(
+            "https://github.com/owner/repo/runs/123456789"
+        ));
+
+        // Denied: issue URL (same or different repo)
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/issues/686"
+        ));
+        // Denied: PR URL
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/pull/948"
+        ));
+        // Denied: blob URL
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/blob/0123456789abcdef0123456789abcdef01234567/file.rs"
+        ));
+        // Denied: release URL
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/releases/download/v1.0.0/asset.zip"
+        ));
+        // Denied: tree URL
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/tree/main"
+        ));
+        // Denied: commit URL
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567"
+        ));
+        // Denied: non-GitHub URL
+        assert!(!is_github_check_run_url("https://example.com/runs/123"));
+        // Denied: actions/runs without numeric ID
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/actions/runs/not-a-number"
+        ));
+        // Denied: query parameters
+        assert!(!is_github_check_run_url(
+            "https://github.com/owner/repo/actions/runs/123?foo=bar"
+        ));
     }
 }
