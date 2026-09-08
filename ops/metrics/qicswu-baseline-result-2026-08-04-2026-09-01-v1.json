@@ -1,0 +1,227 @@
+{
+  "diagnostics": {
+    "eligible_root_work_units_before_availability_gate": null,
+    "excluded_records": null,
+    "input_candidate_records": null,
+    "ledger_records": null,
+    "reason_code_counts": null,
+    "unique_canonical_event_identities": null,
+    "unknown_records": null
+  },
+  "evidence_boundary": "Only a fully reconciled, final canonical settlement with positive solver payout, beneficial-principal evidence, sufficient pre-participation independent funding, a reviewed no-reimbursement relationship, and a qualifying standalone root-work classification can count. Unknown or incomplete evidence makes the published metric unavailable; it never becomes zero or eligible by default.",
+  "input_hash": "sha256:8ed41c9eabaf9ca741ff83a1903cdd9a3befd20c8a2fc07afbb9d14b31be1f04",
+  "ledger": null,
+  "north_star": {
+    "complete_utc_days": 28,
+    "daily": [
+      {
+        "day": "2026-08-04",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-05",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-06",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-07",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-08",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-09",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-10",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-11",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-12",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-13",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-14",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-15",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-16",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-17",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-18",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-19",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-20",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-21",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-22",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-23",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-24",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-25",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-26",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-27",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-28",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-29",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-30",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      },
+      {
+        "day": "2026-08-31",
+        "root_work_units": null,
+        "settled_gmv_base_units": null,
+        "solver_payout_base_units": null
+      }
+    ],
+    "name": "policy_qualified_independently_funded_canonical_settled_root_work_units_per_day",
+    "per_day": null,
+    "total_root_work_units": null,
+    "unit": "root_work_units_per_complete_utc_day"
+  },
+  "policy_hash": "sha256:111797ce4e566128a99e6d23ada77d5a23d1bb7df4a408333628fe56bfdf4034",
+  "policy_id": "qicswu-base-mainnet-v1.2.0",
+  "principal_registry_hash": "sha256:091d6a005819168b181bbc6f94da63397e441186a533d99ec92503c9bec1b581",
+  "result_hash": "sha256:af46f90acb924f57176b261830ccf7d989d6a26eb77b0969baf8e4c2e394aeec",
+  "root_work_map_hash": "sha256:b941ccfbfe4d1229588b0f980cc22bd57830895a39627c7e8e2931dd4772beb1",
+  "schema_version": "agent-bounties/qicswu-evaluation-result-v1",
+  "secondary_metrics": {
+    "independent_preparticipation_funding_base_units": null,
+    "largest_independent_funding_principal_share": null,
+    "largest_solver_principal_share_of_solver_payout": null,
+    "median_qualifying_solver_payout_base_units": null,
+    "operator_subsidy_guardrail": {
+      "boundary": "Operator reward funding never qualifies as independent reward principal. Gas, onboarding, relayer, and other declared support are reported by asset and kind without cross-asset addition.",
+      "declared_nonreward_subsidies_by_asset_and_kind": null,
+      "operator_reward_funding_share_of_qualifying_settled_gmv": null,
+      "operator_reward_funding_usdc_base_units": null,
+      "status": "unavailable",
+      "unavailable_reason_codes": [
+        "north_star_qualification_unavailable"
+      ]
+    },
+    "qualifying_settled_gmv_base_units": null,
+    "qualifying_settled_gmv_per_complete_utc_day": null,
+    "qualifying_solver_payout_base_units": null
+  },
+  "status": "unavailable",
+  "unavailable_reason_codes": [
+    "raw_evidence_resolution_not_implemented",
+    "rpc_provider_registry_not_approved"
+  ],
+  "window": {
+    "boundary": "[started_at,ended_at)",
+    "complete_utc_days": 28,
+    "ended_at": "2026-09-01T00:00:00Z",
+    "started_at": "2026-08-04T00:00:00Z"
+  }
+}

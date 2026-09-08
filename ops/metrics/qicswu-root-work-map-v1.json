@@ -1,0 +1,37 @@
+{
+  "schema_version": "agent-bounties/qicswu-root-work-map-v1",
+  "map_id": "qicswu-baseline-root-work-2026-09-01-v1",
+  "as_of": "2026-09-01T19:41:49Z",
+  "status": "incomplete",
+  "records": [
+    {
+      "candidate_key": "base-mainnet:open_competition_v2:0x3e052b933628b960d61654a68fca23d869d8989f:0xcd8d8fb9755ab634ee0eeaea63fc5e618439ee687ec9d6b17c8cc8a95df4525a:0x830e856ddbade328a0715e47e3aaa36f6363c6be71c18bd20f0baaab75aed4f3:2997",
+      "root_work_id": "declared-synthetic-canary:0x3e052b933628b960d61654a68fca23d869d8989f",
+      "standalone_value_classification": "synthetic_canary",
+      "evidence_refs": [
+        "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.declared_canary_rows_excluded_by_existing_platform_metric[0]",
+        "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json#campaign.excluded_bounty_contracts"
+      ]
+    },
+    {
+      "candidate_key": "base-mainnet:open_competition_v2:0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa:0x202437363e36d066dd82dfd40b10b9c86b75ed6586890c63b8a271e95f0af1d5:0x25dc0c1beca65bcc94e472305c46a50814d6d64b52fbae56477905dcfced2633:347",
+      "root_work_id": "declared-synthetic-canary:0x5f884d4a4cc2727ddbc22382efd776274bc3e7aa",
+      "standalone_value_classification": "synthetic_canary",
+      "evidence_refs": [
+        "ops/metrics/qicswu-baseline-source-observations-v1.json#historical_factory_reconciliation.declared_canary_rows_excluded_by_existing_platform_metric[1]",
+        "site/generated/gmv-snapshots/external-gmv-sprint-20260820-v1.json#campaign.excluded_bounty_contracts"
+      ]
+    }
+  ],
+  "coverage": {
+    "all_candidate_settlements_mapped": false,
+    "all_roots_standalone_value_reviewed": false,
+    "all_root_histories_reconciled": false
+  },
+  "reason_codes": [
+    "root_work_lineage_not_collected",
+    "standalone_value_not_adjudicated",
+    "all_history_root_settlement_lineage_not_reconciled"
+  ],
+  "evidence_boundary": "No bounty, round, transaction, repository issue, or wallet is assumed to be a distinct root work unit. Canary, maintenance, benchmark, rehearsal, and marketplace-generated meta-work require explicit classification evidence."
+}

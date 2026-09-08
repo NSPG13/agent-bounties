@@ -1,0 +1,105 @@
+name: QICSWU Production Shadow
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "Complete UTC day to capture; defaults to yesterday"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qicswu-production-shadow
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify measurement contracts
+        run: |
+          python -m unittest \
+            scripts.test_qicswu_metric \
+            scripts.test_qicswu_evidence \
+            scripts.test_qicswu_rollout_control \
+            scripts.test_qicswu_shadow \
+            -v
+          python scripts/qicswu_verify_baseline.py
+
+      - name: Select complete UTC day
+        id: window
+        env:
+          REQUESTED_DAY: ${{ inputs.day }}
+        run: |
+          if [ -n "$REQUESTED_DAY" ]; then
+            selected="$REQUESTED_DAY"
+          else
+            selected="$(date -u -d yesterday +%F)"
+          fi
+          date -u -d "$selected" +%F >/dev/null
+          printf 'day=%s\n' "$selected" >> "$GITHUB_OUTPUT"
+
+      - name: Capture all supported production protocols
+        env:
+          QICSWU_DAY: ${{ steps.window.outputs.day }}
+        run: |
+          output="target/qicswu-shadow/$QICSWU_DAY"
+          python scripts/qicswu_shadow.py --day "$QICSWU_DAY" --output-dir "$output"
+          jq -e '
+            .primary_participation_path == "open_competition" and
+            .participation_path_source_counts.open_competition == 2 and
+            .participation_path_source_counts.exclusive_claim == 1 and
+            .metric.status == "unavailable" and
+            .metric.north_star_per_day == null and
+            .publication_eligible == false
+          ' "$output/run-manifest.json"
+
+      - name: Verify canonical settlements across two RPC providers
+        env:
+          QICSWU_DAY: ${{ steps.window.outputs.day }}
+        run: |
+          output="target/qicswu-shadow/$QICSWU_DAY"
+          set +e
+          python scripts/qicswu_evidence.py capture \
+            --input "$output/qicswu-input.json" \
+            --registry ops/metrics/qicswu-rpc-provider-registry-candidate-v1.json \
+            --rpc base_official=https://mainnet.base.org \
+            --rpc tenderly_gateway=https://base.gateway.tenderly.co \
+            --output "$output/canonical-evidence.json"
+          capture_status=$?
+          set -e
+          test "$capture_status" -eq 2
+          set +e
+          python scripts/qicswu_evidence.py verify \
+            --input "$output/qicswu-input.json" \
+            --registry ops/metrics/qicswu-rpc-provider-registry-candidate-v1.json \
+            --bundle "$output/canonical-evidence.json" \
+            --output "$output/evidence-resolution.json"
+          verify_status=$?
+          set -e
+          test "$verify_status" -eq 2
+          jq -e '
+            .status == "verified_partial_blocked" and
+            .publication_eligible == false and
+            (.remaining_reason_codes | index("rpc_provider_registry_approval_pending")) != null
+          ' "$output/evidence-resolution.json"
+
+      - name: Upload immutable internal shadow evidence
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: qicswu-production-shadow-${{ steps.window.outputs.day }}-${{ github.run_id }}
+          path: target/qicswu-shadow/${{ steps.window.outputs.day }}
+          if-no-files-found: error
+          retention-days: 30

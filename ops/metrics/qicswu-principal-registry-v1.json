@@ -1,0 +1,17 @@
+{
+  "schema_version": "agent-bounties/qicswu-principal-registry-v1",
+  "registry_id": "qicswu-baseline-principals-2026-09-01-v1",
+  "as_of": "2026-09-01T19:41:49Z",
+  "status": "incomplete",
+  "principals": [],
+  "reimbursement_relationships": [],
+  "coverage": {
+    "all_candidate_wallets_mapped": false,
+    "all_candidate_reimbursement_relationships_reviewed": false
+  },
+  "reason_codes": [
+    "beneficial_principal_evidence_not_collected",
+    "reimbursement_evidence_not_collected"
+  ],
+  "evidence_boundary": "The existing public maintainer policy is a wallet exclusion list. It does not prove beneficial ownership, common control, independence, or lack of reimbursement, so no wallet-to-principal mappings are fabricated here."
+}

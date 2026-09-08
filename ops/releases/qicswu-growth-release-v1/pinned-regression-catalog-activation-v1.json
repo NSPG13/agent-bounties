@@ -1,0 +1,39 @@
+{
+  "schema_version": "agent-bounties/pinned-regression-catalog-activation-v1",
+  "status": "blocked_preconditions_unmet",
+  "catalog_version": "agent-bounties/pinned-regression-catalog-v1",
+  "catalog_path": "crates/mcp-server/fixtures/pinned-regression-catalog-v1.json",
+  "catalog_sha256": "sha256:4edbda807d420fc7a79027a3807a596a093495c5926bbf4b211df585f17239ae",
+  "browser_catalog_path": "site/pinned-regression-catalog-v1.js",
+  "activation_target_status": "active",
+  "immutable_contract": {
+    "task_profile_sha256": "sha256:7f955a6b4ecd3b1fa665e325aad43183233c2a2e4bfe4a5b8570603162405c6f",
+    "benchmark_sha256": "sha256:aa3e2a342045c018f7d5a2670e7cb5a7b60e81a9d0230a4ba0271e6de39f6931",
+    "evidence_schema_sha256": "sha256:39038f3a7549abb82a64a7f774d3add80c625012db29a1e95e10930714f9843f",
+    "runner_timeout_seconds": 900,
+    "runtime_reward_and_window_policy": "Rewards and task_window_days are user-selected runtime terms within the existing protocol bounds. They are not catalog activation evidence and require separate explicit human approval for every handoff."
+  },
+  "non_authoritative_context": {
+    "path": "ops/direct-flagship-verifier-settlement-watchdog-v1.json",
+    "reason": "This older unfunded precommit has different economics, lifecycle terms, and a 1200-second runner timeout. It cannot approve or activate this 900-second catalog tuple."
+  },
+  "required_gate_evidence": {
+    "protected_main_merge": null,
+    "deterministic_known_good_and_known_bad_rehearsal": null,
+    "production_verifier_readiness": null,
+    "live_runner_signer_relay_settlement_canary": null,
+    "cancellation_and_refund_simulation": null,
+    "activation_cohort_measurement_contract": null,
+    "explicit_owner_wallet_confirmation": null
+  },
+  "activation_change_requirements": [
+    "Populate every required_gate_evidence value with a non-empty immutable evidence reference and independently review it against the exact catalog SHA-256.",
+    "Create a new reviewed catalog version whose checked-in JSON and browser mirror both say active; never use the loopback-only override in production.",
+    "Before traffic, implement and test an access-controlled activation-cohort query and immutable private export that bind every eligible handoff view to this experiment id, catalog version, catalog SHA-256, activation timestamp, event id, session id, and occurrence time. The current analytics contract is insufficient and cannot satisfy this gate.",
+    "Before wallet traffic, implement and adversarially test a server-side creator-bound stable handoff idempotency key and atomic reservation that maps retries and concurrent tabs to one immutable creator, terms tuple, creation nonce, bounty id, and predicted contract.",
+    "Regenerate the catalog hash, MCP public descriptor fixtures, and release manifest from the locked source tree.",
+    "Rerun the metric, browser, MCP, API, contract, and direct continuous local-fork gates at that locked tree before separate production deployment approval."
+  ],
+  "production_activation_authorized": false,
+  "evidence_boundary": "This record is an inactive activation contract. Null gate evidence and production_activation_authorized=false prohibit describing the catalog as funding-ready in production. It authorizes no deployment, wallet request, funding, or settlement."
+}
