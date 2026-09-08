@@ -4,11 +4,12 @@ Status: **pre-deployment; blocked on an available baseline and explicit approval
 
 This package controls rollout of the already verified
 `qicswu-growth-release-v1` candidate. It does not alter the QICSWU metric or
-authorize production. The synthetic release candidate remains commit
-`04be4364d6ddf2d38d9c3a142da51b491c31ebb2`, source-tree hash
-`sha256:af167a3ec447f4d204cca4ad9f945be7b45e14cdc55fb46fe02500cc4d276628`.
-Rollout-control code may advance independently; it must never silently replace
-that frozen deployment candidate.
+authorize production. The measurement-shadow release candidate is commit
+`7809c6aea06620b09751b9189ad8cd8dbc19f5ff`, source-tree hash
+`sha256:6e0635d8ba2eff4ea3dba6d24c1aec4d209c209eb0e9976ab79574a185e31ee1`.
+This binding applies only to measurement slice 1; slices 2 and 3 remain
+unapproved. Rollout-control code may advance independently; it must never
+silently replace that frozen deployment candidate.
 
 The controller is [`scripts/qicswu_rollout_control.py`](../../../scripts/qicswu_rollout_control.py).
 It provides four boundaries:
@@ -61,8 +62,8 @@ python3 scripts/qicswu_rollout_control.py preregister \
   --baseline /approved/immutable/qicswu-baseline-result.json \
   --deployment-at 2026-09-10T00:00:00Z \
   --registered-at 2026-09-09T20:00:00Z \
-  --release-commit 04be4364d6ddf2d38d9c3a142da51b491c31ebb2 \
-  --source-tree-sha256 sha256:af167a3ec447f4d204cca4ad9f945be7b45e14cdc55fb46fe02500cc4d276628 \
+  --release-commit 7809c6aea06620b09751b9189ad8cd8dbc19f5ff \
+  --source-tree-sha256 sha256:6e0635d8ba2eff4ea3dba6d24c1aec4d209c209eb0e9976ab79574a185e31ee1 \
   --slice-id qicswu-metric-v1 \
   --output /approved/immutable/qicswu-preregistration.json
 ```
