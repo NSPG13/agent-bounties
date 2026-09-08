@@ -284,12 +284,20 @@ class QicswuRolloutControlTests(unittest.TestCase):
             [row["participation_path"] for row in snapshot["qualified_units"]],
             ["open_competition", "open_competition", "exclusive_claim"],
         )
+        self.assertEqual(
+            [row["protocol_role"] for row in snapshot["qualified_units"]],
+            ["compatibility", "primary", "legacy"],
+        )
         window = rollout._window_result(
             snapshot["qualified_units"], prereg["registered_decision"], "fixture"
         )
         self.assertEqual(
             window["qualified_root_work_units_by_protocol"],
             {"autonomous": 1, "open_competition_v1": 1, "open_competition_v2": 1},
+        )
+        self.assertEqual(
+            window["qualified_root_work_units_by_protocol_role"],
+            {"compatibility": 1, "legacy": 1, "primary": 1},
         )
         self.assertEqual(
             window["qualified_root_work_units_by_participation_path"],

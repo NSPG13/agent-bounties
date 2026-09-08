@@ -62,13 +62,14 @@ None. This slice uses versioned JSON artifacts and a pure evaluator. A semantic 
 
 Alert on any numeric publication while `status != available`, any hash drift without a version change, a missing required protocol/factory stream, duplicate or cross-candidate-reused chain-log identities, protocol-round mismatch, unresolved typed-view source reference, or a negative/invalid amount.
 
-Open Competition is the primary product path. The production shadow must read
-and retain both V1 and V2 streams on every run, use canonical
+Open Competition V2 is the primary protocol for new work. The production
+shadow must read and retain V2 as primary and V1 for compatibility on every
+run, use canonical
 `solution_committed` and `entry_qualified` participation semantics, preserve
 protocol identity in rollout snapshots, and fail closed if either competition
-source disappears or becomes claim-based. Autonomous exclusive-claim work
-remains measured at equal unit weight; product priority does not rewrite the
-north star.
+source disappears or becomes claim-based. Autonomous exclusive-claim work is
+the legacy path and remains measured at equal unit weight; product priority
+does not rewrite the north star.
 
 ## Rollback
 

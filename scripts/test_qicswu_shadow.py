@@ -91,6 +91,11 @@ class QicswuShadowTests(unittest.TestCase):
         run, output = self.capture()
         input_document = metric.load_json(output / "qicswu-input.json")
         self.assertEqual(run["primary_participation_path"], "open_competition")
+        self.assertEqual(run["primary_protocol"], "open_competition_v2")
+        self.assertEqual(
+            run["measured_protocol_roles"],
+            {"compatibility": 1, "legacy": 1, "primary": 1},
+        )
         self.assertEqual(
             run["participation_path_source_counts"],
             {"exclusive_claim": 1, "open_competition": 2},
@@ -99,6 +104,12 @@ class QicswuShadowTests(unittest.TestCase):
         self.assertEqual(run["metric"]["status"], "unavailable")
         self.assertIsNone(run["metric"]["north_star_per_day"])
         self.assertFalse(run["publication_eligible"])
+
+    def test_open_competition_v1_cannot_replace_v2_as_primary(self) -> None:
+        policy = copy.deepcopy(self.policy)
+        policy["product_path_priority"]["primary_protocol"] = "open_competition_v1"
+        with self.assertRaisesRegex(shadow.ShadowCaptureError, "V2 must remain"):
+            shadow.validate_policy(policy)
 
     def test_open_competition_v1_uses_the_canonical_solution_commit_event(self) -> None:
         policy = copy.deepcopy(self.policy)

@@ -4,7 +4,7 @@ Status: **release candidate; not deployed**.
 
 This package contains exactly three independently deployable product slices with scoped application rollback. Slice 3's additive analytics allowlist migration is intentionally forward-only and remains inert if its producers are rolled back. The slices are ordered by dependency on trustworthy measurement, then supply-side actionability, then preparation for a separately authorized external-demand activation:
 
-1. `qicswu-metric-v1` — a versioned, fail-closed north-star contract, deterministic evaluator, qualification ledger, frozen baseline, and read-only scheduled production shadow. Open Competition is its primary participation path; both competition protocols and the legacy exclusive-claim lane remain measured without reweighting.
+1. `qicswu-metric-v1` — a versioned, fail-closed north-star contract, deterministic evaluator, qualification ledger, frozen baseline, and read-only scheduled production shadow. Open Competition V2 is primary for new work; V1 compatibility settlements and the legacy exclusive-claim lane remain measured without reweighting.
 2. `truthful-ready-to-earn-v1` — remove work that fails the documented structural, state, time, action-allowlist, or applicable canonical-margin checks from the agent-facing `ready_to_earn` view.
 3. `pinned-regression-post-fund-handoff-v1` — install the immutable verifier handoff contract, fail-closed browser/MCP behavior, and boundary telemetry while the production catalog remains explicitly inactive and every such handoff remains draft-only.
 

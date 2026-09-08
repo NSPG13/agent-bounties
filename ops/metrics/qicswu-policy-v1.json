@@ -94,12 +94,16 @@
   },
   "product_path_priority": {
     "primary_participation_path": "open_competition",
+    "primary_protocol": "open_competition_v2",
     "open_competition_protocols": [
       "open_competition_v1",
       "open_competition_v2"
     ],
+    "compatibility_protocols": [
+      "open_competition_v1"
+    ],
     "legacy_supported_path": "autonomous_exclusive_claim",
-    "measurement_boundary": "Path priority does not exclude or reweight otherwise qualifying canonical settlements. It keeps Open Competition visible as the primary product path while preserving a comparable marketplace-wide north star."
+    "measurement_boundary": "Open Competition V2 is the primary protocol for new work. V1 remains measured for compatibility and historical continuity, and autonomous exclusive claims remain measured as a legacy path. These roles do not exclude or reweight otherwise qualifying canonical settlements."
   },
   "qualification": {
     "require_positive_solver_payout": true,

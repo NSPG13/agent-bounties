@@ -188,10 +188,10 @@
     "total_root_work_units": null,
     "unit": "root_work_units_per_complete_utc_day"
   },
-  "policy_hash": "sha256:111797ce4e566128a99e6d23ada77d5a23d1bb7df4a408333628fe56bfdf4034",
+  "policy_hash": "sha256:2696fbce08850f53912c4d6e9579fe642f6e2a9772730bff9fd4bf69fb9121c5",
   "policy_id": "qicswu-base-mainnet-v1.2.0",
   "principal_registry_hash": "sha256:091d6a005819168b181bbc6f94da63397e441186a533d99ec92503c9bec1b581",
-  "result_hash": "sha256:af46f90acb924f57176b261830ccf7d989d6a26eb77b0969baf8e4c2e394aeec",
+  "result_hash": "sha256:70449e730ac4dab7efe670c9e4b400597d43ea835a4a12710ef1ceb6d2c78f68",
   "root_work_map_hash": "sha256:b941ccfbfe4d1229588b0f980cc22bd57830895a39627c7e8e2931dd4772beb1",
   "schema_version": "agent-bounties/qicswu-evaluation-result-v1",
   "secondary_metrics": {

@@ -25,6 +25,7 @@ CHAIN_ID = 8453
 SOURCE_OBSERVATION_SCHEMA = "agent-bounties/qicswu-shadow-source-observations-v1"
 RUN_SCHEMA = "agent-bounties/qicswu-production-shadow-run-v1"
 PRIMARY_PATH = "open_competition"
+PRIMARY_PROTOCOL = "open_competition_v2"
 
 SOURCE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "autonomous": {
@@ -35,6 +36,7 @@ SOURCE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "settlement_event_kind": "bounty_settled",
         "participation_event_kind": "bounty_claimed",
         "participation_path": "exclusive_claim",
+        "protocol_role": "legacy",
         "verifier_reward_field": "verifier_reward",
     },
     "open_competition_v1": {
@@ -45,6 +47,7 @@ SOURCE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "settlement_event_kind": "bounty_settled",
         "participation_event_kind": "solution_committed",
         "participation_path": PRIMARY_PATH,
+        "protocol_role": "compatibility",
         "verifier_reward_field": "verifier_reward",
     },
     "open_competition_v2": {
@@ -55,6 +58,7 @@ SOURCE_DEFINITIONS: dict[str, dict[str, Any]] = {
         "settlement_event_kind": "competition_settled",
         "participation_event_kind": "entry_qualified",
         "participation_path": PRIMARY_PATH,
+        "protocol_role": "primary",
         "verifier_reward_field": "keeper_reward",
     },
 }
@@ -129,10 +133,18 @@ def validate_policy(policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
         priority.get("primary_participation_path") == PRIMARY_PATH,
         "Open Competition must remain the primary participation path",
     )
+    require(
+        priority.get("primary_protocol") == PRIMARY_PROTOCOL,
+        "Open Competition V2 must remain the primary protocol",
+    )
     expected_open = {"open_competition_v1", "open_competition_v2"}
     require(
         set(priority.get("open_competition_protocols", [])) == expected_open,
         "policy must declare both Open Competition protocols",
+    )
+    require(
+        priority.get("compatibility_protocols") == ["open_competition_v1"],
+        "Open Competition V1 must remain the compatibility protocol",
     )
 
     rows = policy.get("canonical_settlement_protocols")
@@ -167,6 +179,10 @@ def validate_policy(policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 row.get("participation_event_kind") != "bounty_claimed",
                 f"{protocol} must not use the exclusive-claim event",
             )
+    require(
+        SOURCE_DEFINITIONS[PRIMARY_PROTOCOL]["protocol_role"] == "primary",
+        "the primary protocol source must retain its primary role",
+    )
     return by_protocol
 
 
@@ -288,6 +304,7 @@ def capture_day(
             {
                 "protocol": protocol,
                 "participation_path": source["participation_path"],
+                "protocol_role": source["protocol_role"],
                 "participation_event_kind": source["participation_event_kind"],
                 "endpoint": source["url"],
                 "raw_response_path": str(raw_path.relative_to(output_dir)),
@@ -300,6 +317,7 @@ def capture_day(
         source_coverage.append(
             {
                 "protocol": protocol,
+                "protocol_role": source["protocol_role"],
                 "factory_contracts": [source["factory_contract"]],
                 "coverage_started_at": utc_text(started),
                 "coverage_ended_at": utc_text(ended),
@@ -324,6 +342,7 @@ def capture_day(
             "complete_utc_days": 1,
         },
         "primary_participation_path": PRIMARY_PATH,
+        "primary_protocol": PRIMARY_PROTOCOL,
         "sources": source_rows,
         "boundary": "These are retained production API event-stream observations. They are discovery evidence, not independent RPC, identity, funding, reimbursement, root-work, or settlement qualification evidence.",
     }
@@ -374,6 +393,7 @@ def capture_day(
     write_immutable_json(result_path, result)
 
     path_counts = Counter(source["participation_path"] for source in source_rows)
+    role_counts = Counter(source["protocol_role"] for source in source_rows)
     candidate_counts = Counter(row["protocol"] for row in candidates)
     run = {
         "schema_version": RUN_SCHEMA,
@@ -382,7 +402,9 @@ def capture_day(
         "policy_id": policy["policy_id"],
         "policy_hash": canonical_hash(policy),
         "primary_participation_path": PRIMARY_PATH,
+        "primary_protocol": PRIMARY_PROTOCOL,
         "measured_protocols": sorted(protocol_policy),
+        "measured_protocol_roles": dict(sorted(role_counts.items())),
         "participation_path_source_counts": dict(sorted(path_counts.items())),
         "observed_settlement_candidates_by_protocol": {
             protocol: candidate_counts.get(protocol, 0) for protocol in sorted(SOURCE_DEFINITIONS)
@@ -413,7 +435,7 @@ def capture_day(
             "metric_result": {"path": "qicswu-result.json", "sha256": canonical_hash(result)},
         },
         "publication_eligible": False,
-        "boundary": "This internal read-only production shadow makes Open Competition the primary observed participation path while measuring every supported canonical settlement protocol at equal unit weight. It cannot publish a number, move funds, or authorize a later rollout slice.",
+        "boundary": "This internal read-only production shadow identifies Open Competition V2 as the primary new-work protocol, retains V1 for compatibility and autonomous claims as legacy, and measures every supported canonical settlement protocol at equal unit weight. It cannot publish a number, move funds, or authorize a later rollout slice.",
     }
     run["artifact_hash"] = artifact_hash(run)
     write_immutable_json(output_dir / "run-manifest.json", run)

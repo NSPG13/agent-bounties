@@ -74,6 +74,11 @@ PARTICIPATION_PATH_BY_PROTOCOL = {
     "open_competition_v1": "open_competition",
     "open_competition_v2": "open_competition",
 }
+PROTOCOL_ROLE_BY_PROTOCOL = {
+    "autonomous": "legacy",
+    "open_competition_v1": "compatibility",
+    "open_competition_v2": "primary",
+}
 SHA256_RE = __import__("re").compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT_RE = __import__("re").compile(r"^[0-9a-f]{40}$")
 HEX32_RE = __import__("re").compile(r"^0x[0-9a-f]{64}$")
@@ -538,6 +543,7 @@ def _qualified_units(result: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "candidate_key": row["candidate_key"],
                 "protocol": protocol,
                 "participation_path": PARTICIPATION_PATH_BY_PROTOCOL[protocol],
+                "protocol_role": PROTOCOL_ROLE_BY_PROTOCOL[protocol],
                 "eligibility_status": "complete",
                 "eligibility_result_hash": result["result_hash"],
                 "direct_settlement_proof": {
@@ -644,6 +650,10 @@ def _validate_snapshot_unit(unit: Any, result_hash: Any) -> None:
         unit.get("participation_path") == PARTICIPATION_PATH_BY_PROTOCOL[protocol],
         "qualified unit participation path does not match its protocol",
     )
+    _require(
+        unit.get("protocol_role") == PROTOCOL_ROLE_BY_PROTOCOL[protocol],
+        "qualified unit protocol role does not match its protocol",
+    )
     _require(unit.get("eligibility_status") == "complete", "qualified unit eligibility is incomplete")
     _require(unit.get("eligibility_result_hash") == result_hash, "qualified unit eligibility result binding drifted")
     _require(unit.get("unresolved_disputes") == [], "qualified unit has an unresolved dispute")
@@ -680,6 +690,7 @@ def _window_result(units: list[dict[str, Any]], decision: dict[str, Any], label:
     gmv = sum(unit["settled_gmv_base_units"] for unit in units)
     payout_median = _median(unit["solver_payout_base_units"] for unit in units)
     protocol_counts = Counter(unit["protocol"] for unit in units)
+    protocol_role_counts = Counter(unit["protocol_role"] for unit in units)
     participation_path_counts = Counter(unit["participation_path"] for unit in units)
     if count < decision["target_count_per_28_day_window"]:
         reasons.append("target_count_not_met")
@@ -693,6 +704,9 @@ def _window_result(units: list[dict[str, Any]], decision: dict[str, Any], label:
         "status": "passed" if not reasons else "failed",
         "qualified_root_work_units": count,
         "qualified_root_work_units_by_protocol": dict(sorted(protocol_counts.items())),
+        "qualified_root_work_units_by_protocol_role": dict(
+            sorted(protocol_role_counts.items())
+        ),
         "qualified_root_work_units_by_participation_path": dict(
             sorted(participation_path_counts.items())
         ),

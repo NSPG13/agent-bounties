@@ -59,6 +59,8 @@ jobs:
           python scripts/qicswu_shadow.py --day "$QICSWU_DAY" --output-dir "$output"
           jq -e '
             .primary_participation_path == "open_competition" and
+            .primary_protocol == "open_competition_v2" and
+            .measured_protocol_roles == {"compatibility":1,"legacy":1,"primary":1} and
             .participation_path_source_counts.open_competition == 2 and
             .participation_path_source_counts.exclusive_claim == 1 and
             .metric.status == "unavailable" and

@@ -72,12 +72,12 @@ the fail-closed metric; verifies any observed settlement receipt, block, log,
 and solver transfer against both candidate RPC providers; and uploads the
 immutable internal evidence for 30 days.
 
-Open Competition is the primary participation path. The workflow treats V1
-`solution_committed` and V2 `entry_qualified` as their canonical participation
-events, keeps their protocol identities in the artifacts, and fails if either
-Open Competition source disappears or is redefined as claim-based. Autonomous
-exclusive claims remain measured at equal unit weight so the marketplace-wide
-north star is not manipulated by changing protocol labels.
+Open Competition V2 is the primary protocol for new work. The workflow treats
+V2 `entry_qualified` as primary and V1 `solution_committed` as compatibility,
+keeps both protocol identities in the artifacts, and fails if either source
+disappears or is redefined as claim-based. Autonomous exclusive claims remain
+measured as legacy work at equal unit weight so the marketplace-wide north star
+is not manipulated by changing protocol labels.
 
 This shadow is deliberately not a public dashboard. It emits a null north star
 until the historical-factory stream, lifecycle, payout-state, identity,
