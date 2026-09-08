@@ -73,8 +73,13 @@ const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
     "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
     "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
 ];
 const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
+// Keep the paid-rail canary bound to the independently rehearsed historical tree.
+const RECONCILED_GLAMA_CANARY_COMMIT: &str = "0fae18cf9be464132cde52dfb9d464d836e8f024";
+const RECONCILED_GLAMA_CANARY_DIGEST: &str =
+    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656";
 const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
     (
         RECONCILED_REGRESSION_BENCHMARK_DIGESTS[0],
@@ -111,6 +116,10 @@ const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
     (
         RECONCILED_REGRESSION_BENCHMARK_DIGESTS[8],
         "benchmarks/direct-inventory-v1/stalled-work",
+    ),
+    (
+        RECONCILED_GLAMA_CANARY_DIGEST,
+        "benchmarks/distribution-v1/glama-onboarding-audit",
     ),
 ];
 const CHATGPT_ADVERTISED_TOOL_NAMES: &[&str] = &[
@@ -941,8 +950,12 @@ fn validate_prepared_verifier(
             (*digest == benchmark_digest).then_some(*approved_subdirectory)
         },
     );
+    let approved_commit = (commit == RECONCILED_REGRESSION_BENCHMARK_COMMIT
+        && benchmark_digest != RECONCILED_GLAMA_CANARY_DIGEST)
+        || (commit == RECONCILED_GLAMA_CANARY_COMMIT
+            && benchmark_digest == RECONCILED_GLAMA_CANARY_DIGEST);
     if !repository.eq_ignore_ascii_case("NSPG13/agent-bounties")
-        || commit != RECONCILED_REGRESSION_BENCHMARK_COMMIT
+        || !approved_commit
         || approved_subdirectory != Some(subdirectory)
     {
         return Err(
@@ -5467,6 +5480,29 @@ mod tests {
 
     #[test]
     fn verifier_handoff_rejects_incomplete_or_non_executable_inputs() {
+        let mut glama_canary = valid_args();
+        glama_canary.benchmark.as_mut().unwrap()["source"]["commit"] =
+            json!(RECONCILED_GLAMA_CANARY_COMMIT);
+        glama_canary.benchmark.as_mut().unwrap()["source"]["subdirectory"] =
+            json!("benchmarks/distribution-v1/glama-onboarding-audit");
+        glama_canary.benchmark.as_mut().unwrap()["runner_manifest"]["benchmark_digest"] =
+            json!(RECONCILED_GLAMA_CANARY_DIGEST);
+        let glama_image = sandbox_bounty_image_reference(&glama_canary)
+            .unwrap()
+            .unwrap();
+        let glama_result = build_bounty_post_handoff(&glama_canary, Some(&glama_image));
+        assert!(glama_result.is_ok(), "{glama_result:?}");
+        for (field, value) in [
+            ("commit", json!(RECONCILED_REGRESSION_BENCHMARK_COMMIT)),
+            ("subdirectory", json!("benchmarks/copied-location")),
+        ] {
+            let mut altered = glama_canary.clone();
+            altered.benchmark.as_mut().unwrap()["source"][field] = value;
+            assert!(build_bounty_post_handoff(&altered, None)
+                .unwrap_err()
+                .contains("immutable source tuple"));
+        }
+
         let mut args = valid_args();
         args.evidence_schema = None;
         assert!(build_bounty_post_handoff(&args, None)

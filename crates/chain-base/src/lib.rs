@@ -433,8 +433,13 @@ const RECONCILED_REGRESSION_BENCHMARK_DIGESTS: &[&str] = &[
     "sha256:73fc58dcd45e551344f8889095b7d3a71546170ba7f05fb1876aaf6aa796ac3d",
     "sha256:3bfb647d41539693c9598a01d9f9f7953a285dfb7c1986a190560a8745f64731",
     "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
+    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
 ];
 const RECONCILED_REGRESSION_BENCHMARK_COMMIT: &str = "fa946859a3379b8c9128183e20dedb3b8319a646";
+// Keep the paid-rail canary bound to the independently rehearsed historical tree.
+const RECONCILED_GLAMA_CANARY_COMMIT: &str = "0fae18cf9be464132cde52dfb9d464d836e8f024";
+const RECONCILED_GLAMA_CANARY_DIGEST: &str =
+    "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656";
 // This older immutable tuple contains exactly the reviewed OpenHands tree.
 // Keep the alias scoped to that digest/path; it is not approval of the whole commit.
 const RECONCILED_OPENHANDS_ORIGINAL_COMMIT: &str = "aa28ec742efd4063260653510ba324e291267515";
@@ -476,6 +481,10 @@ const RECONCILED_REGRESSION_BENCHMARK_SOURCES: &[(&str, &str)] = &[
     (
         "sha256:a14e53feada2f49b646d340a494c822ec3112a2a6c468ce1cdb21fd7ee23a3d7",
         "benchmarks/direct-inventory-v1/stalled-work",
+    ),
+    (
+        RECONCILED_GLAMA_CANARY_DIGEST,
+        "benchmarks/distribution-v1/glama-onboarding-audit",
     ),
 ];
 const PUBLIC_EARNING_MIN_VERIFIER_REWARD_USDC_BASE_UNITS: u128 = 10_000;
@@ -5566,9 +5575,12 @@ fn validate_reconciled_regression_benchmark(
                 .and_then(|value| value.get("commit"))
                 .and_then(Value::as_str)
                 .is_some_and(|commit| {
-                    commit.eq_ignore_ascii_case(RECONCILED_REGRESSION_BENCHMARK_COMMIT)
+                    (commit.eq_ignore_ascii_case(RECONCILED_REGRESSION_BENCHMARK_COMMIT)
+                        && benchmark_digest != Some(RECONCILED_GLAMA_CANARY_DIGEST))
                         || (commit.eq_ignore_ascii_case(RECONCILED_OPENHANDS_ORIGINAL_COMMIT)
                             && subdirectory == "benchmarks/direct-growth-v2/openhands-integration")
+                        || (commit.eq_ignore_ascii_case(RECONCILED_GLAMA_CANARY_COMMIT)
+                            && benchmark_digest == Some(RECONCILED_GLAMA_CANARY_DIGEST))
                 })
             && source
                 .and_then(|value| value.get("subdirectory"))
@@ -8682,6 +8694,30 @@ mod tests {
             Err(ChainBaseError::InvalidTermsDocument(message))
                 if message.contains("independently reconciled")
         ));
+        let mut glama_canary_document = supported_document.clone();
+        glama_canary_document.benchmark["source"]["commit"] = json!(RECONCILED_GLAMA_CANARY_COMMIT);
+        glama_canary_document.benchmark["source"]["subdirectory"] =
+            json!("benchmarks/distribution-v1/glama-onboarding-audit");
+        glama_canary_document.benchmark["runner_manifest"]["benchmark_digest"] =
+            json!(RECONCILED_GLAMA_CANARY_DIGEST);
+        assert!(build_autonomous_bounty_terms_record(
+            &record.creator_wallet,
+            glama_canary_document.clone(),
+            now,
+        )
+        .is_ok());
+        for (field, value) in [
+            ("commit", json!(RECONCILED_REGRESSION_BENCHMARK_COMMIT)),
+            ("subdirectory", json!("benchmarks/copied-location")),
+        ] {
+            let mut altered = glama_canary_document.clone();
+            altered.benchmark["source"][field] = value;
+            assert!(matches!(
+                build_autonomous_bounty_terms_record(&record.creator_wallet, altered, now),
+                Err(ChainBaseError::InvalidTermsDocument(message))
+                    if message.contains("immutable source tuple")
+            ));
+        }
         let supported_record =
             build_autonomous_bounty_terms_record(&record.creator_wallet, supported_document, now)
                 .unwrap();
