@@ -8,7 +8,10 @@ const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css
 const server = http.createServer((req, res) => {
   const file = path.resolve(site, "." + decodeURIComponent(new URL(req.url, "http://localhost").pathname));
   if (!file.startsWith(site + path.sep)) return res.writeHead(403).end();
-  try { res.writeHead(200, { "Content-Type": mime[path.extname(file)] || "application/octet-stream" }).end(fs.readFileSync(file)); }
+  try {
+    const body = fs.readFileSync(file);
+    res.writeHead(200, { "Content-Type": mime[path.extname(file)] || "application/octet-stream" }).end(body);
+  }
   catch { res.writeHead(404).end(); }
 });
 async function bounds(page, selector) {
@@ -27,7 +30,10 @@ async function layout(page) {
 async function main() {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+  });
   try {
     for (const [width, height] of [[1440,900],[946,838],[640,480],[390,600],[320,480],[768,320],[480,360]]) {
       const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" });

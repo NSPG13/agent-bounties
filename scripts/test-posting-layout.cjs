@@ -12,7 +12,7 @@ const root = path.resolve(__dirname, "..");
 const baseline = process.env.POSTING_LAYOUT_BASELINE;
 const mime = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml" };
 const server = http.createServer((req, res) => {
-  const relative = decodeURIComponent(new URL(req.url, "http://localhost").pathname).replace(/^\/+/, "");
+  const relative = decodeURIComponent(new URL(req.url, "http://localhost").pathname).replace(/^\/+/, "") || "index.html";
   const filename = path.resolve(root, "site", relative);
   if (!filename.startsWith(path.join(root, "site") + path.sep)) { res.writeHead(403).end(); return; }
   try {
@@ -65,7 +65,10 @@ async function modalBounds(page, selector) {
 async function main() {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = "http://127.0.0.1:" + server.address().port;
-  const browser = await playwright.chromium.launch({ headless: true });
+  const browser = await playwright.chromium.launch({
+    headless: true,
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+  });
   const sizes = [
     { width: 1440, height: 900 }, { width: 946, height: 838 },
     { width: 640, height: 480 }, { width: 390, height: 600 },
@@ -81,6 +84,7 @@ async function main() {
       page.on("pageerror", error => errors.push(error.message));
       await context.route("**/*", async route => {
         const url = new URL(route.request().url());
+        if (url.pathname === "/auth/session") return route.fulfill({ json: { authenticated: true, account_status: "ready", account_complete: true, user: { id: "layout-qa" } } });
         if (url.origin !== origin) return route.abort();
         if (url.pathname === "/phone-wallet-config.js") return route.fulfill({ contentType: "text/javascript", body: 'window.agentBountiesPhoneWalletConfig={projectId:"00000000000000000000000000000000"};' });
         // Inert provider renders a synthetic QR image, with no relay connection.
@@ -183,6 +187,37 @@ async function main() {
       assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
       assert.deepEqual(errors, [], "No browser runtime errors");
       console.log("PASS posting, wallet review, QR, keyboard and scrolling at " + size.width + "x" + size.height + (size.zoomReflow ? " (200% browser-zoom reflow equivalent)" : ""));
+      await context.close();
+    }
+    {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+      const page = await context.newPage();
+      await context.route("**/*", async route => {
+        const url = new URL(route.request().url());
+        if (url.pathname === "/auth/session") return route.fulfill({ json: { authenticated: false, account_status: "signed_out", account_complete: false, providers: { github: true } } });
+        if (url.origin !== origin) return route.abort();
+        if (url.pathname === "/phone-wallet-config.js") return route.fulfill({ contentType: "text/javascript", body: "window.agentBountiesPhoneWalletConfig={};" });
+        return route.continue();
+      });
+      await page.addInitScript(() => {
+        window.__walletWrites = [];
+        window.ethereum = { request: async request => { window.__walletWrites.push(request.method); throw new Error("No wallet request is allowed during login."); } };
+      });
+      await page.goto(`${origin}/post.html?from=ai-app&title=Preserve+this+exact+draft&testMarker=opaque`);
+      await page.waitForFunction(() => window.AgentBountiesComposer);
+      await page.evaluate(draft => window.AgentBountiesComposer.stage(draft), fixture);
+      const login = page.getByRole("button", { name: "LOG IN TO POST", exact: true });
+      await login.waitFor();
+      assert.equal(await login.isEnabled(), true);
+      const exactTarget = page.url();
+      await Promise.all([
+        page.waitForURL(`${origin}/?postReturn=1#login`, { waitUntil: "domcontentloaded" }),
+        login.click(),
+      ]);
+      await page.locator("[data-auth-dialog][open]").waitFor();
+      assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("agentbounties:post-auth-return:v1")).target), exactTarget);
+      assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+      console.log("PASS signed-out posting action opens login with the exact draft preserved and no wallet request");
       await context.close();
     }
   } finally { await browser.close(); }

@@ -23,6 +23,7 @@ on:
       - "scripts/test-phone-wallet-network.cjs"
       - "scripts/test-phone-wallet-storage.cjs"
       - "scripts/test-posting-layout.cjs"
+      - "scripts/test-posting-auth.js"
       - "tools/browser-layout/**"
       - "scripts/configure-phone-wallet.py"
       - "scripts/configure-wallet-providers.py"
@@ -56,6 +57,7 @@ on:
       - "scripts/test-phone-wallet-network.cjs"
       - "scripts/test-phone-wallet-storage.cjs"
       - "scripts/test-posting-layout.cjs"
+      - "scripts/test-posting-auth.js"
       - "tools/browser-layout/**"
       - "scripts/configure-phone-wallet.py"
       - "scripts/configure-wallet-providers.py"
@@ -122,10 +124,13 @@ jobs:
           node --check site/webmcp.js
           node --check site/participate.js
           node --check site/phone-wallet.js
+          node --check site/posting-auth.js
       - name: Test the living scene and marketplace evidence states
         run: node --test scripts/test-solarpunk-home.js
       - name: Test assistant desktop handoff and draft preservation
         run: node scripts/test-ai-bounty-handoff.js
+      - name: Test login and prepared-bounty continuity
+        run: node --test scripts/test-posting-auth.js
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
