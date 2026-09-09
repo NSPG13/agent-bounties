@@ -30,7 +30,10 @@ async function main() {
   const deadline = setTimeout(() => { void browser?.close(); }, 45000);
   try {
     const origin = "http://127.0.0.1:" + server.address().port;
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+    });
     const context = await browser.newContext();
     await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
     await context.addInitScript(() => {
