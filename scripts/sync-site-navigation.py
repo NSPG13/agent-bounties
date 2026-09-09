@@ -19,8 +19,16 @@ def sync(check=False):
         relative = path.relative_to(ROOT / "site")
         prefix = "../" * (len(relative.parts) - 1)
         markup = template.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix)
-        login = ' data-auth-open aria-haspopup="dialog" aria-controls="auth-dialog" aria-expanded="false"' if relative.as_posix() == "index.html" else ""
-        markup = markup.replace("{{login_attributes}}", login)
+        if relative.as_posix() == "index.html":
+            login_href = "#login"
+            login_attributes = ' data-auth-open aria-haspopup="dialog" aria-controls="auth-dialog" aria-expanded="false"'
+        elif relative.as_posix() == "post.html":
+            login_href = "?postReturn=1#login"
+            login_attributes = " data-post-auth-start"
+        else:
+            login_href = "#login"
+            login_attributes = ""
+        markup = markup.replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes)
         block = START + "\n" + markup + "\n" + END
         source = path.read_text(encoding="utf-8")
         if PATTERN.search(source):

@@ -1,10 +1,13 @@
 (function (root, factory) {
-  const api = factory(typeof module === "object" && module.exports
-    ? require("./posting-prompt.js") : root.AgentBountiesPostingPrompt);
+  const commonJs = typeof module === "object" && module.exports;
+  const api = factory(
+    commonJs ? require("./posting-prompt.js") : root.AgentBountiesPostingPrompt,
+    commonJs ? require("./posting-auth.js") : root.AgentBountiesPostingAuth,
+  );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.SolarpunkHome = api;
   if (root && root.document) api.start(root, root.document);
-})(typeof window !== "undefined" ? window : globalThis, function (postingPrompt) {
+})(typeof window !== "undefined" ? window : globalThis, function (postingPrompt, postingAuth) {
   "use strict";
 
   const PHASES = ["dawn", "day", "dusk", "night"];
@@ -736,6 +739,12 @@ ${competitionChildBrief(item)}`;
       let embeddedAddress = null;
       let accountStatus = "checking";
 
+      const returnToPreparedPost = (details = {}) => {
+        if (!currentUser || accountStatus !== "ready" || !postingAuth?.pending(win)) return false;
+        setStatus("Your account is ready. Returning to the prepared bounty…");
+        return postingAuth.complete(win, details);
+      };
+
       const setStatus = (message) => {
         if (status) status.textContent = message;
       };
@@ -1087,6 +1096,9 @@ ${competitionChildBrief(item)}`;
           if (currentUser !== linkingUser) throw { code: 4001 };
           const address = String(Array.isArray(accounts) ? accounts[0] : "").trim().toLowerCase();
           if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw { reason: "invalid_wallet_address" };
+          const walletLabel = selection.kind === "phone" ? "Phone wallet"
+            : selection.kind === "embedded" ? "Embedded wallet" : selection.label || "Wallet";
+          setWalletStatus(`${walletLabel} ${shortWalletAddress(address)} connected. Preparing the ownership-only confirmation…`);
           if (selection.kind === "embedded") {
             embeddedAddress = address;
             renderWallets(verifiedWallets);
@@ -1095,16 +1107,18 @@ ${competitionChildBrief(item)}`;
           }
           if (verifiedWallets.some((wallet) => wallet.address === address)) {
             setWalletStatus(`${shortWalletAddress(address)} is already verified and linked. Your wallet is ready.`);
+            returnToPreparedPost({ walletKind: selection.kind, address });
             return;
           }
           const challenge = await postAccountJson("/wallet/challenge", { address });
           if (currentUser !== linkingUser) throw { code: 4001 };
-          setWalletStatus("Review the ownership-only message in your wallet. It cannot move funds or approve tokens.");
+          setWalletStatus(`${walletLabel} ${shortWalletAddress(address)} connected. Review the ownership-only message in your wallet; it cannot move funds or approve tokens.`);
           const signature = await linkProvider.request({
             method: "personal_sign",
             params: [utf8Hex(challenge.message), address],
           });
           if (currentUser !== linkingUser) throw { code: 4001 };
+          setWalletStatus(`${walletLabel} approval received. Verifying the account link…`);
           const verification = await postAccountJson("/wallet/verify", {
             challenge_id: challenge.challenge_id,
             address,
@@ -1127,6 +1141,7 @@ ${competitionChildBrief(item)}`;
             ? `${shortWalletAddress(address)} is verified and linked. Your account is ready.`
             : "Wallet ownership was confirmed. Recheck your account setup to continue.");
           win.agentBountiesAnalytics?.track("wallet_link_confirmed");
+          returnToPreparedPost({ walletKind: selection.kind, address });
         } catch (error) {
           if (currentUser === linkingUser) setWalletStatus(embeddedAddress && !verifiedWallets.some((wallet) => wallet.address === embeddedAddress)
             ? `Your wallet is ready, but account linking is not finished. ${walletLinkErrorMessage(error)} Select Finish linking to retry.`
@@ -1139,6 +1154,11 @@ ${competitionChildBrief(item)}`;
         }
       };
       walletLinkButton?.addEventListener("click", () => linkWallet());
+      win.addEventListener("agent-bounties:phone-wallet-state", (event) => {
+        const snapshot = event.detail;
+        if (!currentUser || !walletLinkButton?.disabled || !snapshot?.connected || !/^0x[0-9a-fA-F]{40}$/.test(snapshot.address || "")) return;
+        setWalletStatus(`Phone wallet ${shortWalletAddress(snapshot.address)} connected. Preparing the ownership-only confirmation…`);
+      });
       walletList?.addEventListener("click", async (event) => {
         if (event.target.closest?.("[data-wallet-finish]")) { await linkWallet(true); return; }
         if (event.target.closest?.("[data-wallet-access]")) { await win.AgentBountiesCoinbaseEmbeddedWallet?.manageAccess(); return; }
@@ -1228,8 +1248,9 @@ ${competitionChildBrief(item)}`;
       openLoginHash();
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
-      loadSession().then(() => {
-        if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) void linkWallet(true);
+      loadSession().then(async () => {
+        if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) await linkWallet(true);
+        if (returnToPreparedPost()) return;
         if (authResult !== "success" && authResult !== "error") return;
         setStatus(authResult === "success" && accountStatus !== "ready"
           ? "You’re signed in. Link a wallet to finish your account."

@@ -68,12 +68,29 @@
     "sun", "road", "lamp", "building", "tree", "water", "screen", "document", "network", "tool", "person", "check", "bridge", "book", "chart",
   ]);
 
+  function postingAccountStatus(payload) {
+    if (!payload?.authenticated) return "signed_out";
+    if (payload.account_status === "ready" && payload.account_complete === true) return "ready";
+    if (payload.account_status === "wallet_required" && payload.account_complete === false) return "setup";
+    return "unavailable";
+  }
+
+  function postingPrimaryAction(accountStatus, handoffReview = false) {
+    if (accountStatus === "ready") return { action: "approve", disabled: false, label: handoffReview ? "Confirm bounty" : "Approve bounty card" };
+    if (accountStatus === "setup") return { action: "login", disabled: false, label: "FINISH SETUP TO POST" };
+    if (accountStatus === "checking") return { action: "wait", disabled: true, label: "Checking login…" };
+    if (accountStatus === "unavailable") return { action: "login", disabled: false, label: "CHECK ACCOUNT TO POST" };
+    return { action: "login", disabled: false, label: "LOG IN TO POST" };
+  }
+
   if (typeof module === "object" && module.exports) {
     module.exports = Object.freeze({
       parseDistributionAttribution,
       parsePreparedRewardSplit,
       rewardSplitForTotal,
       verificationReadiness,
+      postingAccountStatus,
+      postingPrimaryAction,
     });
     return;
   }
@@ -171,6 +188,8 @@
     handoffReview: false,
     distributionAttribution: null,
     observedWalletState: null,
+    postingAccountStatus: "checking",
+    postingAuthReceipt: null,
   };
 
   function track(eventName, details) {
@@ -220,6 +239,72 @@
       item.dataset.active = String(index === activeIndex);
       item.dataset.complete = String(index >= 0 && index < activeIndex);
     });
+  }
+
+  function postingAuthMessage() {
+    if (state.postingAccountStatus === "ready") {
+      return state.postingAuthReceipt
+        ? "Login and account setup are complete. Your prepared bounty is intact. Confirm it, then choose the wallet that will fund it."
+        : "Review the terms, reward, content-derived visual, and verification disclosure. Nothing has been posted or funded.";
+    }
+    if (state.postingAccountStatus === "setup") {
+      return "You are signed in. Finish linking an account wallet, then you will return to this exact prepared bounty. Account setup cannot post or fund it.";
+    }
+    if (state.postingAccountStatus === "checking") {
+      return "Checking your Agent Bounties login. Your prepared bounty remains in this tab.";
+    }
+    if (state.postingAccountStatus === "unavailable") {
+      return "We couldn’t confirm that your account is ready. Check the account screen, then return to this exact prepared bounty. Nothing has been posted or funded.";
+    }
+    return "Log in to continue with this exact prepared bounty. Login cannot connect a funding wallet, sign, post, or pay.";
+  }
+
+  function syncPrimaryAction() {
+    if (!state.draft || !state.imageReady) return;
+    const action = postingPrimaryAction(state.postingAccountStatus, state.handoffReview);
+    if (action.action !== "approve") {
+      ui.approve.dataset.nextAction = action.action;
+      ui.approve.disabled = action.disabled;
+      ui.approve.textContent = action.label;
+      ui.fund.disabled = true;
+      setStatus(postingAuthMessage(), "pending");
+      return;
+    }
+    try { supportedVerificationPolicy(); }
+    catch (error) {
+      ui.approve.disabled = true;
+      ui.fund.disabled = true;
+      ui.approve.dataset.nextAction = "blocked";
+      ui.approve.textContent = "Verification setup needed";
+      ui.confidence.textContent = "Your AI needs to finish the verification setup";
+      setStatus("Your draft is saved. Ask your AI to finish its executable verification setup before you approve funding.", "pending");
+      return;
+    }
+    ui.approve.dataset.nextAction = action.action;
+    ui.approve.disabled = action.disabled;
+    ui.approve.textContent = action.label;
+    ui.fund.disabled = true;
+    setStatus(postingAuthMessage(), state.postingAccountStatus === "ready" && state.postingAuthReceipt ? "success" : "pending");
+  }
+
+  async function loadPostingAccount() {
+    try {
+      const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname);
+      const endpoint = local ? "/auth/session" : `${API}/v1/site-auth/session`;
+      const response = await fetch(endpoint, { cache: "no-store", credentials: "include", headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`session ${response.status}`);
+      state.postingAccountStatus = postingAccountStatus(await response.json());
+    } catch (_) {
+      state.postingAccountStatus = "unavailable";
+    }
+    state.postingAuthReceipt = window.AgentBountiesPostingAuth?.consumeReceipt(window) || null;
+    syncPrimaryAction();
+    return state.postingAccountStatus;
+  }
+
+  function beginPostingLogin() {
+    try { window.AgentBountiesPostingAuth.begin(window); }
+    catch (error) { setStatus(error.message || String(error), "error"); }
   }
 
   function setComposer({ phase, prompt, label, placeholder, button, hint = "" }) {
@@ -984,23 +1069,7 @@
       );
     }
     await renderAiVisualForCurrentDraft();
-    ui.approve.disabled = false;
-    ui.approve.textContent = "Approve bounty card";
-    setStatus("Review the result, completion checks, time window, reward, and creator-verification disclosure. Nothing has been posted or funded.");
-    if (state.handoffReview) {
-      ui.approve.textContent = "Confirm bounty";
-      setStatus(state.bountyImage
-        ? "Review the exact approved image, terms, reward, and verification disclosure. Nothing has been posted or funded."
-        : "Review the terms, reward, content-derived visual, and verification disclosure. Nothing has been posted or funded.");
-    }
-    try { supportedVerificationPolicy(); }
-    catch (error) {
-      ui.approve.disabled = true;
-      ui.fund.disabled = true;
-      ui.approve.textContent = "Verification setup needed";
-      ui.confidence.textContent = "Your AI needs to finish the verification setup";
-      setStatus("Your draft is saved. Ask your AI to finish its executable verification setup before you approve funding.", "pending");
-    }
+    syncPrimaryAction();
   }
 
   function validHex(value) {
@@ -1491,6 +1560,7 @@
 
   function approveCard() {
     if (!state.imageReady) return;
+    if (state.postingAccountStatus !== "ready") { beginPostingLogin(); return; }
     try { supportedVerificationPolicy(); } catch (error) { setStatus(error.message, "error"); return; }
     state.approved = true;
     ui.approve.dataset.approved = "true";
@@ -1906,7 +1976,11 @@
   }
 
   ui.form.addEventListener("submit",handleComposerSubmit);
-  ui.approve.addEventListener("click", (event) => { if (event.isTrusted) approveCard(); });
+  ui.approve.addEventListener("click", (event) => {
+    if (!event.isTrusted) return;
+    if (ui.approve.dataset.nextAction === "login") beginPostingLogin();
+    else if (ui.approve.dataset.nextAction === "approve") approveCard();
+  });
   ui.revise.addEventListener("click",reviseCard);
   ui.share.addEventListener("click",shareBountyCard);
   ui.fund.addEventListener("click",openFunding);
@@ -1972,6 +2046,7 @@
   });
 
   configureSpeech();
+  void loadPostingAccount();
   setProgress("describe");
   const recordedPosting = postingJournal.load();
   if (recordedPosting) {

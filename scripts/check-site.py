@@ -113,6 +113,7 @@ REQUIRED_FILES = {
     "ai-bounty-handoff.css",
     "ai-bounty-handoff.js",
     "posting-prompt.js",
+    "posting-auth.js",
     "posting-workspace.js",
     "posting-workspace.css",
     "creator-review.js",
@@ -179,6 +180,7 @@ ALLOWED_UI_CODE = {
     "bug-fix.css",
     "bug-fix.js",
     "posting-prompt.js",
+    "posting-auth.js",
     "posting-workspace.js",
     "posting-workspace.css",
     "creator-review.js",
@@ -581,7 +583,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
             "data-card-verifier",
             "function renderVerifierTerms",
             "if (!ui.verifierSummary || !ui.verifier) return;",
-            'bounty-composer-v2.js?v=15',
+            'bounty-composer-v2.js?v=16',
             "function verificationReadiness",
             "verificationReadiness(benchmark, state.draft?.evidence_schema)",
             'sourceSnapshotDigest.pattern === "^sha256:[0-9a-f]{64}$"',
@@ -609,6 +611,27 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
     )
     if "const rewards=splitReward(state.fundingUsdc)" in composer:
         fail("funding must preserve an explicitly prepared solver/verifier reward split")
+    posting_auth = (site_dir / "posting-auth.js").read_text(encoding="utf-8")
+    homepage = (site_dir / "index.html").read_text(encoding="utf-8")
+    home_javascript = (site_dir / "solarpunk-home.js").read_text(encoding="utf-8")
+    require_phrases(
+        "posting login and wallet continuity",
+        post + homepage + composer + posting_auth + home_javascript,
+        [
+            'data-post-auth-start',
+            'posting-auth.js?v=1',
+            'solarpunk-home.js?v=19',
+            'bounty-composer-v2.js?v=16',
+            'label: "LOG IN TO POST"',
+            'credentials: "include"',
+            'account_status === "ready" && payload.account_complete === true',
+            'target.pathname !== "/post.html"',
+            'win.sessionStorage.setItem(INTENT_KEY',
+            'win.location.replace(target)',
+            'Returning to the prepared bounty',
+            'approval received. Verifying the account link',
+        ],
+    )
     node = shutil.which("node")
     if not node:
         fail("node is required for the WebMCP reward-handoff behavior check")

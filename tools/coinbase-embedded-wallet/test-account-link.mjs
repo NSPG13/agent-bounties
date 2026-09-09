@@ -36,7 +36,10 @@ before(async () => {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+  });
 });
 after(async () => {
   await browser?.close();
@@ -50,11 +53,11 @@ async function openAccount(page) {
   await accountLink.click();
 }
 
-async function account({ installed = true, linked = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false } = {}) {
+async function account({ installed = true, linked = false, linkedAddress = ADDRESS, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false, postTarget = null, delayedPhoneSign = false, expectAutoReturn = false } = {}) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const proofs = [], errors = [];
-  let wallets = linked ? [{ address: ADDRESS }] : [];
+  let wallets = linked ? [{ address: linkedAddress }] : [];
   let rejectVerification = failVerify;
   const network = { unavailable };
   page.on("pageerror", (error) => errors.push(error.message));
@@ -62,7 +65,13 @@ async function account({ installed = true, linked = false, mobile = false, adapt
   await page.route("**/auth/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     let body = {};
-    if (pathname.endsWith("/session")) body = { authenticated: true, user: { id: "qa", name: "Test member", provider: "google" }, providers: { google: true } };
+    if (pathname.endsWith("/session")) body = {
+      authenticated: true,
+      user: { id: "qa", name: "Test member", provider: "google" },
+      providers: { google: true },
+      account_status: wallets.length ? "ready" : "wallet_required",
+      account_complete: wallets.length > 0,
+    };
     if (pathname.endsWith("/account")) {
       if (network.unavailable || failRefresh && wallets.some(wallet => wallet.address === EMBEDDED)) { await route.fulfill({status:503,json:{}}); return; }
       body = { wallets, available: false, account_status: wallets.length ? "ready" : "wallet_required", account_complete: wallets.length > 0 };
@@ -100,7 +109,11 @@ async function account({ installed = true, linked = false, mobile = false, adapt
   if (phone) await page.route("**/phone-wallet.js?*", route => route.fulfill({contentType:"text/javascript",body:`
     window.AgentBountiesPhoneWallet = { state: () => ({available:true}), provider: {request: async request => {
       window.walletTestCalls.push({wallet:'phone', ...request});
-      return request.method === 'eth_requestAccounts' ? ['${EMBEDDED}'] : '0x' + 'cd'.repeat(65);
+      if (request.method === 'eth_requestAccounts') return ['${EMBEDDED}'];
+      if (${JSON.stringify(delayedPhoneSign)} && request.method === 'personal_sign') return new Promise(resolve => {
+        window.resolvePhoneOwnership = () => resolve('0x' + 'cd'.repeat(65));
+      });
+      return '0x' + 'cd'.repeat(65);
     }} };
   `}));
   if (pending) await page.addInitScript((intent) => {
@@ -109,15 +122,30 @@ async function account({ installed = true, linked = false, mobile = false, adapt
       sessionStorage.setItem('test-intent-seeded','true');
     }
   }, pending);
+  if (postTarget) await page.addInitScript((target) => {
+    if (!sessionStorage.getItem("test-post-return-seeded")) {
+      sessionStorage.setItem("agentbounties:post-auth-return:v1", JSON.stringify({
+        schema: "agent-bounties/post-auth-return-v1",
+        target,
+        started_at: Date.now(),
+      }));
+      sessionStorage.setItem("test-post-return-seeded", "true");
+    }
+  }, postTarget);
   // Replace only the external SDK boundary; exercise the real chooser and account handler.
   await page.route("**/vendor/coinbase-embedded-wallet.bundle.js?*", (route) => route.fulfill({
     contentType: "text/javascript",
     body: adapter ? testAdapter : `window.AgentBountiesCoinbaseEmbeddedWallet = { enabled: true, provider: { request: async (request) => {
       window.walletTestCalls.push({ wallet: "embedded", ...request });
-      return request.method === "eth_requestAccounts" ? ["${EMBEDDED}"] : "0x" + "cd".repeat(65);
+      sessionStorage.setItem("test-embedded-wallet-methods", JSON.stringify([...(JSON.parse(sessionStorage.getItem("test-embedded-wallet-methods") || "[]")), request.method]));
+      return ["eth_accounts", "eth_requestAccounts"].includes(request.method) ? ["${EMBEDDED}"] : "0x" + "cd".repeat(65);
     } } };`,
   }));
   await page.goto(origin);
+  if (expectAutoReturn) {
+    await page.waitForURL(postTarget);
+    return { context, page, proofs, errors, link: null, network };
+  }
   await openAccount(page);
   const link = page.locator("[data-wallet-link]");
   await page.waitForFunction(() => document.querySelector("[data-wallet-list]").textContent !== "Checking verified wallets…");
@@ -157,6 +185,105 @@ for (const legacy of [false, true]) for (const linked of [false, true]) test(`ph
     assert.equal(await page.locator('[data-auth-dialog]').getAttribute('data-account-status'),'ready');
     assert.deepEqual((await page.evaluate(()=>window.walletTestCalls)).map(call=>call.method),['eth_requestAccounts','personal_sign']);
     assert.equal(proofs.length,2);
+  } finally { await context.close(); }
+});
+
+function preparedPostTarget() {
+  const benchmark = {
+    engine: "sandboxed_regression_v1",
+    runner_manifest: {
+      benchmark_digest: "sha256:eed1340e372c85f87f8718696c03973748fb3fbaec7b4e90041d77d3513f9656",
+      command: ["python", "/benchmark/check.py"],
+      cpu_millis: 1000,
+      image: "docker.io/library/python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64",
+      max_benchmark_bytes: 1048576,
+      max_benchmark_files: 100,
+      max_output_bytes: 1048576,
+      max_source_bytes: 67108864,
+      max_source_files: 1000,
+      memory_bytes: 536870912,
+      pids_limit: 128,
+      platform: "linux/amd64",
+      schema_version: "agent-bounties/regression-sandbox-v1",
+      test_seed: 1,
+      timeout_seconds: 120,
+      tmpfs_bytes: 268435456,
+      workdir: "/workspace",
+    },
+    source: {
+      commit: "0fae18cf9be464132cde52dfb9d464d836e8f024",
+      kind: "github_commit",
+      repository: "NSPG13/agent-bounties",
+      subdirectory: "benchmarks/distribution-v1/glama-onboarding-audit",
+    },
+  };
+  const evidenceSchema = {
+    additionalProperties: false,
+    properties: { source_snapshot_digest: { pattern: "^sha256:[0-9a-f]{64}$", type: "string" } },
+    required: ["source_snapshot_digest"],
+    type: "object",
+  };
+  const params = new URLSearchParams({
+    from: "ai-app",
+    title: "Audit the Glama onboarding path",
+    goal: "Verify the attributed MCP path and publish canonical evidence.",
+    solverReward: "2",
+    verifierReward: "0.1",
+    taskWindowDays: "7",
+    crowdfund: "false",
+    discoverySource: "Glama paid-rail mainnet canary",
+    benchmark: JSON.stringify(benchmark),
+    evidenceSchema: JSON.stringify(evidenceSchema),
+    acquisition: `aba1_${"a".repeat(64)}.${"b".repeat(64)}`,
+    handoff: "52b6a4da-4d81-4581-b61e-a3782321cba7",
+  });
+  params.append("criterion", "Connect to the attributed Glama MCP route.");
+  params.append("criterion", "Publish redacted initialize and tools/list evidence.");
+  return `${origin}/post.html?${params}`;
+}
+
+test("phone ownership feedback returns to the exact prepared bounty without a payment request", async () => {
+  const target = preparedPostTarget();
+  const { context, page, link, errors } = await account({
+    installed: false,
+    mobile: true,
+    phone: true,
+    postTarget: target,
+    delayedPhoneSign: true,
+  });
+  try {
+    await link.click();
+    await page.getByRole("button", { name: "Use a phone wallet Scan a QR code with your wallet app." }).click();
+    await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("connected. Review the ownership-only message"));
+    assert.match(await page.locator("[data-wallet-status]").innerText(), /Phone wallet 0x222222…222222 connected/);
+    assert.deepEqual((await page.evaluate(() => window.walletTestCalls)).map(call => call.method), ["eth_requestAccounts", "personal_sign"]);
+    await page.evaluate(() => window.resolvePhoneOwnership());
+    await page.waitForURL(target);
+    await page.getByRole("button", { name: "Confirm bounty", exact: true }).waitFor();
+    assert.equal(page.url(), target);
+    assert.match(await page.locator("[data-composer-status]").innerText(), /prepared bounty is intact/i);
+    assert.equal((await page.evaluate(() => window.walletTestCalls)).some(call => ["eth_sendTransaction", "wallet_sendCalls"].includes(call.method)), false);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test("an already verified embedded wallet resumes directly into the exact prepared bounty", async () => {
+  const target = preparedPostTarget();
+  const { context, page, errors } = await account({
+    installed: false,
+    linked: true,
+    linkedAddress: EMBEDDED,
+    pending: { userId: "qa", startedAt: Date.now() },
+    postTarget: target,
+    expectAutoReturn: true,
+  });
+  try {
+    await page.getByRole("button", { name: "Confirm bounty", exact: true }).waitFor();
+    assert.equal(page.url(), target);
+    assert.match(await page.locator("[data-composer-status]").innerText(), /prepared bounty is intact/i);
+    assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem("test-embedded-wallet-methods"))), ["eth_accounts"]);
+    assert.equal((await page.evaluate(() => window.walletTestCalls)).some(call => ["personal_sign", "eth_sendTransaction", "wallet_sendCalls"].includes(call.method)), false);
+    assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
 
