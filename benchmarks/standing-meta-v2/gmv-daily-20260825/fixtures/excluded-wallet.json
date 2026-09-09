@@ -1,0 +1,21 @@
+{
+  "schema": "https://agentbounties.app/schemas/gmv-settlement-attribution.v1.json",
+  "network": "base-mainnet",
+  "chain_id": 8453,
+  "competition": "0xbab4de620cee1286307d6551bc5c2816dc27d45a",
+  "bounty_id": "0x08f50f85dcda47753ac40791503af0aa08459169204da94f4769469270abf4de",
+  "epoch_id": "0x170f7705d98a3116c6e7bb2c6c49ece365eda281ca2be2033f8d4e40a6c6f289",
+  "verification_policy_hash": "0xa81438779807146f343271f1350d2e2bb811e61c617d95978f0c883de6a3cebc",
+  "settlement": {
+    "child_bounty_contract": "0x1234567890123456789012345678901234567890",
+    "child_bounty_id": "0x0000000000000000000000000000000000000000000000000000000000000123",
+    "creator": "0x2222222222222222222222222222222222222222",
+    "solver": "0x3333333333333333333333333333333333333333",
+    "funder": "0x1eaa1c68772cf76bc5f4e4174766076e33ace662",
+    "settled_at": 1787630000,
+    "block_number": 50450000,
+    "transaction_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+    "gmv_base_units": 900000,
+    "funding_base_units": 900000
+  }
+}
