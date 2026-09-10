@@ -56,8 +56,7 @@ async function openAccount(page, { restoring = false } = {}) {
     assert.equal(await dialog.getAttribute("data-account-status"), "ready");
     return;
   }
-  // Reloading #account restores the dialog; do not click through its backdrop.
-  if (new URL(page.url()).hash === "#account") await dialog.waitFor({ state: "visible" });
+  // An already open dialog needs no second navigation click.
   if (await dialog.isVisible()) {
     if (await dialog.getAttribute("data-account-status") === "ready") {
       assert.equal(await dialog.getAttribute("data-view"), "account");
@@ -70,7 +69,7 @@ async function openAccount(page, { restoring = false } = {}) {
   await accountLink.click();
 }
 
-async function account({ installed = true, linked = false, linkedAddress = ADDRESS, linkedProvider = null, startupUnavailable = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false, postTarget = null, postReturnRoute = false, delayedPhoneSign = false, expectAutoReturn = false } = {}) {
+async function account({ installed = true, linked = false, linkedAddress = ADDRESS, linkedProvider = null, startupUnavailable = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false, postTarget = null, postReturnRoute = false, delayedPhoneSign = false, expectAutoReturn = false, expectAccountRestore = false } = {}) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const proofs = [], errors = [];
@@ -164,7 +163,7 @@ async function account({ installed = true, linked = false, linkedAddress = ADDRE
     await page.waitForURL(postTarget);
     return { context, page, proofs, errors, link: null, network };
   }
-  await openAccount(page, { restoring: Boolean(pending) });
+  await openAccount(page, { restoring: expectAccountRestore });
   const link = page.locator("[data-wallet-link]");
   await page.waitForFunction(() => document.querySelector("[data-wallet-list]").textContent !== "Checking verified wallets…");
   return { context, page, proofs, errors, link, network };
@@ -533,7 +532,7 @@ test("restoring a selected linked wallet rejects another address before ownershi
 
 test("OAuth return preserves the selected wallet address and cannot link a different wallet", async () => {
   const { context, page, proofs } = await account({ linked: true, linkedProvider: "coinbase-embedded", linkedAddress: ADDRESS,
-    pending: { userId: "qa", startedAt: Date.now(), expectedAddress: ADDRESS } });
+    pending: { userId: "qa", startedAt: Date.now(), expectedAddress: ADDRESS }, expectAccountRestore: true });
   try {
     await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("different address"));
     assert.deepEqual(proofs, []);
