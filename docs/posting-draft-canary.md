@@ -18,7 +18,7 @@ The expected protocol is:
 | Check | Expected result |
 | --- | --- |
 | `GET /v1/site-auth/session` with credentials | HTTP 200, `authenticated:true`, a 64-character lowercase account ID, `posting_drafts_enabled:true` |
-| New UUID `POST /v1/site-auth/posting-drafts/:id` | HTTP 200, revision 1; exact draft and locally computed canonical SHA-256 |
+| New UUID `POST /v1/site-auth/posting-drafts/:operation_id` | HTTP 200, revision 1; exact draft and locally computed canonical SHA-256 |
 | Credentialed read of that UUID | HTTP 200, same draft, revision, and hash |
 | Exact replay of the initial POST, including expected revision 0 | HTTP 200, same revision and hash |
 | Changed canary goal with expected revision 0 | HTTP 409; subsequent read shows the unchanged original |
