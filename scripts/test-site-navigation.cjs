@@ -63,6 +63,25 @@ async function main() {
       const ctx = await context({ viewport: { width, height: 800 } }), page = await ctx.newPage();
       let reference;
       for (const file of pages) {
+        if (file === "posting-draft-canary.html") {
+          const sessionUrl = "https://api.agentbounties.app/v1/site-auth/session";
+          await page.route(sessionUrl, route => route.fulfill({
+            headers: { "Cache-Control": "no-store" },
+            json: { authenticated: false, user: null, posting_drafts_enabled: false },
+          }));
+          await page.goto(`${origin}/${file}`);
+          await page.waitForFunction(() => document.getElementById("canary-authenticated")?.textContent === "No");
+          assert.equal(await page.locator("header, nav, form").count(), 0, "private canary remains isolated");
+          assert.deepEqual(await page.locator("script").evaluateAll(els => els.map(el => el.getAttribute("src"))), ["posting-draft-canary.js"]);
+          assert.equal(await page.locator('meta[name="robots"]').getAttribute("content"), "noindex, nofollow");
+          assert.equal(await page.locator('meta[name="referrer"]').getAttribute("content"), "no-referrer");
+          assert.equal(await page.locator("#canary-enabled").innerText(), "No");
+          assert.equal(await page.locator("#canary-operation-id").innerText(), "None created");
+          assert.equal(await page.locator("#canary-run").isDisabled(), true, "signed-out diagnostic cannot write");
+          for (const selector of ["#canary-refresh", "#canary-run", "#canary-resume", "#canary-reload"]) await assertFits(page, selector);
+          await page.unroute(sessionUrl);
+          continue;
+        }
         await page.goto(`${origin}/${file}`);
         await page.locator(".ab-site-header.is-enhanced").waitFor();
         assert.equal(await page.locator("[data-site-header]").count(), 1, file);
