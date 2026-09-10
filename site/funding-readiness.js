@@ -135,5 +135,105 @@
     } finally { clearTimeout(timer); }
   }
 
-  window.AgentBountiesFundingReadiness = Object.freeze({ parseUsdc, formatUnits, shortfall, readBalances, estimateFees });
+  function describeWalletCalls({ calls, context } = {}) {
+    if (!context || Number(context.chainId) !== 8453 || String(context.usdcAddress).toLowerCase() !== BASE_USDC
+      || !ADDRESS.test(context.factoryAddress || "") || !ADDRESS.test(context.bountyAddress || "")
+      || !Array.isArray(context.validatedCalls) || !Array.isArray(calls) || !calls.length || calls.length > 8) {
+      throw new Error("The exact validated Base posting plan is required for wallet review.");
+    }
+    const amount = BigInt(context.fundingUsdcUnits);
+    if (amount <= 0n || amount >= (1n << 256n)) throw new Error("The reviewed funding amount is invalid.");
+    const lower = (value) => String(value || "").toLowerCase();
+    const value = (call) => BigInt(call.value_wei ?? call.value ?? 0);
+    const word = (data, index) => {
+      const encoded = data.slice(10 + index * 64, 10 + (index + 1) * 64);
+      if (!/^[0-9a-f]{64}$/.test(encoded)) throw new Error("The wallet call is missing committed arguments.");
+      return BigInt(`0x${encoded}`);
+    };
+    const timestamp = (seconds) => {
+      if (seconds <= 0n || seconds > 8640000000000n) throw new Error("The wallet call has an invalid deadline.");
+      return new Date(Number(seconds) * 1000).toISOString();
+    };
+    const descriptions = calls.map((call) => {
+      const data = lower(call?.data), to = lower(call?.to);
+      if (!ADDRESS.test(to) || !/^0x(?:[0-9a-f]{2})+$/.test(data) || value(call) !== 0n
+        || !context.validatedCalls.some((approved) => lower(approved.to) === to && lower(approved.data) === data && value(approved) === 0n)) {
+        throw new Error("The wallet request differs from the validated posting plan.");
+      }
+      const selector = data.slice(0, 10);
+      if (selector === "0x095ea7b3" && to === BASE_USDC) {
+        if (data.length !== 138 || data.slice(10, 34) !== "0".repeat(24)) throw new Error("The USDC allowance call is malformed.");
+        const spender = `0x${data.slice(34, 74)}`, allowance = word(data, 1);
+        if (![lower(context.factoryAddress), lower(context.bountyAddress)].includes(spender) || allowance > amount) throw new Error("The USDC allowance exceeds the reviewed amount or names another spender.");
+        return { kind: "allowance", amountUsdcUnits: allowance, movesUsdc: false, recipient: null, spender, expiresAt: null,
+          summary: `Approve an allowance of ${formatUnits(allowance)} Base USDC for spender ${spender}. No USDC moves in this transaction. Token contract: ${BASE_USDC}. The allowance has no automatic expiry; it remains until spent or changed.` };
+      }
+      if (["0x9d2e414c", "0x61407894"].includes(selector) && to === lower(context.factoryAddress)) {
+        const authorized = selector === "0x61407894";
+        if (word(data, authorized ? 16 : 15) !== amount) throw new Error("The creation amount differs from the reviewed funding.");
+        if (authorized && context.creatorAddress && `0x${data.slice(34, 74)}` !== lower(context.creatorAddress)) throw new Error("The funding authorization names another creator.");
+        const deadline = timestamp(word(data, authorized ? 8 : 7));
+        const expiresAt = authorized ? timestamp(word(data, 19)) : deadline;
+        return { kind: "creation", amountUsdcUnits: amount, movesUsdc: true, recipient: lower(context.bountyAddress), spender: lower(context.factoryAddress), expiresAt,
+          summary: `Create the reviewed bounty and transfer ${formatUnits(amount)} Base USDC to ${lower(context.bountyAddress)} through canonical factory ${to}. Contract funding deadline: ${deadline}.${authorized ? ` The USDC authorization expires ${expiresAt}.` : " The transaction itself has no separate automatic expiry."}` };
+      }
+      if (selector === "0xca1d209d" && to === lower(context.bountyAddress) && data.length === 74 && word(data, 0) === amount) {
+        return { kind: "funding", amountUsdcUnits: amount, movesUsdc: true, recipient: to, spender: to, expiresAt: null,
+          summary: `Contribute ${formatUnits(amount)} Base USDC to the reviewed bounty ${to}. The bounty's committed funding deadline applies; the transaction itself has no separate automatic expiry.` };
+      }
+      if (selector === "0x16d0f49a" && ADDRESS.test(context.termsRegistry || "") && to === lower(context.termsRegistry)) {
+        return { kind: "terms_publication", amountUsdcUnits: 0n, movesUsdc: false, recipient: to, spender: null, expiresAt: null,
+          summary: `Publish the reviewed child-bounty terms to registry ${to}. No USDC moves and this call does not create or fund a bounty. The transaction has no automatic expiry.` };
+      }
+      throw new Error("The wallet call is not a recognized action in the validated posting plan.");
+    });
+    return { network: "Base mainnet", chainId: 8453, calls: descriptions,
+      transferUsdcUnits: descriptions.reduce((total, call) => total + (call.movesUsdc ? call.amountUsdcUnits : 0n), 0n),
+      summary: `Base mainnet (8453).\n${descriptions.map((call, index) => `${index + 1}. ${call.summary}`).join("\n")}\nThese transactions require Base ETH for gas. Review the network fee in your wallet; no sponsorship is confirmed.` };
+  }
+
+  function validateFundingAuthorization({ typedData, context, nowMs = Date.now() } = {}) {
+    const fail = () => { throw new Error("The USDC authorization does not match the approved bounty, wallet, amount, nonce, deadline or Base USDC domain. No signature was requested."); };
+    const exactKeys = (object, keys) => object && typeof object === "object" && !Array.isArray(object)
+      && Object.keys(object).sort().join(",") === [...keys].sort().join(",");
+    const uint = (value) => {
+      if ((typeof value === "number" && (!Number.isSafeInteger(value) || value < 0))
+        || !["number", "string", "bigint"].includes(typeof value) || !/^(0|[1-9][0-9]*)$/.test(String(value))) return fail();
+      const parsed = BigInt(value);
+      if (parsed >= (1n << 256n)) return fail();
+      return parsed;
+    };
+    const lower = (value) => String(value || "").toLowerCase();
+    if (!context || uint(context.chainId) !== 8453n || lower(context.usdcAddress) !== BASE_USDC
+      || !ADDRESS.test(context.creatorAddress || "") || !ADDRESS.test(context.bountyAddress || "")
+      || !/^0x[0-9a-f]{64}$/i.test(context.creationNonce || "") || !Number.isFinite(nowMs)) return fail();
+    const expectedTypes = {
+      EIP712Domain: [["name", "string"], ["version", "string"], ["chainId", "uint256"], ["verifyingContract", "address"]],
+      TransferWithAuthorization: [["from", "address"], ["to", "address"], ["value", "uint256"], ["validAfter", "uint256"], ["validBefore", "uint256"], ["nonce", "bytes32"]],
+    };
+    if (!exactKeys(typedData, ["types", "domain", "primaryType", "message"])
+      || typedData.primaryType !== "TransferWithAuthorization" || !exactKeys(typedData.types, Object.keys(expectedTypes))) return fail();
+    for (const [name, expected] of Object.entries(expectedTypes)) {
+      const fields = typedData.types[name];
+      if (!Array.isArray(fields) || fields.length !== expected.length || fields.some((field, index) => !exactKeys(field, ["name", "type"])
+        || field.name !== expected[index][0] || field.type !== expected[index][1])) return fail();
+    }
+    const { domain, message } = typedData;
+    if (!exactKeys(domain, ["name", "version", "chainId", "verifyingContract"])
+      || domain.name !== "USD Coin" || domain.version !== "2" || uint(domain.chainId) !== 8453n || lower(domain.verifyingContract) !== BASE_USDC
+      || !exactKeys(message, ["from", "to", "value", "validAfter", "validBefore", "nonce"])
+      || lower(message.from) !== lower(context.creatorAddress) || lower(message.to) !== lower(context.bountyAddress)
+      || uint(message.value) !== uint(context.fundingUsdcUnits) || uint(message.value) === 0n || uint(message.validAfter) !== 0n
+      || !/^0x[0-9a-f]{64}$/i.test(message.nonce || "") || lower(message.nonce) !== lower(context.creationNonce)
+      || uint(message.validBefore) !== uint(context.fundingDeadline)
+      || uint(message.validBefore) <= BigInt(Math.floor(nowMs / 1000)) || uint(message.validBefore) > 8640000000000n) return fail();
+    const expiresAt = new Date(Number(uint(message.validBefore)) * 1000).toISOString();
+    // Serialize the exact checked payload now so a later mutable planner object
+    // cannot change what the wallet is asked to sign after this disclosure.
+    const serialized = JSON.stringify(typedData);
+    return { serialized, from: lower(message.from), to: lower(message.to), amountUsdcUnits: uint(message.value), nonce: lower(message.nonce), expiresAt,
+      summary: `Authorize ${formatUnits(uint(message.value))} USDC on Base mainnet (8453) from ${lower(message.from)} to bounty ${lower(message.to)}. Purpose: one-time funding of this exact bounty through the canonical factory. Expires ${expiresAt}. Token: ${BASE_USDC}. This signature costs no gas and does not itself create or fund the bounty. The following creation transaction requires Base ETH; no gas sponsorship is confirmed.` };
+  }
+
+  window.AgentBountiesFundingReadiness = Object.freeze({ parseUsdc, formatUnits, shortfall, readBalances, estimateFees, describeWalletCalls, validateFundingAuthorization });
 })();

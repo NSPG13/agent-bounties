@@ -138,6 +138,27 @@ digest because enabling the optional analytics-exclusion OAuth scope must not
 rewrite the product contract. Tests separately require anonymous access to
 remain available.
 
+The posting-journey extension intentionally adds optional creator-review,
+exact-calendar-deadline, operation-ID, parent-binding, and approved-reference
+fields to `prepare_bounty_post`, with matching output-schema properties. It
+does not add tools or change modern/legacy catalog selection. The advanced
+HTTP catalog receives the same input schema. See the
+[posting handoff contract](chatgpt-app-submission.md) for the exact behavior and
+consent boundaries.
+
+For an intentional reviewed descriptor change, print all three candidate
+digests together before updating the fixtures and public documentation:
+
+```bash
+cargo test -p mcp-server print_reviewed_mcp_catalog_digests -- --ignored --nocapture
+```
+
+This read-only command does not overwrite fixtures or bypass the ordinary
+contract assertions. Copy `chatgpt` and `core` into
+`public-mcp-contract-v1.json`, and `advanced_http` into `tool-registry.json`.
+Then run the ordinary MCP tests to verify both protocol eras and all catalog
+names, schemas, safety annotations, and committed digests.
+
 ## Origin configuration
 
 Requests without an `Origin` are allowed for normal server-to-server MCP

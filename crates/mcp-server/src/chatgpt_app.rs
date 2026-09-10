@@ -4610,6 +4610,13 @@ fn post_handoff_output_schema() -> Value {
         "properties": {
             "schema": {"type": "string"},
             "state": {"type": "string"},
+            "posting_operation_id": {"type": "string", "format": "uuid"},
+            "review_mode": {"type": "string", "enum": ["creator", "automated"]},
+            "delivery_deadline": {"type": ["string", "null"], "format": "date-time"},
+            "meta_child": {"type": ["object", "null"]},
+            "reference_attachment": {"type": ["object", "null"]},
+            "verification_prepared": {"type": "boolean"},
+            "review_disclosure": {"type": ["string", "null"]},
             "title": {"type": "string"},
             "goal": {"type": "string"},
             "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
@@ -4620,6 +4627,8 @@ fn post_handoff_output_schema() -> Value {
             "initial_funding_usdc": {"type": "string"},
             "crowdfund": {"type": "boolean"},
             "source_url": {"type": ["string", "null"]},
+            "benchmark": {"type": ["object", "null"]},
+            "evidence_schema": {"type": ["object", "null"]},
             "image": {
                 "anyOf": [
                     {
@@ -5137,7 +5146,7 @@ fn chatgpt_tool_description(name: &str, fallback: &'static str) -> &'static str 
         "publish_unfunded_bounty" => "Use this when the person explicitly wants to publish a public voluntary request with no wallet and zero committed USDC. It is not canonical, funded, claimable, or guaranteed to pay.",
         "list_unfunded_bounties" => "Use this when the person explicitly asks for voluntary or unpaid Agent Bounties work. Keep these records separate from funded earning opportunities and never promise payment.",
         "submit_unfunded_bounty_solution" => "Use this when a registered agent explicitly wants to publish or replace its public solution to an open unfunded request. This public write creates no payment claim.",
-        "prepare_bounty_post" => "Use this when the person's AI has conversationally gathered complete bounty terms and received explicit approval. If the AI can generate and attach an approved image, pass bounty_image with its exact prompt and alt text; otherwise omit all three optional image fields and the review page will use a deterministic content-derived visual. Agent Bounties prepares a reviewable wallet handoff; it does not generate an image with a platform model key, move funds, request a secret, or prove that a bounty exists.",
+        "prepare_bounty_post" => "Use this when the person's AI has gathered complete bounty terms and received explicit approval. Reuse posting_operation_id when resuming. For creator review, set review_mode=creator and the exact agreed delivery_deadline with timezone offset, omit automated benchmark/evidence fields, and explain that the creator confirms the verdict. Preserve parent bindings, the approved reference_attachment, and any approved bounty_image with its exact prompt and alt text; omit all three image fields together to use the deterministic review-page visual. This prepares a reviewable handoff; it does not publish, move funds, request a secret, or prove that a bounty exists.",
         "list_autonomous_bounties" => "Use this when the person wants funded Agent Bounties work or canonical lifecycle inventory. Set claimable_only=true for work that is currently funded and open to solve.",
         "inspect_open_competition_v2" => "New users start with operation=guide. Then inspect the V2 Beta3 release, reviewed profiles, inventory, events, or proof-job state in the returned order. Treat only CompetitionSettledV2 as payment evidence.",
         "prepare_open_competition_v2" => "Use this only after inspect_open_competition_v2(operation=guide). Match arguments to the selected operation's exact schema. Some operations return unsigned plans; quote_proof creates a hosted job, pay_proof may transfer Base USDC after explicit approval, and authorize_relay may submit a proof after explicit approval. Follow next_action and treat only CompetitionSettledV2 as payment evidence.",
@@ -5696,6 +5705,17 @@ mod tests {
         let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
         let replay = build_bounty_post_handoff(&args, Some(&image)).unwrap();
         assert_eq!(handoff, replay);
+        let schema = post_handoff_output_schema();
+        let properties = schema["properties"].as_object().unwrap();
+        for key in handoff.as_object().unwrap().keys() {
+            assert!(
+                properties.contains_key(key),
+                "undeclared handoff field {key}"
+            );
+        }
+        for required in schema["required"].as_array().unwrap() {
+            assert!(handoff.get(required.as_str().unwrap()).is_some());
+        }
         assert_eq!(handoff["delivery_deadline"], exact);
         assert_eq!(handoff["review_mode"], "creator");
         assert_eq!(
@@ -6560,6 +6580,33 @@ mod tests {
             descriptor["_meta"]["securitySchemes"] = json!("deployment-configured");
         }
         Value::Array(descriptors)
+    }
+
+    // Explicit, read-only fixture regeneration aid; it never updates the approved
+    // fixtures or relaxes the contract assertions below.
+    #[tokio::test]
+    #[ignore = "prints candidate digests for an intentional reviewed MCP contract change"]
+    async fn print_reviewed_mcp_catalog_digests() {
+        let mut digests = serde_json::Map::new();
+        for (profile, key) in [
+            (McpCatalogProfile::Chatgpt, "chatgpt"),
+            (McpCatalogProfile::Core, "core"),
+        ] {
+            let contract = normalized_public_catalog_contract(mcp_tools_for_catalog(profile).await);
+            digests.insert(
+                key.to_string(),
+                json!(app::hash_artifact(
+                    &serde_json::to_string(&contract).unwrap()
+                )),
+            );
+        }
+        digests.insert(
+            "advanced_http".to_string(),
+            json!(app::hash_artifact(
+                &serde_json::to_string(&tools().await.0).unwrap()
+            )),
+        );
+        println!("{}", serde_json::to_string_pretty(&digests).unwrap());
     }
 
     #[tokio::test]

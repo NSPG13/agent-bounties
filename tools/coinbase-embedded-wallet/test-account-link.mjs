@@ -516,6 +516,18 @@ test("restoring a selected linked wallet rejects another address before ownershi
   } finally { await context.close(); }
 });
 
+test("OAuth return preserves the selected wallet address and cannot link a different wallet", async () => {
+  const { context, page, proofs } = await account({ linked: true, linkedProvider: "coinbase-embedded", linkedAddress: ADDRESS,
+    pending: { userId: "qa", startedAt: Date.now(), expectedAddress: ADDRESS } });
+  try {
+    await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("different address"));
+    assert.deepEqual(proofs, []);
+    assert.deepEqual((await page.evaluate(() => window.walletTestCalls)).map(call => call.method), ["eth_accounts"]);
+    assert.equal(await page.locator("[data-wallet-list] code").getAttribute("title"), ADDRESS);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem("agentbounties:pending-embedded-account-link")), null);
+  } finally { await context.close(); }
+});
+
 test("Account stays separate from a saved posting return and restores only the matching signing address", async () => {
   const target = preparedPostTarget();
   const { context, page, proofs } = await account({ linked: true, linkedProvider: "coinbase-embedded", linkedAddress: EMBEDDED, postTarget: target });

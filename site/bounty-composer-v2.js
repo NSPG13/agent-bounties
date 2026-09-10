@@ -1029,7 +1029,7 @@
     const benchmark = missionBenchmark(state.draft?.benchmark || {});
     if (benchmark.engine === "creator_review_v1") {
       const reward = currentRewardSplit();
-      ui.verifierSummary.textContent = `You review the delivered files and confirm the verdict in your wallet. The ${formatUsdc(Number(reward.verifier) / 1_000_000)} USDC creator-review reserve is paid to your funding wallet after a confirmed pass or fail verdict. It is not an automatic refund for doing nothing. This is creator review, with no independent verifier.`;
+      ui.verifierSummary.textContent = `You review the delivered files and confirm the verdict in your wallet. You receive a ${formatUsdc(Number(reward.verifier) / 1_000_000)} USDC review payment after either confirmed verdict. A failed review pays from the solver's bond and leaves the bounty fully funded. The creator-review reserve is not an automatic refund for doing nothing. You are the reviewer.`;
       ui.verifier.replaceChildren();
       for (const [label, value] of [["Reviewer", "You, using the wallet that funds this bounty"], ["Due", state.horizon.label], ["Evidence", "Public deliverable URL and SHA-256 digest"], ["Review window", "48 hours after submission"], ["Wallet cost", "Base gas is additional; this route does not promise sponsorship"]]) {
         const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = label; dd.textContent = value; ui.verifier.append(dt, dd);
@@ -1785,13 +1785,14 @@
     else setPaymentStatus("Funds are available. Review and post prepares the exact request and its network fee; you confirm it in your wallet.", "success");
   }
 
-  function updatePostingCost(fees = null) {
+  function updatePostingCost(fees = null, request = null) {
     if (state.fundingUsdc == null) return;
-    const cost = `Rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee: 0.00 USDC.`;
+    const cost = `Bounty budget — rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee: 0.00 USDC.`;
+    const debit = request ? ` This request transfers ${window.AgentBountiesFundingReadiness.formatUnits(request.transferUsdcUnits)} USDC.` : "";
     const gas = fees?.estimatedTotalWei != null
-      ? ` Estimated network fee: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 10)} ETH. Total: ${formatUsdc(state.fundingUsdc)} USDC plus that ETH estimate. Your wallet confirms the final network fee; this is not a guaranteed maximum.`
+      ? ` Estimated network fee for this request: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 10)} ETH. Your wallet confirms the final network fee; this is not a guaranteed maximum.`
       : " Network fee: not yet available for the exact transaction. Creation is not gas-sponsored. Your wallet shows the fee before you send; an unknown fee is never treated as zero.";
-    for (const selector of ["[data-posting-cost]", "[data-wallet-cost]"]) { const output = document.querySelector(selector); if (output) output.textContent = cost + gas; }
+    for (const selector of ["[data-posting-cost]", "[data-wallet-cost]"]) { const output = document.querySelector(selector); if (output) output.textContent = cost + debit + gas; }
   }
 
   function updatePostingTracker() {
@@ -1804,9 +1805,10 @@
 
   async function prepareWalletRequest(calls) {
     await assertPostingBinding();
-    if (window.AgentBountiesFundingReadiness.estimateFees) updatePostingCost(await window.AgentBountiesFundingReadiness.estimateFees({ provider: state.provider, wallet: state.account, calls }));
-    const recipients = [...new Set(calls.map((call) => call.to))].join(", ");
-    setPaymentStatus(`Base mainnet · ${formatUsdc(state.fundingUsdc)} USDC total funding · recipient contracts: ${recipients}. Purpose: create and fund this exact bounty. Transaction requests have no separate expiry; any USDC authorization expiry is shown separately. Confirm the final gas fee in your wallet.`, "pending");
+    const description = window.AgentBountiesFundingReadiness.describeWalletCalls({ calls, context: postingBinding.requestContext });
+    const fees = await window.AgentBountiesFundingReadiness.estimateFees({ provider: state.provider, wallet: state.account, calls });
+    updatePostingCost(fees, description);
+    setPaymentStatus(description.summary, "pending");
     await postingSession.flush({ requireServer: true });
     await assertPostingBinding();
   }
@@ -1847,7 +1849,9 @@
     try {
       // EIP-5792 requires this boolean even when sequential execution is allowed.
       const batch=await state.provider.request({method:"wallet_sendCalls",params:[{version:"2.0.0",atomicRequired:false,chainId:protocol.chain_id_hex,from:state.account,calls:calls.map((call)=>({to:call.to,data:call.data,value:"0x0"}))}]});
-      postingJournal.checkpoint("batch_submitted",batch);await postingSession.flush({requireServer:true});return batch;
+      const batchId = typeof batch === "string" ? batch : batch?.id;
+      if (typeof batchId !== "string" || !batchId.length || batchId.length > 256 || /[\u0000-\u001f]/.test(batchId)) throw new Error("The wallet returned an unsupported batch identifier. The recorded request remains uncertain; do not send it again.");
+      postingJournal.checkpoint("batch_submitted",batchId);await postingSession.flush({requireServer:true});return batchId;
     } catch(error) {
       // Only explicit lack of method support permits a fallback. A lost reply can conceal a submitted batch.
       if(![-32601,4200].includes(error.code))throw error;
@@ -1912,6 +1916,8 @@
       await postingSession.refresh();
       if (postingJournal.load()) throw new Error("This posting already has a recorded wallet operation. Reconcile it before continuing.");
       await assertPostingBinding();
+      await postingSession.flush({ requireServer: true });
+      await assertPostingBinding();
       await refreshWalletReadiness();
       if (state.balances.usdc < state.balances.required || state.balances.eth === 0n) throw new Error("The wallet is not ready to fund this bounty.");
       if (!window.AgentBountiesLegal) throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
@@ -1958,6 +1964,9 @@
         });
       }
       validateCreationPlan(plan, protocol, create);
+      postingBinding.requestContext = { chainId: 8453, usdcAddress: protocol.native_usdc, factoryAddress: protocol.factory,
+        bountyAddress: plan.predicted_bounty_contract, fundingUsdcUnits: rewards.total, creatorAddress: approvedAccount,
+        termsRegistry: childPlan?.terms_registry, validatedCalls: (childPlan?.pre_claim_wallet_calls || plan.wallet_calls || []).map(call => ({ ...call })) };
       if (!state.approved || state.draft !== approvedDraft) throw new Error("The bounty changed during preparation. Review the revised commitment before funding.");
       if (state.account !== approvedAccount || String((await state.provider.request({ method: "eth_accounts" }))[0]).toLowerCase() !== String(approvedAccount).toLowerCase() || String(await state.provider.request({ method: "eth_chainId" })).toLowerCase() !== "0x2105") throw new Error("The wallet or network changed. Reopen the same review before funding.");
       postingJournal.prepare(plan);
@@ -1974,18 +1983,21 @@
         setPaymentStatus("Create the reviewed 1 USDC child: publish its exact on-chain terms, approve only 1 USDC, then create and fully fund it. Parent claiming is a later step. These direct wallet calls require Base ETH for gas.", "pending");
         await sendWalletCalls(childPlan.pre_claim_wallet_calls, protocol);
       } else if (!(await isContractAccount()) && plan.eip3009_authorization) {
+        const authorization = window.AgentBountiesFundingReadiness.validateFundingAuthorization({ typedData: plan.eip3009_authorization,
+          context: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline } });
         postingJournal.checkpoint("signing");
         await postingSession.flush({ requireServer: true });
         await assertPostingBinding();
-        const authorization = plan.eip3009_authorization.message;
-        setPaymentStatus(`Authorize ${formatUsdc(state.fundingUsdc)} USDC on Base for ${authorization.to}. Purpose: fund this exact bounty through the canonical factory. Expires ${new Date(Number(authorization.validBefore) * 1000).toISOString()}. This signature costs no gas; the following creation transaction is unsponsored and will show its own network fee.`, "pending");
-        const signature = await state.provider.request({ method: "eth_signTypedData_v4", params: [state.account, JSON.stringify(plan.eip3009_authorization)] });
+        setPaymentStatus(authorization.summary, "pending");
+        const signature = await state.provider.request({ method: "eth_signTypedData_v4", params: [state.account, authorization.serialized] });
         postingJournal.checkpoint("authorized");
         await postingSession.flush({ requireServer: true });
         const authorized = await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`, {
           method: "POST", body: JSON.stringify({ network: "base-mainnet", create, signature: signatureParts(signature), relayer: state.account }),
         });
+        if (authorized.bounty_id !== plan.bounty_id || String(authorized.predicted_bounty_contract).toLowerCase() !== String(plan.predicted_bounty_contract).toLowerCase() || Number(authorized.network?.chain_id) !== 8453) throw new Error("The authorized creation response does not match the recorded bounty and Base network.");
         if (!authorized.relay_transaction || String(authorized.relay_transaction.to).toLowerCase() !== String(protocol.factory).toLowerCase()) throw new Error("The authorized transaction does not target the canonical factory.");
+        postingBinding.requestContext.validatedCalls.push({ ...authorized.relay_transaction });
         transactionHash = await sendTransaction(authorized.relay_transaction);
         await waitReceipt(transactionHash);
       } else {

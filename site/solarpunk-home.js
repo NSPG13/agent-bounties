@@ -1120,6 +1120,7 @@ ${competitionChildBrief(item)}`;
         try {
           if (!win.AgentBountiesWalletLink) throw { reason: "wallet_selector_unavailable" };
           if (resuming) {
+            expectedAddress = expectedAddress || win.AgentBountiesWalletLink.pendingAddress(linkingUser.id);
             showDialog();
             setWalletStatus("Restoring your wallet after sign-in…");
             const provider = await win.AgentBountiesWalletLink.loadEmbedded();
@@ -1132,7 +1133,7 @@ ${competitionChildBrief(item)}`;
           } else selection = await win.AgentBountiesWalletLink.select();
           const linkProvider = selection.provider;
           if (currentUser !== linkingUser) throw { code: 4001 };
-          if (selection.kind === "embedded") win.AgentBountiesWalletLink.beginPending(linkingUser.id);
+          if (selection.kind === "embedded") win.AgentBountiesWalletLink.beginPending(linkingUser.id, expectedAddress);
           win.agentBountiesAnalytics?.track("wallet_link_started");
           setWalletStatus("Choose the wallet address you want to link…");
           const accounts = selection.accounts || await linkProvider.request({ method: "eth_requestAccounts" });

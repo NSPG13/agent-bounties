@@ -155,20 +155,24 @@
   function clearPending() {
     try { win.sessionStorage.removeItem(intentKey); } catch (_) { /* Storage may be disabled. */ }
   }
-  function beginPending(userId) {
-    try { win.sessionStorage.setItem(intentKey, JSON.stringify({ userId: String(userId), startedAt: Date.now() })); } catch (_) { /* Same-page linking still works. */ }
+  function beginPending(userId, expectedAddress = null) {
+    const address = /^0x[0-9a-f]{40}$/.test(String(expectedAddress || "").toLowerCase()) ? expectedAddress.toLowerCase() : null;
+    try { win.sessionStorage.setItem(intentKey, JSON.stringify({ userId: String(userId), startedAt: Date.now(), expectedAddress: address })); } catch (_) { /* Same-page linking still works. */ }
   }
-  function hasPending(userId) {
+  function pendingIntent(userId) {
     try {
       const intent = JSON.parse(win.sessionStorage.getItem(intentKey));
-      if (intent && intent.userId === String(userId) && Date.now() - intent.startedAt >= 0 && Date.now() - intent.startedAt < 30 * 60 * 1000) return true;
+      if (intent && intent.userId === String(userId) && Date.now() - intent.startedAt >= 0 && Date.now() - intent.startedAt < 30 * 60 * 1000
+        && (intent.expectedAddress == null || /^0x[0-9a-f]{40}$/.test(intent.expectedAddress))) return intent;
     } catch (_) { /* Ignore expired or malformed intent. */ }
     clearPending();
-    return false;
+    return null;
   }
+  function hasPending(userId) { return Boolean(pendingIntent(userId)); }
+  function pendingAddress(userId) { return pendingIntent(userId)?.expectedAddress || null; }
 
   // This adapter policy is known before loading/authenticating the SDK. Creation
   // needs direct transactions; supported sponsored relays remain separate.
   const embeddedCapabilities = Object.freeze({ directTransactions: false, chainIds: Object.freeze([8453]), transactionPolicy: "agent-bounties-relay-required" });
-  return Object.freeze({ select, choices, loadEmbedded, embeddedCapabilities, beginPending, hasPending, clearPending, cancel: () => finish() });
+  return Object.freeze({ select, choices, loadEmbedded, embeddedCapabilities, beginPending, hasPending, pendingAddress, clearPending, cancel: () => finish() });
 });

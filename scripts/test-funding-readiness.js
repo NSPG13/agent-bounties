@@ -94,6 +94,113 @@ test("missing L1 or operator cost and failed allowance simulation never become z
   assert.equal(timed.estimatedTotalWei, null);
 });
 
+test("wallet review distinguishes an allowance from the later funding transfer", () => {
+  const api = helperContext();
+  const factory = `0x${"b".repeat(40)}`, bounty = `0x${"c".repeat(40)}`;
+  const word = (value) => BigInt(value).toString(16).padStart(64, "0");
+  const allowance = { to: usdc, value_wei: 0, data: `0x095ea7b3${factory.slice(2).padStart(64, "0")}${word(5000000)}` };
+  const args = Array(19).fill(word(0)); args[7] = word(1800000000); args[14] = word(17 * 32); args[15] = word(5000000); args[17] = word(1); args[18] = wallet.slice(2).padStart(64, "0");
+  const creation = { to: factory, value_wei: 0, data: `0x9d2e414c${args.join("")}` };
+  const context = { chainId: 8453, usdcAddress: usdc, factoryAddress: factory, bountyAddress: bounty, fundingUsdcUnits: 5000000n, validatedCalls: [allowance, creation] };
+  const first = api.describeWalletCalls({ calls: [allowance], context });
+  assert.equal(first.calls[0].kind, "allowance");
+  assert.equal(first.calls[0].spender, factory);
+  assert.equal(first.transferUsdcUnits, 0n);
+  assert.match(first.summary, /No USDC moves/);
+  assert.match(first.summary, /no automatic expiry/);
+  const batch = api.describeWalletCalls({ calls: [allowance, creation], context });
+  assert.equal(batch.transferUsdcUnits, 5000000n);
+  assert.equal(batch.calls[1].recipient, bounty);
+  assert.equal(batch.calls[1].expiresAt, "2027-01-15T08:00:00.000Z");
+  assert.match(batch.summary, /through canonical factory/);
+  assert.throws(() => api.describeWalletCalls({ calls: [{ ...allowance, data: allowance.data.slice(0, -64) + word(2n ** 256n - 1n) }], context }), /differs from/);
+  const over = { ...allowance, data: allowance.data.slice(0, -64) + word(6000000) };
+  assert.throws(() => api.describeWalletCalls({ calls: [over], context: { ...context, validatedCalls: [over] } }), /exceeds/);
+});
+
+test("wallet review uses decoded authorization expiry and requires matching validated calls", () => {
+  const api = helperContext();
+  const factory = `0x${"b".repeat(40)}`, bounty = `0x${"c".repeat(40)}`, registry = `0x${"d".repeat(40)}`;
+  const word = (value) => BigInt(value).toString(16).padStart(64, "0");
+  const args = Array(26).fill(word(0)); args[0] = wallet.slice(2).padStart(64, "0"); args[8] = word(1800000000); args[15] = word(24 * 32); args[16] = word(5000000); args[19] = word(1790000000); args[24] = word(1); args[25] = wallet.slice(2).padStart(64, "0");
+  const authorized = { to: factory, value_wei: 0, data: `0x61407894${args.join("")}` };
+  const publish = { to: registry, value_wei: 0, data: `0x16d0f49a${word(0)}` };
+  const context = { chainId: 8453, usdcAddress: usdc, factoryAddress: factory, creatorAddress: wallet, bountyAddress: bounty, fundingUsdcUnits: 5000000n, termsRegistry: registry, validatedCalls: [authorized, publish] };
+  const description = api.describeWalletCalls({ calls: [authorized], context });
+  assert.equal(description.calls[0].expiresAt, new Date(1790000000 * 1000).toISOString());
+  assert.match(description.summary, /authorization expires/);
+  const terms = api.describeWalletCalls({ calls: [publish], context });
+  assert.equal(terms.transferUsdcUnits, 0n);
+  assert.match(terms.summary, /does not create or fund/);
+  assert.throws(() => api.describeWalletCalls({ calls: [authorized], context: { ...context, validatedCalls: [] } }), /differs from/);
+  assert.throws(() => api.describeWalletCalls({ calls: [authorized], context: { ...context, chainId: 1 } }), /validated Base/);
+  const unknown = { to: factory, data: "0x12345678", value_wei: 0 };
+  assert.throws(() => api.describeWalletCalls({ calls: [unknown], context: { ...context, validatedCalls: [unknown] } }), /not a recognized/);
+});
+
+function authorizationFixture() {
+  const bounty = `0x${"c".repeat(40)}`;
+  const nonce = `0x${"ef".repeat(32)}`;
+  const typedData = {
+    types: {
+      EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }],
+      TransferWithAuthorization: [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" }, { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }],
+    },
+    domain: { name: "USD Coin", version: "2", chainId: 8453, verifyingContract: usdc },
+    primaryType: "TransferWithAuthorization",
+    message: { from: wallet, to: bounty, value: "5000000", validAfter: "0", validBefore: "1800000000", nonce },
+  };
+  const context = { chainId: 8453, usdcAddress: usdc, creatorAddress: wallet, bountyAddress: bounty, fundingUsdcUnits: 5000000n, creationNonce: nonce, fundingDeadline: 1800000000 };
+  return { typedData, context, nowMs: Date.parse("2026-09-10T00:00:00Z") };
+}
+
+test("a funding authorization is disclosed and serialized only after all approved bindings match", () => {
+  const api = helperContext();
+  const fixture = authorizationFixture();
+  const checked = api.validateFundingAuthorization(fixture);
+  assert.equal(checked.to, fixture.context.bountyAddress);
+  assert.equal(checked.from, wallet);
+  assert.equal(checked.amountUsdcUnits, 5000000n);
+  assert.equal(checked.expiresAt, "2027-01-15T08:00:00.000Z");
+  assert.match(checked.summary, /Authorize 5 USDC on Base mainnet \(8453\)/);
+  assert.match(checked.summary, /signature costs no gas/);
+  assert.deepEqual(JSON.parse(checked.serialized), fixture.typedData);
+  fixture.typedData.message.value = "6000000";
+  assert.equal(JSON.parse(checked.serialized).message.value, "5000000", "the wallet receives the serialized checked payload even if the planner object later changes");
+});
+
+test("changed EIP3009 identity, economics, expiry or exact types cannot request a funding signature", () => {
+  const api = helperContext();
+  const mutations = [
+    (data) => { data.primaryType = "ReceiveWithAuthorization"; },
+    (data) => { data.domain.name = "USDC"; },
+    (data) => { data.domain.version = "1"; },
+    (data) => { data.domain.chainId = 1; },
+    (data) => { data.domain.verifyingContract = wallet; },
+    (data) => { data.message.from = data.message.to; },
+    (data) => { data.message.to = wallet; },
+    (data) => { data.message.value = "5000001"; },
+    (data) => { data.message.value = Number.MAX_SAFE_INTEGER + 1; },
+    (data) => { data.message.validAfter = "1"; },
+    (data) => { data.message.validBefore = "1800000001"; },
+    (data) => { data.message.nonce = `0x${"ab".repeat(32)}`; },
+    (data) => { data.types.TransferWithAuthorization[2].type = "uint128"; },
+    (data) => { data.types.TransferWithAuthorization.reverse(); },
+    (data) => { data.types.EIP712Domain[0].name = "unexpected"; },
+    (data) => { data.types.Unreviewed = []; },
+    (data) => { data.message.extra = "unreviewed"; },
+    (data) => { data.domain.salt = `0x${"01".repeat(32)}`; },
+  ];
+  for (const mutate of mutations) {
+    const fixture = authorizationFixture(); mutate(fixture.typedData);
+    assert.throws(() => api.validateFundingAuthorization(fixture), /authorization does not match/);
+  }
+  const expired = authorizationFixture(); expired.nowMs = 1800000000 * 1000;
+  assert.throws(() => api.validateFundingAuthorization(expired), /authorization does not match/);
+  const zero = authorizationFixture(); zero.typedData.message.value = "0"; zero.context.fundingUsdcUnits = 0n;
+  assert.throws(() => api.validateFundingAuthorization(zero), /authorization does not match/);
+});
+
 async function onrampContext({ saved = new Map(), balance = "0x1e8480", contract = "", checkoutError = false } = {}) {
   const elements = new Map();
   const opened = [];
