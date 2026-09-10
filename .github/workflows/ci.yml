@@ -75,6 +75,9 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Verify isolated private draft canary
+        run: node --test scripts/test-posting-draft-canary.cjs
+
       - name: Run full repository gate
         shell: bash
         run: |

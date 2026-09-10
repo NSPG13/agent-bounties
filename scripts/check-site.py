@@ -45,6 +45,7 @@ CANONICAL_PAGES = {
     "metrics.html": "https://agentbounties.app/metrics.html",
     "onramp.html": "https://agentbounties.app/onramp.html",
     "post.html": "https://agentbounties.app/post.html",
+    "posting-draft-canary.html": "https://agentbounties.app/posting-draft-canary.html",
     "privacy.html": "https://agentbounties.app/privacy.html",
     "success.html": "https://agentbounties.app/success.html",
     "terms.html": "https://agentbounties.app/terms.html",
@@ -117,6 +118,8 @@ REQUIRED_FILES = {
     "posting-brief.js",
     "posting-reference.js",
     "posting-session.js",
+    "posting-draft-canary.html",
+    "posting-draft-canary.js",
     "posting-workspace.js",
     "posting-workspace.css",
     "creator-review.js",
@@ -176,6 +179,7 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "posting-draft-canary.js",
     "site-navigation.css",
     "site-navigation.js",
     "funded.js",
@@ -1361,12 +1365,28 @@ def main() -> int:
                 '<meta name="description"',
                 f'<link rel="icon" href="{prefix}favicon.svg" type="image/svg+xml">',
                 f'<link rel="canonical" href="{canonical}">',
-                f'<script src="{prefix}analytics-config.js?v=',
-                f'<script src="{prefix}analytics.js?v={analytics_version}"></script>',
             ],
         )
-        if text.index(f'src="{prefix}analytics-config.js?v=') > text.index(f'src="{prefix}analytics.js?v={analytics_version}"'):
-            fail(f"{relative}: analytics config must load before analytics.js")
+        if relative == "posting-draft-canary.html":
+            # A private storage diagnostic must not load the production journey,
+            # shared navigation/account handlers, or analytics dependencies.
+            scripts = re.findall(r"<script\b[^>]*>.*?</script\s*>", text, re.IGNORECASE | re.DOTALL)
+            if scripts != ['<script src="posting-draft-canary.js" defer></script>']:
+                fail(f"{relative}: only the isolated canary script may load")
+            if re.search(r"<(?:header|nav|form)\b|shared-navigation:|\bon\w+\s*=", text, re.IGNORECASE):
+                fail(f"{relative}: shared navigation, forms, and inline handlers are forbidden")
+            require_phrases(relative, text, [
+                '<meta name="referrer" content="no-referrer">',
+                'id="canary-account-id"', 'id="canary-enabled"',
+                'id="canary-run"', 'id="canary-resume"', 'id="canary-reload"',
+            ])
+        else:
+            require_phrases(relative, text, [
+                f'<script src="{prefix}analytics-config.js?v=',
+                f'<script src="{prefix}analytics.js?v={analytics_version}"></script>',
+            ])
+            if text.index(f'src="{prefix}analytics-config.js?v=') > text.index(f'src="{prefix}analytics.js?v={analytics_version}"'):
+                fail(f"{relative}: analytics config must load before analytics.js")
         if relative not in INDEXABLE_PAGES and '<meta name="robots" content="noindex, nofollow">' not in text:
             fail(f"{relative}: transactional handoffs must remain noindex, nofollow")
         title = re.search(r"<title>([^<]+)</title>", text)
