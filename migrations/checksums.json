@@ -34,6 +34,8 @@
     "0032_distribution_attribution.sql": "5175b58667e90ef00b09560a6bf9df81080448b5fd706ce14491e23bf419e2cb",
     "0033_distribution_source_expansion.sql": "7e3fc06ed599122e086c09277018508ea1bde1e7647d78c590f7db527df9c202",
     "0034_distribution_competition_bindings.sql": "2265009b9cc590ec14ac4026bbf3defec4409bda5f4dfa6a87df613718d32786",
-    "0035_distribution_mcpmarket_sources.sql": "407c362cc7e21ff418c0b1ddaeca1b60854c9413e4d26e0aa8e52287eb6b68cd"
+    "0035_distribution_mcpmarket_sources.sql": "407c362cc7e21ff418c0b1ddaeca1b60854c9413e4d26e0aa8e52287eb6b68cd",
+    "0036_site_posting_drafts.sql": "4cdca51752942c6d49e8b3a581fd6a65fb79b7128a31894ebef8646471f6fe51",
+    "0037_site_wallet_provider.sql": "20bc69753951f0486b07bc9dac743eb8f957d94f2e098394426396d14d405d11"
   }
 }

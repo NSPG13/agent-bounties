@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Check private account draft storage with an isolated, unapproved test record that cannot create or fund a bounty.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://agentbounties.app/posting-draft-canary.html">
+  <title>Private draft storage check — Agent Bounties</title>
+  <style>
+    :root { color-scheme: light; font: 17px/1.5 system-ui, sans-serif; color: #17382e; background: #f5f8f5; }
+    body { max-width: 760px; margin: 48px auto; padding: 0 20px 40px; }
+    h1 { line-height: 1.2; font-size: 2rem; }
+    section { background: white; border: 1px solid #d4dfd7; border-radius: 14px; padding: 22px; margin: 22px 0; }
+    dt { font-weight: 650; margin-top: 12px; } dd { margin-left: 0; overflow-wrap: anywhere; }
+    button { font: inherit; color: white; background: #15533e; border: 0; border-radius: 8px; padding: 12px 16px; margin: 6px 8px 6px 0; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; } button.secondary { color: #17382e; background: #e6eee8; }
+    code { font-size: .85em; overflow-wrap: anywhere; } li { margin: 8px 0; }
+    #canary-status { font-weight: 650; } [data-state="failed"] { color: #a12020; }
+  </style>
+  <script src="posting-draft-canary.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Private draft storage check</h1>
+    <p>This release check saves one private test record with no bounty terms, rewards, approval, or wallet request. It does not open or alter your posting journey.</p>
+    <section aria-labelledby="account-heading">
+      <h2 id="account-heading">Current account</h2>
+      <dl>
+        <dt>Signed in</dt><dd id="canary-authenticated">Checking…</dd>
+        <dt>Opaque account ID</dt><dd id="canary-account-id">—</dd>
+        <dt>Private draft storage enabled for this account</dt><dd id="canary-enabled">Checking…</dd>
+        <dt>API</dt><dd>https://api.agentbounties.app</dd>
+      </dl>
+      <button id="canary-refresh" class="secondary" type="button">Refresh account</button>
+    </section>
+    <section aria-labelledby="test-heading">
+      <h2 id="test-heading">Isolated test record</h2>
+      <p id="canary-status" role="status" aria-live="polite">Checking account access.</p>
+      <dl>
+        <dt>Canary operation ID</dt><dd id="canary-operation-id">None created</dd>
+        <dt>Verified revision</dt><dd id="canary-revision">—</dd>
+        <dt>Verified draft hash</dt><dd id="canary-draft-hash">—</dd>
+      </dl>
+      <button id="canary-run" type="button" disabled>Run private storage checks</button>
+      <button id="canary-resume" class="secondary" type="button" disabled>Read saved canary</button>
+      <button id="canary-reload" class="secondary" type="button">Reload page and verify</button>
+      <ol id="canary-results" aria-label="Storage check results"></ol>
+    </section>
+    <details>
+      <summary>What this checks</summary>
+      <p>Normal account cookies authenticate the session and draft API. The account's rollout flag must be enabled. This page does not supply credentials or change rollout settings.</p>
+      <ol>
+        <li>Create a new UUID-bound private record with <code>draft:null</code>, <code>brief:null</code>, <code>approved_draft_hash:null</code>, and empty recovery state.</li>
+        <li>Read it back and verify the exact record, revision, and locally computed SHA-256.</li>
+        <li>Replay the original save and require the same revision and hash.</li>
+        <li>Attempt a changed test record at stale revision zero and require HTTP 409; verify the original is unchanged.</li>
+        <li>Read the same operation with <code>credentials:omit</code> and require HTTP 401.</li>
+        <li>Reload this page to verify the same record under the same signed-in account.</li>
+      </ol>
+      <p>Only this page's canary key is saved in session storage. The private server record expires after 30 days. Passing this check proves account draft storage only; it proves no bounty creation, funding, claimability, or payment.</p>
+    </details>
+  </main>
+</body>
+</html>

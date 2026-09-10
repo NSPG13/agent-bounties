@@ -117,6 +117,32 @@ Agent Bounties never generates or substitutes bounty artwork. The review URL
 renders the completed approved terms and optional image; it does not publish or
 move funds without the separate wallet-reviewed flow.
 
+The posting handoff also preserves the following optional fields in both the
+ten-tool ChatGPT and thirteen-tool core catalogs, including legacy clients:
+
+| Field | Reviewed behavior |
+| --- | --- |
+| `review_mode` and `delivery_deadline` | For design or other human-reviewed work, use `creator` and the exact agreed ISO calendar timestamp with its timezone offset. The creator confirms the verdict. Omit automated `benchmark` and `evidence_schema` fields in this mode. Never replace the calendar deadline with days after claim. |
+| `posting_operation_id` | Reuse this UUID throughout one posting journey. Omission derives a deterministic UUID from unchanged preparation arguments; repeating preparation does not publish or fund a bounty. |
+| `meta_child` | Preserve the routed `parent_bounty_contract` and optional `intended_child_solver`. The first-party page checks the canonical parent before applying child economics. Creator review cannot be combined with a meta-child binding. |
+| `reference_attachment` | Preserve the approved compact homepage snapshot descriptor: capture time, commit-pinned asset URL, SHA-256, MIME type, size, phase, and variant. The server validates the supported pinned descriptor before any optional cover-image upload. This reference is separate from the approved cover image. |
+
+`verifier_reward_usdc` is displayed as the **creator-review reserve** in creator
+mode and is paid to the creator on either verdict. The response exposes the
+preserved fields, `verification_prepared`, and `review_disclosure`; its declared
+output schema includes the optional automated benchmark and evidence objects.
+Preparation without a supported verifier remains unfundable. Wallet, legal,
+publication, and payment confirmations remain with the user. A prepared URL,
+signature, or transaction hash is not confirmed creation, funding, or
+claimability.
+
+After first-party login, the browser can save the complete private draft and
+its recovery journal under that account when the account's controlled rollout
+is enabled. A continuation link identifies the operation and requires the
+same authenticated account; the operation UUID grants no access or payment
+authority. See [account setup](account-setup.md) for the rollout and retention
+contract. MCP preparation alone does not create this authenticated saved row.
+
 Lower-level funding, wallet, claim, submission, and settlement tools are not
 exposed to the ChatGPT app. The model receives only hosted preparation and
 canonical-status tools.
