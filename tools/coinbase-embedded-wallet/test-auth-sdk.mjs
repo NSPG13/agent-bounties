@@ -17,6 +17,10 @@ const testUser = { evmAccountObjects: [{address:'0x'+'22'.repeat(20)}], authenti
 export const useCurrentUser = () => ({currentUser:useSyncExternalStore(subscribe,()=>signedIn()?testUser:null)});
 export const getCurrentUser = async () => user();
 export const isSignedIn = async () => signedIn();
+export const getMfaConfigState = () => window.testCdpUnavailable ? null : ({ projectId: 'qa-wallet-project' });
+export const getProjectConfigState = () => window.testCdpUnavailable ? null : ({ projectId: 'qa-wallet-project' });
+export const getMfaConfig = async () => { if(window.testCdpUnavailable) throw new Error('Network Error private@example.com'); return getMfaConfigState(); };
+export const getProjectConfig = async () => { if(window.testCdpUnavailable) throw new Error('Network Error private@example.com'); return getProjectConfigState(); };
 export const signOut = async () => { sessionStorage.removeItem('test-cdp-signed-in'); listeners.forEach(callback=>callback()); };
 export const createCDPEmbeddedWallet = () => ({provider:{request:async request=>{
   window.walletTestCalls.push({wallet:'embedded',...request});

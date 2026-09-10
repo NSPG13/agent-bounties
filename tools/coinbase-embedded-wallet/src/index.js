@@ -13,16 +13,21 @@ import { useCurrentUser, useIsInitialized, useIsSignedIn } from "@coinbase/cdp-h
 import {
   createCDPEmbeddedWallet,
   getCurrentUser,
+  getMfaConfig,
+  getMfaConfigState,
+  getProjectConfig,
+  getProjectConfigState,
   isSignedIn,
   signOut,
 } from "@coinbase/cdp-core";
 import { http } from "viem";
 import { base } from "viem/chains";
+import { createReadinessGate } from "./readiness.js";
 
 const ADAPTER_ID = "coinbase-embedded";
 const PROVIDER_UUID = "16c41c3b-a510-4b72-82f2-9d70f22552c7";
 const PROVIDER_RDNS = "app.agentbounties.wallet.coinbase";
-const SDK_READY_TIMEOUT_MS = 20_000;
+const SDK_READY_TIMEOUT_MS = 12_000;
 const UNSPONSORED_TRANSACTION_METHODS = new Set([
   "eth_sendTransaction",
   "wallet_sendCalls",
@@ -44,6 +49,21 @@ const ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewB
 
 const runtimeConfig = window.AgentBountiesWalletConfig?.providers?.coinbaseEmbedded;
 const registry = window.AgentBountiesWalletAdapters;
+const capabilities = Object.freeze({
+  embedded: true,
+  custody: "user",
+  vendor: "coinbase-cdp",
+  accountType: "eoa",
+  chainIds: Object.freeze([8453]),
+  authMethods: Object.freeze([...(runtimeConfig?.authMethods || [])]),
+  authMethodLinking: true,
+  typedData: true,
+  eip3009: true,
+  transactionPolicy: runtimeConfig?.transactionPolicy,
+  gasSponsoredOnSupportedRelays: true,
+  arbitraryTransactionsGasSponsored: false,
+  directTransactions: false,
+});
 
 let embeddedWallet = null;
 let registered = false;
@@ -204,7 +224,7 @@ function AuthBridge() {
       React.createElement(
         "p",
         null,
-        "Create a wallet with email or social sign-in. Coinbase secures your wallet; you control it.",
+        "Use or recover your Coinbase embedded wallet with its original email or social sign-in. A matching Agent Bounties email alone does not connect a wallet.",
       ),
       React.createElement(SignIn, { className: "wallet-auth-signin" },
         React.createElement(SignInBackButton, null),
@@ -432,7 +452,7 @@ async function waitForSdk() {
   requireConfigured();
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
-      reject(new Error("Coinbase wallet initialization timed out. Reload and try again."));
+      reject(Object.assign(new Error("Coinbase wallet initialization timed out. Retry or choose another wallet. Your draft is saved."), { code: "coinbase_startup_unavailable" }));
     }, SDK_READY_TIMEOUT_MS);
     sdkReady.then(
       (value) => {
@@ -445,6 +465,24 @@ async function waitForSdk() {
       },
     );
   });
+}
+
+const startup = createReadinessGate(async () => {
+  await waitForSdk();
+  // CDP initialization can resolve after swallowing project/MFA network errors.
+  // Inspect both required public configurations before offering authentication.
+  const [project, mfa] = await Promise.all([
+    getProjectConfigState() || getProjectConfig(),
+    getMfaConfigState() || getMfaConfig(),
+  ]);
+  if (!project || !mfa || project.projectId !== runtimeConfig.projectId || mfa.projectId !== runtimeConfig.projectId) {
+    throw new Error("Coinbase configuration is unavailable for this project.");
+  }
+});
+
+async function checkReadiness() {
+  try { return await startup.run(); }
+  finally { emit("coinbase-embedded-readiness", startup.snapshot()); }
 }
 
 async function ensureEmbeddedWallet() {
@@ -473,7 +511,7 @@ async function accessMethods() {
 }
 
 async function ensureAuthenticated({ review = "review", message = "" } = {}) {
-  await waitForSdk();
+  await checkReadiness();
   const pendingRequest = () => {
     if (review) throw Object.assign(new Error("Finish the current wallet request before reviewing another message."), { code: -32002 });
     return authRequest;
@@ -512,6 +550,7 @@ async function innerProvider() {
 }
 
 const provider = {
+  agentBountiesCapabilities: capabilities,
   async request(args) {
     const method = String(args?.method || "");
     if (!method) throw new TypeError("EIP-1193 method is required.");
@@ -582,21 +621,7 @@ function registerAdapter() {
       rdns: PROVIDER_RDNS,
     },
     provider,
-    capabilities: {
-      embedded: true,
-      custody: "user",
-      vendor: "coinbase-cdp",
-      accountType: "eoa",
-      chainIds: [8453],
-      authMethods: [...runtimeConfig.authMethods],
-      authMethodLinking: true,
-      typedData: true,
-      eip3009: true,
-      transactionPolicy: runtimeConfig.transactionPolicy,
-      gasSponsoredOnSupportedRelays: true,
-      arbitraryTransactionsGasSponsored: false,
-      directTransactions: false,
-    },
+    capabilities,
     disconnect,
   });
   registered = true;
@@ -605,11 +630,14 @@ function registerAdapter() {
 window.AgentBountiesCoinbaseEmbeddedWallet = Object.freeze({
   id: ADAPTER_ID,
   provider,
+  capabilities,
   enabled: Boolean(runtimeConfig?.enabled),
   ensureAuthenticated,
   currentAddress,
   accessMethods,
   manageAccess,
+  checkReadiness,
+  readiness: startup.snapshot,
   disconnect,
 });
 

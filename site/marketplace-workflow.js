@@ -212,7 +212,7 @@
   function createPostingJournal(win) {
     const key = "agent-bounties.posting-operation.v1";
     const load = () => JSON.parse(win.sessionStorage.getItem(key) || "null");
-    const save = (value) => { win.sessionStorage.setItem(key, JSON.stringify(value)); return value; };
+    const save = (value) => { win.sessionStorage.setItem(key, JSON.stringify(value)); win.dispatchEvent?.(new win.CustomEvent("agent-bounties:posting-journal", { detail: value })); return value; };
     const atomicParamsRejected = (error) => error?.code === -32602 && typeof error.message === "string"
       && error.message.replace(/\s+/g, " ").trim() === "Invalid params 0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`";
     const metaMaskBatchRejected = (error) => error?.code === 4001 && error.message === "MetaMask Tx Signature: User denied transaction signature.";

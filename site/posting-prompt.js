@@ -7,19 +7,19 @@
 
   const PROMPT = `Help me create, fund and publicly post a bounty on Agent Bounties.
 
-1. Use https://agentbounties.app/post.html in @Browser, preserving existing page context. Discover WebMCP tools and read page context; confirm actual access. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. Fallback to connected official MCP tools; otherwise prepare a portable draft and say posting and funding remain incomplete. Never request API keys.
+1. Use https://agentbounties.app/post.html in @Browser; preserve page context. Discover WebMCP tools and confirm access. Read https://agentbounties.app/.well-known/agent-bounties.json and https://agentbounties.app/llms.txt before choosing endpoints. Fallback to connected official MCP; otherwise return a portable draft and say posting and funding remain incomplete. Never request API keys.
 
-2. Save and resume my posting journey; preserve my answers and draft. Ask together only for missing business decisions: outcome, total USDC budget and deadline. Propose deliverables and measurable checks. Use a supported reviewed verifier; for design work, propose creator review with my exact calendar deadline and explain that I confirm the verdict. Stage the draft and check funding readiness. Never invent verifier details or replace a calendar deadline with days after claim.
+2. Save my journey; preserve my answers and draft. Ask together only for missing business decisions: outcome, total USDC budget and deadline. Propose measurable checks and a supported verifier. For creative work propose creator review: I confirm the verdict, and approve the reward/reserve split. Confirm my timezone; remote-browser time may differ. Keep the exact calendar deadline with offset, not days after claim. Flag tight deadlines or scope. Bind changing references to real timestamped, hashed snapshots. Stage and check funding readiness.
 
-3. Show one review of public terms, rewards, fees, total cost and deadline. Leave publication, legal, funding and payment consent to me. Reuse unchanged approvals; handle routine preparation yourself.
+3. Review public terms, rewards, fees, gas and total cost once. Leave publication, legal, funding and payment consent to me. Reuse unchanged approvals; link to required page confirmation.
 
-4. Guide wallet connection, offering phone-wallet QR pairing. Explain each request's amount, network, recipient, expiry, purpose and gas cost or confirmed sponsorship. Never request private keys or seed phrases. Leave wallet confirmations to me.
+4. Prefer account wallets; distinguish ownership from signing. Recover Coinbase embedded wallets via email/social. Offer phone-wallet QR pairing on desktop, native handoff on the same phone; for external wallets. No QR screenshots. Check Base USDC/ETH shortfalls. Buying USDC and funding are separate. Explain amount, network, recipient, expiry, purpose and gas/sponsorship. Never request private keys or seed phrases. Leave wallet confirmations to me.
 
-5. After my confirmations, resume automatically. Reconcile the same posting operation; never repeat uncertain transactions. Confirm canonical creation, funding and claimability, then find the exact bounty in public ready-to-earn inventory. Return its public link and confirmed status, or the precise unfinished step. A draft, signature or transaction hash is not completion; only tool results and confirmed canonical Base USDC evidence prove actions and payments.
+5. After confirmations resume automatically; keep the same operation, never repeat uncertain transactions. Confirm canonical creation, funding and claimability and the exact bounty in public ready-to-earn inventory. Return its public link or precise unfinished step. Only confirmed canonical Base USDC evidence proves payments.
 
-Without tools, return importable JSON:
+Without tools return importable JSON:
 {"title":"...","goal":"...","acceptance_criteria":["..."],"solver_reward_usdc":"2.00","verifier_reward_usdc":"0.10","task_window_days":30,"source_url":null,"benchmark":null,"evidence_schema":null}
-Use my agreed amounts and days. For creator review add "review_mode":"creator" and "delivery_deadline" as the agreed ISO timestamp with timezone offset; omit automated benchmark fields. Preserve parent bindings and approved image fields. Missing verification stays unfundable; JSON is not publication or funding.`;
+Use agreed amounts/days. For creator review add "review_mode":"creator" and "delivery_deadline" with ISO offset; omit automated benchmark fields. Preserve parent/image/reference bindings and operation ID. Missing verification stays unfundable; JSON is not publication or funding.`;
 
   function reviewUrl(value) {
     if (!value) return null;

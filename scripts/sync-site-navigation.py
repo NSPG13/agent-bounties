@@ -42,7 +42,7 @@ def sync(check=False):
             header = re.search(r'<header class="(?:scene-header|about-header|topbar|site-header|market-header|install-header|legal-header)"[^>]*>.*?</header>', source, re.S)
             result = source[:header.start()] + block + source[header.end():] if header else re.sub(r'(<body\b[^>]*>)', lambda m: m[0] + "\n    " + block, source, count=1)
         css = f'<link rel="stylesheet" href="{prefix}site-navigation.css?v=1">'
-        js = f'<script src="{prefix}site-navigation.js?v=1" defer></script>'
+        js = f'<script src="{prefix}site-navigation.js?v=2" defer></script>'
         if css not in result:
             result = result.replace("  </head>", "    " + css + "\n    " + js + "\n  </head>")
         if result != source:

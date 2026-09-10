@@ -130,3 +130,20 @@ test("no-wallet and unconfigured deployments do not fall through to an injected 
   h.chooser.cancel();
   await assert.rejects(selection, { code: 4001 });
 });
+
+test("OAuth continuation retains its selected address and remains bound to the account", () => {
+  const h = harness(), records = new Map();
+  h.win.sessionStorage = { getItem: key => records.get(key) ?? null, setItem: (key, value) => records.set(key, value), removeItem: key => records.delete(key) };
+  const selectedAddress = "0x" + "AB".repeat(20);
+  h.chooser.beginPending("member", selectedAddress);
+  assert.equal(h.chooser.hasPending("member"), true);
+  assert.equal(h.chooser.pendingAddress("member"), selectedAddress.toLowerCase());
+  assert.equal(h.chooser.hasPending("another-member"), false);
+  assert.equal(h.chooser.pendingAddress("member"), null);
+  h.chooser.beginPending("member");
+  assert.equal(h.chooser.hasPending("member"), true);
+  assert.equal(h.chooser.pendingAddress("member"), null);
+  const key = "agentbounties:pending-embedded-account-link";
+  records.set(key, JSON.stringify({ userId: "member", startedAt: Date.now(), expectedAddress: "invalid" }));
+  assert.equal(h.chooser.hasPending("member"), false);
+});

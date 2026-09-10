@@ -158,7 +158,8 @@
   margin-top: 0.15rem;
 }
 
-.onramp-return-status[hidden] {
+.onramp-return-status[hidden],
+.onramp-action[hidden] {
   display: none;
 }
 

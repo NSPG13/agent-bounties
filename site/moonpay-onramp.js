@@ -4,8 +4,9 @@
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const BASE_CHAIN_ID = "0x2105";
-  const BALANCE_OF_SELECTOR = "70a08231";
   const CHECKOUT_HOSTS = new Set(["buy.moonpay.com", "buy-sandbox.moonpay.com"]);
+  const ATTEMPT_STORAGE = "agent-bounties:onramp-attempts:v1";
+  const TOPUP_WINDOW = "agent-bounties-wallet-topup";
   const announcedProviders = [];
   const state = {
     protocol: null,
@@ -17,6 +18,10 @@
     usdcBalance: null,
     ethBalance: null,
     observedBalanceState: null,
+    operationId: "",
+    balanceRead: 0,
+    checkoutBusy: false,
+    providerTab: null,
   };
 
   const select = (selector) => document.querySelector(selector);
@@ -139,16 +144,19 @@
   }
 
   async function connectWallet() {
+    if (state.checkoutBusy) throw new Error("Wait for the current checkout request before changing wallets.");
     const protocol = await loadProtocol();
     const provider = selectedProvider();
     const accounts = await provider.request({ method: "eth_requestAccounts" });
     const account = String(accounts?.[0] || "");
     if (!ADDRESS.test(account)) throw new Error("The wallet did not return a valid EVM address.");
     await switchToBase(provider);
+    if (state.account !== account.toLowerCase()) select("[data-onramp-ack]").checked = false;
     state.account = account.toLowerCase();
+    resetBalanceDisplay();
     select("[data-wallet-address]").textContent = state.account;
     select("[data-refresh-balance]").disabled = false;
-    select("[data-start-moonpay]").disabled = !select("[data-onramp-ack]").checked;
+    renderPurchaseRecovery();
     setOutput("[data-wallet-output]", [
       `Connected: ${state.account}`,
       `Network: ${protocol.network}`,
@@ -159,15 +167,18 @@
   }
 
   async function usePublicAddress() {
+    if (state.checkoutBusy) throw new Error("Wait for the current checkout request before changing wallets.");
     const account = String(select("[data-wallet-address-input]").value || "").trim();
     if (!ADDRESS.test(account)) {
       throw new Error("Enter one valid public EVM address. Never enter a recovery phrase or private key.");
     }
     state.provider = null;
+    if (state.account !== account.toLowerCase()) select("[data-onramp-ack]").checked = false;
     state.account = account.toLowerCase();
+    resetBalanceDisplay();
     select("[data-wallet-address]").textContent = state.account;
     select("[data-refresh-balance]").disabled = false;
-    select("[data-start-moonpay]").disabled = !select("[data-onramp-ack]").checked;
+    renderPurchaseRecovery();
     setOutput("[data-wallet-output]", [
       `Public destination: ${state.account}`,
       "Network: base-mainnet",
@@ -177,44 +188,31 @@
     await refreshBalances();
   }
 
-  function paddedAddress(address) {
-    return address.slice(2).toLowerCase().padStart(64, "0");
-  }
-
-  async function rpcRequest(method, params) {
-    const response = await fetch("https://mainnet.base.org", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      cache: "no-store",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || payload?.error || typeof payload?.result !== "string") {
-      throw new Error("Base balance verification is temporarily unavailable.");
-    }
-    return payload.result;
+  function resetBalanceDisplay() {
+    state.balanceRead += 1;
+    state.usdcBalance = null;
+    state.ethBalance = null;
+    select("[data-usdc-balance]").textContent = "—";
+    select("[data-eth-balance]").textContent = "—";
+    select("[data-usdc-shortfall]").textContent = "Check wallet balance";
+    select("[data-topup-step-status]").textContent = "Checking the selected wallet";
+    select("[data-balance-observed]").textContent = "Balances have not been checked for this wallet.";
+    select("[data-quote-guidance]").textContent = "Check the selected wallet's balance before choosing a purchase amount. The provider confirms fees and purchase minimums.";
+    renderBalanceGuidance();
   }
 
   async function refreshBalances() {
     if (!state.account) throw new Error("Connect a wallet or enter its public address first.");
     const protocol = await loadProtocol();
-    if (state.provider) await switchToBase(state.provider);
-    const request = state.provider
-      ? (method, params) => state.provider.request({ method, params })
-      : rpcRequest;
-    const [ethHex, usdcHex] = await Promise.all([
-      request("eth_getBalance", [state.account, "latest"]),
-      request("eth_call", [{
-          to: protocol.native_usdc,
-          data: `0x${BALANCE_OF_SELECTOR}${paddedAddress(state.account)}`,
-        }, "latest"]),
-    ]);
-    state.ethBalance = BigInt(ethHex || "0x0");
-    state.usdcBalance = BigInt(usdcHex || "0x0");
+    const wallet = state.account;
+    const read = ++state.balanceRead;
+    const balances = await window.AgentBountiesFundingReadiness.readBalances({ wallet, usdcAddress: protocol.native_usdc });
+    if (read !== state.balanceRead || wallet !== state.account) return;
+    state.ethBalance = balances.eth;
+    state.usdcBalance = balances.usdc;
     select("[data-eth-balance]").textContent = `${formatUnits(state.ethBalance, 18, 6)} ETH`;
     select("[data-usdc-balance]").textContent = `${formatUnits(state.usdcBalance, 6, 6)} USDC`;
+    select("[data-balance-observed]").textContent = `Checked on Base at ${new Date(balances.observedAt).toLocaleTimeString()}. Refreshes when you return.`;
     renderBalanceGuidance();
   }
 
@@ -254,11 +252,17 @@
       state.bountyContract
         ? "Existing-bounty funding may use gas sponsorship; the final wallet path determines whether ETH is needed."
         : (hasGas
-          ? "This wallet has some Base ETH for new-bounty creation gas. The wallet still decides the actual fee."
+          ? "Base ETH is available. Whether it covers gas remains unknown until the exact transaction is estimated at bounty review."
           : "No Base ETH is visible. New-bounty creation cannot proceed until the same wallet has a small Base ETH balance; choose Base ETH above to review a separate purchase."),
     ];
     guidance.textContent = messages.join(" ");
-    guidance.dataset.tone = enoughUsdc && (state.bountyContract || hasGas) ? "success" : "pending";
+    guidance.dataset.tone = enoughUsdc ? "success" : "pending";
+    const shortfall = window.AgentBountiesFundingReadiness.shortfall(state.requiredUsdc, state.usdcBalance);
+    select("[data-usdc-shortfall]").textContent = `${formatUnits(shortfall, 6, 6)} USDC`;
+    select("[data-quote-guidance]").textContent = shortfall === 0n
+      ? "No USDC purchase is needed for this contribution. Return to the bounty to check gas and review funding."
+      : `Request enough to receive at least ${formatUnits(shortfall, 6, 6)} USDC on Base after provider fees. The provider confirms its USD quote and minimum; this page does not assume a USDC/USD exchange rate.`;
+    select("[data-topup-step-status]").textContent = enoughUsdc ? "Required USDC visible in wallet" : "More USDC needed";
     const observed = enoughUsdc ? "funded" : "unfunded";
     if (state.observedBalanceState !== observed) {
       state.observedBalanceState = observed;
@@ -300,7 +304,7 @@
       throw new Error("This on-ramp handoff contains an invalid bounty contract.");
     }
     state.bountyContract = bountyContract.toLowerCase();
-    state.requiredUsdc = parseUsdc(params.get("amount") || "5.10");
+    state.requiredUsdc = parseUsdc(params.get("amount"));
     if (state.requiredUsdc <= 0n) {
       throw new Error("This on-ramp handoff is missing a valid planned USDC amount.");
     }
@@ -308,8 +312,9 @@
       ? bountyContract.toLowerCase()
       : "New bounty not created yet";
     select("[data-required-usdc]").textContent = `${formatUnits(state.requiredUsdc, 6, 6)} USDC`;
-    const suggestedUsd = Math.max(20, Math.ceil(Number(state.requiredUsdc) / 1_000_000 * 1.08 * 100) / 100);
-    select("[data-fiat-amount]").value = suggestedUsd.toFixed(2);
+    state.operationId = params.get("operation_id") || params.get("operation") || params.get("posting_operation_id") || params.get("journey") || params.get("intent") || "";
+    if (state.operationId && !/^[a-zA-Z0-9_-]{1,128}$/.test(state.operationId)) throw new Error("The posting operation is invalid.");
+    select("[data-fiat-amount]").value = "";
     for (const link of selectAll("[data-return-link]")) link.href = safeReturnUrl().href;
     renderReturnStatus();
     track("onramp_viewed");
@@ -323,14 +328,12 @@
       help.textContent = "Buy Base ETH into the same wallet for transaction gas. This still does not fund the bounty.";
       button.textContent = "Continue to MoonPay for Base ETH";
       select("[data-onramp-ack-copy]").textContent = "I understand that this purchases Base ETH into my wallet and does not yet fund the bounty.";
-      if (Number(select("[data-fiat-amount]").value) > 100) {
-        select("[data-fiat-amount]").value = "20.00";
-      }
     } else {
       help.textContent = "Buy Base USDC into your wallet, then return to approve the contribution.";
       button.textContent = "Continue to MoonPay for Base USDC";
       select("[data-onramp-ack-copy]").textContent = "I understand that this purchases Base USDC into my wallet and does not yet fund the bounty.";
     }
+    renderPurchaseRecovery();
   }
 
   function renderReturnStatus() {
@@ -352,6 +355,7 @@
     if (!select("[data-onramp-ack]").checked) {
       throw new Error("Acknowledge that the purchase and bounty funding are separate actions.");
     }
+    if (state.checkoutBusy || currentAttempt()) throw new Error("A purchase may already be in progress. Resume or resolve that purchase below before starting another.");
     const amount = String(select("[data-fiat-amount]").value || "").trim();
     if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) {
       throw new Error("Enter a positive USD amount with at most two decimal places.");
@@ -364,23 +368,23 @@
 
     const protocol = await loadProtocol();
     if (state.provider) await switchToBase(state.provider);
-    track("onramp_moonpay_started");
     if (!bountyContract) {
-      const asset = select("[data-onramp-asset]").value;
-      const assetLabel = asset === "eth" ? "ETH" : "USDC";
-      setOutput("[data-onramp-output]", [
-        `Opening MoonPay's public ${assetLabel} purchase page for a new-bounty wallet.`,
-        `Copy the exact destination address shown above, choose ${assetLabel} on Base, and verify both again before paying.`,
-        "This purchase does not create or fund a bounty.",
-      ], "pending");
-      window.open(asset === "eth" ? "https://www.moonpay.com/buy/eth" : "https://www.moonpay.com/buy/usdc", "_blank", "noopener,noreferrer");
+      openDirectCheckout();
       return;
     }
+    if (state.checkoutBusy || currentAttempt()) throw new Error("A purchase may already be in progress. Resume the existing purchase.");
+    saveAttempt({ status: "requesting" });
+    state.checkoutBusy = true;
+    renderPurchaseRecovery();
+    track("onramp_moonpay_started");
     const endpoint = `${protocol.mcp_base_url.replace(/\/$/, "")}/v1/onramps/moonpay/checkout`;
     setOutput("[data-onramp-output]", [
       "Creating a device-bound MoonPay checkout URL...",
       "No bounty transaction is being signed.",
     ], "pending");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -395,13 +399,15 @@
       }),
       cache: "no-store",
       credentials: "omit",
+      signal: controller.signal,
     });
     const body = await response.json().catch(() => null);
     if (!response.ok) {
+      clearAttempt();
       throw new Error(body?.error || body?.message || `MoonPay checkout creation failed (${response.status}).`);
     }
     validateCheckoutPlan(body, bountyContract);
-    sessionStorage.setItem("agent-bounties:moonpay:last-external-transaction", body.external_transaction_id);
+    saveAttempt({ status: "opened", reference: body.external_transaction_id });
     setOutput("[data-onramp-output]", [
       body.environment === "sandbox"
         ? "Opening MoonPay sandbox. It validates the checkout flow but will not top up Base mainnet."
@@ -409,7 +415,74 @@
       body.evidence_boundary,
     ], "pending");
     location.assign(body.checkout_url);
+    } finally {
+      clearTimeout(timer);
+      state.checkoutBusy = false;
+      renderPurchaseRecovery();
+    }
   }
+
+  function attemptKey() {
+    return `${state.account || ""}:${select("[data-onramp-asset]").value}`;
+  }
+
+  function attempts() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ATTEMPT_STORAGE) || "{}");
+      return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+    } catch (_error) { return {}; }
+  }
+
+  function currentAttempt() { return attempts()[attemptKey()] || null; }
+
+  function saveAttempt({ status, reference = "" }) {
+    const saved = attempts();
+    saved[attemptKey()] = { status, operation: state.operationId, startedAt: new Date().toISOString(), reference: /^[a-zA-Z0-9_-]{1,128}$/.test(reference) ? reference : "" };
+    // Keep only recovery metadata. Signed checkout URLs and credentials never enter storage.
+    localStorage.setItem(ATTEMPT_STORAGE, JSON.stringify(saved));
+  }
+
+  function clearAttempt() {
+    const saved = attempts();
+    delete saved[attemptKey()];
+    localStorage.setItem(ATTEMPT_STORAGE, JSON.stringify(saved));
+  }
+
+  function renderPurchaseRecovery() {
+    const attempt = currentAttempt();
+    select("[data-purchase-recovery]").hidden = !attempt;
+    select("[data-start-moonpay]").disabled = Boolean(state.checkoutBusy || attempt || !state.account || !select("[data-onramp-ack]").checked);
+    for (const selector of ["[data-onramp-asset]", "[data-wallet-provider]", "[data-connect-wallet]", "[data-use-wallet-address]", "[data-fiat-amount]", "[data-clear-purchase]"]) {
+      const element = select(selector);
+      element.disabled = state.checkoutBusy || (selector === "[data-wallet-provider]" && !state.providers.length);
+    }
+    select("[data-purchase-recovery-copy]").textContent = attempt
+      ? `A ${select("[data-onramp-asset]").value === "eth" ? "Base ETH" : "Base USDC"} purchase was started for this wallet.${attempt.reference ? ` Reference: ${attempt.reference}.` : ""} Its payment status is unverified. Reopen the existing provider order or confirmation email; if you already paid, keep that order and contact its provider about a failed upload or payment screen.`
+      : "";
+    window.dispatchEvent(new Event("agent-bounties:onramp-state"));
+  }
+
+  function openDirectCheckout() {
+    if (!state.account || !select("[data-onramp-ack]").checked) throw new Error("Check the destination wallet and acknowledge the purchase before continuing.");
+    if (state.checkoutBusy || currentAttempt()) throw new Error("Resume or resolve the existing purchase before opening another checkout.");
+    const asset = select("[data-onramp-asset]").value;
+    const destination = asset === "eth" ? "https://www.moonpay.com/buy/eth" : "https://www.moonpay.com/buy/usdc";
+    const tab = window.open("about:blank", TOPUP_WINDOW);
+    if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
+    tab.opener = null;
+    state.providerTab = tab;
+    try {
+      saveAttempt({ status: "opened" });
+      tab.location.replace(destination);
+    } catch (error) {
+      tab.close();
+      throw error;
+    }
+    renderPurchaseRecovery();
+    setOutput("[data-onramp-output]", "MoonPay opened. Review the exact received asset, Base network, destination wallet, quote, fees and purchase minimum there. Buying crypto does not fund the bounty.", "pending");
+  }
+
+  window.AgentBountiesOnramp = Object.freeze({ hasPendingPurchase: () => Boolean(currentAttempt()), openDirectCheckout });
 
   function validateCheckoutPlan(body, bountyContract) {
     if (
@@ -438,8 +511,9 @@
     try {
       await action();
     } catch (error) {
-      setOutput("[data-onramp-output]", error.message || String(error), "error");
-      if (action === connectWallet || action === refreshBalances) {
+      const message = error.name === "AbortError" ? "Checkout request timed out. Check the existing purchase before retrying; its status remains unverified." : error.message || String(error);
+      setOutput("[data-onramp-output]", message, "error");
+      if (action === connectWallet || action === usePublicAddress || action === refreshBalances) {
         setOutput("[data-wallet-output]", error.message || String(error), "error");
       }
     }
@@ -450,18 +524,44 @@
     select("[data-use-wallet-address]").addEventListener("click", () => run(usePublicAddress));
     select("[data-refresh-balance]").addEventListener("click", () => run(refreshBalances));
     select("[data-start-moonpay]").addEventListener("click", () => run(requestCheckout));
-    select("[data-onramp-asset]").addEventListener("change", renderAssetHelp);
-    select("[data-onramp-ack]").addEventListener("change", (event) => {
-      select("[data-start-moonpay]").disabled = !(event.currentTarget.checked && state.account);
+    select("[data-onramp-asset]").addEventListener("change", () => {
+      select("[data-onramp-ack]").checked = false;
+      select("[data-purchase-resolved]").checked = false;
+      renderAssetHelp();
     });
+    select("[data-onramp-ack]").addEventListener("change", renderPurchaseRecovery);
+    select("[data-resume-checkout]").addEventListener("click", () => {
+      if (state.providerTab && !state.providerTab.closed) state.providerTab.focus();
+      else setOutput("[data-onramp-output]", "Open the original purchase in MoonPay or your provider's confirmation email. The temporary checkout URL is not stored here. Refresh balances after delivery; do not pay again for a pending order.", "pending");
+    });
+    select("[data-clear-purchase]").addEventListener("click", () => run(async () => {
+      if (!select("[data-purchase-resolved]").checked) throw new Error("Confirm the provider shows the earlier purchase completed or cancelled, with no pending payment.");
+      clearAttempt();
+      select("[data-purchase-resolved]").checked = false;
+      select("[data-onramp-ack]").checked = false;
+      renderPurchaseRecovery();
+      await refreshBalances();
+    }));
+    window.addEventListener("storage", renderPurchaseRecovery);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && state.account) run(refreshBalances);
+    });
+    window.addEventListener("focus", () => { if (state.account) run(refreshBalances); });
+    setInterval(() => {
+      if (!document.hidden && state.account && currentAttempt()) run(refreshBalances);
+    }, 15000);
     select("[data-wallet-provider]").addEventListener("change", () => {
       state.provider = null;
       state.account = null;
+      select("[data-onramp-ack]").checked = false;
+      resetBalanceDisplay();
       select("[data-start-moonpay]").disabled = true;
       select("[data-refresh-balance]").disabled = true;
       select("[data-wallet-address]").textContent = "Not connected";
       select("[data-usdc-balance]").textContent = "—";
       select("[data-eth-balance]").textContent = "—";
+      select("[data-usdc-shortfall]").textContent = "Check wallet balance";
+      renderPurchaseRecovery();
     });
     for (const link of selectAll("[data-onramp-provider]")) {
       link.addEventListener("click", () => {
@@ -479,6 +579,11 @@
       renderAssetHelp();
       wireEvents();
       await discoverProviders();
+      const wallet = new URLSearchParams(location.search).get("wallet");
+      if (wallet && ADDRESS.test(wallet)) {
+        select("[data-wallet-address-input]").value = wallet;
+        await usePublicAddress();
+      }
     } catch (error) {
       setOutput("[data-onramp-output]", error.message || String(error), "error");
       select("[data-start-moonpay]").disabled = true;

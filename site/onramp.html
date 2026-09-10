@@ -14,11 +14,11 @@
     <link rel="stylesheet" href="styles.css?v=20260722-1">
     <link rel="stylesheet" href="guild-pages.css?v=20260722-1">
     <link rel="stylesheet" href="simple-ux.css?v=1">
-    <link rel="stylesheet" href="onramp.css?v=1">
+    <link rel="stylesheet" href="onramp.css?v=2">
     <link rel="stylesheet" href="wallet-adapters.css?v=1">
-    <link rel="stylesheet" href="phone-wallet.css?v=2">
+    <link rel="stylesheet" href="phone-wallet.css?v=3">
     <link rel="stylesheet" href="site-navigation.css?v=1">
-    <script src="site-navigation.js?v=1" defer></script>
+    <script src="site-navigation.js?v=2" defer></script>
   </head>
   <body class="guild-interior" data-guild-build="20260725-moonpay-2" data-public-ux="simplified-v1">
     <!-- shared-navigation:start -->
@@ -53,24 +53,24 @@
           <!-- Stable evidence-boundary marker: Buying crypto does not fund the bounty. Existing-bounty actions may use gas sponsorship; new-bounty creation still needs Base ETH. -->
         </div>
         <ol>
-          <li><strong>Provider purchase:</strong> Base USDC is delivered to the public wallet address you verify below.</li>
-          <li><strong>Canonical contribution:</strong> after returning, your wallet separately reviews and approves the exact bounty contract call.</li>
+          <li><strong>1. Add money to your wallet:</strong> <span data-topup-step-status>check whether a purchase is needed.</span></li>
+          <li><strong>2. Fund your bounty:</strong> return to bounty review for the exact transaction and a separate wallet confirmation.</li>
         </ol>
         <p>Only the matching indexed <code>FundingAdded</code> event changes the bounty's funded state.</p>
       </section>
 
       <section class="onramp-action" aria-labelledby="provider-choice-title">
         <div>
-          <p class="eyebrow">Three measured variations</p>
+          <p class="eyebrow">Purchase options</p>
           <h2 id="provider-choice-title">Choose where to buy Base USDC.</h2>
           <p>Availability, quotes, identity checks, payment methods, and final fees come from the selected provider. Copy the same destination address and verify <strong>USDC on Base</strong> before paying.</p>
         </div>
         <div class="onramp-provider-grid">
           <a class="button primary" href="#moonpay-action-title" data-onramp-provider="moonpay">MoonPay checkout</a>
           <a class="button secondary" href="https://portfolio.metamask.io/" target="_blank" rel="noopener noreferrer" data-onramp-provider="metamask">MetaMask Portfolio</a>
-          <a class="button secondary" href="https://wallet.coinbase.com/" target="_blank" rel="noopener noreferrer" data-onramp-provider="coinbase">Coinbase Base wallet</a>
+          <a class="button secondary" href="https://wallet.coinbase.com/" target="_blank" rel="noopener noreferrer" data-onramp-provider="coinbase">Base App / Coinbase Wallet</a>
         </div>
-        <p class="fine">In MetaMask choose Move crypto → Buy. In the Coinbase Base app choose Buy → USDC → Base. A provider completion is not bounty-funding evidence.</p>
+        <p class="fine">In your wallet, choose Buy and verify USDC on Base. These are external wallet purchase routes. Coinbase embedded wallet uses email or social login on your account page. A provider completion is not bounty-funding evidence.</p>
       </section>
 
       <section class="onramp-grid" aria-label="Base USDC wallet top-up">
@@ -80,6 +80,7 @@
           <dl class="onramp-facts">
             <div><dt>Bounty context</dt><dd><code data-bounty-contract>New bounty not created yet</code></dd></div>
             <div><dt>Planned contribution</dt><dd><strong data-required-usdc>0 USDC</strong></dd></div>
+            <div><dt>USDC still needed</dt><dd><strong data-usdc-shortfall>Check wallet balance</strong></dd></div>
             <div><dt>Destination network</dt><dd>Base mainnet</dd></div>
           </dl>
 
@@ -94,9 +95,9 @@
 
           <label>
             Fiat amount for MoonPay to quote, USD
-            <input data-fiat-amount type="number" min="1" max="10000" step="0.01" inputmode="decimal" required>
+            <input data-fiat-amount type="number" min="0.01" max="10000" step="0.01" inputmode="decimal" placeholder="Enter an amount to quote" required>
           </label>
-          <p class="fine">This is a starting amount, not a guaranteed received amount. MoonPay shows its final quote, fees, payment methods, and any region-specific limits before you approve.</p>
+          <p class="fine" data-quote-guidance>Select your wallet first to calculate the exact USDC shortfall. MoonPay confirms its exchange rate, fees and purchase minimum for your payment method before you pay. No universal $20 minimum or fee estimate is assumed.</p>
         </article>
 
         <article class="onramp-panel">
@@ -127,8 +128,26 @@
             <div><dt>Base USDC balance</dt><dd><strong data-usdc-balance>—</strong></dd></div>
             <div><dt>Base ETH balance</dt><dd><strong data-eth-balance>—</strong></dd></div>
           </dl>
+          <p class="fine" data-balance-observed>Balances have not been checked.</p>
           <p class="fine" data-balance-guidance>New-bounty creation is not gas-sponsored. This wallet needs a small amount of Base ETH as well as the planned USDC; existing-bounty funding and claims may use sponsorship.</p>
         </article>
+      </section>
+
+      <section class="onramp-action" data-purchase-recovery hidden aria-labelledby="purchase-recovery-title">
+        <div>
+          <p class="eyebrow">Continue the same purchase</p>
+          <h2 id="purchase-recovery-title">Check the existing order before paying again.</h2>
+          <p data-purchase-recovery-copy></p>
+          <label class="onramp-acknowledgement">
+            <input type="checkbox" data-purchase-resolved>
+            <span>I checked with the provider: the earlier purchase is completed or cancelled and no payment is pending.</span>
+          </label>
+        </div>
+        <div class="onramp-action-buttons">
+          <button class="button secondary" type="button" data-resume-checkout>Return to open checkout</button>
+          <a class="button secondary" href="https://support.moonpay.com/" target="_blank" rel="noopener noreferrer">MoonPay order support</a>
+          <button class="button secondary" type="button" data-clear-purchase>Recheck after resolving purchase</button>
+        </div>
       </section>
 
       <section class="onramp-action" aria-labelledby="moonpay-action-title">
@@ -189,12 +208,13 @@
       <a href="https://github.com/NSPG13/agent-bounties/issues">Support</a>
     </footer>
     <script src="phone-wallet-config.js?v=1"></script>
-    <script src="phone-wallet.js?v=5"></script>
-    <script src="marketplace-workflow.js?v=3"></script>
-    <script src="analytics-config.js?v=5"></script>
+    <script src="phone-wallet.js?v=6"></script>
+    <script src="marketplace-workflow.js?v=4"></script>
+    <script src="analytics-config.js?v=7"></script>
     <script src="analytics.js?v=4"></script>
     <script src="guild-shell.js?v=4"></script>
-    <script src="moonpay-onramp.js?v=2"></script>
-    <script src="moonpay-direct-fallback.js?v=2"></script>
+    <script src="funding-readiness.js?v=1"></script>
+    <script src="moonpay-onramp.js?v=3"></script>
+    <script src="moonpay-direct-fallback.js?v=3"></script>
   </body>
 </html>

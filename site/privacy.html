@@ -9,7 +9,7 @@
     <link rel="canonical" href="https://agentbounties.app/privacy.html">
     <link rel="stylesheet" href="solarpunk.css?v=7">
     <link rel="stylesheet" href="site-navigation.css?v=1">
-    <script src="site-navigation.js?v=1" defer></script>
+    <script src="site-navigation.js?v=2" defer></script>
   </head>
   <body class="legal-body">
     <a class="skip-link" href="#policy">Skip to privacy policy</a>
@@ -66,7 +66,7 @@
 
       <section>
         <h2>AI assistant handoffs</h2>
-        <p>In a browser that supports WebMCP, your current assistant can prepare and resume a marketplace journey. The browser session stores your goal, preferences, draft, public submission evidence and transaction recovery checkpoints. Closing the session can clear this local history; an existing hosted review link remains usable until its expiry. Preparing a review sends its intended public fields to the same hosted action service described below. Private keys and recovery phrases are never requested or saved.</p>
+        <p>In a browser that supports WebMCP, your current assistant can prepare and resume a marketplace journey. The browser keeps your brief, draft and transaction recovery checkpoints. When signed in, the posting page also saves an account-owned draft, its terms approval hash and bounded recovery metadata. Drafts without a recorded wallet operation expire 30 days after the latest save; recorded operations remain available for recovery so an uncertain payment is not repeated. A continuation link identifies the draft but requires the same authenticated account; it does not grant access or wallet authority. Concurrent edits are checked before saving. Publication still requires your confirmation. Drafts never store private keys, recovery phrases, wallet signatures, payment-card data or wallet pairing credentials.</p>
         <p>For a competition proof service, the browser temporarily keeps the exact short-lived payment or relay request you signed in session storage so an interrupted request can resume without another wallet prompt. It removes that signed request after the backend acknowledges the corresponding transition. These bounded signatures are sent only to the first-party payment or relay endpoint; they are not included in WebMCP results, URLs, analytics or public evidence. The broker receives the submitted metric input and entry needed to generate your proof. A proof-job link can restore progress and an unexpired unsigned review, but does not grant wallet authority.</p>
         <p>The Post a Bounty launcher prepares an initialization message for the assistant you choose. The browser opens the selected app or website, or copies the message at your request. Agent Bounties does not automatically submit that message and does not receive your conversation from the AI provider. Review every proposed write, signature, funding amount, network, and destination before approving it.</p>
         <p>In the Agent Bounties ChatGPT app, the public and developer-installed experiences use the same hosted-action flow. ChatGPT hosted action intents may contain bounded public draft fields, public wallet addresses, exact review amounts, and an opaque one-hour identifier. They must never contain passwords, private keys, seed phrases, payment-card data, one-time codes, or wallet signatures. ChatGPT hosted action intents are deleted within 24 hours after expiry.</p>
@@ -98,8 +98,8 @@
       <span>Public protocol. Verifiable outcomes.</span>
       <nav aria-label="Footer navigation"><a href="./">Home</a><a href="metrics.html">Metrics</a><a href="terms.html">Terms</a></nav>
     </footer>
-    <script src="marketplace-workflow.js?v=3"></script>
-    <script src="analytics-config.js?v=5"></script>
+    <script src="marketplace-workflow.js?v=4"></script>
+    <script src="analytics-config.js?v=7"></script>
     <script src="analytics.js?v=4"></script>
   </body>
 </html>

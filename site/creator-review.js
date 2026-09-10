@@ -10,7 +10,7 @@
   function deadline(value) {
     if (value == null || value === "") return null;
     if (typeof value !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,3})?)?(?:Z|[+-]\d\d:\d\d)$/.test(value) || !Number.isFinite(Date.parse(value))) throw new Error("Supply the agreed delivery deadline as an ISO timestamp including its time-zone offset.");
-    return new Date(value).toISOString();
+    return value;
   }
   function prepare(draft) {
     if (draft.review_mode !== "creator") return draft;
@@ -19,7 +19,10 @@
     if (!cutoff || Date.parse(cutoff) <= Date.now()) throw new Error("Creator review requires a future delivery deadline.");
     if (Date.parse(cutoff) > Date.now() + 366 * 86400000) throw new Error("The delivery deadline must be within 366 days; prepare a nearer milestone for longer work.");
     if (draft.benchmark && draft.benchmark.engine !== ENGINE) throw new Error("Do not replace an automated benchmark with creator review. Explicitly restage the selected policy without that benchmark.");
-    return { ...draft, delivery_deadline: cutoff, benchmark: { engine: ENGINE, delivery_deadline: Math.floor(Date.parse(cutoff) / 1000), acceptance: "all_published_criteria", reviewer: "creator" }, evidence_schema: evidenceSchema() };
+    const schema = evidenceSchema();
+    const reference = draft.reference_attachment || draft.evidence_schema?.["x-agent-bounties-reference-attachment"];
+    if (reference) schema["x-agent-bounties-reference-attachment"] = reference;
+    return { ...draft, delivery_deadline: cutoff, benchmark: { engine: ENGINE, delivery_deadline: Math.floor(Date.parse(cutoff) / 1000), acceptance: "all_published_criteria", reviewer: "creator" }, evidence_schema: schema };
   }
   function ready(benchmark, schema) {
     return benchmark?.engine === ENGINE && benchmark.reviewer === "creator" && benchmark.acceptance === "all_published_criteria"

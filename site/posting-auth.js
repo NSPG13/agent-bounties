@@ -102,6 +102,7 @@
   function bind(win) {
     for (const control of win.document.querySelectorAll("[data-post-auth-start]")) {
       control.addEventListener("click", (event) => {
+        if (control.dataset.authenticated === "true") { remember(win); return; }
         event.preventDefault();
         try { begin(win); }
         catch (error) {

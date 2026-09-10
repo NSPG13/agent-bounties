@@ -66,6 +66,24 @@ test("meta-child navigation keeps the parent and business answers without publis
   assert.equal(env.requests.some(r => r.method === "POST"), false);
 });
 
+test("account inspection uses the existing session and never returns credentials or payment authority", async () => {
+  const env = environment();
+  const id = "ab".repeat(32);
+  let request;
+  env.window.fetch = async (url, options) => { request = { url, ...options }; return { ok: true, json: async () => ({ authenticated: true, user: { id, email: "private@example.com" }, token: "must-not-return", posting_drafts_enabled: true }) }; };
+  env.register();
+  const result = await env.tools.get("agent_bounties_get_account_status").execute();
+  assert.equal(result.account_id, id);
+  assert.equal(result.posting_drafts_enabled, true);
+  assert.equal(result.wallet_authorized, false);
+  assert.equal(result.payment_authorized, false);
+  assert.equal(request.credentials, "include");
+  assert.equal(request.cache, "no-store");
+  assert.equal(request.method, undefined);
+  assert.equal(JSON.stringify(result).includes("private@example.com"), false);
+  assert.equal(JSON.stringify(result).includes("must-not-return"), false);
+});
+
 test("ordinary work cannot take the meta-child shortcut", async () => {
   const env = environment(); env.register();
   await assert.rejects(env.tools.get("agent_bounties_start_meta_child_bounty").execute({ opportunity_id: item().opportunity_id }), /no supported 1 USDC/);
@@ -419,6 +437,7 @@ test("posting batch fallback occurs only for explicit unsupported-method errors"
     const env = environment(), journal = flow.createPostingJournal(env.window); journal.prepare({ predicted_bounty_contract: contract, bounty_id: "batch" });
     let sends = 0;
     const send = vm.runInNewContext(`${fn}; sendWalletCalls`, { postingJournal: journal,
+      prepareWalletRequest: async () => {}, postingSession: { flush: async () => {} },
       state: { account: wallet, provider: { request: async () => { const error = new Error("wallet error"); error.code = code; throw error; } } },
       sendTransaction: async () => { sends++; return "hash"; }, waitReceipt: async () => ({ status: "0x1" }) });
     const calls = [{ to: contract, data: "0x" }, { to: contract, data: "0x01" }], protocol = { chain_id_hex: "0x2105" };
@@ -427,7 +446,7 @@ test("posting batch fallback occurs only for explicit unsupported-method errors"
   }
 });
 
-function rejectedBatchFixture() {
+function rejectedBatchFixture({ revision = 0 } = {}) {
   const env = environment("/post.html"), journal = flow.createPostingJournal(env.window);
   const input = { bounty_contract: contract, bounty_id: "0x" + "ab".repeat(32), wallet_error: {
     code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`",
@@ -436,15 +455,19 @@ function rejectedBatchFixture() {
   // Preserve the exact journal shape written by the pre-error-capture release.
   const legacy = journal.load(); delete legacy.error_capture_version;
   env.storage.set("agent-bounties.posting-operation.v1", JSON.stringify(legacy));
-  const state = { approved: true, draft: { title: "Preserve my draft" } }, statuses = [], field = { disabled: true }, fundNow = { disabled: true };
+  const walletWrites = [], archivals = [];
+  const state = { approved: true, draft: { title: "Preserve my draft" }, provider: { request: async request => { walletWrites.push(request); throw new Error("Recovery cannot access a wallet"); } } }, statuses = [], field = { disabled: true }, fundNow = { disabled: true };
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
   const fn = source.slice(source.indexOf("  async function recoverRejectedBatch("), source.indexOf("  async function fundApprovedBounty("));
   env.window.fetch = async (url, options) => { env.requests.push({ url, ...options }); return { ok: true, json: async () => [] }; };
-  const context = { postingBusy: false, postingJournal: journal, state, window: env.window,
+  const context = { postingBusy: false, postingJournal: journal, postingSession: {
+    snapshot: () => ({ revision }),
+    beginAfterArchive: async (archived, options) => { archivals.push({ archived, options }); },
+  }, state, window: env.window,
     ui: { form: { querySelectorAll: () => [field] }, fundNow }, setPaymentStatus: text => statuses.push(text) };
   const recoverRejectedBatch = vm.runInNewContext(`${fn}; recoverRejectedBatch`, context);
   env.window.AgentBountiesComposer = { recoverRejectedBatch }; env.register();
-  return { ...env, journal, input, context, state, statuses, field, fundNow,
+  return { ...env, journal, input, context, state, statuses, field, fundNow, walletWrites, archivals,
     recover: value => env.tools.get("agent_bounties_recover_rejected_posting_batch").execute(value || input) };
 }
 
@@ -458,7 +481,20 @@ test("WebMCP archives only the explicitly rejected legacy batch, preserves the d
   assert.match(env.statuses.at(-1), /rejected attempt is saved/);
   assert.equal(JSON.parse(env.storage.get("agent-bounties.posting-operation.v1.rejected")).length, 1);
   assert.equal(env.requests.length, 2); assert.ok(env.requests.every(r => !r.method || r.method === "GET"));
+  assert.equal(env.archivals.length, 1); assert.equal(env.archivals[0].options.preserveDraft, true);
+  assert.equal(env.walletWrites.length, 0);
   await assert.rejects(env.recover(), /does not match/);
+});
+
+test("an account-saved rejected operation keeps its original journal and cannot start a distributed retry", async () => {
+  const env = rejectedBatchFixture({ revision: 1 });
+  const original = env.storage.get("agent-bounties.posting-operation.v1"), draft = env.state.draft;
+  await assert.rejects(env.recover(), /saved to your account/);
+  assert.equal(env.storage.get("agent-bounties.posting-operation.v1"), original);
+  assert.equal(env.storage.has("agent-bounties.posting-operation.v1.rejected"), false);
+  assert.equal(env.archivals.length, 0); assert.equal(env.walletWrites.length, 0);
+  assert.equal(env.state.draft, draft); assert.equal(env.field.disabled, true); assert.equal(env.fundNow.disabled, true);
+  assert.equal(env.requests.length, 2); assert.ok(env.requests.every(request => !request.method || request.method === "GET"));
 });
 
 test("recovery does not grant missing card approval", async () => {

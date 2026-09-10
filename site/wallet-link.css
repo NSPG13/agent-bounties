@@ -29,4 +29,11 @@
 .wallet-link-dialog .wallet-link-note { padding-top: 1rem; border-top: 1px solid #35452f; margin-bottom: 0; font-size: .75rem; }
 .wallet-link-status { font-size: .85rem; }
 .wallet-link-status:empty { display: none; }
+.account-wallets li { grid-template-columns: minmax(0, 1fr) auto; }
+.account-wallets li > code { grid-column: 1; grid-row: 1; font-size: .8rem; }
+.account-wallets [data-wallet-unlink] { grid-column: 2; grid-row: 1; }
+.account-wallets .wallet-verified, .account-wallets li > small { grid-column: 1 / -1; font-size: .75rem; line-height: 1.45; letter-spacing: normal; text-transform: none; }
+.account-wallets li > small { color: #a9b5a5; }
+.account-wallets [data-wallet-use] { grid-column: 1 / -1; justify-self: start; }
+.account-wallets .wallet-remove { min-height: 44px; font-size: .8rem; }
 @media (prefers-reduced-motion: reduce) { .wallet-choice { transition: none; } }

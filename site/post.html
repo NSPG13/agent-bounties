@@ -17,11 +17,12 @@
     <link rel="stylesheet" href="bounty-composer.css?v=1">
     <link rel="stylesheet" href="bounty-composer-v2.css?v=2">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=2">
-    <link rel="stylesheet" href="phone-wallet.css?v=2">
-    <link rel="stylesheet" href="posting-workspace.css?v=3">
+    <link rel="stylesheet" href="phone-wallet.css?v=3">
+    <link rel="stylesheet" href="wallet-link.css?v=2">
+    <link rel="stylesheet" href="posting-workspace.css?v=4">
     <link rel="stylesheet" href="marketplace-theme.css?v=1">
     <link rel="stylesheet" href="site-navigation.css?v=1">
-    <script src="site-navigation.js?v=1" defer></script>
+    <script src="site-navigation.js?v=2" defer></script>
   </head>
   <body class="composer-page posting-page">
     <!-- shared-navigation:start -->
@@ -57,14 +58,30 @@
           <label for="bounty-composer-input" data-composer-label>What do you want delivered?</label>
           <textarea id="bounty-composer-input" maxlength="4000" rows="4" required placeholder="Describe the result you need."></textarea>
           <div class="brief-fields">
-            <div><label for="brief-budget">Total budget (USDC)</label><input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00"></div>
-            <div><label for="brief-deadline">Delivery deadline</label><input id="brief-deadline" data-brief-deadline type="datetime-local"><small data-brief-timezone></small></div>
+            <div><label for="brief-budget">Total budget (USDC)</label><input id="brief-budget" data-brief-budget type="number" min="0.01" step="0.01" placeholder="20.00" required></div>
+            <div><label for="brief-deadline">Delivery deadline</label><input id="brief-deadline" data-brief-deadline type="datetime-local" required></div>
+            <div><label for="brief-timezone">Time zone</label><input id="brief-timezone" data-brief-timezone list="brief-timezones" autocomplete="off"><datalist id="brief-timezones"></datalist><small>Check this if your assistant uses a remote browser.</small></div>
           </div>
+          <output class="brief-summary" data-brief-deadline-summary></output>
+          <output class="brief-summary" data-brief-budget-summary></output>
+          <ul class="brief-warnings" data-brief-warnings></ul>
+          <details class="posting-reference"><summary>Freeze a visual reference</summary><div data-posting-reference></div></details>
           <div class="brief-actions"><button class="button secondary" type="submit" data-composer-submit>Save brief</button><button class="button secondary" type="button" data-export-draft>Download draft</button></div>
           <output class="brief-status" data-brief-status aria-live="polite">Your brief is saved as you type. Nothing is published yet.</output>
+          <output class="brief-status" data-draft-sync-status aria-live="polite">Saved on this device. Sign in to continue on another device.</output>
+          <a data-continue-posting hidden>Continue on another device with the same account</a>
+          <button class="button secondary" type="button" data-copy-continuation>Copy continuation link</button>
+          <button class="button secondary" type="button" data-reload-saved-draft hidden>Reload saved version</button>
           <output class="composer-status" data-composer-status aria-live="polite"></output>
           <span data-composer-hint hidden></span><button data-dictate type="button" hidden>Dictate</button>
         </form>
+        <ol class="posting-tracker" data-posting-tracker aria-label="Posting progress">
+          <li data-posting-step="draft">Draft saved</li><li data-posting-step="approval">Terms approved</li>
+          <li data-posting-step="wallet">Wallet connected</li><li data-posting-step="creation">Creation confirmed</li>
+          <li data-posting-step="funding">Funding confirmed</li><li data-posting-step="claimable">Claimable</li>
+          <li data-posting-step="inventory">Public inventory verified</li>
+        </ol>
+        <p data-posting-tracker-status aria-live="polite"></p>
         <div class="conversation-log" data-conversation-log aria-live="polite" aria-label="Bounty proposal">
           <section id="bounty-preview" class="bounty-preview conversation-draft" hidden aria-labelledby="bounty-card-title">
             <article id="bounty-card" class="bounty-card">
@@ -105,6 +122,8 @@
                   <p data-card-verifier-summary></p>
                   <dl data-card-verifier></dl>
                 </section>
+                <section class="bounty-card-section" data-card-reference aria-label="Frozen reference" hidden></section>
+                <section class="bounty-card-section" aria-label="Total cost"><h3>Total cost</h3><p data-posting-cost>Rewards and platform fee will appear with the proposal. Gas is estimated for the exact wallet request.</p></section>
 
                 <details class="bounty-review-details">
                   <summary>Details to review</summary>
@@ -224,6 +243,7 @@
               <div><span>Base USDC</span><strong data-wallet-usdc>—</strong></div>
               <div><span>Base ETH</span><strong data-wallet-eth>—</strong></div>
             </div>
+            <p data-wallet-state></p><p data-wallet-cost></p>
 
             <details class="funding-help">
               <summary>Exact funding, activation, and recovery sequence</summary>
@@ -242,7 +262,7 @@
             </div>
 
             <div class="wallet-tools">
-              <a class="button secondary" href="onramp.html?purpose=post" target="_blank" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
+              <a class="button secondary" href="onramp.html?purpose=post" target="agent-bounties-topup" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
               <button class="button secondary" type="button" data-watch-usdc>Add USDC</button>
               <button class="button secondary" type="button" data-copy-usdc>Copy token address</button>
               <button class="button secondary" type="button" data-recheck-balance>Recheck</button>
@@ -263,20 +283,26 @@
       </section>
     </main>
 
-    <script src="posting-auth.js?v=1"></script>
+    <script src="posting-auth.js?v=2"></script>
     <script src="phone-wallet-config.js?v=1"></script>
-    <script src="phone-wallet.js?v=5"></script>
-    <script src="marketplace-workflow.js?v=3"></script>
-    <script src="analytics-config.js?v=6"></script>
+    <script src="phone-wallet.js?v=6"></script>
+    <script src="marketplace-workflow.js?v=4"></script>
+    <script src="posting-session.js?v=1"></script>
+    <script src="funding-readiness.js?v=1"></script>
+    <script src="wallet-config.js?v=2"></script>
+    <script src="wallet-link.js?v=4"></script>
+    <script src="posting-reference.js?v=1"></script>
+    <script src="analytics-config.js?v=7"></script>
     <script src="analytics.js?v=5"></script>
     <script src="legal-consent.js?v=2"></script>
     <script src="evm.js"></script>
     <script src="meta-child.js?v=1"></script>
     <script src="bounty-entry.js?v=1"></script>
-    <script src="posting-prompt.js?v=3"></script>
-    <script src="creator-review.js?v=1"></script>
-    <script src="ai-bounty-handoff.js?v=10"></script>
-    <script src="bounty-composer-v2.js?v=16"></script>
-    <script src="posting-workspace.js?v=3"></script>
+    <script src="posting-prompt.js?v=4"></script>
+    <script src="creator-review.js?v=2"></script>
+    <script src="ai-bounty-handoff.js?v=11"></script>
+    <script src="bounty-composer-v2.js?v=17"></script>
+    <script src="posting-brief.js?v=1"></script>
+    <script src="posting-workspace.js?v=5"></script>
   </body>
 </html>

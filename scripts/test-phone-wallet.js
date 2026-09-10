@@ -6,8 +6,9 @@ const createPhoneWallet = require("../site/phone-wallet.js");
 const address = "0x" + "12".repeat(20);
 const uri = `wc:${"a".repeat(64)}@2?relay-protocol=irn&symKey=${"b".repeat(64)}`;
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(setImmediate); };
-function fixture({ configured = true, storage = new Map(), restored = false, failLoad = false } = {}) {
-  const events = new Map(), nodes = [], timers = new Map(), providers = [], options = [], requests = [], qrValues = [];
+function fixture({ configured = true, storage = new Map(), restored = false, failLoad = false, mobile = false, pairing = uri, stalled = false } = {}) {
+  const events = new Map(), nodes = [], timers = new Map(), providers = [], options = [], requests = [], qrValues = [], opened = [];
+  let clock = Date.now();
   let loads = 0, timerId = 0;
   const element = (tag) => {
     const listeners = new Map();
@@ -18,13 +19,15 @@ function fixture({ configured = true, storage = new Map(), restored = false, fai
     nodes.push(node); return node;
   };
   const win = { document: { body: element("body"), createElement: element }, crypto: webcrypto,
+    navigator: { userAgent: mobile ? "Mozilla/5.0 (Linux; Android 16)" : "Mozilla/5.0 (X11; Linux x86_64)" },
+    open(...args) { opened.push(args); },
     agentBountiesPhoneWalletConfig: { projectId: configured ? "1".repeat(32) : "" }, location: new URL("https://agentbounties.app/"),
     localStorage: { getItem: (k) => storage.get(k), setItem: (k, v) => storage.set(k, v), removeItem: (k) => storage.delete(k) },
     addEventListener(k, fn) { if (!events.has(k)) events.set(k, []); events.get(k).push(fn); }, dispatchEvent(event) { for (const fn of events.get(event.type) || []) fn(event); },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     setTimeout(fn) { timers.set(++timerId, fn); return timerId; }, clearTimeout(id) { timers.delete(id); },
   };
-  const api = createPhoneWallet(win, { loadVendor: async () => {
+  const api = createPhoneWallet(win, { now: () => clock, loadVendor: async () => {
     loads++; if (failLoad) throw new Error("private relay error");
     return { qrDataUrl: async (value) => { qrValues.push(value); return "data:image/png;base64,fixture"; }, createProvider: async (config) => {
       options.push(config);
@@ -32,7 +35,7 @@ function fixture({ configured = true, storage = new Map(), restored = false, fai
       const sdk = { accounts: [], chainId: 8453, session: null, connects: 0, disconnects: 0, cleanups: 0,
         signer: { cleanupPendingPairings: async () => { sdk.cleanups++; } },
         on(k, fn) { listeners.set(k, fn); }, emit(k, value) { listeners.get(k)?.(value); },
-        async connect() { this.connects++; const pending = new Promise((resolve, reject) => { resolveConnect = resolve; rejectConnect = reject; }); this.emit("display_uri", uri); return pending; },
+        async connect() { this.connects++; const pending = new Promise((resolve, reject) => { resolveConnect = resolve; rejectConnect = reject; }); if (!stalled) this.emit("display_uri", pairing); return pending; },
         approve(account = address, chain = 8453, methods = config.optionalMethods) { this.accounts = [account]; this.session = { expiry: Date.now() / 1000 + 3600, namespaces: { eip155: { accounts: [`eip155:${chain}:${account}`], methods } } }; this.emit("accountsChanged", this.accounts); resolveConnect?.(); },
         reject(wrapped = false) { rejectConnect(wrapped ? new Error("User rejected.") : Object.assign(new Error("User rejected"), { code: 4001 })); },
         async disconnect() { this.disconnects++; this.accounts = []; this.session = null; this.emit("disconnect"); },
@@ -41,14 +44,14 @@ function fixture({ configured = true, storage = new Map(), restored = false, fai
       if (restored) sdk.approve(); providers.push(sdk); return sdk;
     } };
   } });
-  return { api, win, providers, nodes, storage, requests, timers, options, qrValues, loads: () => loads,
+  return { api, win, providers, nodes, storage, requests, timers, options, qrValues, opened, advance: ms => { clock += ms; }, loads: () => loads,
     button: (text) => nodes.find((n) => n.tag === "button" && n.textContent === text), qr: () => nodes.find((n) => n.tag === "img") };
 }
 test("discovery and status load no relay or wallet, and advertise an EIP-6963 provider", () => {
   const env = fixture(); let announced;
   env.win.addEventListener("eip6963:announceProvider", (e) => { announced = e.detail; });
   env.win.dispatchEvent({ type: "eip6963:requestProvider" });
-  assert.equal(announced.provider, env.api.provider); assert.equal(announced.info.name, "Phone wallet (QR)");
+  assert.equal(announced.provider, env.api.provider); assert.equal(announced.info.name, "Phone wallet (app or QR)");
   assert.equal(env.api.state().connected, false); assert.equal(env.loads(), 0);
   assert.equal(env.win.document.body.children.length, 0, "No standalone phone-wallet button");
 });
@@ -71,6 +74,73 @@ test("only a valid Base session confirms connection, closes QR, and permits exac
 test("double opening shares one pending connection and QR", async () => {
   const env = fixture(); await env.api.openReview(); await env.api.openReview(); await flush();
   assert.equal(env.providers.length, 1); assert.equal(env.providers[0].connects, 1); assert.equal(env.qrValues.length, 1);
+});
+test("mobile handoff opens only the chosen allowlisted app after a click and keeps one pending operation", async () => {
+  const env = fixture({ mobile: true }); await env.api.openReview(); await flush();
+  assert.equal(env.qr().hidden, true, "a phone does not start with a QR scanning requirement");
+  const actions = env.nodes.find(node => node.className === "ab-phone-mobile-actions");
+  assert.equal(actions.hidden, false); assert.equal(env.opened.length, 0);
+  env.button("Open in Trust Wallet").click();
+  assert.equal(env.opened.length, 1);
+  const [destination, target, features] = env.opened[0];
+  const parsed = new URL(destination);
+  assert.equal(parsed.origin, "https://link.trustwallet.com"); assert.equal(parsed.pathname, "/wc");
+  assert.equal(parsed.searchParams.get("uri"), uri); assert.equal(target, "_blank"); assert.equal(features, "noopener,noreferrer");
+  const publicSurface = JSON.stringify({ state: env.api.state(), nodes: env.nodes.map(node => ({ text: node.textContent, attributes: node.attributes, href: node.href })) });
+  assert.doesNotMatch(publicSurface, /wc:|wc%3A|symKey|bbbbbbbbbbbbbbbb/);
+  await env.api.openReview(); await flush();
+  assert.equal(env.providers.length, 1); assert.equal(env.providers[0].connects, 1);
+  env.providers[0].approve(); await flush();
+  assert.equal(env.api.state().connected, true); assert.equal(env.requests.length, 0);
+  env.button("Open in Trust Wallet").click(); assert.equal(env.opened.length, 1, "a settled pairing cannot be relaunched");
+});
+test("desktop can switch to same-device MetaMask handoff without generating another connection", async () => {
+  const env = fixture(); await env.api.openReview(); await flush();
+  assert.equal(env.qr().hidden, false);
+  env.button("Use a wallet on this device").click(); assert.equal(env.qr().hidden, true);
+  env.button("Open in MetaMask").click();
+  assert.equal(new URL(env.opened[0][0]).origin, "https://link.metamask.io");
+  assert.equal(new URL(env.opened[0][0]).searchParams.get("uri"), uri);
+  env.button("Use a QR code on a second device").click(); assert.equal(env.qr().hidden, false);
+  assert.equal(env.providers[0].connects, 1); assert.equal(env.qrValues.length, 1);
+});
+test("pairing countdown honors an earlier SDK expiry and an expired click never launches a wallet", async () => {
+  const expiry = Math.floor(Date.now() / 1000) + 30;
+  const env = fixture({ mobile: true, pairing: `${uri}&expiryTimestamp=${expiry}` });
+  await env.api.openReview(); await flush();
+  assert.equal(env.api.state().pairing_expires_at, new Date(expiry * 1000).toISOString());
+  assert.ok(env.api.state().pairing_seconds_remaining <= 30);
+  const countdown = env.nodes.find(node => node.className === "ab-phone-countdown");
+  assert.match(countdown.textContent, /expires in 0:/);
+  env.advance(31000); env.button("Open in Trust Wallet").click(); await flush();
+  assert.equal(env.api.state().status, "expired"); assert.equal(env.api.state().pairing_expires_at, null);
+  assert.equal(env.opened.length, 0); assert.equal(env.qr().src, undefined); assert.equal(env.timers.size, 0);
+  env.button("Start a new connection").click(); await flush();
+  assert.equal(env.providers.length, 2); assert.notEqual(env.options[0].customStoragePrefix, env.options[1].customStoragePrefix);
+});
+test("invalid or already-expired pairing credentials cannot reach QR or app navigation", async () => {
+  for (const pairing of [`${uri}&expiryTimestamp=1`, `${uri}&expiryTimestamp=1000000000`, `${uri}&symKey=${"c".repeat(64)}`, `${uri}&redirect=https://evil.example`, uri.replace("irn", "unknown"), uri.replace("@2", "@1")]) {
+    const env = fixture({ mobile: true, pairing }); await env.api.openReview(); await flush();
+    env.button("Open in Trust Wallet").click();
+    assert.ok(["error", "expired"].includes(env.api.state().status));
+    assert.equal(env.opened.length, 0); assert.equal(env.qrValues.length, 0); assert.equal(env.qr().src, undefined);
+    assert.equal(env.api.state().pairing_expires_at, null);
+  }
+});
+test("relay preparation times out visibly without a retry loop or late connection resurrection", async () => {
+  const env = fixture({ stalled: true }); await env.api.openReview(); await flush();
+  [...env.timers.values()][0](); await flush();
+  assert.equal(env.api.state().status, "error"); assert.match(env.api.state().message, /did not respond in time/);
+  assert.equal(env.providers.length, 1); assert.equal(env.timers.size, 0);
+  env.providers[0].approve(); await flush();
+  assert.equal(env.api.state().connected, false); assert.equal(env.providers[0].disconnects, 1); assert.equal(env.requests.length, 0);
+});
+test("approval after expiry while a mobile browser suspended timers cannot revive the attempt", async () => {
+  const env = fixture({ mobile: true }); await env.api.openReview(); await flush();
+  env.advance(301000); env.providers[0].approve(); await flush();
+  assert.equal(env.api.state().status, "expired"); assert.equal(env.api.state().connected, false);
+  assert.equal(env.providers[0].disconnects, 1); assert.equal(env.timers.size, 0);
+  assert.equal(env.requests.length, 0);
 });
 test("cancellation erases QR and late approval cannot replace a successful retry", async () => {
   const env = fixture(); const first = env.api.provider.request({ method: "eth_requestAccounts" }); await flush();

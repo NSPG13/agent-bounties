@@ -7,8 +7,20 @@
   const budget = document.querySelector("[data-brief-budget]");
   const deadline = document.querySelector("[data-brief-deadline]");
   const status = document.querySelector("[data-brief-status]");
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  document.querySelector("[data-brief-timezone]").textContent = timezone;
+  const timezone = document.querySelector("[data-brief-timezone]");
+  const helper = window.AgentBountiesPostingBrief;
+  const deadlineSummary = document.querySelector("[data-brief-deadline-summary]");
+  const budgetSummary = document.querySelector("[data-brief-budget-summary]");
+  const warningList = document.querySelector("[data-brief-warnings]");
+  const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  timezone.value = detectedTimezone;
+  const zoneList = document.querySelector("#brief-timezones");
+  if (zoneList) {
+    const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : ["America/Mexico_City", "America/Chicago", "Europe/London", "Asia/Shanghai"];
+    for (const zone of new Set([detectedTimezone, "UTC", "-06:00", ...zones])) {
+      const option = document.createElement("option"); option.value = zone; zoneList.append(option);
+    }
+  }
   let restoring = false;
   const actions = document.querySelector(".bounty-card-actions");
   if (actions) {
@@ -17,32 +29,71 @@
     window.addEventListener("resize", measureActions);
     measureActions();
   }
-  function localDate(value) {
-    const date = new Date(value);
-    return Number.isFinite(date.getTime()) ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "";
+  function render() {
+    const result = helper.resolveDeadline(deadline.value, timezone.value.trim());
+    const journey = client.load();
+    const savedDeadline = journey?.brief?.deadline_at || journey?.draft?.delivery_deadline;
+    // datetime-local shows minutes. Preserve an already committed second or
+    // millisecond when this is only an edit to another field.
+    if (result.iso && Number.isFinite(Date.parse(savedDeadline)) && helper.wallTime(Date.parse(savedDeadline), timezone.value.trim()) === deadline.value) result.iso = savedDeadline;
+    deadline.setCustomValidity(result.error || "");
+    if (deadlineSummary) deadlineSummary.textContent = result.error || (result.iso ? `${deadline.value.replace("T", " ")} (${timezone.value.trim()}) · ${result.iso} · ${helper.countdown(result.iso)}` : "Choose the exact calendar deadline; the clock continues during wallet setup.");
+    const draft = journey?.draft_stale ? null : journey?.draft;
+    if (budgetSummary) {
+      const split = helper.proposedSplit(budget.value);
+      const matching = draft && helper.cents(draft.solver_reward_usdc) + helper.cents(draft.verifier_reward_usdc) === helper.cents(budget.value);
+      budgetSummary.textContent = matching ? (draft.review_mode === "creator" ? `Your proposal: ${draft.solver_reward_usdc} USDC to the solver + ${draft.verifier_reward_usdc} USDC creator-review reserve. You receive the review amount after either confirmed verdict. You confirm the verdict.` : `Your proposal: ${draft.solver_reward_usdc} USDC to the solver + ${draft.verifier_reward_usdc} USDC verifier reward.`) : (split ? `For creator review, suggested split: ${split.solver} USDC to the solver + ${split.reserve} USDC creator-review reserve (90% / 10%, rounded to cents). You receive the review amount after either confirmed verdict. Your AI will propose the review method; you approve the final amounts.` : "Enter the combined solver and review budget. Both rewards must be positive.");
+    }
+    if (warningList) {
+      warningList.replaceChildren();
+      for (const warning of helper.warnings({ goal: goal.value, budget: budget.value, deadline: result.iso, draft })) {
+        const item = document.createElement("li"); item.textContent = warning; warningList.append(item);
+      }
+      warningList.hidden = !warningList.childElementCount;
+    }
+    return result;
   }
   function restore(journey) {
-    if (!journey || journey.role !== "post") return;
+    if (!journey || journey.role !== "post") { render(); return; }
     restoring = true;
     const brief = journey.brief || {};
+    const savedDeadline = brief.deadline_at || journey.draft?.delivery_deadline || "";
     if (document.activeElement !== goal) goal.value = brief.goal || journey.draft?.goal || journey.goal || "";
     if (document.activeElement !== budget) budget.value = brief.budget_usdc || (journey.draft ? String(Number(journey.draft.solver_reward_usdc) + Number(journey.draft.verifier_reward_usdc)) : "");
-    if (document.activeElement !== deadline) deadline.value = localDate(brief.deadline_at || journey.draft?.delivery_deadline || "");
-    status.textContent = journey.draft ? "Draft saved in this browser. Review it below; it has not been posted." : "Brief saved. Your connected AI can use these answers.";
+    if (document.activeElement !== timezone) timezone.value = brief.timezone || savedDeadline.match(/([+-]\d\d:\d\d)$/)?.[1] || detectedTimezone;
+    if (document.activeElement !== deadline) {
+      try {
+        const local = helper.resolveDeadline(brief.deadline_local || "", timezone.value);
+        // A restaged draft may update only deadline_at. Do not let an older
+        // display field overwrite that newly agreed instant on the next edit.
+        const localMatches = !savedDeadline || Date.parse(local.iso) === Date.parse(savedDeadline);
+        deadline.value = brief.deadline_local && localMatches ? brief.deadline_local : (savedDeadline ? helper.wallTime(Date.parse(savedDeadline), timezone.value) : "");
+      }
+      catch (_) { deadline.value = brief.deadline_local || ""; }
+    }
+    status.textContent = journey.draft ? "Draft saved on this device. Review the proposal below." : "Brief saved on this device. Your connected AI can use these answers.";
     restoring = false;
+    render();
   }
   function save() {
     if (restoring) return;
     const current = client.load() || client.start({ role: "post" });
-    const brief = { goal: goal.value.trim(), budget_usdc: budget.value, deadline_at: deadline.value ? new Date(deadline.value).toISOString() : null, timezone };
-    const changed = JSON.stringify(brief) !== JSON.stringify(current.brief);
+    const result = render();
+    const brief = { goal: goal.value.trim(), budget_usdc: budget.value, deadline_at: result.iso, deadline_local: deadline.value, timezone: timezone.value.trim() };
+    // Compare decisions, not display formatting, so restoring an old brief
+    // does not invalidate approval simply because display fields were added.
+    const before = current.brief || {};
+    const changed = brief.goal !== (before.goal || current.draft?.goal || current.goal || "")
+      || Number(brief.budget_usdc) !== Number(before.budget_usdc || (current.draft ? Number(current.draft.solver_reward_usdc) + Number(current.draft.verifier_reward_usdc) : ""))
+      || (Date.parse(brief.deadline_at) || null) !== (Date.parse(before.deadline_at || current.draft?.delivery_deadline) || null);
     if (changed && current.draft) window.AgentBountiesComposer?.invalidate();
     client.save({ ...current, role: "post", goal: brief.goal, brief, draft_stale: current.draft_stale || Boolean(changed && current.draft), updated_at: new Date().toISOString() });
-    status.textContent = changed && current.draft ? "Brief updated. Your AI must update the proposal before you can approve funding." : "Brief saved. Continue with your AI in the same conversation.";
+    status.textContent = result.error || (changed && current.draft ? "Brief updated. Your AI must update the proposal before you can approve funding." : "Brief saved. Continue with your AI in the same conversation.");
   }
-  for (const input of [goal, budget, deadline]) input.addEventListener("input", save);
+  for (const input of [goal, budget, deadline, timezone]) input.addEventListener("input", save);
   form.addEventListener("submit", (event) => {
     event.preventDefault(); event.stopImmediatePropagation(); save();
+    if (!form.reportValidity()) return;
     const journey = client.load();
     window.AgentBountyAI.show(goal.value.trim(), { draft: journey?.draft, brief: journey?.brief });
     document.querySelector("[data-ai-options]").open = !document.documentElement.dataset.agentConnected;
@@ -63,15 +114,7 @@
     link.href = url; link.download = "agent-bounties-draft.json"; link.click(); URL.revokeObjectURL(url);
   });
   restore(client.load());
-  const operation = flow.createPostingJournal(window).load();
-  if (operation?.bounty_contract) {
-    client.request("/v1/base/autonomous-bounties/feed?network=base-mainnet&claimable_only=false").then((feed) => {
-      const item = feed.find((entry) => entry.bounty_id === operation.bounty_id && entry.bounty_contract.toLowerCase() === operation.bounty_contract.toLowerCase());
-      if (!item?.terms_valid || !["claimable", "claimed", "submitted", "paid"].includes(item.status) || BigInt(item.funded_amount) < BigInt(item.target_amount)) {
-        status.textContent = "A posting step is recorded; canonical funding is not confirmed. Ask your AI to check it before trying again."; return;
-      }
-      status.textContent = `Your bounty is funded. Current state: ${item.status}. `;
-      const link = document.createElement("a"); link.href = `participate.html?bountyContract=${encodeURIComponent(item.bounty_contract)}&network=base-mainnet`; link.textContent = "Open your bounty"; status.append(link);
-    }).catch(() => { status.textContent = "A posting step is recorded. Funding status is temporarily unavailable; keep the same operation."; });
-  }
+  window.setInterval(() => { if (!document.hidden) render(); }, 30000);
+  document.addEventListener("visibilitychange", render);
+  // Canonical completion belongs to the shared posting operation tracker.
 })();

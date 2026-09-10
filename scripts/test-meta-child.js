@@ -85,18 +85,34 @@ test("altered funding, chain, quorum, preimages and wallet calls fail before sig
 test("the confirmed funding branch uses the bounded child plan and retries a lost preparation with the same nonce", async () => {
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
   const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function configureSpeech", start);
+  const guardStart = source.indexOf("  async function assertPostingBinding()"), guardEnd = source.indexOf("  async function watchUsdcAsset", guardStart);
+  const postingHelper = require("../site/posting-session.js");
   const storage = new Map(), requests = [], sent = [], consents = [], navigations = [];
+  const saved = [], refreshes = [];
+  const journey = { schema: "agent-bounties/guided-journey-v1", id: "11111111-1111-4111-8111-111111111111", role: "post", goal: fixture.terms.document.goal, draft: fixture.terms.document, draft_stale: false };
+  const approvedEnvelope = postingHelper.stable(postingHelper.envelope(journey));
   const win = { sessionStorage: { getItem: key => storage.get(key) || null, setItem: (key, val) => storage.set(key, val), removeItem: key => storage.delete(key) },
     AgentBountiesLegal: { requireAcceptance: async () => { consents.push("human commitment"); return { durable: true }; } },
-    AgentBountiesWorkflow: { createClient: () => ({}) }, AgentBountiesEvm: evm, location: { assign: url => navigations.push(url) } };
+    AgentBountiesWorkflow: { createClient: () => ({ load: () => journey }) }, AgentBountiesPostingSession: postingHelper,
+    AgentBountiesEvm: evm, location: { assign: url => navigations.push(url) } };
   const journal = require("../site/marketplace-workflow.js").createPostingJournal(win);
   const parent = { terms_hash: "fixed-parent" };
   const fields = [{ disabled: false }, { disabled: false }];
   const state = { approved: true, provider: { request: async ({ method }) => method === "eth_accounts" ? [fixture.parent_solver] : "0x2105" }, account: fixture.parent_solver,
     balances: { usdc: 1000000n, required: 1000000n, eth: 1n }, draft: fixture.terms.document, metaParent: parent, fundingUsdc: 1, taskWindowDays: 3 };
+  const postingSession = {
+    refresh: async () => { refreshes.push(journey.id); },
+    approved: async () => state.approved && postingHelper.stable(postingHelper.envelope(journey)) === approvedEnvelope,
+    flush: async (options = {}) => { saved.push({ required: options.requireServer === true, envelope: postingHelper.envelope(journey), recovery: journal.load() }); },
+    reconcile: async () => {
+      assert.equal(sent.length, 1); assert.equal(journal.load().phase, "batch_submitted");
+      return { creation_confirmed: true, funding_confirmed: true, claimable: true, public_inventory_verified: true, paid: false };
+    },
+  };
   let fail = true, nonces = 0;
-  const run = vm.runInNewContext(source.slice(start, end) + "; fundApprovedBounty", {
-    postingBusy: false, postingJournal: journal, state, window: win, ui: { form: { querySelectorAll: () => fields }, fundNow: {}, badge: {} },
+  const run = vm.runInNewContext(source.slice(guardStart, guardEnd) + source.slice(start, end) + "; fundApprovedBounty", {
+    postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => fields }, fundNow: {}, badge: {} },
+    updatePostingTracker() {},
     track() {}, setPaymentStatus() {}, refreshWalletReadiness: async () => {}, loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: fixture.child_creation.factory_contract, chain_id: 8453 }),
     currentRewardSplit: () => split, randomBytes32: () => nonces++ ? "0x" + "77".repeat(32) : fixture.child_create.creation_nonce,
     metaChild: { ...helper, resolve: async () => parent, request: (_draft, _parent, _wallet, _split, _days, nonce) => ({ ...inputFor(), creation_nonce: nonce }), validatePlan: fixedHelper.validatePlan },
@@ -106,7 +122,7 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
       return { ...fixture, hosted_terms_published: true };
     },
     validateCreationPlan() {}, formatUsdc: v => Number(v).toFixed(2),
-    sendWalletCalls: async calls => { sent.push(calls); journal.checkpoint("batch_submitted", { id: "test-only" }); },
+    sendWalletCalls: async calls => { await postingSession.flush({ requireServer: true }); sent.push(calls); journal.checkpoint("batch_submitted", { id: "test-only" }); },
     pollCreation: async () => true, fetchFeedItem: async () => ({ verification_ready: true }),
   });
   await run(); assert.equal(sent.length, 0); assert.equal(journal.load(), null); assert.ok(fields.every(field => !field.disabled));
@@ -117,4 +133,7 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
   assert.deepEqual(navigations, [`funded.html?bountyContract=${fixture.child_creation.predicted_bounty_contract}&network=base-mainnet`]);
   assert.ok(fields.every(field => field.disabled));
   await run(); assert.equal(sent.length, 1);
+  assert.equal(refreshes.length, 2, "The same operation is refreshed before each preparation; a recorded result cannot start another");
+  assert.ok(saved.some(value => value.required && value.recovery?.phase === "prepared"), "Save recovery before the isolated wallet stub runs");
+  assert.ok(saved.every(value => postingHelper.stable(value.envelope) === approvedEnvelope), "Refresh/save cannot change the exact approved child draft");
 });
