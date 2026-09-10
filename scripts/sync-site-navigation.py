@@ -17,6 +17,10 @@ def sync(check=False):
     changed = []
     for path in sorted((ROOT / "site").rglob("*.html")):
         relative = path.relative_to(ROOT / "site")
+        # check-site.py separately requires this diagnostic to remain isolated
+        # from account/journey handlers and to load only its canary script.
+        if relative.as_posix() == "posting-draft-canary.html":
+            continue
         prefix = "../" * (len(relative.parts) - 1)
         markup = template.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix)
         if relative.as_posix() == "index.html":

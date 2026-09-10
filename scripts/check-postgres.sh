@@ -41,6 +41,7 @@ cargo test -p db tests::site_analytics_round_trip_executes_against_migrated_post
 cargo test -p db tests::platform_metrics_query_enforces_identity_payment_and_cohort_boundaries -- --ignored --exact --nocapture
 cargo test -p db tests::opportunity_comment_round_trip_is_durable_and_idempotent -- --ignored --exact --nocapture
 cargo test -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed_transaction -- --ignored --exact --nocapture
+cargo test -p db site_posting_drafts -- --ignored --nocapture
 cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p db tests::discovery_webhook_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
 cargo test -p api tests::audience_audit_persists_idempotently_across_processes -- --ignored --exact --nocapture

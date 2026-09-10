@@ -75,6 +75,9 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Verify isolated private draft canary
+        run: node --test scripts/test-posting-draft-canary.cjs
+
       - name: Run full repository gate
         shell: bash
         run: |
@@ -123,6 +126,7 @@ jobs:
       - name: Run Postgres sync regressions
         run: |
           cargo test -p db distribution_ -- --ignored --nocapture
+          cargo test -p db site_posting_drafts -- --ignored --nocapture
           cargo test -p worker open_competition_v2_shadow::tests::postgres_shadow_cache_certifies_full_sets_and_recovers_from_disagreement -- --ignored --exact --nocapture
           cargo test -p db tests::x402_relay_attempt_is_idempotent_and_lease_bounded -- --ignored --exact --nocapture
           cargo test -p api github_issue_api_sync_postgres -- --ignored --nocapture

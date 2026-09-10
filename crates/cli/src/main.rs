@@ -5903,6 +5903,7 @@ fn load_api_routes(contract_root: &Path) -> Result<BTreeSet<String>> {
         "crates/api/src/discoverability.rs",
         "crates/api/src/distribution.rs",
         "crates/api/src/open_competition_v2_api.rs",
+        "crates/api/src/site_auth.rs",
         "crates/mcp-server/src/main.rs",
     ] {
         let source_path = contract_root.join(relative_path);
@@ -7300,6 +7301,8 @@ mod tests {
             "/v1/operator/distribution/wallet-exclusions",
             "/v1/distribution/summary",
             "/v1/distribution/handoffs/wallet-review",
+            "/v1/site-auth/session",
+            "/v1/site-auth/posting-drafts/{param}",
         ] {
             assert!(routes.contains(route), "missing modular API route {route}");
         }
