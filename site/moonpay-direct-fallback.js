@@ -2,7 +2,6 @@
   "use strict";
 
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-  const MIN_FIAT_USD = 20;
   const DIRECT_BUY_URLS = Object.freeze({
     usdc: "https://www.moonpay.com/buy/usdc",
     eth: "https://www.moonpay.com/buy/eth",
@@ -32,14 +31,13 @@
 
   function amountReady() {
     const amount = fiatAmount();
-    return amount !== null && amount >= MIN_FIAT_USD;
+    return amount !== null;
   }
 
   function startingAmount() {
     const amount = fiatAmount();
-    if (amount === null) return `Enter at least $${MIN_FIAT_USD.toFixed(2)} USD`;
-    const suffix = amount < MIN_FIAT_USD ? " (below MoonPay minimum)" : "";
-    return `$${amount.toFixed(2)} USD${suffix}`;
+    if (amount === null) return "Enter a USD amount for the provider to quote";
+    return `$${amount.toFixed(2)} USD — fees and received amount confirmed by MoonPay`;
   }
 
   function setDirectOutput(message, tone = "") {
@@ -57,7 +55,7 @@
   }
 
   function minimumMessage() {
-    return `Enter at least $${MIN_FIAT_USD.toFixed(2)} USD. MoonPay may apply a higher minimum based on asset, region, payment method, and network conditions.`;
+    return "Enter a positive USD amount to quote. MoonPay confirms its purchase minimum for the asset, region and payment method before you pay.";
   }
 
   function renderDirectFallback() {
@@ -65,6 +63,7 @@
     const wallet = connectedWallet();
     const acknowledged = Boolean(select("[data-onramp-ack]")?.checked);
     const hasValidAmount = amountReady();
+    const pending = window.AgentBountiesOnramp?.hasPendingPurchase();
     const link = select("[data-direct-moonpay]");
     const copy = select("[data-copy-direct-wallet]");
 
@@ -75,7 +74,7 @@
 
     link.href = DIRECT_BUY_URLS[asset];
     link.dataset.asset = asset;
-    link.setAttribute("aria-disabled", String(!(wallet && acknowledged && hasValidAmount)));
+    link.setAttribute("aria-disabled", String(!(wallet && acknowledged && hasValidAmount && !pending)));
     copy.disabled = !wallet;
 
     if (!wallet) {
@@ -84,6 +83,8 @@
       setDirectOutput("Acknowledge that buying crypto and funding the bounty are separate actions.");
     } else if (!hasValidAmount) {
       setDirectOutput(minimumMessage(), "error");
+    } else if (pending) {
+      setDirectOutput("A purchase may already be in progress. Resolve or resume the existing order above before opening another checkout.", "pending");
     } else {
       setDirectOutput(
         `Ready for manual MoonPay checkout. Select ${assetLabel(asset)}, paste ${wallet}, and verify Base on the final review screen.`,
@@ -112,6 +113,7 @@
   }
 
   function openDirectCheckout(event) {
+    event.preventDefault();
     renderDirectFallback();
     const wallet = connectedWallet();
     const acknowledged = Boolean(select("[data-onramp-ack]")?.checked);
@@ -129,6 +131,13 @@
       return;
     }
     const asset = selectedAsset();
+    try {
+      if (!window.AgentBountiesOnramp) throw new Error("Checkout recovery is unavailable. Reload before opening a purchase.");
+      window.AgentBountiesOnramp.openDirectCheckout();
+    } catch (error) {
+      setDirectOutput(error.message || String(error), "error");
+      return;
+    }
     setDirectOutput(
       `MoonPay is opening in a new tab. Choose ${assetLabel(asset)}, use the starting amount shown here, paste ${wallet}, and stop if the final screen shows another network or address.`,
       "pending",
@@ -150,7 +159,6 @@
     if (!link || !copy) return;
 
     const amountInput = select("[data-fiat-amount]");
-    if (amountInput) amountInput.min = String(MIN_FIAT_USD);
 
     link.addEventListener("click", openDirectCheckout);
     copy.addEventListener("click", copyWallet);
@@ -160,6 +168,7 @@
     select("[data-onramp-ack]")?.addEventListener("change", renderDirectFallback);
     select("[data-connect-wallet]")?.addEventListener("click", () => setTimeout(renderDirectFallback, 0));
     select("[data-wallet-provider]")?.addEventListener("change", renderDirectFallback);
+    window.addEventListener("agent-bounties:onramp-state", renderDirectFallback);
 
     const walletAddress = select("[data-wallet-address]");
     if (walletAddress) {

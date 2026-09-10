@@ -130,6 +130,30 @@ The Coinbase adapter therefore rejects direct transaction methods for now instea
 
 ## Browser CORS boundary
 
+The wallet chooser says **Use or recover Coinbase embedded wallet**. The email
+or social method must belong to the original Coinbase identity; an Agent
+Bounties account email does not establish a wallet identity. Verified account
+wallets show ownership separately from the current signing session. Restoring a
+selected wallet must return that exact address before the flow can continue.
+Provider labels are hints recorded during ownership verification, not proof of
+provider identity, current connection, balances, or funding readiness.
+
+Before displaying the Coinbase authentication UI, the adapter checks the locked
+SDK's project and MFA configuration. CDP initialization can resolve even when
+these requests fail, so initialization alone is not readiness. Checks share one
+pending promise, time out after 12 seconds, and report only bounded error codes.
+They never repeat an authentication request, signature, or transaction. Two
+failed explicit attempts pause further checks for one minute; another wallet
+remains selectable. No browser error details, authentication data, or request
+URLs enter the diagnostic event.
+
+`AgentBountiesWalletLink.embeddedCapabilities` exposes the relay-only policy
+without loading or authenticating Coinbase. The adapter and its EIP-1193
+provider also expose `capabilities` and `agentBountiesCapabilities`, respectively.
+`directTransactions: false` remains unchanged: a new bounty's direct creation
+route must explain this limitation before authentication and offer a compatible
+external wallet. Only a supported relay may claim sponsorship.
+
 Two cross-origin boundaries are verified separately:
 
 1. The Agent Bounties API uses Tower HTTP's `CorsLayer::permissive()`, permitting the website to issue x402 requests and read `payment-required` and `payment-response`.

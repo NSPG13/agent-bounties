@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use db::{DbError, PostgresStore, SiteAuthWallet};
+use db::{DbError, PostgresStore, PostingDraftError, SiteAuthWallet, SitePostingDraft};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -46,6 +46,8 @@ struct SiteAuthInner {
     store: Option<PostgresStore>,
     client: reqwest::Client,
     wallet_challenges: Mutex<HashMap<String, WalletChallenge>>,
+    posting_drafts_enabled: bool,
+    posting_drafts_canary_account_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -94,6 +96,7 @@ struct WalletVerifyRequest {
     challenge_id: String,
     address: String,
     signature: String,
+    provider_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +106,11 @@ struct BrowserWallet {
     chain_id: i64,
     linked_at: DateTime<Utc>,
     proof: String,
+    provider_id: Option<String>,
+    wallet_type: String,
+    chain_ids: Vec<i64>,
+    last_verified_at: DateTime<Utc>,
+    provider_metadata_source: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,12 +187,18 @@ impl SiteAuthService {
                 store,
                 client,
                 wallet_challenges: Mutex::new(HashMap::new()),
+                posting_drafts_enabled: matches!(env::var("SITE_POSTING_DRAFTS_ENABLED").as_deref(), Ok("true" | "1")),
+                posting_drafts_canary_account_id: env::var("SITE_POSTING_DRAFTS_CANARY_ACCOUNT_ID").ok().filter(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())),
             }),
         })
     }
 
     fn enabled(&self) -> bool {
         self.inner.session_secret.is_some() && self.inner.store.is_some()
+    }
+
+    fn posting_drafts_enabled_for(&self, account_id: &str) -> bool {
+        self.inner.posting_drafts_enabled || self.inner.posting_drafts_canary_account_id.as_deref() == Some(account_id)
     }
 
     fn configured_providers(&self) -> BTreeMap<String, bool> {
@@ -234,6 +248,10 @@ pub fn router(service: SiteAuthService) -> Router {
         .route("/v1/site-auth/healthz", get(healthz))
         .route("/v1/site-auth/session", get(session))
         .route("/v1/site-auth/account", get(account))
+        .route(
+            "/v1/site-auth/posting-drafts/:operation_id",
+            get(get_posting_draft).post(save_posting_draft),
+        )
         .route("/v1/site-auth/login/:provider", get(begin_oauth))
         .route("/v1/site-auth/callback/:provider", get(finish_oauth))
         .route("/v1/site-auth/logout", post(logout))
@@ -244,6 +262,279 @@ pub fn router(service: SiteAuthService) -> Router {
         .layer(Extension(service))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavePostingDraftRequest {
+    draft: Value,
+    expected_revision: i64,
+    approved_draft_hash: Option<String>,
+    #[serde(default = "empty_object")]
+    recovery_state: Value,
+}
+
+fn empty_object() -> Value {
+    json!({})
+}
+
+// Drafts are private coordination records. They neither sign transactions nor
+// prove creation, funding, claimability, or payment, even if a saved client says so.
+async fn get_posting_draft(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Path(operation_id): Path<Uuid>,
+) -> Response {
+    let Some(account_id) = service
+        .current_user(&headers)
+        .and_then(|user| service.account_id(&user))
+    else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    if !service.posting_drafts_enabled_for(&account_id) { return error_json(StatusCode::SERVICE_UNAVAILABLE, "posting_drafts_not_enabled"); }
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable");
+    };
+    match store
+        .get_site_posting_draft(&account_id, operation_id)
+        .await
+    {
+        Ok(Some(draft)) => posting_draft_response(&service, draft),
+        Ok(None) => error_json(StatusCode::NOT_FOUND, "draft_not_found"),
+        Err(error) => posting_draft_error(error),
+    }
+}
+
+async fn save_posting_draft(
+    Extension(service): Extension<SiteAuthService>,
+    headers: HeaderMap,
+    Path(operation_id): Path<Uuid>,
+    Json(request): Json<SavePostingDraftRequest>,
+) -> Response {
+    if !service.origin_is_allowed(&headers) {
+        return error_json(StatusCode::FORBIDDEN, "origin_not_allowed");
+    }
+    let Some(account_id) = service
+        .current_user(&headers)
+        .and_then(|user| service.account_id(&user))
+    else {
+        return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
+    };
+    if !service.posting_drafts_enabled_for(&account_id) { return error_json(StatusCode::SERVICE_UNAVAILABLE, "posting_drafts_not_enabled"); }
+    if !valid_posting_draft_envelope(&request.draft, operation_id)
+        || !valid_posting_recovery(&request.recovery_state)
+    {
+        return error_json(StatusCode::BAD_REQUEST, "invalid_draft_or_recovery_state");
+    }
+    let Some(store) = service.inner.store.as_ref() else {
+        return error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable");
+    };
+    match store
+        .save_site_posting_draft(
+            &account_id,
+            operation_id,
+            &request.draft,
+            request.expected_revision,
+            request.approved_draft_hash.as_deref(),
+            &request.recovery_state,
+        )
+        .await
+    {
+        Ok(draft) => posting_draft_response(&service, draft),
+        Err(error) => posting_draft_error(error),
+    }
+}
+
+fn posting_draft_response(service: &SiteAuthService, draft: SitePostingDraft) -> Response {
+    let mut payload = serde_json::to_value(&draft).expect("posting draft serializes");
+    payload["continuation_url"] = json!(format!(
+        "{}/post.html?operation_id={}",
+        service.inner.web_origin, draft.operation_id
+    ));
+    payload["evidence_boundary"] = json!("Private draft and recovery state only. Wallet and legal confirmation stay with the user; only matching canonical Base events prove creation, funding or payment.");
+    no_store_json(StatusCode::OK, payload)
+}
+
+fn posting_draft_error(error: PostingDraftError) -> Response {
+    match error {
+        PostingDraftError::Conflict => error_json(StatusCode::CONFLICT, "revision_conflict"),
+        PostingDraftError::Limit => {
+            error_json(StatusCode::TOO_MANY_REQUESTS, "draft_limit_reached")
+        }
+        PostingDraftError::Invalid => {
+            error_json(StatusCode::BAD_REQUEST, "invalid_draft_or_approval")
+        }
+        PostingDraftError::NonCanonicalJson => error_json(
+            StatusCode::BAD_REQUEST,
+            "draft_integer_exceeds_browser_safe_range_use_a_string",
+        ),
+        PostingDraftError::Database(_) => {
+            error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable")
+        }
+    }
+}
+
+fn valid_posting_draft_envelope(value: &Value, operation_id: Uuid) -> bool {
+    valid_posting_draft_payload(value, 65_536)
+        && value["schema"] == "agent-bounties/posting-draft-v1"
+        && value["id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) == Some(operation_id)
+        && value["role"] == "post"
+        && value["goal"].is_string()
+        && value["preferences"].is_string()
+        && (value["brief"].is_null() || value["brief"].is_object())
+        && (value["draft"].is_null() || value["draft"].is_object())
+        && value["draft_stale"].is_boolean()
+}
+
+fn valid_posting_draft_payload(value: &Value, limit: usize) -> bool {
+    fn bounded(value: &Value, depth: usize, count: &mut usize) -> bool {
+        if depth > 14 {
+            return false;
+        }
+        *count += 1;
+        if *count > 2_000 {
+            return false;
+        }
+        match value {
+            Value::Object(object) => object.iter().all(|(key, value)| {
+                let normalized: String = key
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .flat_map(char::to_lowercase)
+                    .collect();
+                ![
+                    "privatekey",
+                    "seedphrase",
+                    "recoveryphrase",
+                    "signature",
+                    "walletsignature",
+                    "pairinguri",
+                    "sessiontoken",
+                    "accesstoken",
+                    "refreshtoken",
+                    "authorization",
+                ]
+                .contains(&normalized.as_str())
+                    && key.len() <= 100
+                    && !key.chars().any(char::is_control)
+                    && bounded(value, depth + 1, count)
+            }),
+            Value::Array(items) => {
+                items.len() <= 200 && items.iter().all(|value| bounded(value, depth + 1, count))
+            }
+            Value::String(text) => !text.contains('\0') && !text.starts_with("wc:"),
+            _ => true,
+        }
+    }
+    value.is_object()
+        && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= limit)
+        && bounded(value, 0, &mut 0)
+}
+
+fn valid_posting_recovery(value: &Value) -> bool {
+    if !valid_posting_draft_payload(value, 16_384) {
+        return false;
+    }
+    let object = value.as_object().expect("validated object");
+    if object.is_empty() {
+        return true;
+    }
+    if let Some(display) = object.get("display_context") {
+        if !display.as_object().is_some_and(|display| {
+            display.len() == 1
+                && display
+                    .get("timezone")
+                    .and_then(Value::as_str)
+                    .is_some_and(|zone| {
+                        !zone.is_empty()
+                            && zone.len() <= 100
+                            && zone.chars().all(|c| {
+                                c.is_ascii_alphanumeric()
+                                    || matches!(c, '/' | '_' | '-' | '+' | ':')
+                            })
+                    })
+        }) {
+            return false;
+        }
+        if object.len() == 1 {
+            return true;
+        }
+    }
+    if object.keys().any(|key| {
+        ![
+            "bounty_contract",
+            "bounty_id",
+            "phase",
+            "transactions",
+            "error_capture_version",
+            "authorizationIssued",
+            "wallet_method",
+            "wallet_error",
+            "terms_hash",
+            "display_context",
+        ]
+        .contains(&key.as_str())
+    }) {
+        return false;
+    }
+    let fixed_hex = |key: &str, bytes: usize| {
+        value[key].as_str().is_some_and(|text| {
+            text.len() == 2 + bytes * 2
+                && text.starts_with("0x")
+                && text[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    };
+    fixed_hex("bounty_contract", 20)
+        && fixed_hex("bounty_id", 32)
+        && (!object.contains_key("terms_hash") || fixed_hex("terms_hash", 32))
+        && value["phase"].as_str().is_some_and(|phase| {
+            [
+                "prepared",
+                "signing",
+                "sending",
+                "authorized",
+                "pending",
+                "submitted",
+                "batch_submitted",
+                "creation_confirmed",
+                "funding_confirmed",
+            ]
+            .contains(&phase)
+        })
+        && value["transactions"].as_array().is_some_and(|ids| {
+            ids.len() <= 20
+                && ids.iter().all(|id| {
+                    id.as_str().is_some_and(|id| {
+                        !id.is_empty()
+                            && id.len() <= 256
+                            && id.chars().all(|c| {
+                                c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.')
+                            })
+                    })
+                })
+        })
+        && (!object.contains_key("authorizationIssued")
+            || value["authorizationIssued"].is_boolean())
+        && (!object.contains_key("error_capture_version")
+            || value["error_capture_version"].as_u64() == Some(1))
+        && (!object.contains_key("wallet_method")
+            || value["wallet_method"].as_str().is_some_and(|method| {
+                [
+                    "wallet_sendCalls",
+                    "eth_sendTransaction",
+                    "eth_signTypedData_v4",
+                ]
+                .contains(&method)
+            }))
+        && (!object.contains_key("wallet_error")
+            || value["wallet_error"].as_object().is_some_and(|error| {
+                error.len() == 2
+                    && error.get("code").and_then(Value::as_i64).is_some()
+                    && error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .is_some_and(|message| message.len() <= 1_000)
+            }))
+}
+
 async fn healthz(Extension(service): Extension<SiteAuthService>) -> Response {
     no_store_json(
         StatusCode::OK,
@@ -251,6 +542,8 @@ async fn healthz(Extension(service): Extension<SiteAuthService>) -> Response {
             "ok": service.enabled(),
             "providers": service.configured_providers(),
             "storage": if service.inner.store.is_some() { "postgres" } else { "unavailable" },
+            "posting_drafts_enabled": service.inner.posting_drafts_enabled,
+            "posting_drafts_canary_configured": service.inner.posting_drafts_canary_account_id.is_some(),
         }),
     )
 }
@@ -274,6 +567,7 @@ async fn session(Extension(service): Extension<SiteAuthService>, headers: Header
         json!({
             // Authentication permits setup/challenge access; it does not complete an account.
             "authenticated": user.is_some(),
+            "posting_drafts_enabled": account_id.as_deref().is_some_and(|id| service.posting_drafts_enabled_for(id)),
             "user": browser_user,
             "providers": service.configured_providers(),
         }),
@@ -609,7 +903,24 @@ async fn finish_wallet_link(
         );
     };
     match store
-        .link_site_auth_wallet(&account_id, &address, BASE_CHAIN_ID)
+        .link_site_auth_wallet_with_provider(
+            &account_id,
+            &address,
+            BASE_CHAIN_ID,
+            request.provider_id.as_deref().filter(|id| {
+                matches!(
+                    *id,
+                    "coinbase-embedded"
+                        | "coinbase_embedded"
+                        | "coinbase-cdp"
+                        | "metamask"
+                        | "walletconnect"
+                        | "coinbase-wallet"
+                        | "trust-wallet"
+                        | "injected"
+                )
+            }),
+        )
         .await
     {
         Ok(wallets) => {
@@ -1374,12 +1685,24 @@ fn wallet_link_message(
 }
 
 fn browser_wallet(wallet: SiteAuthWallet) -> BrowserWallet {
+    let wallet_type = match wallet.provider_id.as_deref() {
+        Some("coinbase-embedded" | "coinbase_embedded" | "coinbase-cdp") => "embedded",
+        Some("walletconnect" | "coinbase-wallet" | "trust-wallet") => "mobile",
+        Some("metamask" | "injected") => "browser",
+        _ => "unknown",
+    }
+    .to_string();
     BrowserWallet {
         label: short_wallet_address(&wallet.address),
         address: wallet.address,
         chain_id: wallet.chain_id,
         linked_at: wallet.linked_at,
         proof: wallet.proof,
+        provider_id: wallet.provider_id,
+        wallet_type,
+        chain_ids: vec![wallet.chain_id],
+        last_verified_at: wallet.last_verified_at,
+        provider_metadata_source: "user_selected_during_ownership_verification",
     }
 }
 
@@ -1628,6 +1951,183 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
+    fn saved_posting_payload_preserves_public_bindings_and_rejects_credentials() {
+        let operation = Uuid::new_v4();
+        let envelope = json!({"schema":"agent-bounties/posting-draft-v1", "id":operation, "role":"post", "goal":"Draft", "preferences":"", "brief":null, "draft":null, "draft_stale":false});
+        assert!(valid_posting_draft_envelope(&envelope, operation));
+        assert!(!valid_posting_draft_envelope(&envelope, Uuid::new_v4()));
+        assert!(!valid_posting_draft_envelope(&json!({"title":"no envelope"}), operation));
+        assert!(valid_posting_draft_payload(
+            &json!({"draft": {
+                "review_mode":"creator", "delivery_deadline":"2026-09-10T21:00:00-06:00",
+                "reference_attachment":{"sha256":"sha256:abc", "captured_at":"2026-09-10T12:00:00Z"},
+                "image":{"sha256":"sha256:approved"}
+            }}),
+            65_536
+        ));
+        for secret in [
+            "private_key",
+            "seedPhrase",
+            "signature",
+            "wallet_signature",
+            "pairing_uri",
+            "access_token",
+        ] {
+            assert!(!valid_posting_draft_payload(
+                &json!({"nested": {secret: "sensitive"}}),
+                65_536
+            ));
+        }
+        assert!(!valid_posting_draft_payload(
+            &json!({"link":"wc:secret"}),
+            65_536
+        ));
+        assert!(!valid_posting_draft_payload(
+            &json!({"goal":"x".repeat(65_536)}),
+            65_536
+        ));
+        assert!(!valid_posting_draft_payload(&json!([]), 65_536));
+        let mut recovery = json!({"bounty_contract":format!("0x{}", "11".repeat(20)), "bounty_id":format!("0x{}", "22".repeat(32)), "phase":"sending", "transactions":[], "authorizationIssued": false});
+        assert!(valid_posting_recovery(&recovery));
+        assert!(valid_posting_recovery(
+            &json!({"display_context":{"timezone":"America/Mexico_City"}})
+        ));
+        recovery["paid"] = json!(true);
+        assert!(!valid_posting_recovery(&recovery));
+        recovery.as_object_mut().unwrap().remove("paid");
+        recovery["bounty_id"] = json!("not-a-bounty-id");
+        assert!(!valid_posting_recovery(&recovery));
+    }
+
+    #[test]
+    fn wallet_provider_is_a_hint_and_legacy_wallet_stays_unknown() {
+        let wallet = SiteAuthWallet {
+            address: "0x1111111111111111111111111111111111111111".to_string(),
+            chain_id: BASE_CHAIN_ID,
+            linked_at: Utc::now(),
+            proof: "eip191_personal_sign".to_string(),
+            provider_id: None,
+            last_verified_at: Utc::now(),
+        };
+        assert_eq!(browser_wallet(wallet.clone()).wallet_type, "unknown");
+        let embedded = browser_wallet(SiteAuthWallet {
+            provider_id: Some("coinbase-embedded".to_string()),
+            ..wallet
+        });
+        assert_eq!(embedded.wallet_type, "embedded");
+        assert_eq!(
+            embedded.provider_metadata_source,
+            "user_selected_during_ownership_verification"
+        );
+        assert!(!serde_json::to_value(embedded)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("connected"));
+    }
+
+    #[tokio::test]
+    async fn posting_drafts_require_session_and_same_origin_before_storage() {
+        let mut service = SiteAuthService {
+            inner: Arc::new(SiteAuthInner {
+                session_secret: Some(vec![7; 32]),
+                wallet_secret: Some(vec![8; 32]),
+                web_origin: "https://agentbounties.app".to_string(),
+                api_origin: "https://api.agentbounties.app".to_string(),
+                allowed_origins: vec![HeaderValue::from_static("https://agentbounties.app")],
+                providers: BTreeMap::new(),
+                store: None,
+                client: reqwest::Client::new(),
+                wallet_challenges: Mutex::new(HashMap::new()),
+                posting_drafts_enabled: true,
+                posting_drafts_canary_account_id: None,
+            }),
+        };
+        let canary = service.account_id(&test_user()).unwrap();
+        let inner = Arc::get_mut(&mut service.inner).unwrap();
+        inner.posting_drafts_enabled = false;
+        inner.posting_drafts_canary_account_id = Some(canary.clone());
+        assert!(service.posting_drafts_enabled_for(&canary));
+        assert!(!service.posting_drafts_enabled_for("a-different-account"));
+        let operation_id = Uuid::new_v4();
+        assert_eq!(
+            get_posting_draft(
+                Extension(service.clone()),
+                HeaderMap::new(),
+                Path(operation_id)
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let request = || {
+            Json(SavePostingDraftRequest {
+                draft: json!({"schema":"agent-bounties/posting-draft-v1", "id":operation_id, "role":"post", "goal":"Draft", "preferences":"", "brief":null, "draft":null, "draft_stale":false}),
+                expected_revision: 0,
+                approved_draft_hash: None,
+                recovery_state: json!({}),
+            })
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://attacker.example"),
+        );
+        assert_eq!(
+            save_posting_draft(
+                Extension(service.clone()),
+                headers.clone(),
+                Path(operation_id),
+                request()
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://agentbounties.app"),
+        );
+        assert_eq!(
+            save_posting_draft(
+                Extension(service.clone()),
+                headers.clone(),
+                Path(operation_id),
+                request()
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let token = sign_session(test_user(), &[7; 32], Utc::now());
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{SESSION_COOKIE}={token}")).unwrap(),
+        );
+        assert_eq!(
+            save_posting_draft(
+                Extension(service.clone()),
+                headers.clone(),
+                Path(operation_id),
+                request()
+            )
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://attacker.example"),
+        );
+        assert_eq!(
+            save_posting_draft(Extension(service), headers, Path(operation_id), request())
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
     fn account_completion_requires_a_verified_link_and_survives_evidence_outage() {
         let pending = unavailable_account_dashboard("marketplace_identity_unlinked", vec![]);
         assert_eq!(pending["account_status"], "wallet_required");
@@ -1643,6 +2143,11 @@ mod tests {
                 chain_id: BASE_CHAIN_ID,
                 linked_at: Utc::now(),
                 proof: "eip191".to_string(),
+                provider_id: None,
+                wallet_type: "unknown".to_string(),
+                chain_ids: vec![BASE_CHAIN_ID],
+                last_verified_at: Utc::now(),
+                provider_metadata_source: "user_selected_during_ownership_verification",
             }],
         );
         assert_eq!(linked["account_status"], "ready");

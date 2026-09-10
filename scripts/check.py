@@ -302,6 +302,8 @@ def main() -> int:
     )
     py("scripts/test_check_agent_discovery_contract.py", "-v")
     py("scripts/check-agent-discovery-contract.py")
+    run(npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund", cwd=ROOT / "tools/phone-wallet")
+    run(npm, "run", "check", cwd=ROOT / "tools/phone-wallet")
     run_many([[node, *args] for args in (
         ["--check", "skills/agent-bounties/scripts/check-in.mjs"], ["--test", "scripts/test_agent_bounties_openclaw_skill.mjs"],
         ["benchmarks/standing-meta-v2/mcp-discovery/self-test.mjs"], ["benchmarks/direct-v1/agent-loop/self-test.mjs"],
@@ -311,7 +313,8 @@ def main() -> int:
         ["scripts/test-base-sepolia-sponsor-activation-console.js"],
         ["--test", "scripts/test-metrics-dashboard.js"],
         ["--test", "scripts/test-assistant-referrals.js", "scripts/test-solarpunk-home.js", "scripts/test-ai-bounty-handoff.js"],
-        ["--test", "scripts/test-phone-wallet.js", "scripts/test-webmcp.js", "scripts/test-meta-child.js", "scripts/test-competition-proof.js"],
+        ["--test", "scripts/test-phone-wallet.js", "scripts/test-phone-wallet-network.cjs", "scripts/test-webmcp.js", "scripts/test-meta-child.js", "scripts/test-competition-proof.js"],
+        ["--test", "scripts/test-posting-auth.js", "scripts/test-account-navigation.js", "scripts/test-posting-brief.cjs", "scripts/test-posting-reference.js", "scripts/test-posting-session.js", "scripts/test-funding-readiness.js"],
         ["--check", "scripts/open-competition-v1-signer.js"],
         ["scripts/test-open-competition-v1-signer-console.js"],
     )])

@@ -41,7 +41,7 @@ test("creator review is explicit, binds a calendar deadline, and cannot replace 
   const draft = { review_mode: "creator", delivery_deadline: new Date(Date.now() + 7 * 86400000).toISOString() };
   const prepared = review.prepare(draft);
   assert.equal(prepared.delivery_deadline, draft.delivery_deadline);
-  assert.equal(review.deadline("2099-09-13T18:00:00-06:00"), "2099-09-14T00:00:00.000Z");
+  assert.equal(review.deadline("2099-09-13T18:00:00-06:00"), "2099-09-13T18:00:00-06:00");
   assert.equal(review.ready(prepared.benchmark, prepared.evidence_schema), true);
   assert.equal(review.prepare({ benchmark: null }).benchmark, null);
   assert.throws(() => review.prepare({ ...draft, meta_child: {} }), /meta/);
@@ -81,11 +81,11 @@ test("explicitly rejected transaction resumes the same signed verdict", async ()
 
 test("saved brief edits reach the shared journey and invalidate an older funding proposal", () => {
   const flow = require("../site/marketplace-workflow.js"), records = new Map(), listeners = new Map(), elements = new Map();
-  const element = () => ({ value: "", textContent: "", open: false, handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn; } });
+  const element = () => ({ value: "", textContent: "", open: false, handlers: {}, setCustomValidity(value) { this.validationMessage = value; }, addEventListener(name, fn) { this.handlers[name] = fn; } });
   for (const name of ["#bounty-composer-form", "#bounty-composer-input", "[data-brief-budget]", "[data-brief-deadline]", "[data-brief-status]", "[data-brief-timezone]", "[data-ai-options]", "[data-export-draft]"]) elements.set(name, element());
-  const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name) };
+  const document = { activeElement: null, documentElement: { dataset: {} }, querySelector: (name) => elements.get(name), addEventListener() {} };
   let invalidations = 0;
-  const win = { AgentBountiesWorkflow: flow, AgentBountiesComposer: { invalidate() { invalidations++; } }, document,
+  const win = { AgentBountiesWorkflow: flow, AgentBountiesPostingBrief: require("../site/posting-brief.js"), AgentBountiesComposer: { invalidate() { invalidations++; } }, document, setInterval() {},
     crypto: require("node:crypto").webcrypto, location: new URL("https://agentbounties.app/post.html"),
     sessionStorage: { getItem: (key) => records.get(key) || null, setItem: (key, value) => records.set(key, value) },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
@@ -101,4 +101,18 @@ test("saved brief edits reach the shared journey and invalidate an older funding
   budget.value = "25"; budget.handlers.input();
   assert.equal(client.load().brief.budget_usdc, "25"); assert.equal(client.load().draft_stale, true); assert.equal(invalidations, 1);
   assert.ok(client.load().brief.deadline_at, "editing the budget must not erase the deadline");
+  const timezone = elements.get("[data-brief-timezone]");
+  document.activeElement = timezone; timezone.value = "America/Mexico_City"; timezone.handlers.input();
+  document.activeElement = deadline; deadline.value = "2026-12-10T21:00"; deadline.handlers.input();
+  const newCutoff = "2026-12-11T21:00:23.456-06:00";
+  document.activeElement = null;
+  client.save({ ...client.load(), draft_stale: false, brief: { ...client.load().brief, deadline_at: newCutoff }, draft: { goal: goal.value, solver_reward_usdc: "23", verifier_reward_usdc: "2", delivery_deadline: newCutoff } });
+  assert.equal(deadline.value, "2026-12-11T21:00", "restaging an exact deadline replaces old display fields");
+  const before = invalidations;
+  document.activeElement = budget; budget.value = "25.00"; budget.handlers.input();
+  assert.equal(invalidations, before, "equivalent amount formatting preserves the proposal approval");
+  assert.equal(Date.parse(client.load().brief.deadline_at), Date.parse(newCutoff));
+  document.activeElement = timezone; timezone.value = "CST"; timezone.handlers.input();
+  assert.equal(client.load().brief.deadline_at, null, "ambiguous zones cannot stage a guessed deadline");
+  assert.match(deadline.validationMessage, /ambiguous/);
 });

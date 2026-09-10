@@ -9,6 +9,7 @@ const { webcrypto } = require("node:crypto");
 const { UniversalProvider } = require("../tools/phone-wallet/node_modules/@walletconnect/universal-provider");
 const { EthereumProvider } = require("../tools/phone-wallet/node_modules/@walletconnect/ethereum-provider");
 const createPhoneWallet = require("../site/phone-wallet.js");
+const postingSessionLibrary = require("../site/posting-session.js");
 const { createPostingJournal } = require("../site/marketplace-workflow.js");
 const address = "0x" + "12".repeat(20), other = "0x" + "34".repeat(20);
 const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
@@ -17,13 +18,15 @@ assert.ok(start >= 0 && end > start);
 const fundingFunction = source.slice(start, end) + "; fundApprovedBounty";
 const batchFunction = source.slice(source.indexOf("  async function sendWalletCalls("), source.indexOf("  function contractTerms("));
 const walletFunctions = source.slice(source.indexOf("  function signatureParts("), source.indexOf("  async function sendWalletCalls("));
+const bindingFunctions = source.slice(source.indexOf("  async function prepareWalletRequest("), source.indexOf("  async function watchUsdcAsset("));
 const atomicError = { code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`" };
 const rejection = { code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." };
 const syntheticSignature = "0x" + "12".repeat(64) + "1b", transactionHash = "0x" + "ab".repeat(32);
 
 async function fixture({ adapted = true, change = null, uncertain = false, batch = false, legacy = false, pending = false,
-  accountCode = batch ? "0x6001600055" : "0x", approveAuthorization = false, wrapped = false, rejectTransaction = false } = {}) {
-  const storage = new Map(), signing = [], statuses = [], network = [];
+  accountCode = batch ? "0x6001600055" : "0x", approveAuthorization = false, wrapped = false, rejectTransaction = false,
+  mutateAt = null, mutation = "draft", syncFailure = false } = {}) {
+  const storage = new Map(), signing = [], statuses = [], network = [], checkpoints = [], publications = [];
   const store = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   store.setItem("agent-bounties-phone-connected-v1", "ab-phone-12345678-1234-1234-1234-123456789012");
   const namespace = { chains: ["eip155:8453"], accounts: [`eip155:8453:${address}`], methods: ["eth_signTypedData_v4", "wallet_sendCalls", "eth_sendTransaction"], events: [], rpcMap: { "eip155:8453": "http://127.0.0.1:1" } };
@@ -62,23 +65,48 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
     agentBountiesPhoneWalletConfig: { projectId: "0".repeat(32) },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     addEventListener() {}, dispatchEvent() {}, setTimeout, clearTimeout,
-    AgentBountiesLegal: { requireAcceptance: async () => ({ durable: true }) },
+    AgentBountiesLegal: { requireAcceptance: async () => { if (mutateAt === "legal") mutate(); return { durable: true }; } },
   };
+  win.location.assign = () => {};
   const phone = createPhoneWallet(win, { loadVendor: async () => ({ createProvider: async () => sdk }) });
   await phone.restore();
   const provider = adapted ? phone.provider : sdk;
   const journal = createPostingJournal(win);
   const state = { approved: true, provider, account: address, balances: { usdc: 1000000n, required: 1000000n, eth: 1n }, draft: { title: "Synthetic review" }, fundingUsdc: 1 };
-  const authorization = { domain: { chainId: 8453 }, primaryType: "ReceiveWithAuthorization", message: { value: "1000000" } };
+  let journey = { id: "12345678-1234-1234-1234-123456789012", role: "post", draft: state.draft };
+  function mutate() {
+    if (mutation === "draft") journey = { ...journey, draft: { title: "Other device revised this draft" } };
+    if (mutation === "account") state.account = other;
+    if (mutation === "provider") state.provider = { request: async () => { throw new Error("Replacement provider must not receive a request"); } };
+    if (mutation === "approval") state.approved = false;
+  }
+  win.AgentBountiesPostingSession = postingSessionLibrary;
+  win.AgentBountiesWorkflow = { createClient: () => ({ load: () => journey }) };
+  win.AgentBountiesFundingReadiness = { estimateFees: async () => { if (mutateAt === "fees") mutate(); return { estimatedTotalWei: 1n }; } };
+  const authorization = { domain: { chainId: 8453 }, primaryType: "ReceiveWithAuthorization", message: {
+    value: "1000000", to: "0x" + "90".repeat(20), validBefore: String(Math.floor(Date.now() / 1000) + 3600),
+  } };
   const calls = [{ to: other, data: "0x010203" }, { to: address, data: "0x040506" }];
   const plan = { bounty_id: "0x" + "56".repeat(32), predicted_bounty_contract: "0x" + "78".repeat(20), eip3009_authorization: authorization, wallet_calls: calls };
-  const run = vm.runInNewContext(walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + fundingFunction, {
-    postingBusy: false, postingJournal: journal, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
+  const postingSession = {
+    refresh: async () => { if (mutateAt === "refresh") mutate(); },
+    flush: async (options = {}) => {
+      checkpoints.push({ required: options.requireServer === true, phase: journal.load()?.phase });
+      if (mutateAt === "sync" && options.requireServer) mutate();
+      if (syncFailure && options.requireServer) throw new Error("Account sync unavailable; nothing dispatched");
+    },
+    approved: async () => state.approved,
+    reconcile: async () => ({ creation_confirmed: !pending, funding_confirmed: !pending, claimable: !pending, public_inventory_verified: !pending }),
+  };
+  const run = vm.runInNewContext(bindingFunctions + walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + fundingFunction, {
+    postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
     track() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
+    updatePostingCost() {}, updatePostingTracker() {},
     loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20), chain_id_hex: "0x2105" }),
     currentRewardSplit: () => ({ solver: "900000", verifier: "100000", total: "1000000" }),
     contractTerms: () => ({}), termsDocument: () => ({}), createPayload: () => ({}), validateCreationPlan() {}, formatUsdc: String,
     requestJson: async (url, options) => {
+      publications.push(url);
       if (url.endsWith("/terms")) return {};
       if (url.endsWith("/authorized-creation-plan")) {
         assert.equal(JSON.parse(options.body).signature.v, 27);
@@ -92,7 +120,7 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
     pollCreation: async () => pending ? null : [{ kind: "canonical_bounty_created" }, { kind: "funding_added" }, { kind: "bounty_became_claimable" }],
     fetchFeedItem: async () => ({ terms_valid: true, verification_ready: true }),
   });
-  return { sdk, provider, run, signing, statuses, network, journal, authorization, calls };
+  return { sdk, provider, run, signing, statuses, network, journal, authorization, calls, checkpoints, publications };
 }
 
 test("the old batch reproduces the wallet's exact atomicRequired schema rejection through the pinned SDK", async () => {
@@ -163,7 +191,7 @@ test("the real pinned SDK reproduces the false network-change stop before adapta
   const env = await fixture({ adapted: false });
   assert.equal(await env.sdk.request({ method: "eth_chainId" }), 8453);
   await env.run();
-  assert.match(env.statuses.at(-1), /wallet or network changed/);
+  assert.match(env.statuses.at(-1), /network changed/);
   assert.equal(env.signing.length, 0); assert.equal(env.journal.load(), null);
 });
 
@@ -194,3 +222,59 @@ for (const change of ["account", "chain"]) {
     assert.equal(env.signing.length, 0); assert.equal(env.network.length, 0); assert.equal(env.journal.load(), null);
   });
 }
+
+test("a refreshed draft cannot borrow the previous device's approval or publish its old plan", async () => {
+  const env = await fixture({ mutateAt: "refresh", mutation: "draft", approveAuthorization: true });
+  await env.run();
+  assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
+  assert.equal(env.publications.length, 0); assert.equal(env.signing.length, 0); assert.equal(env.journal.load(), null);
+});
+
+test("a change during legal review cannot publish terms under stale approval", async () => {
+  const env = await fixture({ mutateAt: "legal", mutation: "draft", approveAuthorization: true }); await env.run();
+  assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
+  assert.equal(env.publications.length, 0); assert.equal(env.signing.length, 0); assert.equal(env.journal.load(), null);
+});
+
+for (const mutation of ["draft", "account", "provider", "approval"]) {
+  test(`changing ${mutation} during fee preparation stops dispatch and preserves the recorded attempt`, async () => {
+    const env = await fixture({ batch: true, mutateAt: "fees", mutation }); await env.run();
+    assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
+    assert.equal(env.signing.length, 0); assert.ok(env.journal.load());
+    await env.run(); assert.equal(env.signing.length, 0, "the pending operation cannot be replayed");
+  });
+}
+
+test("a changed approval after durable sync cannot reach the USDC signature", async () => {
+  const env = await fixture({ approveAuthorization: true, mutateAt: "sync", mutation: "approval" }); await env.run();
+  assert.equal(env.signing.length, 0); assert.match(env.statuses.at(-1), /approved draft or wallet changed/);
+  assert.ok(env.checkpoints.some(entry => entry.required && entry.phase === "signing"));
+});
+
+test("failed required account sync blocks every wallet request", async () => {
+  for (const batch of [false, true]) {
+    const env = await fixture({ batch, approveAuthorization: true, syncFailure: true }); await env.run();
+    assert.equal(env.signing.length, 0); assert.match(env.statuses.at(-1), /sync unavailable/);
+    await env.run(); assert.equal(env.signing.length, 0);
+  }
+});
+
+test("a wallet change after a USDC authorization stops the transaction and retains that authorization", async () => {
+  const env = await fixture({ approveAuthorization: true, mutateAt: "fees", mutation: "account" }); await env.run();
+  assert.deepEqual(env.signing.map(entry => entry.request.method), ["eth_signTypedData_v4"]);
+  assert.equal(env.journal.load().authorizationIssued, true);
+  await env.run(); assert.equal(env.signing.length, 1);
+});
+
+test("revoking approval while account reads await blocks the final dispatch boundary", async () => {
+  const fn = source.slice(source.indexOf("  async function assertPostingBinding("), source.indexOf("  async function watchUsdcAsset("));
+  let resolveAccounts;
+  const provider = { request: request => request.method === "eth_accounts" ? new Promise(resolve => { resolveAccounts = resolve; }) : Promise.resolve("0x2105") };
+  const state = { provider, account: address, draft: { title: "Reviewed draft" }, approved: true };
+  const journey = { id: "12345678-1234-1234-1234-123456789012", role: "post", draft: state.draft };
+  const binding = { provider, account: address, draft: state.draft, envelope: postingSessionLibrary.stable(postingSessionLibrary.envelope(journey)) };
+  const guard = vm.runInNewContext(`${fn}; assertPostingBinding`, { postingBinding: binding, state, postingSession: { approved: async () => true },
+    window: { AgentBountiesPostingSession: postingSessionLibrary, AgentBountiesWorkflow: { createClient: () => ({ load: () => journey }) } } });
+  const pending = guard(); await new Promise(setImmediate); state.approved = false; resolveAccounts([address]);
+  await assert.rejects(pending, /changed/);
+});

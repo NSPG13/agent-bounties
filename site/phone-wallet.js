@@ -7,12 +7,22 @@
   const BASE = 8453, CHAIN = "0x2105", ADDRESS = /^0x[0-9a-fA-F]{40}$/;
   const PROJECT = /^[a-f0-9]{32}$/i;
   const MARKER = "agent-bounties-phone-connected-v1";
+  const PAIRING_LIFETIME_MS = 300000, PREPARATION_TIMEOUT_MS = 20000;
+  // Reviewed wallet-owned universal links. Keep pairing material in a closure,
+  // never an href/data attribute, status response, or analytics event.
+  const mobileWallets = Object.freeze([
+    { name: "Trust Wallet", url: "https://link.trustwallet.com/wc" },
+    { name: "MetaMask", url: "https://link.metamask.io/wc" },
+  ]);
+  const now = dependencies.now || Date.now;
+  const mobile = Boolean(win.navigator?.userAgentData?.mobile || /Android|iPhone|iPad|iPod/i.test(win.navigator?.userAgent || "") || (win.navigator?.platform === "MacIntel" && win.navigator?.maxTouchPoints > 1));
   const optionalMethods = ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4", "wallet_switchEthereumChain", "wallet_sendCalls", "wallet_getCallsStatus", "wallet_getCapabilities", "wallet_watchAsset"];
   const reads = new Set(["eth_chainId", "eth_accounts", "eth_call", "eth_getBalance", "eth_getCode", "eth_getTransactionReceipt", "eth_blockNumber", "eth_getBlockByNumber", "eth_getLogs", "eth_estimateGas", "eth_gasPrice"]);
   const listeners = new Map();
   const doc = win.document;
   let sdk, sdkPromise, vendorPromise, attempt, generation = 0, activePrefix, accounts = [], chain = CHAIN;
-  let phase = "disconnected", message = "Scan with your phone wallet. Approve the connection on your phone.", dialog, qr, statusNode, retry, disconnectButton;
+  let phase = "disconnected", message = "Connect an external phone wallet. Approve the connection in your wallet app.", dialog, qr, statusNode, retry, disconnectButton;
+  let pairingUri = null, countdown, mobileActions, deviceToggle, showMobile = mobile, showQr = !mobile;
   const projectId = String(win.agentBountiesPhoneWalletConfig?.projectId || "");
   const configured = PROJECT.test(projectId);
   function error(code, message) { return Object.assign(new Error(message), { code }); }
@@ -51,17 +61,53 @@
     if (accounts.length && !liveAccounts(sdk).length) { accounts = []; phase = "disconnected"; message = "Your phone session ended. Reconnect when ready; your draft is saved."; marker(false); }
     return { available: configured, status: phase, connected: accounts.length > 0 && phase === "connected", address: accounts[0] || null,
       chain_id: accounts.length ? chain : null, review_open: Boolean(dialog?.open), message,
-      next_action: !configured ? "Phone pairing is unavailable here. Continue preparing the saved journey or use a browser wallet." : phase === "connecting" ? "Wait for the QR code to appear; no additional permission is needed to prepare it." : phase === "pairing" ? "Scan the QR code with your wallet app and approve the connection on your phone." : phase === "connected" ? "Continue the prepared review. Approve each signature or transaction on your phone." : "Open phone-wallet pairing.",
+      pairing_expires_at: attempt?.expiresAt && pairingUri ? new Date(attempt.expiresAt).toISOString() : null,
+      pairing_seconds_remaining: attempt?.expiresAt && pairingUri ? Math.max(0, Math.ceil((attempt.expiresAt - now()) / 1000)) : null,
+      connection_route: "external_wallet_walletconnect", same_device_available: configured,
+      next_action: !configured ? "Phone pairing is unavailable here. Continue preparing the saved journey or use a browser wallet." : phase === "connecting" ? "Wait for the secure wallet connection to appear; no additional permission is needed to prepare it." : phase === "pairing" ? (showMobile ? "Choose your installed wallet to open it on this device, approve the connection, then return here." : "Scan the QR code with a wallet on a second device, or choose the same-device wallet option.") : phase === "connected" ? "Continue the prepared review. Approve each signature or transaction on your phone." : "Open phone-wallet pairing.",
       connection_approval_required: phase !== "connected", payment_authorized: false };
   }
   function render() {
     const snapshot = state();
     if (statusNode) statusNode.textContent = message;
-    if (retry) { retry.hidden = !configured || phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your phone…" : "Show a new QR code"; }
+    if (retry) { retry.hidden = !configured || phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your wallet…" : "Start a new connection"; }
+    if (qr) qr.hidden = !pairingUri || !showQr;
+    if (mobileActions) mobileActions.hidden = !pairingUri || !showMobile;
+    if (deviceToggle) { deviceToggle.hidden = !pairingUri; deviceToggle.textContent = showMobile ? "Use a QR code on a second device" : "Use a wallet on this device"; }
+    if (countdown) {
+      countdown.hidden = !pairingUri;
+      const seconds = snapshot.pairing_seconds_remaining || 0;
+      countdown.textContent = `Connection expires in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}. No payment is requested.`;
+    }
     if (disconnectButton) disconnectButton.hidden = !accounts.length;
     win.dispatchEvent(new win.CustomEvent("agent-bounties:phone-wallet-state", { detail: snapshot }));
   }
-  function clearQr() { if (qr) { qr.hidden = true; qr.removeAttribute("src"); } }
+  function clearQr() { pairingUri = null; if (qr) { qr.hidden = true; qr.removeAttribute("src"); } }
+  function clearTimers(current) { win.clearTimeout(current.timer); win.clearTimeout(current.tick); }
+  function expire(current) {
+    if (attempt === current) cancel("This connection expired. Start a new connection when your wallet is ready.", "expired");
+  }
+  function tick(current) {
+    if (attempt !== current || current.cancelled) return;
+    if (current.expiresAt <= now()) { expire(current); return; }
+    render(); current.tick = win.setTimeout(() => tick(current), 1000);
+  }
+  function pairingInstructions() {
+    return showMobile ? "Open your installed wallet below. Check agentbounties.app and approve the connection, then return here. No camera or second phone is needed." : "Scan this code with your wallet app on a second device. Check agentbounties.app and approve the connection. Using this page on your phone? Choose the same-device option below.";
+  }
+  function openMobileWallet(wallet) {
+    const current = attempt;
+    if (!current || !pairingUri || phase !== "pairing") return;
+    if (current.expiresAt <= now()) { expire(current); return; }
+    // Only a human click launches the selected wallet; this is connection only.
+    // A separate browsing context preserves this pending operation on return.
+    try {
+      win.open(`${wallet.url}?uri=${encodeURIComponent(pairingUri)}`, "_blank", "noopener,noreferrer");
+      setState("pairing", `Approve the connection to agentbounties.app in ${wallet.name}, then return here. If the app did not open, allow the browser to open it or use this page in your phone’s regular browser. This does not authorize a payment.`);
+    } catch (_) {
+      setState("pairing", "This browser could not open your wallet app. Open the saved journey in your phone’s regular browser, or use a second device for QR pairing. Your draft is saved.");
+    }
+  }
   function setState(next, text) { phase = next; message = text; render(); }
   function clearConnection(text = "Phone wallet disconnected. Your draft and progress are saved.") {
     accounts = []; marker(false); clearQr(); setState("disconnected", text); emit("accountsChanged", []); emit("disconnect", { code: 4900, message: "Phone wallet disconnected." });
@@ -83,14 +129,23 @@
         provider.on("display_uri", async (uri) => {
           const current = attempt;
           if (sdk !== provider || !current || current.cancelled) return;
+          const qrGeneration = current.qrGeneration = (current.qrGeneration || 0) + 1;
           try {
             const params = new URLSearchParams(String(uri).split("?")[1] || "");
-            if (!/^wc:[a-f0-9]{64}@2\?/i.test(uri) || !/^[a-f0-9]{64}$/i.test(params.get("symKey") || "") || String(uri).length > 2048) throw new Error("Invalid pairing code");
+            if (typeof uri !== "string" || !/^wc:[a-f0-9]{64}@2\?/i.test(uri) || !/^[a-f0-9]{64}$/i.test(params.get("symKey") || "") || uri.length > 2048
+              || params.get("relay-protocol") !== "irn" || [...params.keys()].some(key => !["symKey", "relay-protocol", "expiryTimestamp"].includes(key))
+              || ["symKey", "relay-protocol", "expiryTimestamp"].some(key => params.getAll(key).length > 1)) throw new Error("Invalid pairing code");
+            const expiry = params.get("expiryTimestamp");
+            if (expiry !== null && !/^\d{10}$/.test(expiry)) throw new Error("Invalid pairing expiry");
+            const expiresAt = Math.min(current.startedAt + PAIRING_LIFETIME_MS, expiry ? Number(expiry) * 1000 : Infinity);
+            if (expiresAt <= now()) { expire(current); return; }
             const image = await library.qrDataUrl(uri);
-            if (attempt !== current || current.cancelled) return;
-            qr.src = image; qr.hidden = false;
-            setState("pairing", "1. Open your phone wallet’s scanner. 2. Scan this code. 3. Check agentbounties.app and approve the connection. This does not authorize a payment.");
-          } catch (_) { cancel("Phone pairing could not create a QR code. Try again.", "error"); }
+            if (attempt !== current || current.cancelled || current.qrGeneration !== qrGeneration) return;
+            clearTimers(current); current.expiresAt = expiresAt; pairingUri = uri; qr.src = image;
+            current.timer = win.setTimeout(() => expire(current), Math.max(0, expiresAt - now()));
+            setState("pairing", pairingInstructions());
+            tick(current);
+          } catch (_) { if (attempt === current && current.qrGeneration === qrGeneration) cancel("Phone pairing could not create a secure connection. Try again.", "error"); }
         });
         provider.on("accountsChanged", () => {
           if (sdk !== provider || attempt) return; // A session is usable only after connect() resolves.
@@ -114,18 +169,27 @@
     const title = node("h2", "Connect your phone wallet"); title.id = "ab-phone-title";
     statusNode = node("p", message); statusNode.setAttribute("role", "status"); statusNode.setAttribute("aria-live", "polite");
     qr = node("img", "", "ab-phone-qr"); qr.alt = "Scan this QR code with your phone wallet’s scanner"; qr.hidden = true; qr.width = 290; qr.height = 290;
-    const note = node("p", "Use a WalletConnect-compatible wallet that supports Base, such as MetaMask. Keep this page open. Never share the QR code or enter a recovery phrase here.", "ab-phone-note");
+    mobileActions = node("div", "", "ab-phone-mobile-actions"); mobileActions.hidden = true;
+    for (const wallet of mobileWallets) {
+      const button = node("button", `Open in ${wallet.name}`); button.type = "button";
+      button.addEventListener("click", () => openMobileWallet(wallet)); mobileActions.append(button);
+    }
+    countdown = node("p", "", "ab-phone-countdown"); countdown.hidden = true;
+    deviceToggle = node("button"); deviceToggle.type = "button"; deviceToggle.hidden = true;
+    deviceToggle.addEventListener("click", () => { showMobile = !showMobile; showQr = !showMobile; if (phase === "pairing") setState("pairing", pairingInstructions()); else render(); });
+    const note = node("p", "This connects an external WalletConnect wallet on Base. Coinbase embedded wallets use email or social login on the wallet setup page. Keep this page open; each later signature or payment needs its own wallet confirmation.", "ab-phone-note");
+    const security = node("p", "The QR code is a temporary connection credential. Some protected browsers block screenshots; use the native wallet button or a second device instead. Never share the code or enter a recovery phrase here.", "ab-phone-note");
     const actions = node("div", "", "ab-phone-actions");
-    retry = node("button", "Show a new QR code"); retry.type = "button"; retry.addEventListener("click", () => { void begin().catch(() => {}); });
+    retry = node("button", "Start a new connection"); retry.type = "button"; retry.addEventListener("click", () => { void begin().catch(() => {}); });
     disconnectButton = node("button", "Disconnect phone wallet"); disconnectButton.type = "button"; disconnectButton.hidden = true;
     disconnectButton.addEventListener("click", () => { void disconnect(); });
-    actions.append(retry, disconnectButton); dialog.append(close, title, statusNode, qr, note, actions); doc.body.append(dialog);
+    actions.append(retry, disconnectButton); dialog.append(close, title, statusNode, mobileActions, qr, countdown, deviceToggle, note, security, actions); doc.body.append(dialog);
     dialog.addEventListener("cancel", () => cancel()); dialog.addEventListener("close", () => { clearQr(); render(); });
     dialog.showModal(); render();
   }
   function cancel(text = "Pairing cancelled. Your draft and progress are saved.", next = "cancelled") {
     if (!attempt) return;
-    const current = attempt; current.cancelled = true; attempt = null; win.clearTimeout(current.timer); clearQr();
+    const current = attempt; current.cancelled = true; attempt = null; clearTimers(current); clearQr();
     current.reject(error(4001, text));
     const abandoned = sdk; generation++; sdk = null; sdkPromise = null;
     void abandoned?.signer.cleanupPendingPairings({ deletePairings: true }).catch(() => {});
@@ -150,25 +214,28 @@
     if (state().connected) return Promise.resolve(accounts.slice());
     if (!configured) { setState("unavailable", "Phone-wallet pairing is not configured here yet. Continue preparing your work or use a browser wallet."); return Promise.reject(error(4900, message)); }
     if (attempt) return attempt.promise;
-    const current = { cancelled: false };
+    const current = { cancelled: false, startedAt: now() };
     current.promise = new Promise((resolve, reject) => { current.resolve = resolve; current.reject = reject; });
-    attempt = current; clearQr(); setState("connecting", "Preparing a secure QR code…");
-    current.timer = win.setTimeout(() => { if (attempt === current) cancel("This QR code expired. Show a new code when your phone is ready.", "expired"); }, 300000);
+    attempt = current; clearQr(); setState("connecting", "Preparing a secure wallet connection…");
+    current.timer = win.setTimeout(() => { if (attempt === current) cancel("The wallet relay did not respond in time. Check your connection, then retry. Your draft is saved.", "error"); }, PREPARATION_TIMEOUT_MS);
     void (async () => {
       try {
         const provider = await initialize();
         if (current.cancelled) { await provider.signer.cleanupPendingPairings({ deletePairings: true }); return; }
         if (!liveAccounts(provider).length) await provider.connect();
+        if (attempt === current && current.expiresAt && current.expiresAt <= now()) expire(current);
         if (current.cancelled || attempt !== current) { await provider.disconnect().catch(() => {}); return; }
         accounts = liveAccounts(provider);
         if (!accounts.length) { await provider.disconnect().catch(() => {}); throw error(4901, "This wallet did not approve a Base account. Connect a wallet that supports Base."); }
-        chain = `0x${Number(provider.chainId).toString(16)}`; attempt = null; win.clearTimeout(current.timer); clearQr(); marker(true);
+        chain = `0x${Number(provider.chainId).toString(16)}`; attempt = null; clearTimers(current); clearQr(); marker(true);
         setState("connected", "Phone wallet connected. Return to your prepared review; approve each signature or payment on your phone.");
         emit("connect", { chainId: chain }); emit("accountsChanged", accounts.slice()); current.resolve(accounts.slice());
         if (dialog.open) dialog.close();
       } catch (caught) {
         if (attempt !== current) return;
-        attempt = null; win.clearTimeout(current.timer); clearQr();
+        attempt = null; clearTimers(current); clearQr();
+        const abandoned = sdk; generation++; sdk = null; sdkPromise = null;
+        void abandoned?.signer.cleanupPendingPairings({ deletePairings: true }).catch(() => {});
         // EthereumProvider 2.24 wraps connect rejections in Error(message),
         // dropping the original code. Match its exact consent-rejection texts
         // only here; transaction errors below require a structured RPC envelope.
@@ -222,7 +289,7 @@
     },
   });
   const announce = () => { if (configured) win.dispatchEvent(new win.CustomEvent("eip6963:announceProvider", { detail: Object.freeze({
-    info: Object.freeze({ uuid: "c1ae1723-39a9-4b06-843c-c4c3ad0967a6", name: "Phone wallet (QR)", rdns: "app.agentbounties.phone", icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect x='10' y='3' width='20' height='34' rx='4' fill='%23174d43'/><path d='M16 31h8' stroke='white' stroke-width='2'/></svg>" }), provider,
+    info: Object.freeze({ uuid: "c1ae1723-39a9-4b06-843c-c4c3ad0967a6", name: "Phone wallet (app or QR)", rdns: "app.agentbounties.phone", icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect x='10' y='3' width='20' height='34' rx='4' fill='%23174d43'/><path d='M16 31h8' stroke='white' stroke-width='2'/></svg>" }), provider,
   }) })); };
   win.addEventListener("eip6963:requestProvider", announce); announce();
   // Pairing is opened by the contextual wallet chooser or a WebMCP review.

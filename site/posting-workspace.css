@@ -31,6 +31,10 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
 .posting-workspace textarea, .posting-workspace input { width: 100%; min-width: 0; color: #edf2ee; background: #132019; border: 1px solid #405044; border-radius: 8px; padding: 12px; font: inherit; }
 .posting-workspace #bounty-composer-input { min-height: 130px; max-height: none; resize: vertical; }
 .brief-fields small { display: block; color: #aebbb2; margin-top: 6px; overflow-wrap: anywhere; }
+.brief-timezone { grid-column: 1 / -1; }
+.brief-summary { display: block; margin: 10px 0; color: #b9c8bf; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.brief-warnings { border-left: 3px solid #bca86e; padding: 8px 12px 8px 30px; margin: 16px 0; color: #ded3b7; background: #25261b; font-size: 13px; }
+.brief-warnings li + li { margin-top: 8px; }
 .posting-page .button { min-height: 44px; padding: 10px 16px; border-radius: 8px; font: 600 14px/1.45 system-ui, sans-serif; white-space: normal; text-align: center; }
 .posting-page .button.secondary { color: #e1e9e3; border: 1px solid #4a5b4f; background: transparent; }
 .posting-page .button.primary { color: #152006; border: 1px solid #c4f43b; background: #c4f43b; }
@@ -133,3 +137,4 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
   .posting-page .payment-dialog-head p { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .posting-page * { scroll-behavior: auto; } }
+.posting-tracker{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;margin:1rem 0;padding:0;font-size:.8rem;color:#a3b6aa}.posting-tracker li{padding:.5rem .65rem;border:1px solid #32483c;border-radius:.5rem}.posting-tracker li[data-complete="true"]{color:#d9ffe8;border-color:#5fa877;background:#153522}.posting-tracker li[data-complete="true"]::before{content:"✓ ";color:#8bdb9f}.posting-reference{margin:1rem 0}.posting-reference img{display:block;max-width:100%;height:auto;border-radius:.6rem;margin:.75rem 0}.posting-reference select,.posting-reference button{max-width:100%;min-height:44px;margin:.25rem;padding:.5rem}.posting-reference a,[data-card-reference] p{overflow-wrap:anywhere}[data-draft-sync-status]{display:block;margin:.5rem 0}[data-posting-tracker-status]{font-size:.85rem;color:#bfd0c5}[data-card-reference] p{font-size:.75rem}

@@ -106,6 +106,9 @@
       task_window_days: days,
       review_mode: input.review_mode === "creator" ? "creator" : "automated",
       delivery_deadline: input.delivery_deadline || null,
+      posting_operation_id: input.posting_operation_id || null,
+      reference_attachment: input.reference_attachment ? flow.publicJson(input.reference_attachment) : client.load()?.reference_attachment || null,
+      ...(input.image ? { image: flow.publicJson(input.image), image_required: input.image_required === true } : {}),
       source_url: sourceUrl,
       crowdfund: false,
       discovery_source: "WebMCP on agentbounties.app",
@@ -247,19 +250,34 @@
   });
 
   if (window.AgentBountiesPhoneWallet) {
-    register({ name: "agent_bounties_open_phone_wallet", title: "Connect my phone wallet with a QR code",
-      description: "Open the phone-wallet QR dialog on this page. The person scans the code and approves the connection in their wallet app. This only prepares a connection; it never signs, pays, publishes or approves a wallet request. Keep their current draft and journey. Never read, copy or transmit the QR code or pairing URI. After the person approves, check phone-wallet status and continue the existing review.",
+    register({ name: "agent_bounties_open_phone_wallet", title: "Connect my phone wallet by app or QR",
+      description: "Open the external phone-wallet connection on this page. On the same phone, the person chooses an installed supported wallet's native app button; on desktop, they scan the QR with a second device. This is not Coinbase embedded-wallet email login. Preparation never signs, pays, publishes or approves a wallet request. Preserve the current draft and reuse an existing pairing. Never read, copy or transmit the QR or pairing URI, or suggest screenshot scanning. Check the sanitized expiry and connection state, then continue the same review after the person approves in their wallet.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
       async execute() { return window.AgentBountiesPhoneWallet.openReview(); },
     });
     register({ name: "agent_bounties_get_phone_wallet_status", title: "Check my phone wallet connection",
-      description: "Read the sanitized phone-wallet state and the approved public address. Restores a previously approved session when possible; never opens a new QR or wallet prompt. Connected means the wallet approved a session, not that anything was signed or paid. Continue the prepared review without repeating business questions.",
+      description: "Read the sanitized external phone-wallet state, pairing expiry and approved public address. Restores a previously approved session when possible; never opens a new connection or wallet prompt. Connected means the wallet approved a session, not that anything was signed or paid. Continue the prepared review without repeating business questions.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { readOnlyHint: true, untrustedContentHint: false },
       async execute() { const phone = window.AgentBountiesPhoneWallet; try { await phone.restore(); } catch (_) { /* State reports the connection without leaking relay errors. */ } return phone.state(); },
     });
   }
+
+  register({
+    name: "agent_bounties_get_account_status",
+    title: "Check my signed-in account",
+    description: "Read the current first-party account session and account-draft availability. Returns an opaque account identifier for support, never credentials or payment authority. Does not log in, change the draft, link a wallet, or sign anything.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, untrustedContentHint: false },
+    async execute() {
+      const response = await window.fetch(`${flow.apiBase(window.location)}/v1/site-auth/session`, { credentials: "include", cache: "no-store", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error("Account status is temporarily unavailable. Your draft is preserved.");
+      const session = await response.json();
+      const authenticated = session.authenticated === true && /^[0-9a-f]{64}$/.test(session.user?.id || "");
+      return { authenticated, account_id: authenticated ? session.user.id : null, posting_drafts_enabled: authenticated && session.posting_drafts_enabled === true, wallet_authorized: false, payment_authorized: false };
+    },
+  });
 
   register({
     name: "agent_bounties_list_ready_work",
@@ -341,6 +359,10 @@
         task_window_days: { type: "integer", minimum: 1, maximum: 30 },
         review_mode: { type: "string", enum: ["automated", "creator"], description: "For design work without a supported automated benchmark, explicitly propose creator review: the poster signs the completion verdict. It is not automatic or independent verification. Meta children still require automated review." },
         delivery_deadline: { type: "string", description: "Exact agreed ISO timestamp with timezone offset. Required for creator review; preserve the person’s calendar deadline." },
+        posting_operation_id: { type: "string", format: "uuid" },
+        reference_attachment: { type: "object", description: "Exact timestamped and hashed frozen reference returned by capture_homepage_reference." },
+        image: { type: "object", description: "Preserve the person's approved bounty cover image and its complete metadata." },
+        image_required: { type: "boolean" },
         source_url: { type: ["string", "null"], maxLength: 2048 },
         benchmark: { type: "object", description: "Exact executable verifier with pinned public source and runner. Prepare this for the person; do not ask them for technical fields." },
         evidence_schema: { type: "object", description: "Evidence schema paired with the benchmark. Supply both verifier fields or neither; absent verifier stays an unfundable draft." },
@@ -534,10 +556,24 @@
       : journey.selected ? { tool: "agent_bounties_inspect_opportunity", input: { opportunity_id: journey.selected } }
       : journey.role === "earn" ? { tool: "agent_bounties_list_ready_work", input: { limit: 5, timing: "now" } }
       : { tool: "agent_bounties_stage_funded_bounty", missing: "Use the saved brief to prepare deliverables and checks. For design work, propose explicit creator review and the agreed calendar delivery deadline; for automated work, prepare a supported benchmark. Ask only for missing business decisions." };
-    return { journey, next_action: next, guidance: flow.GUIDANCE, user_confirmation_required: false, storage: "this browser session; no wallet authority" };
+    return { journey, next_action: next, guidance: flow.GUIDANCE, user_confirmation_required: false, storage: window.AgentBountiesPostingSession?.create(window).snapshot() || "this browser session; no wallet authority" };
   }
   register({ name: "agent_bounties_get_journey", title: "Continue my marketplace task", description: "Resume the current posting or earning journey. Returns the saved outcome and one next action; do not restart the interview or repeat earlier approvals.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true }, execute() { return journeyResult(client.load()); } });
+  if (isPost) register({ name: "agent_bounties_capture_homepage_reference", title: "Freeze a homepage background reference",
+    description: "Read and hash the selected actual homepage background image, attach its immutable copy and timestamp to this draft, and invalidate changed terms approval. This captures the background asset, not the page text or animated effects. No publication or wallet request.",
+    inputSchema: { type: "object", properties: { phase: { type: "string", enum: ["dawn", "day", "dusk", "night"] }, variant: { type: "string", enum: ["desktop", "mobile"] } }, required: ["phase", "variant"], additionalProperties: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: false }, async execute(input) {
+      if (flow.createPostingJournal(window).load()) throw new Error("Reconcile the current wallet operation before changing its reference.");
+      const helper = await waitFor(() => window.AgentBountiesPostingReference, 8000);
+      if (!helper) throw new Error("The reference capture controls are not ready.");
+      const reference = await helper.captureHomepage(input, window), journey = client.load() || client.start({ role: "post" });
+      window.AgentBountiesComposer?.invalidate();
+      let draft = journey.draft;
+      if (draft) { const schema = { ...draft.evidence_schema }; delete schema["x-agent-bounties-reference-attachment"]; draft = { ...draft, reference_attachment: reference, evidence_schema: helper.withEvidence(schema, reference) }; }
+      client.save({ ...journey, reference_attachment: reference, draft, draft_stale: Boolean(draft) });
+      return { status: "reference_saved_not_published", reference_attachment: reference, next_action: "Restage and review the exact draft with this reference." };
+    } });
   register({ name: "agent_bounties_inspect_opportunity", title: "Explain this opportunity", description: "Read the current canonical opportunity, costs, bond, deadline, exact terms and evidence requirements. Translate these into a short recommendation for the person. No claim, publication or spending.",
     inputSchema: { type: "object", properties: { opportunity_id: { type: "string", minLength: 1, maxLength: 240 } }, required: ["opportunity_id"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute(input) { return client.inspect(input.opportunity_id); } });
@@ -557,6 +593,7 @@
   register({ name: "agent_bounties_get_posting_status", title: "Check the bounty I posted", description: "Resume a recorded posting wallet step after navigation or a lost response. Read canonical creation and funding evidence and save the confirmed checkpoint locally. Never opens a wallet or repeats funding.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: true },
     async execute() {
+      if (isPost && window.AgentBountiesPostingSession) return window.AgentBountiesPostingSession.create(window).reconcile();
       const journal = flow.createPostingJournal(window), operation = journal.load();
       if (!operation) return { status: "no_posting_operation", next_action: { tool: "agent_bounties_get_journey", input: {} } };
       const items = await client.request(`/v1/base/autonomous-bounties/feed?network=${NETWORK}&claimable_only=false`);

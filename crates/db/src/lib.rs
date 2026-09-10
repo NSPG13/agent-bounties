@@ -27,6 +27,9 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod site_posting_drafts;
+pub use site_posting_drafts::{PostingDraftError, SitePostingDraft};
+
 pub const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_core.sql");
 pub const AUTONOMOUS_PROTOCOL_MIGRATION: &str =
     include_str!("../../../migrations/0002_autonomous_protocol.sql");
@@ -89,6 +92,10 @@ pub const DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION: &str =
     include_str!("../../../migrations/0034_distribution_competition_bindings.sql");
 pub const DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION: &str =
     include_str!("../../../migrations/0035_distribution_mcpmarket_sources.sql");
+pub const SITE_POSTING_DRAFTS_MIGRATION: &str =
+    include_str!("../../../migrations/0036_site_posting_drafts.sql");
+pub const SITE_WALLET_PROVIDER_MIGRATION: &str =
+    include_str!("../../../migrations/0037_site_wallet_provider.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1418,6 +1425,8 @@ pub struct SiteAuthWallet {
     pub chain_id: i64,
     pub linked_at: DateTime<Utc>,
     pub proof: String,
+    pub provider_id: Option<String>,
+    pub last_verified_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1493,6 +1502,8 @@ impl PostgresStore {
                 // reject valid MCPMarket rows on subsequent startups.
                 DISTRIBUTION_MCPMARKET_SOURCES_MIGRATION,
                 DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION,
+                SITE_POSTING_DRAFTS_MIGRATION,
+                SITE_WALLET_PROVIDER_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')
@@ -1587,7 +1598,8 @@ impl PostgresStore {
     pub async fn list_site_auth_wallets(&self, account_key: &str) -> DbResult<Vec<SiteAuthWallet>> {
         let rows = sqlx::query(
             r#"
-            SELECT wallet_address, chain_id, linked_at, proof_method
+            SELECT wallet_address, chain_id, linked_at, proof_method, provider_id,
+                   COALESCE(last_verified_at, linked_at) AS last_verified_at
             FROM site_auth_wallets
             WHERE account_key = $1
             ORDER BY linked_at ASC
@@ -1603,6 +1615,8 @@ impl PostgresStore {
                     chain_id: row.try_get("chain_id")?,
                     linked_at: row.try_get("linked_at")?,
                     proof: row.try_get("proof_method")?,
+                    provider_id: row.try_get("provider_id")?,
+                    last_verified_at: row.try_get("last_verified_at")?,
                 })
             })
             .collect()
@@ -1613,6 +1627,17 @@ impl PostgresStore {
         account_key: &str,
         wallet_address: &str,
         chain_id: i64,
+    ) -> DbResult<Vec<SiteAuthWallet>> {
+        self.link_site_auth_wallet_with_provider(account_key, wallet_address, chain_id, None)
+            .await
+    }
+
+    pub async fn link_site_auth_wallet_with_provider(
+        &self,
+        account_key: &str,
+        wallet_address: &str,
+        chain_id: i64,
+        provider_id: Option<&str>,
     ) -> DbResult<Vec<SiteAuthWallet>> {
         let mut transaction = self.pool.begin().await?;
         let account_exists: Option<String> = sqlx::query_scalar(
@@ -1652,16 +1677,19 @@ impl PostgresStore {
         }
         let inserted_owner: String = sqlx::query_scalar(
             r#"
-            INSERT INTO site_auth_wallets (wallet_address, account_key, chain_id)
-            VALUES (lower($1), $2, $3)
+            INSERT INTO site_auth_wallets (wallet_address, account_key, chain_id, provider_id, last_verified_at)
+            VALUES (lower($1), $2, $3, $4, now())
             ON CONFLICT (wallet_address) DO UPDATE SET
-              wallet_address = EXCLUDED.wallet_address
+              provider_id = COALESCE(EXCLUDED.provider_id, site_auth_wallets.provider_id),
+              last_verified_at = now()
+            WHERE site_auth_wallets.account_key = EXCLUDED.account_key
             RETURNING account_key
             "#,
         )
         .bind(wallet_address)
         .bind(account_key)
         .bind(chain_id)
+        .bind(provider_id)
         .fetch_one(&mut *transaction)
         .await?;
         if inserted_owner != account_key {

@@ -43,6 +43,9 @@ try {
             cargo test -p db tests::chatgpt_action_intent_replays_and_confirms_only_observed_transaction -- --ignored --exact --nocapture
         }
         Invoke-Checked {
+            cargo test -p db site_posting_drafts -- --ignored --nocapture
+        }
+        Invoke-Checked {
             cargo test -p db tests::social_mention_ingestion_round_trip_executes_against_migrated_postgres -- --ignored --exact --nocapture
         }
         Invoke-Checked {

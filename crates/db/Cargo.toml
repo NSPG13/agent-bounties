@@ -15,6 +15,7 @@ hmac.workspace = true
 ledger = { path = "../ledger" }
 serde.workspace = true
 serde_json.workspace = true
+serde_jcs = "=0.2.0"
 sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true

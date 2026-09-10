@@ -10,3 +10,6 @@
 .ab-phone-qr[hidden], .ab-phone-dialog [hidden] { display: none; }
 .ab-phone-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
 .ab-phone-note { font-size: .85rem; }
+.ab-phone-mobile-actions { display: grid; gap: .65rem; margin: 1rem 0; }
+.ab-phone-mobile-actions button { min-height: 48px; background: #174d43; border-color: #174d43; color: #fff; }
+.ab-phone-countdown { font-size: .9rem; font-variant-numeric: tabular-nums; }

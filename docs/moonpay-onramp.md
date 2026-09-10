@@ -33,6 +33,54 @@ The destination is the user's wallet, never the bounty contract. A plain ERC-20 
 
 The fiat amount is only a starting value. MoonPay remains authoritative for its final quote, fees, supported payment methods, purchase limits, eligibility, and received crypto amount.
 
+### Shortfall and recovery
+
+The posting handoff can pass `wallet`, `amount`, and `operation` with a
+same-origin `return` URL. The selected public address is checked automatically
+on Base; this does not connect a signing session. The read-only
+`AgentBountiesFundingReadiness.readBalances` helper verifies chain 8453 and
+native Base USDC, reads both balances at one block, and times out after 12
+seconds. Returning to the tab refreshes the snapshot. A nonzero ETH balance
+does not prove the exact creation gas is affordable.
+
+The page calculates the USDC shortfall in integer base units. It does not
+assume a dollar exchange rate, add an invented percentage fee, or enforce a
+universal $20 provider minimum. It shows the target received USDC amount and
+asks for a USD amount to quote; MoonPay confirms its applicable purchase
+minimum, total fees, and actual received amount before payment. No top-up is
+needed when the observed USDC balance already covers the contribution. Final
+gas and the bounty transaction remain a separate review on the posting page.
+
+`AgentBountiesFundingReadiness.estimateFees` accepts only bounded exact calls
+and uses current Base execution gas plus the GasPriceOracle's
+`getL1FeeUpperBound(uint256)` and `getOperatorFee(uint256)`. The L1 estimate
+includes a conservative unsigned type-2 envelope allowance with an empty
+access list. Wallet batching, authorization lists, or later rate changes can
+change the charge. Missing oracle data or a failed sequential approval
+simulation leaves the total unknown, never zero. `maximumWei` is always null:
+the estimate is not a guaranteed wallet spending cap or proof of sponsorship.
+See [Base network fees](https://docs.base.org/specifications/transactions/network-fees)
+and the [official GasPriceOracle implementation](https://github.com/ethereum-optimism/optimism/blob/develop/packages/contracts-bedrock/src/L2/GasPriceOracle.sol).
+
+Before opening a provider purchase, the browser stores only bounded recovery
+metadata for the wallet and asset: operation ID, start time, status, and
+provider reference when returned. It never stores a signed checkout URL or
+credentials. An open or uncertain request blocks another purchase across
+reloads and same-browser tabs. A direct checkout uses one named tab and clears
+its opener before external navigation. The resume button focuses that tab;
+if it is closed, the user returns to the original provider order or
+confirmation email. A failed receipt upload after payment must be resolved
+with the provider on that order, without paying again.
+
+The user can clear the recovery guard only after explicitly confirming that
+the provider shows the earlier purchase completed or cancelled and no payment
+pending. This confirmation is recovery context, never payment evidence. The
+page refreshes balances and resets purchase consent. Browser storage is a
+duplicate-purchase guard, not a provider status API or cross-device order
+record. Provider API/order reconciliation remains required to prove a
+particular purchase completed; confirmed bounty events remain required for
+bounty funding.
+
 ## Direct consumer fallback
 
 The on-ramp page also exposes a bounded manual fallback through MoonPay's public consumer pages:
@@ -119,6 +167,7 @@ cargo test -p mcp-server moonpay
 cargo test -p mcp-server moonpay -- --nocapture
 python scripts/check-site.py
 python scripts/check-public-handoffs.py
+node --test scripts/test-funding-readiness.js
 ```
 
 The Rust tests include MoonPay's published URL-signing test vector, verify that live URLs are IP-bound and signed with `signature` appended last, verify that the secret never appears in the checkout URL, and assert that every checkout plan reports `bounty_funded: false` with no canonical event.

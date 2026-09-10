@@ -359,6 +359,9 @@ pub(super) async fn prepare_bounty_post_handoff(
 ) -> Result<Value, String> {
     // Fail closed on every non-file field before downloading or persisting an
     // optional approved image.
+    let mut stable_args = args.clone();
+    stable_args.posting_operation_id = Some(prepared_posting_operation_id(args)?);
+    let args = &stable_args;
     let validation_image = sandbox_bounty_image_reference(args)?;
     let validation_handoff = build_bounty_post_handoff(args, validation_image.as_ref())?;
     let handoff = if validation_image.is_none() {
@@ -588,7 +591,13 @@ pub(super) fn build_bounty_post_handoff(
         .collect::<Result<Vec<_>, _>>()?;
     let solver_reward = parse_usdc(&args.solver_reward_usdc, "solver_reward_usdc")?;
     let verifier_reward = parse_usdc(&args.verifier_reward_usdc, "verifier_reward_usdc")?;
-    if solver_reward < 2_000_000 {
+    let meta_child = validate_prepared_parent(args.meta_child.as_ref())?;
+    let qualifying_child_draft = meta_child.is_some()
+        && solver_reward > 0
+        && verifier_reward >= 10_000
+        && verifier_reward % 2 == 0
+        && solver_reward.checked_add(verifier_reward) == Some(1_000_000);
+    if solver_reward < 2_000_000 && !qualifying_child_draft {
         return Err("public bounties require at least 2 USDC for the solver".to_string());
     }
     if verifier_reward < 10_000 {
@@ -607,7 +616,37 @@ pub(super) fn build_bounty_post_handoff(
         .as_deref()
         .map(|value| bounded_text(value, "discovery_source", 500))
         .transpose()?;
-    validate_prepared_verifier(args.benchmark.as_ref(), args.evidence_schema.as_ref())?;
+    let review_mode = args.review_mode.as_deref().unwrap_or("automated");
+    match review_mode {
+        "creator" => {
+            if meta_child.is_some() || args.benchmark.is_some() || args.evidence_schema.is_some() {
+                return Err("Creator review cannot replace a meta-child verifier or an automated benchmark. Omit benchmark and evidence_schema when explicitly selecting creator review.".to_string());
+            }
+            let deadline = args.delivery_deadline.as_deref().ok_or(
+                "Creator review requires the exact agreed delivery_deadline with timezone offset.",
+            )?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(deadline).map_err(|_| {
+                "delivery_deadline must be an ISO timestamp including its timezone offset"
+                    .to_string()
+            })?;
+            let now = chrono::Utc::now();
+            if parsed <= now || parsed > now + chrono::Duration::days(366) {
+                return Err(
+                    "Creator review requires a future delivery deadline within 366 days."
+                        .to_string(),
+                );
+            }
+        }
+        "automated" => {
+            if args.delivery_deadline.is_some() {
+                return Err("An automated benchmark does not enforce a calendar delivery deadline. Select creator review or explicitly agree a relative work window.".to_string());
+            }
+            validate_prepared_verifier(args.benchmark.as_ref(), args.evidence_schema.as_ref())?;
+        }
+        _ => return Err("review_mode must be creator or automated".to_string()),
+    }
+    let posting_operation_id = prepared_posting_operation_id(args)?;
+    validate_prepared_reference(args.reference_attachment.as_ref())?;
     match (
         image,
         args.image_prompt.as_deref(),
@@ -640,6 +679,29 @@ pub(super) fn build_bounty_post_handoff(
     {
         let mut query = post_url.query_pairs_mut();
         query.append_pair("from", "ai-app");
+        query.append_pair("operation_id", &posting_operation_id.to_string());
+        query.append_pair("reviewMode", review_mode);
+        if let Some(deadline) = &args.delivery_deadline {
+            query.append_pair("deliveryDeadline", deadline);
+        }
+        if let Some(parent) = &meta_child {
+            query.append_pair(
+                "parentBounty",
+                parent["parent_bounty_contract"]
+                    .as_str()
+                    .expect("validated parent"),
+            );
+            if let Some(solver) = parent["intended_child_solver"].as_str() {
+                query.append_pair("intendedChildSolver", solver);
+            }
+        }
+        if let Some(reference) = &args.reference_attachment {
+            query.append_pair(
+                "referenceAttachment",
+                &serde_json::to_string(reference)
+                    .map_err(|_| "reference_attachment could not be encoded")?,
+            );
+        }
         query.append_pair("title", &title);
         query.append_pair("goal", &goal);
         for criterion in &acceptance_criteria {
@@ -691,6 +753,13 @@ pub(super) fn build_bounty_post_handoff(
     Ok(json!({
         "schema": "agent-bounties/chatgpt-post-handoff-v1",
         "state": "review_required_not_published",
+        "posting_operation_id": posting_operation_id,
+        "review_mode": review_mode,
+        "delivery_deadline": args.delivery_deadline,
+        "meta_child": meta_child,
+        "reference_attachment": args.reference_attachment,
+        "verification_prepared": review_mode == "creator" || args.benchmark.is_some(),
+        "review_disclosure": if review_mode == "creator" { Some("The creator reviews every published check and confirms the verdict. The creator-review reserve is paid to the creator on pass or fail. This is human review; wallet and legal confirmations remain with the creator.") } else { None },
         "title": title,
         "goal": goal,
         "acceptance_criteria": acceptance_criteria,
@@ -710,6 +779,127 @@ pub(super) fn build_bounty_post_handoff(
         "next_action": "Open the secure handoff, review every field, and choose whether to deposit 0 USDC now or fully fund. Then connect the creator wallet and approve only the exact Base transaction shown by that wallet.",
         "evidence_boundary": "No bounty id or contract exists yet. Only confirmed CanonicalBountyCreated proves creation; FundingAdded and BountyBecameClaimable prove funding and claimability."
     }))
+}
+
+fn prepared_posting_operation_id(args: &PrepareBountyPostArgs) -> Result<uuid::Uuid, String> {
+    if let Some(id) = args.posting_operation_id {
+        return Ok(id);
+    }
+    // An unchanged request remains the same journey across MCP retries. This is
+    // only an identifier: every persisted draft still requires its owner's session.
+    let bytes = serde_json::to_vec(args).map_err(|_| "could not identify the posting operation")?;
+    Ok(uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, &bytes))
+}
+
+fn validate_prepared_reference(reference: Option<&Value>) -> Result<(), String> {
+    let Some(value) = reference else {
+        return Ok(());
+    };
+    // Same immutable homepage originals as site/posting-reference.js. Validate
+    // before fetching any optional cover image; this descriptor cannot fetch URLs.
+    let (hash, length) = match (value["phase"].as_str(), value["variant"].as_str()) {
+        (Some("dawn"), Some("desktop")) => (
+            "a7cdaf198c5ed18cf4921d5d5a180353d7f461f96906822cfc3489e229d0c29a",
+            202068,
+        ),
+        (Some("dawn"), Some("mobile")) => (
+            "ded24e4a5aaa0593caf7411ba998bc8e36dea6cb6a5042b69762035645858629",
+            96120,
+        ),
+        (Some("day"), Some("desktop")) => (
+            "f9143ee70ca0551bc97562c89c96cc56b4a54391ab4034315148253b757fcaef",
+            256228,
+        ),
+        (Some("day"), Some("mobile")) => (
+            "7a62291ef8cafe5ce7371a55c79e44432cfe338c8e884d98c95b3fd1a4a172cd",
+            98768,
+        ),
+        (Some("dusk"), Some("desktop")) => (
+            "73e5628a4184a854654df37cc6cf46d18ba14a5f45962619a6606c5627bb24a9",
+            255156,
+        ),
+        (Some("dusk"), Some("mobile")) => (
+            "6a478e020ba6362ce8899d761d858e4dd6ba35221bc89fc76a078bd911bad5ad",
+            113114,
+        ),
+        (Some("night"), Some("desktop")) => (
+            "06fc595b47101033af0ac00a71b4052f31c84d924cc1078e37a42e855d7883fa",
+            149004,
+        ),
+        (Some("night"), Some("mobile")) => (
+            "9705a9ccb07c91ff4cdb360fc6dc6393c5fb7f149bb7479877b9bef4dfcc8b9c",
+            61982,
+        ),
+        _ => {
+            return Err(
+                "reference_attachment must identify a supported homepage background".to_string(),
+            )
+        }
+    };
+    let asset_url = format!("https://raw.githubusercontent.com/NSPG13/agent-bounties/933c9c446a76d26f148a4f2defacf6453d02a7b2/site/assets/solarpunk/scene-{}{}.webp", value["phase"].as_str().unwrap(), if value["variant"] == "mobile" { "-mobile" } else { "" });
+    let valid = value.as_object().is_some_and(|object| {
+        object.len() == 10
+            && object.keys().all(|key| {
+                [
+                    "version",
+                    "kind",
+                    "phase",
+                    "variant",
+                    "source_url",
+                    "asset_url",
+                    "captured_at",
+                    "sha256",
+                    "mime_type",
+                    "byte_length",
+                ]
+                .contains(&key.as_str())
+            })
+    }) && value["version"] == 1
+        && value["kind"] == "homepage_background"
+        && value["source_url"] == "https://agentbounties.app/"
+        && value["asset_url"] == asset_url
+        && value["sha256"] == format!("sha256:{hash}")
+        && value["byte_length"] == length
+        && value["mime_type"] == "image/webp"
+        && value["captured_at"]
+            .as_str()
+            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+            .is_some_and(|time| time <= chrono::Utc::now() + chrono::Duration::minutes(5));
+    if !valid {
+        return Err(
+            "reference_attachment does not match its immutable image, digest and capture time"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_prepared_parent(value: Option<&Value>) -> Result<Option<Value>, String> {
+    let Some(value) = value else { return Ok(None) };
+    let object = value.as_object().ok_or("meta_child must be an object")?;
+    if object
+        .keys()
+        .any(|key| !["parent_bounty_contract", "intended_child_solver"].contains(&key.as_str()))
+    {
+        return Err("meta_child contains unsupported fields".to_string());
+    }
+    let address = |key: &str| -> Result<Option<String>, String> {
+        match object.get(key) {
+            None | Some(Value::Null) if key != "parent_bounty_contract" => Ok(None),
+            Some(Value::String(value)) => {
+                let normalized = chain_base::normalize_evm_address(value)
+                    .map_err(|_| format!("{key} must be an EVM address"))?;
+                if normalized.eq_ignore_ascii_case("0x0000000000000000000000000000000000000000") {
+                    return Err(format!("{key} must not be the zero address"));
+                }
+                Ok(Some(normalized.to_ascii_lowercase()))
+            }
+            _ => Err(format!("{key} must be an EVM address")),
+        }
+    };
+    Ok(Some(
+        json!({"parent_bounty_contract": address("parent_bounty_contract")?, "intended_child_solver": address("intended_child_solver")?}),
+    ))
 }
 
 fn validate_prepared_verifier(
@@ -5133,6 +5323,11 @@ mod tests {
             source_url: Some("https://github.com/NSPG13/agent-bounties/issues/386".to_string()),
             crowdfund: false,
             task_window_days: None,
+            review_mode: None,
+            delivery_deadline: None,
+            posting_operation_id: None,
+            meta_child: None,
+            reference_attachment: None,
             discovery_source: Some("ChatGPT user feedback".to_string()),
             benchmark: Some(json!({
                 "engine": "sandboxed_regression_v1",
@@ -5445,6 +5640,10 @@ mod tests {
         let args = valid_args();
         let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
         let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
+        assert_eq!(
+            handoff,
+            build_bounty_post_handoff(&args, Some(&image)).unwrap()
+        );
         let post_url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
         let pairs = post_url.query_pairs().collect::<Vec<_>>();
 
@@ -5476,6 +5675,72 @@ mod tests {
         assert!(pairs.iter().any(
             |(key, value)| key == "evidenceSchema" && value.contains("source_snapshot_digest")
         ));
+    }
+
+    #[test]
+    fn creator_handoff_preserves_deadline_operation_reference_and_approved_image() {
+        let mut args = valid_args();
+        args.review_mode = Some("creator".to_string());
+        let offset = chrono::FixedOffset::west_opt(6 * 3600).unwrap();
+        let exact = (chrono::Utc::now() + chrono::Duration::days(2))
+            .with_timezone(&offset)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+        args.delivery_deadline = Some(exact.clone());
+        args.benchmark = None;
+        args.evidence_schema = None;
+        args.posting_operation_id = Some(uuid::Uuid::new_v4());
+        args.reference_attachment = Some(
+            json!({"version":1, "kind":"homepage_background", "phase":"day", "variant":"desktop", "source_url":"https://agentbounties.app/", "asset_url":"https://raw.githubusercontent.com/NSPG13/agent-bounties/933c9c446a76d26f148a4f2defacf6453d02a7b2/site/assets/solarpunk/scene-day.webp", "sha256":"sha256:f9143ee70ca0551bc97562c89c96cc56b4a54391ab4034315148253b757fcaef", "mime_type":"image/webp", "byte_length":256228, "captured_at":chrono::Utc::now().to_rfc3339()}),
+        );
+        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
+        let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
+        let replay = build_bounty_post_handoff(&args, Some(&image)).unwrap();
+        assert_eq!(handoff, replay);
+        assert_eq!(handoff["delivery_deadline"], exact);
+        assert_eq!(handoff["review_mode"], "creator");
+        assert_eq!(
+            handoff["reference_attachment"],
+            *args.reference_attachment.as_ref().unwrap()
+        );
+        assert_eq!(handoff["image"]["sha256"], image.sha256);
+        let url = Url::parse(handoff["post_url"].as_str().unwrap()).unwrap();
+        assert!(url
+            .query_pairs()
+            .any(|(key, value)| key == "deliveryDeadline" && value == exact));
+        let original_reference = args.reference_attachment.clone();
+        args.reference_attachment.as_mut().unwrap()["sha256"] = json!("sha256:invented");
+        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
+        args.reference_attachment = original_reference;
+        args.benchmark = Some(json!({"engine":"invented"}));
+        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
+        args.benchmark = None;
+        args.delivery_deadline = Some("2026-09-10T21:00:00".to_string());
+        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
+        args.delivery_deadline = Some(exact);
+        args.meta_child =
+            Some(json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111"}));
+        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
+    }
+
+    #[test]
+    fn parent_handoff_preserves_binding_without_asserting_qualification() {
+        let mut args = valid_args();
+        args.solver_reward_usdc = "0.98".to_string();
+        args.verifier_reward_usdc = "0.02".to_string();
+        args.meta_child = Some(
+            json!({"parent_bounty_contract":"0x1111111111111111111111111111111111111111", "intended_child_solver":"0x2222222222222222222222222222222222222222"}),
+        );
+        let image = sandbox_bounty_image_reference(&args).unwrap().unwrap();
+        let handoff = build_bounty_post_handoff(&args, Some(&image)).unwrap();
+        assert_eq!(handoff["meta_child"], *args.meta_child.as_ref().unwrap());
+        assert_eq!(handoff["bounty_created"], false);
+        assert!(handoff["post_url"]
+            .as_str()
+            .unwrap()
+            .contains("parentBounty="));
+        args.review_mode = Some("automated".to_string());
+        args.delivery_deadline = Some("2026-09-10T21:00:00-06:00".to_string());
+        assert!(build_bounty_post_handoff(&args, Some(&image)).is_err());
     }
 
     #[test]

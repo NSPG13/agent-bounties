@@ -113,6 +113,8 @@
       task_window_days: days,
       review_mode: raw.review_mode === "creator" ? "creator" : "automated",
       delivery_deadline: window.AgentBountiesCreatorReview.deadline(raw.delivery_deadline),
+      posting_operation_id: raw.posting_operation_id || null,
+      reference_attachment: raw.reference_attachment == null ? null : window.AgentBountiesPostingReference.validate(raw.reference_attachment),
       source_url: sourceUrl,
       crowdfund: Boolean(raw.crowdfund),
       discovery_source: boundedText(raw.discovery_source || "User-owned AI assistant", "Discovery source", 500),
@@ -123,9 +125,9 @@
         ? raw.evidence_schema
         : null,
       meta_child: raw.meta_child == null ? null : window.AgentBountiesMetaChild?.normalize(raw.meta_child) || (() => { throw new Error("The parent-child review module is unavailable."); })(),
-      ...(raw.image_required === true
+      ...(raw.image != null || raw.image_required === true
         ? {
-            image_required: true,
+            image_required: raw.image_required === true,
             image: raw.image,
           }
         : {}),

@@ -247,6 +247,9 @@ ${competitionChildBrief(item)}`;
       wallet_limit_reached: "This account has reached its linked-wallet limit.",
       wallet_signature_invalid: "The signature did not prove control of that wallet.",
       wallet_selector_unavailable: "The wallet chooser could not load. Reload the page and try again.",
+      coinbase_startup_unavailable: "Coinbase wallet configuration could not load. Retry, open Agent Bounties in your phone browser, or choose another wallet. Your draft is saved.",
+      coinbase_startup_paused: "Coinbase is still unavailable. Wait a minute before retrying, or choose another wallet. Your draft is saved.",
+      wallet_address_mismatch: "This signing session returned a different address. Select the original wallet or its original sign-in method. No wallet was linked or payment requested.",
     };
     return messages[reason] || "The wallet could not be linked. Please try again.";
   }
@@ -274,7 +277,11 @@ ${competitionChildBrief(item)}`;
         return {
           address,
           label: shortWalletAddress(address),
-          linkedAt: String(item?.linked_at || "").slice(0, 32),
+          linkedAt: String(item?.linked_at || item?.linkedAt || "").slice(0, 40),
+          providerId: ["coinbase-embedded", "metamask", "coinbase-wallet", "walletconnect", "injected", "trust-wallet"].includes(item?.provider_id || item?.providerId) ? item.provider_id || item.providerId : null,
+          walletType: ["embedded", "mobile", "browser"].includes(item?.wallet_type || item?.walletType) ? item.wallet_type || item.walletType : null,
+          chainIds: Array.isArray(item?.chain_ids || item?.chainIds) ? (item.chain_ids || item.chainIds).filter(id => Number.isSafeInteger(id) && id > 0).slice(0, 8) : [],
+          verifiedAt: String(item?.last_verified_at || item?.verifiedAt || item?.linked_at || item?.linkedAt || "").slice(0, 40),
         };
       });
     };
@@ -738,9 +745,21 @@ ${competitionChildBrief(item)}`;
       let verifiedWallets = [];
       let embeddedAddress = null;
       let accountStatus = "checking";
+      const connectedAddresses = new Set();
+      const selectedProviders = new Map();
+      const returnButton = doc.createElement("button");
+      returnButton.type = "button";
+      returnButton.className = "wallet-remove";
+      returnButton.textContent = "Return to bounty";
+      returnButton.hidden = !postingAuth?.pending(win);
+      returnButton.addEventListener("click", () => {
+        const target = postingAuth?.pending(win);
+        if (target) win.location.assign(target);
+      });
+      accountDashboard?.prepend(returnButton);
 
       const returnToPreparedPost = (details = {}) => {
-        if (!currentUser || accountStatus !== "ready" || !postingAuth?.pending(win)) return false;
+        if (!currentUser || accountStatus !== "ready" || !postingAuth?.pending(win) || win.location.hash === "#account") return false;
         setStatus("Your account is ready. Returning to the prepared bounty…");
         return postingAuth.complete(win, details);
       };
@@ -769,7 +788,8 @@ ${competitionChildBrief(item)}`;
           ? ready ? "Your bounties and payments, all in one place."
             : "Link a wallet to finish setup. You can use one you have or create one here."
           : "Sign in, then link a wallet to finish creating your account.";
-        openButton.textContent = currentUser ? ready ? "Account" : "Finish setup" : "Login";
+        openButton.textContent = currentUser ? "Account" : "Login";
+        if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
         if (setupSteps) {
           setupSteps.hidden = ready;
           setupSteps.querySelector("[data-setup-signin]")?.toggleAttribute("data-complete", Boolean(currentUser));
@@ -832,13 +852,27 @@ ${competitionChildBrief(item)}`;
             address.textContent = wallet.label;
             address.title = wallet.address;
             verified.className = "wallet-verified";
-            verified.textContent = "Verified";
+            const connected = connectedAddresses.has(wallet.address);
+            const providerId = wallet.providerId || selectedProviders.get(wallet.address);
+            const providerLabel = ({ "coinbase-embedded": "Coinbase embedded wallet", metamask: "MetaMask", "coinbase-wallet": "Base App / Coinbase Wallet", walletconnect: "Phone wallet", "trust-wallet": "Trust Wallet", injected: "Browser wallet" })[providerId] || "Provider not recorded";
+            verified.textContent = `Verified ownership · ${connected ? "Connected for this session" : "Signing session not connected"}`;
             remove.className = "wallet-remove";
             remove.type = "button";
             remove.dataset.walletUnlink = wallet.address;
             remove.textContent = "Remove";
             remove.setAttribute("aria-label", `Remove linked wallet ${wallet.label}`);
             item.append(address, verified, remove);
+            const metadata = doc.createElement("small");
+            const timestamp = Date.parse(wallet.verifiedAt || wallet.linkedAt);
+            metadata.textContent = `${providerLabel}${providerId ? " (selected provider)" : ""}${wallet.chainIds.includes(8453) ? " · Base ownership link" : ""}${Number.isFinite(timestamp) ? ` · Verified ${new Date(timestamp).toLocaleString()}` : ""} · Network and funding readiness checked when posting.`;
+            item.append(metadata);
+            const use = doc.createElement("button");
+            use.type = "button";
+            use.className = "wallet-remove";
+            use.dataset.walletUse = wallet.address;
+            use.dataset.walletProvider = providerId || "";
+            use.textContent = providerId === "coinbase-embedded" ? "Restore Coinbase signing session" : "Use this wallet";
+            item.append(use);
             if (wallet.address === embeddedAddress) {
               const access = doc.createElement("button");
               access.type = "button";
@@ -929,8 +963,11 @@ ${competitionChildBrief(item)}`;
         if (currentUser?.id !== user?.id) {
           verifiedWallets = [];
           embeddedAddress = null;
+          connectedAddresses.clear();
+          selectedProviders.clear();
         }
         currentUser = user;
+        win.dispatchEvent(new win.CustomEvent("agentbounties:account-session", { detail: { authenticated: Boolean(user), user } }));
         if (form) form.hidden = Boolean(user);
         if (accountDashboard) accountDashboard.hidden = !user;
         renderSetup("checking");
@@ -1036,6 +1073,9 @@ ${competitionChildBrief(item)}`;
 
       openButton.addEventListener("click", (event) => {
         event.preventDefault();
+        if (currentUser && new URLSearchParams(win.location.search).get("postReturn") !== "1") {
+          win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}#account`);
+        }
         setStatus("");
         setWalletStatus("");
         showDialog();
@@ -1049,7 +1089,7 @@ ${competitionChildBrief(item)}`;
       dialog.addEventListener("close", () => {
         openButton.setAttribute("aria-expanded", "false");
         openButton.focus();
-        if (win.location.hash === "#login") win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
+        if (["#login", "#account"].includes(win.location.hash)) win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
       });
       dialog.addEventListener("click", (event) => {
         if (event.target !== dialog) return;
@@ -1071,7 +1111,7 @@ ${competitionChildBrief(item)}`;
         if (!form.reportValidity()) return;
         setStatus("Email and password accounts are not configured yet. Use a connected provider.");
       });
-      const linkWallet = async (resuming = false) => {
+      const linkWallet = async (resuming = false, expectedAddress = null, expectedProvider = null) => {
         if (!currentUser || walletLinkButton.disabled) return;
         const linkingUser = currentUser;
         walletLinkButton.disabled = true;
@@ -1086,6 +1126,9 @@ ${competitionChildBrief(item)}`;
             const accounts = await provider.request({ method: "eth_accounts" });
             if (!accounts?.length) throw { code: 4001 };
             selection = { provider, accounts, kind: "embedded" };
+          } else if (expectedProvider === "coinbase-embedded") {
+            setWalletStatus("Restoring your Coinbase embedded wallet. Use its original sign-in method…");
+            selection = { provider: await win.AgentBountiesWalletLink.loadEmbedded(), kind: "embedded", label: "Coinbase embedded wallet" };
           } else selection = await win.AgentBountiesWalletLink.select();
           const linkProvider = selection.provider;
           if (currentUser !== linkingUser) throw { code: 4001 };
@@ -1096,8 +1139,23 @@ ${competitionChildBrief(item)}`;
           if (currentUser !== linkingUser) throw { code: 4001 };
           const address = String(Array.isArray(accounts) ? accounts[0] : "").trim().toLowerCase();
           if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw { reason: "invalid_wallet_address" };
+          if (expectedAddress && address !== expectedAddress) throw { reason: "wallet_address_mismatch" };
+          connectedAddresses.add(address);
+          const forgetConnection = (accounts) => {
+            if (!Array.isArray(accounts) || !accounts.some(value => String(value).toLowerCase() === address)) {
+              connectedAddresses.delete(address);
+              if (currentUser === linkingUser) renderWallets(verifiedWallets);
+              linkProvider.removeListener?.("accountsChanged", forgetConnection);
+              linkProvider.removeListener?.("disconnect", forgetConnection);
+            }
+          };
+          linkProvider.on?.("accountsChanged", forgetConnection);
+          linkProvider.on?.("disconnect", forgetConnection);
+          const providerId = selection.kind === "embedded" ? "coinbase-embedded" : selection.kind === "phone" ? "walletconnect"
+            : selection.provider?.isMetaMask ? "metamask" : selection.provider?.isCoinbaseWallet ? "coinbase-wallet" : "injected";
+          selectedProviders.set(address, providerId);
           const walletLabel = selection.kind === "phone" ? "Phone wallet"
-            : selection.kind === "embedded" ? "Embedded wallet" : selection.label || "Wallet";
+            : selection.kind === "embedded" ? "Coinbase embedded wallet" : selection.label || "Wallet";
           setWalletStatus(`${walletLabel} ${shortWalletAddress(address)} connected. Preparing the ownership-only confirmation…`);
           if (selection.kind === "embedded") {
             embeddedAddress = address;
@@ -1106,7 +1164,7 @@ ${competitionChildBrief(item)}`;
             setWalletStatus("Your wallet is ready. Confirm ownership to finish linking it to your account.");
           }
           if (verifiedWallets.some((wallet) => wallet.address === address)) {
-            setWalletStatus(`${shortWalletAddress(address)} is already verified and linked. Your wallet is ready.`);
+            setWalletStatus(`${shortWalletAddress(address)} has verified ownership and is connected for this session. Funding readiness is checked separately when posting.`);
             returnToPreparedPost({ walletKind: selection.kind, address });
             return;
           }
@@ -1123,6 +1181,7 @@ ${competitionChildBrief(item)}`;
             challenge_id: challenge.challenge_id,
             address,
             signature,
+            provider_id: providerId,
           });
           if (currentUser !== linkingUser) throw { code: 4001 };
           const linkedWallets = accountDashboardView(verification).wallets;
@@ -1160,6 +1219,8 @@ ${competitionChildBrief(item)}`;
         setWalletStatus(`Phone wallet ${shortWalletAddress(snapshot.address)} connected. Preparing the ownership-only confirmation…`);
       });
       walletList?.addEventListener("click", async (event) => {
+        const use = event.target.closest?.("[data-wallet-use]");
+        if (use) { await linkWallet(false, use.dataset.walletUse, use.dataset.walletProvider); return; }
         if (event.target.closest?.("[data-wallet-finish]")) { await linkWallet(true); return; }
         if (event.target.closest?.("[data-wallet-access]")) { await win.AgentBountiesCoinbaseEmbeddedWallet?.manageAccess(); return; }
         const button = event.target.closest?.("[data-wallet-unlink]");
@@ -1243,14 +1304,14 @@ ${competitionChildBrief(item)}`;
 
       renderProviderAvailability();
       // Interior pages use the same real login entry point, without duplicating auth.
-      const openLoginHash = () => { if (win.location.hash === "#login") openButton.click(); };
+      const openLoginHash = () => { if (["#login", "#account"].includes(win.location.hash)) openButton.click(); };
       win.addEventListener("hashchange", openLoginHash);
       openLoginHash();
       const authParams = new URLSearchParams(win.location.search);
       const authResult = authParams.get("auth");
       loadSession().then(async () => {
         if (currentUser && win.AgentBountiesWalletLink?.hasPending(currentUser.id)) await linkWallet(true);
-        if (returnToPreparedPost()) return;
+        if ((authParams.get("postReturn") === "1" || authResult === "success") && win.location.hash !== "#account" && returnToPreparedPost()) return;
         if (authResult !== "success" && authResult !== "error") return;
         setStatus(authResult === "success" && accountStatus !== "ready"
           ? "You’re signed in. Link a wallet to finish your account."

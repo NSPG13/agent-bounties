@@ -53,11 +53,11 @@ async function openAccount(page) {
   await accountLink.click();
 }
 
-async function account({ installed = true, linked = false, linkedAddress = ADDRESS, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false, postTarget = null, delayedPhoneSign = false, expectAutoReturn = false } = {}) {
+async function account({ installed = true, linked = false, linkedAddress = ADDRESS, linkedProvider = null, startupUnavailable = false, mobile = false, adapter = false, pending = null, failVerify = false, failRefresh = false, phone = false, invalidVerify = false, unavailable = false, legacy = false, postTarget = null, postReturnRoute = false, delayedPhoneSign = false, expectAutoReturn = false } = {}) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 } });
   const page = await context.newPage();
   const proofs = [], errors = [];
-  let wallets = linked ? [{ address: linkedAddress }] : [];
+  let wallets = linked ? [{ address: linkedAddress, provider_id: linkedProvider }] : [];
   let rejectVerification = failVerify;
   const network = { unavailable };
   page.on("pageerror", (error) => errors.push(error.message));
@@ -106,6 +106,7 @@ async function account({ installed = true, linked = false, linkedAddress = ADDRE
       return request.method === "eth_requestAccounts" ? [address] : "0x" + "ab".repeat(65);
     } };
   }, { installed, address: ADDRESS });
+  if (startupUnavailable) await page.addInitScript(() => { window.testCdpUnavailable = true; });
   if (phone) await page.route("**/phone-wallet.js?*", route => route.fulfill({contentType:"text/javascript",body:`
     window.AgentBountiesPhoneWallet = { state: () => ({available:true}), provider: {request: async request => {
       window.walletTestCalls.push({wallet:'phone', ...request});
@@ -141,7 +142,7 @@ async function account({ installed = true, linked = false, linkedAddress = ADDRE
       return ["eth_accounts", "eth_requestAccounts"].includes(request.method) ? ["${EMBEDDED}"] : "0x" + "cd".repeat(65);
     } } };`,
   }));
-  await page.goto(origin);
+  await page.goto(postReturnRoute ? `${origin}/?postReturn=1#login` : origin);
   if (expectAutoReturn) {
     await page.waitForURL(postTarget);
     return { context, page, proofs, errors, link: null, network };
@@ -176,7 +177,7 @@ for (const legacy of [false, true]) for (const linked of [false, true]) test(`ph
   try {
     assert.equal(await page.locator('.ab-phone-launcher').count(),0);
     await link.click();
-    const phone = page.getByRole('button',{name:'Use a phone wallet Scan a QR code with your wallet app.'});
+    const phone = page.getByRole('button',{name:/^Use a phone wallet Open your mobile wallet/});
     assert.equal(await phone.count(),1);
     assert.deepEqual(await page.evaluate(()=>window.walletTestCalls),[]);
     await evidence(page,'phone-chooser-mobile');
@@ -249,11 +250,12 @@ test("phone ownership feedback returns to the exact prepared bounty without a pa
     mobile: true,
     phone: true,
     postTarget: target,
+    postReturnRoute: true,
     delayedPhoneSign: true,
   });
   try {
     await link.click();
-    await page.getByRole("button", { name: "Use a phone wallet Scan a QR code with your wallet app." }).click();
+    await page.getByRole("button", { name: /^Use a phone wallet Open your mobile wallet/ }).click();
     await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("connected. Review the ownership-only message"));
     assert.match(await page.locator("[data-wallet-status]").innerText(), /Phone wallet 0x222222…222222 connected/);
     assert.deepEqual((await page.evaluate(() => window.walletTestCalls)).map(call => call.method), ["eth_requestAccounts", "personal_sign"]);
@@ -342,7 +344,7 @@ for (const installed of [true, false]) {
         await link.click();
         assert.equal(await page.getByRole("dialog", { name: "Choose a wallet" }).isVisible(), true);
         assert.deepEqual(await page.evaluate(() => window.walletTestCalls), []);
-        await page.getByRole("button", { name: "I don’t have a wallet — create one", exact: false }).click();
+        await page.getByRole("button", { name: "Use or recover Coinbase embedded wallet", exact: false }).click();
         await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("verified and linked"));
         const calls = await page.evaluate(() => window.walletTestCalls);
         assert.deepEqual(calls.map(({ wallet, method }) => [wallet, method]), [["embedded", "eth_requestAccounts"], ["embedded", "personal_sign"]]);
@@ -384,7 +386,7 @@ for (const redirect of [false, true]) {
     const {context,page,link,proofs,errors} = await account({adapter:true,mobile:redirect});
     try {
       await link.click();
-      await page.getByRole('button',{name:'I don’t have a wallet — create one',exact:false}).click();
+      await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
       await page.getByRole('button',{name:redirect?'Continue with Google':'Complete email verification',exact:true}).click();
       const confirm = page.getByRole('dialog',{name:'Confirm wallet ownership',exact:true});
       await confirm.waitFor();
@@ -407,8 +409,8 @@ for (const redirect of [false, true]) {
       assert.equal(await page.evaluate(()=>sessionStorage.getItem('agentbounties:pending-embedded-account-link')),null);
       await evidence(page,redirect?'linked-mobile':'linked-desktop');
       await link.click();
-      await page.getByRole('button',{name:'I don’t have a wallet — create one',exact:false}).click();
-      await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('already verified and linked'));
+      await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+      await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('verified ownership and is connected'));
       assert.equal(proofs.length,2);
       await page.reload();
       await openAccount(page);
@@ -423,7 +425,7 @@ test('cancelled ownership review retains the wallet and retries without another 
   const {context,page,link,proofs,errors} = await account({adapter:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'I don’t have a wallet — create one',exact:false}).click();
+    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
     await page.getByRole('button',{name:'Complete email verification'}).click();
     await page.getByRole('button',{name:'Not now',exact:true}).click();
     await page.getByRole('button',{name:'Finish linking',exact:true}).click();
@@ -442,7 +444,7 @@ test('verification failure never marks the wallet verified and can be retried', 
   const {context,page,link,errors} = await account({adapter:true,failVerify:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'I don’t have a wallet — create one',exact:false}).click();
+    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
     await page.getByRole('button',{name:'Complete email verification'}).click();
     await page.getByRole('button',{name:'Verify and link wallet',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('not finished'));
@@ -458,7 +460,7 @@ test('confirmed wallet remains visible when activity refresh fails', async () =>
   const {context,page,link} = await account({failRefresh:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'I don’t have a wallet — create one',exact:false}).click();
+    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
     await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('verified and linked'));
     assert.equal(await page.locator('[data-wallet-list] code').getAttribute('title'),EMBEDDED);
     assert.match(await page.locator('[data-wallet-list]').textContent(),/Verified/);
@@ -476,3 +478,54 @@ for (const pending of [{userId:'another-member',startedAt:Date.now()},{userId:'q
     } finally { await context.close(); }
   });
 }
+
+test("Coinbase configuration failure remains visible with retry and another-wallet route", async () => {
+  const { context, page, link, proofs, errors } = await account({ adapter: true, startupUnavailable: true });
+  try {
+    await link.click();
+    const recovery = page.getByRole("button", { name: /^Use or recover Coinbase embedded wallet/ });
+    await recovery.click();
+    await page.waitForFunction(() => document.querySelector(".wallet-link-status").textContent.includes("configuration could not load"));
+    assert.equal(await recovery.isEnabled(), true);
+    assert.equal(await page.getByRole("dialog", { name: "Choose a wallet" }).isVisible(), true);
+    assert.doesNotMatch(await page.locator(".wallet-link-status").innerText(), /private@example/);
+    assert.deepEqual(proofs, []);
+    assert.deepEqual(await page.evaluate(() => window.walletTestCalls), []);
+    await recovery.click();
+    await page.waitForFunction(() => window.AgentBountiesCoinbaseEmbeddedWallet.readiness().state === "paused");
+    await recovery.click();
+    await page.waitForFunction(() => document.querySelector(".wallet-link-status").textContent.includes("Retry in a minute"));
+    await page.getByRole("button", { name: "MetaMask Choose an address in this wallet." }).click();
+    await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("verified and linked"));
+    assert.deepEqual((await page.evaluate(() => window.walletTestCalls)).map(call => call.wallet), ["MetaMask", "MetaMask"]);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test("restoring a selected linked wallet rejects another address before ownership or payment", async () => {
+  const { context, page, proofs } = await account({ linked: true, linkedProvider: "coinbase-embedded", linkedAddress: ADDRESS });
+  try {
+    assert.match(await page.locator("[data-wallet-list]").innerText(), /Signing session not connected/);
+    await page.getByRole("button", { name: "Restore Coinbase signing session" }).click();
+    await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("different address"));
+    assert.deepEqual(proofs, []);
+    assert.deepEqual((await page.evaluate(() => window.walletTestCalls)).map(call => call.method), ["eth_requestAccounts"]);
+    assert.match(await page.locator("[data-wallet-list]").innerText(), /Signing session not connected/);
+  } finally { await context.close(); }
+});
+
+test("Account stays separate from a saved posting return and restores only the matching signing address", async () => {
+  const target = preparedPostTarget();
+  const { context, page, proofs } = await account({ linked: true, linkedProvider: "coinbase-embedded", linkedAddress: EMBEDDED, postTarget: target });
+  try {
+    await page.evaluate(() => { location.hash = "account"; });
+    assert.equal(await page.getByRole("link", { name: "Account", exact: true }).getAttribute("data-authenticated"), "true");
+    await page.getByRole("button", { name: "Restore Coinbase signing session" }).click();
+    await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("connected for this session"));
+    assert.match(page.url(), /#account$/);
+    assert.deepEqual(proofs, []);
+    assert.match(await page.locator("[data-wallet-list]").innerText(), /Connected for this session/);
+    await page.getByRole("button", { name: "Return to bounty", exact: true }).click();
+    await page.waitForURL(target);
+  } finally { await context.close(); }
+});

@@ -1,14 +1,16 @@
-# Phone-wallet QR pairing
+# Phone-wallet connection
 
 Agent Bounties can pair a WalletConnect-compatible phone wallet from an internal
-browser without an extension. Choose **Connect phone wallet**, scan with the
-wallet app, check `agentbounties.app`, and approve the connection. The same
+browser without an extension. Choose **Connect phone wallet**. On a phone,
+choose **Open in Trust Wallet** or **Open in MetaMask**; on desktop, scan the QR
+with a wallet on a second device. Check `agentbounties.app` and approve the
+connection. The same
 approved Base session can be used on the marketplace board, posting, participation, competition proof,
 onramp and account-linking pages. Each signature and transaction remains a
 separate wallet approval. Connecting does not link an account or authorize money.
 
 WebMCP exposes `agent_bounties_open_phone_wallet` and
-`agent_bounties_get_phone_wallet_status`. Opening prepares the QR; only an
+`agent_bounties_get_phone_wallet_status`. Opening prepares the connection; only an
 approved, unexpired Base session reports `connected`. These tools preserve the
 current journey and return no pairing URI, session keys or signatures. The
 assistant can use the returned public address to prepare the existing review.
@@ -33,11 +35,14 @@ events alone prove payment. WebMCP receives no signing or spending authority.
 The maintainer requested this QR feature and deployment using admin bypass.
 That release authorization does not extend to a real wallet approval or payment.
 
-1. A small shared EIP-6963 facade advertises **Phone wallet (QR)**. It does not
+1. A small shared EIP-6963 facade advertises **Phone wallet (app or QR)**. It does not
    replace an injected browser wallet or load a relay on initial page view.
 2. Opening QR pairing lazily loads the pinned, first-party SDK bundle. Reown
    relays encrypted WalletConnect messages between this browser and the wallet.
-   The browser displays the pairing URI only as a locally generated QR image.
+   The browser displays the pairing URI only as a locally generated QR image,
+   or passes it directly to the selected wallet-owned universal link after a
+   human click. Buttons keep the URI in a closure, not in DOM attributes or tool
+   results. Both actions use the same pending connection.
    The public project ID is an origin-allowlisted service identifier, not a key.
 3. The session requests Base and bounded wallet method permissions, not a
    delegate, agent budget, token allowance or standing signing authority. The
@@ -46,7 +51,7 @@ That release authorization does not extend to a real wallet approval or payment.
 4. The SDK persists session transport material in browser storage; a separate
    opaque storage prefix selects the approved session across pages. WebMCP sees
    only a public account, chain, status and next step. No raw SDK error, URI or
-   session object enters tool results, page URLs or analytics. Optional SDK
+   session object enters tool results, first-party page URLs or analytics. Optional SDK
    telemetry and logging are disabled. Privacy policy describes the relay and
    browser retention. No embedded wallet, exchange or custody feature is loaded.
 
@@ -57,6 +62,39 @@ The dependency lockfile and deterministic bundle check bound shipped SDK code.
 The unused AppKit modal is excluded at build time, including unrelated wallet
 and exchange adapters. No CDN runtime dependency is used.
 
+## Same-device handoff
+
+Mobile detection chooses native-app buttons by default; the user can switch
+between app buttons and second-device QR without creating another session.
+App buttons use only the reviewed `https://link.trustwallet.com/wc` and
+`https://link.metamask.io/wc` routes with one URL-encoded `uri` parameter. They
+open synchronously from a click with `noopener,noreferrer`, preserving the
+first-party page and its saved operation. No clipboard export or automatic
+navigation occurs. Returning to the page observes the existing connection;
+it never repeats a signature or transaction.
+
+Route evidence:
+
+- [Trust Wallet deep links](https://developer.trustwallet.com/developer/develop-for-trust/deeplinking)
+  documents the WalletConnect v2 universal-link route.
+- [MetaMask universal-link handler](https://github.com/MetaMask/metamask-mobile/blob/main/app/core/DeeplinkManager/handlers/handleUniversalLink.ts)
+  accepts the `wc` route and URI, and
+  [MetaMask constants](https://github.com/MetaMask/metamask-mobile/blob/main/app/core/AppConstants.ts)
+  define `link.metamask.io` as its universal-link host.
+
+These are external phone wallets. Coinbase embedded wallet recovery uses its
+email/social authentication route, and Base App/Coinbase Wallet is a separate
+product; this transport does not invent an unsupported Base App deep link.
+In a streamed cloud browser, app buttons apply to the device running that
+browser. Use the authenticated continuation in the phone's regular browser for
+same-phone handoff. Some protected browsers block screenshots; the app explains
+this conditionally and never recommends screenshot-based QR scanning.
+
+The phone must have the selected wallet and a browser permitted to open it.
+An opened link alone proves neither app launch nor connection. Only a valid,
+approved, unexpired Base session makes `connected` true. Real-device approval
+is a separate canary; offline fixtures do not prove device interoperability.
+
 ## Failure and recovery behavior
 
 - Cancel, escape, page exit, rejection, timeout and invalid Base account erase
@@ -66,6 +104,12 @@ and exchange adapters. No CDN runtime dependency is used.
   abort method is not relied on. If the browser closes before cleanup completes,
   revoke any leftover session in the phone wallet. A cancelled session prefix is
   never selected for later restoration.
+- Relay preparation has a 20-second timeout, and pairing shows a live countdown
+  capped at five minutes and any earlier SDK expiry. Public status exposes only
+  the expiry timestamp and seconds remaining. Expired links fail closed before
+  app navigation; renewal is an explicit click with isolated SDK state. There is
+  no automatic retry loop. Late QR generation and old approvals cannot replace
+  a newer attempt.
 - Reopening an approved session does not ask for another connection approval.
   It never replays a signature or transaction. Account changes and revocation
   are read from the approved session; existing reviews recheck the signer.
