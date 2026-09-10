@@ -46,9 +46,24 @@ after(async () => {
   if (server) await new Promise((resolve) => server.close(resolve));
 });
 
-async function openAccount(page) {
+async function openAccount(page, { restoring = false } = {}) {
+  const dialog = page.locator("[data-auth-dialog][open]");
+  // Pending OAuth recovery opens the account after loadSession finishes.
+  // Wait for that expected transition instead of racing its modal backdrop.
+  if (restoring) {
+    await dialog.waitFor({ state: "visible" });
+    assert.equal(await dialog.getAttribute("data-view"), "account");
+    assert.equal(await dialog.getAttribute("data-account-status"), "ready");
+    return;
+  }
   // Reloading #account restores the dialog; do not click through its backdrop.
-  if (await page.locator("[data-auth-dialog][open]").count()) return;
+  if (new URL(page.url()).hash === "#account") await dialog.waitFor({ state: "visible" });
+  if (await dialog.isVisible()) {
+    if (await dialog.getAttribute("data-account-status") === "ready") {
+      assert.equal(await dialog.getAttribute("data-view"), "account");
+    }
+    return;
+  }
   const accountLink = page.getByRole("link", { name: /^(Account|Finish setup)$/, exact: true });
   const menu = page.getByRole("button", { name: "Menu", exact: false });
   if (await menu.isVisible() && await menu.getAttribute("aria-expanded") !== "true") await menu.click();
@@ -149,7 +164,7 @@ async function account({ installed = true, linked = false, linkedAddress = ADDRE
     await page.waitForURL(postTarget);
     return { context, page, proofs, errors, link: null, network };
   }
-  await openAccount(page);
+  await openAccount(page, { restoring: Boolean(pending) });
   const link = page.locator("[data-wallet-link]");
   await page.waitForFunction(() => document.querySelector("[data-wallet-list]").textContent !== "Checking verified wallets…");
   return { context, page, proofs, errors, link, network };
