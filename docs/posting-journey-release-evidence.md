@@ -5,6 +5,7 @@ journey backend and MCP descriptor changes. The complete guard input set contain
 164 files: the Cargo workspace, lockfile, configuration and local crates, plus
 literal Rust compile-time includes. The reviewed changed inputs are
 `Cargo.lock`, `crates/api/src/site_auth.rs`, `crates/db/Cargo.toml`,
+`crates/cli/src/main.rs`,
 `crates/db/src/lib.rs`, `crates/db/src/site_posting_drafts.rs`,
 `crates/mcp-server/src/chatgpt_app.rs`, `crates/mcp-server/src/main.rs`,
 `crates/mcp-server/fixtures/public-mcp-contract-v1.json`,
@@ -16,9 +17,16 @@ versions are unchanged. The cached, checksum-locked `serde_jcs 0.2.0` manifest
 enables `serde_json`'s `float_roundtrip` feature through its dependency, without
 a workspace manifest feature change.
 
+The CLI documentation validator now reads routes from the real `site_auth.rs`
+module, including session and posting-draft routes. Bounded external-PR source
+staging and its exact source-list fixture include the same module; existing
+size, encoding, symlink and root-containment checks remain in force.
+All eight staging tests pass. The compiled CLI documentation check passes
+against 157 documents, 339 routes and 129 MCP names, and both CLI demos pass.
+
 The worker-build digest changes from
 `41c015895864373c73125be5ba1fc87576270128ebde84f7a93bf7898754f9d2` to
-`46d909540dc46a34d2de4ac4b820683b8854c941ac69e43d3c529e2b2bf80902`.
+`25f338acf74ba2a612cccdf5dc4e167ac3d0e929f2d0ad1d6850ca701f172821`.
 Production workflow edits refresh the eight expected worker-build digests in
 the runner, signer and reusable signing workflows. The signing-runtime digest remains
 `469bf155b1bbc5f19ee91ee41172e113cd5baea6f9d1f2d574d88672b1999ddc`;
@@ -30,7 +38,7 @@ worker-build pin, its three derived fixture workflow hashes, and six rehearsal
 pin literals, following the prior refresh in commit `a7c2c8e` (PR #1360).
 Its exact benchmark directory digest changes from
 `sha256:250a62f546a538350ce6f7d00040286b260e7361270fd5fe3ee35a628997a18f`
-to `sha256:eeb4a0a9cf279da44958db261c147eee69d31e2aa5d1f1e4107b905739429d67`.
+to `sha256:b7b7a4850daa40c2537c55a4e80136eb7c63a61444e28d384bb6658e1621cf82`.
 The activation record explicitly classifies this older precommit as
 non-authoritative for the separate immutable 900-second catalog tuple. That
 catalog, all historical benchmark bindings, checker logic, runtime hashes,

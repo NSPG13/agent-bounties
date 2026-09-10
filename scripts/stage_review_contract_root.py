@@ -16,6 +16,7 @@ REQUIRED_SOURCES = (
     Path("crates/api/src/discoverability.rs"),
     Path("crates/api/src/distribution.rs"),
     Path("crates/api/src/open_competition_v2_api.rs"),
+    Path("crates/api/src/site_auth.rs"),
     Path("crates/mcp-server/src/main.rs"),
     Path("crates/mcp-server/fixtures/tool-registry.json"),
 )
@@ -24,6 +25,7 @@ OPTIONAL_BASE_SOURCES = frozenset(
         Path("crates/api/src/discoverability.rs"),
         Path("crates/api/src/distribution.rs"),
         Path("crates/api/src/open_competition_v2_api.rs"),
+        Path("crates/api/src/site_auth.rs"),
     }
 )
 MAX_SOURCE_BYTES = 5 * 1024 * 1024

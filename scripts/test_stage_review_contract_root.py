@@ -21,6 +21,7 @@ class StageReviewContractRootTests(unittest.TestCase):
                 Path("crates/api/src/discoverability.rs"),
                 Path("crates/api/src/distribution.rs"),
                 Path("crates/api/src/open_competition_v2_api.rs"),
+                Path("crates/api/src/site_auth.rs"),
                 Path("crates/mcp-server/src/main.rs"),
                 Path("crates/mcp-server/fixtures/tool-registry.json"),
             ),
