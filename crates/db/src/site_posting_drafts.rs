@@ -263,12 +263,13 @@ mod tests {
             Some(saved.draft_hash.as_str())
         );
         let changed = json!({"goal":"Other terms"});
-        assert!(matches!(
-            store
-                .save_site_posting_draft(&owner, operation, &changed, 1, None, &recovery)
-                .await,
-            Err(PostingDraftError::Conflict)
-        ));
+        let stale_update = store
+            .save_site_posting_draft(&owner, operation, &changed, 1, None, &recovery)
+            .await;
+        assert!(
+            matches!(stale_update, Err(PostingDraftError::Conflict)),
+            "unexpected stale update result: {stale_update:?}"
+        );
         assert!(matches!(
             store
                 .save_site_posting_draft(

@@ -47,6 +47,8 @@ after(async () => {
 });
 
 async function openAccount(page) {
+  // Reloading #account restores the dialog; do not click through its backdrop.
+  if (await page.locator("[data-auth-dialog][open]").count()) return;
   const accountLink = page.getByRole("link", { name: /^(Account|Finish setup)$/, exact: true });
   const menu = page.getByRole("button", { name: "Menu", exact: false });
   if (await menu.isVisible() && await menu.getAttribute("aria-expanded") !== "true") await menu.click();
@@ -519,7 +521,7 @@ test("Account stays separate from a saved posting return and restores only the m
   const { context, page, proofs } = await account({ linked: true, linkedProvider: "coinbase-embedded", linkedAddress: EMBEDDED, postTarget: target });
   try {
     await page.evaluate(() => { location.hash = "account"; });
-    assert.equal(await page.getByRole("link", { name: "Account", exact: true }).getAttribute("data-authenticated"), "true");
+    assert.equal(await page.locator(".ab-site-login").getAttribute("data-authenticated"), "true");
     await page.getByRole("button", { name: "Restore Coinbase signing session" }).click();
     await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("connected for this session"));
     assert.match(page.url(), /#account$/);

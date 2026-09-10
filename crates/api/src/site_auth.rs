@@ -187,8 +187,18 @@ impl SiteAuthService {
                 store,
                 client,
                 wallet_challenges: Mutex::new(HashMap::new()),
-                posting_drafts_enabled: matches!(env::var("SITE_POSTING_DRAFTS_ENABLED").as_deref(), Ok("true" | "1")),
-                posting_drafts_canary_account_id: env::var("SITE_POSTING_DRAFTS_CANARY_ACCOUNT_ID").ok().filter(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())),
+                posting_drafts_enabled: matches!(
+                    env::var("SITE_POSTING_DRAFTS_ENABLED").as_deref(),
+                    Ok("true" | "1")
+                ),
+                posting_drafts_canary_account_id: env::var("SITE_POSTING_DRAFTS_CANARY_ACCOUNT_ID")
+                    .ok()
+                    .filter(|id| {
+                        id.len() == 64
+                            && id
+                                .bytes()
+                                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                    }),
             }),
         })
     }
@@ -198,7 +208,8 @@ impl SiteAuthService {
     }
 
     fn posting_drafts_enabled_for(&self, account_id: &str) -> bool {
-        self.inner.posting_drafts_enabled || self.inner.posting_drafts_canary_account_id.as_deref() == Some(account_id)
+        self.inner.posting_drafts_enabled
+            || self.inner.posting_drafts_canary_account_id.as_deref() == Some(account_id)
     }
 
     fn configured_providers(&self) -> BTreeMap<String, bool> {
@@ -289,7 +300,12 @@ async fn get_posting_draft(
     else {
         return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
     };
-    if !service.posting_drafts_enabled_for(&account_id) { return error_json(StatusCode::SERVICE_UNAVAILABLE, "posting_drafts_not_enabled"); }
+    if !service.posting_drafts_enabled_for(&account_id) {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "posting_drafts_not_enabled",
+        );
+    }
     let Some(store) = service.inner.store.as_ref() else {
         return error_json(StatusCode::SERVICE_UNAVAILABLE, "draft_storage_unavailable");
     };
@@ -318,7 +334,12 @@ async fn save_posting_draft(
     else {
         return error_json(StatusCode::UNAUTHORIZED, "authentication_required");
     };
-    if !service.posting_drafts_enabled_for(&account_id) { return error_json(StatusCode::SERVICE_UNAVAILABLE, "posting_drafts_not_enabled"); }
+    if !service.posting_drafts_enabled_for(&account_id) {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "posting_drafts_not_enabled",
+        );
+    }
     if !valid_posting_draft_envelope(&request.draft, operation_id)
         || !valid_posting_recovery(&request.recovery_state)
     {
@@ -1956,7 +1977,10 @@ mod tests {
         let envelope = json!({"schema":"agent-bounties/posting-draft-v1", "id":operation, "role":"post", "goal":"Draft", "preferences":"", "brief":null, "draft":null, "draft_stale":false});
         assert!(valid_posting_draft_envelope(&envelope, operation));
         assert!(!valid_posting_draft_envelope(&envelope, Uuid::new_v4()));
-        assert!(!valid_posting_draft_envelope(&json!({"title":"no envelope"}), operation));
+        assert!(!valid_posting_draft_envelope(
+            &json!({"title":"no envelope"}),
+            operation
+        ));
         assert!(valid_posting_draft_payload(
             &json!({"draft": {
                 "review_mode":"creator", "delivery_deadline":"2026-09-10T21:00:00-06:00",
