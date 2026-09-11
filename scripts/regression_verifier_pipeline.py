@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -523,21 +524,44 @@ def command_run(args: argparse.Namespace) -> None:
     selected = selected_jobs(jobs, verifiers, args.max_jobs)
     args.output.mkdir(parents=True, exist_ok=True)
     candidates = []
+    failures: list[dict[str, str]] = []
     for job in selected:
         job_id = str(job.get("job_id", ""))
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", job_id):
             raise PipelineError("verification job id is invalid")
-        with tempfile.TemporaryDirectory(prefix="agent-bounties-regression-") as temporary:
-            candidate = run_job(
-                args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
+        try:
+            with tempfile.TemporaryDirectory(prefix="agent-bounties-regression-") as temporary:
+                candidate = run_job(
+                    args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
+                )
+            name = f"candidate-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
+            write_json(args.output / name, candidate)
+            candidates.append({"job_id": job_id, "file": name})
+        except PipelineError as error:
+            # Keep processing later jobs. One poison submission must not block
+            # the whole scheduled batch from producing candidates.
+            failures.append({"job_id": job_id, "error": str(error)})
+            print(
+                f"regression verifier skipped job {job_id}: {error}",
+                file=sys.stderr,
             )
-        name = f"candidate-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
-        write_json(args.output / name, candidate)
-        candidates.append({"job_id": job_id, "file": name})
     write_json(
         args.output / "manifest.json",
-        {"schema": MANIFEST_SCHEMA, "network": args.network, "candidates": candidates},
+        {
+            "schema": MANIFEST_SCHEMA,
+            "network": args.network,
+            "candidates": candidates,
+            "failures": failures,
+        },
     )
+    if selected and not candidates:
+        detail = "; ".join(
+            f"{item['job_id']}: {item['error']}" for item in failures[:5]
+        )
+        raise PipelineError(
+            "regression verifier produced no candidates"
+            + (f"; {detail}" if detail else "")
+        )
 
 
 def current_job(api_base: str, network: str, verifier: str, job_id: str) -> dict[str, Any]:

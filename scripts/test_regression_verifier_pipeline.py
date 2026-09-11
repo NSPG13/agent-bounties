@@ -540,6 +540,60 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             ["single", "legacy"],
         )
 
+    def test_command_run_continues_after_poison_job(self) -> None:
+        configured = ["0x" + "1" * 40, "0x" + "2" * 40]
+        selected = [
+            {
+                "job_id": "poison",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured[:1],
+                "threshold": 1,
+            },
+            {
+                "job_id": "good",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured,
+                "threshold": 2,
+            },
+        ]
+
+        def fake_run_job(
+            worker: Path, staging: Path, job: dict, temporary: Path
+        ) -> dict:
+            del worker, staging, temporary
+            if job["job_id"] == "poison":
+                raise pipeline.PipelineError(
+                    "downloaded source does not match submission evidence"
+                )
+            return {
+                "schema": pipeline.CANDIDATE_SCHEMA,
+                "job": job,
+                "outcome": {"passed": True},
+                "runner_revision": "test",
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            args = mock.Mock(
+                verifier=configured,
+                api_base="https://api.example.test",
+                network="base-mainnet",
+                max_jobs=5,
+                output=output,
+                worker=Path("worker"),
+                staging=Path(temporary) / "staging",
+            )
+            with (
+                mock.patch.object(pipeline, "verification_jobs", return_value=selected),
+                mock.patch.object(pipeline, "selected_jobs", return_value=selected),
+                mock.patch.object(pipeline, "run_job", side_effect=fake_run_job),
+            ):
+                pipeline.command_run(args)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["job_id"] for item in manifest["candidates"]], ["good"])
+            self.assertEqual(manifest["failures"][0]["job_id"], "poison")
+            self.assertTrue((output / manifest["candidates"][0]["file"]).is_file())
+
     def test_regression_job_rejects_zero_or_ambiguous_verifiers(self) -> None:
         base = {
             "verification_mode": "signed_quorum",
