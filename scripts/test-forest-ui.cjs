@@ -76,7 +76,7 @@ async function main() {
       assert.ok(await page.locator(".ab-metrics").evaluate(el => el.scrollWidth <= el.clientWidth), "metrics never need horizontal scrolling");
       for(const selector of [".ab-how-it-works", ".ab-site-board"]) await fits(page,selector);
       assert.equal(await page.locator(".ab-orbit-ring, .ab-orbit-sphere").count(),0);
-      assert.match(await page.locator("#manifesto-title").innerText(),/If you could define.*done.*for the task,/s);
+      assert.match(await page.locator("#manifesto-title").innerText(),/If you can define.*done.*make it a bounty/s);
       assert.equal(await page.locator(".ab-ticker").count(),1,"one row of use cases");
       await capture(page,`home-${width}`);
       await page.emulateMedia({reducedMotion:"no-preference"});
