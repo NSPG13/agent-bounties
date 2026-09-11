@@ -18,6 +18,14 @@ both committed verifier paths need review and a successful rehearsal before
 its readiness can change. A UI label, pull request, fixture or maintainer
 comment cannot approve the benchmark or replace the committed policy.
 
+A maintainer negative control against the exact pinned source and container
+accepted a 33-byte PNG header with no image data and invented browser metadata.
+This demonstrates a validation gap, not a Safari capture. Keep this benchmark
+unapproved. A replacement must decode the full image, reject malformed input,
+and state whether browser/run provenance is independently verified or merely
+reported. Review and rehearse replacement terms before offering new work;
+already-funded immutable terms must not silently inherit a different checker.
+
 ## Child-bounty submissions
 
 This applies to #1354–#1357, #1408 and #1410–#1412, and to similar submissions.
@@ -99,3 +107,21 @@ restricted canonical JSON domain, eight outcomes and adapter trust boundary.
 These are application test vectors for the x402 discussions, not an adopted
 extension or real chain receipts. Funding, verified delivery, outcome
 settlement and completeness must remain independently assessed.
+
+## Reviewed source fingerprint
+
+The Rust changes in #1418 change the worker build fingerprint from
+`25f338acf74ba2a612cccdf5dc4e167ac3d0e929f2d0ad1d6850ca701f172821` to
+`efda90427f4a1c0a99105789ac1aef6bab0152237378902f65768908636bf228`.
+The previous value was reproduced from an isolated archive of main. The four
+changed Rust files contain read-only projections, an advisory checklist and
+tests; they do not change the signing pipeline or committed verifier policy.
+The three workflow pins and current watchdog rehearsal/checker fingerprints
+are refreshed together after review. Previously committed benchmark tuples
+remain pinned to their original source.
+
+The signing runtime remains
+`469bf155b1bbc5f19ee91ee41172e113cd5baea6f9d1f2d574d88672b1999ddc`.
+The pipeline's 28 tests, source guard's 12 tests and the worker/verifier SDK's
+64 non-ignored tests pass. Neither a fingerprint refresh nor an offline
+rehearsal authorizes new signing identities, benchmark approval or payment.
