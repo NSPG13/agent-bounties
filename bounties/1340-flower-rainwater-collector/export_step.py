@@ -113,8 +113,7 @@ def main():
         from OCP.TopoDS import TopoDS_Shape
         from OCP import TopoDS
     except ImportError as exc:
-        print(f"SKIP  OpenCascade bindings not installed ({exc}); pip install cadquery-ocp")
-        return 0
+        return fail(f"OpenCascade bindings not installed ({exc}); pip install cadquery-ocp")
 
     if not args.stl.exists():
         return fail(f"{args.stl} not found - run test_geometry.py --render first")
