@@ -6,9 +6,10 @@ const { contract, item, opportunity } = require("./fixtures/funded-bounty.cjs");
 const site = path.resolve(__dirname, "../site");
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".webp": "image/webp" };
 const server = http.createServer((req, res) => {
-  const file = path.resolve(site, "." + decodeURIComponent(new URL(req.url, "http://localhost").pathname));
-  if (!file.startsWith(site + path.sep)) return res.writeHead(403).end();
+  let file = path.resolve(site, "." + decodeURIComponent(new URL(req.url, "http://localhost").pathname));
+  if (file !== site && !file.startsWith(site + path.sep)) return res.writeHead(403).end();
   try {
+    if (fs.statSync(file).isDirectory()) file = path.join(file, "index.html");
     const body = fs.readFileSync(file);
     res.writeHead(200, { "Content-Type": mime[path.extname(file)] || "application/octet-stream" }).end(body);
   }
@@ -103,7 +104,9 @@ async function main() {
           window.AgentBountiesWorkflow.createClient(window).start({ role: "post", goal: "Previous completed task" });
         }, { contract, id: item.bounty_id });
         await page.locator(".feed-heading [data-new-bounty]").click();
-        await page.waitForURL("**/post.html");
+        await page.waitForURL("**/#post-a-bounty");
+        await page.locator("[data-bounty-launcher][open]").waitFor();
+        await page.goto(`${origin}/post.html`);
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createPostingJournal(window).load()), null);
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().goal), "");
         await page.evaluate(({ contract, id }) => {
@@ -113,7 +116,9 @@ async function main() {
         }, { contract, id: item.bounty_id });
         await page.goto(`${origin}/earn.html`);
         await page.locator(".feed-heading [data-new-bounty]").click();
-        await page.waitForURL("**/post.html");
+        await page.waitForURL("**/#post-a-bounty");
+        await page.locator("[data-bounty-launcher][open]").waitFor();
+        await page.goto(`${origin}/post.html`);
         await page.locator("[data-recorded-posting]").waitFor();
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createPostingJournal(window).load().phase), "authorized");
         assert.equal(await page.evaluate(() => window.AgentBountiesWorkflow.createClient(window).load().goal), "Pending original task");

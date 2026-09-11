@@ -2,8 +2,8 @@
 
 Implemented in the `codex/forest-ui-redesign` worktree from remote main
 `8848f747224135dd135151c37152f282ee1e7c21`, including the September 10 durable
-posting-draft, exact-approval, and wallet-continuity changes. This is a local
-preview and reviewable implementation. Nothing has been deployed.
+posting-draft, exact-approval, and wallet-continuity changes. The forest redesign
+and video shipped in PR #1413, release `763a140a`.
 
 ## Review locally
 
@@ -14,7 +14,7 @@ preview and reviewable implementation. Nothing has been deployed.
 The comparison includes the homepage, posting page, and leaderboard at 390,
 768, 1280, and 1440 pixels, all at 900px viewport height. Stable screenshots use
 reduced motion. Additional captures cover light mode, sign-in, provider-based
-registration, the existing recovery notice, wallet linking, account activity,
+registration, wallet linking, account activity,
 proposal review, and funding. Populated leaderboard and account screenshots
 use isolated fixtures, not real customer data or payment evidence.
 
@@ -28,8 +28,15 @@ python3 -m http.server 8787 --bind 127.0.0.1 --directory site
 Public metrics and leaderboard data are read from the existing APIs. Static
 preview hosting does not provide the first-party account service. Existing
 configured OAuth methods, account APIs, wallet APIs, and payment contracts are
-unchanged. Email/password and account recovery retain the availability states
-already present on main; this redesign does not implement a new provider.
+unchanged. Account entry defaults to provider-based registration with Google,
+Microsoft, and GitHub. Existing users can switch to sign-in with the same
+providers. Custom email/password and unavailable recovery controls are removed.
+
+The onboarding refinement uses two persistent header actions: How it works and
+Open Bounty Board. Account access and secondary destinations live in the footer.
+Post a bounty opens the AI picker from the homepage, board, participation
+workspace, metrics, and footer; typed tasks and unfinished posting records remain
+available. The hero, process copy, and picker help are shortened.
 
 ## Implementation
 
@@ -129,5 +136,5 @@ The open PR queue was inspected before edits. Potential overlaps were #1196
 (email/password accounts; not mergeable), #908 (canonical homepage links; not
 mergeable), #910 (analytics; draft, not mergeable), and #1411 (wallet UX bounty
 fixtures; draft, mergeable). Their backend behavior and bounty terms are outside
-this change. This notice has not been posted because authorization is for local
-implementation.
+this change. The reviewable release is published through a pull request; no
+separate maintainer announcement is sent.

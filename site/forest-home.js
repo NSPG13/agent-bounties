@@ -3,7 +3,6 @@
   const form = document.querySelector("[data-home-task]");
   const input = document.querySelector("#home-task");
   if (!form || !input) return;
-  const status = document.querySelector("#home-task-status");
   const storageKey = "agent-bounties.home-task";
   try { input.value = sessionStorage.getItem(storageKey) || ""; } catch (_) { /* Input remains usable. */ }
   input.addEventListener("input", () => {
@@ -11,15 +10,7 @@
   });
   form.addEventListener("submit", event => {
     event.preventDefault();
-    try {
-      sessionStorage.setItem(storageKey, input.value.trim());
-      window.location.assign(new URL("post.html", window.location.href));
-    } catch (_) {
-      status.textContent = "This browser could not save your task. Copy it before opening the posting workspace.";
-      if (!status.querySelector("a")) {
-        const link = document.createElement("a"); link.href = "post.html"; link.textContent = " Open workspace"; status.append(link);
-      }
-    }
+    document.querySelector("#post-a-bounty")?.click();
   });
   document.querySelectorAll("[data-task-example]").forEach(button => button.addEventListener("click", () => {
     input.value = button.dataset.taskExample;

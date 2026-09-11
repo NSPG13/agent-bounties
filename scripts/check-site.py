@@ -655,8 +655,8 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         post + homepage + composer + posting_auth + home_javascript,
         [
             'data-post-auth-start',
-            'posting-auth.js?v=2',
-            'solarpunk-home.js?v=21',
+            'posting-auth.js?v=3',
+            'solarpunk-home.js?v=22',
             'bounty-composer-v2.js?v=17',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
@@ -823,11 +823,17 @@ def check_homepage(site_dir: Path) -> None:
             'data-auth-provider="google"',
             'data-auth-provider="microsoft"',
             'data-auth-provider="github"',
-            'data-auth-provider="amazon"',
             "data-auth-session",
             "Create an account",
         ],
     )
+    if re.findall(r'data-auth-provider="([a-z]+)"', page) != ["google", "microsoft", "github"]:
+        fail("account entry must offer only Google, Microsoft and GitHub")
+    if 'type="password"' in page or 'data-auth-unavailable' in page or 'Or start with your AI' in page:
+        fail("homepage must not restore custom sign-up or competing posting controls")
+    header_markup = page[header_start:header_end]
+    if 'How it works' not in header_markup or 'Open Bounty Board' not in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup:
+        fail("shared header must keep only How it works and Open Bounty Board")
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
     for removed in ("how-it-works.html",):
@@ -864,7 +870,6 @@ def check_homepage(site_dir: Path) -> None:
             'authApiPath("/session", win.location)',
             'authApiPath("/logout", win.location)',
             'dialog.showModal()',
-            'passwordToggle.setAttribute("aria-pressed"',
         ],
     )
     for sketch_fallback in ('textContent = "100"', 'textContent = "369"', 'textContent = "2.2"'):

@@ -2,7 +2,11 @@
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.AgentBountiesPostingAuth = api;
-  if (root?.document) api.bind(root);
+  if (root?.document) {
+    // Account entry can appear in the shared footer after this script.
+    if (root.document.readyState === "loading") root.document.addEventListener("DOMContentLoaded", () => api.bind(root), { once: true });
+    else api.bind(root);
+  }
 })(typeof window !== "undefined" ? window : globalThis, function () {
   "use strict";
 
