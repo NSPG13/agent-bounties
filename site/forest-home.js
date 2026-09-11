@@ -178,8 +178,7 @@ if (typeof document !== "undefined") {
       const button = event.target?.closest?.("[data-bounty-assistant]");
       if (!button || button.closest?.("[data-bounty-launcher]") !== dialog) return;
       const provider = String(button.dataset.bountyAssistant || "").toLowerCase();
-      const config = MOBILE_PROVIDERS[provider];
-      if (!config) return;
+      if (provider !== "cursor" && !MOBILE_PROVIDERS[provider]) return;
 
       const prompt = String(promptPreview?.textContent || "").trim();
       const links = win.SolarpunkHome?.bountyAssistantLinks?.(
@@ -187,13 +186,26 @@ if (typeof document !== "undefined") {
         prompt,
         reviewDestination(win),
       );
-      const launchUrl = mobileLaunchUrl(provider, links, win.navigator);
-      if (!prompt || !links || !launchUrl) return;
+      if (!prompt || !links) return;
 
       event.preventDefault?.();
       event.stopImmediatePropagation?.();
       assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
       button.setAttribute("aria-current", "true");
+
+      if (provider === "cursor") {
+        if (customActions) customActions.hidden = false;
+        if (webFallback) {
+          webFallback.hidden = true;
+          webFallback.removeAttribute?.("href");
+        }
+        if (status) status.textContent = "Cursor is desktop-only. Choose ChatGPT or Claude on this phone, or copy the instructions to continue later in Cursor.";
+        return;
+      }
+
+      const config = MOBILE_PROVIDERS[provider];
+      const launchUrl = mobileLaunchUrl(provider, links, win.navigator);
+      if (!launchUrl) return;
       if (customActions) customActions.hidden = true;
       if (promptPreview) promptPreview.textContent = exactPrompt(provider, links, prompt);
       if (webFallback) {
