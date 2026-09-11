@@ -33,10 +33,19 @@ Microsoft, and GitHub. Existing users can switch to sign-in with the same
 providers. Custom email/password and unavailable recovery controls are removed.
 
 The onboarding refinement uses two persistent header actions: How it works and
-Open Bounty Board. Account access and secondary destinations live in the footer.
+Browse work. Account access and secondary destinations live in the footer.
 Post a bounty opens the AI picker from the homepage, board, participation
 workspace, metrics, and footer; typed tasks and unfinished posting records remain
 available. The hero, process copy, and picker help are shortened.
+
+The hero uses three explicit lines, highlights “get your work done,” and cycles
+Faster → Cheaper → Better in a fixed-width bold slot. Reduced motion stops the
+word loop, and the accessible heading stays stable. The subtitle underlines
+“only pay for results” with a tilted “only” accent. A white Use cases label sits
+inside the editable task field; its examples cover benchmarked systems work,
+independent research, adversarial testing, and constrained optimization. The
+same examples drive the scrolling rows, and the expanded cards grow naturally
+so their controls stay reachable.
 
 ## Implementation
 
