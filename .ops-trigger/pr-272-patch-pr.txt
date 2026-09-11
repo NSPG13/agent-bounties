@@ -1,0 +1,3 @@
+Open a same-repository control PR to trigger the temporary, isolated PR #272 patch-candidate diagnostic.
+
+This file has no product, deployment, contract, wallet, funding, verification, or settlement effect and will never be merged.
