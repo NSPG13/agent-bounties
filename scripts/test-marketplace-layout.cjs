@@ -43,8 +43,8 @@ async function main() {
       page.on("pageerror", e => errors.push(e.message));
       await context.route("**/*", route => {
         const url = new URL(route.request().url());
-        if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mode === "offline" ? [] : [opportunity], generated_at: new Date().toISOString() }, status: mode === "offline" ? 503 : 200 });
-        if (url.pathname === "/v1/base/autonomous-bounties/feed") return route.fulfill({ json: mode === "pending" ? [] : [item], status: mode === "offline" ? 503 : 200 });
+        if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mode === "offline" ? [] : [{ ...opportunity, competition_mode: "exclusive_claim" }], generated_at: new Date().toISOString() }, status: mode === "offline" ? 503 : 200 });
+        if (url.pathname === "/v1/base/autonomous-bounties/feed") return route.fulfill({ json: mode === "pending" ? [] : [mode === "verifier_blocked" ? { ...item, verification_ready: false, verification_readiness_reason: "benchmark not approved" } : item], status: mode === "offline" ? 503 : 200 });
         if (url.origin !== origin) return route.abort();
         if (url.pathname === "/phone-wallet-config.js") return route.fulfill({ body: "window.agentBountiesPhoneWalletConfig={};", contentType: "text/javascript" });
         return route.continue();
@@ -54,6 +54,10 @@ async function main() {
       assert.match(await page.locator("[data-posted-notice]").innerText(), /On the board/);
       await layout(page);
       await bounds(page, ".opportunity-action a");
+      await page.locator("[data-market-kind]").selectOption("competition");
+      assert.equal(await page.locator(".opportunity-row").count(), 0);
+      await page.locator("[data-market-kind]").selectOption("direct");
+      await page.locator(".opportunity-row").waitFor();
       if (process.env.MARKET_LAYOUT_ARTIFACTS && [1440,390].includes(width)) {
         fs.mkdirSync(process.env.MARKET_LAYOUT_ARTIFACTS, { recursive: true });
         await page.evaluate(() => scrollTo(0, 0));
@@ -85,6 +89,18 @@ async function main() {
       await layout(page); await bounds(page, "[data-funded-board]"); await bounds(page, "[data-funded-workspace]");
       if (process.env.MARKET_LAYOUT_ARTIFACTS && width === 1440) await page.screenshot({ path: path.join(process.env.MARKET_LAYOUT_ARTIFACTS, "funded.png"), fullPage: true });
       mode = "pending";
+      if (width === 1440) {
+        mode = "verifier_blocked";
+        await page.reload();
+        await page.getByText(/Funding is confirmed, but the bounty is not ready for work/).waitFor();
+        assert.match(await page.locator("[data-funded-status]").innerText(), /benchmark not approved/);
+        assert.equal(await page.locator("[data-funded-redirect]").isVisible(), false);
+        await page.goto(`${origin}/participate.html?bountyContract=${contract}&network=base-mainnet`);
+        await page.getByText(/Funded · waiting for verification readiness/).waitFor();
+        assert.equal(await page.locator("[data-work-prepare]").isVisible(), false);
+        mode = "pending";
+        await page.goto(`${origin}/funded.html?bountyContract=${contract}&network=base-mainnet`);
+      }
       await page.reload(); await page.getByRole("heading", { name: "Funding is still being checked." }).waitFor();
       assert.equal(await page.locator("[data-funded-receipt]").isVisible(), false);
       mode = "offline";

@@ -393,6 +393,21 @@ pub fn canonical_opportunity_state(item: &AutonomousBountyFeedItem) -> Canonical
     }
 }
 
+/// Explain why escrow funding alone does not make an executable claim available.
+pub fn canonical_claim_blocker(item: &AutonomousBountyFeedItem) -> Option<String> {
+    if !item.terms_valid || !item.validation_errors.is_empty() {
+        return Some("The canonical terms or event history could not be validated. Refresh the canonical record before starting work.".to_string());
+    }
+    if !item.verification_ready {
+        let reason = item.verification_readiness_reason.trim();
+        return Some(format!(
+            "Verification is not ready{}. Do not claim or start work until the committed verifier is available.",
+            if reason.is_empty() { String::new() } else { format!(": {reason}") }
+        ));
+    }
+    None
+}
+
 pub fn discovery_taxonomy(
     title: &str,
     goal: Option<&str>,

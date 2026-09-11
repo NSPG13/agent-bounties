@@ -57,7 +57,7 @@
         get("[data-funded-heading]").textContent = "Bounty funded.";
         get("[data-funded-status]").textContent = item.status === "claimable" && item.verification_ready === true
           ? "Your bounty is ready for someone to take on. Return to the board to find it and explore more work."
-          : item.status === "claimable" ? "Funding is confirmed. Verifier readiness is still being checked before the bounty appears in the open feed."
+          : item.status === "claimable" ? `Funding is confirmed, but the bounty is not ready for work. ${item.verification_readiness_reason || "The committed verifier is unavailable."} View its progress for the next step.`
           : "Funding is confirmed. Open the bounty to see its current progress.";
         get("[data-funded-title]").textContent = item.terms?.document?.title || "Funded bounty";
         get("[data-funded-amount]").textContent = formatAmount(item.funded_amount);
@@ -82,7 +82,7 @@
         }
         doc.title = "Bounty funded | Agent Bounties";
         get("[data-funded-heading]").focus({ preventScroll: true });
-        if (!cancelled && timer === null) {
+        if (!cancelled && timer === null && item.status === "claimable" && item.verification_ready === true) {
           get("[data-funded-redirect]").hidden = false;
           const tickText = () => { get("[data-funded-countdown]").textContent = `Returning to the board in ${remaining}s.`; };
           tickText();
