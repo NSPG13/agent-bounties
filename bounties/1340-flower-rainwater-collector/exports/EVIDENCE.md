@@ -24,10 +24,18 @@ The STEP is committed **gzipped** because the tessellated B-rep is ~38 MB
 uncompressed (18 624 planar faces, one per mesh triangle). `gunzip` it to open
 it in CAD software. It is regenerated in ~75 s by `python3 export_step.py`.
 
-Reproducibility note: the STL is byte-stable for this source (`5f89ee2c…`), but
-the STEP file's bytes are **not** — the STEP header carries a creation timestamp,
-so two runs of the same geometry produce different file hashes with identical
-volume, face count and validity results.
+Reproducibility — measured, not assumed. Re-rendering this source reproduces the
+**mesh**, not the **bytes**. Three renders of the committed source
+(`5f89ee2c69add9b9…` committed, `f332fe70316031bd…` and `6448ba18d0920f7e…` from
+fresh runs, all 2 894 441 B) are identical as a facet *set* — 18 624 facets each,
+facet multiset equal, zero facets unique to any one file, 8 088 welded vertices,
+volume 2 862.9 cm³, every topology and outlet-probe check passing — but the
+facets appear in a **different order** each run. OpenSCAD emits the same
+triangles in a run-dependent sequence, so an STL sha256 is **not** a
+source-equivalence token; the facet-set comparison plus the topology/volume/probe
+checks are (section 6). The STEP bytes are not reproducible either — the STEP
+header carries a creation timestamp (committed `c6232af9076c5d59…` vs a fresh
+export `cecf240ecf9832b8…`, both 39 904 185 B, identical validity results).
 
 ## 1. Parameter invariants — `python3 test_model.py`
 
@@ -112,8 +120,70 @@ positive check that no dimension label is an undefined string operation.
 Control (RED) check: a probe containing `text("a" + "b")` exits 1 with
 `WARNING: undefined operation (string + string)` under the same flag.
 
+## 5. Requested generation fails when its tool is missing
+
+Review item on PR #1345 (NSPG13): `--render` fell back to the committed STL when
+OpenSCAD was absent, and `export_step.py` exited `0` without OCP, so an
+explicitly requested render/export could report success having produced nothing.
+Fixed in `a66ea53` (author NSPG13, prepared on `collab/pr-1345-rainwater-concept`
+as `0e08ead5` and cherry-picked here). The controls below were run with the
+dependency genuinely absent, in this directory, with the committed STL present:
+
+```
+$ env -i PATH=/usr/bin:/bin HOME=$HOME python3 test_geometry.py --render
+FAIL  --render requires OpenSCAD (set OPENSCAD_BIN or install openscad)
+exit=1                     # the stale exports/*.stl was NOT checked or touched
+                           # sha256 unchanged: 5f89ee2c69add9b9…
+
+$ python3 export_step.py   # CPython without cadquery-ocp
+FAIL  OpenCascade bindings not installed (No module named 'OCP'); pip install cadquery-ocp
+exit=1
+
+$ python3 test_required_dependencies.py -v
+test_requested_render_does_not_use_stale_export ... ok
+test_requested_step_export_requires_ocp ... ok
+Ran 2 tests in 0.034s - OK
+```
+
+Nothing regressed: `test_model.py` passes all 15 invariants, `test_geometry.py`
+passes every mesh check on the committed STL, and `export_step.py` under OCCT
+reproduces the section-3 receipt (18 624 faces, 0 free edges, 0 multiple edges,
+one valid `TopoDS_Solid`, 2 862.9 cm³, delta 0.0000 %, STEP 38 969 KiB).
+
+## 6. Source → export equivalence — fresh render from source
+
+Exact command (from this directory; `OPENSCAD_BIN` points at the extracted
+OpenSCAD 2021.01 AppImage on this host — any 2021.01 `openscad` works):
+
+```
+$ OPENSCAD_BIN=/home/claw1/portfolio/tools/squashfs-root/AppRun python3 test_geometry.py --render
+rendering flower_rainwater_collector.scad with …/AppRun -> exports/flower_rainwater_collector.stl (this takes a few minutes)
+mesh: exports/flower_rainwater_collector.stl
+      18624 triangles, 8088 welded vertices (from 55872 raw), sha256:f332fe70316031bd…
+<all 11 mesh checks PASS, volume 2862.9 cm^3>
+```
+
+Result: the re-render reproduces the committed mesh **exactly as a facet set**
+(18 624 facets; comparison against `exports/flower_rainwater_collector.stl`
+reports `multiset equal: True`, 0 facets unique to either file) with identical
+welded-vertex count, volume and every topology/outlet-probe verdict — while the
+file **bytes** differ (`f332fe70316031bd…` vs the committed `5f89ee2c69add9b9…`),
+because OpenSCAD orders the same triangles differently between runs (section
+"Reproducibility — measured, not assumed"; a second fresh run gave
+`6448ba18d0920f7e…` with the same facet multiset).
+
+The committed STL was therefore **not** replaced by the re-render: the artifact
+in this PR stays exactly the bytes that the maintainer's independent check
+hashed. `gunzip -c exports/flower_rainwater_collector.step.gz` also still
+reproduces 39 904 185 B / sha256 `c6232af9076c5d59…`, matching this file's
+manifest.
+
 ## What is NOT verified
 
+- **Byte-level export reproduction.** Re-rendering reproduces the facet set, not
+  the file: the STL hash differs run to run (facet ordering) and the STEP hash
+  differs even more (header timestamp). Nothing here claims bit-identical
+  artifacts — section 6 states exactly what was compared.
 - **Fabrication.** Nothing has been printed, moulded or measured; the model is a
   concept, not a fabrication drawing.
 - **On-site fit.** The port thread is an assumption (2" nominal = 50.8 mm). The
