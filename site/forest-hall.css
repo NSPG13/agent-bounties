@@ -38,6 +38,8 @@
 .forest-home .ab-metrics { margin-top: 12px; }
 .forest-home .ab-closing { background: linear-gradient(#07110caa, #07110cf0), url("assets/forest/agent-hall-v1.webp") center 58% / cover; }
 .forest-home .ab-closing::before, .forest-home .ab-closing::after { opacity: .2; }
+.forest-home .ab-closing h2 { color: #edf1e8; }
+.forest-home .ab-closing h2 span { color: #c7f542; }
 [data-theme="light"] .ab-forest-backdrop::after { background: linear-gradient(180deg, #07110c70 0%, #07110c99 25%, #07110c80 48%, #07110c00 67%, #07110c00 82%, #f7f8f2 100%), radial-gradient(ellipse at 50% 27%, #07110c99 0%, #07110c20 52%, transparent 75%); }
 @media (max-width: 700px) {
   .forest-home .ab-hero { padding-top: 32px; }
