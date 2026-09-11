@@ -91,9 +91,9 @@ if (typeof document !== "undefined") {
   });
 
   function isMobileNavigator(navigatorLike = {}) {
-    if (typeof navigatorLike.userAgentData?.mobile === "boolean") return navigatorLike.userAgentData.mobile;
     const userAgent = String(navigatorLike.userAgent || "");
-    return /Android|iPhone|iPad|iPod/i.test(userAgent)
+    return navigatorLike.userAgentData?.mobile === true
+      || /Android|iPhone|iPad|iPod/i.test(userAgent)
       || (navigatorLike.platform === "MacIntel" && Number(navigatorLike.maxTouchPoints) > 1);
   }
 
@@ -189,7 +189,7 @@ if (typeof document !== "undefined") {
       if (!prompt || !links) return;
 
       event.preventDefault?.();
-      event.stopImmediatePropagation?.();
+      event.stopPropagation?.();
       assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
       button.setAttribute("aria-current", "true");
 
