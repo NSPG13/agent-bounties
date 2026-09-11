@@ -13,7 +13,7 @@ class Element extends EventTarget {
 function harness({ homepage = false, payload = { authenticated: false }, href = "./?postReturn=1#login" } = {}) {
   const win = new EventTarget(), doc = new EventTarget(), header = new Element(), toggle = new Element(), nav = new Element(), link = new Element();
   link.setAttribute("href", href);
-  link.textContent = "Sign in";
+  link.textContent = "Create an account";
   let calls = 0, failure = false;
   Object.assign(win, {
     location: new URL("https://agentbounties.app/post.html"), setTimeout, clearTimeout,
@@ -21,7 +21,7 @@ function harness({ homepage = false, payload = { authenticated: false }, href = 
     fetch: async () => { calls++; if (failure) throw new Error("offline"); return { ok: true, json: async () => payload }; },
   });
   header.querySelector = selector => ({ ".ab-site-menu": toggle, ".ab-site-nav": nav, ".ab-site-login": link })[selector];
-  doc.querySelector = selector => selector === "[data-site-header]" ? header : selector === "[data-auth-dialog]" && homepage ? {} : null;
+  doc.querySelector = selector => selector === ".ab-site-login" ? link : selector === "[data-site-header]" ? header : selector === "[data-auth-dialog]" && homepage ? {} : null;
   vm.runInNewContext(source, { window: win, document: doc, URL, AbortController });
   return { win, link, calls: () => calls, fail: () => { failure = true; }, emit: payload => win.dispatchEvent(new CustomEvent("agentbounties:account-session", { detail: payload })) };
 }
@@ -38,7 +38,7 @@ test("interior Account link uses server session and strips posting return redire
   await tick();
   assert.equal(h.link.textContent, "Account", "network failure is not sign-out evidence");
   h.emit({ authenticated: false, user: null });
-  assert.equal(h.link.textContent, "Sign in");
+  assert.equal(h.link.textContent, "Create an account");
   assert.equal(h.link.getAttribute("href"), "./?postReturn=1#login");
 });
 
@@ -49,5 +49,5 @@ test("homepage shares its existing session and never introduces duplicate auth r
   h.emit({ authenticated: true, user: { id: "fixture", name: "Member" } });
   assert.equal(h.link.textContent, "Account");
   h.emit({ authenticated: true, user: { email: "unverified@example.invalid" } });
-  assert.equal(h.link.textContent, "Sign in", "email alone is never a session identity");
+  assert.equal(h.link.textContent, "Create an account", "email alone is never a session identity");
 });

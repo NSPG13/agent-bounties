@@ -46,13 +46,13 @@ def sync(check=False):
         # styles cannot override the shared shell or selected color theme.
         result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css)\?v=\d+"[^>]*>(?:</script>)?', '', result)
         home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=3">\n' if relative.as_posix() == "index.html" else ""
-        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=2">
-    <link rel="stylesheet" href="{prefix}forest-ui.css?v=1">
+        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=3">
+    <link rel="stylesheet" href="{prefix}forest-ui.css?v=2">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=1"></script>
-    <script src="{prefix}site-navigation.js?v=3" defer></script>
+    <script src="{prefix}site-navigation.js?v=4" defer></script>
 '''
         result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
-        footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix) + "\n<!-- shared-footer:end -->"
+        footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix).replace("{{login_href}}", login_href).replace("{{login_attributes}}", login_attributes) + "\n<!-- shared-footer:end -->"
         existing_footer = r'<!-- shared-footer:start -->.*?<!-- shared-footer:end -->'
         if re.search(existing_footer, result, re.S):
             result = re.sub(existing_footer, lambda _: footer_block, result, flags=re.S)

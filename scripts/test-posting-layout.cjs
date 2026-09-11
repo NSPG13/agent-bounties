@@ -143,7 +143,6 @@ async function recoveryRegressions(browser, origin) {
     assert.equal(approved.review.explicitly_approved, true);
     assert.ok(approved.approval.hash);
     const exactTarget = page.url();
-    await page.locator(".ab-site-menu").click();
     const account = page.locator("[data-post-auth-start]");
     assert.equal(await account.textContent(), "Account");
     await Promise.all([page.waitForURL(origin + "/#account"), account.click()]);

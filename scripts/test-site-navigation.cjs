@@ -92,32 +92,21 @@ async function main() {
           const url = new URL(el.href);
           return { text: el.textContent.trim(), href: url.pathname + url.search + url.hash };
         }));
-        const expectedLogin = file === "post.html" ? "/?postReturn=1#login" : "/#login";
-        assert.deepEqual(links, [{ text: "Leaderboard", href: "/leaderboard.html" }, { text: "Find bounties", href: "/earn.html" }, { text: "Sign in", href: expectedLogin }], file);
+        assert.deepEqual(links, [{ text: "How it works", href: "/#how-it-works" }, { text: "Open Bounty Board", href: "/earn.html" }], file);
         const appearance = await page.locator("[data-site-header]").evaluate(el => {
           const css = getComputedStyle(el), brand = getComputedStyle(el.querySelector("strong"));
           return { height: el.getBoundingClientRect().height, background: css.backgroundImage, padding: css.padding, brand: brand.font, color: brand.color };
         });
         if (!reference) reference = appearance;
         assert.deepEqual(appearance, reference, `same homepage header: ${file} at ${width}`);
-        if (width < 701) {
-          await assertFits(page, ".ab-site-menu");
-          await page.locator(".ab-site-menu").click();
-          for (const n of [1, 2, 3]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
-          await page.keyboard.press("Escape");
-          assert.equal(await page.locator(".ab-site-menu").getAttribute("aria-expanded"), "false");
-          assert.equal(await page.locator(".ab-site-menu").evaluate(el => el === document.activeElement), true);
-        } else {
-          for (const n of [1, 2, 3]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
-        }
+        assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
+        for (const n of [1, 2]) await assertFits(page, `.ab-site-nav a:nth-child(${n})`);
       }
       console.log(`Shared homepage header and accessible links passed on ${pages.length} pages at ${width}px`);
       await page.goto(`${origin}/blog/`);
-      if (width < 701) await page.locator(".ab-site-menu").click();
       await page.locator(".ab-site-login").click();
       await page.locator("[data-auth-dialog][open]").waitFor();
       await page.locator("[data-auth-close]").click();
-      if (width < 701) await page.locator(".ab-site-menu").click();
       await page.locator(".ab-site-login").click();
       await page.locator("[data-auth-dialog][open]").waitFor();
       await ctx.close();
@@ -126,7 +115,7 @@ async function main() {
     const fallback = await nojs.newPage();
     for (const file of ["index.html", "about.html", "blog/index.html", "metrics.html", "install/chatgpt-dev/index.html"]) {
       await fallback.goto(`${origin}/${file}`);
-      for (const n of [1, 2, 3]) await assertFits(fallback, `.ab-site-nav a:nth-child(${n})`);
+      for (const n of [1, 2]) await assertFits(fallback, `.ab-site-nav a:nth-child(${n})`);
     }
     await nojs.close();
     for (const [width, height] of [[1440,900],[946,838],[640,480],[390,600],[320,480],[768,320],[480,360]]) {

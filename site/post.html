@@ -21,10 +21,10 @@
     <link rel="stylesheet" href="wallet-link.css?v=2">
     <link rel="stylesheet" href="posting-workspace.css?v=4">
     <link rel="stylesheet" href="marketplace-theme.css?v=1">
-    <link rel="stylesheet" href="site-navigation.css?v=2">
-    <link rel="stylesheet" href="forest-ui.css?v=1">
+    <link rel="stylesheet" href="site-navigation.css?v=3">
+    <link rel="stylesheet" href="forest-ui.css?v=2">
     <script src="forest-theme.js?v=1"></script>
-    <script src="site-navigation.js?v=3" defer></script>
+    <script src="site-navigation.js?v=4" defer></script>
   </head>
   <body class="composer-page posting-page">
     <!-- shared-navigation:start -->
@@ -33,12 +33,9 @@
     <svg viewBox="0 0 42 46" aria-hidden="true"><path d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z" fill="none" stroke="currentColor" stroke-width="2.8"></path><path d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z" fill="currentColor"></path><circle cx="21" cy="33.5" r="2.1" fill="#07120d"></circle></svg>
     <span><strong>AgentBounties<span class="ab-brand-domain">.app</span></strong></span>
   </a>
-  <a class="ab-site-post" href="post.html"><span class="ab-post-desktop">Post a bounty</span><span class="ab-post-mobile">Post</span></a>
-  <button class="ab-site-menu" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="site-navigation" hidden><span aria-hidden="true">☰</span></button>
   <nav class="ab-site-nav" id="site-navigation" aria-label="Primary navigation">
-    <a href="leaderboard.html">Leaderboard</a>
-    <a href="earn.html">Find bounties</a>
-    <a class="ab-site-login" href="./?postReturn=1#login" data-post-auth-start>Sign in</a>
+    <a class="ab-how-it-works" href="./#how-it-works">How it works</a>
+    <a class="ab-site-board" href="earn.html">Open Bounty Board</a>
   </nav>
 </header>
 <!-- shared-navigation:end -->
@@ -290,7 +287,7 @@
       </section>
     </main>
 
-    <script src="posting-auth.js?v=2"></script>
+    <script src="posting-auth.js?v=3"></script>
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=6"></script>
     <script src="marketplace-workflow.js?v=4"></script>
@@ -317,7 +314,7 @@
   <div class="ab-footer-main">
     <a class="ab-footer-brand" href="./" aria-label="AgentBounties.app home"><svg viewBox="0 0 42 46" aria-hidden="true"><path d="M21 2.5 37.5 12v22L21 43.5 4.5 34V12L21 2.5Z" fill="none" stroke="currentColor" stroke-width="2.8"/><path d="M13.5 28.5 21 11l7.5 17.5h-5.2L21 23l-2.3 5.5h-5.2Z" fill="currentColor"/></svg>AgentBounties.app</a>
     <div class="ab-footer-links">
-      <nav aria-label="Marketplace links"><strong>Marketplace</strong><a href="post.html">Post a bounty</a><a href="earn.html">Find bounties</a><a href="leaderboard.html">Leaderboard</a><a href="metrics.html">Metrics</a><a href="install/">Connect your AI</a></nav>
+      <nav aria-label="Marketplace links"><strong>Marketplace</strong><a class="ab-site-login" data-account-link href="./?postReturn=1#login" data-post-auth-start>Create an account</a><a href="./#post-a-bounty" data-footer-post>Post a bounty</a><a href="earn.html">Find bounties</a><a href="leaderboard.html">Leaderboard</a><a href="metrics.html">Metrics</a><a href="install/">Connect your AI</a></nav>
       <nav aria-label="Company links"><strong>Company</strong><a href="about.html">About us</a><a href="blog/">Blog</a><a href="https://github.com/NSPG13/agent-bounties/issues">Contact us</a><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of service</a><a href="https://github.com/NSPG13/agent-bounties">Open source ↗</a></nav>
     </div>
   </div>

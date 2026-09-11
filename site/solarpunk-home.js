@@ -6,7 +6,11 @@
   );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.SolarpunkHome = api;
-  if (root && root.document) api.start(root, root.document);
+  if (root && root.document) {
+    // Shared account access is in the footer, after this script in the HTML.
+    if (root.document.readyState === "loading") root.document.addEventListener("DOMContentLoaded", () => api.start(root, root.document), { once: true });
+    else api.start(root, root.document);
+  }
 })(typeof window !== "undefined" ? window : globalThis, function (postingPrompt, postingAuth) {
   "use strict";
 
@@ -733,9 +737,9 @@ ${competitionChildBrief(item)}`;
       const accountActivity = dialog.querySelector(".account-activity");
       const heading = dialog.querySelector("#auth-title");
       const description = dialog.querySelector("#auth-description");
-      const email = form?.elements.email;
-      const password = form?.elements.password;
-      const passwordToggle = dialog.querySelector("[data-password-toggle]");
+      let accountMode = "signup";
+      const modeToggle = dialog.querySelector("[data-auth-mode-toggle]");
+      const switchLabel = dialog.querySelector("[data-auth-switch-label]");
       const status = dialog.querySelector("[data-auth-status]");
       const providerButtons = Array.from(dialog.querySelectorAll("[data-auth-provider]"));
       let authServerReady = false;
@@ -781,14 +785,16 @@ ${competitionChildBrief(item)}`;
       const renderSetup = (state) => {
         accountStatus = state;
         const ready = Boolean(currentUser && state === "ready");
-        dialog.dataset.view = currentUser ? ready ? "account" : "setup" : "login";
+        dialog.dataset.view = currentUser ? ready ? "account" : "setup" : accountMode;
         dialog.dataset.accountStatus = currentUser ? state : "signed_out";
-        if (heading) heading.textContent = currentUser ? ready ? "Your activity" : "Finish your account" : "Sign in";
+        if (heading) heading.textContent = currentUser ? ready ? "Your activity" : "Finish your account" : accountMode === "signup" ? "Create an account" : "Sign in";
         if (description) description.textContent = currentUser
           ? ready ? "Your bounties and payments, all in one place."
             : "Link a wallet to finish setup. You can use one you have or create one here."
-          : "Sign in, then link a wallet to finish creating your account.";
-        openButton.textContent = currentUser ? "Account" : "Sign in";
+          : accountMode === "signup" ? "Choose a provider to get started." : "Welcome back. Choose your provider.";
+        openButton.textContent = currentUser ? "Account" : "Create an account";
+        if (modeToggle) modeToggle.textContent = accountMode === "signup" ? "Sign in" : "Create an account";
+        if (switchLabel) switchLabel.textContent = accountMode === "signup" ? "Already have an account?" : "New to AgentBounties.app?";
         if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
         if (setupSteps) {
           setupSteps.hidden = ready;
@@ -946,13 +952,18 @@ ${competitionChildBrief(item)}`;
       };
 
       const renderProviderAvailability = () => {
+        dialog.querySelector(".auth-providers")?.setAttribute("aria-label", accountMode === "signup" ? "Sign up options" : "Sign in options");
         providerButtons.forEach((button) => {
           const key = String(button.dataset.authProvider || "").toLowerCase();
           const label = AUTH_PROVIDER_LABELS[key] || "Provider";
           const configured = Boolean(authServerReady && providerAvailability[key]);
           button.setAttribute("aria-disabled", String(!configured));
+          const actionLabel = `${accountMode === "signup" ? "Sign up" : "Sign in"} with ${label}`;
+          button.setAttribute("aria-label", actionLabel);
+          const text = button.querySelector("[data-auth-provider-label]");
+          if (text) text.textContent = actionLabel;
           button.title = configured
-            ? `Continue with ${label}`
+            ? `${accountMode === "signup" ? "Sign up" : "Sign in"} with ${label}`
             : `${label} sign-in is not available right now`;
         });
       };
@@ -971,7 +982,7 @@ ${competitionChildBrief(item)}`;
         if (form) form.hidden = Boolean(user);
         if (accountDashboard) accountDashboard.hidden = !user;
         renderSetup("checking");
-        openButton.title = user?.name ? `Signed in as ${user.name}` : "Sign in";
+        openButton.title = user?.name ? `Signed in as ${user.name}` : "Create an account";
         if (!user) {
           accountLoadId += 1;
           embeddedAddress = null;
@@ -1076,13 +1087,14 @@ ${competitionChildBrief(item)}`;
         if (currentUser && new URLSearchParams(win.location.search).get("postReturn") !== "1") {
           win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}#account`);
         }
+        if (!currentUser) { accountMode = "signup"; renderSetup("signed_out"); renderProviderAvailability(); }
         setStatus("");
         setWalletStatus("");
         showDialog();
         if (currentUser) loadAccount();
         win.requestAnimationFrame(() => {
           if (currentUser) closeButton?.focus();
-          else email?.focus();
+          else providerButtons.find(button => button.getAttribute("aria-disabled") !== "true")?.focus();
         });
       });
       closeButton?.addEventListener("click", closeDialog);
@@ -1097,19 +1109,6 @@ ${competitionChildBrief(item)}`;
         const inside = event.clientX >= bounds.left && event.clientX <= bounds.right
           && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
         if (!inside) closeDialog();
-      });
-      passwordToggle?.addEventListener("click", () => {
-        if (!password) return;
-        const visiblePassword = password.type === "text";
-        password.type = visiblePassword ? "password" : "text";
-        passwordToggle.setAttribute("aria-pressed", String(!visiblePassword));
-        passwordToggle.setAttribute("aria-label", visiblePassword ? "Show password" : "Hide password");
-        password.focus();
-      });
-      form?.addEventListener("submit", (event) => {
-        event.preventDefault();
-        if (!form.reportValidity()) return;
-        setStatus("Email and password accounts are not configured yet. Use a connected provider.");
       });
       const linkWallet = async (resuming = false, expectedAddress = null, expectedProvider = null) => {
         if (!currentUser || walletLinkButton.disabled) return;
@@ -1292,15 +1291,11 @@ ${competitionChildBrief(item)}`;
           logoutButton.disabled = false;
         }
       });
-      dialog.querySelectorAll("[data-auth-unavailable]").forEach((button) => {
-        button.addEventListener("click", () => {
-          setStatus("Account recovery and creation will be connected in a later phase.");
-        });
-      });
-      dialog.querySelector("[data-auth-create]")?.addEventListener("click", () => {
-        if (heading) heading.textContent = "Create your account";
-        setStatus("Choose a sign-in provider above. Next, link or create a wallet to finish your account.");
-        providerButtons.find(button => button.getAttribute("aria-disabled") !== "true")?.focus();
+      modeToggle?.addEventListener("click", () => {
+        accountMode = accountMode === "signup" ? "signin" : "signup";
+        renderSetup("signed_out");
+        renderProviderAvailability();
+        setStatus("");
       });
 
       renderProviderAvailability();
@@ -1329,7 +1324,8 @@ ${competitionChildBrief(item)}`;
 
     function setupBountyLauncher() {
       const dialog = doc.querySelector("[data-bounty-launcher]");
-      const openButton = doc.querySelector("[data-bounty-open]");
+      const openButtons = Array.from(doc.querySelectorAll("[data-bounty-open], [data-footer-post]"));
+      let openButton = openButtons[0];
       if (!dialog || !openButton || typeof dialog.showModal !== "function") return;
       const closeButton = dialog.querySelector("[data-bounty-close]");
       const assistantButtons = Array.from(dialog.querySelectorAll("[data-bounty-assistant]"));
@@ -1374,7 +1370,7 @@ ${competitionChildBrief(item)}`;
         }
         resetLauncher();
         if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
-        dialog.showModal();
+        if (!dialog.open) dialog.showModal();
         openButton.setAttribute("aria-expanded", "true");
         win.requestAnimationFrame?.(() => assistantButtons[0]?.focus());
       };
@@ -1409,10 +1405,16 @@ ${competitionChildBrief(item)}`;
         anchor.remove();
       };
 
-      openButton.addEventListener("click", showDialog);
+      openButtons.forEach(button => button.addEventListener("click", event => {
+        event.preventDefault();
+        openButton = button;
+        showDialog();
+      }));
       closeButton?.addEventListener("click", closeDialog);
       dialog.addEventListener("close", () => {
         openButton.setAttribute("aria-expanded", "false");
+        openButton.focus();
+        if (win.location.hash === "#post-a-bounty") win.history?.replaceState?.(null, "", `${win.location.pathname}${win.location.search}`);
       });
       dialog.addEventListener("click", (event) => {
         const rect = dialog.getBoundingClientRect();
@@ -1473,9 +1475,9 @@ ${competitionChildBrief(item)}`;
         if (links?.webUrl) webFallback.href = links.webUrl;
         if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
       });
-      if (win.location.hash === "#post-a-bounty") {
-        win.requestAnimationFrame?.(showDialog);
-      }
+      const openPostingHash = () => { if (win.location.hash === "#post-a-bounty") win.requestAnimationFrame?.(showDialog); };
+      win.addEventListener("hashchange", openPostingHash);
+      openPostingHash();
       if (postingRequest.requested) {
         void (async () => {
           if (!postingRequest.valid) throw new Error("invalid competition posting context");

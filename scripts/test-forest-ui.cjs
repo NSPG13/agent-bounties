@@ -38,7 +38,8 @@ async function main() {
       let mode = "empty", account = "signed_out";
       await ctx.route("**/*", route => {
         const url = new URL(route.request().url());
-        if (url.pathname.includes("/auth/session") || url.pathname === "/v1/site-auth/session") return route.fulfill({json:{authenticated:account!=="signed_out",account_status:account,account_complete:account==="ready",providers:{github:true},user:account!=="signed_out"?{id:"forest-qa",name:"Preview account",email:"preview@example.test"}:null,posting_drafts_enabled:false}});
+        if (/^\/auth\/login\/(google|microsoft|github)$/.test(url.pathname)) return route.fulfill({contentType:"text/html",body:"<!doctype html><title>OAuth handoff fixture</title><p>Provider handoff reached.</p>"});
+        if (url.pathname.includes("/auth/session") || url.pathname === "/v1/site-auth/session") return route.fulfill({json:{authenticated:account!=="signed_out",account_status:account,account_complete:account==="ready",providers:{google:true,microsoft:true,github:true},user:account!=="signed_out"?{id:"forest-qa",name:"Preview account",email:"preview@example.test"}:null,posting_drafts_enabled:false}});
         if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{authenticated:true,account_status:account,account_complete:account==="ready",user:{id:"forest-qa",name:"Preview account",email:"preview@example.test"},wallets:account==="ready"?[{address:"0x"+"1".repeat(40),label:"Preview wallet",provider_id:"metamask",wallet_type:"browser",chain_ids:[8453],linked_at:"2026-09-10T00:00:00Z",last_verified_at:"2026-09-10T00:00:00Z"}]:[],data_status:"unavailable",reason:"marketplace_evidence_unavailable"}});
         if (url.pathname.endsWith("/leaderboard")) return route.fulfill({status:mode==="offline"?503:200,json:mode==="invalid"?{}:leaderboard(mode==="ready")});
         if (url.pathname === "/phone-wallet-config.js") return route.fulfill({body:"window.agentBountiesPhoneWalletConfig={};",contentType:"text/javascript"});
@@ -56,9 +57,9 @@ async function main() {
       assert.equal(await page.locator("[data-forest-video]").getAttribute("src"),null,"reduced motion does not fetch the background video");
       assert.equal(await page.locator("[data-forest-pause]").isVisible(),false,"reduced motion uses the static artwork");
       assert.ok(await page.locator(".ab-forest-poster").evaluate(image=>image.currentSrc.includes(innerWidth<=700?"agent-hall-loop-poster-small-v2.webp":"agent-hall-loop-poster-v2.webp")),"responsive forest artwork");
-      await fits(page,".ab-site-post");
-      if(width<=700) {await fits(page,".ab-site-menu");await page.locator(".ab-site-menu").click();await fits(page,".ab-site-login");await page.keyboard.press("Escape");assert.equal(await page.locator(".ab-site-menu").getAttribute("aria-expanded"),"false");}
-      else {for(const selector of [".ab-site-login",".ab-site-nav a:first-child",".ab-site-nav a:nth-child(2)"]) await fits(page,selector);}
+      assert.deepEqual(await page.locator(".ab-site-nav a").allTextContents(), ["How it works", "Open Bounty Board"]);
+      assert.equal(await page.locator(".ab-site-menu, [data-site-header] .ab-site-login").count(), 0);
+      for(const selector of [".ab-how-it-works", ".ab-site-board"]) await fits(page,selector);
       assert.equal(await page.locator(".ab-orbit-ring").evaluate(el=>getComputedStyle(el).animationName),"none");
       await capture(page,`home-${width}`);
       await page.emulateMedia({reducedMotion:"no-preference"});
@@ -81,18 +82,45 @@ async function main() {
       await page.locator('button[data-theme-choice="dark"]').click();
       const task="Prepare a source-backed competitor report.";
       await page.locator("#home-task").fill(task);
-      await page.locator("[data-home-task] button[type=submit]").click();await page.waitForURL("**/post.html");
+      await page.locator("#post-a-bounty").click();
+      await page.locator("[data-bounty-launcher][open]").waitFor();
+      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the typed task");
+      assert.equal(new URL(page.url()).pathname, "/", "posting CTA opens the picker in place");
+      await capture(page,`ai-picker-${width}`);
+      await page.locator("[data-bounty-close]").click();
+      await page.goto(origin+"/post.html");
       assert.equal(await page.locator("#bounty-composer-input").inputValue(),task,"first task survives synchronous journey creation");
       await page.reload();assert.equal(await page.locator("#bounty-composer-input").inputValue(),task,"saved after reload");
       assert.equal(await page.locator('[data-stage-target="fund"]').isDisabled(),true);
-      await page.goto(origin);await page.locator("#home-task").fill("A different idea");await page.locator("[data-home-task] button[type=submit]").click();await page.waitForURL("**/post.html");
+      await page.goto(origin);await page.locator("#home-task").fill("A different idea");await page.locator("#post-a-bounty").click();
+      await page.locator("[data-bounty-launcher][open]").waitFor();
+      assert.ok((await page.locator("[data-bounty-prompt]").textContent()).includes(await page.locator("#home-task").inputValue()), "AI picker keeps the typed task");
+      assert.equal(new URL(page.url()).pathname, "/", "posting CTA opens the picker in place");
+      await page.locator("[data-bounty-close]").click();
+      await page.goto(origin+"/post.html");
       await page.getByRole("button",{name:"Keep saved brief",exact:true}).click();assert.equal(await page.locator("#bounty-composer-input").inputValue(),task);
       await page.goto(origin+"/post.html?task=New%20review%20request");await page.getByRole("button",{name:"Use this new idea",exact:true}).click();assert.equal(await page.locator("#bounty-composer-input").inputValue(),"New review request");
       await page.evaluate(()=>scrollTo(0,0));await capture(page,`post-${width}`);
-      await page.goto(origin+"/#login");await page.locator("[data-auth-dialog][open]").waitFor();await capture(page,`signin-${width}`);
-      await page.locator("[data-auth-create]").click();assert.equal(await page.locator("#auth-title").innerText(),"Create your account");await capture(page,`register-${width}`);
-      await page.locator("[data-auth-unavailable]").click();assert.match(await page.locator("[data-auth-status]").innerText(),/recovery and creation will be connected/);await capture(page,`recovery-${width}`);
+      await page.goto(origin+"/#login");await page.locator("[data-auth-dialog][open]").waitFor();
+      assert.equal(await page.locator("#auth-title").innerText(),"Create an account");
+      assert.deepEqual(await page.locator("[data-auth-provider]").evaluateAll(els=>els.map(el=>el.dataset.authProvider)),["google","microsoft","github"]);
+      assert.equal(await page.locator("[data-auth-form] input, [data-auth-unavailable]").count(),0,"no custom account credentials or dead recovery controls");
+      await capture(page,`register-${width}`);
+      await page.locator("[data-auth-mode-toggle]").click();assert.equal(await page.locator("#auth-title").innerText(),"Sign in");
+      assert.equal(await page.getByRole("button",{name:"Sign in with Google",exact:true}).count(),1);
+      await capture(page,`signin-${width}`);
       await page.locator("[data-auth-close]").click();
+      await page.locator(".ab-site-login").click();
+      assert.equal(await page.locator("#auth-title").innerText(),"Create an account","reopening defaults to account creation");
+      await page.locator("[data-auth-close]").click();
+      if(width===390) {
+        for(const provider of ["google","microsoft","github"]) {
+          await page.goto(origin+"/#login");
+          await page.waitForFunction(key=>document.querySelector(`[data-auth-provider="${key}"]`).getAttribute("aria-disabled")==="false",provider);
+          await page.locator(`[data-auth-provider="${provider}"]`).click();
+          await page.waitForURL(`**/auth/login/${provider}`);
+        }
+      }
       await page.goto(origin+"/leaderboard.html");await page.getByText("No qualifying completions yet this period.",{exact:false}).waitFor();
       assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);assert.match(await page.locator("[data-prize-title]").innerText(),/26 USDC weekly/);
       await capture(page,`leaderboard-empty-${width}`);
@@ -110,7 +138,6 @@ async function main() {
         await capture(page,`account-${state}-${width}`);
         await page.locator("[data-auth-close]").click();
         await page.locator('button[data-theme-choice="light"]').click();
-        if (width <= 700) await page.locator(".ab-site-menu").click();
         await page.locator(".ab-site-login").click();await capture(page,`account-${state}-light-${width}`);
         await page.locator("[data-auth-close]").click();
         await page.locator('button[data-theme-choice="dark"]').click();
@@ -171,7 +198,9 @@ async function main() {
     assert.equal(await fallback.locator("[data-forest-scene]").getAttribute("data-media-state"),"artwork");
     assert.equal(await fallback.locator("[data-forest-video]").isVisible(),false);
     await fallback.locator("#home-task").fill("My task survives a failed video download");
-    await fallback.locator("[data-home-task] button[type=submit]").click();await fallback.waitForURL("**/post.html");
+    await fallback.locator("#post-a-bounty").click();await fallback.locator("[data-bounty-launcher][open]").waitFor();
+    assert.match(await fallback.locator("[data-bounty-prompt]").textContent(),/My task survives a failed video download/);
+    await fallback.goto(origin+"/post.html");
     assert.equal(await fallback.locator("#bounty-composer-input").inputValue(),"My task survives a failed video download");
     await broken.close();
     const blocked = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" });

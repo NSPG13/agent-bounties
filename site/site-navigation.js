@@ -2,17 +2,17 @@
   "use strict";
   const header = document.querySelector("[data-site-header]");
   if (!header) return;
-  const toggle = header.querySelector(".ab-site-menu");
   const nav = header.querySelector(".ab-site-nav");
-  if (!toggle || !nav) return;
-  const accountLink = header.querySelector(".ab-site-login");
+  if (!nav) return;
+  header.classList.add("is-enhanced");
+  const accountLink = document.querySelector(".ab-site-login");
   const signedOutHref = accountLink?.getAttribute("href");
   const renderAccount = (session) => {
     if (!accountLink || typeof session?.authenticated !== "boolean") return;
     const authenticated = session.authenticated && Boolean(session.user?.id);
     accountLink.dataset.authenticated = String(authenticated);
-    accountLink.textContent = authenticated ? "Account" : "Sign in";
-    accountLink.title = authenticated && session.user.name ? `Account: ${String(session.user.name).slice(0, 100)}` : authenticated ? "Your account" : "Sign in";
+    accountLink.textContent = authenticated ? "Account" : "Create an account";
+    accountLink.title = authenticated && session.user.name ? `Account: ${String(session.user.name).slice(0, 100)}` : authenticated ? "Your account" : "Create an account";
     if (authenticated) {
       const destination = new URL(signedOutHref, window.location.href);
       destination.searchParams.delete("postReturn");
@@ -41,28 +41,6 @@
     window.addEventListener("pageshow", refreshAccount);
     window.addEventListener("focus", refreshAccount);
   }
-  const close = (focus = false) => {
-    header.removeAttribute("data-menu-open");
-    toggle.setAttribute("aria-expanded", "false");
-    if (focus) toggle.focus();
-  };
-  header.classList.add("is-enhanced");
-  toggle.hidden = false;
-  toggle.addEventListener("click", () => {
-    const open = !header.hasAttribute("data-menu-open");
-    header.toggleAttribute("data-menu-open", open);
-    toggle.setAttribute("aria-expanded", String(open));
-  });
-  header.addEventListener("keydown", event => {
-    if (event.key === "Escape" && header.hasAttribute("data-menu-open")) {
-      event.preventDefault(); close(true);
-    }
-  });
-  document.addEventListener("click", event => { if (!header.contains(event.target)) close(); });
-  header.addEventListener("focusout", event => { if (event.relatedTarget && !header.contains(event.relatedTarget)) close(); });
-  nav.addEventListener("click", event => { if (event.target.closest("a")) close(); });
-  window.matchMedia("(min-width: 701px)").addEventListener("change", () => close());
-
   // Deep links remain useful when the destination is inside an optional detail.
   const revealHash = () => {
     let id;
