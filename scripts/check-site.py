@@ -17,6 +17,7 @@ CANONICAL_PAGES = {
     "bug-fix.html": "https://agentbounties.app/bug-fix.html",
     "index.html": "https://agentbounties.app/",
     "earn.html": "https://agentbounties.app/earn.html",
+    "leaderboard.html": "https://agentbounties.app/leaderboard.html",
     "competition.html": "https://agentbounties.app/competition.html",
     "participate.html": "https://agentbounties.app/participate.html",
     "funded.html": "https://agentbounties.app/funded.html",
@@ -51,6 +52,7 @@ CANONICAL_PAGES = {
     "terms.html": "https://agentbounties.app/terms.html",
 }
 INDEXABLE_PAGES = {
+    "leaderboard.html",
     "app-testing.html",
     "api-integration.html",
     "bug-fix.html",
@@ -78,6 +80,15 @@ INDEXABLE_PAGES = {
     "terms.html",
 }
 REQUIRED_FILES = {
+    "forest-ui.css",
+    "forest-theme.js",
+    "forest-home.js",
+    "forest-hall.js",
+    "forest-hall.css",
+    "assets/forest/agent-hall-veo-v2.mp4",
+    "assets/forest/agent-hall-veo-small-v2.mp4",
+    "forest-posting.js",
+    "leaderboard.js",
     "app-testing.html",
     "api-integration.html",
     "site-navigation.css",
@@ -179,6 +190,13 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "forest-ui.css",
+    "forest-theme.js",
+    "forest-home.js",
+    "forest-hall.js",
+    "forest-hall.css",
+    "forest-posting.js",
+    "leaderboard.js",
     "posting-draft-canary.js",
     "site-navigation.css",
     "site-navigation.js",
@@ -243,6 +261,10 @@ ALLOWED_UI_CODE = {
     "vendor/phone-wallet.bundle.js",
 }
 EXPECTED_SCENE_ASSETS = {
+    "assets/forest/agent-hall-loop-poster-v2.webp",
+    "assets/forest/agent-hall-loop-poster-small-v2.webp",
+    "assets/forest/agent-hall-v1.webp",
+    "assets/forest/agent-hall-small-v1.webp",
     "assets/solarpunk/characters-helping.webp",
     "assets/solarpunk/characters-walking.webp",
     "assets/solarpunk/characters-wrestling.webp",
@@ -504,7 +526,7 @@ def check_blog(site_dir: Path) -> None:
             "Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event",
         ],
     )
-    for retired in ("objective.html", "funding.html", "post.html"):
+    for retired in ("objective.html", "funding.html"):
         if retired in bounty_guide + posting_guide:
             fail(f"restored guides must not revive retired route {retired}")
     require_phrases(
@@ -634,7 +656,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=2',
-            'solarpunk-home.js?v=20',
+            'solarpunk-home.js?v=21',
             'bounty-composer-v2.js?v=17',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
@@ -732,15 +754,12 @@ def check_homepage(site_dir: Path) -> None:
         "index.html",
         page,
         [
-            "Rather pay for results than tokens?",
-            "Let AI agents",
-            "compete <em>&amp;</em> collaborate",
-            "to solve your problems",
-            "data-scene-plate=\"dawn\"",
-            "data-scene-plate=\"day\"",
-            "data-scene-plate=\"dusk\"",
-            "data-scene-plate=\"night\"",
-            "data-scene-canvas",
+            'data-home-task',
+            'id="home-task"',
+            'maxlength="4000"',
+            'class="ab-hero"',
+            'data-example-deck',
+            'class="ab-process"',
             "data-market-volume",
             "data-live-bounties",
             "data-completed-bounties",
@@ -756,9 +775,9 @@ def check_homepage(site_dir: Path) -> None:
             '<a href="earn.html">Find bounties</a>',
         ],
     )
-    hero_start = page.find('<section class="hero"')
+    hero_start = page.find('<section class="ab-hero"')
     hero_end = page.find("</section>", hero_start)
-    hero_action = page.find('<div class="hero-action">', hero_start)
+    hero_action = page.find('<div class="ab-task-actions">', hero_start)
     if hero_start < 0 or hero_end < 0 or not hero_start < hero_action < hero_end:
         fail("the homepage CTA must remain in the hero flow to prevent headline overlap")
     stylesheet_version = re.search(r'<link rel="stylesheet" href="solarpunk\.css\?v=(\d+)">', page)
@@ -767,7 +786,7 @@ def check_homepage(site_dir: Path) -> None:
     header_start = page.find('<header class="ab-site-header" data-site-header>')
     header_end = page.find("</header>", header_start)
     market_volume = page.find("data-market-volume")
-    metrics_start = page.find('<section class="market-proof"')
+    metrics_start = page.find('<section class="ab-metrics"')
     metrics_end = page.find("</section>", metrics_start)
     if min(header_start, header_end, market_volume, metrics_start, metrics_end) < 0:
         fail("the homepage must retain its header and marketplace metric structure")
@@ -775,8 +794,6 @@ def check_homepage(site_dir: Path) -> None:
         fail("market volume must not be displayed in the navigation header")
     if not metrics_start < market_volume < metrics_end:
         fail("market volume must be displayed in the marketplace metrics panel")
-    if 'class="metric-market"' not in page:
-        fail("market volume must occupy the full-width third metric row")
     require_phrases(
         "index.html bounty assistant launcher",
         page,
@@ -813,7 +830,7 @@ def check_homepage(site_dir: Path) -> None:
     )
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
-    for removed in ("post.html", "how-it-works.html"):
+    for removed in ("how-it-works.html",):
         if removed in page:
             fail(f"homepage links to removed page {removed}")
     require_phrases(
@@ -853,43 +870,16 @@ def check_homepage(site_dir: Path) -> None:
     for sketch_fallback in ('textContent = "100"', 'textContent = "369"', 'textContent = "2.2"'):
         if sketch_fallback in javascript:
             fail("homepage JavaScript contains a sketch-number fallback")
-    require_phrases(
-        "solarpunk.css",
-        css,
-        [
-            ".stone-title",
-            ".stone-title span:nth-child(1) {\n  font-size: inherit;",
-            ".stone-title span:nth-child(3) {",
-            ".stone-title em {",
-            ".vine-column",
-            ".fire-aura",
-            ".auth-dialog::backdrop",
-            ".bounty-launcher::backdrop",
-            "@media (prefers-reduced-motion: reduce)",
-            "@media (max-width: 560px)",
-        ],
-    )
-    hero_action_css = re.search(r"\.hero-action\s*\{(?P<body>[^}]*)\}", css)
+    forest_css = (site_dir / "forest-ui.css").read_text(encoding="utf-8")
+    require_phrases("forest-ui.css", forest_css, [".ab-hero", ".ab-task-actions", ".ab-example-deck", ".ab-faq", "prefers-reduced-motion: reduce", ".auth-dialog::backdrop", ".bounty-launcher::backdrop"])
+    hero_action_css = re.search(r"\.ab-task-actions\s*\{(?P<body>[^}]*)\}", forest_css)
     if not hero_action_css or re.search(r"(?<![-\w])(?:position|top|left|transform)\s*:", hero_action_css.group("body")):
-        fail("the homepage CTA must not use independent absolute positioning")
-    if "margin-top: clamp(32px, 4vh, 40px)" not in hero_action_css.group("body"):
-        fail("the desktop bounty CTA must retain breathing room below the headline")
-    for selector, label in (
-        (r"\.hero-action button", "post-a-bounty"),
-    ):
-        match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
-        if not match or "cursor: pointer" not in match.group("body"):
-            fail(f"the {label} button must show a hand pointer on hover")
-    desktop_title_css = re.search(r"@media\s*\(min-width:\s*821px\)\s*\{\s*\.stone-title\s*\{(?P<body>[^}]*)\}", css)
-    if not desktop_title_css or "line-height: 1" not in desktop_title_css.group("body"):
-        fail("the desktop hero title must retain its increased line spacing")
+        fail("the homepage CTA must stay in document flow")
+    theme = (site_dir / "forest-theme.js").read_text(encoding="utf-8")
+    require_phrases("forest theme", theme, ["agent-bounties.theme", "prefers-color-scheme: light", "aria-pressed", "storage"])
     scene_header_css = re.search(r"\.ab-site-header\s*\{(?P<body>[^}]*)\}", (site_dir / "site-navigation.css").read_text(encoding="utf-8"))
     if not scene_header_css or "position: sticky" not in scene_header_css.group("body") or "top: 0" not in scene_header_css.group("body"):
         fail("the homepage navigation must remain sticky at the top of the viewport")
-    for selector in (r"\.stone-title span:nth-child\(1\)", r"\.stone-title span:nth-child\(3\)", r"\.stone-title em"):
-        match = re.search(selector + r"\s*\{(?P<body>[^}]*)\}", css)
-        if not match or "font-size: inherit" not in match.group("body"):
-            fail("every hero headline phrase must inherit one shared font size")
     for relative in (
         "assets/solarpunk/provider-openai.svg",
         "assets/solarpunk/provider-claude.svg",
@@ -1345,6 +1335,9 @@ def main() -> int:
     images = {path.relative_to(site_dir).as_posix() for path in site_dir.rglob("*.webp")}
     if images != EXPECTED_SCENE_ASSETS:
         fail(f"orphaned or missing WebP assets: extra={sorted(images - EXPECTED_SCENE_ASSETS)} missing={sorted(EXPECTED_SCENE_ASSETS - images)}")
+    for name, budget in (("agent-hall-v1.webp", 500_000), ("agent-hall-small-v1.webp", 200_000), ("agent-hall-loop-poster-v2.webp", 500_000), ("agent-hall-loop-poster-small-v2.webp", 200_000), ("agent-hall-veo-v2.mp4", 20_000_000), ("agent-hall-veo-small-v2.mp4", 5_000_000)):
+        if (site_dir / "assets/forest" / name).stat().st_size > budget:
+            fail(f"forest hall artwork exceeds its delivery budget: {name}")
 
     titles: dict[str, str] = {}
     descriptions: dict[str, str] = {}
@@ -1352,7 +1345,7 @@ def main() -> int:
         path = site_dir / relative
         text = path.read_text(encoding="utf-8")
         prefix = "../" * (len(PurePosixPath(relative).parts) - 1)
-        analytics_version = 5 if relative in {"index.html", "post.html", "bug-fix.html", "api-integration.html", "app-testing.html"} else 4
+        analytics_version = 5 if relative in {"leaderboard.html", "index.html", "post.html", "bug-fix.html", "api-integration.html", "app-testing.html"} else 4
         parser = PageParser()
         parser.feed(text)
         if parser.h1_count != 1:

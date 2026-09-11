@@ -227,12 +227,12 @@ async function recoveryRegressions(browser, origin) {
     console.log("PASS incomplete brief resumes across devices without inventing a draft or approving terms");
   } finally { await partialContext.close(); }
 }
-async function hitTarget(page, selector) {
-  const result = await page.locator(selector).evaluate(el => {
+async function hitTarget(page, selector, minimumHeight = 43) {
+  const result = await page.locator(selector).evaluate((el, minimumHeight) => {
     const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
     const hit = document.elementFromPoint(x, y);
-    return { text: el.textContent.trim(), visible: r.width > 0 && r.height >= 43 && r.left >= 0 && r.right <= innerWidth + 1 && r.top >= 0 && r.bottom <= innerHeight + 1, hit: hit === el || el.contains(hit), rect: r.toJSON() };
-  });
+    return { text: el.textContent.trim(), visible: r.width > 0 && r.height >= minimumHeight && r.left >= 0 && r.right <= innerWidth + 1 && r.top >= 0 && r.bottom <= innerHeight + 1, hit: hit === el || el.contains(hit), rect: r.toJSON() };
+  }, minimumHeight);
   assert.ok(result.visible && result.hit, selector + " clipped or covered: " + JSON.stringify(result));
 }
 async function noHorizontalOverflow(page) {
@@ -324,8 +324,23 @@ async function main() {
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, "wallet-" + size.width + "x" + size.height + ".png") });
       await page.getByRole("button", { name: "MetaMask", exact: false }).click();
       await page.locator("[data-wallet-readiness]").waitFor({ state: "visible" });
-      assert.equal(await page.locator("#funding-dialog .legal-consent").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(19, 37, 26)");
+      assert.equal(await page.locator("#funding-dialog .legal-consent").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(16, 30, 22)");
       assert.equal(await page.locator("#funding-dialog .legal-consent h3").evaluate(el => getComputedStyle(el).color), "rgb(237, 241, 232)");
+      if ([1440,390].includes(size.width)) {
+        await page.locator("[data-close-funding]").click();
+        await page.locator('button[data-theme-choice="light"]').scrollIntoViewIfNeeded();
+        await hitTarget(page, 'button[data-theme-choice="light"]', 32);
+        await page.locator('button[data-theme-choice="light"]').click();
+        await page.locator("[data-open-funding]").click();
+        await page.locator("[data-wallet-readiness]").waitFor({ state: "visible" });
+        assert.equal(await page.locator("#funding-dialog .legal-consent").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
+        assert.equal(await page.locator("#funding-dialog .legal-consent h3").evaluate(el => getComputedStyle(el).color), "rgb(21, 40, 28)");
+        if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, "funding-light-" + size.width + ".png") });
+        await page.locator("[data-close-funding]").click();
+        await page.locator('button[data-theme-choice="dark"]').click();
+        await page.locator("[data-open-funding]").click();
+        await page.locator("[data-wallet-readiness]").waitFor({ state: "visible" });
+      }
       await page.locator(".funding-help > summary").click();
       if (size.width === 1440) {
         await page.setViewportSize({ width: 390, height: 320 });

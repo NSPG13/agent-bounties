@@ -14,6 +14,7 @@ PATTERN = re.compile(re.escape(START) + r".*?" + re.escape(END), re.S)
 
 def sync(check=False):
     template = (ROOT / "scripts/templates/site-navigation.html").read_text(encoding="utf-8").strip()
+    footer = (ROOT / "scripts/templates/site-footer.html").read_text(encoding="utf-8").strip()
     changed = []
     for path in sorted((ROOT / "site").rglob("*.html")):
         relative = path.relative_to(ROOT / "site")
@@ -41,10 +42,24 @@ def sync(check=False):
             # Initial migration only. A workflow toolbar is local to its page.
             header = re.search(r'<header class="(?:scene-header|about-header|topbar|site-header|market-header|install-header|legal-header)"[^>]*>.*?</header>', source, re.S)
             result = source[:header.start()] + block + source[header.end():] if header else re.sub(r'(<body\b[^>]*>)', lambda m: m[0] + "\n    " + block, source, count=1)
-        css = f'<link rel="stylesheet" href="{prefix}site-navigation.css?v=1">'
-        js = f'<script src="{prefix}site-navigation.js?v=2" defer></script>'
-        if css not in result:
-            result = result.replace("  </head>", "    " + css + "\n    " + js + "\n  </head>")
+        # Render shared assets once, last in the head so page-local legacy
+        # styles cannot override the shared shell or selected color theme.
+        result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css)\?v=\d+"[^>]*>(?:</script>)?', '', result)
+        home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=3">\n' if relative.as_posix() == "index.html" else ""
+        assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=2">
+    <link rel="stylesheet" href="{prefix}forest-ui.css?v=1">
+{home_atmosphere}    <script src="{prefix}forest-theme.js?v=1"></script>
+    <script src="{prefix}site-navigation.js?v=3" defer></script>
+'''
+        result = re.sub(r"[ \t]*</head>", lambda _: assets + "  </head>", result)
+        footer_block = "<!-- shared-footer:start -->\n" + footer.replace("{{root}}", prefix or "./").replace("{{prefix}}", prefix) + "\n<!-- shared-footer:end -->"
+        existing_footer = r'<!-- shared-footer:start -->.*?<!-- shared-footer:end -->'
+        if re.search(existing_footer, result, re.S):
+            result = re.sub(existing_footer, lambda _: footer_block, result, flags=re.S)
+        elif re.search(r'<footer\b[^>]*class="(?:about-footer|guild-shell-footer|market-footer|legal-footer|scene-footer|install-footer)"[^>]*>.*?</footer>', result, re.S):
+            result = re.sub(r'<footer\b[^>]*class="(?:about-footer|guild-shell-footer|market-footer|legal-footer|scene-footer|install-footer)"[^>]*>.*?</footer>', lambda _: footer_block, result, count=1, flags=re.S)
+        else:
+            result = result.replace('</body>', footer_block + '\n  </body>')
         if result != source:
             changed.append(relative.as_posix())
             if not check:
