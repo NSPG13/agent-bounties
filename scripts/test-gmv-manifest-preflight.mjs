@@ -25,3 +25,19 @@ test('duplicate events, unknown policy and malformed roots cannot pass', () => {
   assert.equal(preflight(payload(), { ...policy, epoch_id: hash('8') }).structure_valid, false);
   for (const root of [null, [], 'yes', true]) assert.equal(preflight(root, policy).structure_valid, false);
 });
+test('zero identifiers are rejected for either prefix casing', () => {
+  for (const prefix of ['0x', '0X']) {
+    for (const field of ['competition', 'bounty_id', 'epoch_id', 'verification_policy_hash']) {
+      const zero = prefix + '0'.repeat(field === 'competition' ? 40 : 64);
+      assert.equal(preflight({ ...payload(), [field]: zero }, { ...policy, [field]: zero }).structure_valid, false, `${prefix} ${field}`);
+    }
+    for (const field of ['creator', 'solver', 'funder', 'child_bounty_contract', 'tx_hash']) {
+      const p = payload(); p.settlement[field] = prefix + '0'.repeat(field === 'tx_hash' ? 64 : 40);
+      if (field === 'funder') p.entrant = p.settlement.funder;
+      assert.equal(preflight(p, policy).structure_valid, false, `${prefix} ${field}`);
+    }
+  }
+  const p = payload(); p.entrant = p.entrant.toUpperCase(); p.settlement.funder = p.entrant;
+  p.competition = p.competition.toUpperCase(); p.settlement.tx_hash = p.settlement.tx_hash.toUpperCase();
+  assert.equal(preflight(p, policy).structure_valid, true, 'nonzero uppercase identifiers remain supported');
+});

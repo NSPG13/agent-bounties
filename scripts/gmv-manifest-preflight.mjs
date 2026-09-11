@@ -3,7 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const ADDRESS = /^0x[0-9a-f]{40}$/i, HASH = /^0x[0-9a-f]{64}$/i;
-const nonzero = (value, pattern) => typeof value === "string" && pattern.test(value) && !/^0x0+$/.test(value);
+const nonzero = (value, pattern) => typeof value === "string" && pattern.test(value) && !/^0x0+$/i.test(value);
 const amount = value => typeof value === "string" && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < (1n << 256n);
 const uint = value => Number.isSafeInteger(value) && value >= 0;
 const lower = value => typeof value === "string" ? value.toLowerCase() : "";
