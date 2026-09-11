@@ -267,8 +267,7 @@ def render_stl(out_path):
             if binary is None and Path(candidate).exists():
                 binary = candidate
     if not binary:
-        print("SKIP  --render: no OpenSCAD binary found (set OPENSCAD_BIN or install openscad)")
-        return None
+        raise SystemExit("FAIL  --render requires OpenSCAD (set OPENSCAD_BIN or install openscad)")
     print(f"rendering {SCAD.name} with {binary} -> {out_path} (this takes a few minutes)")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
@@ -291,9 +290,7 @@ def main():
 
     stl = args.stl
     if args.render:
-        rendered = render_stl(DEFAULT_STL)
-        if rendered:
-            stl = rendered
+        stl = render_stl(DEFAULT_STL)
 
     if not stl.exists():
         raise SystemExit(
