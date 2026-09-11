@@ -6,7 +6,8 @@ const mobile = require("../site/forest-home.js");
 
 assert.equal(mobile.isMobileNavigator({ userAgentData: { mobile: true } }), true);
 assert.equal(mobile.isMobileNavigator({ userAgent: "Mozilla/5.0 (Linux; Android 16; Pixel 9a)" }), true);
-assert.equal(mobile.isMobileNavigator({ userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }), false);
+assert.equal(mobile.isMobileNavigator({ userAgentData: { mobile: false }, userAgent: "Mozilla/5.0 (Linux; Android 16; Pixel Tablet)" }), true);
+assert.equal(mobile.isMobileNavigator({ userAgentData: { mobile: false }, userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }), false);
 assert.equal(mobile.isAndroidNavigator({ userAgent: "Android 16" }), true);
 
 const prompt = `${home.BOUNTY_POSTING_PROMPT}\n\nMy task: make the mobile AI handoff work.`;
@@ -118,7 +119,7 @@ let stopped = false;
 handlers.click.callback({
   target: gptButton,
   preventDefault() { prevented = true; },
-  stopImmediatePropagation() { stopped = true; },
+  stopPropagation() { stopped = true; },
 });
 
 assert.equal(prevented, true);
@@ -144,7 +145,7 @@ let cursorStopped = false;
 handlers.click.callback({
   target: cursorButton,
   preventDefault() { cursorPrevented = true; },
-  stopImmediatePropagation() { cursorStopped = true; },
+  stopPropagation() { cursorStopped = true; },
 });
 assert.equal(cursorPrevented, true);
 assert.equal(cursorStopped, true);
