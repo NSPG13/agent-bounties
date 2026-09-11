@@ -33,7 +33,7 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({headless:true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
   try {
-    for (const width of [390,768,1280,1440]) {
+    for (const width of [390,768,1280,1440,1920]) {
       const ctx = await browser.newContext({viewport:{width,height:900},reducedMotion:"reduce",colorScheme:"light"});
       let mode = "empty", account = "signed_out";
       await ctx.route("**/*", route => {
@@ -66,8 +66,18 @@ async function main() {
       assert.equal(await page.locator(".ab-usecases-label").innerText(), "USE CASES");
       assert.equal(await page.locator(".ab-usecases-label").evaluate(el => getComputedStyle(el).color), "rgb(255, 255, 255)");
       assert.equal(await page.locator(".ab-payoff").evaluate(el => getComputedStyle(el).textDecorationLine), "underline");
+      assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+      assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).transform), "none");
+      assert.equal(await page.locator("[data-outcome-word]").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(199, 245, 66)");
+      if (width >= 1280) assert.ok(await page.locator("#hero-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 64), "desktop headline is larger");
+      const metrics = await page.locator(".ab-metric").evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, background:getComputedStyle(el).backgroundColor, transform:getComputedStyle(el).transform }; }));
+      assert.ok(metrics.every(metric => metric.background === "rgba(0, 0, 0, 0)" && metric.transform === "none"), "metrics are open statistics, without cards");
+      assert.equal(new Set(metrics.map(metric => width <= 700 ? metric.x : metric.y)).size, 1, "metrics stack on mobile and align horizontally on desktop");
+      assert.ok(await page.locator(".ab-metrics").evaluate(el => el.scrollWidth <= el.clientWidth), "metrics never need horizontal scrolling");
       for(const selector of [".ab-how-it-works", ".ab-site-board"]) await fits(page,selector);
-      assert.equal(await page.locator(".ab-orbit-ring").evaluate(el=>getComputedStyle(el).animationName),"none");
+      assert.equal(await page.locator(".ab-orbit-ring, .ab-orbit-sphere").count(),0);
+      assert.match(await page.locator("#manifesto-title").innerText(),/If you could define.*done.*for the task,/s);
+      assert.equal(await page.locator(".ab-ticker").count(),1,"one row of use cases");
       await capture(page,`home-${width}`);
       await page.emulateMedia({reducedMotion:"no-preference"});
       await page.waitForFunction(()=>document.querySelector("[data-forest-scene]").dataset.mediaState==="video");
@@ -188,17 +198,18 @@ async function main() {
     await animated.locator("[data-forest-pause]").click();
     assert.equal(await animated.locator("[data-forest-scene]").getAttribute("data-forest-motion"),"running");
     await animated.waitForFunction(()=>!document.querySelector("[data-forest-video]").paused);
-    const ring = animated.locator(".ab-orbit-ring");
-    assert.notEqual(await ring.evaluate(el => getComputedStyle(el).animationName), "none");
-    const initial = await ring.evaluate(el => getComputedStyle(el).transform);
-    await animated.waitForFunction(before => getComputedStyle(document.querySelector(".ab-orbit-ring")).transform !== before, initial);
     await animated.locator(".ab-tickers").scrollIntoViewIfNeeded();
     await animated.waitForFunction(()=>document.querySelector("[data-forest-video]").paused);
-    const ticker = await animated.locator(".ab-tickers").boundingBox();
-    await animated.mouse.move(640, ticker.y + 60);
+    await animated.mouse.move(1, 1);
+    const row = animated.locator(".ab-ticker");
+    assert.equal(await row.evaluate(el=>getComputedStyle(el).animationDuration),"360s");
+    const initial = await row.evaluate(el => getComputedStyle(el).transform);
+    await animated.waitForFunction(before => getComputedStyle(document.querySelector(".ab-ticker")).transform !== before, initial);
+    const ticker = await row.boundingBox();
+    await animated.mouse.move(640, ticker.y + ticker.height / 2);
     await animated.waitForFunction(() => getComputedStyle(document.querySelector(".ab-ticker")).animationPlayState === "paused");
     await animated.emulateMedia({ reducedMotion: "reduce" });
-    assert.equal(await ring.evaluate(el => getComputedStyle(el).animationName), "none");
+    assert.equal(await row.evaluate(el => getComputedStyle(el).animationName), "none");
     assert.equal(await animated.locator("[data-forest-pause]").isVisible(),false);
     assert.equal(await animated.locator("[data-forest-scene]").getAttribute("data-forest-motion"),"paused");
     assert.equal(await video.isVisible(),false,"live reduced-motion switch returns to poster");

@@ -12,6 +12,13 @@
 #how-it-works { scroll-margin-top: calc(var(--site-header-height) + 24px); }
 .market-work-actions { display: flex; justify-content: flex-end; gap: 16px; max-width: 1200px; margin: 18px auto 0; padding: 0 24px; }
 .feed-heading-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+@media (min-width: 1100px) {
+  :root { --site-header-height: 96px; }
+  .ab-site-header { padding: 20px 36px; }
+  .ab-site-brand strong { font-size: 30px; }
+  .ab-site-brand svg { width: 35px; height: 39px; }
+  .ab-site-header .ab-site-nav a { min-height: 52px; padding: 14px 24px; font-size: 17px; }
+}
 @media (max-width: 700px) {
   :root { --site-header-height: 112px; }
   .ab-site-header { flex-direction: column; justify-content: center; padding: 10px 12px; gap: 10px; }
