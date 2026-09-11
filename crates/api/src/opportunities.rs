@@ -2058,7 +2058,15 @@ fn canonical_next_action(
             item.bounty_id
         ),
         body_template: None,
-        instructions: "Inspect confirmed canonical events and immutable terms. Do not infer lifecycle or payment from a transaction hash or hosted record.".to_string(),
+        instructions: if item.status == "claimable" {
+            web_public::canonical_claim_blocker(item)
+                .map(|reason| format!("Funding is confirmed. {reason}"))
+                .unwrap_or_else(|| {
+                    "Refresh the canonical record before preparing a claim.".to_string()
+                })
+        } else {
+            "Inspect confirmed canonical events and immutable terms. Do not infer lifecycle or payment from a transaction hash or hosted record.".to_string()
+        },
     }
 }
 
@@ -2177,7 +2185,7 @@ mod tests {
             id: Uuid::new_v4(),
             protocol_version: "agent-bounties/open-competition-v2-beta3".to_string(),
             log_key: format!("{block_number}:0"),
-            tx_hash: format!("0x{:064x}", block_number),
+            tx_hash: format!("0x{block_number:064x}"),
             block_number,
             log_index: 0,
             contract_address: record.projection.competition.clone(),
@@ -2676,7 +2684,7 @@ mod tests {
             id: Uuid::new_v4(),
             protocol_version: "agent-bounties/open-competition-v1".to_string(),
             log_key: format!("{block_number}:{log_index}"),
-            tx_hash: format!("0x{:064x}", block_number),
+            tx_hash: format!("0x{block_number:064x}"),
             block_number,
             log_index,
             contract_address: "0x9e9382beb8b1a45b737d484b5eafa7b8779d4ca5".to_string(),
@@ -2796,6 +2804,34 @@ mod tests {
             unavailable.next_action.action,
             "inspect_verification_readiness"
         );
+    }
+
+    #[test]
+    fn funded_unready_projection_explains_the_actual_blocker() {
+        let mut source = canonical("claimable", "1000000", false);
+        source.verification_readiness_reason =
+            "regression benchmark digest and immutable source are not approved".to_string();
+        let item = canonical_opportunity(&source, "base-mainnet", "https://api.example").unwrap();
+        assert_eq!(item.payment_state, "escrowed");
+        assert_eq!(item.work_state, "open");
+        assert_eq!(item.next_action.action, "inspect_verification_readiness");
+        assert!(item
+            .next_action
+            .instructions
+            .contains("Funding is confirmed"));
+        assert!(item
+            .next_action
+            .instructions
+            .contains(&source.verification_readiness_reason));
+        assert!(item.next_action.instructions.contains("Do not claim"));
+        source.verification_ready = true;
+        source.validation_errors.push("event mismatch".to_string());
+        let item = canonical_opportunity(&source, "base-mainnet", "https://api.example").unwrap();
+        assert_eq!(item.work_state, "open");
+        assert!(item
+            .next_action
+            .instructions
+            .contains("could not be validated"));
     }
 
     #[test]

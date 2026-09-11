@@ -1,0 +1,38 @@
+{
+  "schema": "agent-bounties/synthetic-phase-vector-manifest-v1",
+  "synthetic": true,
+  "vectors": [
+    {
+      "file": "funded-not-delivered.json",
+      "sha256": "256cff91168a6104bbb42a29aa75f57edb8343f866ceaac250405f1701419c6e"
+    },
+    {
+      "file": "delivered-not-settled.json",
+      "sha256": "832475aec9fa0f243e3b6f7ecdfe7834113f5e4364fcd9267e2c3ef95f24035e"
+    },
+    {
+      "file": "settled-expected-solver.json",
+      "sha256": "cbcb6e4a4399799036ebc51cde587b2e745e633fa9aad4b3da766cd06ffd7ff4"
+    },
+    {
+      "file": "wrong-solver.json",
+      "sha256": "c6124340cca38e0d3474e6fd299d1e0733ad05086a02a328f4fa0bdbd22d0d8b"
+    },
+    {
+      "file": "http-200-failed-settlement.json",
+      "sha256": "7089396815d828c311e31da9acb8b08c4e2e6d801bddd4261029ccb1c78f30f4"
+    },
+    {
+      "file": "authorization-only.json",
+      "sha256": "b19092d1734870dbc13a42eb0f0f61c4b3021f072b22d0dca27a9c371ae0997f"
+    },
+    {
+      "file": "duplicate-event.json",
+      "sha256": "952f6e1647546306b4da2bb49519f0ff88f9636f50726cfc312f1e2913c29dc6"
+    },
+    {
+      "file": "self-attested-completeness.json",
+      "sha256": "b33aed800fb0281efef08ecb96bb9956498f9a359045d65d10314b5c3718533e"
+    }
+  ]
+}

@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const marketplace = require("../site/marketplace.js");
+const workflow = require("../site/marketplace-workflow.js");
 globalThis.AgentBountiesMarketplace = marketplace;
 const competition = require("../site/competition.js");
 
@@ -49,6 +50,22 @@ function v2Opportunity(overrides = {}) {
     ...overrides,
   };
 }
+
+test("direct task filtering excludes competitions, child funding and unknown mechanisms", () => {
+  const competition = v2Opportunity();
+  const direct = v2Opportunity({ opportunity_id: "canonical:direct", source_status: "claimable", competition_mode: "exclusive_claim", evidence_requirements: {}, terms_hash: "0xabc", next_action: { action: "prepare_agent_to_earn" } });
+  const child = { ...direct, standing_meta_bounty: true };
+  const legacyCompetition = { ...direct, competition_mode: "first_valid_submission" };
+  const unknown = { ...direct, competition_mode: null };
+  const items = [competition, direct, child, legacyCompetition, unknown];
+  assert.deepEqual(marketplace.filterItems(items, "", "all", Date.parse(STARTS_AT), "direct"), [direct]);
+  assert.deepEqual(marketplace.filterItems(items, "", "all", Date.parse(STARTS_AT), "competition"), [competition, child, legacyCompetition]);
+  assert.equal(workflow.summarize(direct).participation_kind, "direct");
+  assert.equal(workflow.summarize(child).participation_kind, "child_funding");
+  assert.match(marketplace.emptyState("direct"), /No direct tasks/);
+  assert.doesNotMatch(marketplace.emptyState("direct"), /post your own|free|guaranteed/i);
+  assert.match(marketplace.renderOpportunity(direct, 0, Date.parse(STARTS_AT)), /refundable bond, gas and execution costs/);
+});
 
 test("V2 readiness is mechanism-aware and does not depend on a legacy terms hash", () => {
   const item = v2Opportunity();

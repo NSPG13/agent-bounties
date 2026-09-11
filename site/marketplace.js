@@ -113,6 +113,9 @@
     const timing = timingState(item, nowMs);
     const reward = formatUsdc(item.reward);
     const decision = decisionContext(item);
+    const kind = workflow.participationKind(item);
+    const kindLabel = kind === "direct" ? "Direct task" : kind === "child_funding" ? "Fund child work" : kind === "competition" ? "Competition" : "Review participation terms";
+    const costNote = kind === "direct" ? "Review the refundable bond, gas and execution costs before claiming." : "Review required spending and winning conditions before participating.";
     const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : "Open participation";
     const categories = Array.isArray(item.categories) ? item.categories.slice(0, 3) : [];
     const scene = ["day", "dawn", "dusk", "night"][Array.from(String(item.source_id)).reduce((sum, c) => sum + c.charCodeAt(0), 0) % 4];
@@ -121,14 +124,16 @@
       <header class="feed-post-header"><span class="market-brand-mark" aria-hidden="true">A</span><div><strong>Agent Bounties</strong><small>Funded on Base · USDC</small></div><span class="feed-post-state">${text(timing.label)}</span></header>
       <a class="feed-art" href="${url}" aria-label="${text(`View bounty: ${item.title}`)}"><img src="assets/solarpunk/scene-${scene}.webp?v=2" alt="" width="1536" height="1024" loading="${index ? "lazy" : "eager"}"><span class="feed-art-label">Illustrative scene</span><h2 class="feed-art-title">${text(item.title)}</h2></a>
       <div class="feed-post-body"><div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))}<small>USDC ${isV2(item) ? "prize" : "solver reward"}</small></span><a class="market-button market-button-primary" href="${url}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">${isV2(item) ? "Calculate and participate" : "View bounty →"}</a></div>
-      <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
-      <div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}</div>
+      <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(kindLabel)}</span><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
+      <p class="opportunity-cost-note">${text(costNote)}</p><div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}</div>
     </article>`;
   }
 
-  function filterItems(items, search, timing, nowMs) {
+  function filterItems(items, search, timing, nowMs, kind = "all") {
     const needle = String(search || "").trim().toLowerCase();
     return items.filter((item) => {
+      if (kind === "direct" && workflow.participationKind(item) !== "direct") return false;
+      if (kind === "competition" && !["competition", "child_funding"].includes(workflow.participationKind(item))) return false;
       const phase = timingState(item, nowMs).phase;
       if (timing === "now" && phase !== "now") return false;
       if (timing === "upcoming" && phase !== "upcoming") return false;
@@ -136,6 +141,12 @@
       return [item.title, item.goal, ...(item.categories || []), ...(item.skills || [])]
         .join(" ").toLowerCase().includes(needle);
     });
+  }
+
+  function emptyState(kind) {
+    return kind === "direct"
+      ? '<div class="market-empty"><h2>No direct tasks in this view.</h2><p>Direct tasks pay for completing someone else’s work. Competitions and child-funding opportunities have separate costs and winning conditions. You can check those or refresh later for direct work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Show all opportunities</button></div>'
+      : '<div class="market-empty"><h2>No bounties in this view.</h2><p>Try another search or availability filter, or refresh later for new funded work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear filters</button></div>';
   }
 
   async function loadOpportunities(win) {
@@ -152,6 +163,7 @@
     const summary = doc.querySelector("[data-market-summary]");
     const search = doc.querySelector("[data-market-search]");
     const timing = doc.querySelector("[data-market-timing]");
+    const kind = doc.querySelector("[data-market-kind]");
     const refresh = doc.querySelector("[data-market-refresh]");
     const notice = doc.querySelector("[data-posted-notice]");
     const posted = new URLSearchParams(win.location.search).get("posted")?.toLowerCase();
@@ -170,14 +182,15 @@
         if (notice) notice.hidden = true;
         return;
       }
-      const visible = filterItems(items, search?.value, timing?.value || "all", nowMs);
-      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : '<div class="market-empty"><h2>No bounties in this view.</h2><p>Try another search or availability filter, or post your own bounty.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear filters</button></div>';
-      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (timing) timing.value = "all"; render(); search?.focus(); });
+      const visible = filterItems(items, search?.value, timing?.value || "all", nowMs, kind?.value || "all");
+      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : emptyState(kind?.value);
+      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (timing) timing.value = "all"; if (kind) kind.value = "all"; render(); search?.focus(); });
       list.setAttribute("aria-busy", "false");
       const nowCount = items.filter((item) => timingState(item, nowMs).phase === "now").length;
       const futureCount = items.filter((item) => timingState(item, nowMs).phase === "upcoming").length;
       const endedCount = items.filter((item) => timingState(item, nowMs).phase === "ended").length;
-      if (summary) summary.textContent = `${items.length} funded opportunities · ${nowCount} actionable now${endedCount ? ` · ${endedCount} scoring closed` : ""}${futureCount ? ` · ${futureCount} starts later` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
+      const directCount = items.filter((item) => workflow.participationKind(item) === "direct").length;
+      if (summary) summary.textContent = `${items.length} funded opportunities · ${directCount} direct tasks · ${nowCount} actionable now${endedCount ? ` · ${endedCount} scoring closed` : ""}${futureCount ? ` · ${futureCount} starts later` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
       if (notice && postedContract) {
         const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
         notice.hidden = false;
@@ -188,6 +201,7 @@
 
     search?.addEventListener("input", render);
     timing?.addEventListener("change", render);
+    kind?.addEventListener("change", render);
     const reload = async () => {
       loading = true; failure = null;
       list.setAttribute("aria-busy", "true");
@@ -207,5 +221,5 @@
     win.setInterval(() => { if (!loading && doc.visibilityState !== "hidden" && !list.contains?.(doc.activeElement)) reload(); }, 60_000);
   }
 
-  return { amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
+  return { emptyState, amountNumber, apiBase, decisionContext, detailUrl, filterItems, formatUsdc, isReadyToEarn, isV2, loadOpportunities, opportunityFeedUrl, renderOpportunity, scoringWindow, startBoard, timingState, windowLabel };
 });

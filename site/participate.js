@@ -128,7 +128,9 @@
       } else put("[data-work-status]", `Current work status: ${item.status}.`);
       if (paidEvent) put("[data-work-status]", `Payment confirmed: ${Number(paidEvent.data.solver_payout) / 1e6} USDC to your submission wallet.`);
       if (recovery) {
-        put("[data-work-status]", recovery.effect || recovery.instructions);
+        put("[data-work-status]", recovery.status === "verification_blocked" && item.status === "claimable"
+          ? `Funded · waiting for verification readiness. ${recovery.instructions}`
+          : recovery.effect || recovery.instructions);
         if (recovery.deadline) put("[data-work-deadline]", `The ${item.status === "claimed" ? "work" : "verification"} deadline was ${new Date(recovery.deadline * 1000).toLocaleString()}. Expiry still requires a confirmed on-chain event.`);
       }
       const claimable = item.status === "claimable" && item.verification_ready === true;

@@ -299,7 +299,9 @@ fn autonomous_discovery_item(
     let lifecycle_state = match item.status.as_str() {
         "open" if !fully_funded => "funding_needed",
         "open" => "unavailable",
-        "claimable" if fully_funded && verification_ready => "ready_to_earn",
+        "claimable" if fully_funded && verification_ready && item.validation_errors.is_empty() => {
+            "ready_to_earn"
+        }
         "claimable" => "unavailable",
         "claimed" => "in_progress",
         "submitted" => "verification_pending",
@@ -313,7 +315,12 @@ fn autonomous_discovery_item(
     );
     let public_url = format!("{website}/earn.html?bountyContract={contract}&network={network}");
     let (deadline, deadline_kind) = autonomous_deadline(item);
-    let next_action = autonomous_action(lifecycle_state, network, &contract, api, &events_url);
+    let mut next_action = autonomous_action(lifecycle_state, network, &contract, api, &events_url);
+    if lifecycle_state == "unavailable" && fully_funded {
+        if let Some(reason) = web_public::canonical_claim_blocker(item) {
+            next_action.instructions = format!("Funding is confirmed. {reason}");
+        }
+    }
     let settlement_evidence = if lifecycle_state == "settled" {
         Some(autonomous_settlement(item, &contract)?)
     } else {
@@ -928,7 +935,7 @@ mod tests {
             id: Id::from_u128(u128::from(block) + 1),
             protocol_version: OPEN_COMPETITION_PROTOCOL_VERSION.to_string(),
             log_key: format!("{block}:0"),
-            tx_hash: format!("0x{:064x}", block),
+            tx_hash: format!("0x{block:064x}"),
             block_number: block,
             log_index: 0,
             contract_address: "0x3551ca7bb9090fb8c1648eea40837c8a1cbcc973".to_string(),
@@ -1218,6 +1225,40 @@ mod tests {
                 assert!(projected[0].recovery_action_available);
             }
         }
+    }
+
+    #[test]
+    fn invalid_or_unready_autonomous_items_cannot_advertise_claims() {
+        let mut source = autonomous_fixture("claimable", 2_010_000);
+        source.verification_ready = false;
+        source.verification_readiness_reason = "benchmark not approved".to_string();
+        let project = |item| {
+            autonomous_discovery_items(
+                &[item],
+                "base-mainnet",
+                8453,
+                "https://api.example",
+                "https://www.example",
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let item = project(source.clone());
+        assert!(!item.ready_to_earn);
+        assert!(item
+            .next_action
+            .instructions
+            .contains("benchmark not approved"));
+        source.verification_ready = true;
+        source
+            .validation_errors
+            .push("mismatched event".to_string());
+        let item = project(source);
+        assert!(!item.ready_to_earn);
+        assert!(item
+            .next_action
+            .instructions
+            .contains("could not be validated"));
     }
 
     #[test]

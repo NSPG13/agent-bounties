@@ -45,6 +45,11 @@
         && item.evidence_requirements?.participation_metadata_ready !== false
       : item.source_status === "claimable" && Boolean(item.terms_hash);
   }
+  function participationKind(item) {
+    if (item?.standing_meta_bounty === true) return "child_funding";
+    if (isV2(item) || ["best_score", "first_proven", "first_valid_submission", "open_competition"].includes(item?.competition_mode)) return "competition";
+    return item?.competition_mode === "exclusive_claim" ? "direct" : "unknown";
+  }
   function phase(item, now = Date.now()) {
     const scoring = item?.evidence_requirements?.scoring_window;
     if (!scoring) return "now";
@@ -83,6 +88,7 @@
       bond_usdc: units(item.bond) === null ? null : Number(units(item.bond)) / 1e6,
       cash_economics: item.cash_economics, deadline: item.deadline, standing_meta_bounty: item.standing_meta_bounty === true,
       competition_mode: item.competition_mode, verification_method: item.verification_method,
+      participation_kind: participationKind(item),
       evidence_requirements: item.evidence_requirements, terms_hash: item.terms_hash,
       participation_url: detailUrl(item), next_action: item.next_action, payment_boundary: BOUNDARY,
     };
@@ -270,5 +276,5 @@
       },
     };
   }
-  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, phase, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
+  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
 });
