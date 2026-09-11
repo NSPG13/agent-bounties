@@ -587,6 +587,13 @@ fn parse_github_repo_from_check_run_url(url: &str) -> Option<(String, String)> {
     None
 }
 
+fn is_canonical_path_segment(segment: &str) -> bool {
+    if segment.is_empty() || segment == "." || segment == ".." {
+        return false;
+    }
+    !segment.chars().any(|c| c == '\\' || c.is_ascii_control())
+}
+
 fn parse_immutable_artifact_url(url: &str) -> Option<ParsedArtifactUrl> {
     if !url.starts_with("https://") {
         return None;
@@ -608,13 +615,16 @@ fn parse_immutable_artifact_url(url: &str) -> Option<ParsedArtifactUrl> {
             && (parts[2] == "blob" || parts[2] == "raw")
         {
             let sha = parts[3];
-            let path = parts[4..].join("/");
-            if is_hex_sha(sha, 40) && !path.trim().is_empty() {
+            let path_segments = &parts[4..];
+            if is_hex_sha(sha, 40)
+                && !path_segments.is_empty()
+                && path_segments.iter().all(|s| is_canonical_path_segment(s))
+            {
                 return Some(ParsedArtifactUrl {
                     owner: parts[0].to_ascii_lowercase(),
                     repo: sanitize_repo_name(parts[1]),
                     commit: sha.to_ascii_lowercase(),
-                    path,
+                    path: path_segments.join("/"),
                 });
             }
         }
@@ -625,13 +635,16 @@ fn parse_immutable_artifact_url(url: &str) -> Option<ParsedArtifactUrl> {
         let parts: Vec<&str> = rest.split('/').collect();
         if parts.len() >= 4 && !parts[0].is_empty() && !parts[1].is_empty() {
             let sha = parts[2];
-            let path = parts[3..].join("/");
-            if is_hex_sha(sha, 40) && !path.trim().is_empty() {
+            let path_segments = &parts[3..];
+            if is_hex_sha(sha, 40)
+                && !path_segments.is_empty()
+                && path_segments.iter().all(|s| is_canonical_path_segment(s))
+            {
                 return Some(ParsedArtifactUrl {
                     owner: parts[0].to_ascii_lowercase(),
                     repo: sanitize_repo_name(parts[1]),
                     commit: sha.to_ascii_lowercase(),
-                    path,
+                    path: path_segments.join("/"),
                 });
             }
         }
@@ -814,6 +827,16 @@ mod tests {
         ));
         assert!(!is_immutable_artifact_url("https://github.com/org/repo/raw/0123456789abcdef0123456789abcdef01234567/report.json?v=latest"));
         assert!(!is_immutable_artifact_url("https://github.com/org/repo/raw/0123456789abcdef0123456789abcdef01234567%2Freport.json"));
+
+        // Dot-segments, path traversal, backslashes, and noncanonical segments -> Denied
+        assert!(!is_immutable_artifact_url("https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/../main/README.md"));
+        assert!(!is_immutable_artifact_url("https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/./report.json"));
+        assert!(!is_immutable_artifact_url("https://raw.githubusercontent.com/agent-bounties/agent-bounties/0123456789abcdef0123456789abcdef01234567/crates/../report.json"));
+        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/blob/0123456789abcdef0123456789abcdef01234567/../main/README.md"));
+        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/blob/0123456789abcdef0123456789abcdef01234567/crates/.."));
+        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/raw/0123456789abcdef0123456789abcdef01234567/crates/.."));
+        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/blob/0123456789abcdef0123456789abcdef01234567/crates\\\\report.json"));
+        assert!(!is_immutable_artifact_url("https://github.com/agent-bounties/agent-bounties/blob/0123456789abcdef0123456789abcdef01234567/crates//report.json"));
 
         // Generic unpinned URLs, IPFS, Arweave or other mutable paths -> Denied
         assert!(!is_immutable_artifact_url(
