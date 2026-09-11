@@ -22,3 +22,5 @@ broadcast/
 /tools/coinbase-embedded-wallet/.build-check
 /site/vendor/coinbase-embedded-wallet.bundle.js
 /site/vendor/coinbase-embedded-wallet.bundle.css
+/site/assets/fonts/Satoshi-Variable.woff2
+/.ui-review/

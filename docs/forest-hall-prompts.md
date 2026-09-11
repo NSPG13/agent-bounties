@@ -1,0 +1,26 @@
+# Forest hall generation prompts
+
+These are the exact prompts used for the September 10, 2026 quality pass. The image was supplied to Veo as both the first and last frame. See [provenance and delivery](forest-hall-artwork.md).
+
+## Revised first/last frame
+
+Use case: precise-object-edit.
+Asset type: high-resolution first/last frame for an AgentBounties.app forest-hall video.
+Edit target: the attached existing forest hall image.
+Keep the exact approved camera position, 16:9 framing, open vaulted hall, dense forest, ferns, moss, vines, teal architectural inlays, fire pit, lighting and overall composition. Preserve ALL FIVE existing distinctive AI agents, including the four seated robots and the small floating orb, without replacing or merging any of them.
+Add exactly TWO humans: one young adult man in his twenties and one young adult woman in her twenties. They are seated naturally among the robots around the same fire, comfortably engaged in friendly conversation with them. Seven participants total including the orb. Place the two people within the central gathering, with open space and distinct silhouettes so the group does not look crowded; slight natural repositioning of the seated participants is allowed to fit them convincingly on the circular benches. The man and woman wear tasteful casual solarpunk clothing in muted forest, moss and natural linen colors, with realistic human faces, natural skin texture and correctly formed relaxed hands. One makes a small conversational gesture while a neighboring robot listens; the other person looks toward an agent. Keep the fire clearly visible and the people safely seated around it, with warm firelight matching the scene.
+Add more tiny GREEN fireflies at varied depths among the forest and foliage, with naturally scattered positions and varied small glows, some brightly green and some dim. They must look like actual luminous insects in the scene, not a decorative grid, big lens flares or green fog. Preserve the warm amber fire.
+Photorealistic cinematic environmental image with clean detailed foliage, stone texture and robot materials, sharp natural detail, no waxy skin or oversharpened outlines. Keep the upper half dark and uncluttered for the existing website heading and task form. Keep the people and robots in the lower central region.
+Produce a high-detail 3840x2160 landscape image if supported. No text, branding, logo, borders, watermark, UI, extra people, extra robots, weapons or changes to the architecture.
+
+## Veo 3.1 Standard video
+
+Create an eight-second seamless-loop cinematic video. Use the supplied forest-hall-humans-v2.png as both the first and last frame. Preserve the exact deep forest hall, architecture, lighting, fire pit, and all SEVEN distinct participants: the young adult man and young adult woman in their twenties, the FOUR seated robots, and the ONE floating orb. All seven remain visible and separate, with stable faces, hands, clothes and robot identities.
+
+Locked tripod camera: no zoom, pan, dolly, reframing, border expansion or cuts. Keep the same 16:9 composition, dark upper space for the website heading, and the gathering in the lower center. Maintain fine natural texture in the foliage, moss, wet stone, human skin and robot materials without crawling details, melting faces or sharpening halos.
+
+The humans and robots are having a quiet, friendly conversation around the fire. The man makes one small relaxed hand gesture toward a robot, which gives a subtle listening nod at a different moment. The woman turns slightly toward another agent and smiles; that agent makes a tiny independent head movement. Others stay largely still with subtle natural idle motion. Keep all gestures restrained and asynchronous, then return smoothly to the reference poses. No synchronized waving or arms rising. The floating orb gently hovers and returns. The warm amber fire flickers naturally and casts soft consistent reflected light.
+
+Animate MANY SMALL GREEN FIREFLIES within the actual environment at varied depths, especially around the ferns and background forest, with a few softly defocused foreground insects. Each insect follows its OWN slow, meandering three-dimensional flight path with varied speed, gentle turns and brief hovering. Each green abdomen independently brightens, glows briefly, fades fully dark, and lights again after a different irregular interval. Stagger every insect's glow phase and pulse length: NEVER synchronize or flash the entire scene. Each insect continues flying during its dark phase and reappears farther along its own path. Keep most insects dim or dark at any moment, so the forest stays deep and calm. Avoid static sparkling points, identical motion, particle grids, long neon trails, green fog, or fire embers turning into green insects. These are real luminous flying insects rendered inside the video, with natural depth and occlusion by plants.
+
+Very slow, calm motion suitable for a website background. Plants barely move. Finish smoothly at the supplied final composition for a clean repeat without abrupt resets. 4K output, 16:9, eight seconds, full Veo 3.1 Standard/Quality. No extra humans or robots, text, logo, watermark, voiceover, intelligible dialogue, music, or camera movement.

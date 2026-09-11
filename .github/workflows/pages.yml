@@ -8,8 +8,12 @@ on:
       - ".github/workflows/pages.yml"
       - "site/**"
       - "scripts/check-site.py"
+      - "scripts/prepare-site-fonts.py"
       - "scripts/sync-site-navigation.py"
       - "scripts/templates/site-navigation.html"
+      - "scripts/templates/site-footer.html"
+      - "scripts/test-forest-ui.cjs"
+      - "scripts/test-leaderboard.cjs"
       - "scripts/test-site-navigation.cjs"
       - "scripts/test-solarpunk-home.js"
       - "scripts/test-ai-bounty-handoff.js"
@@ -46,8 +50,12 @@ on:
       - ".github/workflows/pages.yml"
       - "site/**"
       - "scripts/check-site.py"
+      - "scripts/prepare-site-fonts.py"
       - "scripts/sync-site-navigation.py"
       - "scripts/templates/site-navigation.html"
+      - "scripts/templates/site-footer.html"
+      - "scripts/test-forest-ui.cjs"
+      - "scripts/test-leaderboard.cjs"
       - "scripts/test-site-navigation.cjs"
       - "scripts/test-solarpunk-home.js"
       - "scripts/test-ai-bounty-handoff.js"
@@ -117,6 +125,8 @@ jobs:
           cd tools/coinbase-embedded-wallet
           npx playwright install --with-deps chromium
           npm run test:browser
+      - name: Prepare licensed self-hosted typography
+        run: python scripts/prepare-site-fonts.py
       - name: Validate the reduced public site
         run: python scripts/check-site.py --require-wallet-bundle
       - name: Check retained browser JavaScript
@@ -124,6 +134,11 @@ jobs:
           node --check site/analytics-config.js
           node --check site/analytics.js
           node --check site/solarpunk-home.js
+          node --check site/forest-theme.js
+          node --check site/forest-home.js
+          node --check site/forest-hall.js
+          node --check site/forest-posting.js
+          node --check site/leaderboard.js
           node --check site/metrics.js
           node --check site/marketplace.js
           node --check site/competition.js
@@ -137,7 +152,9 @@ jobs:
           node --check site/posting-reference.js
           node --check site/posting-session.js
           node --check site/funding-readiness.js
-      - name: Test the living scene and marketplace evidence states
+      - name: Test leaderboard evidence and shared appearance
+        run: node --test scripts/test-leaderboard.cjs
+      - name: Test the marketplace evidence states
         run: node --test scripts/test-solarpunk-home.js
       - name: Test assistant desktop handoff and draft preservation
         run: node scripts/test-ai-bounty-handoff.js
@@ -254,6 +271,8 @@ jobs:
               raise SystemExit("analytics configuration assignment was not found exactly once")
           path.write_text(updated, encoding="utf-8")
           PY
+      - name: Prepare licensed self-hosted typography
+        run: python scripts/prepare-site-fonts.py
       - name: Stage machine-readable protocol schemas
         run: |
           mkdir -p site/schemas
@@ -289,7 +308,7 @@ jobs:
           curl --fail --silent --show-error --location "https://agentbounties.app/terms.html?verify=${nonce}" -o /tmp/live-terms.html
           curl --fail --silent --show-error --location "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-discovery.json
           grep -q 'data-scene-root' /tmp/live-index.html
-          grep -q 'Rather pay for results than tokens?' /tmp/live-index.html
+          grep -q 'data-home-task' /tmp/live-index.html
           grep -q 'All ready opportunities' /tmp/live-earn.html
           grep -q 'data-posted-notice' /tmp/live-earn.html
           grep -q 'data-funded-receipt' /tmp/live-funded.html

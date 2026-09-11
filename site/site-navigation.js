@@ -11,7 +11,7 @@
     if (!accountLink || typeof session?.authenticated !== "boolean") return;
     const authenticated = session.authenticated && Boolean(session.user?.id);
     accountLink.dataset.authenticated = String(authenticated);
-    accountLink.textContent = authenticated ? "Account" : "Login";
+    accountLink.textContent = authenticated ? "Account" : "Sign in";
     accountLink.title = authenticated && session.user.name ? `Account: ${String(session.user.name).slice(0, 100)}` : authenticated ? "Your account" : "Sign in";
     if (authenticated) {
       const destination = new URL(signedOutHref, window.location.href);

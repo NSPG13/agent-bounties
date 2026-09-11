@@ -628,7 +628,7 @@ ${competitionChildBrief(item)}`;
     }
 
     function beginAnimation() {
-      if (reducedMotion.matches || frame || !visible) return;
+      if (!canvas || !context || reducedMotion.matches || frame || !visible) return;
       frame = win.requestAnimationFrame(drawScene);
     }
 
@@ -788,7 +788,7 @@ ${competitionChildBrief(item)}`;
           ? ready ? "Your bounties and payments, all in one place."
             : "Link a wallet to finish setup. You can use one you have or create one here."
           : "Sign in, then link a wallet to finish creating your account.";
-        openButton.textContent = currentUser ? "Account" : "Login";
+        openButton.textContent = currentUser ? "Account" : "Sign in";
         if (returnButton) returnButton.hidden = !postingAuth?.pending(win);
         if (setupSteps) {
           setupSteps.hidden = ready;
@@ -1368,6 +1368,10 @@ ${competitionChildBrief(item)}`;
         setStatus(contextStatus);
       };
       const showDialog = () => {
+        if (!postingRequest.requested) {
+          const task = doc.querySelector("#home-task")?.value?.trim();
+          launcherPrompt = task ? `${BOUNTY_POSTING_PROMPT}\n\nMy task: ${task}` : BOUNTY_POSTING_PROMPT;
+        }
         resetLauncher();
         if (promptPreview) promptPreview.textContent = currentLauncherPrompt();
         dialog.showModal();

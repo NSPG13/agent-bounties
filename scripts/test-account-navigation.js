@@ -13,7 +13,7 @@ class Element extends EventTarget {
 function harness({ homepage = false, payload = { authenticated: false }, href = "./?postReturn=1#login" } = {}) {
   const win = new EventTarget(), doc = new EventTarget(), header = new Element(), toggle = new Element(), nav = new Element(), link = new Element();
   link.setAttribute("href", href);
-  link.textContent = "Login";
+  link.textContent = "Sign in";
   let calls = 0, failure = false;
   Object.assign(win, {
     location: new URL("https://agentbounties.app/post.html"), setTimeout, clearTimeout,
@@ -38,7 +38,7 @@ test("interior Account link uses server session and strips posting return redire
   await tick();
   assert.equal(h.link.textContent, "Account", "network failure is not sign-out evidence");
   h.emit({ authenticated: false, user: null });
-  assert.equal(h.link.textContent, "Login");
+  assert.equal(h.link.textContent, "Sign in");
   assert.equal(h.link.getAttribute("href"), "./?postReturn=1#login");
 });
 
@@ -49,5 +49,5 @@ test("homepage shares its existing session and never introduces duplicate auth r
   h.emit({ authenticated: true, user: { id: "fixture", name: "Member" } });
   assert.equal(h.link.textContent, "Account");
   h.emit({ authenticated: true, user: { email: "unverified@example.invalid" } });
-  assert.equal(h.link.textContent, "Login", "email alone is never a session identity");
+  assert.equal(h.link.textContent, "Sign in", "email alone is never a session identity");
 });

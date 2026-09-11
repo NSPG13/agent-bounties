@@ -85,13 +85,15 @@ async function main() {
         await page.goto(`${origin}/${file}`);
         await page.locator(".ab-site-header.is-enhanced").waitFor();
         assert.equal(await page.locator("[data-site-header]").count(), 1, file);
+        assert.equal(await page.locator("body > .ab-footer").count(), 1, `one page footer outside article cards: ${file}`);
+        assert.equal(await page.locator(".ab-footer").count(), 1, file);
         assert.equal(await page.locator("nav[aria-label='Primary navigation']").count(), 1, file);
         const links = await page.locator(".ab-site-nav a").evaluateAll(els => els.map(el => {
           const url = new URL(el.href);
           return { text: el.textContent.trim(), href: url.pathname + url.search + url.hash };
         }));
         const expectedLogin = file === "post.html" ? "/?postReturn=1#login" : "/#login";
-        assert.deepEqual(links, [{ text: "About us", href: "/about.html" }, { text: "Find bounties", href: "/earn.html" }, { text: "Login", href: expectedLogin }], file);
+        assert.deepEqual(links, [{ text: "Leaderboard", href: "/leaderboard.html" }, { text: "Find bounties", href: "/earn.html" }, { text: "Sign in", href: expectedLogin }], file);
         const appearance = await page.locator("[data-site-header]").evaluate(el => {
           const css = getComputedStyle(el), brand = getComputedStyle(el.querySelector("strong"));
           return { height: el.getBoundingClientRect().height, background: css.backgroundImage, padding: css.padding, brand: brand.font, color: brand.color };
