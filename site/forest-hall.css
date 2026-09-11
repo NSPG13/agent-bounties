@@ -65,7 +65,8 @@
 /* A quiet forest invitation with independent firefly glows. */
 .ab-manifesto { position: relative; isolation: isolate; max-width: 1600px; margin: 0 auto; padding: 130px 100px; text-align: center; background: radial-gradient(ellipse at 50% 60%, #83b8340e, transparent 66%); }
 .ab-manifesto h2 { position: relative; margin: 0 auto; max-width: 1200px; font: 400 clamp(34px, 4.7vw, 76px)/1.14 var(--ab-display); letter-spacing: -.025em; text-wrap: balance; }
-.ab-manifesto h2 strong { display: block; margin-top: .3em; font-weight: 400; color: var(--ab-moss); }
+.ab-manifesto h2 strong { display: block; margin-top: .3em; font-weight: 400; color: #102008; }
+.ab-manifesto h2 strong span { background: #c7f542; padding: .03em .06em .07em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .ab-manifesto h2 em { font-style: normal; color: var(--ab-ink); text-decoration: underline; text-decoration-color: var(--ab-moss); text-decoration-thickness: 2px; text-underline-offset: .12em; }
 .ab-manifesto-branch { position: absolute; z-index: -1; left: 0; top: 0; height: 100%; width: 18%; color: var(--ab-moss); opacity: .2; }
 .ab-manifesto-fireflies { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
