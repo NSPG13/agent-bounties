@@ -1,5 +1,7 @@
 /* Cinematic forest atmosphere, independent of task/account/payment state. */
 .forest-home .ab-hero { padding-top: 62px; }
+.forest-home .ab-hero h1 { max-width: 1060px; font-size: clamp(28px, 4vw, 54px); line-height: 1.16; text-wrap: balance; }
+.forest-home .ab-hero-subtitle { margin-top: 28px; text-wrap: balance; }
 .forest-home .ab-hero::before { content: none; }
 .ab-forest-backdrop { position: absolute; inset: 0 0 110px; z-index: -1; overflow: hidden; pointer-events: none; background: #07110c; }
 .ab-forest-backdrop picture { display: contents; }
