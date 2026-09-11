@@ -40,11 +40,11 @@ available. The hero, process copy, and picker help are shortened.
 
 The hero uses three explicit lines, highlights “get your work done,” and cycles
 Faster → Cheaper → Better in a fixed-width bold slot. Reduced motion stops the
-word loop, and the accessible heading stays stable. The subtitle underlines
-“only pay for results” with a tilted “only” accent. A white Use cases label sits
+word loop, and the accessible heading stays stable. The rotating word has an
+untilted lime highlight; the subtitle only underlines “only pay for results.” A white Use cases label sits
 inside the editable task field; its examples cover benchmarked systems work,
 independent research, adversarial testing, and constrained optimization. The
-same examples drive the scrolling rows, and the expanded cards grow naturally
+same examples drive one slow scrolling row, and the expanded cards grow naturally
 so their controls stay reachable.
 
 ## Implementation
@@ -55,11 +55,16 @@ header and footer share one template across public pages. The private posting
 canary remains isolated. Contact stays on GitHub support, and legal body text
 and existing URLs remain intact.
 
-The task-led homepage follows the observed TryBounty composition: centered
-hero, task field, pill controls, metrics cards, rotating botanical visual,
-scrolling task examples, process cards, a keyboard/swipe carousel, three FAQ
-columns, closing CTA, and footer. Factual marketplace evidence replaces
-competitor endorsements; example cards are labeled as examples.
+The homepage combines a centered hero and task field with the forest hall video,
+botanical linework, and independently glowing fireflies. Desktop typography and
+controls scale up while the mobile hero retains its existing sizing. Metrics form
+an open strip on desktop and stacked rows on mobile, with no cards or horizontal
+scrolling. A static “define ‘done’” statement replaces the circular visual, followed
+by one slow row of task examples. How it works leads directly into the steps.
+A keyboard/swipe carousel, three FAQ columns, closing CTA, and footer complete
+the page. Factual marketplace evidence replaces competitor endorsements; example
+cards are labeled as examples. Healthy metric updates remain quiet; unavailable
+evidence still displays its error state.
 
 The forest-hall refinement adds a six-second Veo 3.1 Standard loop with two
 young adults and five embodied agents around a fire. Desktop receives 4K and
@@ -96,7 +101,7 @@ Passed locally:
   marketplace evidence, assistant handoff, WebMCP, and leaderboard parsing.
 - 29 Coinbase embedded-wallet readiness and account-link tests.
 - The full browser-layout suite: shared navigation on every HTML route,
-  homepage themes and task handoff at the four requested widths, account states,
+  homepage themes and task handoff at 390, 768, 1280, 1440, and 1920px, account states,
   leaderboard populated/empty/error states, board/workspace/receipt recovery,
   posting and phone-wallet layout from 320px through 1440px, and zoom reflow.
 - Additional light-mode funding checks verify that terms remain readable and

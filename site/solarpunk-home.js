@@ -663,7 +663,8 @@ ${competitionChildBrief(item)}`;
       doc.querySelector("[data-live-weekly]").textContent = `+${formatter.format(snapshot.addedThisWeek)} created in the last 7 days`;
       doc.querySelector("[data-completed-weekly]").textContent = `+${formatter.format(snapshot.completedThisWeek)} settled in the last 7 days`;
       const status = doc.querySelector("[data-market-status]");
-      status.textContent = "Canonical marketplace evidence is current.";
+      status.textContent = "";
+      status.hidden = true;
       status.dataset.state = "ready";
     }
 
@@ -675,6 +676,7 @@ ${competitionChildBrief(item)}`;
       doc.querySelector("[data-completed-weekly]").textContent = "Canonical settlement history unavailable";
       const status = doc.querySelector("[data-market-status]");
       status.textContent = message;
+      status.hidden = false;
       status.dataset.state = "unavailable";
     }
 

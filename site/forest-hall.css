@@ -2,12 +2,12 @@
 .forest-home .ab-hero { padding-top: 62px; }
 .forest-home .ab-hero h1 { max-width: 1060px; font-size: clamp(19px, 6.15vw, 54px); line-height: 1.26; }
 .forest-home .ab-hero h1 > .ab-title-line { display: block; margin: 0; white-space: nowrap; }
-.forest-home .ab-outcome-word { display: inline-block; width: 4.35em; text-align: left; font-family: var(--ab-body); font-weight: 900; line-height: 1; letter-spacing: -.045em; vertical-align: baseline; }
+.forest-home .ab-outcome-word { display: inline-block; width: 4.4em; padding: .03em .12em .08em; border-radius: .1em; background: #c7f542; color: #102008; text-align: center; font-family: var(--ab-body); font-weight: 900; line-height: 1; letter-spacing: -.045em; vertical-align: baseline; }
 .forest-home .ab-hero-subtitle { margin-top: 28px; text-wrap: balance; }
 .ab-payoff { white-space: nowrap; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
-.ab-only { display: inline-block; margin: 0 3px; padding: 0 5px; border-radius: 3px; background: #c7f542; color: #102008; font-style: normal; font-weight: 800; transform: rotate(-7deg); text-shadow: none; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
+.ab-only { font-style: normal; }
 .forest-home .ab-hero::before { content: none; }
-.ab-forest-backdrop { position: absolute; inset: 0 0 110px; z-index: -1; overflow: hidden; pointer-events: none; background: #07110c; }
+.ab-forest-backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; background: #07110c; }
 .ab-forest-backdrop picture { display: contents; }
 .ab-forest-poster, .ab-forest-video { display: block; position: absolute; width: 100%; height: 100%; object-fit: cover; object-position: center 72%; }
 .ab-forest-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, #07110c70 0%, #07110c99 25%, #07110c80 48%, #07110c00 67%, #07110c00 82%, var(--ab-bg) 100%), radial-gradient(ellipse at 50% 27%, #07110c99 0%, #07110c20 52%, transparent 75%); }
@@ -36,25 +36,103 @@
 .ab-forest-controls button[aria-pressed="true"]::before { content: "▷"; }
 .ab-forest-controls button:hover { background: #203c27; }
 .forest-home .ab-metrics { margin-top: 12px; }
-.forest-home .ab-orbit-section { position: relative; isolation: isolate; background: radial-gradient(ellipse at center, #365d261a, transparent 65%); }
-.forest-home .ab-orbit-section::before, .forest-home .ab-orbit-section::after { content: ""; pointer-events: none; position: absolute; z-index: -1; width: 38%; max-width: 480px; height: 80%; top: 10%; background: url("assets/forest/agent-hall-small-v1.webp") left center / auto 100% no-repeat; opacity: .28; mask-image: radial-gradient(ellipse at left, #000 8%, transparent 70%); }
-.forest-home .ab-orbit-section::before { left: 0; }
-.forest-home .ab-orbit-section::after { right: 0; transform: scaleX(-1); }
 .forest-home .ab-closing { background: linear-gradient(#07110caa, #07110cf0), url("assets/forest/agent-hall-v1.webp") center 58% / cover; }
 .forest-home .ab-closing::before, .forest-home .ab-closing::after { opacity: .2; }
 [data-theme="light"] .ab-forest-backdrop::after { background: linear-gradient(180deg, #07110c70 0%, #07110c99 25%, #07110c80 48%, #07110c00 67%, #07110c00 82%, #f7f8f2 100%), radial-gradient(ellipse at 50% 27%, #07110c99 0%, #07110c20 52%, transparent 75%); }
-[data-theme="light"] .forest-home .ab-orbit-section::before, [data-theme="light"] .forest-home .ab-orbit-section::after { opacity: .12; }
-@media (min-width: 1600px) { .ab-forest-backdrop { inset-inline: calc((100% - 1800px) / 2); } }
 @media (max-width: 700px) {
   .forest-home .ab-hero { padding-top: 32px; }
   .ab-usecases-label { padding: 18px 23px 0; font-size: 12px; }
   .forest-home .ab-task-field textarea { height: 154px; min-height: 154px; padding-top: 12px; padding-bottom: 18px; font-size: 22px; }
   .forest-home .ab-example-card[data-slot="1"] { transform: translateX(23%) rotate(8deg) scale(.9); }
   .forest-home .ab-example-card[data-slot="2"] { transform: translateX(-23%) rotate(-8deg) scale(.9); }
-  .ab-forest-backdrop { bottom: 120px; }
   .ab-forest-poster, .ab-forest-video { object-fit: cover; object-position: center bottom; }
   .ab-forest-clearing { height: 240px; }
   .forest-home .ab-metrics { margin-top: 8px; }
   .ab-forest-controls { min-height: 34px; }
 }
 @media (prefers-reduced-motion: reduce) { .ab-forest-video { display: none; } .ab-forest-controls button { display: none; } }
+
+/* Open forest statistics: a shared landscape, not a row of cards. */
+.forest-home .ab-metrics { width: calc(100% - 64px); max-width: 1440px; margin: 0 auto; padding: 54px 0; gap: 0; overflow: visible; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--ab-line); background: radial-gradient(ellipse at 50% 100%, #83b8340b, transparent 70%); }
+.forest-home .ab-metric:nth-child(n) { position: relative; min-height: 0; padding: 12px 32px; background: none; border-radius: 0; transform: none; color: var(--ab-ink); text-align: center; justify-content: flex-start; }
+.forest-home .ab-metric + .ab-metric { border-left: 1px solid var(--ab-line); }
+.forest-home .ab-metric + .ab-metric::before { content: ""; position: absolute; left: -3px; top: 40%; width: 5px; height: 5px; border-radius: 50%; background: var(--ab-moss); box-shadow: 0 0 18px #83b83477; }
+.forest-home .ab-metric strong, .forest-home .ab-metric output { font-size: clamp(36px, 4vw, 64px); color: var(--ab-moss); }
+.forest-home .ab-metric span { font-size: 17px; margin-top: 14px; }
+.forest-home .ab-metric small { font-size: 13px; line-height: 1.5; color: var(--ab-muted); opacity: 1; }
+.forest-home [data-market-status][hidden] { display: none; }
+
+/* A quiet forest invitation with independent firefly glows. */
+.ab-manifesto { position: relative; isolation: isolate; max-width: 1600px; margin: 0 auto; padding: 130px 100px; text-align: center; background: radial-gradient(ellipse at 50% 60%, #83b8340e, transparent 66%); }
+.ab-manifesto h2 { position: relative; margin: 0 auto; max-width: 1200px; font: 400 clamp(34px, 4.7vw, 76px)/1.14 var(--ab-display); letter-spacing: -.025em; text-wrap: balance; }
+.ab-manifesto h2 strong { display: block; margin-top: .3em; font-weight: 400; color: var(--ab-moss); }
+.ab-manifesto h2 em { font-style: normal; color: var(--ab-ink); text-decoration: underline; text-decoration-color: var(--ab-moss); text-decoration-thickness: 2px; text-underline-offset: .12em; }
+.ab-manifesto-branch { position: absolute; z-index: -1; left: 0; top: 0; height: 100%; width: 18%; color: var(--ab-moss); opacity: .2; }
+.ab-manifesto-fireflies { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.ab-manifesto-fireflies i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #a7f361; box-shadow: 0 0 14px 3px #83b83455; animation: ab-forest-glimmer 5.7s ease-in-out infinite; }
+.ab-manifesto-fireflies i:nth-child(1) { left: 12%; top: 26%; animation-delay: -1.2s; }
+.ab-manifesto-fireflies i:nth-child(2) { left: 29%; top: 78%; animation-duration: 7.1s; animation-delay: -4s; }
+.ab-manifesto-fireflies i:nth-child(3) { left: 71%; top: 14%; animation-duration: 4.9s; animation-delay: -2.2s; }
+.ab-manifesto-fireflies i:nth-child(4) { left: 89%; top: 52%; animation-duration: 8.3s; animation-delay: -6s; }
+.ab-manifesto-fireflies i:nth-child(5) { left: 84%; top: 84%; animation-duration: 6.6s; animation-delay: -3s; }
+.ab-manifesto-fireflies i:nth-child(6) { left: 46%; top: 10%; animation-duration: 7.7s; animation-delay: -5s; }
+@keyframes ab-forest-glimmer { 0%, 18%, 78%, 100% { opacity: .04; translate: 0 0; } 42% { opacity: .8; translate: 3px -5px; } 55% { opacity: .25; translate: 5px -3px; } }
+
+/* One unhurried line of examples, with matching groups for a seamless loop. */
+.forest-home .ab-tickers { display: block; padding: 28px 0 65px; }
+.forest-home .ab-ticker { gap: 0; animation-duration: 360s; }
+.ab-ticker-group { display: flex; gap: 20px; padding-right: 20px; }
+.forest-home .ab-ticker button { border-radius: 999px; border-color: color-mix(in srgb, var(--ab-moss) 28%, transparent); background: color-mix(in srgb, var(--ab-panel) 65%, transparent); }
+
+@media (min-width: 1100px) {
+  .forest-home .ab-hero { padding-top: 54px; }
+  .forest-home .ab-hero-content { max-width: 1440px; }
+  .forest-home .ab-hero h1 { max-width: 1420px; font-size: clamp(64px, 4.5vw, 86px); line-height: 1.18; }
+  .forest-home .ab-hero-subtitle { max-width: 1060px; margin: 34px auto 40px; font-size: clamp(24px, 1.6vw, 30px); }
+  .forest-home .ab-task-form { max-width: 1120px; }
+  .forest-home .ab-usecases-label { font-size: 17px; padding-top: 25px; }
+  .forest-home .ab-task-field textarea { font-size: clamp(32px, 2vw, 38px); height: 166px; min-height: 166px; }
+  .forest-home .ab-button { min-height: 64px; padding: 18px 30px; font-size: 22px; }
+  .forest-home .ab-task-actions .ab-button { min-width: 280px; font-size: 22px; }
+  .forest-home .ab-process { max-width: 1480px; }
+  .forest-home .ab-section-title { max-width: 1100px; font-size: clamp(72px, 5vw, 88px); }
+  .forest-home .ab-process-copy { max-width: 520px; }
+  .forest-home .ab-process h3 { font-size: 52px; }
+  .forest-home .ab-process p:not(.ab-overline) { font-size: 23px; }
+  .forest-home .ab-overline, .forest-home .ab-step-number { font-size: 18px; }
+  .forest-home .ab-demo { padding: 38px; }
+  .forest-home .ab-demo h4 { font-size: 34px; }
+  .forest-home .ab-demo ul { font-size: 19px; }
+  .forest-home .ab-demo small { font-size: 16px; }
+  .forest-home .ab-ticker button { font-size: 18px; padding: 22px 30px; max-width: 800px; }
+  .forest-home .ab-ticker button span { font-size: 13px; }
+  .forest-home .ab-stories > h2, .forest-home .ab-faq h2 { font-size: 64px; max-width: 1100px; }
+  .forest-home .ab-example-deck { max-width: 1100px; }
+  .forest-home .ab-example-card { width: 520px; padding: 42px; }
+  .forest-home .ab-example-card h3 { font-size: 36px; }
+  .forest-home .ab-example-card p { font-size: 19px; }
+  .forest-home .ab-example-card small { font-size: 15px; }
+  .forest-home .ab-faq { max-width: 1400px; }
+  .forest-home .ab-faq h3 { font-size: 25px; }
+  .forest-home .ab-faq p { font-size: 19px; }
+  .forest-home .ab-closing h2 { font-size: 76px; }
+  .forest-home .ab-closing p { font-size: 24px; }
+}
+@media (max-width: 700px) {
+  .forest-home .ab-metrics { width: calc(100% - 48px); margin: 0 auto; padding: 26px 0; grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .forest-home .ab-metric:nth-child(n) { padding: 25px 12px; min-height: 0; }
+  .forest-home .ab-metric + .ab-metric { border-left: 0; border-top: 1px solid var(--ab-line); }
+  .forest-home .ab-metric + .ab-metric::before { top: -3px; left: calc(50% - 2px); }
+  .forest-home .ab-metric strong, .forest-home .ab-metric output { font-size: 42px; }
+  .forest-home .ab-metric span { font-size: 16px; margin-top: 9px; }
+  .forest-home .ab-metric small { font-size: 12px; margin-top: 8px; }
+  .ab-manifesto { padding: 78px 30px; }
+  .ab-manifesto h2 { font-size: clamp(30px, 8vw, 42px); }
+  .ab-manifesto-branch { width: 29%; opacity: .14; }
+  .forest-home .ab-tickers { padding: 16px 0 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .forest-home .ab-tickers { overflow-x: auto; mask-image: none; }
+  .forest-home .ab-ticker { flex-wrap: nowrap; width: max-content; }
+  .ab-ticker-group[data-ticker-copy] { display: none; }
+}

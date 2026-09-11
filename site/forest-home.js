@@ -31,8 +31,8 @@
     outcome.textContent = outcomes[outcomeIndex];
     outcomeAnimation?.cancel();
     outcomeAnimation = outcome.animate?.([
-      { opacity: 0, transform: "translateY(.3em) rotate(4deg)" },
-      { opacity: 1, transform: "translateY(0) rotate(0)" },
+      { opacity: 0, transform: "translateY(.3em)" },
+      { opacity: 1, transform: "translateY(0)" },
     ], { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" });
   }, 2800);
   reduced.addEventListener("change", () => { if (reduced.matches) outcomeAnimation?.cancel(); });
