@@ -139,6 +139,22 @@ assert.match(status.textContent, /Nothing is posted or funded until you approve 
 assert.equal(customActions.hidden, true);
 assert.equal(gptButton.attributes["aria-current"], "true");
 
+let cursorPrevented = false;
+let cursorStopped = false;
+handlers.click.callback({
+  target: cursorButton,
+  preventDefault() { cursorPrevented = true; },
+  stopImmediatePropagation() { cursorStopped = true; },
+});
+assert.equal(cursorPrevented, true);
+assert.equal(cursorStopped, true);
+assert.equal(launches.length, 1, "desktop-only Cursor must not launch a broken mobile deep link");
+assert.equal(customActions.hidden, false);
+assert.equal(webFallback.hidden, true);
+assert.match(status.textContent, /Cursor is desktop-only/);
+assert.match(status.textContent, /copy the instructions/i);
+assert.equal(cursorButton.attributes["aria-current"], "true");
+
 assert.equal(
   mobile.setupMobileAssistantHandoff(
     { navigator: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)", userAgentData: { mobile: false } } },
