@@ -19,9 +19,23 @@
     input.focus({ preventScroll: true });
   }));
   // A cycling placeholder never replaces user input and stops during editing.
-  const examples = ["Research my top 20 competitors", "Turn my podcast into short videos", "Build a landing page for my product"];
+  const examples = Array.from(new Set(Array.from(document.querySelectorAll("[data-task-example]"), button => button.dataset.taskExample)));
   let example = 0;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  const outcome = document.querySelector("[data-outcome-word]");
+  const outcomes = ["Faster", "Cheaper", "Better"];
+  let outcomeIndex = 0, outcomeAnimation;
+  window.setInterval(() => {
+    if (!outcome || document.hidden || reduced.matches || outcome.getBoundingClientRect().bottom < 0) return;
+    outcomeIndex = (outcomeIndex + 1) % outcomes.length;
+    outcome.textContent = outcomes[outcomeIndex];
+    outcomeAnimation?.cancel();
+    outcomeAnimation = outcome.animate?.([
+      { opacity: 0, transform: "translateY(.3em) rotate(4deg)" },
+      { opacity: 1, transform: "translateY(0) rotate(0)" },
+    ], { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" });
+  }, 2800);
+  reduced.addEventListener("change", () => { if (reduced.matches) outcomeAnimation?.cancel(); });
   if (!reduced.matches && "IntersectionObserver" in window) {
     const reveal = new IntersectionObserver(entries => entries.forEach(entry => {
       if (!entry.isIntersecting) return;
@@ -36,7 +50,7 @@
     });
   }
   window.setInterval(() => {
-    if (document.hidden || reduced.matches || input.value || document.activeElement === input) return;
+    if (!examples.length || document.hidden || reduced.matches || input.value || document.activeElement === input) return;
     example = (example + 1) % examples.length;
     input.placeholder = examples[example];
   }, 5000);

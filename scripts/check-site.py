@@ -832,8 +832,8 @@ def check_homepage(site_dir: Path) -> None:
     if 'type="password"' in page or 'data-auth-unavailable' in page or 'Or start with your AI' in page:
         fail("homepage must not restore custom sign-up or competing posting controls")
     header_markup = page[header_start:header_end]
-    if 'How it works' not in header_markup or 'Open Bounty Board' not in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup:
-        fail("shared header must keep only How it works and Open Bounty Board")
+    if 'How it works' not in header_markup or 'Browse work' not in header_markup or 'ab-site-menu' in header_markup or 'ab-site-login' in header_markup:
+        fail("shared header must keep only How it works and Browse work")
     if "town hall" in page.lower():
         fail("homepage must not use the retired town-hall language")
     for removed in ("how-it-works.html",):

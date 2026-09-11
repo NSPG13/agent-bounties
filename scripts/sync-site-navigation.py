@@ -45,7 +45,7 @@ def sync(check=False):
         # Render shared assets once, last in the head so page-local legacy
         # styles cannot override the shared shell or selected color theme.
         result = re.sub(r'\s*<(?:link\b[^>]*href|script\b[^>]*src)="' + re.escape(prefix) + r'(?:site-navigation\.css|site-navigation\.js|forest-ui\.css|forest-theme\.js|forest-hall\.css)\?v=\d+"[^>]*>(?:</script>)?', '', result)
-        home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=4">\n' if relative.as_posix() == "index.html" else ""
+        home_atmosphere = '    <link rel="stylesheet" href="forest-hall.css?v=5">\n' if relative.as_posix() == "index.html" else ""
         assets = f'''    <link rel="stylesheet" href="{prefix}site-navigation.css?v=3">
     <link rel="stylesheet" href="{prefix}forest-ui.css?v=2">
 {home_atmosphere}    <script src="{prefix}forest-theme.js?v=1"></script>
