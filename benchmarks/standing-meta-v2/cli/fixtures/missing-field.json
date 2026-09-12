@@ -1,0 +1,16 @@
+{
+  "binary": "agent-bounty-cli",
+  "commands": [
+    "list",
+    "claim",
+    "register",
+    "status"
+  ],
+  "exit_codes": [
+    0,
+    1,
+    2
+  ],
+  "help": true,
+  "node_version": ">=20"
+}
