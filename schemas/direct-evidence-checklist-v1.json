@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbounties.org/schemas/direct-evidence-checklist-v1.json",
+  "title": "Direct Bounty Evidence Checklist",
+  "description": "Machine-readable evidence checklist that separates submission, verification, and payment proof for direct coding bounties.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bounty_id",
+    "submission_evidence",
+    "verification_evidence",
+    "payment_evidence"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-bounties/direct-evidence-checklist-v1"
+    },
+    "bounty_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "submission_evidence": {
+      "type": "object",
+      "required": ["commit", "repository", "subdirectory", "pull_request_url"],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "repository": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://github\\.com/[^/]+/[^/]+$"
+        },
+        "subdirectory": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pull_request_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://github\\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "verification_evidence": {
+      "type": "object",
+      "required": ["check_run_urls", "artifact"],
+      "properties": {
+        "check_run_urls": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          }
+        },
+        "artifact": {
+          "type": "object",
+          "required": ["url", "digest"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "digest": {
+              "type": "object",
+              "required": ["algorithm", "value"],
+              "properties": {
+                "algorithm": {
+                  "type": "string",
+                  "enum": ["sha256", "sha512"]
+                },
+                "value": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64,128}$"
+                }
+              },
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": { "algorithm": { "const": "sha256" } }
+                  },
+                  "then": {
+                    "properties": { "value": { "pattern": "^[0-9a-f]{64}$" } }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "algorithm": { "const": "sha512" } }
+                  },
+                  "then": {
+                    "properties": { "value": { "pattern": "^[0-9a-f]{128}$" } }
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "payment_evidence": {
+      "type": "object",
+      "required": ["canonical_settlement"],
+      "properties": {
+        "canonical_settlement": {
+          "type": "object",
+          "required": ["transaction_hash"],
+          "properties": {
+            "transaction_hash": {
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{64}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
