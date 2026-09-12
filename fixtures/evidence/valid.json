@@ -1,0 +1,27 @@
+{
+  "schema_version": "agent-bounties/direct-evidence-checklist-v1",
+  "bounty_id": "686",
+  "submission_evidence": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "repository": "https://github.com/NSPG13/agent-bounties",
+    "subdirectory": "crates/domain",
+    "pull_request_url": "https://github.com/NSPG13/agent-bounties/pull/745"
+  },
+  "verification_evidence": {
+    "check_run_urls": [
+      "https://github.com/NSPG13/agent-bounties/actions/runs/1000000000"
+    ],
+    "artifact": {
+      "url": "https://mcp.agentbounties.app/public/artifacts/686",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    }
+  },
+  "payment_evidence": {
+    "canonical_settlement": {
+      "transaction_hash": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  }
+}
