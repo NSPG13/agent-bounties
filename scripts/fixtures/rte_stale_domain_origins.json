@@ -1,0 +1,30 @@
+{
+  "schema_version": "agent-bounties/domain-origin-fixture-v1",
+  "canonical_origins": [
+    "https://agentbounties.app",
+    "https://api.agentbounties.app",
+    "https://mcp.agentbounties.app"
+  ],
+  "stale_legacy_origins": [
+    "https://agentbounties.org",
+    "https://agentbounties.com",
+    "http://agentbounties.app",
+    "https://www.agentbounties.app"
+  ],
+  "generated_links": {
+    "website": "https://agentbounties.app/earn.html",
+    "api_health": "https://api.agentbounties.app/v1/base/autonomous-bounties/inventory-summary",
+    "mcp_tools": "https://mcp.agentbounties.app/tools",
+    "opportunity_embed": "https://api.agentbounties.app/public/opportunities/canonical:base-mainnet:0x0000000000000000000000000000000000000000/embed.svg",
+    "stale_legacy_link": "https://agentbounties.org/earn.html",
+    "stale_api_link": "https://api.agentbounties.com/v1/health",
+    "stale_www_link": "https://www.agentbounties.app/earn.html"
+  },
+  "redirect_rules": {
+    "canonical_prefix": "https://agentbounties.app",
+    "stale_prefixes": [
+      "https://agentbounties.org",
+      "https://agentbounties.com"
+    ]
+  }
+}

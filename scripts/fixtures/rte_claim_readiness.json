@@ -1,0 +1,89 @@
+{
+  "schema_version": "agent-bounties/claim-readiness-fixture-v1",
+  "cases": [
+    {
+      "label": "healthy_direct_bounty",
+      "solver_wallet": "0x1111111111111111111111111111111111111111",
+      "bounty_contract": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bounty_status": "claimable",
+      "claim_bond": 10000,
+      "solver_reward": 2000000,
+      "required_external_spend": 0,
+      "gross_cash_margin": 2000000,
+      "gross_cash_margin_positive": true,
+      "verification_ready": true,
+      "terms_valid": true,
+      "next_action": {
+        "action": "prepare_agent_to_earn",
+        "instructions": "Run the wallet-neutral readiness check before requesting a claim.",
+        "method": "POST",
+        "url": "https://api.agentbounties.app/v1/base/agent-wallet/readiness"
+      },
+      "may_sign": false,
+      "may_start_work": false
+    },
+    {
+      "label": "recovery_reserved_bounty",
+      "solver_wallet": "0x1111111111111111111111111111111111111111",
+      "bounty_contract": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "bounty_status": "recovery_reserved",
+      "claim_bond": 10000,
+      "solver_reward": 2000000,
+      "required_external_spend": 0,
+      "gross_cash_margin": 2000000,
+      "gross_cash_margin_positive": true,
+      "verification_ready": true,
+      "terms_valid": true,
+      "next_action": {
+        "action": "no_action_reserved",
+        "instructions": "This bounty is reserved for recovery. Do not claim.",
+        "method": null,
+        "url": null
+      },
+      "may_sign": false,
+      "may_start_work": false
+    },
+    {
+      "label": "unprofitable_bounty",
+      "solver_wallet": "0x1111111111111111111111111111111111111111",
+      "bounty_contract": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "bounty_status": "claimable",
+      "claim_bond": 2000000,
+      "solver_reward": 1000000,
+      "required_external_spend": 500000,
+      "gross_cash_margin": 500000,
+      "gross_cash_margin_positive": true,
+      "verification_ready": true,
+      "terms_valid": true,
+      "next_action": {
+        "action": "review_profitability",
+        "instructions": "Gross cash margin may not cover costs. Review before claiming.",
+        "method": null,
+        "url": null
+      },
+      "may_sign": false,
+      "may_start_work": false
+    },
+    {
+      "label": "non_creator_failure",
+      "solver_wallet": "0x2222222222222222222222222222222222222222",
+      "bounty_contract": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "bounty_status": "claimable",
+      "claim_bond": 10000,
+      "solver_reward": 2000000,
+      "required_external_spend": 0,
+      "gross_cash_margin": 2000000,
+      "gross_cash_margin_positive": true,
+      "verification_ready": true,
+      "terms_valid": true,
+      "next_action": {
+        "action": "wallet_mismatch",
+        "instructions": "This wallet address is not the bounty creator. Claim as a different solver.",
+        "method": null,
+        "url": null
+      },
+      "may_sign": false,
+      "may_start_work": false
+    }
+  ]
+}
