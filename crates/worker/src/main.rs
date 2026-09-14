@@ -1,3 +1,5 @@
+mod keeper_recovery;
+
 use anyhow::Context;
 use db::PostgresStore;
 use std::{
@@ -230,23 +232,15 @@ async fn run_open_competition_v2_keeper(store: &PostgresStore, once: bool) -> an
     let config = OpenCompetitionV2KeeperConfig::from_env()?;
     let chain = OpenCompetitionV2BrokerChainConfig::from_env()?;
     let poll_seconds = env_u64("OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS", 5)?.clamp(1, 60);
-    loop {
-        match poll_open_competition_v2_keeper_once(store, &config, &chain).await {
-            Ok(report) => println!("{}", serde_json::to_string(&report)?),
-            Err(error) => eprintln!(
-                "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "schema": "agent-bounties/open-competition-v2-keeper-recovery-v1",
-                    "error": redact_operational_error(&error.to_string()),
-                    "decision": "retry_from_safe_projection",
-                    "evidence_boundary": "Keeper retries are permissionless and idempotent at the contract state machine; only safe canonical V2 events prove outcomes."
-                }))?
-            ),
-        }
-        if once || wait_or_shutdown(poll_seconds).await? {
-            return Ok(());
-        }
-    }
+    keeper_recovery::run(
+        once,
+        poll_seconds,
+        IndexerRecoveryPolicy::from_env()?,
+        || poll_open_competition_v2_keeper_once(store, &config, &chain),
+        wait_or_shutdown,
+        || uuid::Uuid::new_v4().as_u128() as u64,
+    )
+    .await
 }
 
 async fn run_open_competition_v2_broker(store: &PostgresStore, once: bool) -> anyhow::Result<()> {
