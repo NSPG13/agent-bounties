@@ -82,7 +82,16 @@ process. Malformed responses, invalid emitters, decode/config/cursor errors, and
 other unclassified failures halt ingestion after the failed heartbeat; they are
 not retried or converted into canonical evidence.
 
-The Open Competition V2 keeper uses the same error classifier and
+The Open Competition V2 keeper uses the indexer classifier plus a keeper-only
+allowlist for relayer transport failures. The relayer currently retains
+sanitized provider messages rather than the original error types, so the
+keeper recognizes the pinned HTTP/request-transport forms and explicit
+rate-limit codes. Malformed or null responses, invalid configuration,
+simulation rejections, policy caps, insufficient balance, chain mismatches,
+and unknown provider errors halt. Submission-stage errors, including provider
+fillers, also halt because the keeper does not retain a pending transaction
+hash or reconcile uncertain broadcasts. This does not change indexer classification.
+The keeper uses the same
 `BASE_INDEXER_RETRY_INITIAL_SECONDS`, `BASE_INDEXER_RETRY_MAX_SECONDS`, and
 `BASE_INDEXER_EXIT_AFTER_FAILURES` settings. Consecutive transient failures use
 exponential backoff with random jitter in the upper quarter of each delay,
@@ -93,7 +102,8 @@ resets the failure count and restores normal polling. Exhausting the budget
 exits with an error; unclassified or integrity failures halt polling until
 operator intervention. `--once` returns an error immediately after a failed
 poll and never retries. Each retry invokes the unchanged keeper poll, including
-its safe-block read before any action. Successful report fields remain the
+its safe-block read and canonical projection reads before any action; these
+reads are not pending-transaction reconciliation. Successful report fields remain the
 same; recovery logs include the attempt count, classification, selected delay,
 and final decision.
 
