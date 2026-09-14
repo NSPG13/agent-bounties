@@ -397,14 +397,6 @@ body .account-identity button, body .account-wallets > header > button, body .ac
 body .account-wallets h3, body .account-activity h3, body .account-stats dd { color: var(--ab-ink); font-family: var(--ab-display); font-weight: 400; }
 body .account-identity small, body .account-identity > div span, body .account-wallets header p, body .account-wallets li > small, body .wallet-proof-note, body .account-stats dt, body .account-stats span, body .account-activity li, body .account-activity li span, body .account-evidence { color: var(--ab-muted); }
 body .account-wallets code { color: var(--ab-ink); }
-body .account-review-emails { padding: 18px; border: 1px solid var(--ab-line); border-radius: 16px; background: var(--ab-bg); }
-body .account-review-emails h3 { margin: 0 0 12px; color: var(--ab-ink); font-family: var(--ab-display); font-weight: 400; }
-body .account-review-emails label { display: flex; align-items: flex-start; gap: 10px; color: var(--ab-ink); font: 400 14px/1.5 var(--ab-body); cursor: pointer; }
-body .account-review-emails input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ab-ink); flex-shrink: 0; }
-body .account-review-emails p { margin: 10px 0 0; color: var(--ab-muted); font: 400 12px/1.5 var(--ab-body); overflow-wrap: anywhere; }
-body .review-email-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-body .review-email-actions:has(button:not([hidden])) { min-height: 40px; }
-body .review-email-actions button { padding: 8px 14px; border: 1px solid var(--ab-line); border-radius: 999px; background: var(--ab-soft); color: var(--ab-ink); cursor: pointer; }
 body .wallet-verified, body .wallet-status, body .account-activity header span, body .account-setup-steps li[aria-current="step"] { color: var(--ab-moss); }
 body .wallet-pending { color: var(--ab-amber); }
 body .wallet-link-dialog, body .ab-phone-dialog, body .wallet-auth-panel { background: var(--ab-panel); color: var(--ab-ink); border-color: var(--ab-line); border-radius: 24px; font-family: var(--ab-body); }
