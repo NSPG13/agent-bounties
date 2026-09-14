@@ -82,6 +82,21 @@ process. Malformed responses, invalid emitters, decode/config/cursor errors, and
 other unclassified failures halt ingestion after the failed heartbeat; they are
 not retried or converted into canonical evidence.
 
+The Open Competition V2 keeper uses the same error classifier and
+`BASE_INDEXER_RETRY_INITIAL_SECONDS`, `BASE_INDEXER_RETRY_MAX_SECONDS`, and
+`BASE_INDEXER_EXIT_AFTER_FAILURES` settings. Consecutive transient failures use
+exponential backoff with random jitter in the upper quarter of each delay,
+bounded below by both the initial backoff and
+`OPEN_COMPETITION_V2_KEEPER_POLL_SECONDS`. If the normal poll interval exceeds
+the configured retry cap, that poll interval is the minimum delay. Success
+resets the failure count and restores normal polling. Exhausting the budget
+exits with an error; unclassified or integrity failures halt polling until
+operator intervention. `--once` returns an error immediately after a failed
+poll and never retries. Each retry invokes the unchanged keeper poll, including
+its safe-block read before any action. Successful report fields remain the
+same; recovery logs include the attempt count, classification, selected delay,
+and final decision.
+
 ## SLOs And Error Budgets
 
 Initial public-beta objectives:
