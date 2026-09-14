@@ -81,3 +81,11 @@ Focused validation: 13 real PostgreSQL notification tests, 15 mailer/projection
 tests, strict affected-crate Clippy, 82 frontend/WebMCP tests, mobile/desktop
 review-link browser checks, site checks, 52 source/pipeline/precommit tests and
 the known-good/known-bad rehearsal. Production delivery remains disabled.
+
+## Plain language update
+
+Email, review-page and account text now use shorter sentences and everyday words.
+Behavior and authority checks are unchanged. The mail template and its existing
+text checks change the worker fingerprint to `bc044a20d8e6c47e7511d7ee9e495a65589d55010f1a7180342e73dd9c6278bd`.
+The matching inactive benchmark digest is `sha256:403bc9d0c7461f86f7592d360702e50badaebae22c08343a29e06ed87b79a49c`.
+The existing pin refresh process applies; no signing logic or funded record changes.

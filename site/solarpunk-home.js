@@ -28,20 +28,20 @@
   function reviewNotificationView(payload, provider) {
     if (!payload || typeof payload.enabled !== "boolean") return {
       checked: false, disabled: true, address: "", confirmEmail: false, linkWallet: false,
-      message: "Review email settings are unavailable. Try again.",
+      message: "We can’t load your email settings. Try again.",
     };
     const emailVerified = payload.email_verified === true && typeof payload.email === "string" && Boolean(payload.email);
     const walletLinked = payload.wallet_linked === true;
     const providerSupported = ["google", "github"].includes(provider);
-    let message = "Review emails are enabled, even without a bounty deadline. Check the site for current submissions and review deadlines; email can be delayed.";
-    if (!payload.enabled) message = "Review emails are turned off. You can still review solutions on the site.";
+    let message = "Review emails are on, even without a bounty deadline. Email can be late. Check the site for review dates.";
+    if (!payload.enabled) message = "Review emails are turned off. You can still check the site.";
     else if (!emailVerified) message = providerSupported
-      ? `Sign in again with ${AUTH_PROVIDER_LABELS[provider]} to confirm your email for review notifications.`
-      : "Review emails need a Google or GitHub verified email. Sign out, sign in with one of those providers, and link your verifier wallet.";
-    else if (!walletLinked) message = "Link the wallet named as a verifier on your bounties to receive review emails.";
-    else if (payload.delivery_configured !== true) message = "Your preference is saved. Email delivery is not enabled yet; check the site for solutions to review.";
+      ? `Sign in again with ${AUTH_PROVIDER_LABELS[provider]} to confirm your email.`
+      : "Sign out, then sign in with Google or GitHub. Next, link your review wallet.";
+    else if (!walletLinked) message = "Link the wallet chosen to review your bounties.";
+    else if (payload.delivery_configured !== true) message = "Saved. Email delivery is not enabled yet. Check the site for work to review.";
     return { checked: payload.enabled, disabled: false,
-      address: emailVerified ? `Verified address: ${payload.email}` : "No verified review email yet.",
+      address: emailVerified ? `Confirmed email: ${payload.email}` : "No confirmed email yet.",
       confirmEmail: payload.enabled && !emailVerified && providerSupported,
       linkWallet: payload.enabled && emailVerified && !walletLinked, message };
   }
@@ -828,7 +828,7 @@ ${competitionChildBrief(item)}`;
         if (reviewEmailEnabled) { reviewEmailEnabled.checked = view.checked; reviewEmailEnabled.disabled = loading || view.disabled; }
         if (reviewEmailAddress) reviewEmailAddress.textContent = view.address;
         if (reviewEmailStatus) reviewEmailStatus.textContent = loading ? "Checking review email settings…"
-          : error ? "We couldn’t confirm your review email settings. Check again before relying on this preference." : view.message;
+          : error ? "We couldn’t check your email settings. Try again." : view.message;
         if (reviewEmailSignin) { reviewEmailSignin.hidden = loading || !view.confirmEmail; reviewEmailSignin.textContent = `Confirm email with ${AUTH_PROVIDER_LABELS[currentUser?.provider] || "your provider"}`; }
         if (reviewEmailWallet) reviewEmailWallet.hidden = loading || !view.linkWallet;
         if (reviewEmailRetry) reviewEmailRetry.hidden = !error;

@@ -228,22 +228,19 @@ impl ReviewEmailSender {
             bounty_contract.to_ascii_lowercase()
         );
         let deadline = match review_deadline {
-            Some(deadline) => format!(
-                "Review deadline: {}.",
-                deadline.format("%Y-%m-%d %H:%M:%S UTC")
-            ),
-            None => "No review deadline is set.".to_owned(),
+            Some(deadline) => format!("Review by {}.", deadline.format("%Y-%m-%d %H:%M:%S UTC")),
+            None => "No review deadline.".to_owned(),
         };
-        let instruction = "Check the current submission and review deadline on the site before deciding whether to sign a verdict. This email does not extend the review window.";
-        let reason = "You received this because a wallet linked to your account is designated to review this bounty.";
+        let instruction = "Check the latest work before you decide. The deadline stays the same.";
+        let reason = "Your linked wallet was picked to review this bounty.";
         let settings = format!("{REVIEW_ORIGIN}/#account");
         Ok(json!({
             "from": self.config.sender,
             "to": [recipient_email],
             "subject": SUBJECT,
-            "text": format!("{SUBJECT}.\n\nReview the solution: {link}\n\n{deadline}\n\n{instruction}\n\n{reason}\nManage review emails: {settings}"),
+            "text": format!("{SUBJECT}.\n\nReview the solution: {link}\n\n{deadline}\n\n{instruction}\n\n{reason}\nEmail settings: {settings}"),
             "html": format!(
-                "<p>{}.</p><p><a href=\"{}\">Review the solution</a></p><p>{}</p><p>{}</p><p>{}</p><p><a href=\"{}\">Manage review emails</a></p>",
+                "<p>{}.</p><p><a href=\"{}\">Review the solution</a></p><p>{}</p><p>{}</p><p>{}</p><p><a href=\"{}\">Email settings</a></p>",
                 escape_html(SUBJECT), escape_html(&link), escape_html(&deadline), escape_html(instruction), escape_html(reason), escape_html(&settings)
             ),
         }))
@@ -670,7 +667,7 @@ mod tests {
         assert!(no_deadline["text"]
             .as_str()
             .unwrap()
-            .contains("No review deadline is set."));
+            .contains("No review deadline."));
         let html = no_deadline["html"].as_str().unwrap();
         assert!(html.contains(&expected_link.replace('&', "&amp;")));
         assert!(!html.contains(RECIPIENT));
@@ -685,7 +682,7 @@ mod tests {
         assert!(with_deadline["text"]
             .as_str()
             .unwrap()
-            .contains("Review deadline: 2026-09-15 07:02:03 UTC."));
+            .contains("Review by 2026-09-15 07:02:03 UTC."));
         assert!(!with_deadline["text"]
             .as_str()
             .unwrap()
@@ -694,8 +691,8 @@ mod tests {
             for format in ["text", "html"] {
                 let body = value[format].as_str().unwrap();
                 assert!(body.contains("https://agentbounties.app/#account"));
-                assert!(body.contains("a wallet linked to your account is designated"));
-                assert!(body.contains("does not extend the review window"));
+                assert!(body.contains("Your linked wallet was picked"));
+                assert!(body.contains("The deadline stays the same"));
             }
             let serialized = value.to_string();
             for forbidden in [

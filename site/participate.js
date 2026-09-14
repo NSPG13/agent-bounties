@@ -10,7 +10,7 @@
   const stable = (value) => value && typeof value === "object" ? Array.isArray(value) ? `[${value.map(stable).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}` : JSON.stringify(value);
   // A URL selects presentation only; it never establishes verifier authority.
   function verifierReviewState(item, now = Math.floor(Date.now() / 1000)) {
-    if (item.status !== "submitted") return { title: "Check the current bounty", summary: "This bounty no longer has a solution awaiting review. Check its current status before taking action.", deadline: "" };
+    if (item.status !== "submitted") return { title: "Check the current bounty", summary: "There is no work to review right now. Check the latest status below.", deadline: "" };
     const submission = (item.events || []).filter((event) => event.kind === "submission_added"
       && lower(event.contract_address) === lower(item.bounty_contract) && event.bounty_id === item.bounty_id
       && event.id && Number.isSafeInteger(event.block_number) && event.block_number > 0
@@ -19,11 +19,11 @@
     const deadline = submission?.data?.verification_expires_at;
     if (item.terms_valid !== true || !Number.isSafeInteger(submission?.data?.round) || submission.data.round <= 0
       || !Number.isSafeInteger(deadline) || deadline <= 0 || !Number.isFinite(new Date(deadline * 1000).getTime())) return {
-      title: "Refresh review details", summary: "Current submission or review deadline details are unavailable. Refresh before preparing a verdict.", deadline: "",
+      title: "Refresh review details", summary: "We can’t load the work or its review date. Try again before you decide.", deadline: "",
     };
     const date = new Date(deadline * 1000).toLocaleString();
-    if (now >= deadline) return { title: "The review deadline has passed", summary: "Do not prepare a verdict for this expired review. Refresh progress to check the current on-chain state.", deadline: `Review deadline: ${date} (your local time).` };
-    return { title: "Review the submitted solution", summary: "Read the submitted evidence below and compare it with the acceptance criteria. Your AI can help prepare the committed verification flow. Only a wallet named in the verification policy can sign a verdict.", deadline: `Review by ${date} (your local time). This is the review deadline, separate from the work deadline.` };
+    if (now >= deadline) return { title: "The review deadline has passed", summary: "The time to review this work has ended. Refresh to see what happened next.", deadline: `Review deadline: ${date} (your local time).` };
+    return { title: "Review the solution", summary: "Read the work below and check it against the bounty’s rules. Your AI can help. Only the chosen review wallet can sign your decision.", deadline: `Review by ${date} (your local time). This date is for your review.` };
   }
   function recoveryStatus(item, now = Math.floor(Date.now() / 1000)) {
     if (["paid", "cancelled"].includes(item.status)) return null;

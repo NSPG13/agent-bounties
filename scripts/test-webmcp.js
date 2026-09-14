@@ -285,16 +285,16 @@ async function participantFixture(action = "solve") {
 test("email review guidance uses the current submission expiry, without a delivery deadline or creator role", () => {
   const submission = { id: "submission", block_number: 11, log_index: 0, bounty_id: "bounty", contract_address: contract, kind: "submission_added", data: { round: 2, verification_expires_at: 200 } };
   const base = { bounty_contract: contract, bounty_id: "bounty", status: "submitted", terms_valid: true, verification_ready: false, events: [submission] };
-  assert.equal(verifierReviewState(base, 100).title, "Review the submitted solution");
-  assert.match(verifierReviewState(base, 100).summary, /Only a wallet named in the verification policy/);
-  assert.match(verifierReviewState(base, 100).deadline, /separate from the work deadline/);
+  assert.equal(verifierReviewState(base, 100).title, "Review the solution");
+  assert.match(verifierReviewState(base, 100).summary, /Only the chosen review wallet/);
+  assert.match(verifierReviewState(base, 100).deadline, /This date is for your review/);
   assert.equal(verifierReviewState(base, 200).title, "The review deadline has passed");
   assert.equal(verifierReviewState({ ...base, status: "paid" }, 100).deadline, "");
   for (const invalid of [{ contract_address: wallet }, { bounty_id: "other" }, { id: null }, { data: { round: 2 } }]) {
     assert.equal(verifierReviewState({ ...base, events: [{ ...submission, ...invalid }] }, 100).title, "Refresh review details");
   }
   const newer = { ...submission, block_number: 12, data: { round: 3, verification_expires_at: 300 } };
-  assert.equal(verifierReviewState({ ...base, events: [submission, newer] }, 201).title, "Review the submitted solution");
+  assert.equal(verifierReviewState({ ...base, events: [submission, newer] }, 201).title, "Review the solution");
 });
 
 test("email review visit opens evidence, refreshes deadlines and never starts a wallet action", async () => {
@@ -308,7 +308,7 @@ test("email review visit opens evidence, refreshes deadlines and never starts a 
   const now = Math.floor(Date.now() / 1000);
   env.state.feed.events = [{ id: "submission", block_number: 12, log_index: 0, bounty_id: "test-bounty", contract_address: contract, kind: "submission_added", data: { round: 2, verification_expires_at: now + 600 } }];
   await env.reload();
-  assert.equal(env.elements.get("[data-step-title]").textContent, "Review the submitted solution");
+  assert.equal(env.elements.get("[data-step-title]").textContent, "Review the solution");
   assert.equal(env.elements.get("[data-work-evidence]").parentElement.open, true);
   assert.equal(env.elements.get("[data-work-prepare]").hidden, true);
   assert.deepEqual(env.sent, []);

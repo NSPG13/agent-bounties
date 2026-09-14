@@ -20,14 +20,14 @@ test("review emails require an explicit verified contact, linked wallet, and con
   assert.match(home.reviewNotificationView(reviewEmailReady, "google").message, /even without a bounty deadline/);
   const legacy = home.reviewNotificationView({ ...reviewEmailReady, email_verified: false }, "google");
   assert.match(legacy.message, /Sign in again with Google/);
-  assert.equal(legacy.address, "No verified review email yet.");
+  assert.equal(legacy.address, "No confirmed email yet.");
   assert.equal(legacy.confirmEmail, true);
   const unsupported = home.reviewNotificationView({ ...reviewEmailReady, email_verified: false }, "microsoft");
-  assert.match(unsupported.message, /Sign out, sign in with one of those providers/);
+  assert.match(unsupported.message, /Sign out, then sign in with Google or GitHub/);
   assert.equal(unsupported.confirmEmail, false);
   const noWallet = home.reviewNotificationView({ ...reviewEmailReady, wallet_linked: false }, "github");
   assert.equal(noWallet.linkWallet, true);
-  assert.match(noWallet.message, /wallet named as a verifier/);
+  assert.match(noWallet.message, /wallet chosen to review/);
   const disabledRuntime = home.reviewNotificationView({ ...reviewEmailReady, delivery_configured: false }, "google");
   assert.match(disabledRuntime.message, /delivery is not enabled/);
   assert.doesNotMatch(disabledRuntime.message, /You’ll get an email/);
