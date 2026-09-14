@@ -4,35 +4,39 @@
   "vectors": [
     {
       "file": "funded-not-delivered.json",
-      "sha256": "256cff91168a6104bbb42a29aa75f57edb8343f866ceaac250405f1701419c6e"
+      "sha256": "30e815be4a88941cdc0c80840548822dab3653787673accb5d442f619eec72be"
     },
     {
       "file": "delivered-not-settled.json",
-      "sha256": "832475aec9fa0f243e3b6f7ecdfe7834113f5e4364fcd9267e2c3ef95f24035e"
+      "sha256": "edc25febabc5dade88b4e55e42348a3fc0a7d9cacf5f44d4aad4fe71a001260c"
     },
     {
       "file": "settled-expected-solver.json",
-      "sha256": "cbcb6e4a4399799036ebc51cde587b2e745e633fa9aad4b3da766cd06ffd7ff4"
+      "sha256": "cedf60667d1c85920a68244b2050a79c2aa602d92bb05d9659e557929a13eabd"
     },
     {
       "file": "wrong-solver.json",
-      "sha256": "c6124340cca38e0d3474e6fd299d1e0733ad05086a02a328f4fa0bdbd22d0d8b"
+      "sha256": "1c324f9df7e169d4ffd7b6eae12286a2611ffc7acb20c1b6fc36849868fc3bb3"
     },
     {
       "file": "http-200-failed-settlement.json",
-      "sha256": "7089396815d828c311e31da9acb8b08c4e2e6d801bddd4261029ccb1c78f30f4"
+      "sha256": "7fc7995c4ca850a1f7b8115cf09e390db9d432d0d851166ed0b754e30516dd00"
     },
     {
       "file": "authorization-only.json",
-      "sha256": "b19092d1734870dbc13a42eb0f0f61c4b3021f072b22d0dca27a9c371ae0997f"
+      "sha256": "3d6d7502ccbac0c97049129d84220333d8e0d287e5ff1130301b613e272a6829"
     },
     {
       "file": "duplicate-event.json",
-      "sha256": "952f6e1647546306b4da2bb49519f0ff88f9636f50726cfc312f1e2913c29dc6"
+      "sha256": "ac4c1a52d9a298faf3c082e1536c13888f81e93dca4eb023c13e22f114af4615"
     },
     {
       "file": "self-attested-completeness.json",
-      "sha256": "b33aed800fb0281efef08ecb96bb9956498f9a359045d65d10314b5c3718533e"
+      "sha256": "de4f8ed21b6e4a4fe6da1b3dea6f50185aa74df077717f92c3071faab4658c4f"
+    },
+    {
+      "file": "delivery-from-other-lifecycle.json",
+      "sha256": "3bebb9ad03fc3ec4525daf3cb9f2fa68266bb440de9e323e0c5684b51f8214b1"
     }
   ]
 }

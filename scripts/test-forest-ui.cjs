@@ -11,7 +11,7 @@ const server = http.createServer((req, res) => {
   catch { res.writeHead(404).end(); }
 });
 function leaderboard(populated) {
-  const data = period => ({ reward_usdc: period === "daily" ? "3" : "26", reward_funding_status: "partially_funded", reward_payout_status: "not_paid", ranking: { period: { kind: period, starts_at: "2026-09-10T00:00:00Z", ends_at: "2026-09-17T00:00:00Z" }, rules: ["Rank by qualifying confirmed completions."], entries: populated ? [3,1,2].map(rank => ({ rank, solver_wallet: `0x${String(rank).repeat(40)}`, prize_eligible_bounties: 10 - rank, eligible_solver_rewards_usdc_base_units: `${(10-rank)*1000000}` })) : [] } });
+  const data = period => ({ reward_usdc: period === "daily" ? "3" : "26", reward_funding_status: "partially_funded", reward_payout_status: "not_paid", ranking: { period: { kind: period, starts_at: "2026-09-10T00:00:00Z", ends_at: period === "daily" ? "2026-09-11T00:00:00Z" : "2026-09-17T00:00:00Z" }, rules: ["Rank by qualifying confirmed completions."], entries: populated ? [3,1,2].map(rank => ({ rank, solver_wallet: `0x${String(rank).repeat(40)}`, prize_eligible_bounties: 10 - rank, eligible_solver_rewards_usdc_base_units: `${(10-rank)*1000000}` })) : [] } });
   return { schema_version: "agent-bounties/solver-leaderboard-v1", network: "base-mainnet", daily: data("daily"), weekly: data("weekly") };
 }
 async function capture(page, name) {
@@ -33,8 +33,8 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({headless:true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
   try {
-    for (const width of [390,768,1280,1440,1920]) {
-      const ctx = await browser.newContext({viewport:{width,height:900},reducedMotion:"reduce",colorScheme:"light"});
+    for (const width of [390,701,768,900,1280,1440,1920]) {
+      const ctx = await browser.newContext({viewport:{width,height:900},reducedMotion:"reduce",colorScheme:"light",locale:"en-US",timezoneId:"America/Los_Angeles"});
       let mode = "empty", account = "signed_out";
       await ctx.route("**/*", route => {
         const url = new URL(route.request().url());
@@ -42,6 +42,8 @@ async function main() {
         if (url.pathname.includes("/auth/session") || url.pathname === "/v1/site-auth/session") return route.fulfill({json:{authenticated:account!=="signed_out",account_status:account,account_complete:account==="ready",providers:{google:true,microsoft:true,github:true},user:account!=="signed_out"?{id:"forest-qa",name:"Preview account",email:"preview@example.test"}:null,posting_drafts_enabled:false}});
         if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{authenticated:true,account_status:account,account_complete:account==="ready",user:{id:"forest-qa",name:"Preview account",email:"preview@example.test"},wallets:account==="ready"?[{address:"0x"+"1".repeat(40),label:"Preview wallet",provider_id:"metamask",wallet_type:"browser",chain_ids:[8453],linked_at:"2026-09-10T00:00:00Z",last_verified_at:"2026-09-10T00:00:00Z"}]:[],data_status:"unavailable",reason:"marketplace_evidence_unavailable"}});
         if (url.pathname.endsWith("/leaderboard")) return route.fulfill({status:mode==="offline"?503:200,json:mode==="invalid"?{}:leaderboard(mode==="ready")});
+        if (url.pathname === "/v1/metrics/platform") return route.fulfill({json:{marketplace_payout_volume:{lifetime:{usdc:"1000.25"},lifetime_settled_rounds:1234},daily:[]}});
+        if (url.pathname === "/v1/opportunities") return route.fulfill({json:{applied_view:"ready_to_earn",degraded:false,source_statuses:[{source_type:"canonical_base",available:true}],items:[]}});
         if (url.pathname === "/phone-wallet-config.js") return route.fulfill({body:"window.agentBountiesPhoneWalletConfig={};",contentType:"text/javascript"});
         if (url.origin !== origin) return route.fulfill({status:503,body:"Isolated fixture"});
         return route.continue();
@@ -68,11 +70,23 @@ async function main() {
       assert.equal(await page.locator(".ab-payoff").evaluate(el => getComputedStyle(el).textDecorationLine), "underline");
       assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).transform), "none");
+      assert.match(await page.locator(".ab-funding-note").innerText(), /Fund the reward upfront in escrow.*solver is paid only after/s);
+      assert.match(await page.locator(".ab-faq article").first().innerText(), /rejected result does not pay the solver.*another attempt.*refundable.*cancellation.*withdraw their refund/s);
       assert.equal(await page.locator("[data-outcome-word]").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(199, 245, 66)");
       if (width >= 1280) assert.ok(await page.locator("#hero-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 64), "desktop headline is larger");
       const metrics = await page.locator(".ab-metric").evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, background:getComputedStyle(el).backgroundColor, transform:getComputedStyle(el).transform }; }));
       assert.ok(metrics.every(metric => metric.background === "rgba(0, 0, 0, 0)" && metric.transform === "none"), "metrics are open statistics, without cards");
-      assert.equal(new Set(metrics.map(metric => width <= 700 ? metric.x : metric.y)).size, 1, "metrics stack on mobile and align horizontally on desktop");
+      if (width <= 700) assert.equal(new Set(metrics.map(metric => metric.x)).size, 1, "metrics stack on mobile");
+      else if (width < 1100) { assert.equal(new Set(metrics.map(metric => metric.x)).size, 2, "tablet metrics use two columns"); assert.equal(new Set(metrics.map(metric => metric.y)).size, 2, "tablet metrics use two rows"); }
+      else assert.equal(new Set(metrics.map(metric => metric.y)).size, 1, "desktop metrics align horizontally");
+      await page.waitForFunction(() => document.querySelector("[data-market-volume]").textContent === "1,000.25");
+      assert.equal(await page.locator("[data-completed-bounties]").innerText(), "1,234");
+      const metricValues = await page.locator(".ab-metric output, .ab-metric strong").evaluateAll(els => els.map(el => {
+        const range = document.createRange(); range.selectNodeContents(el);
+        const text = range.getBoundingClientRect(), cell = el.closest(".ab-metric").getBoundingClientRect();
+        return { value: el.textContent, fits: text.left >= cell.left && text.right <= cell.right, width: text.width, available: cell.width };
+      }));
+      assert.ok(metricValues.every(value => value.fits), "populated metric values remain inside their own cell: " + JSON.stringify(metricValues));
       assert.ok(await page.locator(".ab-metrics").evaluate(el => el.scrollWidth <= el.clientWidth), "metrics never need horizontal scrolling");
       for(const selector of [".ab-how-it-works", ".ab-site-board"]) await fits(page,selector);
       assert.equal(await page.locator(".ab-orbit-ring, .ab-orbit-sphere").count(),0);
@@ -140,8 +154,10 @@ async function main() {
       }
       await page.goto(origin+"/leaderboard.html");await page.getByText("No qualifying completions yet this period.",{exact:false}).waitFor();
       assert.equal(await page.locator("[data-leaderboard-table]").isVisible(),false);assert.match(await page.locator("[data-prize-title]").innerText(),/26 USDC weekly/);
+      assert.equal(await page.locator("[data-prize-dates]").innerText(), "Sep 10 – Sep 16 · UTC");
       await capture(page,`leaderboard-empty-${width}`);
       await page.locator('[data-leaderboard-period="daily"]').click();assert.match(await page.locator("[data-prize-title]").innerText(),/3 USDC daily/);
+      assert.equal(await page.locator("[data-prize-dates]").innerText(), "Sep 10 · UTC");
       mode="ready";await page.locator("[data-leaderboard-refresh]").click();await page.locator("[data-leaderboard-table]").waitFor();
       assert.deepEqual(await page.locator(".ab-podium-place").evaluateAll(els=>els.map(el=>el.dataset.rank)),["2","1","3"]);
       assert.deepEqual(await page.locator("tbody tr td:first-child").allTextContents(),["#1","#2","#3"]);

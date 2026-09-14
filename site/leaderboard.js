@@ -26,6 +26,13 @@
     if (!seconds) return "Period ended";
     return `${String(Math.floor(seconds / 86400)).padStart(2, "0")}d ${String(Math.floor(seconds % 86400 / 3600)).padStart(2, "0")}h ${String(Math.floor(seconds % 3600 / 60)).padStart(2, "0")}m`;
   }
+  function periodDates(starts, ends, locale) {
+    const first = new Date(starts), last = new Date(Date.parse(ends) - 1);
+    const options = { month: "short", day: "numeric", timeZone: "UTC" };
+    if (first.getUTCFullYear() !== last.getUTCFullYear()) options.year = "numeric";
+    const start = first.toLocaleDateString(locale, options), end = last.toLocaleDateString(locale, options);
+    return `${start === end ? start : `${start} – ${end}`} · UTC`;
+  }
   function start(win, doc) {
     let payload = null, period = "weekly", view = null, loading = false;
     const status = doc.querySelector("[data-leaderboard-status]"), table = doc.querySelector("[data-leaderboard-table]"), podium = doc.querySelector("[data-leaderboard-podium]"), prize = doc.querySelector(".ab-prize"), refreshButton = doc.querySelector("[data-leaderboard-refresh]");
@@ -34,7 +41,7 @@
       try { view = periodView(payload, period); } catch (_) { unavailable(); return; }
       doc.querySelectorAll("[data-leaderboard-period]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.leaderboardPeriod === period)));
       doc.querySelector("[data-prize-title]").textContent = `${view.reward_usdc} USDC ${period} prize`;
-      doc.querySelector("[data-prize-dates]").textContent = `${new Date(view.starts).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })} – ${new Date(view.ends).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })} · UTC`;
+      doc.querySelector("[data-prize-dates]").textContent = periodDates(view.starts, view.ends);
       const funded = { funded: "Reward pool currently funded", partially_funded: "Reward pool partially funded", unfunded: "Reward pool currently unfunded", not_configured: "Reward pool not configured" }[view.reward_funding_status] || "Reward funding evidence unavailable";
       doc.querySelector("[data-prize-funding]").textContent = `${funded}. Prize status: ${String(view.reward_payout_status || "unavailable").replaceAll("_", " ")}.`;
       doc.querySelector("[data-prize-countdown]").textContent = countdown(view.ends);
@@ -79,5 +86,5 @@
     win.setInterval(() => { if (!doc.hidden && view) doc.querySelector("[data-prize-countdown]").textContent = countdown(view.ends); }, 1000);
     refresh();
   }
-  return { amount, periodView, countdown, start };
+  return { amount, periodView, countdown, periodDates, start };
 });
