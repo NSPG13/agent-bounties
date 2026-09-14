@@ -4015,12 +4015,6 @@ pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bo
     item.status == "claimable"
         && item.terms_valid
         && item.verification_ready
-        && !item.terms.as_ref().is_some_and(|terms| {
-            terms.document.benchmark["engine"] == creator_review::ENGINE
-                && terms.document.benchmark["delivery_deadline"]
-                    .as_u64()
-                    .is_none_or(|deadline| deadline <= Utc::now().timestamp().max(0) as u64)
-        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
