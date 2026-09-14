@@ -101,6 +101,7 @@ def compile_python(platform: str) -> None:
         "scripts/standing_meta_v4_release_audit.py", "scripts/test_standing_meta_v4_release_audit.py",
         "scripts/standing_meta_v4_rehearsal_audit.py", "scripts/test_standing_meta_v4_rehearsal_audit.py",
         "scripts/check-site.py", "scripts/configure-wallet-providers.py",
+        "scripts/check-public-site-canary.py", "scripts/test_check_public_site_canary.py",
         "scripts/serve_open_competition_v2_reserve_recovery.py",
         "scripts/test_serve_open_competition_v2_reserve_recovery.py",
         "scripts/check-migration-history.py", "scripts/check-render-blueprint.py",
@@ -288,6 +289,7 @@ def main() -> int:
     ])
     py("-m", "pip", "install", "-r", "scripts/requirements-site.txt")
     py("scripts/check-site.py")
+    py("scripts/test_check_public_site_canary.py", "-v")
     py("examples/x402-async-phases/verify.py")
     py("scripts/check-migration-history.py")
     py(
