@@ -540,6 +540,155 @@ class RegressionVerifierPipelineTests(unittest.TestCase):
             ["single", "legacy"],
         )
 
+    def test_command_run_continues_after_poison_job(self) -> None:
+        configured = ["0x" + "1" * 40, "0x" + "2" * 40]
+        selected = [
+            {
+                "job_id": "poison",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured[:1],
+                "threshold": 1,
+            },
+            {
+                "job_id": "good",
+                "verification_mode": "signed_quorum",
+                "eligible_verifiers": configured,
+                "threshold": 2,
+            },
+        ]
+
+        def fake_run_job(
+            worker: Path, staging: Path, job: dict, temporary: Path
+        ) -> dict:
+            del worker, staging, temporary
+            if job["job_id"] == "poison":
+                raise pipeline.PipelineError(
+                    "downloaded source does not match submission evidence"
+                )
+            return {
+                "schema": pipeline.CANDIDATE_SCHEMA,
+                "job": job,
+                "outcome": {"passed": True},
+                "runner_revision": "test",
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            args = mock.Mock(
+                verifier=configured,
+                api_base="https://api.example.test",
+                network="base-mainnet",
+                max_jobs=5,
+                max_scan=100,
+                output=output,
+                worker=Path("worker"),
+                staging=Path(temporary) / "staging",
+            )
+            with (
+                mock.patch.object(pipeline, "verification_jobs", return_value=selected),
+                mock.patch.object(pipeline, "selected_jobs", return_value=selected),
+                mock.patch.object(pipeline, "run_job", side_effect=fake_run_job),
+            ):
+                pipeline.command_run(args)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["job_id"] for item in manifest["candidates"]], ["good"])
+            self.assertEqual(manifest["failures"][0]["job_id"], "poison")
+            self.assertTrue((output / manifest["candidates"][0]["file"]).is_file())
+
+    def exercise_batch(self, failures, *, maximum=1, scan=100, good=True):
+        configured = ["0x" + "1" * 40]
+        def job(name):
+            return {"job_id": name, "verification_mode": "signed_quorum",
+                    "eligible_verifiers": configured, "threshold": 1}
+        jobs = [job(f"bad-{index}") for index in range(len(failures))]
+        if good:
+            jobs.append(job("good"))
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            args = pipeline.parser().parse_args([
+                "run", "--verifier", configured[0], "--worker", "unused-worker",
+                "--staging", temporary, "--output", temporary,
+                "--max-jobs", str(maximum), "--max-scan", str(scan)])
+            outcomes = [*failures, {"schema": pipeline.CANDIDATE_SCHEMA}]
+            with mock.patch.object(pipeline, "verification_jobs", return_value=jobs), \
+                    mock.patch.object(pipeline, "run_job", side_effect=outcomes) as run_job:
+                failure = None
+                try:
+                    pipeline.command_run(args)
+                except pipeline.PipelineError as error:
+                    failure = str(error)
+            manifest = pipeline.read_json(output / "manifest.json")
+            return manifest, run_job.call_count, failure
+
+    def test_late_valid_job_survives_more_failures_than_candidate_limit(self):
+        manifest, calls, error = self.exercise_batch([
+            pipeline.PipelineError("digest mismatch") for _ in range(6)])
+        self.assertIsNone(error)
+        self.assertEqual(calls, 7)
+        self.assertEqual(manifest["candidates"][0]["job_id"], "good")
+        self.assertEqual(len(manifest["failures"]), 6)
+        self.assertEqual(manifest["status"], "degraded")
+
+    def test_expected_job_failures_do_not_abort_later_work(self):
+        errors = [OSError("download failed"), ValueError("invalid JSON"),
+                  TypeError("malformed value"), KeyError("snapshot"),
+                  AttributeError("malformed nested object"),
+                  pipeline.subprocess.TimeoutExpired("worker", 900),
+                  tarfile.ReadError("bad archive"), EOFError("truncated archive")]
+        manifest, calls, error = self.exercise_batch(errors)
+        self.assertIsNone(error)
+        self.assertEqual(calls, len(errors) + 1)
+        self.assertEqual(len(manifest["failures"]), len(errors))
+        self.assertEqual(len(manifest["candidates"]), 1)
+
+    def test_all_failed_batch_saves_diagnostics_and_fails(self):
+        manifest, calls, error = self.exercise_batch([pipeline.PipelineError("bad")], good=False)
+        self.assertIn("no candidates", error)
+        self.assertEqual(calls, 1)
+        self.assertEqual(manifest["status"], "degraded")
+        self.assertEqual(manifest["candidates"], [])
+
+    def test_empty_batch_is_idle(self):
+        manifest, calls, error = self.exercise_batch([], good=False)
+        self.assertIsNone(error)
+        self.assertEqual(calls, 0)
+        self.assertEqual(manifest["status"], "idle")
+
+    def test_scan_budget_is_separate_and_bounded(self):
+        manifest, calls, error = self.exercise_batch([
+            pipeline.PipelineError("bad") for _ in range(3)], scan=2)
+        self.assertIn("no candidates", error)
+        self.assertEqual(calls, 2)
+        self.assertTrue(manifest["scan_limit_reached"])
+
+    def test_malformed_job_and_duplicate_do_not_block_or_duplicate_candidate(self):
+        signer = "0x" + "1" * 40
+        good = {"job_id": "good", "verification_mode": "signed_quorum",
+                "eligible_verifiers": [signer], "threshold": 1}
+        jobs = [None, {**good, "job_id": "../bad"},
+                {**good, "job_id": "bad-signers", "eligible_verifiers": None},
+                good, good, {**good, "job_id": "another"}]
+        with tempfile.TemporaryDirectory() as temporary:
+            args = pipeline.parser().parse_args([
+                "run", "--verifier", signer, "--worker", "unused-worker",
+                "--staging", temporary, "--output", temporary, "--max-jobs", "2"])
+            with mock.patch.object(pipeline, "fetch_json", return_value=jobs), \
+                    mock.patch.object(pipeline, "run_job", return_value={}) as invoked:
+                pipeline.command_run(args)
+            manifest = pipeline.read_json(Path(temporary) / "manifest.json")
+            self.assertEqual(invoked.call_count, 2)
+            self.assertEqual(len(manifest["failures"]), 3)
+            self.assertEqual([c["job_id"] for c in manifest["candidates"]], ["good", "another"])
+
+    def test_signer_feed_remains_strict_for_malformed_jobs(self):
+        with mock.patch.object(pipeline, "fetch_json", return_value=[None, {}]):
+            with self.assertRaisesRegex(pipeline.PipelineError, "array of jobs"):
+                pipeline.verification_jobs("https://example.test", "base-mainnet", "unused")
+        with mock.patch.object(pipeline, "fetch_json", return_value={"jobs": []}):
+            with self.assertRaisesRegex(pipeline.PipelineError, "array of jobs"):
+                pipeline.verification_jobs("https://example.test", "base-mainnet", "unused",
+                                           isolate_invalid_entries=True)
+
     def test_regression_job_rejects_zero_or_ambiguous_verifiers(self) -> None:
         base = {
             "verification_mode": "signed_quorum",

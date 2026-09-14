@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -165,12 +166,14 @@ def fetch_json(url: str, timeout: float = 30) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
-def verification_jobs(api_base: str, network: str, verifier: str) -> list[dict[str, Any]]:
+def verification_jobs(api_base: str, network: str, verifier: str, *,
+                      isolate_invalid_entries: bool = False) -> list[Any]:
     query = urllib.parse.urlencode({"network": network, "verifier": verifier})
     value = fetch_json(
         f"{api_base.rstrip('/')}/v1/base/autonomous-bounties/verification-jobs?{query}"
     )
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+    if not isinstance(value, list) or (not isolate_invalid_entries
+            and not all(isinstance(item, dict) for item in value)):
         raise PipelineError("verification feed must be an array of jobs")
     return value
 
@@ -519,25 +522,57 @@ def command_run(args: argparse.Namespace) -> None:
     verifiers = [normalize_address(value, "verifier") for value in args.verifier]
     if len(verifiers) not in {1, 2} or len(set(verifiers)) != len(verifiers):
         raise PipelineError("runner requires one or two distinct verifier addresses")
-    jobs = verification_jobs(args.api_base, args.network, verifiers[0])
-    selected = selected_jobs(jobs, verifiers, args.max_jobs)
+    if not 1 <= args.max_jobs <= args.max_scan <= 1000:
+        raise PipelineError("runner requires 1 <= max-jobs <= max-scan <= 1000")
+    jobs = verification_jobs(args.api_base, args.network, verifiers[0], isolate_invalid_entries=True)
     args.output.mkdir(parents=True, exist_ok=True)
     candidates = []
-    for job in selected:
-        job_id = str(job.get("job_id", ""))
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", job_id):
-            raise PipelineError("verification job id is invalid")
-        with tempfile.TemporaryDirectory(prefix="agent-bounties-regression-") as temporary:
-            candidate = run_job(
-                args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
-            )
-        name = f"candidate-{hashlib.sha256(job_id.encode()).hexdigest()}.json"
-        write_json(args.output / name, candidate)
-        candidates.append({"job_id": job_id, "file": name})
-    write_json(
-        args.output / "manifest.json",
-        {"schema": MANIFEST_SCHEMA, "network": args.network, "candidates": candidates},
-    )
+    failures: list[dict[str, str]] = []
+    seen: set[str] = set()
+    scanned = 0
+
+    def checkpoint() -> None:
+        write_json(args.output / "manifest.json", {
+            "schema": MANIFEST_SCHEMA, "network": args.network,
+            "candidates": candidates, "failures": failures, "scanned": scanned,
+            "scan_limit_reached": scanned == args.max_scan and scanned < len(jobs),
+            "status": "degraded" if failures else "ok" if candidates else "idle",
+        })
+
+    checkpoint()
+    for job in jobs[:args.max_scan]:
+        if len(candidates) >= args.max_jobs:
+            break
+        scanned += 1
+        job_id = str(job.get("job_id", "")) if isinstance(job, dict) else ""
+        try:
+            if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", job_id):
+                raise PipelineError("verification job id is invalid")
+            signers = required_job_signers(job)
+            if signers != verifiers[:len(signers)] or job_id in seen:
+                continue
+            seen.add(job_id)
+            with tempfile.TemporaryDirectory(prefix="agent-bounties-regression-") as temporary:
+                candidate = run_job(
+                    args.worker.resolve(), args.staging.resolve(), job, Path(temporary)
+                )
+            name = content_addressed_name("candidate", job_id)
+        except (PipelineError, OSError, ValueError, TypeError, KeyError,
+                AttributeError, subprocess.TimeoutExpired, tarfile.TarError, EOFError) as error:
+            # This boundary handles malformed remote jobs and expected execution
+            # failures. Output persistence and process-control failures stay fatal.
+            failures.append({"job_id": job_id[:200], "error": str(error)[:800]})
+            print("regression verifier skipped job: " + canonical_json(failures[-1]), file=sys.stderr)
+        else:
+            write_json(args.output / name, candidate)
+            candidates.append({"job_id": job_id, "file": name})
+        finally:
+            checkpoint()
+    if failures:
+        print(f"::warning::Verifier batch degraded: {len(failures)} failed jobs; "
+              f"{len(candidates)} candidates; {scanned} jobs scanned.", file=sys.stderr)
+    if failures and not candidates:
+        raise PipelineError("regression verifier produced no candidates; see manifest failures")
 
 
 def current_job(api_base: str, network: str, verifier: str, job_id: str) -> dict[str, Any]:
@@ -1192,7 +1227,8 @@ def parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--worker", type=Path, required=True)
     run_parser.add_argument("--staging", type=Path, required=True)
     run_parser.add_argument("--output", type=Path, required=True)
-    run_parser.add_argument("--max-jobs", type=int, default=5)
+    run_parser.add_argument("--max-jobs", type=int, default=5, help="maximum successful candidates")
+    run_parser.add_argument("--max-scan", type=int, default=100, help="maximum feed entries examined")
     run_parser.set_defaults(handler=command_run)
 
     sign_parser = subcommands.add_parser("sign")

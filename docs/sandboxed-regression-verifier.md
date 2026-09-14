@@ -155,6 +155,18 @@ signing runtime afterward. Any new build script, dependency drift, or
 post-build mutation stops the workflow before a verifier or keeper key reaches
 a child process.
 
+The candidate runner processes up to five successful candidates while examining at
+most 100 feed entries per batch (`--max-jobs` and `--max-scan`). Invalid jobs,
+download failures, malformed job data, and worker timeouts are recorded per job;
+they do not consume a successful-candidate slot. Duplicate job IDs are attempted
+once. The manifest is checkpointed after each attempt and includes `failures`,
+`scanned`, `scan_limit_reached`, and a status of `idle`, `ok`, or `degraded`.
+Mixed batches emit a workflow warning and keep valid candidates available for
+independent signer validation. A batch with failures and no candidates fails;
+an empty batch is idle. Runner artifacts are retained even on failure for
+inspection. Reaching the scan limit can still leave later work unexamined; use
+the manifest to investigate the backlog before changing the bounded limit.
+
 The no-secrets candidate runner is schedule-only. The settlement watchdog may
 retry one exact failed GitHub job, but it cannot dispatch a workflow or rerun a
 whole workflow run. Its plan binds the workflow run, exact job, run attempt,

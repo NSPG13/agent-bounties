@@ -103,10 +103,13 @@ python3 examples/x402-async-phases/verify.py
 ```
 
 The [fixture README](../examples/x402-async-phases/README.md) specifies the
-restricted canonical JSON domain, eight outcomes and adapter trust boundary.
+restricted canonical JSON domain, nine outcomes and adapter trust boundary.
 These are application test vectors for the x402 discussions, not an adopted
 extension or real chain receipts. Funding, verified delivery, outcome
 settlement and completeness must remain independently assessed.
+The lifecycle composition control rejects delivery from a different occurrence,
+even when its content hashes match. Adapters must verify the occurrence binding;
+copying a lifecycle tag or chain event locator does not establish it.
 
 ## Reviewed source fingerprint
 
@@ -120,8 +123,21 @@ The three workflow pins and current watchdog rehearsal/checker fingerprints
 are refreshed together after review. Previously committed benchmark tuples
 remain pinned to their original source.
 
-The signing runtime remains
+At #1418, the signing runtime was
 `469bf155b1bbc5f19ee91ee41172e113cd5baea6f9d1f2d574d88672b1999ddc`.
 The pipeline's 28 tests, source guard's 12 tests and the worker/verifier SDK's
 64 non-ignored tests pass. Neither a fingerprint refresh nor an offline
 rehearsal authorizes new signing identities, benchmark approval or payment.
+
+
+## September 14 follow-up
+
+The maintainer notice on #1425 covers the batch-isolation repair based on
+@jizu1's #1426 and the separate lifecycle-composition report on #1418. The runner
+now separates the successful candidate limit from its bounded scan limit and
+preserves per-job failures. Its signing-runtime fingerprint is
+`6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1`;
+the three workflow pins are updated together. The signer, relay, benchmark
+allowlist, and worker build fingerprint are unchanged by this runner repair.
+The x402 example now includes the ninth lifecycle-mismatch vector described
+above. These maintenance changes do not confirm any contributor's settlement.
