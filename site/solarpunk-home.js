@@ -25,6 +25,68 @@
   };
   const BOUNTY_POSTING_PROMPT = postingPrompt.build();
 
+  function reviewNotificationView(payload, provider) {
+    if (!payload || typeof payload.enabled !== "boolean") return {
+      checked: false, disabled: true, address: "", confirmEmail: false, linkWallet: false,
+      message: "Review email settings are unavailable. Try again.",
+    };
+    const emailVerified = payload.email_verified === true && typeof payload.email === "string" && Boolean(payload.email);
+    const walletLinked = payload.wallet_linked === true;
+    const providerSupported = ["google", "github"].includes(provider);
+    let message = "You’ll get an email when a new solution is ready for your review, even without a bounty deadline.";
+    if (!payload.enabled) message = "Review emails are turned off. You can still review solutions on the site.";
+    else if (!emailVerified) message = providerSupported
+      ? `Sign in again with ${AUTH_PROVIDER_LABELS[provider]} to confirm your email for review notifications.`
+      : "Review emails need a Google or GitHub verified email. Sign out, sign in with one of those providers, and link your verifier wallet.";
+    else if (!walletLinked) message = "Link the wallet named as a verifier on your bounties to receive review emails.";
+    else if (payload.delivery_configured !== true) message = "Your preference is saved. Email delivery is not enabled yet; check the site for solutions to review.";
+    return { checked: payload.enabled, disabled: false,
+      address: emailVerified ? `Verified address: ${payload.email}` : "No verified review email yet.",
+      confirmEmail: payload.enabled && !emailVerified && providerSupported,
+      linkWallet: payload.enabled && emailVerified && !walletLinked, message };
+  }
+
+  function createReviewNotificationController(win, render) {
+    let accountId = null, generation = 0, payload = null, pending = null;
+    const update = (enabled) => {
+      if (!accountId) return Promise.resolve(false);
+      // Account refreshes must not race an opt-out write and restore an older value.
+      if (pending) return enabled === undefined ? pending : Promise.resolve(false);
+      const requestId = ++generation;
+      render({ payload: enabled === undefined ? payload : { ...payload, enabled }, loading: true, error: false });
+      pending = Promise.resolve().then(async () => { try {
+        if (requestId !== generation || !accountId) return false;
+        const response = await win.fetch(authApiPath("/review-notifications", win.location), {
+          method: enabled === undefined ? "GET" : "POST", credentials: "include", cache: "no-store", redirect: "error",
+          headers: enabled === undefined ? { Accept: "application/json" } : { Accept: "application/json", "Content-Type": "application/json" },
+          ...(enabled === undefined ? {} : { body: JSON.stringify({ enabled }) }),
+        });
+        if (!response.ok) throw new Error("notification_settings_unavailable");
+        const value = await response.json();
+        if (typeof value?.enabled !== "boolean") throw new Error("notification_settings_unavailable");
+        if (requestId !== generation || !accountId) return false;
+        payload = value;
+        render({ payload, loading: false, error: false });
+        return true;
+      } catch (_) {
+        if (requestId === generation && accountId) render({ payload, loading: false, error: true });
+        return false;
+      } finally {
+        if (requestId === generation) pending = null;
+      } });
+      return pending;
+    };
+    return {
+      setAccount(id) {
+        if (accountId === id) return;
+        accountId = id || null; generation += 1; payload = null; pending = null;
+        render({ payload, loading: Boolean(accountId), error: false });
+      },
+      load: () => update(),
+      save: (enabled) => typeof enabled === "boolean" ? update(enabled) : Promise.resolve(false),
+    };
+  }
+
   function clamp(value, minimum = 0, maximum = 1) {
     return Math.min(maximum, Math.max(minimum, value));
   }
@@ -736,6 +798,13 @@ ${competitionChildBrief(item)}`;
       const setupSteps = dialog.querySelector("[data-account-setup-steps]");
       const setupNote = dialog.querySelector("[data-account-setup-note]");
       const setupRetry = dialog.querySelector("[data-account-setup-retry]");
+      const reviewEmailSettings = dialog.querySelector("[data-review-email-settings]");
+      const reviewEmailEnabled = dialog.querySelector("[data-review-email-enabled]");
+      const reviewEmailAddress = dialog.querySelector("[data-review-email-address]");
+      const reviewEmailStatus = dialog.querySelector("[data-review-email-status]");
+      const reviewEmailSignin = dialog.querySelector("[data-review-email-signin]");
+      const reviewEmailWallet = dialog.querySelector("[data-review-email-wallet]");
+      const reviewEmailRetry = dialog.querySelector("[data-review-email-retry]");
       const accountActivity = dialog.querySelector(".account-activity");
       const heading = dialog.querySelector("#auth-title");
       const description = dialog.querySelector("#auth-description");
@@ -753,6 +822,25 @@ ${competitionChildBrief(item)}`;
       let accountStatus = "checking";
       const connectedAddresses = new Set();
       const selectedProviders = new Map();
+      const reviewEmails = createReviewNotificationController(win, ({ payload, loading, error }) => {
+        const view = reviewNotificationView(payload, currentUser?.provider);
+        reviewEmailSettings?.setAttribute("aria-busy", String(loading));
+        if (reviewEmailEnabled) { reviewEmailEnabled.checked = view.checked; reviewEmailEnabled.disabled = loading || view.disabled; }
+        if (reviewEmailAddress) reviewEmailAddress.textContent = view.address;
+        if (reviewEmailStatus) reviewEmailStatus.textContent = loading ? "Checking review email settings…"
+          : error ? "We couldn’t confirm your review email settings. Check again before relying on this preference." : view.message;
+        if (reviewEmailSignin) { reviewEmailSignin.hidden = loading || !view.confirmEmail; reviewEmailSignin.textContent = `Confirm email with ${AUTH_PROVIDER_LABELS[currentUser?.provider] || "your provider"}`; }
+        if (reviewEmailWallet) reviewEmailWallet.hidden = loading || !view.linkWallet;
+        if (reviewEmailRetry) reviewEmailRetry.hidden = !error;
+      });
+      reviewEmailEnabled?.addEventListener("change", () => reviewEmails.save(reviewEmailEnabled.checked));
+      reviewEmailRetry?.addEventListener("click", () => reviewEmails.load());
+      reviewEmailWallet?.addEventListener("click", () => walletLinkButton?.click());
+      reviewEmailSignin?.addEventListener("click", () => {
+        if (!["google", "github"].includes(currentUser?.provider)) return;
+        const path = authProviderPath(currentUser.provider, win.location);
+        if (path && providerAvailability[currentUser.provider]) win.location.assign(path);
+      });
       const returnButton = doc.createElement("button");
       returnButton.type = "button";
       returnButton.className = "wallet-remove";
@@ -980,6 +1068,7 @@ ${competitionChildBrief(item)}`;
           selectedProviders.clear();
         }
         currentUser = user;
+        reviewEmails.setAccount(user?.id || null);
         win.dispatchEvent(new win.CustomEvent("agentbounties:account-session", { detail: { authenticated: Boolean(user), user } }));
         if (form) form.hidden = Boolean(user);
         if (accountDashboard) accountDashboard.hidden = !user;
@@ -1037,6 +1126,7 @@ ${competitionChildBrief(item)}`;
 
       const loadAccount = async () => {
         if (!currentUser) return null;
+        reviewEmails.load();
         const requestId = ++accountLoadId;
         renderAccountLoading();
         try {
@@ -1548,6 +1638,8 @@ ${competitionChildBrief(item)}`;
     BOUNTY_POSTING_PROMPT,
     accountDashboardView,
     accountSetupStatus,
+    createReviewNotificationController,
+    reviewNotificationView,
     authApiPath,
     authProviderPath,
     authResultMessage,

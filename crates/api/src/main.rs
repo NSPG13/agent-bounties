@@ -2198,6 +2198,11 @@ async fn main() -> anyhow::Result<()> {
         Vec::new()
     };
     let site_auth = site_auth::SiteAuthService::from_env(store.clone())?;
+    let verifier_email_runtime = worker::VerifierEmailRuntime::from_env()?;
+    if verifier_email_runtime.is_some() && store.is_none() {
+        anyhow::bail!("VERIFIER_EMAIL_ENABLED requires DATABASE_URL");
+    }
+    let verifier_email_store = store.clone();
     let x402_relayer = X402HostedRelayerConfig::from_env()?;
     let bond_sponsor = BondSponsorConfig::from_env()?;
     if x402_relayer.enabled && store.is_none() {
@@ -2793,7 +2798,14 @@ async fn main() -> anyhow::Result<()> {
         "127.0.0.1:8080",
     );
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-    axum::serve(listener, app).await?;
+    let verifier_email_task = verifier_email_runtime
+        .zip(verifier_email_store)
+        .map(|(runtime, store)| tokio::spawn(runtime.run(store)));
+    let serve_result = axum::serve(listener, app).await;
+    if let Some(task) = verifier_email_task {
+        task.abort();
+    }
+    serve_result?;
     Ok(())
 }
 

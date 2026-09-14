@@ -5,6 +5,131 @@ const test = require("node:test");
 const home = require("../site/solarpunk-home.js");
 const postingPrompt = require("../site/posting-prompt.js");
 
+const reviewEmailReady = {
+  enabled: true, email: "reviewer@example.test", email_verified: true,
+  wallet_linked: true, delivery_configured: true,
+};
+
+function deferredReviewResponse() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve: (value) => resolve({ ok: true, json: async () => value }), reject };
+}
+
+test("review emails require an explicit verified contact, linked wallet, and configured delivery", () => {
+  assert.match(home.reviewNotificationView(reviewEmailReady, "google").message, /even without a bounty deadline/);
+  const legacy = home.reviewNotificationView({ ...reviewEmailReady, email_verified: false }, "google");
+  assert.match(legacy.message, /Sign in again with Google/);
+  assert.equal(legacy.address, "No verified review email yet.");
+  assert.equal(legacy.confirmEmail, true);
+  const unsupported = home.reviewNotificationView({ ...reviewEmailReady, email_verified: false }, "microsoft");
+  assert.match(unsupported.message, /Sign out, sign in with one of those providers/);
+  assert.equal(unsupported.confirmEmail, false);
+  const noWallet = home.reviewNotificationView({ ...reviewEmailReady, wallet_linked: false }, "github");
+  assert.equal(noWallet.linkWallet, true);
+  assert.match(noWallet.message, /wallet named as a verifier/);
+  const disabledRuntime = home.reviewNotificationView({ ...reviewEmailReady, delivery_configured: false }, "google");
+  assert.match(disabledRuntime.message, /delivery is not enabled/);
+  assert.doesNotMatch(disabledRuntime.message, /You’ll get an email/);
+  assert.match(home.reviewNotificationView({ ...reviewEmailReady, enabled: false }, "google").message, /turned off/);
+  assert.equal(home.reviewNotificationView(null, "google").disabled, true);
+});
+
+test("review preference sends only a boolean with the account cookie and no redirects", async () => {
+  const calls = [], renders = [];
+  const controller = home.createReviewNotificationController({
+    location: { hostname: "agentbounties.app" },
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, json: async () => ({ ...reviewEmailReady, enabled: options.method === "GET" }) };
+    },
+  }, (state) => renders.push(state));
+  assert.equal(await controller.save(false), false);
+  controller.setAccount("first-account");
+  assert.equal(await controller.load(), true);
+  assert.equal(await controller.save(false), true);
+  assert.equal(calls.length, 2);
+  for (const { url, options } of calls) {
+    assert.equal(url, "https://api.agentbounties.app/v1/site-auth/review-notifications");
+    assert.equal(options.credentials, "include");
+    assert.equal(options.redirect, "error");
+    assert.equal(options.cache, "no-store");
+  }
+  assert.equal(calls[0].options.body, undefined);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { enabled: false });
+  assert.equal(renders.at(-1).payload.enabled, false);
+  assert.equal(await controller.save("false"), false);
+  assert.equal(calls.length, 2);
+});
+
+test("late responses from a previous account cannot reveal its review contact", async () => {
+  const first = deferredReviewResponse(), second = deferredReviewResponse(), renders = [];
+  let count = 0;
+  const controller = home.createReviewNotificationController({
+    location: { hostname: "localhost" }, fetch: () => (++count === 1 ? first.promise : second.promise),
+  }, (state) => renders.push(state));
+  controller.setAccount("first-account");
+  const oldRead = controller.load();
+  await Promise.resolve();
+  controller.setAccount("second-account");
+  const newRead = controller.load();
+  second.resolve({ ...reviewEmailReady, email: "second@example.test" });
+  assert.equal(await newRead, true);
+  first.resolve({ ...reviewEmailReady, email: "first@example.test" });
+  assert.equal(await oldRead, false);
+  assert.equal(renders.at(-1).payload.email, "second@example.test");
+  assert.equal(renders.some(({ payload }) => payload?.email === "first@example.test"), false);
+  controller.setAccount(null);
+  assert.equal(renders.at(-1).payload, null);
+  assert.equal(await controller.load(), false);
+});
+
+test("account refresh waits for an opt-out instead of restoring an older preference", async () => {
+  const write = deferredReviewResponse(), renders = [], calls = [];
+  const controller = home.createReviewNotificationController({
+    location: { hostname: "localhost" },
+    fetch: async (_, options) => {
+      calls.push(options.method);
+      return options.method === "GET" ? { ok: true, json: async () => reviewEmailReady } : write.promise;
+    },
+  }, (state) => renders.push(state));
+  controller.setAccount("first-account");
+  await controller.load();
+  const saving = controller.save(false);
+  assert.equal(renders.at(-1).payload.enabled, false, "the checkbox keeps the selected value while saving");
+  assert.equal(renders.at(-1).loading, true);
+  const refresh = controller.load();
+  assert.equal(await controller.save(true), false);
+  write.resolve({ ...reviewEmailReady, enabled: false });
+  assert.equal(await saving, true);
+  assert.equal(await refresh, true);
+  assert.deepEqual(calls, ["GET", "POST"]);
+  assert.equal(renders.at(-1).payload.enabled, false);
+});
+
+test("uncertain saves can be reconciled by a new read and cancelled account work never starts", async () => {
+  const renders = [];
+  let calls = 0;
+  const controller = home.createReviewNotificationController({
+    location: { hostname: "localhost" }, fetch: async (_, options) => {
+      calls += 1;
+      if (options.method === "POST") throw new Error("response lost after server commit");
+      return { ok: true, json: async () => ({ ...reviewEmailReady, enabled: false }) };
+    },
+  }, (state) => renders.push(state));
+  controller.setAccount("first-account");
+  const cancelled = controller.save(true);
+  controller.setAccount(null);
+  assert.equal(await cancelled, false);
+  assert.equal(calls, 0);
+  controller.setAccount("first-account");
+  assert.equal(await controller.save(false), false);
+  assert.equal(renders.at(-1).error, true);
+  assert.equal(await controller.load(), true);
+  assert.equal(renders.at(-1).payload.enabled, false);
+  assert.equal(renders.at(-1).error, false);
+});
+
 test("rolling auth deployments still require explicit server wallet proof", () => {
   const wallets = [{address:"0x" + "11".repeat(20)}];
   assert.equal(home.accountSetupStatus({identity_link_status:"verified"},wallets),"ready");
