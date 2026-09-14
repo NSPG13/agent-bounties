@@ -290,7 +290,7 @@ impl BaseTransactionRelayer {
         let pending = provider
             .send_transaction(transaction)
             .await
-            .map_err(sanitize_relayer_provider_error)?;
+            .map_err(sanitize_relayer_submission_error)?;
         Ok(BaseRelayedTransaction {
             relayer: format!("{relayer:#x}"),
             tx_hash: format!("{:#x}", pending.tx_hash()),
@@ -327,6 +327,12 @@ fn sanitize_relayer_error_message(error: impl std::fmt::Display) -> String {
 
 fn sanitize_relayer_provider_error(error: impl std::fmt::Display) -> ChainBaseError {
     ChainBaseError::RelayerProvider(sanitize_relayer_error_message(error))
+}
+
+fn sanitize_relayer_submission_error(error: impl std::fmt::Display) -> ChainBaseError {
+    // This includes provider fillers: an error cannot establish whether a
+    // transaction was submitted, so callers must not treat it as a safe retry.
+    sanitize_relayer_provider_error(format!("transaction submission failed: {error}"))
 }
 
 fn sanitize_relayer_simulation_error(error: impl std::fmt::Display) -> ChainBaseError {
@@ -7403,6 +7409,29 @@ mod tests {
         assert_eq!(message, "execution reverted at [redacted-url]");
         assert!(!message.contains("secret"));
         assert!(!message.contains("private-key"));
+    }
+
+    #[test]
+    fn hosted_relayer_submission_errors_keep_stage_and_redact_credentials() {
+        let error = sanitize_relayer_submission_error(
+            "error sending request for url (https://user:secret@rpc.example/private-key)",
+        );
+        let ChainBaseError::RelayerProvider(message) = error else {
+            panic!("expected the existing relayer provider error variant");
+        };
+        assert_eq!(
+            message,
+            "transaction submission failed: error sending request for url ([redacted-url])"
+        );
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("private-key"));
+        let ChainBaseError::RelayerProvider(bounded) =
+            sanitize_relayer_submission_error("x".repeat(500))
+        else {
+            panic!("expected the existing relayer provider error variant");
+        };
+        assert!(bounded.starts_with("transaction submission failed: "));
+        assert_eq!(bounded.chars().count(), 300);
     }
 
     #[tokio::test]

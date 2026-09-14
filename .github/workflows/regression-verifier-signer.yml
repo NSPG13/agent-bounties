@@ -42,7 +42,7 @@ jobs:
           python-version: "3.12"
       - run: python scripts/test_regression_verifier_pipeline.py -v
       - run: python scripts/test_regression_verifier_source_guard.py -v
-      - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 efda90427f4a1c0a99105789ac1aef6bab0152237378902f65768908636bf228
+      - run: python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 7a55133c0025be81feac6354942bf655e5358572114c622e5a921bf549b18bb6
       - run: python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1
 
   authorize-run:
@@ -151,11 +151,11 @@ jobs:
         run: >-
           python scripts/regression_verifier_source_guard.py
           --scope worker-build
-          --expected-sha256 efda90427f4a1c0a99105789ac1aef6bab0152237378902f65768908636bf228
+          --expected-sha256 7a55133c0025be81feac6354942bf655e5358572114c622e5a921bf549b18bb6
       - run: cargo build --release -p worker
       - name: Revalidate reviewed runtime after build
         run: |
-          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 efda90427f4a1c0a99105789ac1aef6bab0152237378902f65768908636bf228
+          python scripts/regression_verifier_source_guard.py --scope worker-build --expected-sha256 7a55133c0025be81feac6354942bf655e5358572114c622e5a921bf549b18bb6
           python scripts/regression_verifier_source_guard.py --scope signing-runtime --expected-sha256 6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1
       - name: Revalidate and relay exact quorum
         env:
