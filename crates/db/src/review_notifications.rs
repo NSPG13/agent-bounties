@@ -396,7 +396,7 @@ impl PostgresStore {
                  AND (j.status = 'pending' OR (j.status = 'leased' AND j.lease_expires_at <= now()))
                  AND (j.review_deadline IS NULL OR j.review_deadline > now())
                  AND (j.retry_until IS NULL OR j.retry_until > now()) AND j.attempt_count < 100
-               ORDER BY j.next_attempt_at, j.created_at, j.id
+               ORDER BY j.review_deadline ASC NULLS LAST, j.next_attempt_at, j.created_at, j.id
                LIMIT $2 FOR UPDATE OF j SKIP LOCKED"#,
         ).bind(network).bind(i64::from(limit.min(100))).fetch_all(&mut *tx).await?;
         let mut leases = Vec::with_capacity(rows.len());
@@ -1509,6 +1509,50 @@ mod tests {
             .unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, locked_id);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicit loopback AGENT_BOUNTIES_TEST_DATABASE_URL named *test*"]
+    async fn claims_prioritize_due_reviews_without_bypassing_retry_backoff() {
+        let store = fixture().await;
+        let (_, wallet, _) = linked_contact(&store).await;
+        let network = network();
+        let now = Utc::now();
+        let no_deadline = job(&network, &wallet, None);
+        let later = job(&network, &wallet, Some(now + chrono::Duration::hours(2)));
+        let urgent = job(&network, &wallet, Some(now + chrono::Duration::minutes(5)));
+        let backing_off = job(&network, &wallet, Some(now + chrono::Duration::minutes(1)));
+        enqueue(
+            &store,
+            &[
+                no_deadline.clone(),
+                later.clone(),
+                urgent.clone(),
+                backing_off.clone(),
+            ],
+        )
+        .await;
+        // Simulate older nonurgent work already waiting when the urgent review arrives.
+        sqlx::query("UPDATE verifier_review_notifications SET next_attempt_at = now() - interval '1 hour' WHERE network=$1 AND bounty_contract=$2")
+            .bind(&network).bind(&no_deadline.bounty_contract).execute(&store.pool).await.unwrap();
+        sqlx::query("UPDATE verifier_review_notifications SET next_attempt_at = now() + interval '30 seconds' WHERE network=$1 AND bounty_contract=$2")
+            .bind(&network).bind(&backing_off.bounty_contract).execute(&store.pool).await.unwrap();
+        let leases = store
+            .claim_review_notifications(&network, 10, 60)
+            .await
+            .unwrap();
+        let contracts: Vec<_> = leases
+            .iter()
+            .map(|lease| lease.notification.bounty_contract.as_str())
+            .collect();
+        assert_eq!(
+            contracts,
+            vec![
+                urgent.bounty_contract.as_str(),
+                later.bounty_contract.as_str(),
+                no_deadline.bounty_contract.as_str()
+            ]
+        );
     }
 
     #[tokio::test]

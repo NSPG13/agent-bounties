@@ -58,3 +58,26 @@ the adversarial workflow/build-input mutations and the known-bad implementation.
 Any subsequent guarded source edit requires a new reviewed digest, synchronized
 pins and these checks again. No live signing, relay or provider email request is
 part of this fingerprint validation.
+
+## Review follow-up
+
+A further review found that queue admission discarded deadline ordering and
+that email links did not identify the verifier's task. The follow-up prioritizes
+due reviews by their earliest deadline, keeps retry backoff, adds email context
+and preference links, and gives email visitors current review guidance.
+The new PostgreSQL test fails under the previous admission order and passes
+with the correction. No contract, recipient authority, migration, signing flow,
+or provider retry payload from an earlier attempt changes.
+
+Only `crates/db/src/review_notifications.rs` and
+`crates/worker/src/review_email.rs` change guarded build inputs in this follow-up.
+The reviewed worker fingerprint is now `e11407bce1db901466da6da7b18bbdc5057812de538b71d5299d4e7f827086d9`;
+the inactive 1200-second benchmark digest is `sha256:4d64e0548471aef9284c3b7f30312a3ac148f3538d3ea6bc0f808ee101138582`.
+The same eight workflow pins, six rehearsal literals and derived fixture hashes
+are refreshed. Signing runtime, guard/checker behavior, funded tuples and the
+900-second catalog are unchanged.
+
+Focused validation: 13 real PostgreSQL notification tests, 15 mailer/projection
+tests, strict affected-crate Clippy, 82 frontend/WebMCP tests, mobile/desktop
+review-link browser checks, site checks, 52 source/pipeline/precommit tests and
+the known-good/known-bad rehearsal. Production delivery remains disabled.

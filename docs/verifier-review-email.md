@@ -17,8 +17,18 @@ verdict, accept work, or release payment.
 
 The email contains a first-party review link and the submission's review deadline
 in UTC. It contains no title, solution, artifact URL, or private bounty content.
-Use the linked page to check the current state before reviewing or signing.
+The email explains why it was sent and links to account notification settings.
+The review link opens the current evidence and shows the submission's review
+deadline in the browser's local time, including for non-creator verifiers.
+Expired or completed reviews show their current state instead of inviting a new
+verdict. The URL selects a view; it grants no authority. Use the linked page to
+check the current state before reviewing or signing.
 Email delivery does not extend any on-chain review window.
+
+Among attempts whose retry delay has elapsed, the outbox sends the earliest
+review deadline first. Records without a review deadline follow dated reviews.
+Backoff still applies to urgent reviews. Email can be delayed; provider acceptance
+is not proof of inbox delivery, and verifiers should also check the site.
 
 Notifications do not depend on a bounty delivery deadline. Autonomous-v1 emits a
 separate review expiry when a solution is submitted; that expiry controls whether

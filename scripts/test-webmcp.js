@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const { webcrypto } = require("node:crypto");
 const flow = require("../site/marketplace-workflow.js");
 const market = require("../site/marketplace.js");
-const { validateCalls, recoveryStatus, start: startParticipant } = require("../site/participate.js");
+const { validateCalls, recoveryStatus, verifierReviewState, start: startParticipant } = require("../site/participate.js");
 const contract = "0x" + "11".repeat(20), wallet = "0x" + "22".repeat(20);
 const intentId = "10000000-0000-4000-8000-000000000001";
 const amount = (n) => ({ amount: String(n), unit: "base_units", decimals: 6, currency: "USDC" });
@@ -281,6 +281,44 @@ async function participantFixture(action = "solve") {
   const click = (selector, trusted = true) => env.elements.get(selector).listeners.get("click")({ isTrusted: trusted });
   return { ...env, state, sent, observations, publications, submission, click, reload: () => startParticipant(env.window, env.document) };
 }
+
+test("email review guidance uses the current submission expiry, without a delivery deadline or creator role", () => {
+  const submission = { id: "submission", block_number: 11, log_index: 0, bounty_id: "bounty", contract_address: contract, kind: "submission_added", data: { round: 2, verification_expires_at: 200 } };
+  const base = { bounty_contract: contract, bounty_id: "bounty", status: "submitted", terms_valid: true, verification_ready: false, events: [submission] };
+  assert.equal(verifierReviewState(base, 100).title, "Review the submitted solution");
+  assert.match(verifierReviewState(base, 100).summary, /Only a wallet named in the verification policy/);
+  assert.match(verifierReviewState(base, 100).deadline, /separate from the work deadline/);
+  assert.equal(verifierReviewState(base, 200).title, "The review deadline has passed");
+  assert.equal(verifierReviewState({ ...base, status: "paid" }, 100).deadline, "");
+  for (const invalid of [{ contract_address: wallet }, { bounty_id: "other" }, { id: null }, { data: { round: 2 } }]) {
+    assert.equal(verifierReviewState({ ...base, events: [{ ...submission, ...invalid }] }, 100).title, "Refresh review details");
+  }
+  const newer = { ...submission, block_number: 12, data: { round: 3, verification_expires_at: 300 } };
+  assert.equal(verifierReviewState({ ...base, events: [submission, newer] }, 201).title, "Review the submitted solution");
+});
+
+test("email review visit opens evidence, refreshes deadlines and never starts a wallet action", async () => {
+  const env = await participantFixture();
+  env.window.location.search = `?bountyContract=${contract}&network=base-mainnet&role=verifier`;
+  let poll;
+  env.window.setInterval = (fn) => { poll = fn; };
+  env.elements.get("[data-work-evidence]").parentElement = { open: false };
+  env.state.feed.status = "submitted";
+  env.state.feed.terms.document.verification_policy = { mechanism: "signed_quorum", verifiers: [wallet] };
+  const now = Math.floor(Date.now() / 1000);
+  env.state.feed.events = [{ id: "submission", block_number: 12, log_index: 0, bounty_id: "test-bounty", contract_address: contract, kind: "submission_added", data: { round: 2, verification_expires_at: now + 600 } }];
+  await env.reload();
+  assert.equal(env.elements.get("[data-step-title]").textContent, "Review the submitted solution");
+  assert.equal(env.elements.get("[data-work-evidence]").parentElement.open, true);
+  assert.equal(env.elements.get("[data-work-prepare]").hidden, true);
+  assert.deepEqual(env.sent, []);
+  env.state.feed.status = "paid";
+  poll();
+  await new Promise(setImmediate);
+  assert.equal(env.elements.get("[data-step-title]").textContent, "Check the current bounty");
+  assert.equal(env.elements.get("[data-work-deadline]").textContent, "");
+  assert.deepEqual(env.sent, []);
+});
 
 test("expired work takes precedence over verifier outages and does not imply recovery executed", () => {
   const claim = { id: "claim", block_number: 10, log_index: 0, bounty_id: "bounty", contract_address: contract, kind: "bounty_claimed", data: { round: 2, solver: wallet, claim_expires_at: 100 } };

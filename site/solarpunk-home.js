@@ -33,7 +33,7 @@
     const emailVerified = payload.email_verified === true && typeof payload.email === "string" && Boolean(payload.email);
     const walletLinked = payload.wallet_linked === true;
     const providerSupported = ["google", "github"].includes(provider);
-    let message = "You’ll get an email when a new solution is ready for your review, even without a bounty deadline.";
+    let message = "Review emails are enabled, even without a bounty deadline. Check the site for current submissions and review deadlines; email can be delayed.";
     if (!payload.enabled) message = "Review emails are turned off. You can still review solutions on the site.";
     else if (!emailVerified) message = providerSupported
       ? `Sign in again with ${AUTH_PROVIDER_LABELS[provider]} to confirm your email for review notifications.`

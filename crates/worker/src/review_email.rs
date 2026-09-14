@@ -224,7 +224,7 @@ impl ReviewEmailSender {
             return Err(ReviewEmailInputError::InvalidContract);
         }
         let link = format!(
-            "{REVIEW_ORIGIN}/participate.html?bountyContract={}&network=base-mainnet",
+            "{REVIEW_ORIGIN}/participate.html?bountyContract={}&network=base-mainnet&role=verifier",
             bounty_contract.to_ascii_lowercase()
         );
         let deadline = match review_deadline {
@@ -234,16 +234,17 @@ impl ReviewEmailSender {
             ),
             None => "No review deadline is set.".to_owned(),
         };
-        let instruction =
-            "Open the review page to inspect the solution and decide whether to sign a verdict.";
+        let instruction = "Check the current submission and review deadline on the site before deciding whether to sign a verdict. This email does not extend the review window.";
+        let reason = "You received this because a wallet linked to your account is designated to review this bounty.";
+        let settings = format!("{REVIEW_ORIGIN}/#account");
         Ok(json!({
             "from": self.config.sender,
             "to": [recipient_email],
             "subject": SUBJECT,
-            "text": format!("{SUBJECT}.\n\nReview the solution: {link}\n\n{deadline}\n\n{instruction}"),
+            "text": format!("{SUBJECT}.\n\nReview the solution: {link}\n\n{deadline}\n\n{instruction}\n\n{reason}\nManage review emails: {settings}"),
             "html": format!(
-                "<p>{}.</p><p><a href=\"{}\">Review the solution</a></p><p>{}</p><p>{}</p>",
-                escape_html(SUBJECT), escape_html(&link), escape_html(&deadline), escape_html(instruction)
+                "<p>{}.</p><p><a href=\"{}\">Review the solution</a></p><p>{}</p><p>{}</p><p>{}</p><p><a href=\"{}\">Manage review emails</a></p>",
+                escape_html(SUBJECT), escape_html(&link), escape_html(&deadline), escape_html(instruction), escape_html(reason), escape_html(&settings)
             ),
         }))
     }
@@ -658,7 +659,7 @@ mod tests {
         let sender = ReviewEmailSender::new(config()).unwrap();
         assert_eq!(sender.endpoint.as_str(), RESEND_ENDPOINT);
         let no_deadline = payload(&sender);
-        let expected_link = format!("https://agentbounties.app/participate.html?bountyContract={CONTRACT}&network=base-mainnet");
+        let expected_link = format!("https://agentbounties.app/participate.html?bountyContract={CONTRACT}&network=base-mainnet&role=verifier");
         assert_eq!(no_deadline.as_object().unwrap().len(), 5);
         assert_eq!(no_deadline["subject"], SUBJECT);
         assert_eq!(no_deadline["to"], json!([RECIPIENT]));
@@ -690,6 +691,12 @@ mod tests {
             .unwrap()
             .contains("No review deadline"));
         for value in [&no_deadline, &with_deadline] {
+            for format in ["text", "html"] {
+                let body = value[format].as_str().unwrap();
+                assert!(body.contains("https://agentbounties.app/#account"));
+                assert!(body.contains("a wallet linked to your account is designated"));
+                assert!(body.contains("does not extend the review window"));
+            }
             let serialized = value.to_string();
             for forbidden in [
                 "attachments",

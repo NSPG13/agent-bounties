@@ -8,6 +8,23 @@
   const HASH = /^0x[0-9a-f]{64}$/i;
   const lower = (value) => String(value || "").toLowerCase();
   const stable = (value) => value && typeof value === "object" ? Array.isArray(value) ? `[${value.map(stable).join(",")}]` : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}` : JSON.stringify(value);
+  // A URL selects presentation only; it never establishes verifier authority.
+  function verifierReviewState(item, now = Math.floor(Date.now() / 1000)) {
+    if (item.status !== "submitted") return { title: "Check the current bounty", summary: "This bounty no longer has a solution awaiting review. Check its current status before taking action.", deadline: "" };
+    const submission = (item.events || []).filter((event) => event.kind === "submission_added"
+      && lower(event.contract_address) === lower(item.bounty_contract) && event.bounty_id === item.bounty_id
+      && event.id && Number.isSafeInteger(event.block_number) && event.block_number > 0
+      && Number.isSafeInteger(event.log_index) && event.log_index >= 0)
+      .sort((a, b) => b.block_number - a.block_number || b.log_index - a.log_index)[0];
+    const deadline = submission?.data?.verification_expires_at;
+    if (item.terms_valid !== true || !Number.isSafeInteger(submission?.data?.round) || submission.data.round <= 0
+      || !Number.isSafeInteger(deadline) || deadline <= 0 || !Number.isFinite(new Date(deadline * 1000).getTime())) return {
+      title: "Refresh review details", summary: "Current submission or review deadline details are unavailable. Refresh before preparing a verdict.", deadline: "",
+    };
+    const date = new Date(deadline * 1000).toLocaleString();
+    if (now >= deadline) return { title: "The review deadline has passed", summary: "Do not prepare a verdict for this expired review. Refresh progress to check the current on-chain state.", deadline: `Review deadline: ${date} (your local time).` };
+    return { title: "Review the submitted solution", summary: "Read the submitted evidence below and compare it with the acceptance criteria. Your AI can help prepare the committed verification flow. Only a wallet named in the verification policy can sign a verdict.", deadline: `Review by ${date} (your local time). This is the review deadline, separate from the work deadline.` };
+  }
   function recoveryStatus(item, now = Math.floor(Date.now() / 1000)) {
     if (["paid", "cancelled"].includes(item.status)) return null;
     const events = (item.events || []).filter((event) => lower(event.contract_address) === lower(item.bounty_contract)
@@ -64,6 +81,8 @@
     const find = (s) => doc.querySelector(s), put = (s, value) => { find(s).textContent = value; };
     const params = new URLSearchParams(win.location.search), contract = lower(params.get("bountyContract"));
     const network = params.get("network") || flow.NETWORK;
+    const reviewVisit = params.get("role") === "verifier";
+    if (reviewVisit) doc.body?.classList.add("verifier-review-visit");
     let intentId = params.get("intent"), intent = null, item = null, wallet = null, provider = null, calls = null, submission = null, busy = false;
     const recordKey = `agent-bounties.wallet-step.v1:${intentId || contract}`;
     let record;
@@ -138,6 +157,14 @@
       put("[data-step-title]", recovery ? "Review recovery" : item.status === "paid" ? "Canonical result" : item.status === "claimed" ? "Track the agreed work" : item.status === "submitted" ? "Verification in progress" : "Review the next step");
       put("[data-step-summary]", recovery ? recovery.instructions : item.verification_ready ? "Your AI can read the exact requirements and prepare the next action."
         : item.verification_readiness_reason || "The verifier is not ready. Do not commit to new work yet.");
+      if (reviewVisit && !intentId) {
+        const review = verifierReviewState(item);
+        put("[data-step-title]", review.title);
+        put("[data-step-summary]", review.summary);
+        put("[data-work-deadline]", review.deadline);
+        find("[data-work-prepare]").hidden = true;
+        find("[data-work-evidence]").parentElement.open = true;
+      }
       put("[data-work-evidence]", JSON.stringify({ verification: terms.verification_policy, benchmark: terms.benchmark, evidence_schema: terms.evidence_schema, events, jobs }, null, 2));
       const next = paidEvent ? null
         : item.status === "paid" ? { action: "show_canonical_result", instructions: "Show the recorded settlement and its actual recipient. This is not a claim that the current person earned money unless their wallet and submission are matched." }
@@ -147,7 +174,9 @@
         : item.status === "claimed" && ownsClaim ? { action: "complete_agreed_work", instructions: "Use the current assistant's execution tools to complete and test the exact accepted work. Prepare action complete with the public artifact and evidence when it passes. No permission is needed for routine preparation." }
         : item.status === "claimed" ? { action: "track_claimed_work", instructions: "This work is reserved by the displayed claim owner. Track that solver's progress; do not start duplicate work or represent the claim as yours without matching the person's wallet." }
         : item.status === "submitted" && terms.benchmark?.engine === "creator_review_v1" ? { tool: "agent_bounties_get_creator_review", input: {}, instructions: "The creator signs the verdict. Prepare their assessment only after examining the exact submitted artifacts; a solver cannot approve their own payment." }
-        : item.status === "submitted" ? { action: "continue_committed_verification", instructions: "Read the returned verification job. Execute its exact committed flow through an available interface, or wait for the committed verifier. Do not ask for a new approval just to check status." }
+        : item.status === "submitted" ? { action: "continue_committed_verification", instructions: reviewVisit
+          ? "Read the current submission evidence and committed verification policy. Check that the person's wallet is a designated verifier before preparing their verdict; this URL grants no authority. Use the committed verification flow and first-party signing pages."
+          : "Read the returned verification job. Execute its exact committed flow through an available interface, or wait for the committed verifier. Do not ask for a new approval just to check status." }
         : { action: "review_current_requirements", instructions: "Resolve the listed prerequisites before preparing a claim. If posting, wait for a solver or continue preparing an authorized contribution." };
       return { bounty_contract: contract, bounty_id: item.bounty_id, status: item.status, terms, events, claim_owner: claimOwner, claim_owned_by_review_wallet: ownsClaim, verification_jobs: jobs,
         action: intent, paid: Boolean(paidEvent), payment_evidence: paidEvent || null, wallet_connected: Boolean(wallet), poll_after_seconds: 15, evidence_boundary: flow.BOUNDARY,
@@ -305,7 +334,7 @@
     find("[data-work-refresh]").addEventListener("click", () => refresh().catch(message));
     win.AgentBountiesParticipation = Object.freeze({ refresh, publishEvidence, prepareRecovery });
     try { await refresh(); } catch (error) { message(error); }
-    win.setInterval(() => { if (!doc.hidden && !busy && intentId) refresh().catch(message); }, 15000);
+    win.setInterval(() => { if (!doc.hidden && !busy && (intentId || reviewVisit)) refresh().catch(message); }, 15000);
   }
-  return { validateCalls, validateSubmission, recoveryStatus, start };
+  return { validateCalls, validateSubmission, recoveryStatus, verifierReviewState, start };
 });
