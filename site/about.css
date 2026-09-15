@@ -4,7 +4,7 @@
   --about-panel-strong: #0a1d13;
   --about-ink: #eef2e8;
   --about-muted: #aeb9ad;
-  --about-lime: #c7ef68;
+  --about-lime: #38a700;
   --about-mint: #59d8b2;
   --about-line: rgba(197, 231, 119, 0.22);
   --about-serif: "Iowan Old Style", Baskerville, "Palatino Linotype", Georgia, serif;
@@ -252,8 +252,8 @@ body.about-body {
 .post-content p,
 .post-content li,
 .post-content dd { color: var(--about-muted); font-size: 1rem; line-height: 1.82; }
-.post-content a { color: #d5f580; text-underline-offset: 3px; }
-.post-content code { padding: 0.12em 0.34em; border: 1px solid var(--about-line); color: #ddf598; background: rgba(1, 8, 5, 0.68); }
+.post-content a { color: #a3d8ae; text-underline-offset: 3px; }
+.post-content code { padding: 0.12em 0.34em; border: 1px solid var(--about-line); color: #c1e2ca; background: rgba(1, 8, 5, 0.68); }
 .post-content table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .post-content th,
 .post-content td { padding: 13px 12px; border-bottom: 1px solid var(--about-line); color: var(--about-muted); text-align: left; vertical-align: top; }

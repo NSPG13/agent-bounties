@@ -3,7 +3,7 @@
   --composer-panel: rgba(7, 25, 16, 0.92);
   --composer-panel-strong: #071b11;
   --composer-line: rgba(188, 239, 55, 0.24);
-  --composer-lime: #c9f548;
+  --composer-lime: #38a700;
   --composer-mint: #7cefd1;
   --composer-text: #f4f6ef;
   --composer-muted: #aab6ad;
@@ -114,7 +114,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 100% 0, rgba(201, 245, 72, 0.12), transparent 26rem);
+  background: radial-gradient(circle at 100% 0, rgba(56, 167, 0, 0.12), transparent 26rem);
 }
 
 .composer-assistant {
@@ -131,10 +131,10 @@
   place-items: center;
   width: 38px;
   height: 38px;
-  border: 1px solid rgba(201, 245, 72, 0.55);
+  border: 1px solid rgba(56, 167, 0, 0.55);
   border-radius: 12px;
   color: var(--composer-lime);
-  background: rgba(201, 245, 72, 0.07);
+  background: rgba(56, 167, 0, 0.07);
   font-weight: 900;
 }
 
@@ -178,8 +178,8 @@
 }
 
 #bounty-composer-input:focus {
-  border-color: rgba(201, 245, 72, 0.7);
-  box-shadow: 0 0 0 4px rgba(201, 245, 72, 0.09);
+  border-color: rgba(56, 167, 0, 0.7);
+  box-shadow: 0 0 0 4px rgba(56, 167, 0, 0.09);
 }
 
 #bounty-composer-input::placeholder {
@@ -194,10 +194,10 @@
   place-items: center;
   width: 42px;
   height: 42px;
-  border: 1px solid rgba(201, 245, 72, 0.36);
+  border: 1px solid rgba(56, 167, 0, 0.36);
   border-radius: 999px;
   color: var(--composer-lime);
-  background: rgba(201, 245, 72, 0.08);
+  background: rgba(56, 167, 0, 0.08);
   cursor: pointer;
 }
 
@@ -218,7 +218,7 @@
 }
 
 @keyframes composer-pulse {
-  50% { box-shadow: 0 0 0 9px rgba(201, 245, 72, 0.12); }
+  50% { box-shadow: 0 0 0 9px rgba(56, 167, 0, 0.12); }
 }
 
 .composer-actions {
@@ -264,7 +264,7 @@
 .bounty-card {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(201, 245, 72, 0.3);
+  border: 1px solid rgba(56, 167, 0, 0.3);
   border-radius: 26px;
   background: linear-gradient(160deg, #0b2717, #06130c 68%);
   box-shadow: 0 32px 90px rgba(0, 0, 0, 0.36);
@@ -347,7 +347,7 @@
 
 .bounty-stat {
   min-width: 0;
-  border: 1px solid rgba(201, 245, 72, 0.13);
+  border: 1px solid rgba(56, 167, 0, 0.13);
   border-radius: 14px;
   padding: 12px;
   background: rgba(0, 8, 4, 0.46);
@@ -449,7 +449,7 @@
   width: min(660px, calc(100% - 24px));
   max-height: calc(100vh - 32px);
   overflow: auto;
-  border: 1px solid rgba(201, 245, 72, 0.3);
+  border: 1px solid rgba(56, 167, 0, 0.3);
   border-radius: 24px;
   padding: 0;
   color: var(--composer-text);
@@ -518,7 +518,7 @@
 .payment-method span { display: block; }
 .payment-method span { margin-top: 4px; color: #7f8b83; font-size: 0.72rem; }
 .payment-method:disabled { opacity: 0.42; cursor: not-allowed; }
-.payment-method[data-active="true"] { border-color: var(--composer-lime); background: rgba(201, 245, 72, 0.08); }
+.payment-method[data-active="true"] { border-color: var(--composer-lime); background: rgba(56, 167, 0, 0.08); }
 
 .wallet-picker-panel {
   border-top: 1px solid rgba(255,255,255,.1);
@@ -557,12 +557,12 @@
   text-align: left;
 }
 
-.wallet-option:hover { border-color: rgba(201,245,72,.55); }
+.wallet-option:hover { border-color: rgba(56, 167, 0,.55); }
 .wallet-option small { color: var(--composer-muted); }
 
 .wallet-readiness {
   margin-top: 16px;
-  border: 1px solid rgba(201, 245, 72, 0.16);
+  border: 1px solid rgba(56, 167, 0, 0.16);
   border-radius: 16px;
   padding: 16px;
   background: rgba(0, 7, 4, 0.42);
