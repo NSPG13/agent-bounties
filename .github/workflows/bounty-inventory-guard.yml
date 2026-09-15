@@ -2,7 +2,8 @@ name: Bounty inventory guard
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # One automatic report/failure alert per day, at 09:17 Mexico City (UTC-6).
+    - cron: "17 15 * * *"
   workflow_dispatch:
     inputs:
       execute_github_discovery:
