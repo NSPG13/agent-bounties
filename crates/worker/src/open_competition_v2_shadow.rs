@@ -322,7 +322,7 @@ async fn fetch_shadow_events(
             logs,
             from_block,
             end,
-            &[config.indexer.factory_contract.clone()],
+            std::slice::from_ref(&config.indexer.factory_contract),
         )?);
         pace_shadow_requests(config).await;
         request_id = request_id.saturating_add(1);
@@ -918,7 +918,7 @@ mod tests {
         let mut observed_later = event.clone();
         observed_later.occurred_at = Utc::now() + chrono::Duration::seconds(10);
         assert_eq!(
-            canonical_event_set_hash(&[event.clone()]).unwrap(),
+            canonical_event_set_hash(std::slice::from_ref(&event)).unwrap(),
             canonical_event_set_hash(&[observed_later]).unwrap()
         );
         let mut changed = event;

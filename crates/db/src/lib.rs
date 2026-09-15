@@ -27,6 +27,12 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod review_notifications;
+pub use review_notifications::{
+    LeasedReviewNotification, NewReviewNotification, ReviewNotificationAttempt,
+    ReviewNotificationError, ReviewNotificationOutcome, ReviewNotificationPreferences,
+    ReviewNotificationRound, ReviewNotificationSync,
+};
 mod site_posting_drafts;
 pub use site_posting_drafts::{PostingDraftError, SitePostingDraft};
 
@@ -96,6 +102,8 @@ pub const SITE_POSTING_DRAFTS_MIGRATION: &str =
     include_str!("../../../migrations/0036_site_posting_drafts.sql");
 pub const SITE_WALLET_PROVIDER_MIGRATION: &str =
     include_str!("../../../migrations/0037_site_wallet_provider.sql");
+pub const VERIFIER_REVIEW_NOTIFICATIONS_MIGRATION: &str =
+    include_str!("../../../migrations/0040_verifier_review_notifications.sql");
 const MIGRATION_ADVISORY_LOCK_ID: i64 = 4_270_265_017;
 const UPSERT_PAYMENT_EVENT_SQL: &str = r#"
             INSERT INTO payment_events (id, rail, external_id, status, payload_hash, received_at)
@@ -1504,6 +1512,7 @@ impl PostgresStore {
                 DISTRIBUTION_COMPETITION_BINDINGS_MIGRATION,
                 SITE_POSTING_DRAFTS_MIGRATION,
                 SITE_WALLET_PROVIDER_MIGRATION,
+                VERIFIER_REVIEW_NOTIFICATIONS_MIGRATION,
             ] {
                 for statement in migration
                     .split(';')

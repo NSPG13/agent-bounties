@@ -201,6 +201,14 @@ services:
         value: https://api.agentbounties.app
       - key: WEBSITE_BASE_URL
         value: https://agentbounties.app
+      # Enable after sender verification and a controlled review-email canary.
+      # Keep provider credentials scoped to the API service.
+      - key: VERIFIER_EMAIL_ENABLED
+        value: "false"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: VERIFIER_EMAIL_FROM
+        sync: false
       - key: MCP_BASE_URL
         value: https://mcp.agentbounties.app
       - key: AGENT_BOUNTIES_SOCIAL_MENTION_DRAFTS_ENABLED

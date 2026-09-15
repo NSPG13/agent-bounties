@@ -32,12 +32,16 @@ use verifier_sdk::{VerificationInput, Verifier, VerifierResultType};
 
 mod open_competition_v2_broker;
 mod regression_sandbox;
+mod review_notifications;
 pub use open_competition_v2_broker::*;
+pub use review_notifications::*;
 mod open_competition_v2_keeper;
 pub use open_competition_v2_keeper::*;
 mod open_competition_v2_shadow;
 pub use open_competition_v2_shadow::*;
 pub use regression_sandbox::*;
+mod review_email;
+pub use review_email::*;
 
 const AUTONOMOUS_LOG_ADDRESS_BATCH_SIZE: usize = 500;
 const INDEXER_HEARTBEAT_SUCCESS: &str = "success";

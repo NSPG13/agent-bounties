@@ -37,7 +37,7 @@
         ]
       }
     </script>
-    <link rel="stylesheet" href="solarpunk.css?v=17">
+    <link rel="stylesheet" href="solarpunk.css?v=18">
     <link rel="stylesheet" href="phone-wallet.css?v=3">
     <link rel="stylesheet" href="wallet-link.css?v=2">
     <link rel="stylesheet" href="wallet-adapters.css?v=3">
@@ -187,6 +187,18 @@
           <p class="wallet-status" data-wallet-status aria-live="polite"></p>
         </section>
 
+        <section class="account-review-emails" data-review-email-settings aria-labelledby="review-email-title" aria-busy="true">
+          <h3 id="review-email-title">Review emails</h3>
+          <label><input type="checkbox" data-review-email-enabled disabled> <span>Email me when a solution needs my review</span></label>
+          <p data-review-email-address></p>
+          <p data-review-email-status aria-live="polite">Checking review email settings…</p>
+          <div class="review-email-actions">
+            <button type="button" data-review-email-signin hidden>Confirm email</button>
+            <button type="button" data-review-email-wallet hidden>Link my verifier wallet</button>
+            <button type="button" data-review-email-retry hidden>Try again</button>
+          </div>
+        </section>
+
         <p class="account-setup-note" data-account-setup-note aria-live="polite">Checking your account setup…</p>
         <button class="account-setup-retry" type="button" data-account-setup-retry hidden>Check again</button>
 
@@ -331,7 +343,7 @@
     <script src="analytics-config.js?v=7"></script>
     <script src="analytics.js?v=5"></script>
     <script src="posting-prompt.js?v=4"></script>
-    <script src="solarpunk-home.js?v=23"></script>
+    <script src="solarpunk-home.js?v=26"></script>
     <script src="forest-home.js?v=4"></script>
     <script src="forest-hall.js?v=4"></script>
   <!-- shared-footer:start -->

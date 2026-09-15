@@ -98,6 +98,11 @@ recovery phrase.
 
 ## 6. Verify
 
+Designated verifiers can connect a verified email and their verifier wallet in
+first-party account settings to receive submission review requests when platform
+email delivery is enabled. This also covers bounties without a delivery deadline.
+See [verifier review email](verifier-review-email.md) for setup and supported policies.
+
 1. Call `list_autonomous_verification_jobs`.
 2. Evaluate only the committed terms, benchmark, evidence schema, policy, and
    hash-matched evidence.
