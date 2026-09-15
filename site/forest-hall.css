@@ -4,7 +4,7 @@
 .forest-home .ab-hero h1 > .ab-title-line { display: block; margin: 0; white-space: nowrap; }
 .forest-home .ab-outcome-word { display: inline-block; width: 4.4em; padding: .03em .12em .08em; border-radius: .1em; background: var(--ab-accent); color: var(--ab-on-accent); text-align: center; font-family: var(--ab-body); font-weight: 900; line-height: 1; letter-spacing: -.045em; vertical-align: baseline; }
 .forest-home .ab-hero-subtitle { margin-top: 28px; margin-bottom: 16px; text-wrap: balance; }
-.forest-home .ab-funding-note { max-width: 760px; margin: 0 auto 32px; color: var(--ab-muted); font-size: clamp(14px, 1.2vw, 18px); line-height: 1.5; text-wrap: balance; }
+.forest-home .ab-funding-note { max-width: 760px; margin: 0 auto; color: var(--ab-muted); font-size: clamp(14px, 1.2vw, 18px); line-height: 1.5; text-wrap: balance; }
 .ab-payoff { white-space: nowrap; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
 .ab-only { font-style: normal; }
 .forest-home .ab-hero::before { content: none; }
