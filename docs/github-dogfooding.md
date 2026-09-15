@@ -309,7 +309,14 @@ exists:
   `vars.AGENT_BOUNTIES_API_BASE_URL`, calls the proof-record planner, and
   creates or updates a sticky comment marked with `<!-- agent-bounties-proof -->`.
 - `.github/workflows/bounty-inventory-guard.yml` reconciles canonical status
-  every 15 minutes. For an autonomous bounty with exact source-issue mapping
+  once a day, scheduled for 15:17 UTC (09:17 Mexico City), when
+  `BOUNTY_DISCOVERY_EXECUTE=true`. Otherwise it produces a dry-run report.
+  Manual runs can also reconcile after the dry-run actions are reviewed.
+  GitHub labels and mirrored state can lag by a day or longer if a run is
+  delayed, fails, or cannot start. Before claiming or posting a bond, check
+  the live API feed and its `verification_ready` and
+  `verification_readiness_reason` fields; a GitHub label is not authorization
+  to claim. For an autonomous bounty with exact source-issue mapping
   and confirmed `BountySettled`, it publishes one receipt marked with
   `<!-- agent-bounties-canonical-settlement -->`, applies `settled-paid`, then
   closes the issue as completed. A dry run lists the exact comment and closure
