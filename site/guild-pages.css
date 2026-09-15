@@ -6,8 +6,8 @@
   --guild-panel-solid: #091710;
   --guild-line: rgba(181, 226, 70, 0.25);
   --guild-line-strong: rgba(190, 238, 74, 0.58);
-  --guild-lime: #b9ef37;
-  --guild-lime-bright: #ceff48;
+  --guild-lime: #38a700;
+  --guild-lime-bright: #50b820;
   --guild-mint: #18d9ac;
   --guild-gold: #e8bd26;
   --guild-text: #f6f7ef;
@@ -59,7 +59,7 @@ body.guild-interior::before {
 body.guild-interior::after {
   z-index: -1;
   background:
-    radial-gradient(circle at 50% -12%, transparent 0 18rem, rgba(185, 239, 55, 0.035) 18.1rem 18.2rem, transparent 18.3rem),
+    radial-gradient(circle at 50% -12%, transparent 0 18rem, rgba(56, 167, 0, 0.035) 18.1rem 18.2rem, transparent 18.3rem),
     linear-gradient(180deg, transparent 72%, rgba(0, 0, 0, 0.28));
 }
 
@@ -120,7 +120,7 @@ body.guild-interior .brand {
   width: 31px;
   height: 35px;
   color: var(--guild-lime);
-  filter: drop-shadow(0 0 10px rgba(185, 239, 55, 0.22));
+  filter: drop-shadow(0 0 10px rgba(56, 167, 0, 0.22));
 }
 
 .guild-shell-crest svg {
@@ -219,7 +219,7 @@ body.guild-interior .topbar nav a[aria-current="page"]::after {
 
 .guild-mode-switch a:hover,
 .guild-mode-switch a[aria-current="page"] {
-  background: rgba(185, 239, 55, 0.14);
+  background: rgba(56, 167, 0, 0.14);
   color: var(--guild-lime-bright);
 }
 
@@ -261,10 +261,10 @@ body.guild-interior .protocol-head::before {
   right: -80px;
   width: 440px;
   height: 440px;
-  border: 1px solid rgba(185, 239, 55, 0.16);
+  border: 1px solid rgba(56, 167, 0, 0.16);
   border-radius: 50%;
   box-shadow:
-    0 0 0 54px rgba(185, 239, 55, 0.025),
+    0 0 0 54px rgba(56, 167, 0, 0.025),
     0 0 0 108px rgba(24, 217, 172, 0.018);
 }
 
@@ -390,7 +390,7 @@ body.guild-interior .policy-band {
 
 body.guild-interior .muted {
   background:
-    radial-gradient(circle at 92% 16%, rgba(185, 239, 55, 0.07), transparent 18rem),
+    radial-gradient(circle at 92% 16%, rgba(56, 167, 0, 0.07), transparent 18rem),
     linear-gradient(145deg, rgba(12, 34, 23, 0.93), rgba(5, 17, 12, 0.96));
 }
 
@@ -429,15 +429,15 @@ body.guild-interior .button:hover {
 body.guild-interior .button.primary,
 body.guild-interior .primary {
   border-color: rgba(205, 255, 75, 0.82);
-  background: linear-gradient(110deg, #9fd020, #caf04b);
+  background: linear-gradient(110deg, #6fa67a, #38a700);
   color: #081006;
-  box-shadow: 0 9px 26px rgba(185, 239, 55, 0.13);
+  box-shadow: 0 9px 26px rgba(56, 167, 0, 0.13);
 }
 
 body.guild-interior .button.primary:hover,
 body.guild-interior .primary:hover {
-  background: linear-gradient(110deg, #b4e42c, #d4ff5b);
-  box-shadow: 0 12px 32px rgba(185, 239, 55, 0.2);
+  background: linear-gradient(110deg, #38a700, #50b820);
+  box-shadow: 0 12px 32px rgba(56, 167, 0, 0.2);
 }
 
 body.guild-interior .button.secondary,
@@ -450,7 +450,7 @@ body.guild-interior .secondary {
 body.guild-interior .button.secondary:hover,
 body.guild-interior .secondary:hover {
   border-color: var(--guild-line-strong);
-  background: rgba(185, 239, 55, 0.07);
+  background: rgba(56, 167, 0, 0.07);
   color: var(--guild-lime-bright);
 }
 
@@ -526,7 +526,7 @@ body.guild-interior input:focus,
 body.guild-interior select:focus,
 body.guild-interior textarea:focus {
   border-color: var(--guild-line-strong);
-  outline: 2px solid rgba(185, 239, 55, 0.12);
+  outline: 2px solid rgba(56, 167, 0, 0.12);
 }
 
 body.guild-interior select option {
@@ -644,7 +644,7 @@ body.guild-interior .opportunity-count {
 
 body.guild-interior .opportunity-state {
   border: 1px solid rgba(181, 226, 70, 0.15);
-  background: rgba(185, 239, 55, 0.06);
+  background: rgba(56, 167, 0, 0.06);
   color: var(--guild-muted);
 }
 
@@ -686,7 +686,7 @@ body.guild-interior .objective-workspace {
   border: 1px solid var(--guild-line);
   border-radius: 28px;
   background:
-    radial-gradient(circle at 85% 4%, rgba(185, 239, 55, 0.1), transparent 24rem),
+    radial-gradient(circle at 85% 4%, rgba(56, 167, 0, 0.1), transparent 24rem),
     linear-gradient(145deg, rgba(7, 23, 15, 0.98), rgba(2, 12, 8, 0.98));
   box-shadow: var(--guild-shadow);
   color: var(--guild-text);
@@ -812,7 +812,7 @@ body.guild-interior .policy {
   border: 1px solid var(--guild-line);
   border-radius: 26px;
   background:
-    radial-gradient(circle at 90% 0%, rgba(185, 239, 55, 0.08), transparent 19rem),
+    radial-gradient(circle at 90% 0%, rgba(56, 167, 0, 0.08), transparent 19rem),
     linear-gradient(145deg, rgba(9, 27, 18, 0.94), rgba(3, 13, 9, 0.98));
   box-shadow: var(--guild-shadow);
 }
@@ -825,7 +825,7 @@ body.guild-interior .policy h2 {
 body.guild-interior .policy-summary {
   border-left-color: var(--guild-lime);
   border-radius: 0 14px 14px 0;
-  background: rgba(185, 239, 55, 0.06);
+  background: rgba(56, 167, 0, 0.06);
 }
 
 body.guild-interior .cta {
@@ -833,7 +833,7 @@ body.guild-interior .cta {
   overflow: hidden;
   align-items: center;
   background:
-    radial-gradient(circle at 88% 24%, rgba(185, 239, 55, 0.15), transparent 18rem),
+    radial-gradient(circle at 88% 24%, rgba(56, 167, 0, 0.15), transparent 18rem),
     linear-gradient(125deg, rgba(3, 13, 9, 0.98), rgba(13, 42, 27, 0.96));
   color: var(--guild-text);
 }

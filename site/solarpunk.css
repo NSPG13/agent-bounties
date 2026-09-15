@@ -7,7 +7,7 @@
   --stone-top: #f2f0df;
   --stone-mid: #aeb7aa;
   --stone-dark: #667169;
-  --moss: #83b834;
+  --moss: #6fa67a;
   --fire: #ff9a3d;
   --rune: #59d8d3;
   --scene-shift-x: 0px;
@@ -1238,7 +1238,7 @@ html[data-scene-ready="false"] .scene-plate {
 .auth-dialog [hidden] { display: none !important; }
 .account-setup-steps { display: flex; flex-wrap: wrap; gap: 12px 24px; list-style: none; padding: 0; margin: 24px 0 8px; font: 600 14px/1.5 system-ui, sans-serif; color: #a9b9ab; }
 .account-setup-steps li { display: flex; align-items: center; gap: 9px; }
-.account-setup-steps li[aria-current="step"] { color: #d8f29c; }
+.account-setup-steps li[aria-current="step"] { color: #c1e2ca; }
 .account-setup-steps span { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #52654a; border-radius: 50%; }
 .account-setup-steps [data-complete] span { background: #234632; color: #bff199; }
 .account-setup-note { color: #c2d1bd; font: 400 14px/1.6 system-ui, sans-serif; margin: 18px 0 0; }
