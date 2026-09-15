@@ -9,9 +9,13 @@ A shallow, flower-like funnel sits on top of the tinaco and captures rain over
 an area far larger than the tank's own fill opening. Eight concave **petals**
 tilt downward toward a central hub, so every drop that lands on a petal runs
 inward. Radial gaps between petals act as drainage channels that carry water to
-a **screened central funnel**, which narrows to a threaded sleeve that engages
-the tinaco's fill port. A debris/mosquito screen across the hub mouth keeps
-leaves, bird droppings, and insect breeding out of the stored water.
+a **screened central funnel**, which narrows to a **smooth sleeve** that drops
+into the tinaco's fill port. The sleeve is not a threaded fitting: the model
+carries no screw geometry, and the joint to the actual tank port is made with a
+gasket plus a strap clamp (or an off-the-shelf threaded adapter slipped over the
+smooth sleeve) — see [Port interface](#port-interface) and the BOM. A
+debris/mosquito screen across the hub mouth keeps leaves, bird droppings, and
+insect breeding out of the stored water.
 
 The whole part is a single watertight shell, so it can be rotomolded, vacuum
 formed, or FDM printed (with a food-safe liner when potable water is intended).
@@ -38,8 +42,8 @@ constants at the top to fit any tinaco and any desired capture area.
 | `petal_gap_flare` | 2.0 | – | Rim valley radius as a multiple of `petal_gap` |
 | `hub_dia` | 180 | mm | Central funnel mouth diameter |
 | `funnel_height` | 90 | mm | Funnel drop from hub to port |
-| `port_thread_dia` | 50.8 | mm | Tinaco fill-port thread (2" nominal) |
-| `port_length` | 40 | mm | Threaded sleeve engagement |
+| `port_thread_dia` | 50.8 | mm | Tinaco fill-port size being adapted to (2" nominal) — the **sleeve is smooth**; this sets its outside diameter so a gasket/clamp or a threaded adapter fits over it |
+| `port_length` | 40 | mm | Sleeve engagement depth below the funnel outlet (smooth, not a screw thread) |
 | `screen_thick` | 3 | mm | Debris screen thickness |
 | `screen_hole` | 2.5 | mm | Square screen hole side |
 | `screen_pitch` | 6 | mm | Screen hole grid pitch |
@@ -63,7 +67,7 @@ meaningful against a 750–1100 L tinaco.
 ## Assembly stack
 
 `z = 0` is the hub-mouth / mounting datum. The dish sits **above** it, the funnel
-and the threaded sleeve hang **below** it, and every joint is a real volumetric
+and the sleeve hang **below** it, and every joint is a real volumetric
 overlap (the funnel lip rises `fuse` into the dish shell, the screen rim sinks
 into the funnel wall), so the assembly renders as **one** closed solid:
 
@@ -72,18 +76,37 @@ into the funnel wall), so the assembly renders as **one** closed solid:
 | rim crest | +102.5 mm | `petal_rise + wall` |
 | hub mouth (datum) | 0.0 mm | ⌀180 mm, screen across it |
 | funnel outlet | −90.0 mm | `funnel_height` |
-| sleeve bottom | −130.0 mm | `port_length` = 40 mm of thread engagement |
+| sleeve bottom | −130.0 mm | `port_length` = 40 mm of sleeve engagement |
 | overall height | 232.5 mm | rim → outlet |
+
+## Port interface
+
+The sleeve that enters the tinaco is **smooth** — the model carries no screw
+geometry, and neither the STL nor the STEP contains a thread. What the sleeve
+does provide is the 40 mm engagement depth and the `port_thread_dia` outside
+diameter, so a standard adapter can be fitted on site:
+
+| Option | How it makes the seal |
+|---|---|
+| Gasket + strap clamp | EPDM/silicone gasket over the smooth sleeve, stainless worm-drive or spring clamp over the tank's port collar (this is the default in the BOM) |
+| Threaded adapter over the sleeve | Off-the-shelf PVC/NPT or tinaco-thread female adapter slipped over the smooth sleeve and solvent-welded or clamped, then screwed into the tank port |
+| Rotomoulded port collar | If this is tooled as one part, the mould can carry the tank's own thread instead — that is a tooling decision, not modelled here |
+
+Adding modelled threads is deliberately out of scope for this revision; the
+smoothed-out interface is honest about what the CAD actually contains.
 
 ## Verification
 
-Four layers, in increasing order of what they can catch:
+Five checks, in increasing order of what they can catch, plus the equivalence
+check that ties the committed export back to the source:
 
 ```bash
 python3 test_model.py                  # 1. parameter-table invariants (stdlib only)
 python3 test_geometry.py               # 2. mesh invariants against exports/*.stl (stdlib only)
 python3 export_step.py                 # 3. CAD import + valid-solid check + STEP (needs cadquery-ocp)
 python3 test_required_dependencies.py  # 4. controls: generation fails when its tool is missing (stdlib only)
+python3 compare_export.py --selftest   # 5. RED/GREEN controls for the comparator (stdlib only, seconds)
+python3 compare_export.py              # 5. render to a TEMP file, compare facet multiset vs the committed STL (needs OpenSCAD)
 ```
 
 An explicitly requested render or export never falls back to a stale artifact
@@ -127,6 +150,21 @@ and never exits `0` on a missing tool:
    triangle) — the honest representation of a CSG mesh source; an analytic B-rep
    would require rebuilding the part in a B-rep kernel.
 
+4. `test_required_dependencies.py` is the regression control for 2 and 3: it
+   forces the tool to be unavailable and asserts the nonzero exit, so a future
+   edit cannot quietly restore a silent `SKIP`-and-report-success path.
+
+5. `compare_export.py` answers "is the committed STL still the file this source
+   produces?" — a question an STL hash cannot answer, because OpenSCAD re-renders
+   of one source emit the same triangle *set* in a different *order* (three
+   renders of this part gave three sha256s with an identical facet multiset). It
+   renders the `.scad` to a **temporary** file (never over the committed export),
+   verifies the committed export's sha256 did not change, and compares facet
+   multisets plus vertex/edge counts, winding, connected bodies, volume and
+   bounding box. `--selftest` proves the comparison can fail: it runs the
+   comparator against an identical copy (must PASS) and against a copy with one
+   vertex nudged 0.5 mm and one facet deleted (both must FAIL).
+
 ## Exports (`exports/`)
 
 Generated from the same source, not drawn separately:
@@ -157,9 +195,10 @@ from the model's own variables — nothing is redrawn by hand.
 Measured at the actual installation; the defaults are **nominal** and this model
 is a concept, not a fabrication drawing:
 
-- **Port thread**: major diameter, pitch and thread standard. The default assumes
-  2" nominal = 50.8 mm. A 2" PVC/NPT fitting is ~60.3 mm OD, so measure — the
-  sleeve is the one dimension that must match exactly.
+- **Fill-port thread / OD**: major diameter, pitch and thread standard of the
+  tank's own port. The default assumes 2" nominal = 50.8 mm. A 2" PVC/NPT fitting
+  is ~60.3 mm OD, so measure — this is what the smooth sleeve and its adapter
+  must match, and it is the one dimension that must be right.
 - **Port height above the tank top** and its centre offset from the tank centre.
 - **Tank top / lid ring diameter** — clearance for the 1.2 m dish overhang and
   for the lid to still be serviceable.
@@ -177,5 +216,8 @@ is a concept, not a fabrication drawing:
   unvented collector must not pressurize a sealed tank.
 - **Materials:** UV-stabilized, food-grade polypropylene or LLDPE. For FDM
   prototypes use PETG and a food-safe liner if water will be drunk.
-- **Seal:** a gasketed thread or a strap clamp adapts `port_thread_dia` to the
-  specific tinaco lid; the sleeve is the interchangeable interface.
+- **Seal:** the sleeve is smooth, so the seal is made by a gasket plus a strap
+  clamp over the tank's port collar (the BOM default), or by an off-the-shelf
+  threaded adapter fitted over the sleeve. `port_thread_dia` sets the sleeve OD;
+  the adapter is the interchangeable part, per the [Port interface](#port-interface)
+  section.

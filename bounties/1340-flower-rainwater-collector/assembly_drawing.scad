@@ -34,8 +34,12 @@ module vline(x, y1, y2, w = LW) {
   translate([x - w / 2, min(y1, y2)]) square([w, abs(y2 - y1)]);
 }
 
+// Arrowhead: tip at (x, y), body extending back along the dimension line.
+// Translate to the endpoint FIRST and rotate about it. Rotating first leaves
+// every arrowhead sitting at the drawing origin instead of the dimension end.
 module arrowhead(x, y, angle) {
-  rotate([0, 0, angle]) polygon(points = [[0, 0], [4, 1.4], [4, -1.4]]);
+  translate([x, y])
+    rotate([0, 0, angle]) polygon(points = [[0, 0], [4, 1.4], [4, -1.4]]);
 }
 
 // Horizontal dimension chain: extension lines, dim line, arrows, label above.
@@ -45,13 +49,16 @@ module hdim(x1, x2, y, label, ext = 0) {
     vline(x2, y, y + ext, LW / 2);
   }
   hline(x1, x2, y);
-  arrowhead(min(x1, x2), y, 180);
-  arrowhead(max(x1, x2), y, 0);
+  // Same convention as vdim: tip ON the extension line, body inside the chain.
+  arrowhead(min(x1, x2), y, 0);
+  arrowhead(max(x1, x2), y, 180);
   translate([(x1 + x2) / 2, y + 3]) text(label, size = TS, halign = "center", valign = "bottom");
 }
 
 // Vertical dimension chain: extension lines, dim line, arrows, label left.
-module vdim(y1, y2, x, label, ext = 0) {
+// `side = 1` puts the label to the RIGHT of the dim line instead (used where a
+// label on the left would collide with another dimension's text).
+module vdim(y1, y2, x, label, ext = 0, side = -1) {
   if (ext != 0) {
     hline(x, x + ext, y1, LW / 2);
     hline(x, x + ext, y2, LW / 2);
@@ -59,7 +66,10 @@ module vdim(y1, y2, x, label, ext = 0) {
   vline(x, y1, y2);
   arrowhead(x, min(y1, y2), 90);
   arrowhead(x, max(y1, y2), 270);
-  translate([x - 3, (y1 + y2) / 2]) text(label, size = TS, halign = "right", valign = "center");
+  if (side < 0)
+    translate([x - 3, (y1 + y2) / 2]) text(label, size = TS, halign = "right", valign = "center");
+  else
+    translate([x + 3, (y1 + y2) / 2]) text(label, size = TS, halign = "left", valign = "center");
 }
 
 module leader(x1, y1, x2, y2, label) {
@@ -101,26 +111,38 @@ translate([-140, 40]) {
   // port thread diameter at the outlet
   hdim(S * -port_radius, S * port_radius, S * -(funnel_height + port_length) - 12,
        mm(port_thread_dia, " mm dia"), ext = S * 8);
-  // rim-to-hub concave depth
-  vdim(0, S * petal_rise, S * 95, mm(petal_rise), ext = S * 10);
+  // rim-to-hub concave depth. Label to the RIGHT of its dim line: on the left
+  // it ran into the hub-mouth diameter text above.
+  vdim(0, S * petal_rise, S * 95, mm(petal_rise), ext = S * 10, side = 1);
   leader(S * hub_radius + S * 20, S * 1, S * 150, S * 22, str("wall ", r2(wall), " mm"));
   leader(S * 30, S * -1.2, S * 120, S * -20,
          str("screen ", r2(screen_thick), " mm, holes ", r2(screen_hole), " mm @ ",
              r2(screen_pitch), " mm"));
-  translate([0, S * 30]) text("SECTION A-A  (1:4)", size = 8, halign = "center");
-  translate([0, S * 30 - 10]) text("cut through a petal centre", size = 5, halign = "center");
+  // View title ABOVE the part. At S*30 it sat inside the dish, and the
+  // hub-mouth dimension line at S*45 ran straight through it. The part tops
+  // out at S*(petal_rise + wall) = 25.6.
+  translate([0, S * (petal_rise + wall) + 12]) text("SECTION A-A  (1:4)", size = 8, halign = "center");
+  translate([0, S * (petal_rise + wall) + 4]) text("cut through a petal centre", size = 5, halign = "center");
 }
 
-// Plan dimensions.
+// Plan dimensions. The plan is a FILLED silhouette (every point inside the
+// 1.2 m disc belongs to the part), and OpenSCAD exports the 2D UNION of the
+// view with whatever is drawn on it. Geometry drawn INSIDE that silhouette is
+// absorbed by the union unless it crosses one of the white radial channels:
+// the hub-mouth dimension that used to sit here survived only as fragments in
+// the channels (4 path vertices over its whole length, and none of its label
+// glyphs), so it was unreadable on the sheet. The hub mouth is a real edge in
+// the SECTION, where it IS dimensioned; the plan carries the value as a
+// caption note instead.
 translate([160, 60]) {
   hdim(-S2 * collector_radius, S2 * collector_radius, S2 * collector_radius + 22,
        mm(collector_dia, " mm dia"), ext = S2 * 12);
-  hdim(-S2 * hub_radius, S2 * hub_radius, S2 * (hub_radius + 40),
-       str("hub ", mm(hub_dia)), ext = S2 * 40);
   vdim(-S2 * collector_radius, S2 * collector_radius, -S2 * collector_radius - 22,
        mm(collector_dia), ext = S2 * 12);
   translate([0, -S2 * collector_radius - 40]) text("PLAN  (1:8)", size = 8, halign = "center");
-  translate([0, -S2 * collector_radius - 50]) text(str(n_petals, " petals"), size = 5, halign = "center");
+  translate([0, -S2 * collector_radius - 50])
+    text(str(n_petals, " petals, hub ", mm(hub_dia, " mm dia"), " (see section)"),
+         size = 5, halign = "center");
 }
 
 // ------------------------------------------------------------------ title block
@@ -130,11 +152,21 @@ module table_row(x, y, key, value) {
   translate([x + 95, y]) text(value, size = 5, halign = "right", valign = "center");
 }
 
-translate([-380, -95]) {
-  square([300, 185]);
+// Title block, placed BELOW both views. The section's lowest dimension line
+// sits at y = -4.5 and the plan's lowest label at y = -65, so the block's top
+// edge at y = -115 clears them. The border is an OUTLINE: a filled `square()`
+// here paints a solid rectangle over Section A-A (the block and the views
+// share this sheet space) and hides it.
+translate([-380, -300]) {
+  hline(0, 300, 0, 0.4);
+  hline(0, 300, 185, 0.4);
+  vline(0, 0, 185, 0.4);
+  vline(300, 0, 185, 0.4);
   translate([5, 175]) text("FLOWER RAINWATER COLLECTOR - tinaco retrofit", size = 8, halign = "left");
   translate([5, 165]) text("concept design - dimensions nominal, not for fabrication", size = 5, halign = "left");
-  translate([5, 158]) hline(0, 290, 158, 0.4);
+  // One local coordinate system per rule: the y is passed once (here) and the
+  // helper draws at y = 0 inside it. Passing 158 as well drew the rule at 316.
+  translate([5, 158]) hline(0, 290, 0, 0.4);
 
   rows_label = ["n_petals", "collector_dia", "petal_rise", "petal_gap", "hub_dia",
                 "funnel_height", "port_thread_dia", "port_length", "screen_thick",
@@ -148,7 +180,7 @@ translate([-380, -95]) {
     table_row(5, 148 - i * 8, rows_label[i], rows_value[i]);
 
   x2 = 155;
-  translate([x2, 158]) vline(x2, 158, -1, 0.4);
+  vline(x2, 158, -1, 0.4);   // column divider, block-local x (no second translate)
   derived_label = ["overall height", "outlet below datum", "hub mouth", "rim crest",
                    "capture area", "material volume", "BOM"];
   cap_area = 3.14159265 * pow(collector_dia / 2000, 2);

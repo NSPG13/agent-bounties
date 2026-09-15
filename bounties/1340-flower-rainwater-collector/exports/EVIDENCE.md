@@ -18,7 +18,7 @@ directory. Commands are copy-pasteable from here.
 |---|---|---|---|
 | `exports/flower_rainwater_collector.stl` | 2 894 441 | `5f89ee2c69add9b98b31cd5dd53a1f6ba90c9156bac582df00f079fac90b52e8` | `openscad --hardwarnings -o exports/flower_rainwater_collector.stl flower_rainwater_collector.scad` |
 | `exports/flower_rainwater_collector.step.gz` | 6 389 838 | `09e990df2514c13738051b093e61cb71ad11ed96bfcb324346eb149ad6f57f6f` | `python3 export_step.py` then `gzip -9` (uncompressed: 39 904 185 B, sha256 `c6232af9076c5d597ffaad4b8e8a0b6b7860f53b9c7cc2b664ef609d19d43e50`) |
-| `exports/assembly_drawing.svg` | 247 070 | `46c930b847a018e6f93feea589927ceabde380cca9dc1c595e7f03404cdf1373` | `openscad --hardwarnings -D render_assembly=false -o exports/assembly_drawing.svg assembly_drawing.scad` |
+| `exports/assembly_drawing.svg` | 2 388 650 | `a949250850c03ad528945c32018a8e4af219b668845375d895510c1587c89e80` | `openscad --hardwarnings -D render_assembly=false -o exports/assembly_drawing.svg assembly_drawing.scad` |
 
 The STEP is committed **gzipped** because the tessellated B-rep is ~38 MB
 uncompressed (18 624 planar faces, one per mesh triangle). `gunzip` it to open
@@ -112,13 +112,41 @@ All CAD import checks passed.
 $ openscad --hardwarnings -D render_assembly=false -o exports/assembly_drawing.svg assembly_drawing.scad
 OPENSCAD_EXIT=0 WARNINGS=0 UNDEF=0
    Top level object is a 2D object:
-   Contours:      127
+   Contours:      964
 ```
 
 `--hardwarnings` turns every OpenSCAD warning into a failure, so this is a
 positive check that no dimension label is an undefined string operation.
 Control (RED) check: a probe containing `text("a" + "b")` exits 1 with
 `WARNING: undefined operation (string + string)` under the same flag.
+
+### 4.1 Readability — checked on the rendered sheet, not on the exit code
+
+Review item on PR #1345 (NSPG13) asked for a drawing revision and then for an
+eye check of the rendered SVG, because "a successful export alone does not catch
+the overlap". The SVG was rasterised at 192 dpi (4664 × 3530 px) and read region
+by region. Fixed in this revision:
+
+| Defect (cited by the review or found by the eye check) | Fix |
+|---|---|
+| `square([300, 185])` painted a filled rectangle (line 134) — in OpenSCAD 2D an overlapping fill is a **union**, so it absorbed the section view it sat on | border drawn as four `hline`/`vline` rules; block moved to `y = -300`, below both views (top edge `-115`, section's lowest dimension line `-4.5`, plan's lowest label `-65`) |
+| table rule at line 137 applied its `y` twice (translate **and** `hline(...,158,...)`) → drew at `y = 316` | one local coordinate system: `translate([5, 158]) hline(0, 290, 0, 0.4)` |
+| column divider at line 151 applied its `x`/`y` twice → drew at `(310, 316)` | `vline(x2, 158, -1, 0.4)` in block-local coordinates |
+| `arrowhead()` ignored its `x`/`y` arguments, so every arrow was drawn at the drawing origin | `translate([x, y])` before `rotate`; the horizontal chain's angles now match the vertical chain's convention (tip on the extension line, body inside) |
+| view title at `S*30` sat inside the dish, and the hub-mouth dimension line at `S*45` ran through the text | title and note moved above the part (part tops out at `S*(petal_rise + wall) = 25.6`) |
+| "100 mm" (rim-to-hub) label ran into the hub-mouth diameter text | `vdim(..., side = 1)`: label placed to the right of its dimension line |
+| the plan's hub-mouth dimension was drawn **inside** the filled silhouette, where the 2D union absorbs it (it survived only as fragments across the white radial channels — 4 path vertices over its whole length, none of its label glyphs) | dimension removed from the plan (the hub is a real edge and IS dimensioned in the section); the plan caption now reads `8 petals, hub 180 mm dia (see section)` |
+
+Verification of the fix, on the rendered sheet: every dimension label in SECTION
+A-A reads (232.5 / 90 / 40 / 100 mm, 180 mm dia, 50.8 mm dia, wall 2.5 mm,
+screen 3 mm holes 2.5 mm @ 6 mm), arrowheads are present at both ends of both
+horizontal dimension lines, the title is clear of the part and of every
+dimension line, the plan shows no dimension inside the silhouette, and the title
+block is an unfilled outline with both rules in place and every row legible.
+
+The export grew from 247 070 B (127 contours) to 2 388 650 B (964 contours)
+because the old fill had absorbed a large part of the section view into its
+union; the sheet now exports the geometry it actually draws.
 
 ## 5. Requested generation fails when its tool is missing
 
@@ -142,7 +170,7 @@ exit=1
 $ python3 test_required_dependencies.py -v
 test_requested_render_does_not_use_stale_export ... ok
 test_requested_step_export_requires_ocp ... ok
-Ran 2 tests in 0.034s - OK
+Ran 2 tests in 0.063s - OK
 ```
 
 Nothing regressed: `test_model.py` passes all 15 invariants, `test_geometry.py`
@@ -150,33 +178,106 @@ passes every mesh check on the committed STL, and `export_step.py` under OCCT
 reproduces the section-3 receipt (18 624 faces, 0 free edges, 0 multiple edges,
 one valid `TopoDS_Solid`, 2 862.9 cm³, delta 0.0000 %, STEP 38 969 KiB).
 
-## 6. Source → export equivalence — fresh render from source
+## 6. Source → export equivalence — `python3 compare_export.py`
 
-Exact command (from this directory; `OPENSCAD_BIN` points at the extracted
-OpenSCAD 2021.01 AppImage on this host — any 2021.01 `openscad` works):
+Review item on PR #1345 (NSPG13): make the equivalence claim **replayable** —
+render to a temporary file, compare its facets with the preserved export, fail
+when the geometry changes, and never replace the reviewed artifact. That is now
+a committed script; this is its run on this revision (the EXACT command from
+this directory; `OPENSCAD_BIN` points at the extracted OpenSCAD 2021.01 AppImage
+on this host — any 2021.01 `openscad` works):
 
 ```
-$ OPENSCAD_BIN=/home/claw1/portfolio/tools/squashfs-root/AppRun python3 test_geometry.py --render
-rendering flower_rainwater_collector.scad with …/AppRun -> exports/flower_rainwater_collector.stl (this takes a few minutes)
-mesh: exports/flower_rainwater_collector.stl
-      18624 triangles, 8088 welded vertices (from 55872 raw), sha256:f332fe70316031bd…
-<all 11 mesh checks PASS, volume 2862.9 cm^3>
+$ OPENSCAD_BIN=…/AppRun python3 compare_export.py
+preserved export: exports/flower_rainwater_collector.stl (sha256 5f89ee2c69add9b98b31cd5dd53a1f6ba90c9156bac582df00f079fac90b52e8)
+rendering flower_rainwater_collector.scad with … -> /tmp/compare_export_c8rsmemx/render.stl (this takes a few minutes)
+fresh render:     /tmp/compare_export_c8rsmemx/render.stl (sha256 68dfc35c6966c5744dae4b351b2c562af8a8ea8c5fa876076a171c9c3f20d9be)
+preserved export unchanged by the render: yes
+
+facets: 18624 (committed) vs 18624 (fresh render) - multisets identical: yes
+triangles: 18624 vs 18624
+welded_vertices: 8088 vs 8088
+edges: 27936 vs 27936
+boundary_edges: 0 vs 0
+non_manifold_edges: 0 vs 0
+bad_winding: 0 vs 0
+bodies: 1 vs 1
+body_sizes: [18624] vs [18624]
+volume: 2862882.6454 vs 2862882.6454 mm^3 (delta 0.000000)
+bounding box: max coordinate delta 0.000000 mm
+
+PASS  source -> export equivalence (facet multiset, topology, volume)
+exit=0
 ```
 
-Result: the re-render reproduces the committed mesh **exactly as a facet set**
-(18 624 facets; comparison against `exports/flower_rainwater_collector.stl`
-reports `multiset equal: True`, 0 facets unique to either file) with identical
-welded-vertex count, volume and every topology/outlet-probe verdict — while the
-file **bytes** differ (`f332fe70316031bd…` vs the committed `5f89ee2c69add9b9…`),
-because OpenSCAD orders the same triangles differently between runs (section
-"Reproducibility — measured, not assumed"; a second fresh run gave
-`6448ba18d0920f7e…` with the same facet multiset).
+The two files have **different bytes** (`68dfc35c6966c574…` fresh vs the
+committed `5f89ee2c69add9b9…`) and the same geometry. That is the whole point:
+an STL sha256 is not a source-equivalence token (section "Reproducibility —
+measured, not assumed"), the facet multiset plus the topology/volume checks are.
+The committed STL was **not** replaced by the render: the artifact in this PR
+stays exactly the bytes the maintainer's independent check hashed, and the
+script verifies that itself (sha256 before == after). `gunzip -c
+exports/flower_rainwater_collector.step.gz` also still reproduces 39 904 185 B /
+sha256 `c6232af9076c5d59…`, matching this file's manifest.
 
-The committed STL was therefore **not** replaced by the re-render: the artifact
-in this PR stays exactly the bytes that the maintainer's independent check
-hashed. `gunzip -c exports/flower_rainwater_collector.step.gz` also still
-reproduces 39 904 185 B / sha256 `c6232af9076c5d59…`, matching this file's
-manifest.
+The comparison is itself controlled (RED), because a comparator that cannot fail
+proves nothing. `--selftest` copies the committed export, mutates the copies and
+asserts the verdicts (runs in seconds, no OpenSCAD):
+
+```
+$ python3 compare_export.py --selftest
+selftest: the comparator must PASS the identical copy and FAIL both mutated ones
+
+--- control: identical copy (expect PASS)
+facets: 18624 (committed) vs 18624 (control) - multisets identical: yes
+triangles: 18624 vs 18624
+welded_vertices: 8088 vs 8088
+edges: 27936 vs 27936
+boundary_edges: 0 vs 0
+non_manifold_edges: 0 vs 0
+bad_winding: 0 vs 0
+bodies: 1 vs 1
+body_sizes: [18624] vs [18624]
+volume: 2862882.6454 vs 2862882.6454 mm^3 (delta 0.000000)
+bounding box: max coordinate delta 0.000000 mm
+    comparator PASSED -> as expected
+
+--- control: one vertex nudged by 0.5 mm (expect FAIL)
+facets: 18624 (committed) vs 18624 (control) - multisets identical: NO
+  facets only in committed: 1; only in control: 1
+  example only in committed: ((-3.0, 91.1714, 2.5), (-3.0, 91.1714, 2.7451), (-3.0, 92.4214, 2.5))
+  example only in control: ((-3.0, 91.1714, 2.5), (-3.0, 92.4214, 2.5), (-2.5, 91.1714, 2.7451))
+triangles: 18624 vs 18624
+welded_vertices: 8088 vs 8089  <-- DIFFERS
+edges: 27936 vs 27938  <-- DIFFERS
+boundary_edges: 0 vs 4  <-- DIFFERS
+non_manifold_edges: 0 vs 0
+bad_winding: 0 vs 0
+bodies: 1 vs 1
+body_sizes: [18624] vs [18624]
+volume: 2862882.6454 vs 2862882.3850 mm^3 (delta 0.260417)  <-- DIFFERS
+bounding box: max coordinate delta 0.000000 mm
+    comparator FAILED -> as expected
+
+--- control: one facet removed (expect FAIL)
+facets: 18624 (committed) vs 18623 (control) - multisets identical: NO
+  facets only in committed: 1; only in control: 0
+  example only in committed: ((275.097, 3.0, 36.3089), (588.383, 3.0, 97.7377), (588.383, 3.0, 100.238))
+triangles: 18624 vs 18623  <-- DIFFERS
+welded_vertices: 8088 vs 8088
+edges: 27936 vs 27936
+boundary_edges: 0 vs 3  <-- DIFFERS
+non_manifold_edges: 0 vs 0
+bad_winding: 0 vs 0
+bodies: 1 vs 1
+body_sizes: [18624] vs [18623]  <-- DIFFERS
+volume: 2862882.6454 vs 2863274.2529 mm^3 (delta 391.607500)  <-- DIFFERS
+bounding box: max coordinate delta 0.000000 mm
+    comparator FAILED -> as expected
+
+selftest: all three controls behaved as expected
+exit=0
+```
 
 ## What is NOT verified
 
@@ -186,9 +287,13 @@ manifest.
   artifacts — section 6 states exactly what was compared.
 - **Fabrication.** Nothing has been printed, moulded or measured; the model is a
   concept, not a fabrication drawing.
-- **On-site fit.** The port thread is an assumption (2" nominal = 50.8 mm). The
-  real tinaco port must be measured — see the "On-site dimensions" section of
-  the README.
+- **On-site fit.** The tank's fill-port size is an assumption (2" nominal =
+  50.8 mm). The real tinaco port must be measured — see the "On-site dimensions"
+  section of the README.
+- **No modelled thread.** The sleeve is smooth by design; the gasket + clamp and
+  threaded-adapter options in the README's "Port interface" section are
+  described, not modelled. Nothing here claims a threaded joint is modelled or
+  that the sleeve screws into any specific tank port.
 - **Material, filtration and fit claims** are concept assumptions: no UV, impact,
   food-safety or flow testing has been run, and the first-flush diverter is
   documented but not modelled.

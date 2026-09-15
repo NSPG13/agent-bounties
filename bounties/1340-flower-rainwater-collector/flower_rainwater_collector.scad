@@ -1,7 +1,7 @@
 // Flower-shaped rainwater collector for a tinaco (Mexico City).
 // Parametric CAD concept.
 //
-// A shallow, flower-like funnel retrofits onto the threaded fill port of a
+// A shallow, flower-like funnel retrofits onto the fill port of a
 // rooftop tinaco. Rain falling on the concave petals drains inward through
 // radial gaps to a screened central hub and down into the tank. See README.md
 // for the full concept, standard tinaco sizing, materials, and verification.
@@ -9,7 +9,7 @@
 // DATUM: z = 0 is the hub mouth plane, i.e. the top of the mounting datum on
 // the tank's fill port. The concave dish lives ABOVE z = 0 (hub mouth at z = 0,
 // rim at z = petal_rise); the funnel drops BELOW z = 0 to the port (outlet at
-// z = -funnel_height) and the threaded sleeve continues below that to
+// z = -funnel_height) and the smooth sleeve continues below that to
 // z = -(funnel_height + port_length). Every part therefore overlaps its
 // neighbour in a real volume, so the assembly is ONE closed solid.
 
@@ -25,8 +25,11 @@ hub_dia       = 180;      // mouth diameter of the central funnel (mm)
 funnel_height = 90;       // funnel drop from the hub mouth down to the port (mm)
 
 /* [Tinaco interface] */
-port_thread_dia = 50.8;   // tinaco fill-port thread diameter (mm); 2" nominal
-port_length     = 40;     // engagement length of the threaded sleeve (mm)
+// The sleeve is SMOOTH: no screw geometry is modelled. port_thread_dia is the
+// port size this sleeve adapts to - it sets the sleeve's outside diameter so a
+// gasket + strap clamp, or an off-the-shelf threaded adapter, fits over it.
+port_thread_dia = 50.8;   // tinaco fill-port size being adapted to (mm); 2" nominal
+port_length     = 40;     // smooth sleeve engagement depth below the funnel outlet (mm)
 
 /* [Debris screen] */
 screen_thick = 3;         // screen disc thickness (mm)
@@ -101,8 +104,10 @@ module funnel() {
   }
 }
 
-// Threaded sleeve that engages the tinaco fill port. It continues the funnel
-// bore downward from the funnel outlet, so the water path is continuous.
+// SMOOTH sleeve that drops into the tinaco fill port. It continues the funnel
+// bore downward from the funnel outlet, so the water path is continuous. No
+// thread is modelled - the joint to the tank port is a gasket + strap clamp (or
+// an external adapter), see README "Port interface".
 module port_sleeve() {
   difference() {
     translate([0, 0, -funnel_height - port_length])
