@@ -70,7 +70,7 @@ async function main() {
       assert.equal(await page.locator(".ab-payoff").evaluate(el => getComputedStyle(el).textDecorationLine), "underline");
       assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).transform), "none");
-      assert.match(await page.locator(".ab-funding-note").innerText(), /Fund the reward upfront in escrow.*solver is paid only after/s);
+      assert.equal(await page.locator(".ab-funding-note").count(), 0);
       assert.match(await page.locator(".ab-faq article").first().innerText(), /rejected result does not pay the solver.*another attempt.*refundable.*cancellation.*withdraw their refund/s);
       assert.equal(await page.locator("[data-outcome-word]").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(199, 245, 66)");
       if (width >= 1280) assert.ok(await page.locator("#hero-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 64), "desktop headline is larger");
