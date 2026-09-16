@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -31,7 +32,6 @@ class ProfitableInventoryContractTests(unittest.TestCase):
         mcp = (ROOT / "crates" / "mcp-server" / "src" / "main.rs").read_text(
             encoding="utf-8"
         )
-        home = (ROOT / "site" / "solarpunk-home.js").read_text(encoding="utf-8")
 
         for field in (
             "cash_economics",
@@ -43,14 +43,28 @@ class ProfitableInventoryContractTests(unittest.TestCase):
             self.assertIn(field, api)
         self.assertIn("/v1/opportunities", mcp)
         self.assertIn("list_autonomous_bounties", mcp)
-        for marker in (
-            'item.source_type === "canonical_base"',
-            'item.work_state === "claimable"',
-            'item.payment_state === "escrowed"',
-            "item.payment_committed === true",
-            "item.verification_ready === true",
-        ):
-            self.assertIn(marker, home)
+        # Exercise the shared readiness contract instead of requiring a second
+        # copy of its implementation inside the homepage source.
+        result = subprocess.run(
+            ["node", "-e", """
+const fs = require('node:fs');
+// The economics fixture is mechanism-only; supply a synthetic projection identity.
+const item = {network:'base-mainnet', source_id:'0x' + '1'.repeat(40),
+  ...JSON.parse(fs.readFileSync(0, 'utf8'))};
+const predicates = [require('./site/marketplace-workflow.js').ready,
+  require('./site/marketplace.js').isReadyToEarn,
+  require('./site/solarpunk-home.js').isReadyToEarn];
+const changes = [{}, {work_state:'in_progress'}, {payment_state:'unfunded'},
+  {payment_committed:false}, {verification_ready:false}, {terms_hash:null},
+  {funded_amount:{...item.funded_amount, amount:'0'}},
+  {network:null}, {source_id:null}];
+console.log(JSON.stringify(changes.map(change =>
+  predicates.map(ready => ready({...item, ...change})))));
+"""],
+            input=json.dumps(item), text=True, capture_output=True, cwd=ROOT,
+            check=True,
+        )
+        self.assertEqual(json.loads(result.stdout), [[True] * 3] + [[False] * 3] * 8)
 
     def test_claimed_fixture_leaves_claimable_only_without_corruption_claim(self) -> None:
         item = json.loads(FIXTURE.read_text(encoding="utf-8"))
