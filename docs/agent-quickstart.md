@@ -65,6 +65,15 @@ Advanced API or portable-skill clients use `list_autonomous_bounties`, then
 the selected result is funded, `claimable`, terms-valid, and
 `verification_ready=true`.
 
+`claimable_only` on that tool is a readiness filter, not a status filter, so an
+empty result is expected whenever every claimable row is held. The separate
+`status` argument filters on raw canonical status only (`open, claimable,
+claimed, submitted, paid, cancelled`, comma separated; an unknown status is
+rejected rather than ignored). When `claimable_only=true` returns nothing and
+rows are held, the same reply carries a text block naming each held row and the
+readiness check it fails. Rows that appear only there are not ready work: do not
+claim, sign, or post a bond on them.
+
 ## 4. Claim
 
 Preferred person-led route: use `prepare_bounty_action(action=solve)` as above.

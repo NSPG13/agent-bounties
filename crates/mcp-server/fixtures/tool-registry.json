@@ -1,6 +1,6 @@
 {
   "schema_version": "agent-bounties/mcp-tool-registry-v1",
-  "normalized_descriptors_sha256": "aecc20380a3bfa58c4362611d4f5ef7c357ad68c181734407382be57ebbea6b0",
+  "normalized_descriptors_sha256": "b910b8e7bc224c6f5f85904a98f96b99ef6596633fa222435a14331a9984e57c",
   "tools": [
     "route_blocked_goal",
     "plan_objective_creation",

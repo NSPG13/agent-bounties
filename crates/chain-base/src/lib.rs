@@ -67,6 +67,8 @@ pub enum ChainBaseError {
     InvalidSubmissionEvidence(String),
     #[error("invalid autonomous submission preparation: {0}")]
     InvalidSubmissionPreparation(String),
+    #[error("invalid canonical bounty status filter: {0}")]
+    InvalidBountyStatusFilter(String),
     #[error("autonomous bounty terms document exceeds 256 KiB")]
     TermsDocumentTooLarge,
     #[error("release recipients must be non-empty")]
@@ -4011,16 +4013,140 @@ impl AutonomousBountyRecoveryReservations {
     }
 }
 
+/// Every raw canonical lifecycle status `build_autonomous_bounty_feed` can produce.
+/// Raw status is not readiness: see [`autonomous_bounty_earning_blockers`].
+pub const AUTONOMOUS_BOUNTY_STATUSES: [&str; 6] = [
+    "open",
+    "claimable",
+    "claimed",
+    "submitted",
+    "paid",
+    "cancelled",
+];
+
+/// One machine-readable reason a canonical row is not ready to earn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutonomousBountyEarningBlocker {
+    pub code: String,
+    pub detail: String,
+}
+
+impl AutonomousBountyEarningBlocker {
+    fn new(code: &str, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Every readiness check a row fails, in the order they are evaluated.
+///
+/// This is the single definition of earning readiness: [`autonomous_bounty_is_earning_ready`]
+/// is exactly "no blockers", so a row can never be offered as ready work while any check
+/// still fails. Callers that filter on raw status use this to explain blocked work instead
+/// of guessing why an empty ready-to-earn list is empty.
+pub fn autonomous_bounty_earning_blockers(
+    item: &AutonomousBountyFeedItem,
+) -> Vec<AutonomousBountyEarningBlocker> {
+    let mut blockers = Vec::new();
+    if item.status != "claimable" {
+        blockers.push(AutonomousBountyEarningBlocker::new(
+            "status_not_claimable",
+            format!(
+                "raw canonical status is `{}`; only `claimable` rows are open to claim",
+                item.status
+            ),
+        ));
+    }
+    if !item.terms_valid {
+        let detail = if item.validation_errors.is_empty() {
+            "content-addressed terms do not validate against the canonical creation event"
+                .to_string()
+        } else {
+            item.validation_errors.join("; ")
+        };
+        blockers.push(AutonomousBountyEarningBlocker::new("terms_invalid", detail));
+    }
+    if !item.verification_ready {
+        let detail = if item.verification_readiness_reason.is_empty() {
+            "verification configuration is not ready".to_string()
+        } else {
+            item.verification_readiness_reason.clone()
+        };
+        blockers.push(AutonomousBountyEarningBlocker::new(
+            "verification_not_ready",
+            detail,
+        ));
+    }
+    if item.terms.as_ref().is_some_and(|terms| {
+        terms.document.benchmark["engine"] == creator_review::ENGINE
+            && terms.document.benchmark["delivery_deadline"]
+                .as_u64()
+                .is_none_or(|deadline| deadline <= Utc::now().timestamp().max(0) as u64)
+    }) {
+        blockers.push(AutonomousBountyEarningBlocker::new(
+            "creator_review_delivery_window_closed",
+            "the creator-review delivery deadline is missing or already passed, so a new claim cannot deliver inside the reviewed window",
+        ));
+    }
+    blockers
+}
+
 pub fn autonomous_bounty_is_earning_ready(item: &AutonomousBountyFeedItem) -> bool {
-    item.status == "claimable"
-        && item.terms_valid
-        && item.verification_ready
-        && !item.terms.as_ref().is_some_and(|terms| {
-            terms.document.benchmark["engine"] == creator_review::ENGINE
-                && terms.document.benchmark["delivery_deadline"]
-                    .as_u64()
-                    .is_none_or(|deadline| deadline <= Utc::now().timestamp().max(0) as u64)
-        })
+    autonomous_bounty_earning_blockers(item).is_empty()
+}
+
+/// Parse a `status=` filter value into canonical raw statuses.
+///
+/// Comma separated and case-insensitive. An unknown status is an error rather than a
+/// silently ignored query, because a silently ignored filter returns rows that look
+/// filtered and are not.
+pub fn parse_autonomous_bounty_status_filter(raw: &str) -> Result<Vec<String>, ChainBaseError> {
+    let mut statuses: Vec<String> = Vec::new();
+    for candidate in raw.split(',') {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        let canonical = AUTONOMOUS_BOUNTY_STATUSES
+            .iter()
+            .find(|status| status.eq_ignore_ascii_case(candidate))
+            .ok_or_else(|| {
+                ChainBaseError::InvalidBountyStatusFilter(format!(
+                    "unknown status `{candidate}`; expected one of {}",
+                    AUTONOMOUS_BOUNTY_STATUSES.join(", ")
+                ))
+            })?;
+        let canonical = (*canonical).to_string();
+        if !statuses.contains(&canonical) {
+            statuses.push(canonical);
+        }
+    }
+    Ok(statuses)
+}
+
+/// Raw-status match, independent of every readiness check. An empty filter matches all.
+pub fn autonomous_bounty_matches_status(
+    item: &AutonomousBountyFeedItem,
+    statuses: &[String],
+) -> bool {
+    statuses.is_empty()
+        || statuses
+            .iter()
+            .any(|status| item.status.eq_ignore_ascii_case(status))
+}
+
+/// Keep only rows whose raw canonical status is in `statuses`. Never relaxes readiness:
+/// it is applied on top of, not instead of, [`autonomous_bounty_is_earning_ready`].
+pub fn retain_autonomous_bounties_with_status(
+    feed: &mut Vec<AutonomousBountyFeedItem>,
+    statuses: &[String],
+) {
+    if statuses.is_empty() {
+        return;
+    }
+    feed.retain(|item| autonomous_bounty_matches_status(item, statuses));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9151,6 +9277,251 @@ mod tests {
                 "issue {issue} evidence schema"
             );
         }
+    }
+
+    fn status_filter_fixture(status: &str) -> AutonomousBountyFeedItem {
+        AutonomousBountyFeedItem {
+            bounty_id: format!("0x{}", "ab".repeat(32)),
+            bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+            creator: "0x4444444444444444444444444444444444444444".to_string(),
+            status: status.to_string(),
+            solver_reward: "900000".to_string(),
+            verifier_reward: "100000".to_string(),
+            claim_bond: "100000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "1000000".to_string(),
+            funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
+            terms_hash: format!("0x{}", "aa".repeat(32)),
+            terms: None,
+            terms_valid: true,
+            verification_mode: "deterministic_module".to_string(),
+            verifier_module: Some("0x5555555555555555555555555555555555555555".to_string()),
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("fixture".to_string()),
+            verification_ready: true,
+            verification_readiness_reason: "deterministic verifier module is committed on-chain"
+                .to_string(),
+            validation_errors: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn benchmark_terms_fixture(benchmark: serde_json::Value) -> AutonomousBountyTermsRecord {
+        AutonomousBountyTermsRecord {
+            terms_hash: format!("0x{}", "aa".repeat(32)),
+            policy_hash: format!("0x{}", "bb".repeat(32)),
+            acceptance_criteria_hash: format!("0x{}", "01".repeat(32)),
+            benchmark_hash: format!("0x{}", "02".repeat(32)),
+            evidence_schema_hash: format!("0x{}", "03".repeat(32)),
+            creator_wallet: "0x4444444444444444444444444444444444444444".to_string(),
+            document: AutonomousBountyTermsDocument {
+                schema_version: "agent-bounties/terms-v1".to_string(),
+                contract_terms: json!({"protocol_version": "agent-bounties/autonomous-v1"}),
+                title: "Status filter fixture".to_string(),
+                goal: "Exercise readiness blockers".to_string(),
+                acceptance_criteria: vec!["fixture".to_string()],
+                benchmark,
+                evidence_schema: json!({"required": ["commit_sha"]}),
+                verification_policy: json!({"mechanism": "deterministic_module"}),
+                source_url: None,
+                discovery_source: None,
+                image: None,
+                agent_eligibility: None,
+                claim_coordination: None,
+            },
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn earning_blockers_preserve_every_readiness_check() {
+        // The predicate exactly as it read before blockers existed. Readiness may gain
+        // reasons; it may never lose a check.
+        fn legacy_is_earning_ready(item: &AutonomousBountyFeedItem) -> bool {
+            item.status == "claimable"
+                && item.terms_valid
+                && item.verification_ready
+                && !item.terms.as_ref().is_some_and(|terms| {
+                    terms.document.benchmark["engine"] == creator_review::ENGINE
+                        && terms.document.benchmark["delivery_deadline"]
+                            .as_u64()
+                            .is_none_or(|deadline| deadline <= Utc::now().timestamp().max(0) as u64)
+                })
+        }
+
+        let future = (Utc::now().timestamp().max(0) as u64) + 86_400;
+        let terms_variants: Vec<Option<AutonomousBountyTermsRecord>> = vec![
+            None,
+            Some(benchmark_terms_fixture(json!({"engine": "github_ci"}))),
+            Some(benchmark_terms_fixture(
+                json!({"engine": creator_review::ENGINE, "delivery_deadline": future}),
+            )),
+            Some(benchmark_terms_fixture(
+                json!({"engine": creator_review::ENGINE, "delivery_deadline": 1_600_000_000u64}),
+            )),
+            Some(benchmark_terms_fixture(
+                json!({"engine": creator_review::ENGINE}),
+            )),
+        ];
+
+        let mut checked = 0_usize;
+        let mut ready = 0_usize;
+        for status in AUTONOMOUS_BOUNTY_STATUSES {
+            for terms_valid in [true, false] {
+                for verification_ready in [true, false] {
+                    for terms in &terms_variants {
+                        let mut item = status_filter_fixture(status);
+                        item.terms_valid = terms_valid;
+                        if !terms_valid {
+                            item.validation_errors =
+                                vec!["terms hash does not match creation".to_string()];
+                        }
+                        item.verification_ready = verification_ready;
+                        if !verification_ready {
+                            item.verification_readiness_reason =
+                                "regression benchmark digest and immutable source are not approved"
+                                    .to_string();
+                        }
+                        item.terms = terms.clone();
+                        assert_eq!(
+                            autonomous_bounty_is_earning_ready(&item),
+                            legacy_is_earning_ready(&item),
+                            "readiness changed for status={status} terms_valid={terms_valid} verification_ready={verification_ready}"
+                        );
+                        checked += 1;
+                        if autonomous_bounty_is_earning_ready(&item) {
+                            ready += 1;
+                            assert!(autonomous_bounty_earning_blockers(&item).is_empty());
+                        } else {
+                            assert!(!autonomous_bounty_earning_blockers(&item).is_empty());
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 120);
+        assert!(ready > 0, "the matrix must contain ready rows too");
+    }
+
+    #[test]
+    fn earning_blockers_name_each_failing_check() {
+        let codes = |item: &AutonomousBountyFeedItem| {
+            autonomous_bounty_earning_blockers(item)
+                .into_iter()
+                .map(|blocker| blocker.code)
+                .collect::<Vec<_>>()
+        };
+
+        assert!(codes(&status_filter_fixture("claimable")).is_empty());
+
+        let paid = status_filter_fixture("paid");
+        assert_eq!(codes(&paid), vec!["status_not_claimable".to_string()]);
+        assert!(autonomous_bounty_earning_blockers(&paid)[0]
+            .detail
+            .contains("`paid`"));
+
+        // A live base-mainnet row: raw status claimable, readiness blocked by an expired
+        // creator-review delivery deadline.
+        let mut expired = status_filter_fixture("claimable");
+        expired.verification_ready = false;
+        expired.verification_readiness_reason =
+            "the creator-review delivery deadline passed; cancel and recover unclaimed funds"
+                .to_string();
+        expired.terms = Some(benchmark_terms_fixture(
+            json!({"engine": creator_review::ENGINE, "delivery_deadline": 1_600_000_000u64}),
+        ));
+        assert_eq!(
+            codes(&expired),
+            vec![
+                "verification_not_ready".to_string(),
+                "creator_review_delivery_window_closed".to_string()
+            ]
+        );
+        assert!(autonomous_bounty_earning_blockers(&expired)[0]
+            .detail
+            .contains("creator-review delivery deadline passed"));
+
+        let mut invalid = status_filter_fixture("claimable");
+        invalid.terms_valid = false;
+        invalid.validation_errors = vec!["solver reward does not match creation".to_string()];
+        assert_eq!(codes(&invalid), vec!["terms_invalid".to_string()]);
+        assert_eq!(
+            autonomous_bounty_earning_blockers(&invalid)[0].detail,
+            "solver reward does not match creation"
+        );
+
+        let mut invalid_without_errors = status_filter_fixture("claimable");
+        invalid_without_errors.terms_valid = false;
+        assert!(
+            autonomous_bounty_earning_blockers(&invalid_without_errors)[0]
+                .detail
+                .contains("do not validate")
+        );
+    }
+
+    #[test]
+    fn raw_status_filter_is_parsed_and_applied_without_touching_readiness() {
+        assert_eq!(
+            parse_autonomous_bounty_status_filter("Claimable").unwrap(),
+            vec!["claimable".to_string()]
+        );
+        assert_eq!(
+            parse_autonomous_bounty_status_filter(" claimable , PAID ,, claimable ").unwrap(),
+            vec!["claimable".to_string(), "paid".to_string()]
+        );
+        assert!(parse_autonomous_bounty_status_filter("")
+            .unwrap()
+            .is_empty());
+        let error = parse_autonomous_bounty_status_filter("claimable,ready").unwrap_err();
+        assert!(matches!(
+            error,
+            ChainBaseError::InvalidBountyStatusFilter(_)
+        ));
+        assert!(error.to_string().contains("unknown status `ready`"));
+        assert!(error.to_string().contains("cancelled"));
+
+        let mut feed = vec![
+            status_filter_fixture("claimable"),
+            status_filter_fixture("paid"),
+            status_filter_fixture("cancelled"),
+        ];
+        // A blocked row keeps its raw status and stays visible under a raw-status filter.
+        feed[0].verification_ready = false;
+        feed[0].verification_readiness_reason =
+            "standing-meta-v2 migration reservation is active".to_string();
+
+        let mut filtered = feed.clone();
+        retain_autonomous_bounties_with_status(&mut filtered, &[]);
+        assert_eq!(filtered.len(), 3);
+
+        let mut filtered = feed.clone();
+        retain_autonomous_bounties_with_status(
+            &mut filtered,
+            &parse_autonomous_bounty_status_filter("claimable").unwrap(),
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].status, "claimable");
+        assert!(!autonomous_bounty_is_earning_ready(&filtered[0]));
+        assert_eq!(
+            autonomous_bounty_earning_blockers(&filtered[0])
+                .into_iter()
+                .map(|blocker| blocker.code)
+                .collect::<Vec<_>>(),
+            vec!["verification_not_ready".to_string()]
+        );
+
+        let mut filtered = feed.clone();
+        retain_autonomous_bounties_with_status(
+            &mut filtered,
+            &parse_autonomous_bounty_status_filter("paid,cancelled").unwrap(),
+        );
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered
+            .iter()
+            .all(|item| !autonomous_bounty_is_earning_ready(item)));
     }
 
     #[test]
