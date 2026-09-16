@@ -12,10 +12,10 @@ html:has(.posting-page)::-webkit-scrollbar, .posting-page dialog::-webkit-scroll
 html:has(.posting-page)::-webkit-scrollbar-track, .posting-page dialog::-webkit-scrollbar-track { background: #101b15; }
 html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-scrollbar-thumb { background: #738379; border: 3px solid #101b15; border-radius: 8px; }
 .posting-page *, .posting-page *::before, .posting-page *::after { box-sizing: border-box; }
-.posting-page :is(button, a, input, textarea, summary):focus-visible { outline: 2px solid #a8d98b; outline-offset: 3px; }
+.posting-page :is(button, a, input, textarea, summary):focus-visible { outline: 2px solid #8ee46b; outline-offset: 3px; }
 .posting-page .chat-app-header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px clamp(16px, 3vw, 32px); border-bottom: 1px solid #2a382f; background: #0b1410; }
 .posting-page .chat-app-brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
-.posting-page .chat-app-brand span { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #586b32; border-radius: 8px; color: #a8d98b; font-weight: 700; }
+.posting-page .chat-app-brand span { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #586b32; border-radius: 8px; color: #8ee46b; font-weight: 700; }
 .posting-page .chat-app-brand strong { font-size: 14px; font-weight: 600; }
 .posting-page .chat-app-title { margin: 0 auto 0 12px; font-size: 14px; font-weight: 500; color: #b4c1b8; }
 .posting-page .chat-app-close { display: grid; place-items: center; width: 44px; height: 44px; color: #b4c1b8; text-decoration: none; font-size: 24px; }
@@ -37,7 +37,7 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
 .brief-warnings li + li { margin-top: 8px; }
 .posting-page .button { min-height: 44px; padding: 10px 16px; border-radius: 8px; font: 600 14px/1.45 system-ui, sans-serif; white-space: normal; text-align: center; }
 .posting-page .button.secondary { color: #e1e9e3; border: 1px solid #4a5b4f; background: transparent; }
-.posting-page .button.primary { color: #152006; border: 1px solid #a8d98b; background: #a8d98b; }
+.posting-page .button.primary { color: #152006; border: 1px solid #8ee46b; background: #8ee46b; }
 .brief-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .brief-status, .posting-page .composer-status { display: block; margin-top: 16px; font-size: 14px; }
 .posting-page .composer-status:empty { display: none; }
@@ -76,7 +76,7 @@ html:has(.posting-page)::-webkit-scrollbar-thumb, .posting-page dialog::-webkit-
 .posting-workspace .bounty-card-actions .button { flex: 0 1 240px; min-width: 0; }
 .posting-workspace .bounty-card-actions:has([data-approve-card][data-approved="false"]) [data-open-funding],
 .posting-workspace .bounty-card-actions [data-approve-card][data-approved="true"] { display: none; }
-.posting-workspace .bounty-card-actions [data-approve-card] { color: #152006; border-color: #a8d98b; background: #a8d98b; }
+.posting-workspace .bounty-card-actions [data-approve-card] { color: #152006; border-color: #8ee46b; background: #8ee46b; }
 .posting-workspace .ai-handoff { background: none; box-shadow: none; padding: 16px 0; border: 0; }
 .posting-workspace .ai-handoff h2 { font-size: 22px; }
 .posting-workspace .ai-original { display: none; }

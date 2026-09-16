@@ -2,7 +2,7 @@
 .forest-home .ab-hero { padding-top: 62px; }
 .forest-home .ab-hero h1 { max-width: 1060px; font-size: clamp(19px, 6.15vw, 54px); line-height: 1.26; }
 .forest-home .ab-hero h1 > .ab-title-line { display: block; margin: 0; white-space: nowrap; }
-.forest-home .ab-outcome-word { display: inline-block; width: 4.4em; padding: .03em .12em .08em; border-radius: .1em; background: var(--ab-accent); color: #102008; text-align: center; font-family: var(--ab-body); font-weight: 900; line-height: 1; letter-spacing: -.045em; vertical-align: baseline; }
+.forest-home .ab-outcome-word { display: inline-block; width: 4.4em; padding: .03em .12em .08em; border-radius: .1em; background: var(--ab-accent); color: #07110c; text-align: center; font-family: var(--ab-body); font-weight: 900; line-height: 1; letter-spacing: -.045em; vertical-align: baseline; }
 .forest-home .ab-hero-subtitle { margin-top: 28px; margin-bottom: 16px; text-wrap: balance; }
 .ab-payoff { white-space: nowrap; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 5px; }
 .ab-only { font-style: normal; }
@@ -12,8 +12,8 @@
 .ab-forest-poster, .ab-forest-video { display: block; position: absolute; width: 100%; height: 100%; object-fit: cover; object-position: center 72%; }
 .ab-forest-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, #07110c70 0%, #07110c99 25%, #07110c80 48%, #07110c00 67%, #07110c00 82%, var(--ab-bg) 100%), radial-gradient(ellipse at 50% 27%, #07110c99 0%, #07110c20 52%, transparent 75%); }
 .ab-hero-content { position: relative; z-index: 1; }
-.forest-home .ab-hero-content { --ab-ink: #edf1e8; --ab-muted: #d1ddcd; --ab-panel: #101e16; --ab-bg: #07110c; --ab-line: #435341; --ab-moss: #79b85a; --ab-highlight: #203c27; color: var(--ab-ink); }
-.forest-home .ab-hero mark { color: var(--ab-accent); background: #203c27e8; }
+.forest-home .ab-hero-content { --ab-ink: #edf1e8; --ab-muted: #d1ddcd; --ab-panel: #101e16; --ab-bg: #07110c; --ab-line: #435341; --ab-moss: #8ccd69; --ab-highlight: #203c27; color: var(--ab-ink); }
+.forest-home .ab-hero mark { color: var(--ab-accent); background: #102619; }
 .forest-home .ab-trust a { color: #d1ddcd; }
 .forest-home .ab-hero-subtitle, .forest-home .ab-trust { text-shadow: 0 2px 12px #000; }
 .forest-home .ab-task-form { display: flex; flex-direction: column; gap: 20px; }
@@ -58,24 +58,24 @@
 @media (prefers-reduced-motion: reduce) { .ab-forest-video { display: none; } .ab-forest-controls button { display: none; } }
 
 /* Open forest statistics: a shared landscape, not a row of cards. */
-.forest-home .ab-metrics { width: calc(100% - 64px); max-width: 1440px; margin: 0 auto; padding: 54px 0; gap: 0; overflow: visible; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--ab-line); background: radial-gradient(ellipse at 50% 100%, #79b85a0b, transparent 70%); }
+.forest-home .ab-metrics { width: calc(100% - 64px); max-width: 1440px; margin: 0 auto; padding: 54px 0; gap: 0; overflow: visible; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--ab-line); background: radial-gradient(ellipse at 50% 100%, #8ccd690b, transparent 70%); }
 .forest-home .ab-metric:nth-child(n) { position: relative; min-height: 0; padding: 12px 32px; background: none; border-radius: 0; transform: none; color: var(--ab-ink); text-align: center; justify-content: flex-start; }
 .forest-home .ab-metric + .ab-metric { border-left: 1px solid var(--ab-line); }
-.forest-home .ab-metric + .ab-metric::before { content: ""; position: absolute; left: -3px; top: 40%; width: 5px; height: 5px; border-radius: 50%; background: var(--ab-moss); box-shadow: 0 0 18px #79b85a77; }
+.forest-home .ab-metric + .ab-metric::before { content: ""; position: absolute; left: -3px; top: 40%; width: 5px; height: 5px; border-radius: 50%; background: var(--ab-moss); box-shadow: 0 0 18px #8ccd6977; }
 .forest-home .ab-metric strong, .forest-home .ab-metric output { font-size: clamp(36px, 4vw, 64px); color: var(--ab-moss); }
 .forest-home .ab-metric span { font-size: 17px; margin-top: 14px; }
 .forest-home .ab-metric small { font-size: 13px; line-height: 1.5; color: var(--ab-muted); opacity: 1; }
 .forest-home [data-market-status][hidden] { display: none; }
 
 /* A quiet forest invitation with independent firefly glows. */
-.ab-manifesto { position: relative; isolation: isolate; max-width: 1600px; margin: 0 auto; padding: 130px 100px; text-align: center; background: radial-gradient(ellipse at 50% 60%, #79b85a0e, transparent 66%); }
+.ab-manifesto { position: relative; isolation: isolate; max-width: 1600px; margin: 0 auto; padding: 130px 100px; text-align: center; background: radial-gradient(ellipse at 50% 60%, #8ccd690e, transparent 66%); }
 .ab-manifesto h2 { position: relative; margin: 0 auto; max-width: 1200px; font: 400 clamp(34px, 4.7vw, 76px)/1.14 var(--ab-display); letter-spacing: -.025em; text-wrap: balance; }
-.ab-manifesto h2 strong { display: block; margin-top: .3em; font-weight: 400; color: #102008; }
+.ab-manifesto h2 strong { display: block; margin-top: .3em; font-weight: 400; color: #07110c; }
 .ab-manifesto h2 strong span { background: var(--ab-accent); padding: .03em .06em .07em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .ab-manifesto h2 em { font-style: normal; color: var(--ab-ink); text-decoration: underline; text-decoration-color: var(--ab-moss); text-decoration-thickness: 2px; text-underline-offset: .12em; }
 .ab-manifesto-branch { position: absolute; z-index: -1; left: 0; top: 0; height: 100%; width: 18%; color: var(--ab-moss); opacity: .2; }
 .ab-manifesto-fireflies { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
-.ab-manifesto-fireflies i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--ab-accent); box-shadow: 0 0 14px 3px #79b85a55; animation: ab-forest-glimmer 5.7s ease-in-out infinite; }
+.ab-manifesto-fireflies i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--ab-accent); box-shadow: 0 0 14px 3px #8ccd6955; animation: ab-forest-glimmer 5.7s ease-in-out infinite; }
 .ab-manifesto-fireflies i:nth-child(1) { left: 12%; top: 26%; animation-delay: -1.2s; }
 .ab-manifesto-fireflies i:nth-child(2) { left: 29%; top: 78%; animation-duration: 7.1s; animation-delay: -4s; }
 .ab-manifesto-fireflies i:nth-child(3) { left: 71%; top: 14%; animation-duration: 4.9s; animation-delay: -2.2s; }

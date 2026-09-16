@@ -7,7 +7,7 @@
 .ab-brand-domain { color: var(--ab-muted, #aab9ae); }
 .ab-site-header .ab-site-nav { display: flex; align-items: center; gap: 12px; }
 .ab-site-header .ab-site-nav a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 12px 18px; border: 1px solid var(--ab-line, #2c4032); border-radius: 999px; color: var(--ab-ink, #edf1e8); text-decoration: none; white-space: nowrap; font-size: 14px; font-weight: 700; }
-.ab-site-header .ab-site-nav .ab-site-board { background: var(--ab-accent, #a8d98b); color: var(--ab-on-accent, #102008); border-color: transparent; }
+.ab-site-header .ab-site-nav .ab-site-board { background: var(--ab-accent, #8ee46b); color: var(--ab-on-accent, #07110c); border-color: transparent; }
 .ab-site-header .ab-site-nav a:hover { filter: brightness(1.1); }
 #how-it-works { scroll-margin-top: calc(var(--site-header-height) + 24px); }
 .market-work-actions { display: flex; justify-content: flex-end; gap: 16px; max-width: 1200px; margin: 18px auto 0; padding: 0 24px; }

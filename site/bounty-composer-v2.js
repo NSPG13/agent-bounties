@@ -1163,7 +1163,7 @@
     return {
       version: 1,
       scene,
-      palette: ["#06140d", "#1b5132", "#a8d98b", "#7cefd1"],
+      palette: ["#06140d", "#1b5132", "#8ee46b", "#7cefd1"],
       elements: elementsByScene[scene].map((kind, index) => ({ kind, x: 14 + index * 18, y: 62 - (index % 2) * 22, size: 0.8 + (index % 3) * 0.2 })),
     };
   }
@@ -1325,7 +1325,7 @@
     const x = element.x / 100 * width;
     const y = element.y / 100 * height;
     const size = 70 * element.size;
-    const accent = palette[2] || "#a8d98b";
+    const accent = palette[2] || "#8ee46b";
     const secondary = palette[3] || "#7cefd1";
     context.save();
     context.translate(x, y);
@@ -1579,13 +1579,13 @@
       context.fillStyle = "#03110b"; context.fillRect(0,0,1200,1500);
       context.drawImage(ui.art, 0, 0, 1200, 675);
       const gradient = context.createLinearGradient(0,620,0,1500); gradient.addColorStop(0,"rgba(6,31,18,.95)"); gradient.addColorStop(1,"#020b08"); context.fillStyle = gradient; context.fillRect(0,610,1200,890);
-      context.fillStyle = "#a8d98b"; context.font = "800 29px system-ui"; context.fillText(state.scope === "mission" ? "AGENT BOUNTIES · MISSION TASK" : "AGENT BOUNTIES · BOUNTY CARD", 68, 710);
+      context.fillStyle = "#8ee46b"; context.font = "800 29px system-ui"; context.fillText(state.scope === "mission" ? "AGENT BOUNTIES · MISSION TASK" : "AGENT BOUNTIES · BOUNTY CARD", 68, 710);
       context.fillStyle = "#f4f6ef"; context.font = "850 68px system-ui";
       let y = 806; for (const line of wrapCanvasText(context,state.draft.title,1060,3)) { context.fillText(line,68,y); y += 76; }
       context.fillStyle = "#bdc8c0"; context.font = "440 31px system-ui"; y += 10; for (const line of wrapCanvasText(context,state.draft.goal,1060,5)) { context.fillText(line,68,y); y += 43; }
       const statsY = Math.max(y + 32, 1180);
       const stats = [["TOTAL REWARD",`${formatUsdc(state.fundingUsdc)} USDC`],["TASK WINDOW",`${state.taskWindowDays} days`],["MISSION HORIZON",state.scope === "mission" ? state.horizon.label : "Single result"]];
-      stats.forEach(([label,value],index) => { const x=68+index*355; context.fillStyle="rgba(168, 217, 139,.12)"; context.fillRect(x,statsY,325,126); context.fillStyle="#8d9a91"; context.font="800 19px system-ui"; context.fillText(label,x+20,statsY+36); context.fillStyle="#f4f6ef"; context.font="750 27px system-ui"; let lineY=statsY+76; for(const line of wrapCanvasText(context,value,285,2)){context.fillText(line,x+20,lineY);lineY+=31;} });
+      stats.forEach(([label,value],index) => { const x=68+index*355; context.fillStyle="rgba(142, 228, 107,.12)"; context.fillRect(x,statsY,325,126); context.fillStyle="#8d9a91"; context.font="800 19px system-ui"; context.fillText(label,x+20,statsY+36); context.fillStyle="#f4f6ef"; context.font="750 27px system-ui"; let lineY=statsY+76; for(const line of wrapCanvasText(context,value,285,2)){context.fillText(line,x+20,lineY);lineY+=31;} });
       context.fillStyle="#e8c15a"; context.font="650 23px system-ui"; context.fillText("DRAFT · NOT POSTED OR FUNDED · CREATOR VERIFIES COMPLETION",68,1435);
       const blob = await new Promise((resolve) => canvas.toBlob(resolve,"image/png"));
       if (!blob) throw new Error("The share image could not be created.");

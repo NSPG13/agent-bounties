@@ -1,11 +1,11 @@
 :root {
-  --metrics-accent: #a8d98b;
-  --metrics-blue: #a8d98b;
+  --metrics-accent: #8ee46b;
+  --metrics-blue: #8ee46b;
   --metrics-paper: #f1f3eb;
   --metrics-ink: #f6f8f1;
   --metrics-muted: #aeb9b0;
   --metrics-line: rgba(212, 233, 208, 0.2);
-  --metrics-line-strong: rgba(168, 217, 139, 0.5);
+  --metrics-line-strong: rgba(142, 228, 107, 0.5);
 }
 
 html:has(body.metrics-page) {
@@ -15,7 +15,7 @@ html:has(body.metrics-page) {
 body.metrics-page {
   background:
     radial-gradient(circle at 92% 7%, rgba(72, 118, 255, 0.13), transparent 28rem),
-    radial-gradient(circle at 8% 35%, rgba(168, 217, 139, 0.07), transparent 26rem),
+    radial-gradient(circle at 8% 35%, rgba(142, 228, 107, 0.07), transparent 26rem),
     #020906;
 }
 
@@ -118,7 +118,7 @@ body.metrics-page {
 
 .source-badge[data-status="ready"] span {
   background: var(--metrics-accent);
-  box-shadow: 0 0 0 4px rgba(168, 217, 139, 0.12), 0 0 16px rgba(168, 217, 139, 0.65);
+  box-shadow: 0 0 0 4px rgba(142, 228, 107, 0.12), 0 0 16px rgba(142, 228, 107, 0.65);
 }
 
 .source-badge[data-status="partial"] span,
@@ -171,8 +171,8 @@ body.metrics-page {
 
 .period-control button:hover,
 .period-control button[aria-pressed="true"] {
-  border-color: rgba(168, 217, 139, 0.42);
-  background: rgba(168, 217, 139, 0.1);
+  border-color: rgba(142, 228, 107, 0.42);
+  background: rgba(142, 228, 107, 0.1);
   color: var(--metrics-accent);
 }
 
