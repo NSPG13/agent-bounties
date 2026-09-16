@@ -26,9 +26,12 @@ funnel_height = 90;       // funnel drop from the hub mouth down to the port (mm
 
 /* [Tinaco interface] */
 // The sleeve is SMOOTH: no screw geometry is modelled. port_thread_dia is the
-// port size this sleeve adapts to - it sets the sleeve's outside diameter so a
-// gasket + strap clamp, or an off-the-shelf threaded adapter, fits over it.
-port_thread_dia = 50.8;   // tinaco fill-port size being adapted to (mm); 2" nominal
+// nominal tinaco fill-port size this sleeve adapts to, and it sets the sleeve's
+// BORE (inside diameter) - not its outside diameter. The outside diameter is
+// that bore plus two wall thicknesses (port_od, 55.8 mm by default), so a
+// gasket + strap clamp - or an off-the-shelf threaded adapter - fits OVER the
+// outside of the smooth sleeve. port_sleeve() cuts both surfaces.
+port_thread_dia = 50.8;   // tinaco fill-port size being adapted to (mm); 2" nominal BORE dia
 port_length     = 40;     // smooth sleeve engagement depth below the funnel outlet (mm)
 
 /* [Debris screen] */
@@ -46,7 +49,8 @@ $fn = 120;
 
 collector_radius = collector_dia / 2;
 hub_radius       = hub_dia / 2;
-port_radius      = port_thread_dia / 2;
+port_radius      = port_thread_dia / 2;       // BORE radius of the funnel outlet and sleeve
+port_od          = 2 * (port_radius + wall);  // sleeve OUTSIDE diameter: bore + 2 x wall
 
 // Every joint is fused by a real volumetric overlap instead of a coincident
 // face, so booleans cannot open a seam: the funnel lip rises `fuse` above
@@ -105,9 +109,12 @@ module funnel() {
 }
 
 // SMOOTH sleeve that drops into the tinaco fill port. It continues the funnel
-// bore downward from the funnel outlet, so the water path is continuous. No
-// thread is modelled - the joint to the tank port is a gasket + strap clamp (or
-// an external adapter), see README "Port interface".
+// bore downward from the funnel outlet, so the water path is continuous. The
+// bore is `port_thread_dia` (50.8 mm by default); the outside diameter is
+// `port_od` (55.8 mm) because the wall is added on BOTH sides - the sleeve is
+// not a 50.8 mm outside diameter. No thread is modelled - the joint to the tank
+// port is a gasket + strap clamp (or an external adapter) OVER this outside
+// surface, see README "Port interface".
 module port_sleeve() {
   difference() {
     translate([0, 0, -funnel_height - port_length])

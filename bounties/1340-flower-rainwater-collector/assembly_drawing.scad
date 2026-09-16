@@ -82,10 +82,17 @@ module leader(x1, y1, x2, y2, label) {
 
 // SECTION A-A: cut through a petal centre, so the dish thickness, the hub
 // joint, the funnel bore and the screen all appear in section.
+//
+// ORIENTATION. Every dimension below maps model +Z to drawing +Y (the rim is
+// drawn UP at +Y, the sleeve hangs DOWN to the dimensioned outlet at -Y). A
+// rotation of +90 degrees about X sends model +Z to drawing -Y, which draws the
+// assembly upside down: the funnel and sleeve appear ABOVE the dish, the view
+// title ends up inside the part, and the outlet dimension floats under empty
+// space. -90 about X is the convention the dimensions are written in.
 translate([-140, 40])
   scale([S, S, S])
     projection(cut = true)
-      rotate([90, 0, 0])
+      rotate([-90, 0, 0])
         rotate([0, 0, -180 / n_petals])
           collector();
 
@@ -108,9 +115,17 @@ translate([-140, 40]) {
   vdim(S * -(funnel_height + port_length), S * -funnel_height, x_h + 44, mm(port_length), ext = S * 20);
   // hub mouth diameter across the funnel throat
   hdim(S * -hub_radius, S * hub_radius, S * 45, mm(hub_dia, " mm dia"));
-  // port thread diameter at the outlet
+  // Outlet dimensions. This line spans +/- port_radius, which is the sleeve's
+  // BORE, so that is what it is labelled. The outside diameter is one wall
+  // thicker on each side (port_od = bore + 2 x wall); it gets a leader instead
+  // of a second dimension line because at 1:4 the bore and OD silhouettes are
+  // only 0.625 mm apart on the sheet and two dimension lines there would be
+  // unreadable. The title block carries both values.
   hdim(S * -port_radius, S * port_radius, S * -(funnel_height + port_length) - 12,
-       mm(port_thread_dia, " mm dia"), ext = S * 8);
+       mm(port_thread_dia, " mm bore"), ext = S * 8);
+  leader(S * (port_radius + wall), S * -(funnel_height + port_length / 2),
+         S * 130, S * -(funnel_height + port_length) - 6,
+         str("OD ", r2(port_od), " mm"));
   // rim-to-hub concave depth. Label to the RIGHT of its dim line: on the left
   // it ran into the hub-mouth diameter text above.
   vdim(0, S * petal_rise, S * 95, mm(petal_rise), ext = S * 10, side = 1);
@@ -182,11 +197,13 @@ translate([-380, -300]) {
   x2 = 155;
   vline(x2, 158, -1, 0.4);   // column divider, block-local x (no second translate)
   derived_label = ["overall height", "outlet below datum", "hub mouth", "rim crest",
-                   "capture area", "material volume", "BOM"];
+                   "port sleeve bore", "port sleeve OD", "capture area",
+                   "material volume", "BOM"];
   cap_area = 3.14159265 * pow(collector_dia / 2000, 2);
   derived_value = [mm(petal_rise + wall + funnel_height + port_length),
                    mm(-(funnel_height + port_length)),
                    "z = 0", str("z = ", mm(petal_rise + wall)),
+                   mm(port_thread_dia), mm(port_od),
                    str(r2(cap_area), " m^2"), "see README", "1 part, see README"];
   for (i = [0 : len(derived_label) - 1])
     table_row(x2 + 5, 148 - i * 8, derived_label[i], derived_value[i]);

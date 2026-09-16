@@ -148,6 +148,119 @@ The export grew from 247 070 B (127 contours) to 2 388 650 B (964 contours)
 because the old fill had absorbed a large part of the section view into its
 union; the sheet now exports the geometry it actually draws.
 
+Those labels were superseded in the next revision (§4.2): the outlet
+dimension now reads `50.8 mm bore` and an `OD 55.8 mm` leader points at the
+sleeve's outside surface.
+
+### 4.2 Orientation and the bore / OD wording — second review on PR #1345
+
+Review item (2026-09-15, review id 5216867831) asked for two bounded presentation
+repairs on revision `5c0783b`. Each one was **verified before it was changed**,
+and the verification is recorded here rather than asserted.
+
+**1. Section axis convention (`assembly_drawing.scad`).** The section was
+projected through `rotate([90, 0, 0])`, which sends model `+Z` to drawing `-Y`,
+while every dimension in the file is written `+Z` → `+Y`. Measured on standalone
+`projection(cut = true)` renders of the two options (part file only, no
+dimensions), splitting every contour vertex at the datum `y = 0`:
+
+| rotation | half carrying the 1.2 m dish (`max|x|` = 599.79 mm) | other half (`max|x|` = 42.85 mm) |
+|---|---|---|
+| `[90, 0, 0]` — before | drawn **below** the datum | drawn above the datum |
+| `[-90, 0, 0]` — now | drawn **above** the datum | drawn below the datum |
+
+The wide half is the rim/dish (radius 600 mm) and the narrow one the funnel and
+sleeve, so the table states which way the part was drawn. Reproduce: write a
+`.scad` that `include`s the part and applies `projection(cut = true)` over the
+rotation under test, export to SVG, and take `max|x|` per half around the datum
+(SVG negates y, so the split is symmetric).
+
+**2. Bore versus outside diameter.** `port_sleeve()` cuts
+`cylinder(r = port_radius)` out of `cylinder(r = port_radius + wall)`, so
+`port_thread_dia` is the **bore** and the outside is
+`port_od = port_thread_dia + 2 × wall`. Measured on the committed mesh (the
+exported artifact, not the parameter table), at the sleeve's bottom ring:
+
+```
+$ python3 measure_sleeve.py          # reads exports/*.stl with test_geometry.read_stl
+sleeve bottom ring  z = -130.0
+    r = 25.4000 mm  (dia 50.8000)   x720 vertices
+    r = 27.9000 mm  (dia 55.8000)   x720 vertices
+  -> bore 50.8000 mm dia, outside 55.8000 mm dia, wall 2.5001 mm
+```
+
+Both rings are cylindrical and the inner radius is identical at the top and
+bottom of the sleeve, so the bore is constant over the 40 mm engagement.
+Corrected in `flower_rainwater_collector.scad` (customizer comment, `port_sleeve()`
+comment, new derived `port_od`), in `README.md` (parameter table, a new
+"Port interface" table, the on-site-dimension list, the deployment notes) and on
+the drawing: the outlet dimension now reads `50.8 mm bore`, an `OD 55.8 mm`
+leader points at the sleeve's outside surface, and the title block carries
+adjacent `port sleeve bore 50.8 mm` / `port sleeve OD 55.8 mm` rows.
+
+**Rendered sheet for this revision.** Commands and receipts:
+
+```
+$ openscad --hardwarnings -D render_assembly=false -o exports/assembly_drawing.svg assembly_drawing.scad
+OPENSCAD_EXIT=0 WARNINGS=0 UNDEF=0
+   Top level object is a 2D object:
+   Contours:     1038
+exports/assembly_drawing.svg   2 594 620 B   sha256 53119043f19c6174…
+exports/flower_rainwater_collector.stl   sha256 5f89ee2c69add9b9…   (unchanged by the render)
+```
+
+Rasterised at 192 dpi (4664 × 3530 px) and read region by region, not judged by
+the export's exit code:
+
+| Region | What the sheet shows |
+|---|---|
+| SECTION A-A | dish/rim **above** the datum and the funnel + sleeve hanging **below** it, ending at the outlet dimensions: `232.5 / 90 / 40 mm`, `100 mm`, `180 mm dia`, `wall 2.5 mm`, `screen 3 mm, holes 2.5 mm @ 6 mm`, `50.8 mm bore`, and an `OD 55.8 mm` leader on the sleeve's outside surface |
+| view title | above the part, clear of the geometry and of every dimension line |
+| PLAN (1:8) | `1200 mm dia` both ways, caption `8 petals, hub 180 mm dia (see section)`, nothing dimensioned inside the silhouette |
+| title block | unfilled outline with both rules and the column divider, every row legible — including `port sleeve bore 50.8 mm` and `port sleeve OD 55.8 mm` |
+
+Label placement is measured as well as looked at. Text in the export is glyph
+outlines, so `measure_rows.py` splits the SVG into subpaths, takes each subpath's
+bounding box, and reports the x-extent of the glyph clusters inside a table row —
+two fields that touch appear as one cluster with no gap:
+
+```
+subpaths parsed: 1038   (geometries + glyph outlines of the whole sheet)
+
+PARAMETER COLUMN (key left-aligned at -375, value right-aligned at -280):
+  n_petals             y= -152.0  key ends  -349.53   value  -283.47.. -280.21   separation =  66.06 mm
+  collector_dia        y= -160.0  key ends  -336.84   value  -307.74.. -280.32   separation =  29.10 mm
+  petal_rise           y= -168.0  key ends  -345.81   value  -303.97.. -280.32   separation =  41.84 mm
+  petal_gap            y= -176.0  key ends  -345.41   value  -296.60.. -280.32   separation =  48.81 mm
+  hub_dia              y= -184.0  key ends  -350.77   value  -303.97.. -280.32   separation =  46.80 mm
+  funnel_height        y= -192.0  key ends  -334.28   value  -300.40.. -280.32   separation =  33.88 mm
+  port_thread_dia      y= -200.0  key ends  -327.40   value  -306.10.. -280.32   separation =  21.30 mm
+  port_length          y= -208.0  key ends  -344.84   value  -300.57.. -280.32   separation =  44.28 mm
+  screen_thick         y= -216.0  key ends  -340.42   value  -296.69.. -280.32   separation =  43.73 mm
+  screen_hole          y= -224.0  key ends  -338.27   value  -302.26.. -280.32   separation =  36.01 mm
+  screen_pitch         y= -232.0  key ends  -340.42   value  -296.60.. -280.32   separation =  43.82 mm
+  wall                 y= -240.0  key ends  -363.75   value  -302.26.. -280.32   separation =  61.48 mm
+
+DERIVED COLUMN (key at -220, value right-aligned at -125):
+  overall height       y= -152.0  key ends  -179.67   value  -154.80.. -125.32   separation =  24.86 mm
+  outlet below datum   y= -160.0  key ends  -163.40   value  -151.45.. -125.32   separation =  11.95 mm
+  hub mouth            y= -168.0  key ends  -188.31   value  -139.61.. -125.18   separation =  48.70 mm
+  rim crest            y= -176.0  key ends  -194.01   value  -165.99.. -125.32   separation =  28.02 mm
+  port sleeve bore     y= -184.0  key ends  -171.59   value  -151.10.. -125.32   separation =  20.48 mm
+  port sleeve OD       y= -192.0  key ends  -174.99   value  -151.10.. -125.32   separation =  23.88 mm
+  capture area         y= -200.0  key ends  -181.83   value  -152.16.. -125.26   separation =  29.67 mm
+  material volume      y= -208.0  key ends  -172.35   value  -166.64.. -125.19   separation =   5.71 mm   <-- tight
+  BOM                  y= -216.0  key ends  -204.99   value  -187.41.. -125.19   separation =  17.57 mm
+
+rows measured: 21   smallest separation: 5.71 mm   median: 33.88 mm
+```
+
+A note on what this revision did **not** do: the geometry, the STL and the STEP
+are untouched (`compare_export.py`: facet multisets identical, topology/volume
+/bbox equal, "preserved export unchanged by the render: yes"), no thread was
+modelled, and the drawing is still a concept sheet — nothing physical was
+measured.
+
 ## 5. Requested generation fails when its tool is missing
 
 Review item on PR #1345 (NSPG13): `--render` fell back to the committed STL when

@@ -42,16 +42,22 @@ constants at the top to fit any tinaco and any desired capture area.
 | `petal_gap_flare` | 2.0 | – | Rim valley radius as a multiple of `petal_gap` |
 | `hub_dia` | 180 | mm | Central funnel mouth diameter |
 | `funnel_height` | 90 | mm | Funnel drop from hub to port |
-| `port_thread_dia` | 50.8 | mm | Tinaco fill-port size being adapted to (2" nominal) — the **sleeve is smooth**; this sets its outside diameter so a gasket/clamp or a threaded adapter fits over it |
+| `port_thread_dia` | 50.8 | mm | Tinaco fill-port size being adapted to (2" nominal) — the **sleeve is smooth**. It sets the sleeve's **bore** (inside diameter), i.e. the water path and the dimension the tank port is matched against — *not* the outside diameter; see [Port interface](#port-interface) |
 | `port_length` | 40 | mm | Sleeve engagement depth below the funnel outlet (smooth, not a screw thread) |
 | `screen_thick` | 3 | mm | Debris screen thickness |
 | `screen_hole` | 2.5 | mm | Square screen hole side |
 | `screen_pitch` | 6 | mm | Screen hole grid pitch |
 | `wall` | 2.5 | mm | Material wall thickness |
 
+Derived from those (not free parameters): the sleeve's outside diameter is
+`port_od = port_thread_dia + 2 × wall` = **55.8 mm** at the defaults, because
+`port_sleeve()` adds the wall on *both* sides of the bore. Any gasket, clamp or
+adapter fits that 55.8 mm outside surface — there is no 50.8 mm outside surface
+on the part.
+
 ### Sizing to a tinaco
 
-Common Mexico City tinacos and the `port_thread_dia` to target:
+Common Mexico City tinacos and the `port_thread_dia` (sleeve bore) to target:
 
 | Tinaco | Typical diameter | Fill port |
 |---|---|---|
@@ -83,8 +89,18 @@ into the funnel wall), so the assembly renders as **one** closed solid:
 
 The sleeve that enters the tinaco is **smooth** — the model carries no screw
 geometry, and neither the STL nor the STEP contains a thread. What the sleeve
-does provide is the 40 mm engagement depth and the `port_thread_dia` outside
-diameter, so a standard adapter can be fitted on site:
+does provide is the 40 mm engagement depth, a **50.8 mm bore** and a **55.8 mm
+outside diameter**, so a standard adapter can be fitted on site:
+
+| Surface | Value at the defaults | Where it comes from |
+|---|---|---|
+| Bore (water path, inside diameter) | **50.8 mm** | `port_thread_dia` — the nominal tinaco fill-port size, 2" |
+| Outside diameter | **55.8 mm** | `port_od = port_thread_dia + 2 × wall` (`port_sleeve()` adds `wall = 2.5 mm` on both sides of the bore radius) |
+
+The distinction matters when ordering hardware: the tank port is matched against
+the **bore** figure, but every gasket, strap clamp or slip-over adapter grips the
+**55.8 mm outside surface**. A part described as "50.8 mm OD" would not fit this
+sleeve, and no 50.8 mm outside surface exists on it.
 
 | Option | How it makes the seal |
 |---|---|
@@ -195,10 +211,12 @@ from the model's own variables — nothing is redrawn by hand.
 Measured at the actual installation; the defaults are **nominal** and this model
 is a concept, not a fabrication drawing:
 
-- **Fill-port thread / OD**: major diameter, pitch and thread standard of the
-  tank's own port. The default assumes 2" nominal = 50.8 mm. A 2" PVC/NPT fitting
-  is ~60.3 mm OD, so measure — this is what the smooth sleeve and its adapter
-  must match, and it is the one dimension that must be right.
+- **Fill-port size (bore)**: the tank's own port diameter, thread major diameter
+  and pitch. The default assumes 2" nominal = 50.8 mm **bore**. Note what that
+  number is matched against: the model's bore is 50.8 mm and its outside
+  diameter is 55.8 mm (`port_od`), so the sleeve's outside will not pass through
+  a 50.8 mm restriction — a 2" PVC/NPT fitting is ~60.3 mm OD, so measure. This
+  is the one dimension that must be right.
 - **Port height above the tank top** and its centre offset from the tank centre.
 - **Tank top / lid ring diameter** — clearance for the 1.2 m dish overhang and
   for the lid to still be serviceable.
@@ -218,6 +236,7 @@ is a concept, not a fabrication drawing:
   prototypes use PETG and a food-safe liner if water will be drunk.
 - **Seal:** the sleeve is smooth, so the seal is made by a gasket plus a strap
   clamp over the tank's port collar (the BOM default), or by an off-the-shelf
-  threaded adapter fitted over the sleeve. `port_thread_dia` sets the sleeve OD;
-  the adapter is the interchangeable part, per the [Port interface](#port-interface)
-  section.
+  threaded adapter fitted over the sleeve. `port_thread_dia` sets the sleeve
+  **bore** (50.8 mm) and the wall adds 2.5 mm on each side, so the outside
+  surface that hardware grips is `port_od` = 55.8 mm; the adapter is the
+  interchangeable part, per the [Port interface](#port-interface) section.
