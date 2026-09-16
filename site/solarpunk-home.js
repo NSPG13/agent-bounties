@@ -3,6 +3,7 @@
   const api = factory(
     commonJs ? require("./posting-prompt.js") : root.AgentBountiesPostingPrompt,
     commonJs ? require("./posting-auth.js") : root.AgentBountiesPostingAuth,
+    commonJs ? require("./marketplace-workflow.js") : root.AgentBountiesWorkflow,
   );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.SolarpunkHome = api;
@@ -11,7 +12,7 @@
     if (root.document.readyState === "loading") root.document.addEventListener("DOMContentLoaded", () => api.start(root, root.document), { once: true });
     else api.start(root, root.document);
   }
-})(typeof window !== "undefined" ? window : globalThis, function (postingPrompt, postingAuth) {
+})(typeof window !== "undefined" ? window : globalThis, function (postingPrompt, postingAuth, workflow) {
   "use strict";
 
   const PHASES = ["dawn", "day", "dusk", "night"];
@@ -392,12 +393,7 @@ ${competitionChildBrief(item)}`;
   }
 
   function isReadyToEarn(item) {
-    return Boolean(item)
-      && item.source_type === "canonical_base"
-      && item.work_state === "claimable"
-      && item.payment_state === "escrowed"
-      && item.payment_committed === true
-      && item.verification_ready === true;
+    return workflow.ready(item);
   }
 
   function finiteNonNegative(value, label) {
@@ -408,29 +404,18 @@ ${competitionChildBrief(item)}`;
 
   function marketSnapshot(platform, projection, now = Date.now()) {
     if (!platform || !projection) throw new Error("Marketplace evidence is unavailable");
-    if (projection.applied_view !== "ready_to_earn" || projection.degraded !== false || !Array.isArray(projection.items)) {
-      throw new Error("Ready-to-earn evidence is incomplete");
-    }
-    const canonicalSource = Array.isArray(projection.source_statuses)
-      ? projection.source_statuses.find((source) => source?.source_type === "canonical_base")
-      : null;
-    if (!canonicalSource || canonicalSource.available !== true || projection.items.some((item) => !isReadyToEarn(item))) {
-      throw new Error("Canonical inventory evidence is incomplete");
-    }
+    const { items } = workflow.fundedInventory(projection);
+    const availability = workflow.inventoryCounts(items, now);
 
     const payout = finiteNonNegative(platform?.marketplace_payout_volume?.lifetime?.usdc, "Lifetime payout");
     const completed = finiteNonNegative(platform?.marketplace_payout_volume?.lifetime_settled_rounds, "Settled rounds");
     const weekStart = now - (7 * 24 * 60 * 60 * 1000);
-    const addedThisWeek = projection.items.reduce((total, item) => {
-      const created = Date.parse(item.created_at);
-      return total + (Number.isFinite(created) && created >= weekStart && created <= now ? 1 : 0);
-    }, 0);
     const completedThisWeek = (Array.isArray(platform.daily) ? platform.daily : []).reduce((total, item) => {
       const day = Date.parse(`${item?.day}T00:00:00Z`);
       if (!Number.isFinite(day) || day < weekStart || day > now) return total;
       return total + finiteNonNegative(item.settled_rounds, "Daily settled rounds");
     }, 0);
-    return { payout, live: projection.items.length, completed, addedThisWeek, completedThisWeek };
+    return { payout, live: availability.unavailable ? null : availability.now, availability, completed, completedThisWeek };
   }
 
   function start(win, doc) {
@@ -658,21 +643,22 @@ ${competitionChildBrief(item)}`;
     function applyMetricState(snapshot) {
       const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
       doc.querySelector("[data-market-volume]").textContent = formatter.format(snapshot.payout);
-      doc.querySelector("[data-live-bounties]").textContent = formatter.format(snapshot.live);
+      doc.querySelector("[data-live-bounties]").textContent = snapshot.live === null ? "—" : formatter.format(snapshot.live);
       doc.querySelector("[data-completed-bounties]").textContent = formatter.format(snapshot.completed);
-      doc.querySelector("[data-live-weekly]").textContent = `+${formatter.format(snapshot.addedThisWeek)} created in the last 7 days`;
+      const counts = snapshot.availability;
+      doc.querySelector("[data-live-weekly]").textContent = `${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks${counts.unavailable ? ` confirmed open; timing unavailable for ${counts.unavailable}` : ""}`;
       doc.querySelector("[data-completed-weekly]").textContent = `+${formatter.format(snapshot.completedThisWeek)} settled in the last 7 days`;
       const status = doc.querySelector("[data-market-status]");
-      status.textContent = "";
-      status.hidden = true;
-      status.dataset.state = "ready";
+      status.textContent = counts.unavailable ? "Open-now total is unconfirmed while some timing is unavailable. See All funded on the board." : "";
+      status.hidden = !counts.unavailable;
+      status.dataset.state = counts.unavailable ? "unavailable" : "ready";
     }
 
     function applyUnavailableState(message = "Marketplace evidence is temporarily unavailable.") {
       ["[data-market-volume]", "[data-live-bounties]", "[data-completed-bounties]"].forEach((selector) => {
         doc.querySelector(selector).textContent = "—";
       });
-      doc.querySelector("[data-live-weekly]").textContent = "Ready-to-earn inventory unavailable";
+      doc.querySelector("[data-live-weekly]").textContent = "Open-now inventory unavailable";
       doc.querySelector("[data-completed-weekly]").textContent = "Canonical settlement history unavailable";
       const status = doc.querySelector("[data-market-status]");
       status.textContent = message;
@@ -691,11 +677,11 @@ ${competitionChildBrief(item)}`;
         const protocol = await requestJson("protocol.json");
         const apiBase = String(protocol?.api_base_url || "").replace(/\/$/, "");
         if (!/^https:\/\//.test(apiBase)) throw new Error("API discovery is unavailable");
-        const [platform, projection] = await Promise.all([
+        const [platform, inventory] = await Promise.all([
           requestJson(`${apiBase}/v1/metrics/platform?period=lifetime`),
-          requestJson(`${apiBase}/v1/opportunities?network=base-mainnet&view=ready_to_earn&source_type=canonical_base&work_state=claimable&payment_state=escrowed&limit=300&live=${Date.now()}`),
+          workflow.loadFundedInventory(win),
         ]);
-        applyMetricState(marketSnapshot(platform, projection));
+        applyMetricState(marketSnapshot(platform, inventory.payload));
       } catch (error) {
         applyUnavailableState();
       }

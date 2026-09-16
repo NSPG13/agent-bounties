@@ -49,9 +49,10 @@
         <label>
           <span>Availability</span>
           <select data-market-timing>
-            <option value="all">All ready opportunities</option>
-            <option value="now">Actionable now</option>
-            <option value="upcoming">Starts later</option>
+            <option value="now" selected>Open now</option>
+            <option value="upcoming">Upcoming</option>
+            <option value="ended">Scoring closed / proof stage</option>
+            <option value="all">All funded</option>
           </select>
         </label>
         <label>
@@ -59,7 +60,8 @@
           <select data-market-kind>
             <option value="all">All opportunities</option>
             <option value="direct">Direct tasks</option>
-            <option value="competition">Competitions / child funding</option>
+            <option value="competition">Competitions</option>
+            <option value="child_funding">Child-funding tasks</option>
           </select>
         </label>
         <p class="market-summary" data-market-summary aria-live="polite">Finding open, funded bounties…</p>
@@ -72,7 +74,7 @@
       <aside class="feed-aside">
         <section><p class="market-eyebrow">Have something in mind?</p><h2>Let someone build it.</h2><p>Describe the outcome. Your AI prepares the bounty; you review and fund it.</p><a class="market-button market-button-primary" href="./#post-a-bounty" data-new-bounty>+ Post a bounty</a></section>
         <section><h2>Your AI can help.</h2><p data-agent-guidance>Find a task, prepare the work and track payment. You confirm commitments and wallet requests.</p><a href="install/">Agent setup ↗</a></section>
-        <details><summary>How this board works</summary><p>Every visible opportunity passes the readiness rules for its own settlement mechanism. Rewards are funded in Base USDC. Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment.</p><a href="https://api.agentbounties.app/v1/opportunities?network=base-mainnet&amp;view=ready_to_earn&amp;source_type=canonical_base&amp;limit=300">View source data</a></details>
+        <details><summary>How this board works</summary><p>Every visible opportunity passes the readiness rules for its own settlement mechanism. Open now includes only work with confirmed current timing. Existing participants can choose Scoring closed / proof stage to continue their proof workflow; All funded also includes work with unconfirmed timing. Rewards are funded in Base USDC. Only a confirmed canonical <code>BountySettled</code> or <code>CompetitionSettledV2</code> event proves solver payment.</p><a href="https://api.agentbounties.app/v1/opportunities?network=base-mainnet&amp;view=ready_to_earn&amp;source_type=canonical_base&amp;limit=300">View source data</a></details>
       </aside>
     </main>
 
@@ -90,10 +92,10 @@
 <!-- shared-footer:end -->
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=6"></script>
-    <script src="marketplace-workflow.js?v=5"></script>
+    <script src="marketplace-workflow.js?v=6"></script>
     <script src="analytics-config.js?v=7"></script>
     <script src="analytics.js?v=4"></script>
-    <script src="marketplace.js?v=5"></script>
+    <script src="marketplace.js?v=6"></script>
     <script src="marketplace-navigation.js?v=1"></script>
   </body>
 </html>

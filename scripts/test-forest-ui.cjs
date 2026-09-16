@@ -43,7 +43,7 @@ async function main() {
         if (["/auth/account","/v1/site-auth/account"].includes(url.pathname)) return route.fulfill({json:{authenticated:true,account_status:account,account_complete:account==="ready",user:{id:"forest-qa",name:"Preview account",email:"preview@example.test"},wallets:account==="ready"?[{address:"0x"+"1".repeat(40),label:"Preview wallet",provider_id:"metamask",wallet_type:"browser",chain_ids:[8453],linked_at:"2026-09-10T00:00:00Z",last_verified_at:"2026-09-10T00:00:00Z"}]:[],data_status:"unavailable",reason:"marketplace_evidence_unavailable"}});
         if (url.pathname.endsWith("/leaderboard")) return route.fulfill({status:mode==="offline"?503:200,json:mode==="invalid"?{}:leaderboard(mode==="ready")});
         if (url.pathname === "/v1/metrics/platform") return route.fulfill({json:{marketplace_payout_volume:{lifetime:{usdc:"1000.25"},lifetime_settled_rounds:1234},daily:[]}});
-        if (url.pathname === "/v1/opportunities") return route.fulfill({json:{applied_view:"ready_to_earn",degraded:false,source_statuses:[{source_type:"canonical_base",available:true}],items:[]}});
+        if (url.pathname === "/v1/opportunities") return route.fulfill({json:{schema_version:"agent-bounties/opportunity-projection-v1",network:"base-mainnet",applied_view:"ready_to_earn",degraded:false,source_statuses:[{source_type:"canonical_base",available:true}],items:[]}});
         if (url.pathname === "/phone-wallet-config.js") return route.fulfill({body:"window.agentBountiesPhoneWalletConfig={};",contentType:"text/javascript"});
         if (url.origin !== origin) return route.fulfill({status:503,body:"Isolated fixture"});
         return route.continue();
@@ -71,6 +71,12 @@ async function main() {
       assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
       assert.equal(await page.locator(".ab-only").evaluate(el => getComputedStyle(el).transform), "none");
       assert.equal(await page.locator(".ab-funding-note").count(), 0);
+      const inputLines = await page.locator("#home-task").evaluate(el => {
+        const css = getComputedStyle(el);
+        return { visible: (el.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)) / parseFloat(css.lineHeight), wrap: css.whiteSpace };
+      });
+      assert.equal(inputLines.visible, width <= 700 ? 2 : 1, "two visible mobile lines and one desktop line");
+      assert.equal(inputLines.wrap, width <= 700 ? "pre-wrap" : "pre");
       assert.match(await page.locator(".ab-faq article").first().innerText(), /rejected result does not pay the solver.*another attempt.*refundable.*cancellation.*withdraw their refund/s);
       assert.equal(await page.locator("[data-outcome-word]").evaluate(el => getComputedStyle(el).backgroundColor), "rgb(142, 228, 107)");
       if (width >= 1280) assert.ok(await page.locator("#hero-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 64), "desktop headline is larger");
@@ -146,7 +152,10 @@ async function main() {
       await page.locator("[data-auth-close]").click();
       if(width===390) {
         for(const provider of ["google","microsoft","github"]) {
-          await page.goto(origin+"/#login");
+          // Force a fresh document; a late close event on the previous dialog
+          // can otherwise remove the hash during same-document navigation.
+          await page.goto(origin+`/?providerFixture=${provider}#login`);
+          await page.locator("[data-auth-dialog][open]").waitFor();
           await page.waitForFunction(key=>document.querySelector(`[data-auth-provider="${key}"]`).getAttribute("aria-disabled")==="false",provider);
           await page.locator(`[data-auth-provider="${provider}"]`).click();
           await page.waitForURL(`**/auth/login/${provider}`);

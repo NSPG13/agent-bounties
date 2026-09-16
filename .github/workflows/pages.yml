@@ -19,6 +19,7 @@ on:
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
       - "scripts/test-marketplace-ui.js"
+      - "scripts/fixtures/opportunities-audit-20260916.json"
       - "scripts/test-webmcp.js"
       - "scripts/test-meta-child.js"
       - "scripts/fixtures/meta-child-plan.json"
@@ -61,6 +62,7 @@ on:
       - "scripts/test-ai-bounty-handoff.js"
       - "scripts/test-metrics-dashboard.js"
       - "scripts/test-marketplace-ui.js"
+      - "scripts/fixtures/opportunities-audit-20260916.json"
       - "scripts/test-webmcp.js"
       - "scripts/test-meta-child.js"
       - "scripts/fixtures/meta-child-plan.json"
@@ -309,7 +311,7 @@ jobs:
           curl --fail --silent --show-error --location "https://agentbounties.app/.well-known/agent-bounties.json?verify=${nonce}" -o /tmp/live-discovery.json
           grep -q 'data-scene-root' /tmp/live-index.html
           grep -q 'data-home-task' /tmp/live-index.html
-          grep -q 'All ready opportunities' /tmp/live-earn.html
+          grep -q '<option value="now" selected>Open now</option>' /tmp/live-earn.html
           grep -q 'data-posted-notice' /tmp/live-earn.html
           grep -q 'data-funded-receipt' /tmp/live-funded.html
           grep -q 'workspace-shell' /tmp/live-participate.html
