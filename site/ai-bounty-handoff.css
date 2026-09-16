@@ -2,10 +2,10 @@
   align-self: flex-start;
   width: min(100%, 720px);
   padding: 22px;
-  border: 1px solid rgba(200, 245, 72, 0.28);
+  border: 1px solid rgba(168, 217, 139, 0.28);
   border-radius: 22px;
   background:
-    radial-gradient(circle at 100% 0, rgba(200, 245, 72, 0.12), transparent 16rem),
+    radial-gradient(circle at 100% 0, rgba(168, 217, 139, 0.12), transparent 16rem),
     #0b1810;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
   animation: chat-message-in 180ms ease both;
@@ -43,7 +43,7 @@
   padding: 12px 14px;
   border-left: 3px solid var(--chat-lime);
   border-radius: 0 12px 12px 0;
-  background: rgba(200, 245, 72, 0.07);
+  background: rgba(168, 217, 139, 0.07);
 }
 
 .ai-original span {
@@ -69,7 +69,7 @@
 .ai-provider-grid button,
 .ai-mcp-row button,
 .ai-prompt-details > button {
-  border: 1px solid rgba(200, 245, 72, 0.25);
+  border: 1px solid rgba(168, 217, 139, 0.25);
   border-radius: 14px;
   background: #112019;
   color: var(--chat-text);
@@ -85,8 +85,8 @@
 .ai-provider-grid button:hover,
 .ai-mcp-row button:hover,
 .ai-prompt-details > button:hover {
-  border-color: rgba(200, 245, 72, 0.72);
-  background: rgba(200, 245, 72, 0.1);
+  border-color: rgba(168, 217, 139, 0.72);
+  background: rgba(168, 217, 139, 0.1);
 }
 
 .ai-provider-grid strong,

@@ -24,7 +24,7 @@
   display: grid;
   gap: 1rem;
   box-sizing: border-box;
-  border: 1px solid rgba(201, 245, 72, 0.28);
+  border: 1px solid rgba(168, 217, 139, 0.28);
   border-radius: 1rem;
   padding: 1.25rem;
   color: #f4f6ef;
@@ -85,7 +85,7 @@
 .wallet-auth-notice {
   margin: 0;
   color: #dff5ad;
-  background: rgba(201, 245, 72, 0.1);
+  background: rgba(168, 217, 139, 0.1);
 }
 
 .wallet-auth-account,
@@ -130,14 +130,14 @@
 .wallet-auth-actions > button {
   min-height: 2.75rem;
   padding: .65rem 1rem;
-  border: 1px solid rgba(201, 245, 72, .4);
+  border: 1px solid rgba(168, 217, 139, .4);
   border-radius: .5rem;
   font: inherit;
   color: #f4f6ef;
   background: #18321f;
   cursor: pointer;
 }
-.wallet-auth-actions > button.primary { color: #102015; background: #c3e66a; }
+.wallet-auth-actions > button.primary { color: #102015; background: #a8d98b; }
 .wallet-auth-actions > button:disabled { opacity: .5; cursor: default; }
 .wallet-auth-message { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font-size: .8rem; }
 

@@ -5,7 +5,7 @@
   --chat-line: rgba(255, 255, 255, 0.11);
   --chat-text: #f3f5ef;
   --chat-muted: #98a39b;
-  --chat-lime: #c8f548;
+  --chat-lime: #a8d98b;
   --chat-mint: #7cefd1;
 }
 html,
@@ -72,7 +72,7 @@ body.chat-app-page {
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(200, 245, 72, 0.55);
+  border: 1px solid rgba(168, 217, 139, 0.55);
   border-radius: 9px;
   color: var(--chat-lime);
   font-size: 13px;
@@ -132,7 +132,7 @@ body.chat-app-page {
   overflow-y: auto;
   overscroll-behavior: contain;
   scroll-behavior: smooth;
-  scrollbar-color: rgba(200, 245, 72, 0.28) transparent;
+  scrollbar-color: rgba(168, 217, 139, 0.28) transparent;
 }
 
 .conversation-message {
@@ -162,7 +162,7 @@ body.chat-app-page {
 }
 
 .conversation-message[data-role="user"] .conversation-bubble {
-  border-color: rgba(200, 245, 72, 0.26);
+  border-color: rgba(168, 217, 139, 0.26);
   border-radius: 18px 18px 5px 18px;
   background: rgba(166, 207, 54, 0.16);
   color: #f7f9f1;
@@ -260,8 +260,8 @@ body.chatgpt-handoff-review {
 }
 
 .chat-composer-input-wrap:focus-within {
-  border-color: rgba(200, 245, 72, 0.48);
-  box-shadow: 0 0 0 3px rgba(200, 245, 72, 0.06), 0 14px 36px rgba(0, 0, 0, 0.24);
+  border-color: rgba(168, 217, 139, 0.48);
+  box-shadow: 0 0 0 3px rgba(168, 217, 139, 0.06), 0 14px 36px rgba(0, 0, 0, 0.24);
 }
 
 .chat-app-page #bounty-composer-input {
@@ -377,7 +377,7 @@ body.chatgpt-handoff-review {
   display: block;
   width: 100%;
   overflow: hidden;
-  border: 1px solid rgba(200, 245, 72, 0.28);
+  border: 1px solid rgba(168, 217, 139, 0.28);
   border-radius: 20px;
   background: #0b1810;
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
@@ -583,7 +583,7 @@ body.chatgpt-handoff-review {
   max-height: min(760px, calc(100dvh - 32px));
   padding: 0;
   overflow: auto;
-  border: 1px solid rgba(200, 245, 72, 0.28);
+  border: 1px solid rgba(168, 217, 139, 0.28);
   border-radius: 20px;
   background: #0a1710;
   color: var(--chat-text);
