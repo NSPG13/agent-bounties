@@ -52,12 +52,61 @@
   }
   function phase(item, now = Date.now()) {
     const scoring = item?.evidence_requirements?.scoring_window;
-    if (!scoring) return "now";
-    const start = Date.parse(scoring.starts_at), end = Date.parse(scoring.ends_at);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return "unavailable";
-    if (now < start) return "upcoming";
-    if (now < end) return "now";
-    return "ended";
+    if (!Number.isFinite(now) || participationKind(item) === "unknown") return "unavailable";
+    if (scoring) {
+      const start = Date.parse(scoring.starts_at), end = Date.parse(scoring.ends_at);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return "unavailable";
+      if (now < start) return "upcoming";
+      if (now < end) return "now";
+      return "ended";
+    }
+    // A V2 proof deadline cannot substitute for its missing scoring window.
+    if (isV2(item)) return "unavailable";
+    const deadline = Date.parse(item?.deadline || "");
+    if (!Number.isFinite(deadline)) return "unavailable";
+    return now < deadline ? "now" : "closed";
+  }
+  function opportunityDeadline(item, now = Date.now()) {
+    const scoring = item?.evidence_requirements?.scoring_window;
+    const end = Date.parse(scoring?.ends_at || ""), start = Date.parse(scoring?.starts_at || "");
+    // Once scoring closes, participants need the remaining proof deadline.
+    if (Number.isFinite(start) && Number.isFinite(end) && start < end && now < end) return end;
+    const deadline = Date.parse(item?.deadline || "");
+    return Number.isFinite(deadline) ? deadline : Infinity;
+  }
+  function sortOpportunities(items, now = Date.now()) {
+    return [...items].sort((a, b) =>
+      Number(participationKind(b) === "direct") - Number(participationKind(a) === "direct")
+      || opportunityDeadline(a, now) - opportunityDeadline(b, now)
+      || String(a.opportunity_id).localeCompare(String(b.opportunity_id)));
+  }
+  function inventoryCounts(items, now = Date.now()) {
+    const counts = { now: 0, upcoming: 0, ended: 0, closed: 0, unavailable: 0, direct: 0, competition: 0, child_funding: 0, unknown: 0 };
+    for (const item of items) {
+      const timing = phase(item, now);
+      counts[timing]++;
+      if (timing === "now") counts[participationKind(item)]++;
+    }
+    return counts;
+  }
+  function fundedInventory(payload) {
+    if (payload?.schema_version !== "agent-bounties/opportunity-projection-v1" || payload.network !== NETWORK
+      || payload.applied_view !== "ready_to_earn" || payload.degraded !== false || !Array.isArray(payload.items)) {
+      throw new Error("Funded inventory evidence is incomplete.");
+    }
+    const canonical = payload.source_statuses?.find?.((source) => source?.source_type === "canonical_base");
+    if (canonical?.available !== true || payload.items.some((item) => !ready(item))) {
+      throw new Error("Canonical inventory evidence is unavailable.");
+    }
+    return { payload, items: payload.items };
+  }
+  function opportunityFeedUrl(location) {
+    return `${apiBase(location)}/v1/opportunities?network=${NETWORK}&view=ready_to_earn&source_type=canonical_base&limit=300`;
+  }
+  async function loadFundedInventory(win) {
+    const response = await win.fetch(opportunityFeedUrl(win.location), { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`Funded inventory request failed (${response.status}).`);
+    return fundedInventory(await response.json());
   }
   function detailUrl(item) {
     if (!ADDRESS.test(item?.source_id) || item.network !== NETWORK) throw new Error("The opportunity has no supported canonical address.");
@@ -276,5 +325,5 @@
       },
     };
   }
-  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
+  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, opportunityDeadline, sortOpportunities, inventoryCounts, fundedInventory, opportunityFeedUrl, loadFundedInventory, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
 });

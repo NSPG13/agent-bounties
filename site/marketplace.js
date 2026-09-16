@@ -18,7 +18,7 @@
   }
 
   function opportunityFeedUrl(locationLike) {
-    return `${apiBase(locationLike)}/v1/opportunities?network=${NETWORK}&view=ready_to_earn&source_type=canonical_base&limit=300`;
+    return workflow.opportunityFeedUrl(locationLike);
   }
 
   function amountNumber(amount) {
@@ -54,16 +54,17 @@
   }
 
   function timingState(item, nowMs = Date.now()) {
-    if (workflow.phase(item, nowMs) === "unavailable") return { phase: "unavailable", label: "Timing unavailable", detail: "Refresh the committed scoring window before continuing." };
+    const phase = workflow.phase(item, nowMs);
+    if (phase === "unavailable") return { phase, label: "Timing unavailable", detail: "Opening time could not be confirmed. Review the committed terms before continuing." };
     const window = scoringWindow(item);
-    if (!window) return { phase: "now", label: "Ready now", detail: deadlineText(item?.deadline) };
-    if (nowMs < window.startsAt) {
+    if (!window) return { phase, label: phase === "now" ? "Open now" : "Deadline passed", detail: deadlineText(item?.deadline) };
+    if (phase === "upcoming") {
       return { phase: "upcoming", label: `Starts in ${duration(window.startsAt - nowMs)}`, detail: windowLabel(window) };
     }
-    if (nowMs < window.endsAt) {
+    if (phase === "now") {
       return { phase: "now", label: `Scoring now · ${duration(window.endsAt - nowMs)} left`, detail: windowLabel(window) };
     }
-    return { phase: "ended", label: "Scoring closed · proof phase", detail: windowLabel(window) };
+    return { phase: "ended", label: "Scoring closed / proof stage", detail: `${windowLabel(window)} · ${deadlineText(item?.deadline)}` };
   }
 
   function duration(milliseconds) {
@@ -81,7 +82,7 @@
 
   function deadlineText(value) {
     const parsed = Date.parse(value || "");
-    return Number.isFinite(parsed) ? `Deadline ${new Date(parsed).toLocaleString()}` : "Canonical readiness confirmed";
+    return Number.isFinite(parsed) ? `Deadline ${new Date(parsed).toLocaleString()}` : "Deadline unavailable";
   }
 
   function detailUrl(item) { return workflow.detailUrl(item); }
@@ -114,48 +115,42 @@
     const reward = formatUsdc(item.reward);
     const decision = decisionContext(item);
     const kind = workflow.participationKind(item);
-    const kindLabel = kind === "direct" ? "Direct task" : kind === "child_funding" ? "Fund child work" : kind === "competition" ? "Competition" : "Review participation terms";
+    const kindLabel = kind === "direct" ? "Direct task" : kind === "child_funding" ? "Child-funding task" : kind === "competition" ? "Competition" : "Review participation terms";
     const costNote = kind === "direct" ? "Review the refundable bond, gas and execution costs before claiming." : "Review required spending and winning conditions before participating.";
     const entries = Number.isInteger(item.entry_count) ? `${item.entry_count} accepted ${item.entry_count === 1 ? "entry" : "entries"}` : "Open participation";
     const categories = Array.isArray(item.categories) ? item.categories.slice(0, 3) : [];
     const scene = ["day", "dawn", "dusk", "night"][Array.from(String(item.source_id)).reduce((sum, c) => sum + c.charCodeAt(0), 0) % 4];
     const url = text(detailUrl(item));
-    return `<article class="opportunity-row" id="bounty-${text(item.source_id)}" data-phase="${timing.phase}" style="animation-delay:${Math.min(index * 45, 360)}ms">
+    const actionLabel = timing.phase === "ended" ? "Continue to proof stage →" : timing.phase === "upcoming" || timing.phase === "unavailable" || timing.phase === "closed" ? "Review opportunity →" : isV2(item) ? "Calculate and participate" : "View bounty →";
+    return `<article class="opportunity-row" id="bounty-${text(item.source_id)}" data-phase="${timing.phase}" data-kind="${kind}" style="animation-delay:${Math.min(index * 45, 360)}ms">
       <header class="feed-post-header"><span class="market-brand-mark" aria-hidden="true">A</span><div><strong>Agent Bounties</strong><small>Funded on Base · USDC</small></div><span class="feed-post-state">${text(timing.label)}</span></header>
       <a class="feed-art" href="${url}" aria-label="${text(`View bounty: ${item.title}`)}"><img src="assets/solarpunk/scene-${scene}.webp?v=2" alt="" width="1536" height="1024" loading="${index ? "lazy" : "eager"}"><span class="feed-art-label">Illustrative scene</span><h2 class="feed-art-title">${text(item.title)}</h2></a>
-      <div class="feed-post-body"><div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))}<small>USDC ${isV2(item) ? "prize" : "solver reward"}</small></span><a class="market-button market-button-primary" href="${url}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">${isV2(item) ? "Calculate and participate" : "View bounty →"}</a></div>
+      <div class="feed-post-body"><div class="opportunity-action"><span class="opportunity-reward">${text(reward.replace(" USDC", ""))}<small>USDC ${isV2(item) ? "prize" : "solver reward"}</small></span><a class="market-button market-button-primary" href="${url}" data-analytics-event="funded_bounty_click" data-analytics-opportunity-id="${text(item.opportunity_id)}" data-analytics-bounty-contract="${text(item.source_id)}">${actionLabel}</a></div>
       <div class="opportunity-main"><p>${text(item.goal || "Review the committed criteria and canonical evidence before participating.")}</p><div class="opportunity-meta"><span>${text(kindLabel)}</span><span>${text(entries)}</span>${categories.map((category) => `<span>${text(category)}</span>`).join("")}</div></div>
       <p class="opportunity-cost-note">${text(costNote)}</p><div class="opportunity-timing" data-phase="${timing.phase}"><time>${text(timing.detail)}</time></div>${decision ? `<span class="opportunity-margin"><strong>${text(decision.win)}</strong><br>${text(decision.loss)}</span>` : ""}</div>
     </article>`;
   }
 
-  function filterItems(items, search, timing, nowMs, kind = "all") {
+  function filterItems(items, search, timing = "now", nowMs = Date.now(), kind = "all") {
     const needle = String(search || "").trim().toLowerCase();
-    return items.filter((item) => {
-      if (kind === "direct" && workflow.participationKind(item) !== "direct") return false;
-      if (kind === "competition" && !["competition", "child_funding"].includes(workflow.participationKind(item))) return false;
-      const phase = timingState(item, nowMs).phase;
-      if (timing === "now" && phase !== "now") return false;
-      if (timing === "upcoming" && phase !== "upcoming") return false;
+    return workflow.sortOpportunities(items.filter((item) => {
+      if (kind !== "all" && workflow.participationKind(item) !== kind) return false;
+      const phase = workflow.phase(item, nowMs);
+      if (timing !== "all" && phase !== timing) return false;
       if (!needle) return true;
       return [item.title, item.goal, ...(item.categories || []), ...(item.skills || [])]
         .join(" ").toLowerCase().includes(needle);
-    });
+    }), nowMs);
   }
 
-  function emptyState(kind) {
+  function emptyState(kind, timingUnavailable = 0) {
+    if (timingUnavailable) return '<div class="market-empty"><h2>No matching work with confirmed timing.</h2><p>Timing is unavailable for some funded opportunities. Choose All funded to inspect their terms, or refresh later. The number open now is unconfirmed.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear search and work type</button></div>';
     return kind === "direct"
-      ? '<div class="market-empty"><h2>No direct tasks in this view.</h2><p>Direct tasks pay for completing someone else’s work. Competitions and child-funding opportunities have separate costs and winning conditions. You can check those or refresh later for direct work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Show all opportunities</button></div>'
+      ? '<div class="market-empty"><h2>No direct tasks in this view.</h2><p>Direct tasks pay for completing someone else’s work. Competitions and child-funding opportunities have separate costs and winning conditions. You can check those or refresh later for direct work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Show all work types</button></div>'
       : '<div class="market-empty"><h2>No bounties in this view.</h2><p>Try another search or availability filter, or refresh later for new funded work.</p><button class="market-button market-button-secondary" type="button" data-market-clear>Clear filters</button></div>';
   }
 
-  async function loadOpportunities(win) {
-    const response = await win.fetch(opportunityFeedUrl(win.location), { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`Unified inventory request failed (${response.status})`);
-    const payload = await response.json();
-    if (payload.schema_version !== "agent-bounties/opportunity-projection-v1" || !Array.isArray(payload.items)) throw new Error("Unified inventory schema is invalid");
-    return { payload, items: payload.items.filter(isReadyToEarn) };
-  }
+  async function loadOpportunities(win) { return workflow.loadFundedInventory(win); }
 
   function startBoard(win, doc) {
     const list = doc.querySelector("[data-opportunity-list]");
@@ -182,15 +177,12 @@
         if (notice) notice.hidden = true;
         return;
       }
-      const visible = filterItems(items, search?.value, timing?.value || "all", nowMs, kind?.value || "all");
-      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : emptyState(kind?.value);
-      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (timing) timing.value = "all"; if (kind) kind.value = "all"; render(); search?.focus(); });
+      const counts = workflow.inventoryCounts(items, nowMs);
+      const visible = filterItems(items, search?.value, timing?.value || "now", nowMs, kind?.value || "all");
+      list.innerHTML = visible.length ? visible.map((item, index) => renderOpportunity(item, index, nowMs)).join("") : emptyState(kind?.value, counts.unavailable);
+      list.querySelector?.("[data-market-clear]")?.addEventListener("click", () => { if (search) search.value = ""; if (kind) kind.value = "all"; render(); search?.focus(); });
       list.setAttribute("aria-busy", "false");
-      const nowCount = items.filter((item) => timingState(item, nowMs).phase === "now").length;
-      const futureCount = items.filter((item) => timingState(item, nowMs).phase === "upcoming").length;
-      const endedCount = items.filter((item) => timingState(item, nowMs).phase === "ended").length;
-      const directCount = items.filter((item) => workflow.participationKind(item) === "direct").length;
-      if (summary) summary.textContent = `${items.length} funded opportunities · ${directCount} direct tasks · ${nowCount} actionable now${endedCount ? ` · ${endedCount} scoring closed` : ""}${futureCount ? ` · ${futureCount} starts later` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
+      if (summary) summary.textContent = `${counts.now} ${counts.unavailable ? "confirmed " : ""}open now (${counts.direct} direct tasks · ${counts.competition} competitions · ${counts.child_funding} child-funding tasks) · ${counts.ended} scoring closed · ${counts.upcoming} upcoming · ${items.length} funded${counts.unavailable ? ` · Timing unavailable for ${counts.unavailable}; open-now total unconfirmed` : ""}${counts.closed ? ` · ${counts.closed} past deadline` : ""}${generatedAt ? ` · refreshed ${new Date(generatedAt).toLocaleTimeString()}` : ""}`;
       if (notice && postedContract) {
         const match = items.find((item) => item.source_id.toLowerCase() === postedContract);
         notice.hidden = false;
@@ -209,8 +201,6 @@
       try {
         const { payload, items: ready } = await loadOpportunities(win);
         items = ready;
-        // Pin only an exact match from current ready inventory, never a URL claim.
-        if (postedContract) items.sort((a, b) => Number(b.source_id.toLowerCase() === postedContract) - Number(a.source_id.toLowerCase() === postedContract));
         generatedAt = payload.generated_at;
       } catch (error) { items = []; failure = error; }
       finally { loading = false; if (refresh) refresh.disabled = false; render(); }

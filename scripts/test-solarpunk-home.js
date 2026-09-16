@@ -226,6 +226,11 @@ function readyItem(overrides = {}) {
     payment_state: "escrowed",
     payment_committed: true,
     verification_ready: true,
+    source_id: "0x" + "1".repeat(40), network: "base-mainnet", source_status: "claimable",
+    competition_mode: "exclusive_claim", terms_hash: "0xabc", deadline: "2026-09-01T00:00:00Z",
+    reward: { amount: "1000000", decimals: 6, unit: "base_units" },
+    funded_amount: { amount: "1000000", decimals: 6, unit: "base_units" },
+    funding_target: { amount: "1000000", decimals: 6, unit: "base_units" },
     created_at: "2026-08-20T12:00:00Z",
     ...overrides,
   };
@@ -233,6 +238,7 @@ function readyItem(overrides = {}) {
 
 function evidence(overrides = {}) {
   return {
+    schema_version: "agent-bounties/opportunity-projection-v1", network: "base-mainnet",
     applied_view: "ready_to_earn",
     degraded: false,
     source_statuses: [{ source_type: "canonical_base", available: true }],
@@ -261,7 +267,7 @@ test("market snapshot exposes only truthful canonical evidence", () => {
     payout: 23.75,
     live: 2,
     completed: 12,
-    addedThisWeek: 1,
+    availability: { now: 2, upcoming: 0, ended: 0, closed: 0, unavailable: 0, direct: 2, competition: 0, child_funding: 0, unknown: 0 },
     completedThisWeek: 2,
   });
 });
