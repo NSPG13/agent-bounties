@@ -1,5 +1,5 @@
 :root {
-  --simple-lime: #c9ff3d;
+  --simple-lime: #a8d98b;
   --simple-panel: rgba(5, 24, 15, 0.92);
   --simple-line: rgba(190, 238, 74, 0.28);
   --simple-muted: #b9c7bd;
@@ -92,7 +92,7 @@ body.guild-interior .cancel-hero h1 {
   border: 1px solid var(--simple-line);
   border-radius: 18px;
   background:
-    radial-gradient(circle at 100% 0, rgba(185, 239, 55, .1), transparent 13rem),
+    radial-gradient(circle at 100% 0, rgba(168, 217, 139, .1), transparent 13rem),
     linear-gradient(145deg, rgba(12, 34, 23, .96), rgba(3, 17, 10, .98));
 }
 

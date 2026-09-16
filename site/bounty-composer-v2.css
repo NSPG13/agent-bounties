@@ -32,7 +32,7 @@
 .mission-horizon {
   display: inline-flex;
   margin-top: 10px;
-  border: 1px solid rgba(201, 245, 72, 0.22);
+  border: 1px solid rgba(168, 217, 139, 0.22);
   border-radius: 999px;
   padding: 6px 10px;
   color: var(--composer-lime);
@@ -60,8 +60,8 @@
 }
 
 .mission-task-option:has(input:checked) {
-  border-color: rgba(201, 245, 72, 0.65);
-  background: rgba(201, 245, 72, 0.075);
+  border-color: rgba(168, 217, 139, 0.65);
+  background: rgba(168, 217, 139, 0.075);
 }
 
 .mission-task-option input {
