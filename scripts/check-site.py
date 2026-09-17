@@ -21,6 +21,7 @@ CANONICAL_PAGES = {
     "competition.html": "https://agentbounties.app/competition.html",
     "participate.html": "https://agentbounties.app/participate.html",
     "funded.html": "https://agentbounties.app/funded.html",
+    "recover-bounty.html": "https://agentbounties.app/recover-bounty.html",
     "about.html": "https://agentbounties.app/about.html",
     "blog/index.html": "https://agentbounties.app/blog/",
     "blog/agentic-economy-needs-a-market-for-work.html": "https://agentbounties.app/blog/agentic-economy-needs-a-market-for-work.html",
@@ -194,6 +195,9 @@ REQUIRED_FILES = {
     "x402-test-vectors.json",
 }
 ALLOWED_UI_CODE = {
+    "bounty-recovery.js",
+    "bounty-recovery-page.js",
+    "bounty-recovery.css",
     "forest-ui.css",
     "forest-theme.js",
     "forest-home.js",
@@ -1333,6 +1337,10 @@ def check_install_distribution(repo_root: Path, site_dir: Path) -> None:
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     site_dir = repo_root / "site"
+    recovery_node = shutil.which("node")
+    if not recovery_node:
+        fail("Node.js is required for the recovery safety checks")
+    subprocess.run([recovery_node, "--test", str(repo_root / "scripts/test-bounty-recovery.cjs")], check=True)
     for relative in sorted(REQUIRED_FILES | EXPECTED_SCENE_ASSETS):
         if not (site_dir / relative).exists():
             fail(f"missing required site file: {relative}")
