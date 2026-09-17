@@ -27,3 +27,5 @@ PR #1451 still owns saved provider quotes and its separate hosted-runtime interf
 Rollback: revert this frontend commit and restore its prior asset versions. No migration or purchase retry is necessary. Never replay an uncertain transaction as part of rollback.
 
 The embedded-wallet release fixtures also use the new wallet labels. Its browser gate (`test-readiness.mjs`, `test-posting-requests.mjs`, `test-account-link.mjs`) passes all 36 checks with the real chooser and a simulated external SDK. Optional local API/PostgreSQL flow fixtures use the same labels; their missing-terms case checks the disabled button and visible explanation without weakening the no-signature/no-submission assertions. Those optional integration suites were not rerun for the selector-only follow-up.
+
+A second release harness follow-up stubs the presentation callback in the two VM tests that extract the funding function in isolation. All financial assertions remain unchanged. The broader posting, phone SDK/network, meta-child, competition, handoff and marketplace set now passes 256 checks locally, including the exact group that failed in hosted CI before the harness update.
