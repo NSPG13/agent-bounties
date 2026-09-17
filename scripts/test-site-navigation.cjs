@@ -2,6 +2,7 @@
 // Isolated browser tests. Fixtures only; no real accounts, wallet requests or payments.
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), http = require("node:http");
 const { chromium } = require("../tools/browser-layout/node_modules/playwright");
+const assertHeadingLayout = require("./assert-heading-layout.cjs");
 const site = path.resolve(__dirname, "../site");
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".webp": "image/webp" };
 const pages = fs.readdirSync(site, { recursive: true }).filter(file => file.endsWith(".html")).map(file => file.replaceAll("\\", "/")).sort((a, b) => a === "index.html" ? -1 : b === "index.html" ? 1 : a.localeCompare(b));
@@ -84,6 +85,7 @@ async function main() {
         }
         await page.goto(`${origin}/${file}`);
         await page.locator(".ab-site-header.is-enhanced").waitFor();
+        await assertHeadingLayout(page, `${file} at ${width}px`);
         assert.equal(await page.locator("[data-site-header]").count(), 1, file);
         assert.equal(await page.locator("body > .ab-footer").count(), 1, `one page footer outside article cards: ${file}`);
         assert.equal(await page.locator(".ab-footer").count(), 1, file);
