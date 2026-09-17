@@ -27,14 +27,14 @@
     return target > available ? target - available : 0n;
   }
 
-  async function readBalances({ wallet, usdcAddress = BASE_USDC, provider = null, timeoutMs = 12000 } = {}) {
+  async function readBalances({ wallet, usdcAddress = BASE_USDC, provider = null, usePublicRpc = false, timeoutMs = 12000 } = {}) {
     if (!ADDRESS.test(wallet || "")) throw new Error("A valid public Base wallet address is required.");
     if (String(usdcAddress).toLowerCase() !== BASE_USDC) throw new Error("Balance checks require native Base USDC.");
     const controller = new AbortController();
     let timeout;
     const request = async (method, params) => {
       let result;
-      if (provider) {
+      if (provider && !usePublicRpc) {
         result = await provider.request({ method, params });
       } else {
         const response = await fetch("https://mainnet.base.org", {
@@ -53,6 +53,14 @@
     try {
       return await Promise.race([
         (async () => {
+          // WalletConnect's public RPC transport can stall independently of an
+          // approved phone session. Keep signing on the phone, but read public
+          // balances directly after checking the actual wallet network.
+          if (provider && usePublicRpc) {
+            const walletChain = await provider.request({ method: "eth_chainId" });
+            if (typeof walletChain !== "string" || !HEX.test(walletChain)) throw new Error("The wallet returned an invalid network response.");
+            if (BigInt(walletChain) !== 8453n) throw new Error("Choose Base mainnet before checking funding readiness.");
+          }
           const chainId = await request("eth_chainId", []);
           if (BigInt(chainId) !== 8453n) throw new Error("Choose Base mainnet before checking funding readiness.");
           const blockNumber = await request("eth_blockNumber", []);
