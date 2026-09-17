@@ -67,3 +67,21 @@ Regression: old starting amount 25, actual deposit 20 USDC, bounty requirement
 order. Also covered: partial deposit, failed RPC after a successful read,
 reload, popup failure, missing ETH, MetaMask, saved-address vs live-connection
 status, and no wallet writes or implicit account request.
+
+
+## MoonPay wallet choice containment (2026-09-17)
+
+Generic MoonPay buy links are now blocked because they lose the selected funding
+wallet. Card checkout stays visibly unavailable until a live signed checkout
+preserves that wallet and Base asset. The existing provider configuration is
+sandbox-only; this release does not activate it or change provider secrets.
+
+**Use money in MoonPay** shows the shortfall, Base network, exact receiving
+address and sending-fee requirement. It is also reachable for an older purchase
+that delivered into a MoonPay account wallet. It preserves the original order
+and posting operation, watches the selected wallet, and resumes the saved review.
+MoonPay can send Base USDC; its app's direct bounty signing is unverified here.
+
+Regression coverage includes the generic-link block, no purchase side effect,
+recovery without clearing an old order, partial deposits, sufficient USDC with no
+ETH, automatic readiness, and layouts at 390, 532 and 1280 pixels.

@@ -1,17 +1,16 @@
-> Current guided UI: start at **Add money**, then choose a wallet app or card.
-> The public MoonPay/MetaMask path asks for the amount only at the provider.
-> Sign-up/sign-in, fees and final purchase confirmation happen there. Wallet
-> balances update automatically every five seconds while the page is visible.
-> Enough wallet funds unlock the saved bounty review even when the purchase
-> status is unverified; the pending order remains protected from duplication.
-> See [the current guide](simple-funding-guide.md#shorter-top-up-follow-up-2026-09-17).
-> The signed partner checkout details below retain their existing API contract.
+> Current status (2026-09-17): generic MoonPay purchase links are disabled.
+> They can select a MoonPay account wallet instead of the user's bounty wallet.
+> The primary card alternative is the user's wallet app. **Use money in MoonPay**
+> explains how to send existing Base USDC to the exact saved funding address.
+> The live signing endpoint currently returns sandbox checkout; this is not
+> production activation. Do not enable MoonPay card checkout until the release
+> checklist below has been completed with a live, wallet-bound checkout.
 
 # MoonPay wallet on-ramp
 
 > Public UI status: active after deployment at
 > `https://agentbounties.app/onramp.html`. The page offers the signed MoonPay
-> path when configured and the bounded public-consumer fallback otherwise.
+> path only after live destination checks; the public-consumer fallback is blocked.
 
 This integration adds a bounded MoonPay wallet-top-up step without changing the autonomous bounty protocol. The ChatGPT app exposes only a first-party handoff planner; provider checkout and every wallet or purchase step remain outside ChatGPT.
 
@@ -90,22 +89,49 @@ record. Provider API/order reconciliation remains required to prove a
 particular purchase completed; confirmed bounty events remain required for
 bounty funding.
 
-## Direct consumer fallback
+## Preserve wallet choice
 
-The on-ramp page also exposes a bounded manual fallback through MoonPay's public consumer pages:
+The generic consumer links do not accept a trusted wallet handoff. Appending
+unsigned wallet query parameters is not a supported substitute for server
+signing. The page no longer opens those links or labels them a working funding
+route. The controller blocks them before opening a tab or recording a purchase,
+even if stale UI or an old caller invokes `openDirectCheckout("moonpay")`.
 
-- `https://www.moonpay.com/buy/usdc`
-- `https://www.moonpay.com/buy/eth`
+A direct checkout must preserve the exact destination address, the chosen Base
+asset, and the bounty context in a server-signed URL. The browser rejects sandbox,
+a mismatched address or asset, a non-Base currency code, duplicate destination
+parameters, and an unsigned or non-approved host. Changing wallet must require
+an explicit user choice and a newly reviewed checkout. The user's quote, purchase,
+legal and wallet confirmations stay at the provider; ownership is not signing
+consent. New-bounty checkout must preserve the posting operation without demanding
+a pre-existing bounty contract or a duplicate amount form. That new-bounty
+partner route and live provider activation remain prerequisites, not capabilities
+claimed by this containment release.
 
-This keeps Base wallet top-up available when Agent Bounties' MoonPay partner credentials are not yet active or the signed checkout service is unavailable. It is deliberately less seamless than the partner checkout:
+## Use existing money in MoonPay
 
-1. Agent Bounties does not append the wallet, asset, network, amount, API key, or signature to the public URL.
-2. A visible Copy button makes the exact saved wallet address available. The connection badge only says connected after an existing session is checked.
-3. Inside MoonPay, sign up or sign in, choose the amount, select USDC or ETH on Base, verify the Base network and exact wallet address, and review the final amount and fees.
-4. The user is told to stop if MoonPay shows another network or wallet address.
-5. After delivery, the user returns to Agent Bounties, sees automatically refreshed wallet balances, and separately authorizes canonical bounty funding.
+MoonPay's documented phone app can hold, receive and send assets on Base. It
+requires native ETH on Base for USDC sending fees. This does not establish
+support for our wallet connection, personal-message proof, typed-data verdict or
+contract calls; direct MoonPay signing is **unverified**, not advertised as a
+connectable wallet. Never ask the user to export or share recovery material.
 
-The fallback is not equivalent to the signed integration. It cannot cryptographically bind the reviewed wallet or context to MoonPay's checkout, and it should disappear as the primary path once approved partner credentials are active. It exists so an account-level credential dependency does not make the user-facing on-ramp unusable.
+The guided page offers **Use money in MoonPay**, including during an unresolved
+older purchase. It shows one action: send the current USDC shortfall on Base to
+the full saved wallet address. If USDC is already sufficient, it asks only for
+Base ETH for the bounty wallet's fee. Fees and any transfer remain subject to the
+user's wallet confirmation. This view does not clear, settle, or repeat a
+provider order. It does not infer who controls a supplied public address.
+
+Balance polling continues every five seconds. A confirmed wallet balance that
+covers the bounty budget unlocks the same saved bounty review regardless of an
+earlier purchase amount; the uncertain order record remains intact. A separate
+canonical funding transaction and its confirmed events are still required.
+
+Official sources checked 2026-09-17:
+- [MoonPay wallet capabilities and Base support](https://support.moonpay.com/en/articles/383215-managing-your-wallets)
+- [Sending and receiving assets](https://support.moonpay.com/en/articles/385117-how-do-i-send-and-receive-crypto-assets)
+- [Wallet-prefill signing requirements](https://moonpay.readme.io/docs/quickstart)
 
 ## Architecture
 
@@ -121,7 +147,7 @@ The browser never receives `MOONPAY_SECRET_KEY`. It sends the reviewed wallet, a
 
 ## Required environment variables
 
-Set these on the hosted MCP service to activate the prefilled, server-signed partner checkout. The direct consumer fallback does not require these credentials.
+Set these on the hosted MCP service to activate the prefilled, server-signed partner checkout. The generic consumer fallback remains disabled regardless of configuration.
 
 | Variable | Required for partner checkout | Example / purpose |
 | --- | --- | --- |
@@ -165,7 +191,7 @@ Activation sequence:
 9. Return to the same bounty and complete the separate canonical contribution.
 10. Confirm the matching indexed `FundingAdded` event before describing the bounty as funded.
 
-Until this sequence is complete, the direct consumer fallback remains available but must not be described as wallet-prefilled, signed, or partner-activated.
+Until this sequence is complete, MoonPay card checkout remains unavailable. Offer the wallet-app purchase or existing-money transfer guide; do not reopen generic MoonPay checkout. The production smoke reports route health separately from live checkout availability, and `--require-checkout` rejects sandbox-only setup.
 
 ## Verification
 
@@ -181,7 +207,7 @@ node --test scripts/test-funding-readiness.js
 
 The Rust tests include MoonPay's published URL-signing test vector, verify that live URLs are IP-bound and signed with `signature` appended last, verify that the secret never appears in the checkout URL, and assert that every checkout plan reports `bounty_funded: false` with no canonical event.
 
-The static gate also verifies that the direct fallback uses only MoonPay's public consumer URLs, opens with `noopener noreferrer`, does not imitate a signed or wallet-prefilled URL, and keeps the same canonical funding boundary.
+The static gate verifies that the generic MoonPay control is disabled, has no navigation URL, and does not imitate a signed or wallet-prefilled URL. It reports healthy containment separately from live checkout availability and keeps the canonical funding boundary.
 
 ## Deliberate limitations
 
@@ -191,5 +217,5 @@ The static gate also verifies that the direct fallback uses only MoonPay's publi
 - No checkout URL is persisted in browser storage.
 - No email or other personal identifier is sent to MoonPay from Agent Bounties.
 - No affiliate fee is added in this version. This keeps the first implementation focused on reducing entry friction rather than creating an incentive to encourage unnecessary purchases.
-- The direct consumer fallback cannot prefill or bind the user's wallet, Base network, asset, or amount; the user must verify all four inside MoonPay.
+- The direct consumer fallback is blocked. It cannot preserve the user's wallet and Base network.
 - The in-memory rate limit is appropriate for the current single-service deployment. A horizontally scaled deployment should replace it with a shared rate limiter before increasing traffic.

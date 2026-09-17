@@ -64,6 +64,7 @@
           <p class="topup-amount" data-topup-needed></p>
           <button class="button primary" type="button" data-topup-wallet-buy>Use my wallet app</button>
           <button class="button secondary" type="button" data-topup-card-buy>Buy with a card</button>
+          <button class="button secondary" type="button" data-topup-moonpay-transfer>Use money in MoonPay</button>
           <p class="topup-note">Buying money for your wallet does not post or pay for your bounty.</p>
         </section>
 
@@ -78,17 +79,34 @@
           <p>Choose your amount there. Sign up or sign in, then review the price and fees.</p>
           <p class="topup-note">Select Base and use the wallet address above.</p>
           <div data-direct-moonpay-fallback>
-            <a class="button primary" href="https://www.moonpay.com/buy/usdc" target="_blank" rel="noopener noreferrer" data-direct-moonpay>Open MoonPay</a>
+            <button class="button secondary" type="button" data-direct-moonpay disabled>MoonPay card checkout unavailable</button>
+            <p class="topup-note">We cannot pass your wallet to MoonPay yet. Buy in your wallet app instead.</p>
             <output data-direct-moonpay-output role="status" aria-live="polite"></output>
           </div>
-          <a class="button secondary" href="https://portfolio.metamask.io/" target="_blank" rel="noopener noreferrer" data-onramp-provider="metamask">Open MetaMask</a>
+          <a class="button primary" href="https://portfolio.metamask.io/" target="_blank" rel="noopener noreferrer" data-onramp-provider="metamask">Open MetaMask</a>
+          <button class="button secondary" type="button" data-topup-moonpay-transfer>Use money in MoonPay</button>
           <p class="topup-note">Buying money for your wallet does not post or pay for your bounty.</p>
+        </section>
+
+        <section data-topup-panel="moonpay" hidden>
+          <p class="topup-amount" data-topup-transfer-amount></p>
+          <p data-topup-transfer-instruction>In the MoonPay phone app, tap Send. Choose USDC on Base. Paste the wallet address above.</p>
+          <p class="topup-note">MoonPay needs a little ETH on Base for the sending fee. Review the fee in MoonPay before you send.</p>
+          <p class="topup-note">We watch this wallet for your money. Your bounty payment comes next.</p>
+          <details><summary>MoonPay says I need ETH</summary>
+            <p>Copy your receiving address from MoonPay. From another wallet, send a little ETH on Base to that address and review the fee. The address above is for the USDC coming back to your bounty wallet.</p>
+          </details>
+          <details><summary>Can I connect my MoonPay wallet here?</summary>
+            <p>MoonPay supports sending USDC on Base. Direct connection and bounty signing from its app are not verified here. Send to your chosen wallet above, then use that wallet to fund and review your bounty.</p>
+            <a href="https://support.moonpay.com/en/articles/383215-managing-your-wallets" target="_blank" rel="noopener noreferrer">MoonPay wallet help</a>
+          </details>
         </section>
 
         <section data-topup-panel="pending" hidden>
           <section data-purchase-recovery hidden>
             <p data-purchase-recovery-copy></p><p class="topup-note">We check for money automatically. Do not buy again while it is on the way.</p>
             <button class="button primary" type="button" data-resume-checkout>Check my existing purchase</button>
+            <button class="button secondary" type="button" data-topup-moonpay-transfer>Money went to my MoonPay wallet</button>
             <details><summary>My purchase is finished or cancelled</summary>
               <label class="onramp-acknowledgement"><input type="checkbox" data-purchase-resolved><span>I checked with the provider. The earlier purchase is finished or cancelled. No payment is pending.</span></label>
               <button class="button secondary" type="button" data-clear-purchase>Check after purchase</button>
@@ -125,7 +143,7 @@
           <output data-wallet-output aria-live="off"></output>
           <output data-onramp-output aria-live="off"></output>
           <div data-return-status hidden><p data-return-status-copy></p></div>
-          <p>Public checkout cannot prefill or cryptographically bind your wallet. Select Base and check the address with the provider.</p>
+          <p>Public checkout cannot prefill or cryptographically bind your wallet, so we do not open it. Direct MoonPay checkout requires a live signed link for your chosen wallet and Base asset.</p>
           <p>Buying crypto does not fund the bounty. New-bounty creation is not gas-sponsored. Only the matching confirmed <code>FundingAdded</code> event proves bounty funding.</p>
         </details>
       </section>
@@ -150,8 +168,8 @@
     <script src="analytics.js?v=4"></script>
     <script src="guild-shell.js?v=4"></script>
     <script src="funding-readiness.js?v=1"></script>
-    <script src="topup-guide.js?v=3"></script>
-    <script src="moonpay-onramp.js?v=5"></script>
-    <script src="moonpay-direct-fallback.js?v=4"></script>
+    <script src="topup-guide.js?v=4"></script>
+    <script src="moonpay-onramp.js?v=6"></script>
+    <script src="moonpay-direct-fallback.js?v=5"></script>
   </body>
 </html>

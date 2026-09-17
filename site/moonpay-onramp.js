@@ -4,7 +4,6 @@
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const BASE_CHAIN_ID = "0x2105";
-  const CHECKOUT_HOSTS = new Set(["buy.moonpay.com", "buy-sandbox.moonpay.com"]);
   const ATTEMPT_STORAGE = "agent-bounties:onramp-attempts:v1";
   const TOPUP_WINDOW = "agent-bounties-wallet-topup";
   const announcedProviders = [];
@@ -505,12 +504,11 @@
       clearAttempt();
       throw new Error(body?.error || body?.message || `MoonPay checkout creation failed (${response.status}).`);
     }
-    validateCheckoutPlan(body, bountyContract);
+    try { validateCheckoutPlan(body, bountyContract); }
+    catch (error) { clearAttempt(); throw error; }
     saveAttempt({ status: "opened", reference: body.external_transaction_id });
     setOutput("[data-onramp-output]", [
-      body.environment === "sandbox"
-        ? "Opening MoonPay sandbox. It validates the checkout flow but will not top up Base mainnet."
-        : "Opening MoonPay. Review the final quote, fees, eligibility, asset, network, and wallet before approval.",
+      "Opening MoonPay. Review the final quote, fees, asset, Base network, and wallet before approval.",
       body.evidence_boundary,
     ], "pending");
     location.assign(body.checkout_url);
@@ -576,9 +574,10 @@
     if (!state.account) throw new Error("Choose the destination wallet first.");
     if (state.checkoutBusy || currentAttempt()) throw new Error("Resume or resolve the existing purchase before opening another checkout.");
     if (!balanceFresh()) throw new Error("Check your balance before opening a purchase.");
-    const asset = select("[data-onramp-asset]").value;
-    const destination = provider === "metamask" ? "https://portfolio.metamask.io/"
-      : asset === "eth" ? "https://www.moonpay.com/buy/eth" : "https://www.moonpay.com/buy/usdc";
+    // A generic MoonPay URL can silently select its own account wallet.
+    // Only the separately validated live partner flow may open MoonPay.
+    if (provider === "moonpay") throw new Error("MoonPay cannot use your chosen wallet here yet. Buy in your wallet app, or choose Use money in MoonPay.");
+    const destination = "https://portfolio.metamask.io/";
     const tab = window.open("about:blank", TOPUP_WINDOW);
     if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
     tab.opener = null;
@@ -649,6 +648,9 @@
       || body.schema_version !== "agent-bounties/moonpay-onramp-checkout-v1"
       || body.provider !== "moonpay"
       || body.destination_wallet?.toLowerCase() !== state.account
+      || body.environment !== "live"
+      || body.destination_network !== "base-mainnet"
+      || body.asset !== select("[data-onramp-asset]").value
       || body.bounty_contract?.toLowerCase() !== bountyContract.toLowerCase()
       || body.bounty_funded !== false
       || body.canonical_funding_event !== null
@@ -658,7 +660,12 @@
     const checkout = new URL(body.checkout_url);
     if (
       checkout.protocol !== "https:"
-      || !CHECKOUT_HOSTS.has(checkout.hostname)
+      || checkout.hostname !== "buy.moonpay.com"
+      || checkout.username || checkout.password || checkout.port
+      || checkout.searchParams.getAll("walletAddress").length !== 1
+      || checkout.searchParams.has("walletAddresses")
+      || checkout.searchParams.getAll("currencyCode").length !== 1
+      || checkout.searchParams.get("currencyCode") !== (body.asset === "eth" ? "eth_base" : "usdc_base")
       || !checkout.searchParams.get("signature")
       || checkout.searchParams.get("walletAddress")?.toLowerCase() !== state.account
     ) {
