@@ -18,7 +18,7 @@ ADVERTISEMENT_SOURCES = (
 HANDOFF_BOUNDARIES = {
     "authorize.html": ("Canonical evidence required", "BountySettled"),
     "cancel.html": ("not canonical funding evidence",),
-    "onramp.html": ("FundingAdded", "MoonPay top-up ≠ bounty funding"),
+    "onramp.html": ("FundingAdded", "Buying crypto does not fund the bounty."),
     "post.html": ("canonical creation and funding events", "data-walletless-onramp-link"),
     "success.html": ("does not prove funding", "FundingAdded"),
 }
