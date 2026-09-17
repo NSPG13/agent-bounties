@@ -120,5 +120,15 @@ After formatting, the reviewed build digest is
 replacing `7a55133c0025be81feac6354942bf655e5358572114c622e5a921bf549b18bb6`
 in the eight production workflow checks. Signing-runtime remains
 `6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1`.
-Historical benchmark directories and committed bounty bindings are unchanged.
+Committed bounty bindings and the separate immutable catalog are unchanged.
 The guard, its scope and all before/after-build checks remain enforced.
+
+The full gate also rehearses the 1200-second unfunded watchdog precommit
+against current build inputs. Its reviewed worker pin, six fixture literals,
+three derived workflow hashes and directory digest are refreshed together;
+checker logic, economics, authority and funding gates do not change.
+The public feed checked on 2026-09-17 contained 70 bounties and complete terms
+for all 17 entries from the precommit creator, with no matching watchdog
+subdirectory or old digest. This is an indexed observation, not proof of
+all historical chain state. No precommit is activated, funded or published
+by these changes; existing commit-pinned sources retain their prior bytes.
