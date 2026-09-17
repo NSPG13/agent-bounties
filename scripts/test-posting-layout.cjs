@@ -125,7 +125,10 @@ async function recoveryRegressions(browser, origin) {
     await page.waitForFunction(() => document.querySelector("[data-approve-card]").dataset.nextAction === "approve");
     await page.locator("[data-approve-card]").click();
     await page.locator("#funding-dialog[open]").waitFor();
-    await page.waitForFunction(() => document.querySelector("[data-wallet-state]").textContent.includes("Balance checks only"));
+    await page.waitForFunction(() => {
+      const state = document.querySelector("[data-wallet-state]").textContent;
+      return state.includes("Balance checks only") && state.includes("USDC available");
+    });
     assert.equal(await page.locator("[data-fund-now]").isDisabled(), true, "Verified ownership must not authorize funding");
     assert.equal(await page.locator('[data-posting-step="wallet"]').getAttribute("data-complete"), "false");
     assert.equal(await page.evaluate(() => window.__walletRequests.includes("eth_requestAccounts")), false, "Linked wallet balances are checked without requesting connection");
