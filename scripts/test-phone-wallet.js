@@ -162,6 +162,61 @@ test("approved session restores across navigation without QR or another approval
   assert.deepEqual(await next.api.provider.request({ method: "eth_accounts" }), [address]);
   assert.equal(next.providers[0].connects, 0); assert.equal(next.qrValues.length, 0); assert.equal(next.api.state().review_open, false);
 });
+test("explicit phone selection shows the restored wallet and waits for the visible choice", async () => {
+  const env = fixture({ storage: new Map([["agent-bounties-phone-connected-v1", "ab-phone-11111111-1111-4111-8111-111111111111"]]), restored: true });
+  let resolved = false;
+  const pending = env.api.provider.request({ method: "eth_requestAccounts" }).then(value => { resolved = true; return value; });
+  await flush();
+  assert.equal(env.api.state().review_open, true); assert.equal(resolved, false);
+  assert.equal(env.button("Use connected wallet").hidden, false);
+  assert.equal(env.button("Connect again with a new QR code").hidden, false);
+  assert.ok(env.nodes.some(node => node.textContent.includes(address) && node.textContent.includes("already connected")));
+  assert.equal(env.qr().hidden, true); assert.equal(env.providers[0].connects, 0);
+  env.button("Use connected wallet").click();
+  assert.deepEqual(await pending, [address]); assert.equal(env.api.state().review_open, false);
+  assert.equal(env.providers[0].disconnects, 0); assert.deepEqual(env.requests, []);
+});
+test("a fresh QR requires an explicit click and resumes the same selection after phone approval", async () => {
+  const env = fixture({ storage: new Map([["agent-bounties-phone-connected-v1", "ab-phone-11111111-1111-4111-8111-111111111111"]]), restored: true });
+  const pending = env.api.provider.request({ method: "eth_requestAccounts" }); await flush();
+  env.button("Connect again with a new QR code").click();
+  env.button("Connect again with a new QR code").click(); await flush();
+  assert.equal(env.providers[0].disconnects, 1); assert.equal(env.providers[0].connects, 1);
+  assert.equal(env.api.state().status, "pairing"); assert.equal(env.qr().hidden, false);
+  assert.equal(env.api.state().payment_authorized, false); assert.deepEqual(env.requests, []);
+  env.providers[0].approve(); assert.deepEqual(await pending, [address]);
+  assert.equal(env.api.state().review_open, false); assert.equal(env.qr().src, undefined);
+});
+test("reconnecting on a phone offers native handoff without requiring a QR scan", async () => {
+  const env = fixture({ mobile: true, storage: new Map([["agent-bounties-phone-connected-v1", "ab-phone-11111111-1111-4111-8111-111111111111"]]), restored: true });
+  const pending = env.api.provider.request({ method: "eth_requestAccounts" });
+  const rejected = assert.rejects(pending, { code: 4001 }); await flush();
+  env.button("Connect another phone wallet").click(); await flush();
+  assert.equal(env.qr().hidden, true);
+  assert.equal(env.nodes.find(node => node.className === "ab-phone-mobile-actions").hidden, false);
+  assert.deepEqual(env.opened, []); assert.deepEqual(env.requests, []);
+  env.button("Close").click(); await rejected;
+});
+test("closing a restored-wallet choice cancels selection without disconnecting or paying", async () => {
+  const env = fixture({ storage: new Map([["agent-bounties-phone-connected-v1", "ab-phone-11111111-1111-4111-8111-111111111111"]]), restored: true });
+  const pending = env.api.provider.request({ method: "eth_requestAccounts" });
+  const rejected = assert.rejects(pending, { code: 4001 }); await flush();
+  env.button("Close").click(); await rejected;
+  assert.equal(env.api.state().connected, true); assert.equal(env.providers[0].disconnects, 0);
+  assert.deepEqual(env.requests, []);
+  await env.api.openReview();
+  assert.equal(env.api.state().review_open, true); assert.equal(env.providers[0].connects, 0);
+});
+test("a failed disconnect cannot create a replacement QR or accept the old session", async () => {
+  const env = fixture({ storage: new Map([["agent-bounties-phone-connected-v1", "ab-phone-11111111-1111-4111-8111-111111111111"]]), restored: true });
+  const pending = env.api.provider.request({ method: "eth_requestAccounts" });
+  const rejected = assert.rejects(pending, { code: 4001 }); await flush();
+  env.providers[0].disconnect = async () => { throw new Error("relay unavailable"); };
+  env.button("Connect again with a new QR code").click(); await flush();
+  assert.equal(env.api.state().status, "error"); assert.equal(env.qr().hidden, true);
+  assert.equal(env.button("Use connected wallet").hidden, true); assert.equal(env.providers[0].connects, 0);
+  env.button("Close").click(); await rejected; assert.deepEqual(env.requests, []);
+});
 test("rejection, wrong network, missing config and network failures never connect", async () => {
   for (const action of ["reject", "wrong-chain", "missing-config", "network"]) {
     const env = fixture({ configured: action !== "missing-config", failLoad: action === "network" });

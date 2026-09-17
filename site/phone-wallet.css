@@ -1,7 +1,7 @@
 .ab-phone-dialog { box-sizing: border-box; width: min(94vw, 440px); max-height: 90dvh; overflow: auto; padding: 1.5rem; border: 1px solid #b8d2c6; border-radius: 20px; background: #fcfff9; color: #16382f; font: 1rem/1.5 system-ui, sans-serif; box-shadow: 0 20px 70px #092d3659; }
 .ab-phone-dialog::backdrop { background: #09292299; }
 .ab-phone-dialog h2 { margin: 0 2rem .5rem 0; font: 700 1.45rem/1.25 system-ui, sans-serif; color: inherit; }
-.ab-phone-dialog p { color: inherit; margin: .75rem 0; }
+.ab-phone-dialog p { color: inherit; margin: .75rem 0; overflow-wrap: anywhere; }
 .ab-phone-dialog button { padding: .65rem 1rem; border: 1px solid #729688; border-radius: 9px; background: #edf8ee; color: #16382f; font: 600 .95rem/1.4 system-ui, sans-serif; cursor: pointer; }
 .ab-phone-dialog button:focus-visible { outline: 3px solid #a85613; outline-offset: 3px; }
 .ab-phone-dialog button:disabled { opacity: .6; cursor: wait; }

@@ -1672,7 +1672,7 @@
     onrampUrl.searchParams.set("return", window.location.href);
     onrampUrl.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || "");
     if (state.account) onrampUrl.searchParams.set("wallet", state.account);
-    for (const link of ui.onramps) { link.href = onrampUrl.href; link.target = "agent-bounties-topup"; }
+    for (const link of ui.onramps) { link.href = onrampUrl.href; link.target = "_self"; }
     ui.dialog.showModal();
     setPaymentStatus("");
     ui.walletPanel.hidden = false;
@@ -1697,6 +1697,27 @@
     for(const provider of injected) if(provider&&typeof provider.request==="function"&&!candidates.some((item)=>item.provider===provider)) candidates.push({provider,info:{}});
     state.providers=candidates;
     return candidates;
+  }
+
+  async function openWalletTopUp(event) {
+    event.preventDefault();
+    if (postingBusy) { setPaymentStatus("Wait for the current wallet request to finish. Your operation is saved.", "pending"); return; }
+    try {
+      await postingSession.flush({ requireServer: Boolean(state.accountSession?.authenticated) });
+      const operation = postingSession.snapshot().operation_id || window.AgentBountiesWorkflow.createClient(window).load()?.id;
+      const back = new URL(window.location.href);
+      if (operation) back.searchParams.set("operation_id", operation);
+      back.searchParams.set("funding_review", "1"); back.hash = "bounty-preview";
+      const destination = new URL("onramp.html", window.location.href);
+      destination.searchParams.set("purpose", "post");
+      destination.searchParams.set("amount", formatUsdc(state.fundingUsdc));
+      destination.searchParams.set("return", back.href);
+      if (operation) destination.searchParams.set("operation_id", operation);
+      if (state.account) destination.searchParams.set("wallet", state.account);
+      // In-app browsers may silently discard secondary-window requests.
+      // Save the exact operation first, then use ordinary same-tab navigation.
+      window.location.assign(destination.href);
+    } catch (error) { setPaymentStatus(`Could not open wallet top-up: ${error.message} Your draft remains here.`, "error"); }
   }
 
   async function chooseCryptoWallet() {
@@ -1854,7 +1875,7 @@
     ui.fundNow.disabled = !state.approved || !provider || !usdcReady || !gasAvailable || Boolean(postingJournal.load() && !postingSession.canContinue()) || postingSession.snapshot().conflict;
     ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : "Review and post";
     walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. Gas is checked for the exact transaction before sending.`;
-    for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "agent-bounties-topup"; }
+    for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "_self"; }
     updatePostingTracker(); updatePostingCost();
     if (!provider) setPaymentStatus("Balances checked without connecting or signing. Choose Use this wallet to restore its signing session.", "pending");
     else if (!usdcReady || !gasAvailable) setPaymentStatus("Top up the displayed shortfall, then return here. Buying funds does not create or fund the bounty.", "pending");
@@ -2339,6 +2360,7 @@
   ui.watchUsdc.addEventListener("click",watchUsdcAsset);
   ui.copyUsdc.addEventListener("click",copyUsdcAddress);
   ui.recheck.addEventListener("click",()=>refreshWalletReadiness().catch((error)=>setPaymentStatus(error.message||String(error),"error")));
+  for (const link of ui.onramps) link.addEventListener("click", openWalletTopUp);
   ui.fundNow.addEventListener("click",(event)=>{
     if (!event.isTrusted) return;
     try {
@@ -2488,5 +2510,6 @@
     await postingSession.hydrate(state.accountSession);
     state.approved = await postingSession.approved(); syncPrimaryAction(); updatePostingTracker();
     await resumePosting();
+    if (new URLSearchParams(window.location.search).get("funding_review") === "1" && state.approved) await openFunding();
   })().catch((error) => setStatus(error.message || String(error), "error"));
 })();

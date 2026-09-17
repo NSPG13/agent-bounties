@@ -21,7 +21,7 @@
   const listeners = new Map();
   const doc = win.document;
   let sdk, sdkPromise, vendorPromise, attempt, generation = 0, activePrefix, accounts = [], chain = CHAIN;
-  let phase = "disconnected", message = "Connect an external phone wallet. Approve the connection in your wallet app.", dialog, qr, statusNode, retry, disconnectButton;
+  let phase = "disconnected", message = "Connect an external phone wallet. Approve the connection in your wallet app.", dialog, qr, statusNode, retry, disconnectButton, useConnected, reconnectButton, selection;
   let pairingUri = null, countdown, mobileActions, deviceToggle, showMobile = mobile, showQr = !mobile;
   const projectId = String(win.agentBountiesPhoneWalletConfig?.projectId || "");
   const configured = PROJECT.test(projectId);
@@ -69,7 +69,10 @@
   }
   function render() {
     const snapshot = state();
-    if (statusNode) statusNode.textContent = message;
+    if (statusNode) statusNode.textContent = snapshot.connected
+      ? `Wallet ${snapshot.address} is already connected. Use this wallet, or start a new connection to ${mobile ? "open your wallet app" : "scan a fresh QR code"}. No payment is requested.` : message;
+    if (useConnected) useConnected.hidden = !snapshot.connected;
+    if (reconnectButton) { reconnectButton.hidden = !accounts.length; reconnectButton.disabled = phase === "disconnecting" || Boolean(attempt); }
     if (retry) { retry.hidden = !configured || phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your wallet…" : "Start a new connection"; }
     if (qr) qr.hidden = !pairingUri || !showQr;
     if (mobileActions) mobileActions.hidden = !pairingUri || !showMobile;
@@ -183,11 +186,20 @@
     retry = node("button", "Start a new connection"); retry.type = "button"; retry.addEventListener("click", () => { void begin().catch(() => {}); });
     disconnectButton = node("button", "Disconnect phone wallet"); disconnectButton.type = "button"; disconnectButton.hidden = true;
     disconnectButton.addEventListener("click", () => { void disconnect(); });
-    actions.append(retry, disconnectButton); dialog.append(close, title, statusNode, mobileActions, qr, countdown, deviceToggle, note, security, actions); doc.body.append(dialog);
+    useConnected = node("button", "Use connected wallet"); useConnected.type = "button"; useConnected.hidden = true;
+    useConnected.addEventListener("click", () => { if (state().connected) { finishSelection(null, accounts.slice()); dialog.close(); } });
+    reconnectButton = node("button", mobile ? "Connect another phone wallet" : "Connect again with a new QR code"); reconnectButton.type = "button"; reconnectButton.hidden = true;
+    reconnectButton.addEventListener("click", () => { void reconnect(); });
+    actions.append(useConnected, reconnectButton, retry, disconnectButton); dialog.append(close, title, statusNode, mobileActions, qr, countdown, deviceToggle, note, security, actions); doc.body.append(dialog);
     dialog.addEventListener("cancel", () => cancel()); dialog.addEventListener("close", () => { clearQr(); render(); });
     dialog.showModal(); render();
   }
-  function cancel(text = "Pairing cancelled. Your draft and progress are saved.", next = "cancelled") {
+  function finishSelection(failure, values) {
+    const current = selection; selection = null;
+    if (current) { if (failure) current.reject(failure); else current.resolve(values); }
+  }
+  function cancel(text = "Pairing cancelled. Your draft and progress are saved.", next = "cancelled", keepSelection = false) {
+    if (!keepSelection) finishSelection(error(4001, text));
     if (!attempt) return;
     const current = attempt; current.cancelled = true; attempt = null; clearTimers(current); clearQr();
     current.reject(error(4001, text));
@@ -248,9 +260,40 @@
     })();
     return current.promise;
   }
-  async function openReview() { buildDialog(); void begin().catch(() => {}); return state(); }
-  async function disconnect() {
-    cancel();
+  async function openReview() {
+    buildDialog();
+    try { await restore(); } catch (failure) { setState("error", failure.message); return state(); }
+    if (dialog.open) { if (state().connected) render(); else void begin().catch(() => {}); }
+    return state();
+  }
+  function requestConnection() {
+    buildDialog();
+    if (selection) return selection.promise;
+    const current = {};
+    current.promise = new Promise((resolve, reject) => { current.resolve = resolve; current.reject = reject; });
+    selection = current;
+    void (async () => {
+      try {
+        await restore();
+        if (selection !== current) return;
+        if (state().connected) { render(); return; }
+        const values = await begin();
+        if (selection === current) finishSelection(null, values);
+      } catch (failure) { if (selection === current) { if (!["cancelled", "expired", "error"].includes(phase)) setState("error", failure.message); finishSelection(failure); } }
+    })();
+    return current.promise;
+  }
+  async function reconnect() {
+    if (phase === "disconnecting" || attempt) return;
+    const current = selection;
+    await disconnect(true);
+    if (!dialog.open || selection !== current || phase !== "disconnected") return;
+    showMobile = mobile; showQr = !mobile;
+    try { const values = await begin(); if (selection === current) finishSelection(null, values); }
+    catch (failure) { if (selection === current) finishSelection(failure); }
+  }
+  async function disconnect(keepSelection = false) {
+    cancel(undefined, undefined, keepSelection);
     setState("disconnecting", "Disconnecting your phone wallet…");
     try { if (sdk?.session) await sdk.disconnect(); clearConnection(); }
     catch (_) { setState("error", "The relay could not confirm disconnection. Disconnect Agent Bounties inside your phone wallet, then retry here."); }
@@ -260,7 +303,7 @@
     on(name, listener) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(listener); return provider; },
     removeListener(name, listener) { listeners.get(name)?.delete(listener); return provider; },
     async request(request) {
-      if (request.method === "eth_requestAccounts") { const restored = await restore(); return restored.length ? restored : begin(); }
+      if (request.method === "eth_requestAccounts") return requestConnection();
       if (request.method === "eth_accounts") return (accounts.length ? liveAccounts(sdk) : await restore()).slice();
       if (!sdk || !liveAccounts(sdk).length || phase !== "connected") throw error(4900, "Connect your phone wallet before continuing this review.");
       if (!reads.has(request.method) && !optionalMethods.includes(request.method)) throw error(4200, "This phone connection does not support that wallet method.");

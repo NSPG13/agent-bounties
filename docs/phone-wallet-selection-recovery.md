@@ -1,5 +1,39 @@
 # Phone-wallet selection recovery
 
+## Follow-up: visible connection and same-tab top-up
+
+The initial balance fix in #1453 did not cover two visible interaction failures.
+`eth_requestAccounts` returned a restored session before opening the connection
+dialog, and posting's top-up links targeted a named secondary window that the
+in-app browser did not show. A working balance lookup did not prove either a
+visible QR flow or successful top-up navigation.
+
+Explicit phone selection now opens the connection dialog and lets the person use
+the displayed wallet or explicitly disconnect and create a fresh pairing. Desktop
+reconnection shows a QR; phones offer native app handoff. Read-only restoration
+remains silent. Closing a selection preserves its existing session; failed
+disconnection cannot create another pairing. No signature or payment is replayed.
+
+Both posting top-up links save the exact operation before same-tab navigation.
+The return link binds that operation and reopens its approved funding review.
+Save failure keeps the person on the current page with an explanation. The token
+visibility action is labeled “Show USDC in wallet” to distinguish it from buying.
+
+[Maintainer notice #1454](https://github.com/NSPG13/agent-bounties/issues/1454)
+records this follow-up under the existing administrator-authorized incident
+deployment. The refreshed queue still identifies #1451 as the overlapping work;
+it now reports a merge conflict and should retain the connection dialog and
+same-tab operation return when rebasing. No data migration is required.
+
+Regression coverage adds restored-session choice, explicit new pairing, native
+phone handoff, cancellation, failed disconnect, blocked popups, and a real-browser
+top-up round trip preserving the approval hash and frozen reference. Public
+payment claims still require canonical evidence.
+
+Rollback: revert the follow-up commit and its paired browser asset versions.
+
+## Initial balance-read recovery
+
 A restored phone session could connect successfully while its balance RPC timed
 out. The posting window then retained its earlier “connect to sign” state, making
 both the direct phone option and the linked-wallet chooser appear unresponsive.

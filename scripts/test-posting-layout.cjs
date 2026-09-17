@@ -39,7 +39,7 @@ function sortedJson(value) {
   return value;
 }
 async function fixtures(context, origin, options = {}) {
-  const mock = { authenticated: options.authenticated !== false, wallets: options.wallets || [], drafts: options.drafts || new Map(), rpcRequests: [], draftRequests: [], events: [], inventory: [] };
+  const mock = { authenticated: options.authenticated !== false, wallets: options.wallets || [], drafts: options.drafts || new Map(), rpcRequests: [], draftRequests: [], events: [], inventory: [], usdcBalance: "0x5f5e100" };
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url());
     const session = { authenticated: mock.authenticated, account_status: mock.authenticated ? "ready" : "signed_out", account_complete: mock.authenticated, providers: { github: true }, user: mock.authenticated ? { id: "layout-qa", name: "Posting QA", email: "posting-qa@example.test" } : null };
@@ -66,7 +66,7 @@ async function fixtures(context, origin, options = {}) {
     if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
     if (url.origin === "https://mainnet.base.org") {
       const call = request.postDataJSON(); mock.rpcRequests.push(call);
-      const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: "0x5f5e100", eth_getBalance: "0x2386f26fc10000" })[call.method];
+      const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: mock.usdcBalance, eth_getBalance: "0x2386f26fc10000" })[call.method];
       assert.ok(result, "Public balance RPC must remain read only: " + call.method);
       return route.fulfill({ json: { jsonrpc: "2.0", id: call.id, result } });
     }
@@ -74,17 +74,26 @@ async function fixtures(context, origin, options = {}) {
     if (url.pathname === "/phone-wallet-config.js") return route.fulfill({ contentType: "text/javascript", body: 'window.agentBountiesPhoneWalletConfig={projectId:"00000000000000000000000000000000"};' });
     // Synthetic pairing only: this provider has no relay, signing or payment.
     if (url.pathname === "/vendor/phone-wallet.bundle.js") return route.fulfill({ contentType: "text/javascript", body: `
-      export async function createProvider() {
+      export async function createProvider(config) {
         const listeners = {};
-        return { accounts: [], chainId: 8453, on: (name, fn) => listeners[name] = fn,
+        const address = "0x1111111111111111111111111111111111111111";
+        const restored = ${Boolean(options.phoneRestored)};
+        const session = () => ({ expiry: Date.now() / 1000 + 3600, namespaces: { eip155: { accounts: ["eip155:8453:" + address], methods: config.optionalMethods } } });
+        const calls = window.__phoneCalls = []; let approve;
+        const provider = { accounts: restored ? [address] : [], session: restored ? session() : null, chainId: 8453, on: (name, fn) => listeners[name] = fn,
           signer: { cleanupPendingPairings: async () => {} },
-          connect: () => { listeners.display_uri?.("wc:" + "0".repeat(64) + "@2?relay-protocol=irn&symKey=" + "0".repeat(64)); return new Promise(() => {}); }
+          connect: () => { calls.push("connect"); listeners.display_uri?.("wc:" + "0".repeat(64) + "@2?relay-protocol=irn&symKey=" + "0".repeat(64)); return new Promise(resolve => { approve = resolve; }); },
+          disconnect: async () => { calls.push("disconnect"); provider.accounts = []; provider.session = null; listeners.disconnect?.(); },
+          request: async ({ method }) => { calls.push(method); if (method === "eth_chainId") return 8453; throw new Error("Unexpected phone request: " + method); }
         };
+        window.__approvePhoneFixture = () => { provider.accounts = [address]; provider.session = session(); approve?.(); };
+        return provider;
       }
       export async function qrDataUrl() { return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="290" height="290"><rect width="290" height="290" fill="white"/><path d="M20 20h80v80H20zM190 20h80v80h-80zM20 190h80v80H20z" fill="black"/></svg>'); }
     ` });
     return route.continue();
   });
+  if (options.phoneRestored) await context.addInitScript(() => localStorage.setItem("agent-bounties-phone-connected-v1", "ab-phone-11111111-1111-4111-8111-111111111111"));
   await context.addInitScript(() => {
     window.__walletWrites = []; window.__walletRequests = [];
     window.ethereum = { isMetaMask: true, request: async ({ method }) => {
@@ -104,7 +113,7 @@ async function awaitPosting(page) {
 }
 async function recoveryRegressions(browser, origin) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
-  const mock = await fixtures(context, origin, { wallets: [wallet] });
+  const mock = await fixtures(context, origin, { wallets: [wallet], phoneRestored: true });
   const page = await context.newPage(), errors = [];
   page.on("pageerror", error => errors.push(error.message));
   try {
@@ -162,6 +171,50 @@ async function recoveryRegressions(browser, origin) {
     assert.deepEqual(resumed.draft.reference_attachment, reference);
     assert.deepEqual(resumed.draft.evidence_schema["x-agent-bounties-reference-attachment"], reference);
     assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+
+    // Explicit selection must show a window even when a session was restored.
+    await page.locator("[data-open-funding]").click();
+    await page.getByRole("button", { name: "Phone wallet (app or QR) Connect and check Base USDC", exact: true }).click();
+    await page.getByRole("button", { name: "Use connected wallet", exact: true }).waitFor();
+    assert.equal(await page.locator(".ab-phone-dialog[open]").isVisible(), true);
+    await modalBounds(page, ".ab-phone-dialog");
+    assert.equal(await page.locator(".ab-phone-qr").isVisible(), false);
+    assert.deepEqual(await page.evaluate(() => window.__phoneCalls), []);
+    await page.getByRole("button", { name: "Use connected wallet", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("[data-wallet-state]").textContent.includes("Connected for this session"));
+    await page.getByRole("button", { name: /Test wallet · Verified ownership/ }).click();
+    await page.getByRole("button", { name: "Use this wallet", exact: true }).click();
+    await page.getByRole("button", { name: /^Use a phone wallet / }).click();
+    await page.getByRole("button", { name: "Connect again with a new QR code", exact: true }).click();
+    await page.locator(".ab-phone-qr").waitFor({ state: "visible" });
+    assert.equal(await page.locator(".ab-phone-dialog[open]").isVisible(), true);
+    await page.evaluate(() => window.__approvePhoneFixture());
+    await page.locator(".ab-phone-dialog[open]").waitFor({ state: "hidden" });
+    await page.waitForFunction(() => document.querySelector("[data-wallet-state]").textContent.includes("Connected for this session"));
+    assert.deepEqual(await page.evaluate(() => window.__phoneCalls.filter(method => method !== "eth_chainId")), ["disconnect", "connect"]);
+
+    // Popup blocking must not prevent top-up or lose the exact approved review.
+    mock.usdcBalance = "0x0";
+    await page.getByRole("button", { name: "Recheck", exact: true }).click();
+    await page.getByRole("link", { name: "Add Base USDC", exact: true }).waitFor();
+    await page.evaluate(() => { window.open = () => { throw new Error("Popup blocked"); }; });
+    const pagesBefore = context.pages().length;
+    await Promise.all([page.waitForURL(url => url.pathname === "/onramp.html"), page.getByRole("link", { name: "Add Base USDC", exact: true }).click()]);
+    assert.equal(context.pages().length, pagesBefore);
+    const topup = new URL(page.url());
+    assert.equal(topup.searchParams.get("operation_id"), approved.journey.id);
+    assert.equal(topup.searchParams.get("wallet"), wallet.address);
+    await page.waitForFunction(id => new URL(document.querySelector("[data-return-link]").href).searchParams.get("operation_id") === id, approved.journey.id);
+    await Promise.all([page.waitForURL(url => url.pathname === "/post.html"), page.getByRole("link", { name: "Return to bounty review", exact: true }).click()]);
+    await page.locator("#funding-dialog[open]").waitFor();
+    const returned = await page.evaluate(() => ({ review: window.AgentBountiesComposer.review(), approval: JSON.parse(sessionStorage.getItem("agent-bounties.posting-approval.v1")), reference: window.AgentBountiesWorkflow.createClient(window).load().draft.reference_attachment }));
+    assert.equal(returned.review.explicitly_approved, true);
+    assert.equal(returned.review.saved_operation.operation_id, approved.journey.id);
+    assert.equal(returned.approval.hash, approved.approval.hash);
+    assert.deepEqual(returned.reference, reference);
+    assert.deepEqual(await page.evaluate(() => window.__walletRequests), []);
+    await page.locator("[data-close-funding]").click();
+    console.log("PASS visible restored-phone choice, explicit fresh QR, same-tab top-up with popups blocked, and exact approved-review return");
 
     // A clean second browser uses only the authenticated continuation. No
     // storage copying or injected approval is involved.
