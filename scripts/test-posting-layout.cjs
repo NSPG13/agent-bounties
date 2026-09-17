@@ -66,6 +66,7 @@ async function fixtures(context, origin, options = {}) {
     if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
     if (url.origin === "https://mainnet.base.org") {
       const call = request.postDataJSON(); mock.rpcRequests.push(call);
+      if (mock.rpcFailure) return route.fulfill({ status: 503, json: { error: { message: "Synthetic outage" } } });
       const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: mock.usdcBalance, eth_getBalance: mock.ethBalance })[call.method];
       assert.ok(result, "Public balance RPC must remain read only: " + call.method);
       return route.fulfill({ json: { jsonrpc: "2.0", id: call.id, result } });
@@ -324,75 +325,139 @@ async function guidedTopupRegressions(browser, origin) {
   for (const width of [390, 532, 1280]) {
     const context = await browser.newContext({ viewport: { width, height: 844 }, reducedMotion: "reduce" });
     const mock = await fixtures(context, origin); mock.usdcBalance = "0x0";
+    await context.addInitScript(() => {
+      window.__topupTools = new Map();
+      Object.defineProperty(document, "modelContext", { configurable: true, value: { registerTool(tool) { window.__topupTools.set(tool.name, tool); } } });
+      window.__openedPurchases = [];
+    });
     const page = await context.newPage(), errors = [];
     page.on("pageerror", error => errors.push(error.message));
     try {
       const back = origin + "/post.html?operation_id=guide-fixture&funding_review=1#bounty-preview";
-      await page.goto(origin + "/onramp.html?amount=2.01&operation_id=guide-fixture&wallet=" + wallet.address + "&return=" + encodeURIComponent(back));
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
+      const url = origin + "/onramp.html?amount=2.01&operation_id=guide-fixture&wallet=" + wallet.address + "&return=" + encodeURIComponent(back);
+      await page.goto(url);
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method" && document.querySelector("[data-topup-connection]").dataset.connected === "true");
       assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
-      assert.ok(await page.locator("[data-topup-wallet-buy]").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 18), "The main action must use large text");
+      assert.equal(await page.locator("#onramp-title").textContent(), "Add money to your wallet");
+      assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
+      assert.match(await page.locator("[data-topup-connection]").textContent(), /Wallet connected.*Base/);
+      assert.ok(await page.locator("[data-topup-wallet-buy]").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 18));
       assert.equal(await page.locator("[data-topup-needed]").textContent(), "2.01 USDC still needed");
       if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-guide-${width}.png`) });
       await page.getByRole("button", { name: "Use my wallet app", exact: true }).click();
       assert.equal(await page.locator("#onramp-title").textContent(), "Open your wallet app");
-      await page.getByRole("button", { name: "Next", exact: true }).click();
-      assert.equal(await page.locator("#onramp-title").textContent(), "Choose USDC on Base");
-      await page.getByRole("button", { name: "Next", exact: true }).click();
-      assert.equal(await page.locator("[data-topup-destination]").textContent(), wallet.address);
-      await noHorizontalOverflow(page);
-      await page.getByRole("button", { name: "Next", exact: true }).click();
-      await page.getByRole("button", { name: "I’m back — check my balance", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
+      assert.match(await page.locator("[data-topup-panel=wallet-buy]").textContent(), /MetaMask/);
+      assert.equal(await page.getByRole("button", { name: "Next", exact: true }).count(), 0);
+      await page.getByRole("button", { name: "Back", exact: true }).click();
       await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
-      await page.locator("[data-fiat-amount]").fill("10");
-      await page.getByRole("button", { name: "Review purchase details", exact: true }).click();
       assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
-      assert.equal(await page.locator("[data-direct-wallet]").textContent(), wallet.address);
-      assert.equal(await page.locator("[data-direct-moonpay]").getAttribute("aria-disabled"), "true");
-      await page.locator("[data-onramp-ack]").check();
+      assert.equal(await page.locator("[data-fiat-amount]").isVisible(), false, "No duplicate amount before MoonPay");
+      assert.equal(await page.getByRole("link", { name: "Open MetaMask", exact: true }).isVisible(), true);
+      assert.match(await page.locator("[data-topup-panel=card]").textContent(), /Sign up or sign in/);
       assert.equal(await page.locator("[data-direct-moonpay]").getAttribute("aria-disabled"), "false");
-      // A blocked popup gives feedback and records no uncertain purchase.
+      if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-card-${width}.png`) });
       await page.evaluate(() => { window.open = () => null; });
       await page.getByRole("link", { name: "Open MoonPay", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector("[data-direct-moonpay-output]").textContent.includes("Allow the checkout tab"));
+      await page.waitForFunction(() => document.querySelector("[data-topup-feedback]").textContent.includes("Allow the checkout tab"));
       assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), false);
-      // Simulated provider only. The page must return to the same pending order.
-      await page.evaluate(() => { window.open = () => ({ location: { replace() {} }, close() {}, focus() {} }); });
+      await page.evaluate(() => { window.open = () => ({ location: { replace(url) { window.__openedPurchases.push(url); } }, close() {}, focus() {} }); });
+      // A stale earlier amount must not enter the provider URL or readiness target.
+      await page.evaluate(() => { document.querySelector("[data-fiat-amount]").value = "25"; });
       await page.getByRole("link", { name: "Open MoonPay", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
-      assert.equal(await page.locator("[data-topup-panel=checkout]").isVisible(), false);
+      assert.deepEqual(await page.evaluate(() => window.__openedPurchases), ["https://www.moonpay.com/buy/usdc"]);
       await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
-      mock.usdcBalance = "0x2dc6c0";
+      assert.equal(await page.getByRole("link", { name: "Open MoonPay", exact: true }).isVisible(), false);
+      // Partial delivery stays pending without offering a duplicate purchase.
+      mock.usdcBalance = "0xf4240";
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.waitForFunction(() => document.querySelector("[data-usdc-balance]").textContent === "1 USDC");
+      assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending");
+      // No click, focus, or simulated provider callback: periodic balance polling
+      // must notice 20 USDC, enough for 2.01, despite the old 25 starting value.
+      mock.usdcBalance = "0x1312d00";
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready", null, { timeout: 10000 });
+      assert.equal(await page.locator("[data-topup-ready-amount]").textContent(), "20 USDC available ✓");
+      assert.match(await page.locator("[data-topup-watch]").textContent(), /20 USDC added/);
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), true, "Liquidity cannot settle or erase a provider order");
+      assert.equal(await page.locator("[data-topup-panel=ready] [data-return-link]").getAttribute("href"), back);
+      const status = await page.evaluate(() => window.__topupTools.get("agent_bounties_get_topup_status").execute({}));
+      assert.equal(status.usdc_balance, "20"); assert.equal(status.usdc_shortfall, "0");
+      assert.equal(status.provider_order_status, "unverified"); assert.equal(status.bounty_funded, false);
+      assert.equal(status.payment_authorized, false); assert.equal(status.return_url, back);
+      assert.equal(status.ready_for_bounty_review, true); assert.equal(status.wallet_connected, true);
+      await page.evaluate(async () => {
+        const prepare = window.__topupTools.get("agent_bounties_prepare_topup");
+        try { await prepare.execute({ method: "card", approved: true }); throw new Error("Accepted invalid approval"); }
+        catch (error) { if (!error.message.includes("Invalid top-up")) throw error; }
+        const result = await prepare.execute({ method: "card" });
+        if (result.view !== "ready" || result.purchase_opened) throw new Error("Preparation opened a purchase or replaced readiness");
+        try { window.AgentBountiesOnramp.openDirectCheckout(); throw new Error("Duplicate purchase opened"); }
+        catch (error) { if (!error.message.includes("existing purchase")) throw error; }
+      });
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
+      mock.rpcFailure = true;
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.waitForFunction(() => document.querySelector("[data-usdc-balance]").textContent === "Unavailable");
+      assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending", "An RPC failure must remove stale readiness");
+      mock.rpcFailure = false;
       await page.getByRole("button", { name: "Check my balance", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector("[data-usdc-shortfall]").textContent === "0 USDC");
-      assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending", "Money arriving must not declare an uncertain order resolved");
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
+      // Synthetic provider completion only: exercise the separate gas path.
+      mock.ethBalance = "0x0";
+      await page.getByRole("button", { name: "Check my balance", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
       await page.getByText("My purchase is finished or cancelled", { exact: true }).click();
       await page.locator("[data-purchase-resolved]").check();
-      mock.ethBalance = "0x0";
       await page.getByRole("button", { name: "Check after purchase", exact: true }).click();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
       assert.equal(await page.locator("[data-topup-needed]").textContent(), "ETH needed for the network fee");
       await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
-      assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth", "After USDC arrives, the card path must select the missing gas asset");
+      assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth");
+      assert.equal(await page.locator("[data-topup-card-asset]").textContent(), "ETH on Base");
+      await page.evaluate(() => { window.open = () => ({ location: { replace(url) { window.__openedPurchases.push(url); } }, close() {}, focus() {} }); });
+      await page.getByRole("link", { name: "Open MetaMask", exact: true }).click();
+      assert.deepEqual(await page.evaluate(() => window.__openedPurchases), ["https://portfolio.metamask.io/"]);
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), true);
       await page.reload();
-      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
-      await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
-      assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth", "A gas-only visit without asset=eth must select ETH");
-      await page.getByRole("button", { name: "Review purchase details", exact: true }).click();
-      assert.match(await page.locator("[data-direct-asset]").textContent(), /ETH/);
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
+      assert.equal(await page.getByRole("link", { name: "Open MoonPay", exact: true }).isVisible(), false, "An ETH order survives a reload without asset=eth");
       mock.ethBalance = "0x2386f26fc10000";
       await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
-      assert.equal(await page.locator("[data-topup-panel=ready] [data-return-link]").getAttribute("href"), back);
+      // A supplied address is never described as a live session without a match.
+      await page.evaluate(() => { window.ethereum.request = async ({method}) => method === "eth_accounts" ? [] : "0x2105"; window.dispatchEvent(new Event("focus")); });
+      await page.waitForFunction(() => document.querySelector("[data-topup-connection]").textContent.includes("not connected"));
+      assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
       await noHorizontalOverflow(page);
       assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+      assert.equal(await page.evaluate(() => window.__walletRequests.includes("eth_requestAccounts")), false);
       assert.deepEqual(errors, []);
-      console.log("PASS one-step wallet/card guide, blocked popup feedback, purchase recovery and exact return at " + width);
+      console.log("PASS simple top-up, live connection, amount-free providers, automatic partial/full deposits, preserved orders, stale reads, WebMCP and gas at " + width);
     } finally { await context.close(); }
   }
+}
+
+async function topupPhoneConnectionRegression(browser, origin) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await fixtures(context, origin, { phoneRestored: true });
+  await context.addInitScript(() => { delete window.ethereum; });
+  const page = await context.newPage(), errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  try {
+    await page.goto(origin + "/onramp.html?amount=2.01&wallet=" + wallet.address);
+    await page.waitForFunction(() => document.querySelector("[data-topup-connection]").dataset.connected === "true");
+    assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
+    assert.equal(await page.evaluate(() => window.AgentBountiesPhoneWallet.state().review_open), false);
+    assert.equal(await page.evaluate(() => (window.__phoneCalls || []).includes("connect")), false);
+    await page.evaluate(() => window.AgentBountiesPhoneWallet.disconnect());
+    await page.waitForFunction(() => document.querySelector("[data-topup-connection]").textContent.includes("not connected"));
+    assert.equal(await page.locator("[data-topup-address]").textContent(), wallet.address);
+    assert.deepEqual(errors, []);
+    console.log("PASS restored phone connection is live without a new prompt, and disconnect preserves the destination");
+  } finally { await context.close(); }
 }
 
 async function main() {
@@ -410,7 +475,8 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
-    if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await guidedTopupRegressions(browser, origin); return; }
+    if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await guidedTopupRegressions(browser, origin);
+    await topupPhoneConnectionRegression(browser, origin); return; }
     for (const size of sizes) {
       const context = await browser.newContext({ viewport: { width: size.width, height: size.height }, reducedMotion: "reduce" });
       const page = await context.newPage();
@@ -549,6 +615,7 @@ async function main() {
     }
     await recoveryRegressions(browser, origin);
     await guidedTopupRegressions(browser, origin);
+    await topupPhoneConnectionRegression(browser, origin);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => server.close());

@@ -24,3 +24,16 @@
 html[data-theme=light] .topup-guide { background: #fffef8; color: #15281c; }
 body .simple-topup .topup-guide .button { font-size: 1.15rem; min-height: 3.4rem; }
 body .simple-topup #onramp-title:focus { outline: none; }
+.simple-topup .topup-wallet { padding-bottom: .9rem; border-bottom: 1px solid #80966a70; }
+.simple-topup .topup-wallet p { margin: .3rem 0; }
+.simple-topup .topup-connection { font-size: .95rem; font-weight: 700; }
+.simple-topup .topup-connection[data-connected=true] { color: #98c779; }
+html[data-theme=light] .simple-topup .topup-connection[data-connected=true] { color: #376126; }
+.simple-topup .topup-wallet-address { display: flex; gap: .7rem; align-items: center; }
+.simple-topup .topup-wallet-address code { flex: 1; min-width: 0; font-size: .9rem; }
+.simple-topup .topup-copy { min-width: 3.6rem; min-height: 2.75rem; border: 1px solid #80966a70; border-radius: .5rem; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.simple-topup .topup-balance { font-size: 1rem; }
+.simple-topup .topup-watch { font-size: .95rem; min-height: 1.5rem; }
+
+body .simple-topup { margin-top: 1rem; gap: .25rem; }
+.simple-topup .topup-guide { margin-top: .4rem; }

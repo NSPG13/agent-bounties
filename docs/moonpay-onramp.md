@@ -1,3 +1,12 @@
+> Current guided UI: start at **Add money**, then choose a wallet app or card.
+> The public MoonPay/MetaMask path asks for the amount only at the provider.
+> Sign-up/sign-in, fees and final purchase confirmation happen there. Wallet
+> balances update automatically every five seconds while the page is visible.
+> Enough wallet funds unlock the saved bounty review even when the purchase
+> status is unverified; the pending order remains protected from duplication.
+> See [the current guide](simple-funding-guide.md#shorter-top-up-follow-up-2026-09-17).
+> The signed partner checkout details below retain their existing API contract.
+
 # MoonPay wallet on-ramp
 
 > Public UI status: active after deployment at
@@ -18,7 +27,7 @@ MoonPay handles **asset acquisition**. Agent Bounties handles **bounty allocatio
 
 The destination is the user's wallet, never the bounty contract. A plain ERC-20 transfer to a bounty contract would not necessarily call the protocol's contribution function, enforce its cap, associate the amount with the correct bounty, or emit `FundingAdded`.
 
-## User flow
+## Signed partner checkout flow
 
 1. Open a canonical bounty and choose **Help fund**.
 2. Select **Buy Base USDC or gas with MoonPay**.
@@ -46,7 +55,7 @@ does not prove the exact creation gas is affordable.
 The page calculates the USDC shortfall in integer base units. It does not
 assume a dollar exchange rate, add an invented percentage fee, or enforce a
 universal $20 provider minimum. It shows the target received USDC amount and
-asks for a USD amount to quote; MoonPay confirms its applicable purchase
+lets the person choose the amount in public checkout; MoonPay confirms its applicable purchase
 minimum, total fees, and actual received amount before payment. No top-up is
 needed when the observed USDC balance already covers the contribution. Final
 gas and the bounty transaction remain a separate review on the posting page.
@@ -91,10 +100,10 @@ The on-ramp page also exposes a bounded manual fallback through MoonPay's public
 This keeps Base wallet top-up available when Agent Bounties' MoonPay partner credentials are not yet active or the signed checkout service is unavailable. It is deliberately less seamless than the partner checkout:
 
 1. Agent Bounties does not append the wallet, asset, network, amount, API key, or signature to the public URL.
-2. The user must explicitly copy the connected wallet address.
-3. Inside MoonPay, the user must select `USDC_BASE` or `ETH_BASE`, verify the Base network, paste the exact address, and review the final amount and fees.
+2. A visible Copy button makes the exact saved wallet address available. The connection badge only says connected after an existing session is checked.
+3. Inside MoonPay, sign up or sign in, choose the amount, select USDC or ETH on Base, verify the Base network and exact wallet address, and review the final amount and fees.
 4. The user is told to stop if MoonPay shows another network or wallet address.
-5. After delivery, the user returns to Agent Bounties, refreshes the wallet balances, and separately authorizes canonical bounty funding.
+5. After delivery, the user returns to Agent Bounties, sees automatically refreshed wallet balances, and separately authorizes canonical bounty funding.
 
 The fallback is not equivalent to the signed integration. It cannot cryptographically bind the reviewed wallet or context to MoonPay's checkout, and it should disappear as the primary path once approved partner credentials are active. It exists so an account-level credential dependency does not make the user-facing on-ramp unusable.
 
