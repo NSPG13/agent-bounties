@@ -1,8 +1,7 @@
-# Maintainer notice draft: guided wallet funding
+# Maintainer release notice: guided wallet funding
 
-Local review artifact; not published. Publication requires the repository owner's
-authorization to send a public message. This draft is not a bounty, merge,
-funding, deployment or payment approval.
+This notice accompanies the user-authorized website deployment. It describes
+contributor impact and recovery; it is not a bounty or payment approval.
 
 ## Scope and reason
 
@@ -25,7 +24,7 @@ including #1447 (digest automation), #1446 (discovery filtering), #1438
 (homepage palette), #1437 (claim deadline), #1436 (verifier email), #1196
 (credential flow), and #910 (analytics migration reservation). No external PR
 code was executed and no maintainer review or status approval is implied.
-Recheck the complete queue and latest contributor activity before publication.
+The open queue was rechecked before preparing the website release on September 17.
 
 Potential overlap is in account flow, public guidance, API annotations/OpenAPI
 digest and shared frontend assets; no known bounty artifact submission needs

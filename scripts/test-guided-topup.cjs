@@ -8,7 +8,7 @@ const server=http.createServer((req,res)=>{const name=decodeURIComponent(new URL
 try{
  for(const width of [390,532,1280]){
   const context=await browser.newContext({viewport:{width,height:740}}),page=await context.newPage();const errors=[];page.on("pageerror",e=>errors.push(e.message));
-  let attempt=null,shortfall="2010000",opened=0,prepared=0,providerError=null,flag=true;
+  let attempt=null,shortfall="2010000",opened=0,prepared=0,providerError=null,flag=true,unconfigured=false;
   await context.route("**/*",async route=>{
    const url=new URL(route.request().url());if(url.origin===base){const file=path.resolve(root,"site",`.${url.pathname}`);if(!file.startsWith(path.join(root,"site")+path.sep))return route.abort();try{return route.fulfill({contentType:({".js":"application/javascript",".css":"text/css",".html":"text/html",".json":"application/json",".svg":"image/svg+xml"})[path.extname(file)]||"application/octet-stream",body:fs.readFileSync(file)});}catch{return route.fulfill({status:404,body:""});}}
    if(url.hostname!=="api.agentbounties.app")return route.abort();
@@ -17,6 +17,7 @@ try{
    if(p==="/v1/wallet-funding/capabilities")return json({guided_topup:flag});
    if(p==="/v1/site-auth/account")return json({wallets:[{address:wallet}]});
    if(p.endsWith("/readiness"))return json({operation_id:operation,wallet,usdc_shortfall_units:shortfall,required_usdc_units:"2010000",gas_sponsorship:{status:"awaiting_authorization",message:"The relay can pay gas after checking your exact authorization. No ETH purchase is needed."}});
+   if(p.endsWith("/topup-options")&&unconfigured)return json({enabled:true,recommended:"handoff",providers:[{id:"coinbase",available:false,blocker:"provider_not_configured"},{id:"moonpay",available:false,blocker:"sandbox_does_not_fund_base"}]});
    if(p.endsWith("/topup-options")&&body.country==="ZZ")return json({enabled:true,recommended:"handoff",providers:[]});
    if(p.endsWith("/topup-options"))return json({enabled:true,recommended:"coinbase",providers:[{id:"coinbase",available:true,requirements:"Coinbase sign-in may be required.",options:{payment_currencies:[{id:"USD"}],payment_methods:[{id:"CARD"}]}},{id:"moonpay",available:true},{id:"metamask",available:false}]});
    if(p.endsWith("/topups/action")){assert.equal(body.attempt_id,attempt.id);if(body.action==="open"){opened++;attempt.status="pending";}else attempt.status="cancelled";return json({attempt});}
@@ -58,9 +59,11 @@ try{
   await page.evaluate(()=>{window.ethereum={isMetaMask:true,request:async()=>["0x2222222222222222222222222222222222222222"]};});
   const mismatch=await page.evaluate(async()=>{try{await window.AgentBountiesGuidedTopup.prepare({provider:"metamask"});return null;}catch(e){return e.message;}});assert.match(mismatch,/Choose the bounty wallet/);assert.equal(prepared,1);
   assert.deepEqual(errors,[]);
+  attempt=null;unconfigured=true;await page.reload();await page.locator("[data-guided-country]").waitFor({state:"visible"});await page.locator("[data-guided-country]").fill("MX");await page.locator("[data-guided-next]").click();await page.getByText("Card purchases are not available here yet. Use an already funded Base wallet or return to your saved review.",{exact:true}).waitFor();
+  assert.equal(await page.locator("[data-guided-card]").getAttribute("aria-busy"),"false");
   shortfall="0";await page.reload();await page.waitForURL(url=>url.pathname==="/post.html"&&url.searchParams.get("operation_id")===operation&&url.searchParams.get("analytics")==="off");
   assert.equal(opened,0,"returning wallet funds never authorizes a provider or bounty payment");
-  await context.close();cases+=14;
+  await context.close();cases+=15;
  }
  console.log(`guided top-up browser checks: ${cases} passed; no live checkout or wallet calls`);
 }finally{await browser.close();await new Promise(r=>server.close(r));}})().catch(error=>{console.error(error);server.close();process.exitCode=1;});

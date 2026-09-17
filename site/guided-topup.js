@@ -48,6 +48,11 @@
     const accounts=await provider.request({method:"eth_accounts"}).catch(()=>[]);
     return accounts[0]||null;
   }
+  function unavailableRouteMessage(){
+    const hosted=state.options?.providers?.filter(provider=>["coinbase","moonpay"].includes(provider.id))||[];
+    if(hosted.length&&hosted.every(provider=>["provider_not_configured","sandbox_does_not_fund_base"].includes(provider.blocker)))return "Card purchases are not available here yet. Use an already funded Base wallet or return to your saved review.";
+    return "No compatible purchase route is ready for this country and wallet. Keep the same wallet and saved operation when checking another route.";
+  }
   function render(){
     const current=funding.step(state.readiness,state.attempt);
     for(const node of document.querySelectorAll("[data-topup-progress]")){if(Number(node.dataset.topupProgress)===current)node.setAttribute("aria-current","step");else node.removeAttribute("aria-current");}
@@ -71,7 +76,7 @@
       text("[data-guided-signin]",state.options?.providers?.find(p=>p.id===state.attempt.provider)?.requirements||"The provider may require its own account and identity verification.");primary(`Open ${state.attempt.provider==="coinbase"?"Coinbase":state.attempt.provider==="moonpay"?"MoonPay":"MetaMask"} checkout`,"open");
     }else if(pending){text("[data-guided-title]","Continue your existing purchase");announce(["prepared","preparing"].includes(state.attempt.status)?"An unopened quote is saved. It can be replaced after confirming it was never opened.":"A purchase may be pending. Check its order before starting another, including with a different provider.");
       const support=$("[data-guided-support]");support.href=state.attempt.provider==="moonpay"?"https://support.moonpay.com/":state.attempt.provider==="coinbase"?"https://help.coinbase.com/en/coinbase/trading-and-funding/coinbase-pay/using-onramp":"https://support.metamask.io/";primary(["prepared","preparing"].includes(state.attempt.status)?"Replace unopened quote":"Check purchase and wallet",["prepared","preparing"].includes(state.attempt.status)?"cancel_unopened":"refresh");
-    }else {text("[data-guided-title]","Add the missing USDC");announce(state.options?.recommended==="handoff"?"No compatible purchase route is ready in this browser. Keep the same wallet and saved operation when you switch devices.":"We’ll prefill the purchase. You review its fees before paying.");primary(state.options?.recommended==="handoff"?"Return to wallet review":state.options?"Get provider quote":"Check purchase options",state.options?.recommended==="handoff"?"return":state.options?"prepare":"options");}
+    }else {text("[data-guided-title]","Add the missing USDC");announce(state.options?.recommended==="handoff"?unavailableRouteMessage():"We’ll prefill the purchase. You review its fees before paying.");primary(state.options?.recommended==="handoff"?"Return to wallet review":state.options?"Get provider quote":"Check purchase options",state.options?.recommended==="handoff"?"return":state.options?"prepare":"options");}
     const recovery=state.attempt?.quote?.recovery_code;
     if(recovery){announce(funding.recovery(recovery));show("[data-guided-recovery]",true);const support=$("[data-guided-support]");try{const url=new URL(state.attempt.quote.support_url);if(["buy.moonpay.com","support.moonpay.com","help.coinbase.com"].includes(url.hostname)&&url.protocol==="https:"&&!url.username&&!url.password&&!url.port)support.href=url.href;}catch(_){}support.textContent=`Check this provider order${state.attempt.quote.order_reference?` · ${state.attempt.quote.order_reference}`:""} ↗`;}
     $("[data-guided-card]").setAttribute("aria-busy",String(state.busy));guide();
@@ -153,6 +158,7 @@
         const imported=await state.client.prepare({...input("moonpay"),country:state.country||"ZZ",legacy_pending:true});state.attempt=imported.attempt;render();
       }
     }catch(error){announce(error.message);primary(error.status===401?"Sign in to restore this bounty":"Return to saved review",error.status===401?"signin":"return");}
+    $("[data-guided-card]").setAttribute("aria-busy","false");
     $("[data-guided-next]").addEventListener("click",event=>{if(!event.isTrusted)return;void run(async()=>{
       if(state.action==="other_operation")window.location.assign(funding.returnUrl(window,state.attempt.operation_id));
       else if(state.action==="return")window.location.assign(funding.returnUrl(window,state.operation));
