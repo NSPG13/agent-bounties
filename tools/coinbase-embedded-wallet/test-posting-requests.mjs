@@ -51,6 +51,7 @@ test("embedded posting reviews exact Base amount, recipient, expiry and full net
   assert.equal(details.Network, "Base (chain 8453)");
   assert.equal(details.Amount, "2.01 Base USDC");
   assert.equal(details.Recipient, bounty);
+  assert.equal(details["Factory contract"], factory);
   assert.ok(Date.parse(details.Expiry) > Date.now());
   assert.match(details["Estimated network fee"], /ETH \(paid by you\)/);
   assert.equal(h.sends().length, 1);

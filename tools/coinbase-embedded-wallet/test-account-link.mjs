@@ -489,6 +489,8 @@ test('embedded posting requires a real payment click, preserves cancellation and
     await review.waitFor();
     assert.match(await review.innerText(),/2.01 Base USDC/);
     assert.match(await review.innerText(),/Estimated network fee/);
+    assert.equal(await review.locator('.wallet-auth-review div').filter({has:page.getByText('Factory contract',{exact:true})}).locator('dd').innerText(),'0x'+'44'.repeat(20));
+    assert.equal(await review.locator('.wallet-auth-review div').filter({has:page.getByText('Recipient',{exact:true})}).locator('dd').innerText(),'0x'+'33'.repeat(20));
     await page.evaluate(()=>document.querySelector('.wallet-auth-actions .primary').click());
     assert.equal((await page.evaluate(()=>window.walletTestCalls)).some(call=>call.method==='eth_sendTransaction'),false);
     await review.getByRole('button',{name:'Cancel',exact:true}).click();
