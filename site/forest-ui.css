@@ -440,3 +440,45 @@ body .bounty-connection-help { margin-top: 18px; color: var(--ab-muted); font-si
 body .bounty-connection-help summary { cursor: pointer; }
 body .bounty-launcher-heading h2 { font-family: var(--ab-display); font-weight: 400; letter-spacing: -.035em; }
 body .bounty-assistant-list strong { font-family: var(--ab-body); font-weight: 700; }
+
+/* Cal Sans has one regular weight. Legacy condensed display settings make
+   longer interior-page titles collide when this font replaces the old face. */
+body:not(.forest-home) :is(h1, h2, h3),
+body.guild-interior :is(.page-head, .policy, .objective-intro) h1 {
+  min-width: 0;
+  letter-spacing: normal;
+  word-spacing: normal;
+  line-height: 1.2;
+  font-synthesis: none;
+  overflow-wrap: anywhere;
+}
+body:not(.forest-home) :is(h1, h2),
+body.guild-interior :is(.page-head, .policy, .objective-intro) h1,
+body:not(.forest-home) .blog-card h3 {
+  font-weight: 400;
+  text-wrap: balance;
+}
+
+/* Reading-page titles should leave room for their introduction and content. */
+body:not(.forest-home) :is(.about-hero, .blog-hero, .post-header, .hero-inner, .legal-main) h1,
+body.guild-interior :is(.page-head, .policy, .objective-intro) h1 {
+  font-size: clamp(32px, 5vw, 64px);
+}
+
+body.competition-page .competition-head {
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, .85fr);
+  gap: 40px 48px;
+  padding-block: clamp(32px, 5vw, 64px) 40px;
+}
+body.competition-page .competition-head > div { min-width: 0; }
+body.competition-page .market-back { margin-bottom: 28px; }
+body.competition-page .competition-head h1 { font-size: clamp(32px, 4vw, 56px); }
+body.competition-page .competition-goal { margin-top: 24px; font-size: 18px; line-height: 1.65; }
+body.competition-page .competition-facts { align-self: center; }
+body.competition-page .competition-facts dd { line-height: 1.5; }
+body.competition-page .competition-workspace { gap: 40px 48px; }
+body.competition-page .competition-instructions > section { padding-block: 32px 40px; }
+body.competition-page :is(.competition-instructions, .economics) h2 { font-size: clamp(28px, 3vw, 36px); }
+@media (max-width: 860px) {
+  body.competition-page .competition-head { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+}

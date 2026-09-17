@@ -4,6 +4,7 @@ const assert = require("node:assert/strict"), fs = require("node:fs"), path = re
 const { chromium } = require("../tools/browser-layout/node_modules/playwright");
 const { contract, item, opportunity } = require("./fixtures/funded-bounty.cjs");
 const audit = require("./fixtures/opportunities-audit-20260916.json");
+const assertHeadingLayout = require("./assert-heading-layout.cjs");
 const site = path.resolve(__dirname, "../site");
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".webp": "image/webp" };
 const server = http.createServer((req, res) => {
@@ -76,6 +77,18 @@ async function auditJourney(browser, origin, width) {
   await proof.click();
   await page.waitForURL("**/competition.html?**");
   await page.waitForFunction(() => document.querySelector("[data-machine-request]")?.textContent.includes('"phase": "ended"'));
+  await assertHeadingLayout(page, `closed competition at ${width}px`);
+  const longTitle = audit.items.find(item => item.source_id === "0x5817b7742b085d333c7e7831daa62a490c493b56");
+  assert.ok(longTitle, "real long-title competition fixture");
+  await page.goto(`${origin}/competition.html?bountyContract=${longTitle.source_id}&network=base-mainnet`);
+  await page.getByRole("heading", { name: longTitle.title, exact: true }).waitFor();
+  for (const viewportWidth of width === 1440 ? [1920, 1280, 768] : [390, 320]) {
+    await page.setViewportSize({ width: viewportWidth, height: 900 });
+    await assertHeadingLayout(page, `long competition title at ${viewportWidth}px`);
+    await layout(page);
+    if (process.env.MARKET_LAYOUT_ARTIFACTS) await page.screenshot({ path: path.join(process.env.MARKET_LAYOUT_ARTIFACTS, `competition-${viewportWidth}.png`) });
+  }
+  await page.setViewportSize({ width, height: 900 });
   await page.goto(origin + "/earn.html");
   await page.locator(".opportunity-row").first().waitFor();
   await page.locator("[data-market-timing]").selectOption("all");
