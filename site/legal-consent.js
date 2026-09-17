@@ -102,21 +102,27 @@
     const actions = actionsFor(root);
     const actionText = actions.length === 1 ? actionLabels[actions[0]] : "use this wallet action";
 
+    const simple = root.dataset.consentSimple === "true";
     const heading = createElement("div", "legal-consent-heading");
     heading.append(
       createElement("span", "legal-consent-step", "Before you continue"),
-      createElement("h3", "", `Know what happens when you ${actionText}`),
+      createElement("h3", "", simple ? "Before you pay" : `Know what happens when you ${actionText}`),
     );
 
     const points = createElement("ul", "legal-consent-points");
-    for (const text of [
+    for (const text of (simple ? [
+      "Check the amount, Base network, and address in your wallet.",
+      "Your bounty and wallet activity may be public forever.",
+      "Work is paid only after review and a confirmed payment.",
+      "We never need your recovery phrase or private key.",
+    ] : [
       "Money: check the Base network, USDC amount, and destination in your wallet before approving.",
       "Public record: your wallet, bounty, evidence, and blockchain activity may be public and permanent.",
       root.closest("[data-proof-workspace]")
         ? "Prize payment: only a matching confirmed CompetitionSettledV2 event proves that your entry was paid. The proof service charge does not guarantee a prize."
         : "Payment: only the posted verifier and a confirmed BountySettled event prove that work was paid.",
       "Security: we never need your recovery phrase or private key.",
-    ]) {
+    ])) {
       points.append(createElement("li", "", text));
     }
 

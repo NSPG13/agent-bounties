@@ -143,7 +143,7 @@ async function recoveryRegressions(browser, origin) {
     assert.equal(await page.evaluate(() => window.__walletRequests.includes("eth_requestAccounts")), false, "Linked wallet balances are checked without requesting connection");
     assert.ok(mock.rpcRequests.some(call => call.method === "eth_getBalance"));
     assert.ok(mock.rpcRequests.some(call => call.method === "eth_call"));
-    await page.getByRole("button", { name: /Test wallet · Verified ownership/ }).click();
+    await page.getByRole("button", { name: /Test wallet .*Saved to your account/ }).click();
     await page.getByRole("button", { name: "Use this wallet", exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.__walletRequests.includes("eth_requestAccounts")), false, "Selecting verified ownership remains a public balance read");
     await page.locator("[data-close-funding]").click();
@@ -181,8 +181,15 @@ async function recoveryRegressions(browser, origin) {
     assert.equal(await page.locator(".ab-phone-qr").isVisible(), false);
     assert.deepEqual(await page.evaluate(() => window.__phoneCalls), []);
     await page.getByRole("button", { name: "Use connected wallet", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector("[data-wallet-state]").textContent.includes("Connected for this session"));
-    await page.getByRole("button", { name: /Test wallet · Verified ownership/ }).click();
+    await page.waitForFunction(() => document.querySelector("#funding-dialog").dataset.fundingView === "review");
+    assert.equal(await page.locator("[data-wallet-panel]").isVisible(), false);
+    assert.equal(await page.locator("[data-funding-topup]").isVisible(), false);
+    assert.equal(await page.locator("[data-fund-now]").isDisabled(), true, "Unaccepted legal terms keep payment disabled");
+    await page.locator("[data-legal-consent-checkbox]").check();
+    assert.equal(await page.locator("[data-fund-now]").isEnabled(), true);
+    await page.locator("[data-legal-consent-checkbox]").uncheck();
+    await page.getByRole("button", { name: "Change wallet", exact: true }).click();
+    await page.getByRole("button", { name: /Test wallet .*Saved to your account/ }).click();
     await page.getByRole("button", { name: "Use this wallet", exact: true }).click();
     await page.getByRole("button", { name: /^Use a phone wallet / }).click();
     await page.getByRole("button", { name: "Connect again with a new QR code", exact: true }).click();
@@ -195,7 +202,7 @@ async function recoveryRegressions(browser, origin) {
 
     // Popup blocking must not prevent top-up or lose the exact approved review.
     mock.usdcBalance = "0x0";
-    await page.getByRole("button", { name: "Recheck", exact: true }).click();
+    await page.getByRole("button", { name: "Check my balance", exact: true }).click();
     await page.getByRole("link", { name: "Add Base USDC", exact: true }).waitFor();
     await page.evaluate(() => { window.open = () => { throw new Error("Popup blocked"); }; });
     const pagesBefore = context.pages().length;
@@ -313,6 +320,68 @@ async function modalBounds(page, selector) {
   });
   assert.ok(value.bounded && value.noHorizontal, selector + " exceeds the viewport: " + JSON.stringify(value));
 }
+async function guidedTopupRegressions(browser, origin) {
+  for (const width of [390, 532, 1280]) {
+    const context = await browser.newContext({ viewport: { width, height: 844 }, reducedMotion: "reduce" });
+    const mock = await fixtures(context, origin); mock.usdcBalance = "0x0";
+    const page = await context.newPage(), errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    try {
+      const back = origin + "/post.html?operation_id=guide-fixture&funding_review=1#bounty-preview";
+      await page.goto(origin + "/onramp.html?amount=2.01&operation_id=guide-fixture&wallet=" + wallet.address + "&return=" + encodeURIComponent(back));
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
+      assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
+      assert.ok(await page.locator("[data-topup-wallet-buy]").evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 18), "The main action must use large text");
+      assert.equal(await page.locator("[data-topup-needed]").textContent(), "2.01 USDC still needed");
+      if (process.env.POSTING_LAYOUT_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.POSTING_LAYOUT_SCREENSHOTS, `topup-guide-${width}.png`) });
+      await page.getByRole("button", { name: "Use my wallet app", exact: true }).click();
+      assert.equal(await page.locator("#onramp-title").textContent(), "Open your wallet app");
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      assert.equal(await page.locator("#onramp-title").textContent(), "Choose USDC on Base");
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      assert.equal(await page.locator("[data-topup-destination]").textContent(), wallet.address);
+      await noHorizontalOverflow(page);
+      await page.getByRole("button", { name: "Next", exact: true }).click();
+      await page.getByRole("button", { name: "I’m back — check my balance", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
+      await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
+      await page.locator("[data-fiat-amount]").fill("10");
+      await page.getByRole("button", { name: "Review purchase details", exact: true }).click();
+      assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
+      assert.equal(await page.locator("[data-direct-wallet]").textContent(), wallet.address);
+      assert.equal(await page.locator("[data-direct-moonpay]").getAttribute("aria-disabled"), "true");
+      await page.locator("[data-onramp-ack]").check();
+      assert.equal(await page.locator("[data-direct-moonpay]").getAttribute("aria-disabled"), "false");
+      // A blocked popup gives feedback and records no uncertain purchase.
+      await page.evaluate(() => { window.open = () => null; });
+      await page.getByRole("link", { name: "Open MoonPay", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector("[data-direct-moonpay-output]").textContent.includes("Allow the checkout tab"));
+      assert.equal(await page.evaluate(() => window.AgentBountiesOnramp.hasPendingPurchase()), false);
+      // Simulated provider only. The page must return to the same pending order.
+      await page.evaluate(() => { window.open = () => ({ location: { replace() {} }, close() {}, focus() {} }); });
+      await page.getByRole("link", { name: "Open MoonPay", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
+      assert.equal(await page.locator("[data-topup-panel]:visible").count(), 1);
+      assert.equal(await page.locator("[data-topup-panel=checkout]").isVisible(), false);
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "pending");
+      mock.usdcBalance = "0x2dc6c0";
+      await page.getByRole("button", { name: "Check my balance", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector("[data-usdc-shortfall]").textContent === "0 USDC");
+      assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending", "Money arriving must not declare an uncertain order resolved");
+      await page.getByText("My purchase is finished or cancelled", { exact: true }).click();
+      await page.locator("[data-purchase-resolved]").check();
+      await page.getByRole("button", { name: "Check after purchase", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
+      assert.equal(await page.locator("[data-topup-panel=ready] [data-return-link]").getAttribute("href"), back);
+      await noHorizontalOverflow(page);
+      assert.deepEqual(await page.evaluate(() => window.__walletWrites), []);
+      assert.deepEqual(errors, []);
+      console.log("PASS one-step wallet/card guide, blocked popup feedback, purchase recovery and exact return at " + width);
+    } finally { await context.close(); }
+  }
+}
+
 async function main() {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const origin = "http://127.0.0.1:" + server.address().port;
@@ -328,6 +397,7 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
+    if (process.env.POSTING_LAYOUT_GUIDE_ONLY) { await guidedTopupRegressions(browser, origin); return; }
     for (const size of sizes) {
       const context = await browser.newContext({ viewport: { width: size.width, height: size.height }, reducedMotion: "reduce" });
       const page = await context.newPage();
@@ -407,10 +477,14 @@ async function main() {
       await modalBounds(page, "#funding-dialog");
       await wheelToEnd(page, "#funding-dialog");
       await hitTarget(page, "[data-close-funding]");
-      await hitTarget(page, "[data-fund-now]");
+      assert.equal(await page.locator("[data-funding-review]").isVisible(), false, "Legal and payment controls stay hidden while money is missing");
+      await page.locator(".funding-help > summary").click();
+      await page.locator("[data-funding-topup] [data-onramp-link]").scrollIntoViewIfNeeded();
+      await hitTarget(page, "[data-funding-topup] [data-onramp-link]");
       await page.locator("[data-close-funding]").click();
       assert.equal(await page.locator(".ab-phone-launcher").count(), 0);
       await page.locator("[data-open-funding]").click();
+      await page.getByRole("button", { name: "Change wallet", exact: true }).click();
       await page.getByRole("button", { name: "Choose or recover another wallet", exact: true }).click();
       await page.getByRole("button", { name: "Use a phone wallet", exact: false }).click();
       await page.locator(".ab-phone-qr").waitFor({ state: "visible" });
@@ -461,6 +535,7 @@ async function main() {
       await context.close();
     }
     await recoveryRegressions(browser, origin);
+    await guidedTopupRegressions(browser, origin);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => server.close());

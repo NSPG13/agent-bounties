@@ -170,7 +170,8 @@ test("explicit phone selection shows the restored wallet and waits for the visib
   assert.equal(env.api.state().review_open, true); assert.equal(resolved, false);
   assert.equal(env.button("Use connected wallet").hidden, false);
   assert.equal(env.button("Connect again with a new QR code").hidden, false);
-  assert.ok(env.nodes.some(node => node.textContent.includes(address) && node.textContent.includes("already connected")));
+  assert.ok(env.nodes.some(node => node.textContent === address && !node.hidden));
+  assert.ok(env.nodes.some(node => node.textContent === "Use this wallet?"));
   assert.equal(env.qr().hidden, true); assert.equal(env.providers[0].connects, 0);
   env.button("Use connected wallet").click();
   assert.deepEqual(await pending, [address]); assert.equal(env.api.state().review_open, false);

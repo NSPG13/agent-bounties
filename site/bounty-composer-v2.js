@@ -248,6 +248,19 @@
   function setPaymentStatus(message, tone = "") {
     ui.paymentStatus.textContent = message || "";
     ui.paymentStatus.dataset.tone = tone;
+    renderFundingGuide();
+  }
+
+  function renderFundingGuide() {
+    window.AgentBountiesFundingGuide?.render({
+      account: state.account, connected: Boolean(state.provider), balances: state.balances,
+      connecting: walletConnecting, busy: postingBusy, approved: state.approved,
+      recorded: Boolean(postingJournal.load()), continuable: postingSession.canContinue(),
+      canonical: state.canonical, conflict: postingSession.snapshot().conflict,
+      total: formatUsdc(state.fundingUsdc), solver: state.fundingUsdc ? formatUsdc(Number(currentRewardSplit().solver) / 1e6) : "0.00",
+      verifier: state.fundingUsdc ? formatUsdc(Number(currentRewardSplit().verifier) / 1e6) : "0.00", creator: state.draft?.benchmark?.engine === "creator_review_v1",
+      message: ui.paymentStatus.textContent, tone: ui.paymentStatus.dataset.tone,
+    });
   }
 
   function setProgress(active) {
@@ -1678,7 +1691,8 @@
     ui.walletPanel.hidden = false;
     ui.readiness.hidden = true;
     ui.fundNow.disabled = true;
-    chooseCryptoWallet().catch((error) => setPaymentStatus(error.message || String(error), "error"));
+    if (state.provider) void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error"));
+    else chooseCryptoWallet().catch((error) => setPaymentStatus(error.message || String(error), "error"));
   }
 
   function providerName(item) {
@@ -1702,6 +1716,7 @@
   async function openWalletTopUp(event) {
     event.preventDefault();
     if (postingBusy) { setPaymentStatus("Wait for the current wallet request to finish. Your operation is saved.", "pending"); return; }
+    setPaymentStatus("Saving your bounty. Opening the next step…", "pending");
     try {
       await postingSession.flush({ requireServer: Boolean(state.accountSession?.authenticated) });
       const operation = postingSession.snapshot().operation_id || window.AgentBountiesWorkflow.createClient(window).load()?.id;
@@ -1711,6 +1726,7 @@
       const destination = new URL("onramp.html", window.location.href);
       destination.searchParams.set("purpose", "post");
       destination.searchParams.set("amount", formatUsdc(state.fundingUsdc));
+      if (state.balances && state.balances.usdc >= state.balances.required && state.balances.eth === 0n) destination.searchParams.set("asset", "eth");
       destination.searchParams.set("return", back.href);
       if (operation) destination.searchParams.set("operation_id", operation);
       if (state.account) destination.searchParams.set("wallet", state.account);
@@ -1727,15 +1743,15 @@
     ui.walletOptions.textContent="";
     ui.walletMessage.textContent="Looking for wallets on this device…";
     const providers=await discoverWallets();
-    ui.walletMessage.textContent="Verified ownership and a connected signing session are separate. Select your wallet to check its balances first.";
+    ui.walletMessage.textContent="Choose a saved wallet, or use another wallet.";
     for (const wallet of state.linkedWallets) {
       if (!/^0x[0-9a-f]{40}$/i.test(wallet.address)) continue;
       const button = document.createElement("button"); button.type = "button"; button.className = "wallet-option";
       const title = document.createElement("strong"), note = document.createElement("small");
-      title.textContent = `${wallet.label || wallet.address} · Verified ownership`;
-      note.textContent = `${wallet.provider_id || "Provider not recorded"} · Base · Last verified ${wallet.last_verified_at || wallet.linked_at || "unknown"}`;
+      title.textContent = `${wallet.label || "Saved wallet"}`;
+      note.textContent = `${wallet.address.slice(0, 8)}…${wallet.address.slice(-6)} · Saved to your account`;
       button.append(title, note);
-      const use = document.createElement("button"); use.type = "button"; use.className = "button secondary"; use.textContent = "Use this wallet"; use.hidden = true;
+      const use = document.createElement("button"); use.type = "button"; use.className = "button primary guide-primary"; use.textContent = "Use this wallet"; use.hidden = true;
       use.addEventListener("click", async () => {
         if (postingBusy || walletConnecting) return;
         try { const choice = await window.AgentBountiesWalletLink.select(); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); }
@@ -1757,6 +1773,7 @@
     const other = document.createElement("button"); other.type = "button"; other.className = "wallet-option"; other.textContent = "Choose or recover another wallet";
     other.addEventListener("click", async () => { try { const choice = await window.AgentBountiesWalletLink.select(); await connectWallet({ ...choice, info: { name: choice.label } }); } catch (error) { setPaymentStatus(error.message, "error"); } });
     ui.walletOptions.append(other);
+    renderFundingGuide();
     if (state.linkedWallets.length === 1 && !state.account) {
       state.account = state.linkedWallets[0].address; state.selectedWallet = state.account;
       void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error"));
@@ -1794,14 +1811,14 @@
         if (state.provider !== item.provider) return;
         if (!values?.[0] || values[0].toLowerCase() !== state.account?.toLowerCase()) {
           state.provider = null; state.balances = null; ui.fundNow.disabled = true;
-          setPaymentStatus("The signing account changed. Reconnect the selected wallet before funding.", "pending"); updatePostingTracker();
+          setPaymentStatus("Your wallet changed. Connect it again to continue.", "pending"); updatePostingTracker();
         }
       });
       state.provider.on?.("chainChanged", () => { if (state.provider !== item.provider) return; state.balances = null; ui.fundNow.disabled = true; void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error")); });
       updatePostingTracker();
       track("wallet_connected"); await switchToBase(state.provider, protocol); await refreshWalletReadiness();
     } catch (error) { setPaymentStatus(error.message || String(error), "error"); }
-    finally { walletConnecting = false; }
+    finally { walletConnecting = false; renderFundingGuide(); }
   }
 
   function addressWord(address){return String(address).toLowerCase().replace(/^0x/,"").padStart(64,"0");}
@@ -1877,7 +1894,7 @@
     walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. Gas is checked for the exact transaction before sending.`;
     for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "_self"; }
     updatePostingTracker(); updatePostingCost();
-    if (!provider) setPaymentStatus("Balances checked without connecting or signing. Choose Use this wallet to restore its signing session.", "pending");
+    if (!provider) setPaymentStatus("Choose your wallet to connect it. No money will move.", "pending");
     else if (!usdcReady || !gasAvailable) setPaymentStatus("Top up the displayed shortfall, then return here. Buying funds does not create or fund the bounty.", "pending");
     else setPaymentStatus("Funds are available. Review and post prepares the exact request and its network fee; you confirm it in your wallet.", "success");
   }
@@ -2089,6 +2106,7 @@
       postingBusy = false; postingBinding = null;
       ui.fundNow.disabled = !postingSession.canContinue();
       if (postingSession.canContinue()) ui.fundNow.textContent = "Continue funding";
+      renderFundingGuide();
     }
   }
 
@@ -2229,6 +2247,7 @@
       postingBusy = false;
       postingBinding = null;
       if (!postingJournal.load()) for (const field of ui.form.querySelectorAll("input, textarea, button")) field.disabled = false;
+      renderFundingGuide();
     }
   }
 
@@ -2357,6 +2376,13 @@
   ui.fund.addEventListener("click",openFunding);
   ui.closeDialog.addEventListener("click",()=>ui.dialog.close());
   ui.cryptoMethod.addEventListener("click",chooseCryptoWallet);
+  document.querySelector("[data-change-funding-wallet]")?.addEventListener("click", () => {
+    if (postingBusy || walletConnecting) return;
+    state.provider = null; state.balances = null;
+    setPaymentStatus("");
+    void chooseCryptoWallet().catch(error => setPaymentStatus(error.message, "error"));
+  });
+  ui.dialog.addEventListener("change", renderFundingGuide);
   ui.watchUsdc.addEventListener("click",watchUsdcAsset);
   ui.copyUsdc.addEventListener("click",copyUsdcAddress);
   ui.recheck.addEventListener("click",()=>refreshWalletReadiness().catch((error)=>setPaymentStatus(error.message||String(error),"error")));

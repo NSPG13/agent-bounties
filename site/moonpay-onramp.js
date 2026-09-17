@@ -21,6 +21,7 @@
     operationId: "",
     balanceRead: 0,
     checkoutBusy: false,
+    balanceBusy: false,
     providerTab: null,
   };
 
@@ -36,6 +37,7 @@
     if (!element) return;
     element.textContent = Array.isArray(message) ? message.join("\n") : message;
     element.dataset.tone = tone;
+    if (tone === "error" || tone === "pending") window.AgentBountiesTopupGuide?.feedback(Array.isArray(message) ? message.join(" ") : message, tone);
   }
 
   function providerName(provider, info = {}) {
@@ -203,17 +205,20 @@
 
   async function refreshBalances() {
     if (!state.account) throw new Error("Connect a wallet or enter its public address first.");
-    const protocol = await loadProtocol();
-    const wallet = state.account;
-    const read = ++state.balanceRead;
-    const balances = await window.AgentBountiesFundingReadiness.readBalances({ wallet, usdcAddress: protocol.native_usdc });
-    if (read !== state.balanceRead || wallet !== state.account) return;
-    state.ethBalance = balances.eth;
-    state.usdcBalance = balances.usdc;
-    select("[data-eth-balance]").textContent = `${formatUnits(state.ethBalance, 18, 6)} ETH`;
-    select("[data-usdc-balance]").textContent = `${formatUnits(state.usdcBalance, 6, 6)} USDC`;
-    select("[data-balance-observed]").textContent = `Checked on Base at ${new Date(balances.observedAt).toLocaleTimeString()}. Refreshes when you return.`;
-    renderBalanceGuidance();
+    state.balanceBusy = true; notifyGuide();
+    try {
+      const protocol = await loadProtocol();
+      const wallet = state.account;
+      const read = ++state.balanceRead;
+      const balances = await window.AgentBountiesFundingReadiness.readBalances({ wallet, usdcAddress: protocol.native_usdc });
+      if (read !== state.balanceRead || wallet !== state.account) return;
+      state.ethBalance = balances.eth;
+      state.usdcBalance = balances.usdc;
+      select("[data-eth-balance]").textContent = `${formatUnits(state.ethBalance, 18, 6)} ETH`;
+      select("[data-usdc-balance]").textContent = `${formatUnits(state.usdcBalance, 6, 6)} USDC`;
+      select("[data-balance-observed]").textContent = `Checked on Base at ${new Date(balances.observedAt).toLocaleTimeString()}. Refreshes when you return.`;
+      renderBalanceGuidance();
+    } finally { state.balanceBusy = false; notifyGuide(); }
   }
 
   function formatUnits(value, decimals, maximumFractionDigits) {
@@ -460,6 +465,7 @@
       ? `A ${select("[data-onramp-asset]").value === "eth" ? "Base ETH" : "Base USDC"} purchase was started for this wallet.${attempt.reference ? ` Reference: ${attempt.reference}.` : ""} Its payment status is unverified. Reopen the existing provider order or confirmation email; if you already paid, keep that order and contact its provider about a failed upload or payment screen.`
       : "";
     window.dispatchEvent(new Event("agent-bounties:onramp-state"));
+    notifyGuide();
   }
 
   function openDirectCheckout() {
@@ -482,6 +488,11 @@
     setOutput("[data-onramp-output]", "MoonPay opened. Review the exact received asset, Base network, destination wallet, quote, fees and purchase minimum there. Buying crypto does not fund the bounty.", "pending");
   }
 
+  function notifyGuide() {
+    window.AgentBountiesTopupGuide?.render({ account: state.account, required: state.requiredUsdc,
+      usdc: state.usdcBalance, eth: state.ethBalance, busy: state.balanceBusy || state.checkoutBusy,
+      pending: Boolean(currentAttempt()), existingBounty: Boolean(state.bountyContract) });
+  }
   window.AgentBountiesOnramp = Object.freeze({ hasPendingPurchase: () => Boolean(currentAttempt()), openDirectCheckout });
 
   function validateCheckoutPlan(body, bountyContract) {
@@ -508,8 +519,10 @@
   }
 
   async function run(action) {
+    window.AgentBountiesTopupGuide?.feedback("Working on it…", "pending");
     try {
       await action();
+      window.AgentBountiesTopupGuide?.feedback("", "");
     } catch (error) {
       const message = error.name === "AbortError" ? "Checkout request timed out. Check the existing purchase before retrying; its status remains unverified." : error.message || String(error);
       setOutput("[data-onramp-output]", message, "error");
@@ -576,6 +589,7 @@
   async function initialize() {
     try {
       renderContext();
+      if (new URLSearchParams(location.search).get("asset") === "eth") select("[data-onramp-asset]").value = "eth";
       renderAssetHelp();
       wireEvents();
       await discoverProviders();
@@ -587,7 +601,7 @@
     } catch (error) {
       setOutput("[data-onramp-output]", error.message || String(error), "error");
       select("[data-start-moonpay]").disabled = true;
-    }
+    } finally { notifyGuide(); }
   }
 
   initialize();
