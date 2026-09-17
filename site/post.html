@@ -17,7 +17,7 @@
     <link rel="stylesheet" href="bounty-composer.css?v=3">
     <link rel="stylesheet" href="bounty-composer-v2.css?v=4">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=4">
-    <link rel="stylesheet" href="phone-wallet.css?v=3">
+    <link rel="stylesheet" href="phone-wallet.css?v=4">
     <link rel="stylesheet" href="wallet-link.css?v=4">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
     <link rel="stylesheet" href="posting-workspace.css?v=6">
@@ -248,7 +248,7 @@
           <section class="wallet-picker-panel" data-wallet-panel hidden>
             <p data-wallet-message>Looking for wallets…</p>
             <div class="wallet-options" data-wallet-options></div>
-            <p class="wallet-alternative">Need a wallet or USDC? <a href="onramp.html?purpose=post" target="_blank" rel="noopener noreferrer" data-onramp-link data-walletless-onramp-link>View setup options ↗</a></p>
+            <p class="wallet-alternative">Need a wallet or USDC? <a href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link data-walletless-onramp-link>View setup options</a></p>
           </section>
 
           <section class="wallet-readiness" data-wallet-readiness hidden aria-label="Wallet readiness">
@@ -277,8 +277,8 @@
             </div>
 
             <div class="wallet-tools">
-              <a class="button secondary" href="onramp.html?purpose=post" target="agent-bounties-topup" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
-              <button class="button secondary" type="button" data-watch-usdc>Add USDC</button>
+              <a class="button secondary" href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
+              <button class="button secondary" type="button" data-watch-usdc>Show USDC in wallet</button>
               <button class="button secondary" type="button" data-copy-usdc>Copy token address</button>
               <button class="button secondary" type="button" data-recheck-balance>Recheck</button>
             </div>
@@ -300,7 +300,7 @@
 
     <script src="posting-auth.js?v=3"></script>
     <script src="phone-wallet-config.js?v=1"></script>
-    <script src="phone-wallet.js?v=6"></script>
+    <script src="phone-wallet.js?v=7"></script>
     <script src="marketplace-workflow.js?v=8"></script>
     <script src="posting-session.js?v=2"></script>
     <script src="funding-readiness.js?v=2"></script>
@@ -316,7 +316,7 @@
     <script src="posting-prompt.js?v=6"></script>
     <script src="creator-review.js?v=2"></script>
     <script src="ai-bounty-handoff.js?v=11"></script>
-    <script src="bounty-composer-v2.js?v=22"></script>
+    <script src="bounty-composer-v2.js?v=23"></script>
     <script src="posting-brief.js?v=1"></script>
     <script src="posting-workspace.js?v=5"></script>
     <script src="forest-posting.js?v=1"></script>

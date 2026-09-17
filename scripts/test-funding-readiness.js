@@ -121,6 +121,34 @@ function postingWalletFixture({ balanceFailure = false } = {}) {
   return { ...api, state, ui, context, window, phone, element, statuses, walletCalls, balanceReads };
 }
 
+test("top-up saves the approved operation before same-tab navigation and binds the return review", async () => {
+  const operation = "11111111-1111-4111-8111-111111111111";
+  const calls = [], statuses = [];
+  let blocked = false;
+  const context = vm.createContext({ URL, postingBusy: false,
+    state: { account: wallet, fundingUsdc: 2.01, accountSession: { authenticated: true } },
+    postingSession: { async flush(options) { calls.push(["save", options.requireServer]); if (blocked) throw new Error("Draft changed on another device"); }, snapshot: () => ({ operation_id: operation }) },
+    window: { location: { href: "https://agentbounties.app/post.html?analytics=off", assign: url => calls.push(["navigate", url]) }, open: () => { throw new Error("Popups are blocked"); } },
+    formatUsdc: value => value.toFixed(2), setPaymentStatus: text => statuses.push(text),
+  });
+  const source = fs.readFileSync(path.join(root, "site/bounty-composer-v2.js"), "utf8");
+  const open = vm.runInContext(source.slice(source.indexOf("  async function openWalletTopUp("), source.indexOf("  async function chooseCryptoWallet()")) + "\nopenWalletTopUp", context);
+  let prevented = 0;
+  await open({ preventDefault() { prevented++; } });
+  assert.equal(prevented, 1); assert.deepEqual(calls[0], ["save", true]);
+  const destination = new URL(calls[1][1]), back = new URL(destination.searchParams.get("return"));
+  assert.equal(destination.pathname, "/onramp.html"); assert.equal(destination.searchParams.get("amount"), "2.01");
+  assert.equal(destination.searchParams.get("wallet"), wallet); assert.equal(destination.searchParams.get("operation_id"), operation);
+  assert.equal(back.pathname, "/post.html"); assert.equal(back.searchParams.get("operation_id"), operation);
+  assert.equal(back.searchParams.get("analytics"), "off"); assert.equal(back.searchParams.get("funding_review"), "1");
+  assert.equal(back.hash, "#bounty-preview");
+  calls.length = 0; blocked = true;
+  await open({ preventDefault() {} });
+  assert.equal(calls.length, 1); assert.match(statuses.at(-1), /Draft changed.*draft remains here/);
+  calls.length = 0; context.postingBusy = true;
+  await open({ preventDefault() {} }); assert.equal(calls.length, 0);
+});
+
 test("both phone entry points reuse the connection, show the shortfall and make no payment request", async () => {
   for (const route of ["direct", "chooser"]) {
     const env = postingWalletFixture();
