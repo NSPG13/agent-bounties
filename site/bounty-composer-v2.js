@@ -215,6 +215,8 @@
   const postingSession = window.AgentBountiesPostingSession.create(window);
   let postingBusy = false;
   let postingBinding = null;
+  let walletConnecting = false;
+  let walletReadinessVersion = 0;
 
   function enableAiHandoffReview() {
     state.handoffReview = true;
@@ -1698,7 +1700,7 @@
   }
 
   async function chooseCryptoWallet() {
-    if (postingBusy) return;
+    if (postingBusy || walletConnecting) return;
     ui.cryptoMethod.dataset.active="true";
     ui.walletPanel.hidden=false;
     ui.walletOptions.textContent="";
@@ -1712,17 +1714,23 @@
       title.textContent = `${wallet.label || wallet.address} · Verified ownership`;
       note.textContent = `${wallet.provider_id || "Provider not recorded"} · Base · Last verified ${wallet.last_verified_at || wallet.linked_at || "unknown"}`;
       button.append(title, note);
+      const use = document.createElement("button"); use.type = "button"; use.className = "button secondary"; use.textContent = "Use this wallet"; use.hidden = true;
+      use.addEventListener("click", async () => {
+        if (postingBusy || walletConnecting) return;
+        try { const choice = await window.AgentBountiesWalletLink.select(); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); }
+        catch (error) { setPaymentStatus(error.message, "error"); }
+      });
       button.addEventListener("click", async () => {
-        if (postingBusy) return;
+        if (postingBusy || walletConnecting) return;
         state.selectedWallet = wallet.address; state.account = wallet.address; state.provider = null;
+        // Connection remains available even when the public balance read fails.
+        // Repeated selection reuses this action instead of appending duplicates.
+        use.hidden = false;
         try {
           await refreshWalletReadiness();
-          const use = document.createElement("button"); use.type = "button"; use.className = "button secondary"; use.textContent = "Use this wallet";
-          use.addEventListener("click", async () => { try { const choice = await window.AgentBountiesWalletLink.select(); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); } catch (error) { setPaymentStatus(error.message, "error"); } });
-          ui.walletOptions.append(use);
         } catch (error) { setPaymentStatus(error.message, "error"); }
       });
-      ui.walletOptions.append(button);
+      ui.walletOptions.append(button, use);
     }
     for(const item of providers){const button=document.createElement("button");button.type="button";button.className="wallet-option";const name=document.createElement("strong");name.textContent=providerName(item);const note=document.createElement("small");note.textContent="Connect and check Base USDC";button.append(name,note);button.addEventListener("click",()=>connectWallet(item));ui.walletOptions.append(button);}
     const other = document.createElement("button"); other.type = "button"; other.className = "wallet-option"; other.textContent = "Choose or recover another wallet";
@@ -1746,11 +1754,14 @@
   async function switchToBase(provider,protocol){const current=await provider.request({method:"eth_chainId"});if(String(current).toLowerCase()===String(protocol.chain_id_hex).toLowerCase())return;try{await provider.request({method:"wallet_switchEthereumChain",params:[{chainId:protocol.chain_id_hex}]});}catch(error){if(error&&error.code===4902){await provider.request({method:"wallet_addEthereumChain",params:[{chainId:protocol.chain_id_hex,chainName:"Base",nativeCurrency:{name:"Ether",symbol:"ETH",decimals:18},rpcUrls:["https://mainnet.base.org"],blockExplorerUrls:[protocol.explorer_url]}]});}else throw error;}}
 
   async function connectWallet(item, expectedAddress = null) {
-    if (postingBusy) return;
+    if (postingBusy || walletConnecting) return;
     if ((item.kind === "embedded" || item.provider?.agentBountiesCapabilities?.directTransactions === false) && item.provider?.agentBountiesCapabilities?.postingTransactions !== true) {
       setPaymentStatus("This wallet version cannot create a bounty. Reload to update it or choose another wallet. Your draft and approval are saved.", "pending");
       return;
     }
+    walletConnecting = true;
+    walletReadinessVersion++;
+    state.balances = null; ui.fundNow.disabled = true;
     setPaymentStatus(`Connecting ${providerName(item)}…`, "pending");
     try {
       const protocol = await loadProtocol();
@@ -1759,14 +1770,17 @@
       if (expectedAddress && accounts[0].toLowerCase() !== expectedAddress.toLowerCase()) throw new Error("This signing session belongs to another address. Choose the verified wallet you selected; no payment was requested.");
       state.provider = item.provider; state.account = accounts[0]; state.selectedWallet = state.account;
       state.provider.on?.("accountsChanged", (values) => {
+        if (state.provider !== item.provider) return;
         if (!values?.[0] || values[0].toLowerCase() !== state.account?.toLowerCase()) {
           state.provider = null; state.balances = null; ui.fundNow.disabled = true;
           setPaymentStatus("The signing account changed. Reconnect the selected wallet before funding.", "pending"); updatePostingTracker();
         }
       });
-      state.provider.on?.("chainChanged", () => { state.balances = null; ui.fundNow.disabled = true; void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error")); });
+      state.provider.on?.("chainChanged", () => { if (state.provider !== item.provider) return; state.balances = null; ui.fundNow.disabled = true; void refreshWalletReadiness().catch((error) => setPaymentStatus(error.message, "error")); });
+      updatePostingTracker();
       track("wallet_connected"); await switchToBase(state.provider, protocol); await refreshWalletReadiness();
     } catch (error) { setPaymentStatus(error.message || String(error), "error"); }
+    finally { walletConnecting = false; }
   }
 
   function addressWord(address){return String(address).toLowerCase().replace(/^0x/,"").padStart(64,"0");}
@@ -1795,10 +1809,34 @@
 
   async function refreshWalletReadiness() {
     if (!state.account) return;
-    const account = state.account, provider = state.provider, protocol = await loadProtocol();
-    const balances = await window.AgentBountiesFundingReadiness.readBalances({ wallet: account, usdcAddress: protocol.native_usdc, provider });
-    if (state.account !== account || state.provider !== provider) return;
+    const account = state.account, provider = state.provider, version = ++walletReadinessVersion;
+    const current = () => version === walletReadinessVersion && state.account === account && state.provider === provider;
+    const verified = state.linkedWallets.some((wallet) => wallet.address.toLowerCase() === account.toLowerCase());
+    const connection = `${verified ? "Verified ownership" : "Ownership not linked to this account"} · ${provider ? "Connected for this session" : "Balance checks only — connect to sign"}`;
+    const walletState = document.querySelector("[data-wallet-state]");
+    state.balances = null; ui.fundNow.disabled = true;
+    ui.account.textContent = `${account.slice(0,8)}…${account.slice(-6)}`;
+    ui.requiredUsdc.textContent = `${formatUsdc(state.fundingUsdc)} USDC`;
+    ui.usdcBalance.textContent = "Checking…"; ui.ethBalance.textContent = "Checking…";
+    ui.readiness.hidden = false; ui.fundingHelp.hidden = true;
+    walletState.textContent = `${connection} · Checking Base balances…`;
+    updatePostingTracker();
+    setPaymentStatus(`${provider ? "Wallet connected. " : ""}Checking Base USDC and ETH; no signature or payment is requested.`, "pending");
+    let balances;
+    try {
+      const protocol = await loadProtocol();
+      if (!current()) return;
+      balances = await window.AgentBountiesFundingReadiness.readBalances({ wallet: account, usdcAddress: protocol.native_usdc, provider,
+        usePublicRpc: Boolean(provider && provider === window.AgentBountiesPhoneWallet?.provider) });
+    } catch (error) {
+      if (!current()) return;
+      ui.usdcBalance.textContent = "Unavailable"; ui.ethBalance.textContent = "Unavailable";
+      walletState.textContent = `${connection} · Balance check unavailable. Use Recheck; no payment was requested.`;
+      throw error;
+    }
+    if (!current()) return;
     const priorConsent = await savedLegalAcceptance();
+    if (!current()) return;
     const legalCheckbox = ui.dialog.querySelector("[data-legal-consent-checkbox]");
     if (legalCheckbox) {
       if (priorConsent) { legalCheckbox.checked = true; legalCheckbox.disabled = true; }
@@ -1815,8 +1853,7 @@
     ui.missingUsdc.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(required > usdc ? required - usdc : 0n)} USDC`;
     ui.fundNow.disabled = !state.approved || !provider || !usdcReady || !gasAvailable || Boolean(postingJournal.load() && !postingSession.canContinue()) || postingSession.snapshot().conflict;
     ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : "Review and post";
-    const verified = state.linkedWallets.some((wallet) => wallet.address.toLowerCase() === account.toLowerCase());
-    document.querySelector("[data-wallet-state]").textContent = `${verified ? "Verified ownership" : "Ownership not linked to this account"} · ${provider ? "Connected for this session" : "Balance checks only — connect to sign"} · ${usdcReady ? "USDC available" : "USDC shortfall"}. Gas is checked for the exact transaction before sending.`;
+    walletState.textContent = `${connection} · ${usdcReady ? "USDC available" : "USDC shortfall"}. Gas is checked for the exact transaction before sending.`;
     for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "agent-bounties-topup"; }
     updatePostingTracker(); updatePostingCost();
     if (!provider) setPaymentStatus("Balances checked without connecting or signing. Choose Use this wallet to restore its signing session.", "pending");

@@ -11,8 +11,8 @@ const wallet = `0x${"a".repeat(40)}`;
 const usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 const runScript = (context, name) => vm.runInContext(fs.readFileSync(path.join(root, "site", name), "utf8"), context, { filename: name });
 
-function helperContext() {
-  const context = vm.createContext({ window: {}, AbortController, setTimeout, clearTimeout });
+function helperContext(fetch) {
+  const context = vm.createContext({ window: {}, AbortController, setTimeout, clearTimeout, fetch });
   runScript(context, "funding-readiness.js");
   return context.window.AgentBountiesFundingReadiness;
 }
@@ -49,6 +49,130 @@ test("readiness rejects wrong network, token, malformed balances and a stalled p
   await assert.rejects(api.readBalances({ wallet, usdcAddress: wallet }), /native Base USDC/);
   await assert.rejects(api.readBalances({ wallet, provider: { request: async () => "garbage" } }), /invalid balance/);
   await assert.rejects(api.readBalances({ wallet, provider: { request: () => new Promise(() => {}) }, timeoutMs: 5 }), /timed out/);
+});
+
+test("phone balances bypass stalled wallet RPC while checking both wallet and public Base networks", async () => {
+  const walletCalls = [], publicCalls = [];
+  let walletChain = "0x2105", publicChain = "0x2105";
+  const api = helperContext(async (url, options) => {
+    assert.equal(url, "https://mainnet.base.org");
+    assert.equal(options.credentials, "omit");
+    const call = JSON.parse(options.body); publicCalls.push(call);
+    return { ok: true, json: async () => ({ result: { eth_chainId: publicChain, eth_blockNumber: "0x123", eth_call: "0x0", eth_getBalance: "0x12" }[call.method] }) };
+  });
+  const provider = { request: async ({ method }) => {
+    walletCalls.push(method);
+    if (method === "eth_chainId") return walletChain;
+    return new Promise(() => {});
+  } };
+  const result = await api.readBalances({ wallet, provider, usePublicRpc: true, timeoutMs: 50 });
+  assert.deepEqual(walletCalls, ["eth_chainId"]);
+  assert.equal(result.usdc, 0n); assert.equal(result.eth, 18n);
+  assert.equal(publicCalls[2].params[1], "0x123"); assert.equal(publicCalls[3].params[1], "0x123");
+  walletChain = "0x1";
+  await assert.rejects(api.readBalances({ wallet, provider, usePublicRpc: true }), /Base mainnet/);
+  assert.equal(publicCalls.length, 4, "A wrong wallet chain never gets bypassed by a public Base read");
+  walletChain = "invalid";
+  await assert.rejects(api.readBalances({ wallet, provider, usePublicRpc: true }), /invalid network/);
+  walletChain = "0x2105"; publicChain = "0x1";
+  await assert.rejects(api.readBalances({ wallet, provider, usePublicRpc: true }), /Base mainnet/);
+  const stalled = helperContext(() => new Promise(() => {}));
+  await assert.rejects(stalled.readBalances({ wallet, provider, usePublicRpc: true, timeoutMs: 5 }), /timed out/);
+});
+
+function postingWalletFixture({ balanceFailure = false } = {}) {
+  const elements = new Map(), statuses = [], walletCalls = [], balanceReads = [];
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, { hidden: false, disabled: false, textContent: "", dataset: {}, children: [], handlers: {},
+      append(...children) { this.children.push(...children); }, addEventListener(type, handler) { this.handlers[type] = handler; } });
+    return elements.get(selector);
+  };
+  let nextElement = 0;
+  const document = { createElement: () => element(`created-${nextElement++}`), querySelector: element };
+  const ui = Object.fromEntries(["cryptoMethod", "walletPanel", "walletOptions", "walletMessage", "fundNow", "account", "requiredUsdc", "usdcBalance", "ethBalance", "readiness", "fundingHelp", "missingUsdc"].map(name => [name, element(name)]));
+  ui.onramps = []; ui.dialog = { querySelector: () => null };
+  const phone = { request: async ({ method }) => { walletCalls.push(method); if (method === "eth_requestAccounts") return [wallet]; if (method === "eth_chainId") return "0x2105"; throw new Error("Unexpected wallet request: " + method); }, on() {} };
+  const state = { linkedWallets: [{ address: wallet }], account: wallet, provider: null, approved: true, fundingUsdc: 2.01, balances: { usdc: 99999999n } };
+  const helper = helperContext();
+  const window = { AgentBountiesPhoneWallet: { provider: phone }, AgentBountiesWalletLink: { select: async () => ({ provider: phone, kind: "phone", label: "Phone wallet" }) },
+    AgentBountiesFundingReadiness: { ...helper, readBalances: async (input) => {
+      balanceReads.push(input);
+      if (balanceFailure) throw new Error("Base balance check timed out");
+      assert.equal(input.usePublicRpc, Boolean(input.provider === phone));
+      return { wallet, usdc: 0n, eth: 18n, blockNumber: "0x123" };
+    } } };
+  const context = vm.createContext({ window, document, ui, state, URL,
+    walletReadinessVersion: 0, walletConnecting: false, postingBusy: false,
+    discoverWallets: async () => [{ provider: phone, info: { name: "Phone wallet" } }], providerName: item => item.info?.name || "Wallet",
+    loadProtocol: async () => ({ native_usdc: usdc, chain_id_hex: "0x2105" }),
+    switchToBase: async provider => { assert.equal(await provider.request({ method: "eth_chainId" }), "0x2105"); },
+    savedLegalAcceptance: async () => null, usdcBaseUnits: value => helper.parseUsdc(value), formatUsdc: value => Number(value).toFixed(2),
+    postingJournal: { load: () => null }, postingSession: { canContinue: () => false, snapshot: () => ({ conflict: false }) },
+    updatePostingTracker() {}, updatePostingCost() {}, track() {}, setPaymentStatus: text => statuses.push(text),
+  });
+  const source = fs.readFileSync(path.join(root, "site/bounty-composer-v2.js"), "utf8");
+  const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
+  const api = vm.runInContext([
+    section("  async function chooseCryptoWallet()", "  async function loadProtocol()"),
+    section("  async function connectWallet(", "  function addressWord("),
+    section("  async function refreshWalletReadiness()", "  function updatePostingCost("),
+    "({ chooseCryptoWallet, connectWallet, refreshWalletReadiness })",
+  ].join("\n"), context);
+  return { ...api, state, ui, context, window, phone, element, statuses, walletCalls, balanceReads };
+}
+
+test("both phone entry points reuse the connection, show the shortfall and make no payment request", async () => {
+  for (const route of ["direct", "chooser"]) {
+    const env = postingWalletFixture();
+    await env.chooseCryptoWallet();
+    const buttons = env.ui.walletOptions.children;
+    if (route === "direct") await buttons.find(button => button.children[0]?.textContent === "Phone wallet").handlers.click();
+    else {
+      await buttons[0].handlers.click(); await buttons[0].handlers.click();
+      assert.equal(buttons.filter(button => button.textContent === "Use this wallet").length, 1);
+      await buttons.find(button => button.textContent === "Use this wallet").handlers.click();
+    }
+    assert.equal(env.state.provider, env.phone);
+    assert.match(env.element("[data-wallet-state]").textContent, /Connected for this session.*USDC shortfall/);
+    assert.equal(env.ui.missingUsdc.textContent, "2.01 USDC");
+    assert.equal(env.ui.fundNow.disabled, true);
+    assert.deepEqual(env.walletCalls, ["eth_requestAccounts", "eth_chainId"]);
+    assert.ok(env.statuses.some(text => text.startsWith("Wallet connected.")));
+    assert.equal(env.context.walletConnecting, false);
+  }
+});
+
+test("failed balance reads retain a single connection action and never leave stale funds enabled", async () => {
+  const env = postingWalletFixture({ balanceFailure: true });
+  await env.chooseCryptoWallet();
+  await env.ui.walletOptions.children[0].handlers.click();
+  const use = env.ui.walletOptions.children.find(button => button.textContent === "Use this wallet");
+  assert.equal(use.hidden, false, "Connection cannot be gated on balance RPC availability");
+  await use.handlers.click();
+  assert.equal(env.state.provider, env.phone);
+  assert.equal(env.state.balances, null);
+  assert.equal(env.ui.fundNow.disabled, true);
+  assert.equal(env.ui.usdcBalance.textContent, "Unavailable");
+  assert.match(env.element("[data-wallet-state]").textContent, /Connected for this session.*Recheck/);
+});
+
+test("an older readiness result cannot overwrite a new wallet selection or newer failed check", async () => {
+  const env = postingWalletFixture();
+  const pending = [];
+  env.window.AgentBountiesFundingReadiness.readBalances = () => new Promise((resolve, reject) => pending.push({ resolve, reject }));
+  const first = env.refreshWalletReadiness();
+  await new Promise(setImmediate);
+  const second = env.refreshWalletReadiness();
+  await new Promise(setImmediate);
+  pending[1].reject(new Error("newer failure"));
+  await assert.rejects(second, /newer failure/);
+  pending[0].resolve({ usdc: 100000000n, eth: 18n }); await first;
+  assert.equal(env.state.balances, null); assert.equal(env.ui.fundNow.disabled, true);
+  assert.equal(env.ui.usdcBalance.textContent, "Unavailable");
+  const old = env.refreshWalletReadiness(); await new Promise(setImmediate);
+  env.state.account = `0x${"b".repeat(40)}`;
+  pending[2].resolve({ usdc: 100000000n, eth: 18n }); await old;
+  assert.equal(env.state.balances, null); assert.equal(env.ui.fundNow.disabled, true);
 });
 
 test("fee estimate includes live L1, L2 and operator fees without advertising a guaranteed maximum", async () => {
