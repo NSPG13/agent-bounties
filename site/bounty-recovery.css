@@ -1,0 +1,12 @@
+.recovery-page { max-width: 760px; margin: 4rem auto; padding: 1.5rem; line-height: 1.65; }
+.recovery-page h1 { font-size: clamp(2rem, 7vw, 3.5rem); line-height: 1.1; margin: 1.5rem 0; }
+.recovery-facts { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: .6rem 1rem; padding: 1.3rem; border: 1px solid currentColor; border-radius: 1rem; }
+.recovery-facts dt { font-weight: 700; }
+.recovery-facts dd { margin: 0; overflow-wrap: anywhere; }
+.recovery-page li { margin-block: .9rem; }
+.recovery-actions { display: flex; gap: .7rem; flex-wrap: wrap; margin-block: 1.5rem; }
+.recovery-actions button { border: 1px solid currentColor; border-radius: .65rem; padding: .8rem 1rem; font: inherit; font-weight: 700; cursor: pointer; }
+.recovery-actions button:disabled { opacity: .5; cursor: default; }
+#recovery-send:not(:disabled) { background: #8ee46b; color: #10251a; }
+#recovery-status { white-space: pre-line; overflow-wrap: anywhere; }
+@media (max-width: 540px) { .recovery-page { margin: 1rem auto; padding: 1rem; } .recovery-facts { grid-template-columns: 1fr; gap: .1rem; } .recovery-facts dd { margin-bottom: .7rem; } .recovery-actions button { width: 100%; } }
