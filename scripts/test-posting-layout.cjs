@@ -39,7 +39,7 @@ function sortedJson(value) {
   return value;
 }
 async function fixtures(context, origin, options = {}) {
-  const mock = { authenticated: options.authenticated !== false, wallets: options.wallets || [], drafts: options.drafts || new Map(), rpcRequests: [], draftRequests: [], events: [], inventory: [], usdcBalance: "0x5f5e100" };
+  const mock = { authenticated: options.authenticated !== false, wallets: options.wallets || [], drafts: options.drafts || new Map(), rpcRequests: [], draftRequests: [], events: [], inventory: [], usdcBalance: "0x5f5e100", ethBalance: "0x2386f26fc10000" };
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url());
     const session = { authenticated: mock.authenticated, account_status: mock.authenticated ? "ready" : "signed_out", account_complete: mock.authenticated, providers: { github: true }, user: mock.authenticated ? { id: "layout-qa", name: "Posting QA", email: "posting-qa@example.test" } : null };
@@ -66,7 +66,7 @@ async function fixtures(context, origin, options = {}) {
     if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
     if (url.origin === "https://mainnet.base.org") {
       const call = request.postDataJSON(); mock.rpcRequests.push(call);
-      const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: mock.usdcBalance, eth_getBalance: "0x2386f26fc10000" })[call.method];
+      const result = ({ eth_chainId: "0x2105", eth_blockNumber: "0x64", eth_call: mock.usdcBalance, eth_getBalance: mock.ethBalance })[call.method];
       assert.ok(result, "Public balance RPC must remain read only: " + call.method);
       return route.fulfill({ json: { jsonrpc: "2.0", id: call.id, result } });
     }
@@ -371,7 +371,20 @@ async function guidedTopupRegressions(browser, origin) {
       assert.equal(await page.locator(".topup-guide").getAttribute("data-view"), "pending", "Money arriving must not declare an uncertain order resolved");
       await page.getByText("My purchase is finished or cancelled", { exact: true }).click();
       await page.locator("[data-purchase-resolved]").check();
+      mock.ethBalance = "0x0";
       await page.getByRole("button", { name: "Check after purchase", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
+      assert.equal(await page.locator("[data-topup-needed]").textContent(), "ETH needed for the network fee");
+      await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
+      assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth", "After USDC arrives, the card path must select the missing gas asset");
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "method");
+      await page.getByRole("button", { name: "Buy with a card", exact: true }).click();
+      assert.equal(await page.locator("[data-onramp-asset]").inputValue(), "eth", "A gas-only visit without asset=eth must select ETH");
+      await page.getByRole("button", { name: "Review purchase details", exact: true }).click();
+      assert.match(await page.locator("[data-direct-asset]").textContent(), /ETH/);
+      mock.ethBalance = "0x2386f26fc10000";
+      await page.reload();
       await page.waitForFunction(() => document.querySelector(".topup-guide").dataset.view === "ready");
       assert.equal(await page.locator("[data-topup-panel=ready] [data-return-link]").getAttribute("href"), back);
       await noHorizontalOverflow(page);
