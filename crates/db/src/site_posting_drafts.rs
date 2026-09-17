@@ -274,10 +274,7 @@ mod tests {
         );
         assert_ne!(first.is_ok(), second.is_ok());
         let winner = first.or(second).unwrap();
-        for mut changed in [
-            ready.clone(),
-            winner.recovery_state.clone(),
-        ] {
+        for mut changed in [ready.clone(), winner.recovery_state.clone()] {
             if changed == winner.recovery_state {
                 changed["submission_attempt_id"] = json!(Uuid::new_v4());
             }

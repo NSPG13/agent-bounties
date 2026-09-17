@@ -103,3 +103,22 @@ the tested application changes and running the bounded live Coinbase test
 after deployment, replacing the prior staging-first requirement for this
 change. The five-person pilot is waived. Human publication, legal acceptance
 and wallet confirmations remain required; no payment is claimed in advance.
+
+## Reviewed build fingerprint — PR #1449
+
+The worker-build guard covers 165 inputs. Compared with main `c2261859`,
+only `crates/api/src/site_auth.rs` and `crates/db/src/site_posting_drafts.rs`
+change within that set. The API accepts a bounded continuation digest and
+submission UUID, rejects signatures in persisted recovery, and constrains
+submission phases. The database keeps the digest and reservation immutable
+and prevents returning a reserved send to a retryable phase. The added tests
+cover malformed metadata and concurrent/changed/replayed reservations.
+No dependencies, worker execution, signing runtime or secret scopes change.
+
+After formatting, the reviewed build digest is
+`81d1fee1017801a61caec3a7a2538f71fbdc2d33fcb805d6667c5e0dcc57b809`,
+replacing `7a55133c0025be81feac6354942bf655e5358572114c622e5a921bf549b18bb6`
+in the eight production workflow checks. Signing-runtime remains
+`6b0c5073097e9612f94e35089285729d0c0f5db580f75b351d19a97f8bffd2f1`.
+Historical benchmark directories and committed bounty bindings are unchanged.
+The guard, its scope and all before/after-build checks remain enforced.
