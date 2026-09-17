@@ -120,7 +120,7 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => fields }, fundNow: {}, badge: {} },
     sessionStorage: win.sessionStorage,
     updatePostingTracker() {},
-    track() {}, setPaymentStatus(message, kind) { if (kind === "error") errors.push(message); }, refreshWalletReadiness: async () => {}, loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: fixture.child_creation.factory_contract, chain_id: 8453 }),
+    track() {}, renderFundingGuide() {}, setPaymentStatus(message, kind) { if (kind === "error") errors.push(message); }, refreshWalletReadiness: async () => {}, loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: fixture.child_creation.factory_contract, chain_id: 8453 }),
     currentRewardSplit: () => split, randomBytes32: () => nonces++ ? "0x" + "77".repeat(32) : fixture.child_create.creation_nonce,
     metaChild: { ...helper, resolve: async () => parent, request: (_draft, _parent, _wallet, _split, _days, nonce) => ({ ...inputFor(), creation_nonce: nonce }), validatePlan: fixedHelper.validatePlan },
     requestJson: async (url, options) => {

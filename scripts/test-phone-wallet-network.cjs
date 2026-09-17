@@ -135,7 +135,7 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
   const run = vm.runInNewContext(legalFunctions + bindingFunctions + walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + finishFunction + fundingFunction, {
     postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
     sessionStorage: store,
-    track() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
+    track() {}, renderFundingGuide() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
     updatePostingCost() {}, updatePostingTracker() {},
     loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20), chain_id_hex: "0x2105", native_usdc: nativeUsdc }),
     currentRewardSplit: () => ({ solver: "900000", verifier: "100000", total: "1000000" }),
