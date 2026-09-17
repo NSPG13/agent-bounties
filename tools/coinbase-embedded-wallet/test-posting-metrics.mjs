@@ -15,9 +15,9 @@ async function openSignature(h){await h.page.locator('[data-legal-consent-checkb
 async function reconnect(h){
   await h.page.reload();await h.page.waitForFunction(()=>window.AgentBountiesComposer?.review().explicitly_approved);
   await tool(h.page,'agent_bounties_open_funding_review');
-  await h.page.locator('[data-wallet-options] button').filter({hasText:'Verified ownership'}).first().click();
+  await h.page.locator('[data-wallet-options] button').filter({hasText:'Saved to your account'}).first().click();
   await h.page.getByRole('button',{name:'Use this wallet',exact:true}).click();
-  await h.page.getByRole('button',{name:/Use or recover Coinbase embedded wallet/}).click();
+  await h.page.getByRole('button',{name:/Use Coinbase with email/}).click();
   await h.page.waitForFunction(()=>document.querySelector('[data-wallet-state]').textContent.includes('Connected for this session'));
 }
 async function send(h){await h.page.getByRole('button',{name:'Send transaction',exact:true}).click();await h.page.waitForURL('**/funded.html?**');}

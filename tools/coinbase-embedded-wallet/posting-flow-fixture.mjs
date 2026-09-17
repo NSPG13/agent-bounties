@@ -128,9 +128,9 @@ export async function setup(options={}) {
 }
 export async function connect({page,state}) {
   await page.locator('[data-approve-card]').click();
-  await page.locator('[data-wallet-options] button').filter({hasText:'Verified ownership'}).first().click();
+  await page.locator('[data-wallet-options] button').filter({hasText:'Saved to your account'}).first().click();
   await page.getByRole('button',{name:'Use this wallet',exact:true}).click();
-  await page.getByRole('button',{name:/Use or recover Coinbase embedded wallet/}).click();
+  await page.getByRole('button',{name:/Use Coinbase with email/}).click();
   await page.getByRole('button',{name:'Complete email verification',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('[data-wallet-state]').textContent.includes('Connected for this session'));
   assert.equal(state.signed,0);assert.equal(state.sent,0);
