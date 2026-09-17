@@ -123,8 +123,11 @@ terminally, retain it for recovery; do not silently fork a fresh authorization.
 
 ## API and WebMCP contract
 
-`GET /v1/wallet-funding/capabilities` exposes rollout flags. Account routes use the
-existing secure site session cookie, not an API key. All operation routes live
+The separately deployed hosted runtime exposes rollout flags through the
+[funding capabilities endpoint](https://api.agentbounties.app/v1/wallet-funding/capabilities)
+(GET). This website release does not add these routes to the public repository's
+local API; local deployments need the matching hosted-runtime implementation.
+Account routes use the existing secure site session cookie, not an API key. All operation routes live
 under the site-auth posting-funding operation prefix and return
 `Cache-Control: no-store`. The signed-in account must own the private posting draft.
 
