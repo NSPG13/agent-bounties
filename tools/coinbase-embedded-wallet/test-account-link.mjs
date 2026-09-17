@@ -194,7 +194,7 @@ for (const legacy of [false, true]) for (const linked of [false, true]) test(`ph
   try {
     assert.equal(await page.locator('.ab-phone-launcher').count(),0);
     await link.click();
-    const phone = page.getByRole('button',{name:/^Use a phone wallet Open your mobile wallet/});
+    const phone = page.getByRole('button',{name:/^Use a phone wallet Scan a code with your phone/});
     assert.equal(await phone.count(),1);
     assert.deepEqual(await page.evaluate(()=>window.walletTestCalls),[]);
     await evidence(page,'phone-chooser-mobile');
@@ -272,7 +272,7 @@ test("phone ownership feedback returns to the exact prepared bounty without a pa
   });
   try {
     await link.click();
-    await page.getByRole("button", { name: /^Use a phone wallet Open your mobile wallet/ }).click();
+    await page.getByRole("button", { name: /^Use a phone wallet Scan a code with your phone/ }).click();
     await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("connected. Review the ownership-only message"));
     assert.match(await page.locator("[data-wallet-status]").innerText(), /Phone wallet 0x222222…222222 connected/);
     assert.deepEqual((await page.evaluate(() => window.walletTestCalls)).map(call => call.method), ["eth_requestAccounts", "personal_sign"]);
@@ -361,7 +361,7 @@ for (const installed of [true, false]) {
         await link.click();
         assert.equal(await page.getByRole("dialog", { name: "Choose a wallet" }).isVisible(), true);
         assert.deepEqual(await page.evaluate(() => window.walletTestCalls), []);
-        await page.getByRole("button", { name: "Use or recover Coinbase embedded wallet", exact: false }).click();
+        await page.getByRole("button", { name: "Use Coinbase with email", exact: false }).click();
         await page.waitForFunction(() => document.querySelector("[data-wallet-status]").textContent.includes("verified and linked"));
         const calls = await page.evaluate(() => window.walletTestCalls);
         assert.deepEqual(calls.map(({ wallet, method }) => [wallet, method]), [["embedded", "eth_requestAccounts"], ["embedded", "personal_sign"]]);
@@ -403,7 +403,7 @@ for (const redirect of [false, true]) {
     const {context,page,link,proofs,errors} = await account({adapter:true,mobile:redirect});
     try {
       await link.click();
-      await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+      await page.getByRole('button',{name:'Use Coinbase with email',exact:false}).click();
       await page.getByRole('button',{name:redirect?'Continue with Google':'Complete email verification',exact:true}).click();
       const confirm = page.getByRole('dialog',{name:'Confirm wallet ownership',exact:true});
       await confirm.waitFor();
@@ -426,7 +426,7 @@ for (const redirect of [false, true]) {
       assert.equal(await page.evaluate(()=>sessionStorage.getItem('agentbounties:pending-embedded-account-link')),null);
       await evidence(page,redirect?'linked-mobile':'linked-desktop');
       await link.click();
-      await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+      await page.getByRole('button',{name:'Use Coinbase with email',exact:false}).click();
       await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('verified ownership and is connected'));
       assert.equal(proofs.length,2);
       await page.reload();
@@ -442,7 +442,7 @@ test('cancelled ownership review retains the wallet and retries without another 
   const {context,page,link,proofs,errors} = await account({adapter:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+    await page.getByRole('button',{name:'Use Coinbase with email',exact:false}).click();
     await page.getByRole('button',{name:'Complete email verification'}).click();
     await page.getByRole('button',{name:'Not now',exact:true}).click();
     await page.getByRole('button',{name:'Finish linking',exact:true}).click();
@@ -461,7 +461,7 @@ test('embedded posting requires a real payment click, preserves cancellation and
   const {context,page,link,errors} = await account({adapter:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+    await page.getByRole('button',{name:'Use Coinbase with email',exact:false}).click();
     await page.getByRole('button',{name:'Complete email verification'}).click();
     await page.getByRole('button',{name:'Verify and link wallet',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('verified and linked'));
@@ -512,7 +512,7 @@ test('verification failure never marks the wallet verified and can be retried', 
   const {context,page,link,errors} = await account({adapter:true,failVerify:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+    await page.getByRole('button',{name:'Use Coinbase with email',exact:false}).click();
     await page.getByRole('button',{name:'Complete email verification'}).click();
     await page.getByRole('button',{name:'Verify and link wallet',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('not finished'));
@@ -528,7 +528,7 @@ test('confirmed wallet remains visible when activity refresh fails', async () =>
   const {context,page,link} = await account({failRefresh:true});
   try {
     await link.click();
-    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+    await page.getByRole('button',{name:'Use Coinbase with email',exact:false}).click();
     await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('verified and linked'));
     assert.equal(await page.locator('[data-wallet-list] code').getAttribute('title'),EMBEDDED);
     assert.match(await page.locator('[data-wallet-list]').textContent(),/Verified/);
@@ -551,7 +551,7 @@ test("Coinbase configuration failure remains visible with retry and another-wall
   const { context, page, link, proofs, errors } = await account({ adapter: true, startupUnavailable: true });
   try {
     await link.click();
-    const recovery = page.getByRole("button", { name: /^Use or recover Coinbase embedded wallet/ });
+    const recovery = page.getByRole("button", { name: /^Use Coinbase with email/ });
     await recovery.click();
     await page.waitForFunction(() => document.querySelector(".wallet-link-status").textContent.includes("configuration could not load"));
     assert.equal(await recovery.isEnabled(), true);

@@ -14,9 +14,9 @@ async function restoreSecondTab(h){
   await second.addInitScript(saved=>{for(const [key,value] of Object.entries(saved))sessionStorage.setItem(key,value);},saved);
   await second.goto(h.page.url());await second.waitForFunction(()=>window.AgentBountiesComposer?.review().explicitly_approved);
   await tool(second,'agent_bounties_open_funding_review');
-  await second.locator('[data-wallet-options] button').filter({hasText:'Verified ownership'}).first().click();
+  await second.locator('[data-wallet-options] button').filter({hasText:'Saved to your account'}).first().click();
   await second.getByRole('button',{name:'Use this wallet',exact:true}).click();
-  await second.getByRole('button',{name:/Use or recover Coinbase embedded wallet/}).click();
+  await second.getByRole('button',{name:/Use Coinbase with email/}).click();
   await second.waitForFunction(()=>document.querySelector('[data-wallet-state]').textContent.includes('Connected for this session'));
   return second;
 }
@@ -28,8 +28,9 @@ for(const mobile of [false,true])for(const scenario of scenarios)test(`${mobile?
     await connect(h);
     if(['missing_terms','synthetic_click','changed_terms'].includes(scenario))row.expected_signatures=0;
     if(scenario==='missing_terms'){
-      await h.page.locator('[data-fund-now]').click();
-      await h.page.waitForFunction(()=>document.querySelector('[data-payment-status]').textContent.includes('Read and accept'));
+      assert.equal(await h.page.locator('[data-fund-now]').isDisabled(),true,'Payment stays disabled without legal consent');
+      assert.equal(await h.page.locator('[data-funding-consent-hint]').isVisible(),true);
+      await h.page.locator('[data-fund-now]').evaluate(button=>button.click());
       assert.equal(h.state.terms,null);
     }else if(scenario==='synthetic_click'){
       await h.page.locator('[data-legal-consent-checkbox]').check();
@@ -61,9 +62,10 @@ for(const mobile of [false,true])for(const scenario of scenarios)test(`${mobile?
       await cancelTransaction(h);h.state.legalChanged=true;await h.page.reload();
       await h.page.waitForFunction(()=>window.AgentBountiesComposer?.review().explicitly_approved);
       await tool(h.page,'agent_bounties_open_funding_review');
-      await h.page.locator('[data-wallet-options] button').filter({hasText:'Verified ownership'}).first().click();
+      await h.page.locator('[data-wallet-options] button').filter({hasText:'Saved to your account'}).first().click();
       await h.page.getByRole('button',{name:'Use this wallet',exact:true}).click();
-      await h.page.getByRole('button',{name:/Use or recover Coinbase embedded wallet/}).click();
+      await h.page.getByRole('button',{name:/Use Coinbase with email/}).click();
+      await h.page.locator('[data-legal-consent-checkbox]').check();
       await h.page.locator('[data-fund-now]').click();
       await h.page.waitForFunction(()=>document.querySelector('[data-payment-status]').textContent.includes('legal terms changed'));
     }else if(['private_continuation','tampered_continuation'].includes(scenario)){
