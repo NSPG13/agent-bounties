@@ -25,6 +25,13 @@ try{
    return json({});
   });
   await page.addInitScript(()=>{const tools=new Map();Object.defineProperty(document,"modelContext",{value:{registerTool:tool=>tools.set(tool.name,tool)}});window.testTopupTools=tools;});
+  for(const query of ["", "?guided=1", "?operation_id=invalid&guided=1"]){
+   await page.goto(`${base}/onramp.html${query}`);
+   assert.equal(await page.evaluate(()=>window.AgentBountiesGuidedFundingBoot),false);
+   assert.equal(await page.locator("[data-legacy-topup]").isVisible(),true);
+   assert.equal(await page.locator("[data-guided-topup]").isVisible(),false);
+   cases++;
+  }
   await page.goto(`${base}/onramp.html?operation_id=${operation}&wallet=${wallet}&amount=2.01&analytics=off`);
   await page.locator("[data-guided-country]").waitFor({state:"visible"});
   assert.equal(await page.locator("[data-legacy-topup]").isVisible(),false);

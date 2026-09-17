@@ -136,6 +136,9 @@
   }
   async function boot(){
     const requested=new URLSearchParams(window.location.search), key=`agent-bounties:guided-topup:${requested.get("operation_id")}`;
+    // Standalone, solver and participation links have no saved posting operation.
+    // Even an explicit rollout marker must not replace their working on-ramp.
+    if(!funding.UUID.test(requested.get("operation_id")||""))return false;
     const recovering=requested.get("guided")==="1"||remembered(key)==="1";
     let enabled=false;
     try{const api=window.AgentBountiesWorkflow.apiBase(window.location);const response=await fetch(`${api}/v1/wallet-funding/capabilities`,{cache:"no-store",credentials:"omit"});enabled=response.ok&&(await response.json()).guided_topup===true;}catch(_){}
