@@ -1,79 +1,75 @@
-/* The guide never buys, signs, or assumes that a purchase succeeded. */
+/* Presentation only: no purchase, signing, or provider-order completion. */
 (() => {
   "use strict";
   const $ = selector => document.querySelector(selector);
-  let snapshot = null, view = "method", walletStep = 0, previous = "", lastAccount = null;
+  let snapshot = null, view = "method", previous = "", lastAccount = null;
   function text(selector, value) { const node = $(selector); if (node && node.textContent !== value) node.textContent = value; }
   function feedback(message, tone) { const output = $("[data-topup-feedback]"); output.textContent = message; output.hidden = !message; output.dataset.tone = tone; }
-  function asset() { return $("[data-onramp-asset]").value === "eth" ? "ETH" : "USDC"; }
   function render(s = snapshot) {
     if (!s) return;
     snapshot = s;
-    if (s.account !== lastAccount) { view = "method"; walletStep = 0; lastAccount = s.account; }
+    if (s.account !== lastAccount) { view = "method"; lastAccount = s.account; }
     const units = value => window.AgentBountiesFundingReadiness.formatUnits(value);
     const short = s.usdc === null ? null : s.required > s.usdc ? s.required - s.usdc : 0n;
-    const ready = s.usdc !== null && short === 0n && (s.existingBounty || s.eth > 0n);
-    const active = s.pending ? "pending" : !s.account ? "wallet" : s.busy ? "checking" : ready ? "ready" : view;
-    const buying = asset();
-    const steps = [
-      ["Open your wallet app", "Tap Buy or Receive in the wallet you connected.", "Keep this page open. Come back when you are done."],
-      ["Choose " + buying + " on Base", "Check both the coin and the network.", buying + " · Base network"],
-      ["Check the amount and address", "Use this same wallet. Check any fees before you pay.", buying === "USDC" ? short === null ? "Check your balance first." : `Receive at least ${units(short)} USDC after fees.` : "Add ETH on Base for the network fee. Your wallet shows the cost."],
-      ["Finish in your wallet", "Approve the purchase or transfer there. Then come back here.", "Already paid? Wait for it to arrive. Do not buy again."],
-    ];
-    const copy = active === "wallet-buy" ? steps[walletStep] : {
+    const ready = s.fresh && short === 0n && (s.existingBounty || s.eth > 0n);
+    // Wallet liquidity and provider-order completion are different facts.
+    // Keep the uncertain order recorded, but do not trap an adequately funded wallet.
+    const active = !s.account ? "wallet" : ready ? "ready" : s.pending ? "pending" : view;
+    const buying = $("[data-onramp-asset]").value === "eth" ? "ETH" : "USDC";
+    const copy = {
       wallet: ["Which wallet will receive the money?", "Use the same wallet as your bounty."],
-      checking: ["Checking your balance…", "This may take a few seconds."],
       method: ["Add money to your wallet", "Choose how you want to add it."],
-      card: ["Choose an amount to buy", "You will review the final price with MoonPay."],
-      checkout: ["Check before opening MoonPay", "Send the money to your own wallet on Base."],
-      pending: ["Check your existing purchase", "Do not pay again while it is pending."],
-      ready: ["Your wallet has the money", "Go back to review your bounty payment."],
+      "wallet-buy": ["Open your wallet app", `Buy ${buying} on Base.`],
+      card: ["Buy with a card", "Choose where to buy."],
+      pending: ["Waiting for money", "Already paid? Keep this page open."],
+      ready: ["Your wallet has enough USDC", "Continue to review your bounty payment."],
     }[active];
     $(".topup-guide").dataset.view = active;
     $(".topup-guide").setAttribute("aria-busy", String(s.busy));
     text("#onramp-title", copy[0]); text("[data-topup-instruction]", copy[1]);
-    text("[data-topup-step]", active === "wallet-buy" ? `Add money · Step ${walletStep + 1} of 4` : "Step 2 of 3 · Add money");
     for (const panel of document.querySelectorAll("[data-topup-panel]")) panel.hidden = panel.dataset.topupPanel !== active;
-    text("[data-topup-needed]", short === null ? "Check your balance below" : short > 0n ? `${units(short)} USDC still needed` : "ETH needed for the network fee");
-    text("[data-topup-wallet-detail]", active === "wallet-buy" ? copy[2] : "");
-    const destination = $("[data-topup-destination]"); destination.textContent = s.account || ""; destination.hidden = walletStep !== 2;
-    $("[data-topup-copy]").hidden = walletStep !== 2;
-    text("[data-topup-next]", walletStep === 3 ? "I’m back — check my balance" : "Next");
-    const check = $("[data-refresh-balance]"); check.hidden = ["wallet", "checkout", "card", "ready"].includes(active) || active === "wallet-buy" && walletStep < 3;
-    check.disabled = s.busy || !s.account; check.textContent = s.busy ? "Checking…" : "Check my balance";
-    if (active === "wallet-buy" && walletStep === 3) check.hidden = true;
-    $("[data-topup-next]").disabled = s.busy;
-    $("[data-topup-back]").hidden = !["wallet-buy", "card", "checkout"].includes(active);
+    const need = short === null || !s.fresh ? "Checking your Base balance…" : short > 0n ? `${units(short)} USDC still needed` : "ETH needed for the network fee";
+    text("[data-topup-needed]", s.error ? "Balance unavailable" : need);
+    text("[data-topup-wallet-detail]", buying === "USDC" ? need : "ETH on Base · for the network fee");
+    text("[data-topup-card-asset]", `${buying} on Base`);
+    $("[data-topup-wallet]").hidden = !s.account;
+    text("[data-topup-address]", s.account || "");
+    const connected = s.connection?.connected && s.connection.address?.toLowerCase() === s.account;
+    const base = s.connection?.chain_id === "0x2105";
+    text("[data-topup-connection]", connected ? base ? "● Wallet connected · Base" : "● Wallet connected · switch to Base for payment" : s.connection?.connected ? "Different wallet connected · saved address below" : "Wallet address saved · not connected");
+    $("[data-topup-connection]").dataset.connected = String(Boolean(connected));
+    text("[data-topup-balance]", s.usdc !== null && s.fresh ? `${units(s.usdc)} USDC on Base` : "");
+    text("[data-topup-ready-amount]", ready ? `${units(s.usdc)} USDC available ✓` : "");
+    $("[data-topup-order-note]").hidden = !s.pending;
+    const watch = !s.account ? "" : s.error ? "Balance check failed. Trying again…" : s.busy ? "Checking your balance…" : s.received > 0n ? `${units(s.received)} USDC added since the first check.` : "Watching for money · checks every 5 seconds";
+    text("[data-topup-watch]", watch);
+    const check = $("[data-refresh-balance]"); check.hidden = !s.account; check.disabled = s.busy;
+    check.textContent = s.busy ? "Checking…" : "Check my balance";
+    $("[data-topup-back]").hidden = !["wallet-buy", "card"].includes(active);
+    for (const selector of ["[data-topup-wallet-buy]", "[data-topup-card-buy]"]) $(selector).disabled = !s.fresh;
     if (active !== previous) { previous = active; $("#onramp-title").focus({ preventScroll: true }); }
   }
-  function selectGasAssetIfNeeded() {
-    if (snapshot && snapshot.usdc !== null && snapshot.usdc >= snapshot.required && snapshot.eth === 0n && !snapshot.existingBounty) {
+  function show(method) {
+    if (!["method", "wallet", "card"].includes(method)) throw new Error("Choose wallet or card.");
+    if (snapshot && snapshot.fresh && snapshot.usdc >= snapshot.required && snapshot.eth === 0n && !snapshot.existingBounty) {
       $("[data-onramp-asset]").value = "eth";
       $("[data-onramp-asset]").dispatchEvent(new Event("change"));
     }
+    view = method === "wallet" ? "wallet-buy" : method;
+    feedback("", ""); render();
+    // User navigation starts the new screen at its wallet/heading, even when
+    // the previous choice was below the fold. Background reads never scroll.
+    const header = document.querySelector("[data-site-header]")?.getBoundingClientRect().bottom || 0;
+    const top = $(".topup-guide").getBoundingClientRect().top + window.scrollY - header - 12;
+    window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
+    return { view: $(".topup-guide").dataset.view, purchase_opened: false };
   }
-  $("[data-topup-wallet-buy]").addEventListener("click", () => {
-    selectGasAssetIfNeeded();
-    view = "wallet-buy"; walletStep = 0; feedback("", ""); render(); });
-  $("[data-topup-card-buy]").addEventListener("click", () => { selectGasAssetIfNeeded(); view = "card"; feedback("", ""); render(); });
-  $("[data-topup-next]").addEventListener("click", () => {
-    if (walletStep < 3) { walletStep++; render(); $("#onramp-title").focus({ preventScroll: true }); }
-    else { view = "method"; $("[data-refresh-balance]").click(); }
-  });
-  $("[data-topup-card-next]").addEventListener("click", () => {
-    const amount = $("[data-fiat-amount]");
-    if (!amount.reportValidity()) return;
-    view = "checkout"; feedback("", ""); render();
-  });
-  $("[data-topup-back]").addEventListener("click", () => {
-    if (view === "wallet-buy" && walletStep > 0) walletStep--;
-    else view = view === "checkout" ? "card" : "method";
-    feedback("", ""); render(); $("#onramp-title").focus({ preventScroll: true });
-  });
+  $("[data-topup-wallet-buy]").addEventListener("click", () => show("wallet"));
+  $("[data-topup-card-buy]").addEventListener("click", () => show("card"));
+  $("[data-topup-back]").addEventListener("click", () => show("method"));
   $("[data-topup-copy]").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(snapshot.account); feedback("Wallet address copied.", "success"); }
     catch (_) { feedback("Copy the wallet address shown above.", "error"); }
   });
-  window.AgentBountiesTopupGuide = Object.freeze({ render, feedback });
+  window.AgentBountiesTopupGuide = Object.freeze({ render, feedback, show });
 })();
