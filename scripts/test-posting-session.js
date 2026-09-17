@@ -60,6 +60,40 @@ async function ready(server = new Server()) { const win = browser(server); seed(
 async function second(server, options = {}) { const win = browser(server, { url: `https://agentbounties.app/post.html?operation_id=${OPERATION}`, ...options }); const session = posting.create(win); await session.hydrate(account(win.user)); return { win, session }; }
 function pending(hash = HASH) { return { bounty_contract: CONTRACT, bounty_id: BOUNTY, phase: "sending", transactions: [hash], authorizationIssued: true }; }
 
+test("a signed continuation survives reload, checks integrity and reserves at most one submission", async () => {
+  const one = await ready(); await one.session.approve();
+  const journal = workflow.createPostingJournal(one.win);
+  journal.prepare({bounty_id:BOUNTY,predicted_bounty_contract:CONTRACT}); journal.checkpoint("signing");
+  await one.session.flush({requireServer:true});
+  await one.session.saveContinuation({bounty_id:BOUNTY,bounty_contract:CONTRACT,create:{creator:CONTRACT},signature:"0xfixture"});
+  assert.equal(one.session.canContinue(),true);
+  const saved = await one.session.loadContinuation();
+  assert.equal(saved.signature,"0xfixture");
+  assert.equal(JSON.stringify(one.server.record().recovery_state).includes("0xfixture"),false);
+  const restored = await second(one.server,{storage:one.win.sessionStorage});
+  assert.equal(await restored.session.approved(),true);
+  assert.deepEqual(await restored.session.loadContinuation(),saved);
+  await restored.session.reserveSubmission();
+  assert.equal(restored.session.canContinue(),false);
+  await assert.rejects(restored.session.reserveSubmission(),/cannot send another transaction/);
+  assert.match(one.server.record().recovery_state.submission_attempt_id,workflow.UUID);
+});
+
+test("tampered continuation bytes and another account cannot reuse a funding signature", async () => {
+  const one = await ready(); await one.session.approve();
+  const journal = workflow.createPostingJournal(one.win);
+  journal.prepare({bounty_id:BOUNTY,predicted_bounty_contract:CONTRACT}); journal.checkpoint("signing");
+  await one.session.flush({requireServer:true});
+  await one.session.saveContinuation({bounty_id:BOUNTY,bounty_contract:CONTRACT,create:{amount:"2010000"},signature:"0xfixture"});
+  const key="agent-bounties.posting-continuation.v1", original=one.win.sessionStorage.getItem(key);
+  const altered=JSON.parse(original);altered.create.amount="2010001";one.win.sessionStorage.setItem(key,JSON.stringify(altered));
+  await assert.rejects(one.session.loadContinuation(),/integrity/);
+  one.win.sessionStorage.setItem(key,original);
+  one.win.user="owner-b";await one.session.hydrate(account("owner-b"));
+  assert.equal(one.session.canContinue(),false);
+  await assert.rejects(one.session.loadContinuation(),/cannot send another transaction/);
+});
+
 test("draft hashes use JCS UTF-16 key order and preserve legitimate decimal values", async () => {
   const win = browser(new Server());
   const value = { "\ue000": 1, "\u{10000}": 2, small: 0.000001, smaller: 1e-7, size: 0.4, zero: -0, max: Number.MAX_SAFE_INTEGER };

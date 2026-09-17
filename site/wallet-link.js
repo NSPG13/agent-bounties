@@ -47,9 +47,9 @@
         let failed = false;
         const stylesheet = doc.createElement("link");
         stylesheet.rel = "stylesheet";
-        stylesheet.href = new URL("vendor/coinbase-embedded-wallet.bundle.css?v=3", doc.baseURI).href;
+        stylesheet.href = new URL("vendor/coinbase-embedded-wallet.bundle.css?v=4", doc.baseURI).href;
         const script = doc.createElement("script");
-        script.src = new URL("vendor/coinbase-embedded-wallet.bundle.js?v=3", doc.baseURI).href;
+        script.src = new URL("vendor/coinbase-embedded-wallet.bundle.js?v=4", doc.baseURI).href;
         script.async = true;
         const fail = () => { failed = true; win.clearTimeout(timer); script.remove(); stylesheet.remove(); reject(new Error("Coinbase embedded wallet could not load. Check your connection and try again, or choose another wallet below.")); };
         const timer = win.setTimeout(fail, 12000);
@@ -173,6 +173,6 @@
 
   // This adapter policy is known before loading/authenticating the SDK. Creation
   // needs direct transactions; supported sponsored relays remain separate.
-  const embeddedCapabilities = Object.freeze({ directTransactions: false, chainIds: Object.freeze([8453]), transactionPolicy: "agent-bounties-relay-required" });
+  const embeddedCapabilities = Object.freeze({ directTransactions: false, postingTransactions: true, reviewedPostingOnly: true, chainIds: Object.freeze([8453]), transactionPolicy: "reviewed-base-posting" });
   return Object.freeze({ select, choices, loadEmbedded, embeddedCapabilities, beginPending, hasPending, pendingAddress, clearPending, cancel: () => finish() });
 });

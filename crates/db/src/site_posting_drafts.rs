@@ -122,6 +122,33 @@ impl PostgresStore {
             .bind(account_id).bind(operation_id).fetch_optional(&mut *tx).await?
             .map(from_row).transpose()?;
         if let Some(existing) = &existing {
+            // A continuation binds one immutable signed request. Once a unique
+            // submission attempt is reserved, no device can replace it or
+            // downgrade it to a retryable pre-send phase, even at a fresh revision.
+            for key in ["continuation_hash", "submission_attempt_id"] {
+                if existing.recovery_state.get(key).is_some()
+                    && existing.recovery_state.get(key) != recovery_state.get(key)
+                {
+                    return Err(PostingDraftError::Conflict);
+                }
+            }
+            if existing
+                .recovery_state
+                .get("submission_attempt_id")
+                .is_some()
+                && !matches!(
+                    recovery_state["phase"].as_str(),
+                    Some(
+                        "sending"
+                            | "submitted"
+                            | "pending"
+                            | "creation_confirmed"
+                            | "funding_confirmed"
+                    )
+                )
+            {
+                return Err(PostingDraftError::Conflict);
+            }
             if existing.recovery_state.get("bounty_id").is_some()
                 && (existing.draft_hash != hash
                     || existing.recovery_state.get("bounty_id") != recovery_state.get("bounty_id")
@@ -217,6 +244,94 @@ mod tests {
                 Err(PostingDraftError::NonCanonicalJson)
             ));
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AGENT_BOUNTIES_TEST_DATABASE_URL"]
+    async fn signed_continuation_has_one_durable_submission_owner() {
+        let store =
+            PostgresStore::connect(&std::env::var("AGENT_BOUNTIES_TEST_DATABASE_URL").unwrap())
+                .await
+                .unwrap();
+        store.migrate().await.unwrap();
+        let owner = Uuid::new_v4().to_string();
+        let operation = Uuid::new_v4();
+        let draft = json!({"goal":"Resume exactly this bounty"});
+        let ready = json!({"bounty_id":format!("0x{}", "ab".repeat(32)), "bounty_contract":format!("0x{}", "cd".repeat(20)),
+            "phase":"authorized", "authorizationIssued":true, "transactions":[], "continuation_hash":format!("0x{}", "ef".repeat(32))});
+        let saved = store
+            .save_site_posting_draft(&owner, operation, &draft, 0, None, &ready)
+            .await
+            .unwrap();
+        let mut a = ready.clone();
+        a["phase"] = json!("sending");
+        a["submission_attempt_id"] = json!(Uuid::new_v4());
+        let mut b = a.clone();
+        b["submission_attempt_id"] = json!(Uuid::new_v4());
+        let (first, second) = tokio::join!(
+            store.save_site_posting_draft(&owner, operation, &draft, saved.revision, None, &a),
+            store.save_site_posting_draft(&owner, operation, &draft, saved.revision, None, &b)
+        );
+        assert_ne!(first.is_ok(), second.is_ok());
+        let winner = first.or(second).unwrap();
+        for mut changed in [
+            ready.clone(),
+            winner.recovery_state.clone(),
+        ] {
+            if changed == winner.recovery_state {
+                changed["submission_attempt_id"] = json!(Uuid::new_v4());
+            }
+            assert!(matches!(
+                store
+                    .save_site_posting_draft(
+                        &owner,
+                        operation,
+                        &draft,
+                        winner.revision,
+                        None,
+                        &changed
+                    )
+                    .await,
+                Err(PostingDraftError::Conflict)
+            ));
+        }
+        let mut downgraded = winner.recovery_state.clone();
+        downgraded["phase"] = json!("authorized");
+        assert!(matches!(
+            store
+                .save_site_posting_draft(
+                    &owner,
+                    operation,
+                    &draft,
+                    winner.revision,
+                    None,
+                    &downgraded
+                )
+                .await,
+            Err(PostingDraftError::Conflict)
+        ));
+        let mut altered = winner.recovery_state.clone();
+        altered["continuation_hash"] = json!(format!("0x{}", "aa".repeat(32)));
+        assert!(matches!(
+            store
+                .save_site_posting_draft(&owner, operation, &draft, winner.revision, None, &altered)
+                .await,
+            Err(PostingDraftError::Conflict)
+        ));
+        assert_eq!(
+            store
+                .save_site_posting_draft(
+                    &owner,
+                    operation,
+                    &draft,
+                    saved.revision,
+                    None,
+                    &winner.recovery_state
+                )
+                .await
+                .unwrap(),
+            winner
+        );
     }
 
     #[tokio::test]

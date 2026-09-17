@@ -84,6 +84,43 @@ test("account inspection uses the existing session and never returns credentials
   assert.equal(JSON.stringify(result).includes("must-not-return"), false);
 });
 
+test("posting options explain both supported checks and preserve campaign economics", () => {
+  const env = environment("/post.html"); env.register();
+  const result = env.tools.get("agent_bounties_get_posting_options").execute();
+  assert.deepEqual(result.choices.map(choice => choice.review_mode), ["creator", "automated"]);
+  assert.match(result.explanation, /checks the finished work/);
+  assert.equal(result.protocol.id, "agent-bounties/autonomous-v1");
+  assert.match(result.campaign_limit, /person's agreement/);
+  assert.match(result.costs, /approve that split/);
+  assert.equal(env.requests.length, 0);
+});
+
+test("WebMCP opens account setup in the same tab with exact draft return and no borrowed consent", () => {
+  const env = environment("/post.html?from=webmcp&analytics=off&operation_id=preserved#bounty-preview");
+  env.window.AgentBountiesPostingAuth = require("../site/posting-auth.js");
+  const client = flow.createClient(env.window);
+  const saved = client.start({ role: "post", goal: "Pay 1 USDC per company response" });
+  env.register();
+  const result = env.tools.get("agent_bounties_open_account_setup").execute();
+  assert.equal(result.resume_url, env.window.location.href);
+  assert.equal(result.operation_id, saved.id);
+  assert.equal(result.payment_authorized, false);
+  assert.equal(result.wallet_authorized, false);
+  assert.equal(client.load().goal, saved.goal);
+  assert.equal(env.window.AgentBountiesPostingAuth.pending(env.window), result.resume_url);
+  assert.deepEqual(env.navigations, ["https://agentbounties.app/?postReturn=1#login"]);
+  assert.equal(env.requests.length, 0);
+});
+
+test("account setup does not navigate when the prepared return cannot be saved", () => {
+  const env = environment("/post.html");
+  env.window.AgentBountiesPostingAuth = require("../site/posting-auth.js");
+  env.window.sessionStorage.setItem = () => { throw new Error("storage blocked"); };
+  env.register();
+  assert.throws(() => env.tools.get("agent_bounties_open_account_setup").execute(), /Could not save/);
+  assert.equal(env.navigations.length, 0);
+});
+
 test("ordinary work cannot take the meta-child shortcut", async () => {
   const env = environment(); env.register();
   await assert.rejects(env.tools.get("agent_bounties_start_meta_child_bounty").execute({ opportunity_id: item().opportunity_id }), /no supported 1 USDC/);

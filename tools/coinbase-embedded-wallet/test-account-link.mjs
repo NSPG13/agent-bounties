@@ -150,6 +150,7 @@ async function account({ installed = true, linked = false, linkedAddress = ADDRE
     }
   }, postTarget);
   // Replace only the external SDK boundary; exercise the real chooser and account handler.
+  await page.route("**/vendor/coinbase-embedded-wallet.bundle.css?*", route => route.fulfill({ contentType: "text/css", body: "/* SDK styles are outside this test boundary. */" }));
   await page.route("**/vendor/coinbase-embedded-wallet.bundle.js?*", (route) => route.fulfill({
     contentType: "text/javascript",
     body: adapter ? testAdapter : `window.AgentBountiesCoinbaseEmbeddedWallet = { enabled: true, provider: { request: async (request) => {
@@ -452,6 +453,55 @@ test('cancelled ownership review retains the wallet and retries without another 
     assert.equal(proofs.length,3);
     await page.getByRole('button',{name:'Recovery settings',exact:true}).click();
     await page.getByRole('dialog',{name:'Protect access to this wallet'}).waitFor();
+    assert.deepEqual(errors,[]);
+  } finally { await context.close(); }
+});
+
+test('embedded posting requires a real payment click, preserves cancellation and sends the exact transaction once', async () => {
+  const {context,page,link,errors} = await account({adapter:true});
+  try {
+    await link.click();
+    await page.getByRole('button',{name:'Use or recover Coinbase embedded wallet',exact:false}).click();
+    await page.getByRole('button',{name:'Complete email verification'}).click();
+    await page.getByRole('button',{name:'Verify and link wallet',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('[data-wallet-status]').textContent.includes('verified and linked'));
+    await page.getByRole('button',{name:'Close account dialog'}).click();
+    await page.addScriptTag({url:origin+'/funding-readiness.js'});
+    const reads = [];
+    await page.route('https://mainnet.base.org/**', route => {
+      const input = route.request().postDataJSON(); reads.push(input.method);
+      const result = {eth_chainId:'0x2105',eth_blockNumber:'0x1',eth_gasPrice:'0x3',eth_estimateGas:'0x5208',eth_call:'0x64',eth_getBalance:'0x2386f26fc10000'}[input.method];
+      return route.fulfill({json:{jsonrpc:'2.0',id:input.id,result}});
+    });
+    await page.evaluate(async () => {
+      const adapter = window.AgentBountiesCoinbaseEmbeddedWallet;
+      const balance = await adapter.provider.request({method:'eth_getBalance',params:['0x'+'22'.repeat(20),'latest']});
+      if(balance !== '0x2386f26fc10000') throw new Error('public balance read failed');
+      const word = n => BigInt(n).toString(16).padStart(64,'0');
+      const from='0x'+'22'.repeat(20),to='0x'+'44'.repeat(20);
+      const words=Array(26).fill(word(0));words[0]=from.slice(2).padStart(64,'0');words[8]=word(4102444800);words[16]=word(2010000);words[19]=word(4102444800);
+      const tx={from,to,data:'0x61407894'+words.join(''),value:'0x0'};
+      window.testPostingRequest={method:'eth_sendTransaction',params:[tx],agentBountiesPostingContext:{chainId:8453,creatorAddress:from,usdcAddress:'0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',factoryAddress:to,bountyAddress:'0x'+'33'.repeat(20),fundingUsdcUnits:'2010000',validatedCalls:[tx]}};
+      window.startTestPosting=()=>{window.testPostingResult=null;adapter.provider.request(window.testPostingRequest).then(hash=>{window.testPostingResult={hash};},error=>{window.testPostingResult={code:error.code};});};
+      window.startTestPosting();
+    });
+    const review=page.getByRole('dialog',{name:'Confirm bounty transaction',exact:true});
+    await review.waitFor();
+    assert.match(await review.innerText(),/2.01 Base USDC/);
+    assert.match(await review.innerText(),/Estimated network fee/);
+    await page.evaluate(()=>document.querySelector('.wallet-auth-actions .primary').click());
+    assert.equal((await page.evaluate(()=>window.walletTestCalls)).some(call=>call.method==='eth_sendTransaction'),false);
+    await review.getByRole('button',{name:'Cancel',exact:true}).click();
+    await page.waitForFunction(()=>window.testPostingResult?.code===4001);
+    await page.evaluate(()=>window.startTestPosting());
+    await review.getByRole('button',{name:'Send transaction',exact:true}).click();
+    await page.waitForFunction(()=>window.testPostingResult?.hash);
+    assert.equal((await page.evaluate(()=>window.walletTestCalls)).filter(call=>call.method==='eth_sendTransaction').length,1);
+    await page.evaluate(()=>window.startTestPosting());
+    await page.waitForFunction(()=>window.testPostingResult?.code===4100);
+    assert.equal((await page.evaluate(()=>window.walletTestCalls)).filter(call=>call.method==='eth_sendTransaction').length,1);
+    assert.ok(reads.includes('eth_getBalance'));
+    assert.ok(reads.includes('eth_estimateGas'));
     assert.deepEqual(errors,[]);
   } finally { await context.close(); }
 });

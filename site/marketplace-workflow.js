@@ -14,12 +14,40 @@
     : JSON.stringify(value);
   const BOUNDARY = "Only confirmed canonical BountySettled or CompetitionSettledV2 events prove payment. A draft, approval, signature or transaction hash does not.";
   const GUIDANCE = {
-    style: "Use ordinary language. Ask only for missing outcome, budget, deadline or work preferences. Suggest sensible defaults together; do not ask one technical question at a time.",
+    style: "Use at most three short sentences per routine reply and give one primary next action. Define necessary terms: the worker does the task, the reviewer checks it, and gas means the network fee. Ask together only for missing outcome, budget, deadline or work preferences; detailed payment approvals may be longer.",
     autonomy: "Inspect, compare, draft, revise, check readiness, prepare evidence and poll unchanged requests without asking permission again. Do the work in the current assistant; never send the person to another chat to copy technical instructions.",
     consent: "Show one concise review of the exact public terms or submission, total cost, refundable bond, losing exposure and deadline. The person approves the commitment and accepts legal terms in the first-party page, then confirms native wallet requests. Never click their consent controls or accept consent through a tool boolean. Ask again only when the commitment, amount, recipient, wallet, scope or expiry changes.",
     progress: "Report meaningful changes only. Preserve the journey and stable request keys across navigation/retries. A pending transaction means wait, never ask to sign it again.",
     verification: "Prepare the exact committed verifier and evidence yourself. Never invent a benchmark or claim payment from an AI assessment. Explain unsupported work honestly and help adapt it to a supported verifier before funding.",
+    posting_choices: "Before staging, explain why completion needs a check and offer the choices from agent_bounties_get_posting_options. Recommend one with its protocol, task-specific reason, review reward and total cost. Preserve per-result rates and campaign caps; changes need the person's agreement.",
+    sign_in: "Use agent_bounties_open_account_setup to show sign-in in this same browser tab, preserving the draft. The person completes credentials and consent there. Prefer validated WebMCP actions, record any necessary UI fallback, and keep routine setup in this browser.",
   };
+  const POSTING_OPTIONS = {
+    explanation: "A bounty holds the reward until someone checks the finished work. The verifier is the person or test that makes that check.",
+    choices: [
+      { review_mode: "creator", label: "I review the work", suitable_for: "Outreach, research, design, and work that needs your judgment.", explanation: "You check the evidence and confirm pass or fail in your wallet within the review window. This is your decision, not an independent review.",
+        decision_maker: "You, the bounty creator", evidence: "The delivered artifact and evidence for every agreed acceptance check.", costs: "At least 2 USDC for the worker and a positive review reserve of at least 0.01 USDC; the reserve pays you after either completed verdict.", limitations: "You must review within the published review window; no independent reviewer is provided.", protocol_id: "agent-bounties/autonomous-v1" },
+      { review_mode: "automated", label: "An automated test checks it", suitable_for: "Work with a supported, repeatable pass/fail test, such as a code fix.", explanation: "The exact test and verifier must be supported and ready before funding. An assistant's opinion alone cannot release money.",
+        decision_maker: "The precommitted verifier quorum running the supported test", evidence: "The exact pinned benchmark, its required submission evidence and matching verifier verdicts.", costs: "At least 2 USDC for the worker and at least 0.01 USDC for the review; confirm the actual supported verifier's reward and readiness before funding.", limitations: "An unsupported or unavailable test cannot be funded; this option cannot establish whether a real-company conversation is genuine.", protocol_id: "agent-bounties/autonomous-v1" },
+    ],
+    protocol: { id: "agent-bounties/autonomous-v1", explanation: "This form posts one fixed-reward bounty on Base. Its contract holds the funds and pays after the agreed review. The review method is fixed before funding." },
+    other_protocols: [{ id: "agent-bounties/open-competition-v2-beta3", explanation: "An opt-in competition can reward the first proven result or the best score. It needs a supported deterministic proof program and live release readiness. It does not verify real-company conversations or implement per-referral campaign payouts; it is not a substitute for creator review." }],
+    costs: "Ordinary bounties need at least 2 USDC for the worker plus a positive review reward of at least 0.01 USDC. You approve that split. The worker separately supplies a bond equal to the review reward. Creator review still needs this reserve: it pays you after either completed verdict, not automatically. Platform fee: 0 USDC. Creation also needs Base ETH for a network fee shown before sending.",
+    campaign_limit: "This form does not implement an open-ended per-response or referral campaign with a shared budget cap. Preserve those requested rates and explain this limit; only propose separate fixed bounties with the person's agreement.",
+    wallets: "Use or recover a Coinbase embedded wallet with email or social sign-in, or choose a browser or phone wallet. Linking proves ownership; payment requires a separate confirmation.",
+  };
+  function postingOptions(workType) {
+    const reasons = {
+      outreach: ["creator", "You need to judge the company identity, response and referral evidence."],
+      research: ["creator", "You need to judge the sources and whether the findings answer your question."],
+      creative: ["creator", "You need to judge the delivered design against your acceptance checks."],
+      software: ["automated", "A supported pinned regression test can measure whether the requested code behavior works."],
+    };
+    if (workType !== undefined && !Object.hasOwn(reasons, workType)) throw new Error("Choose outreach, research, creative or software work.");
+    const match = reasons[workType];
+    return { ...POSTING_OPTIONS, recommendation: match ? { review_mode: match[0], protocol_id: POSTING_OPTIONS.protocol.id, reason: match[1], approval_required: true } : null,
+      next_action: match ? "Review this recommendation and choose how the work will be checked." : "Describe the outcome to get a review recommendation." };
+  }
   function apiBase(location) {
     return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(location?.hostname)
       ? "http://127.0.0.1:3000" : "https://api.agentbounties.app";
@@ -309,6 +337,19 @@
         if (!current) throw new Error("Posting recovery state is unavailable; no new wallet request can be sent.");
         return save({ ...current, phase, ...(walletMethod ? { wallet_method: walletMethod } : {}), authorizationIssued: current.authorizationIssued || phase === "authorized", transactions: hash ? [...current.transactions, hash] : current.transactions });
       },
+      authorizeContinuation(hash) {
+        const current = load();
+        if (!current || current.submission_attempt_id || current.transactions.length || !["signing", "authorized"].includes(current.phase)
+          || !/^0x[0-9a-f]{64}$/.test(hash) || current.continuation_hash && current.continuation_hash !== hash)
+          throw new Error("The signed posting request cannot replace an existing operation.");
+        return save({ ...current, phase: "authorized", authorizationIssued: true, continuation_hash: hash });
+      },
+      reserveContinuation(attempt) {
+        const current = load();
+        if (!current?.continuation_hash || current.phase !== "authorized" || current.submission_attempt_id || current.transactions.length || !UUID.test(attempt))
+          throw new Error("This operation is already reserved or submitted. Check its status; do not send it again.");
+        return save({ ...current, phase: "sending", wallet_method: "eth_sendTransaction", submission_attempt_id: attempt });
+      },
       reject(error) {
         const current = load();
         if (current?.phase === "sending" && current.wallet_method === "wallet_sendCalls" && atomicParamsRejected(error))
@@ -325,5 +366,5 @@
       },
     };
   }
-  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, opportunityDeadline, sortOpportunities, inventoryCounts, fundedInventory, opportunityFeedUrl, loadFundedInventory, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
+  return { ADDRESS, UUID, BOUNDARY, GUIDANCE, POSTING_OPTIONS, postingOptions, NETWORK, SESSION_KEY, apiBase, units, isV2, ready, participationKind, phase, opportunityDeadline, sortOpportunities, inventoryCounts, fundedInventory, opportunityFeedUrl, loadFundedInventory, detailUrl, text, publicJson, summarize, createClient, createPostingJournal };
 });

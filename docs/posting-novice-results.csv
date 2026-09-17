@@ -1,0 +1,1 @@
+participant_code,device,started_at,deadline_iso_offset,work_answer_verbatim,review_answer_verbatim,cost_answer_verbatim,next_action_answer_verbatim,work_correct,review_correct,cost_correct,action_correct,unaided_completion,completion_evidence,assistance,mistakes,elapsed_seconds

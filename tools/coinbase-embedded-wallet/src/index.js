@@ -20,19 +20,16 @@ import {
   isSignedIn,
   signOut,
 } from "@coinbase/cdp-core";
-import { http } from "viem";
+import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
 import { createReadinessGate } from "./readiness.js";
+import { createPostingRequests } from "./posting-requests.js";
 
 const ADAPTER_ID = "coinbase-embedded";
 const PROVIDER_UUID = "16c41c3b-a510-4b72-82f2-9d70f22552c7";
 const PROVIDER_RDNS = "app.agentbounties.wallet.coinbase";
 const SDK_READY_TIMEOUT_MS = 12_000;
-const UNSPONSORED_TRANSACTION_METHODS = new Set([
-  "eth_sendTransaction",
-  "wallet_sendCalls",
-  "wallet_sendTransaction",
-]);
+const PUBLIC_READ_METHODS = new Set(["eth_chainId", "eth_getBalance", "eth_getCode", "eth_call", "eth_estimateGas", "eth_gasPrice", "eth_blockNumber", "eth_getBlockByNumber", "eth_getTransactionReceipt", "eth_getTransactionByHash", "eth_getTransactionCount"]);
 const METHOD_LABELS = Object.freeze({
   email: "Email",
   sms: "SMS",
@@ -63,6 +60,8 @@ const capabilities = Object.freeze({
   gasSponsoredOnSupportedRelays: true,
   arbitraryTransactionsGasSponsored: false,
   directTransactions: false,
+  postingTransactions: true,
+  reviewedPostingOnly: true,
 });
 
 let embeddedWallet = null;
@@ -72,12 +71,25 @@ let authResolve = null;
 let authReject = null;
 let authReview = null;
 let authReviewMessage = "";
+let paymentReview = null;
 let panelControl = null;
 let sdkReadyResolve = null;
 let sdkReadyReject = null;
 const sdkReady = new Promise((resolve, reject) => {
   sdkReadyResolve = resolve;
   sdkReadyReject = reject;
+});
+const baseReadClient = createPublicClient({ chain: base, transport: http(window.AgentBountiesWalletConfig?.chain?.rpcUrl || "https://mainnet.base.org", { timeout: 12000, retryCount: 0 }) });
+const requestPosting = createPostingRequests({
+  getProvider: async () => ({ request: args => PUBLIC_READ_METHODS.has(args.method)
+    ? baseReadClient.request(args) : innerProvider().then(value => value.request(args)) }),
+  currentAddress,
+  readiness: () => window.AgentBountiesFundingReadiness,
+  confirm: review => {
+    if (authRequest) throw Object.assign(new Error("Finish the open wallet review first."), { code: -32002 });
+    paymentReview = review;
+    return ensureAuthenticated({ review: "payment" });
+  },
 });
 
 function emit(name, payload = null) {
@@ -174,6 +186,7 @@ function AuthBridge() {
       showSignIn: () => setPanel({ visible: true, view: "signin", notice: "" }),
       showReview: () => setPanel({ visible: true, view: "review", notice: "" }),
       showOwnership: () => setPanel({ visible: true, view: "ownership", notice: "" }),
+      showPayment: () => setPanel({ visible: true, view: "payment", notice: "" }),
       showLink: () => setPanel({ visible: true, view: "link", notice: "" }),
       hide: () => setPanel((value) => ({ ...value, visible: false, notice: "" })),
     });
@@ -203,7 +216,8 @@ function AuthBridge() {
     if (authReject) rejectPendingAuth(Object.assign(new Error("Wallet sign-in was cancelled."), { code: 4001 }));
     else hidePanel();
   };
-  const continueWithWallet = () => {
+  const continueWithWallet = (event) => {
+    if (!event.isTrusted) return;
     if (!address) return;
     resolvePendingAuth(address);
   };
@@ -240,6 +254,17 @@ function AuthBridge() {
         "p",
         { className: "wallet-auth-method-warning" },
         "Returning user? Use the same sign-in method to access your existing wallet.",
+      ),
+    );
+  } else if (panel.view === "payment") {
+    body = React.createElement(React.Fragment, null,
+      paymentReview?.details
+        ? React.createElement("dl", { className: "wallet-auth-review" }, ...paymentReview.details.map(([name, value]) => React.createElement("div", { key: name }, React.createElement("dt", null, name), React.createElement("dd", null, value))))
+        : React.createElement("p", { className: "wallet-auth-message" }, paymentReview?.summary),
+      paymentReview?.note ? React.createElement("p", null, paymentReview.note) : null,
+      React.createElement("div", { className: "wallet-auth-actions" },
+        React.createElement("button", { type: "button", className: "button secondary", onClick: close }, "Cancel"),
+        React.createElement("button", { type: "button", className: "button primary", disabled: !address, onClick: continueWithWallet }, paymentReview?.label),
       ),
     );
   } else if (panel.view === "ownership") {
@@ -389,11 +414,11 @@ function AuthBridge() {
         React.createElement(
           "div",
           null,
-          React.createElement("p", { className: "eyebrow" }, panel.view === "ownership" ? "Wallet ready" : panel.view === "review" ? "Your wallet, your recovery paths" : "No extension or recovery phrase"),
+          React.createElement("p", { className: "eyebrow" }, panel.view === "payment" ? "Base wallet confirmation" : panel.view === "ownership" ? "Wallet ready" : panel.view === "review" ? "Your wallet, your recovery paths" : "No extension or recovery phrase"),
           React.createElement(
             "h2",
             { id: "coinbase-wallet-auth-title" },
-            panel.view === "ownership" ? "Confirm wallet ownership" : panel.view === "link" ? "Link another way to sign in" : panel.view === "review" ? "Protect access to this wallet" : "Create or access your wallet",
+            panel.view === "payment" ? paymentReview?.title : panel.view === "ownership" ? "Confirm wallet ownership" : panel.view === "link" ? "Link another way to sign in" : panel.view === "review" ? "Protect access to this wallet" : "Create or access your wallet",
           ),
         ),
         React.createElement(
@@ -531,7 +556,8 @@ async function ensureAuthenticated({ review = "review", message = "" } = {}) {
     rejectPendingAuth(new Error("Coinbase wallet authentication UI is not ready. Reload and try again."));
     return request;
   }
-  if (existing && review === "ownership") panelControl.showOwnership();
+  if (existing && review === "payment") panelControl.showPayment();
+  else if (existing && review === "ownership") panelControl.showOwnership();
   else if (existing) panelControl.showReview();
   else panelControl.showSignIn();
   return request;
@@ -554,11 +580,18 @@ const provider = {
   async request(args) {
     const method = String(args?.method || "");
     if (!method) throw new TypeError("EIP-1193 method is required.");
-    if (UNSPONSORED_TRANSACTION_METHODS.has(method)) {
-      throw Object.assign(
-        new Error("This embedded wallet permits only Agent Bounties actions routed through an explicit sponsored relay. This action is not sponsored yet; connect an external wallet only after reviewing its gas requirement."),
-        { code: 4100 },
-      );
+    if (PUBLIC_READ_METHODS.has(method)) return baseReadClient.request(args);
+    if (method === "wallet_sendCalls" || method === "wallet_sendTransaction") throw Object.assign(new Error("This wallet uses separately reviewed Base transactions."), { code: 4200 });
+    if (method === "eth_sendTransaction" || method === "eth_signTypedData_v4" && args.agentBountiesPostingContext) return requestPosting(args);
+    if (method === "eth_signTypedData_v4") {
+      if (authRequest) throw Object.assign(new Error("Finish the open wallet review first."), { code: -32002 });
+      const params = JSON.parse(JSON.stringify(args.params));
+      const payload = typeof params?.[1] === "string" ? JSON.parse(params[1]) : params?.[1];
+      if (Number(payload?.domain?.chainId) !== 8453 || params?.[0]?.toLowerCase() !== (await currentAddress())?.toLowerCase()) throw new Error("Review a signature for the connected wallet on Base only.");
+      paymentReview = { title: "Review wallet signature", label: "Sign this request", summary: `This signature may authorize a payment. Review the full request before signing. Signing itself has no network fee.\n${JSON.stringify(payload, null, 2)}` };
+      await ensureAuthenticated({ review: "payment" });
+      if (params[0].toLowerCase() !== (await currentAddress())?.toLowerCase()) throw new Error("The signing wallet changed.");
+      return (await innerProvider()).request({ method, params });
     }
     if (method === "eth_accounts") {
       await waitForSdk();
@@ -590,8 +623,8 @@ const provider = {
       }
       return null;
     }
-    await ensureAuthenticated();
-    return (await innerProvider()).request(args);
+    if (["wallet_getCapabilities", "wallet_getCallsStatus"].includes(method)) return (await innerProvider()).request(args);
+    throw Object.assign(new Error("This wallet method is unsupported."), { code: 4200 });
   },
   on(eventName, listener) {
     ensureEmbeddedWallet().then((wallet) => wallet.provider.on?.(eventName, listener)).catch(() => {});

@@ -9,9 +9,28 @@ not add `document.modelContext` to an unsupported browser.
 
 ## Conversation contract
 
+Start with a short explanation: a worker does the task, a reviewer checks it,
+and the contract pays after the agreed check. Read
+`agent_bounties_get_posting_options` before staging, optionally passing
+`work_type: outreach | research | creative | software`. The response gives
+each choice's decision-maker, evidence, cost, limitations and protocol; a
+category adds a task-specific recommendation without choosing it. Offer creator review or a
+supported automated test, recommend one with a reason, and explain the review
+reward. The ordinary posting form uses autonomous-v1 for one fixed reward.
+It cannot promise a campaign with per-response payouts and a shared cap. Keep
+the person's rates intact; get agreement before adapting that structure.
+
+On the posting page, `agent_bounties_open_account_setup` opens sign-in in the
+same browser tab and saves its exact return URL. The person enters credentials
+and confirms ownership in that browser. The tool cannot sign, accept legal
+terms, publish or fund. Use discovered WebMCP actions first; a browser tool
+carrying a WebMCP call is not a fallback to visual clicking. Use UI actions only
+when the needed action is not exposed, and explain that briefly.
+
 Infer posting versus earning from the person's request. Ask together for only
 the missing business decisions: outcome, budget, deadline, or work preferences.
-Use their answers throughout the journey. Explain one next action in ordinary
+Use their answers throughout the journey. Keep routine guidance to at most
+three short sentences, with one primary next action. Explain that action in ordinary
 language and report meaningful progress. Do not restart an interview on a new
 page or ask permission to inspect, draft, revise, prepare a review, or poll.
 
