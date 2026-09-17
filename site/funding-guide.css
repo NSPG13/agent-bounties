@@ -1,0 +1,32 @@
+/* A quiet, single-step surface. Theme colors come from the existing site. */
+#funding-dialog.simple-funding { width: min(38rem, calc(100vw - 1.25rem)); }
+#funding-dialog.simple-funding [hidden] { display: none !important; }
+#funding-dialog.simple-funding .payment-dialog-inner { padding: clamp(1.25rem, 4vw, 2rem); }
+#funding-dialog.simple-funding .payment-dialog-head { margin-bottom: 1.5rem; }
+#funding-dialog.simple-funding h2 { font: 750 clamp(1.8rem, 5vw, 2.45rem)/1.15 system-ui, sans-serif; letter-spacing: -.035em; margin: .5rem 0 .75rem; }
+#funding-dialog.simple-funding .guide-step { font-size: .85rem; font-weight: 700; margin: 0; }
+#funding-dialog.simple-funding .guide-instruction { font-size: 1.2rem; line-height: 1.5; }
+#funding-dialog.simple-funding .guide-amount { font-size: clamp(1.6rem, 5vw, 2rem); font-weight: 750; margin: .5rem 0 1rem; line-height: 1.25; }
+#funding-dialog.simple-funding .wallet-readiness { border: 0; padding: 0; background: transparent; }
+#funding-dialog.simple-funding .guide-primary { display: flex; justify-content: center; width: 100%; min-height: 3.4rem; font-size: 1.15rem; margin: 1rem 0 .65rem; }
+#funding-dialog.simple-funding .wallet-option { min-height: 3.5rem; padding: 1rem; }
+#funding-dialog.simple-funding .wallet-option strong { font-size: 1.1rem; }
+#funding-dialog.simple-funding .guide-note, #funding-dialog.simple-funding .guide-details { font-size: .95rem; line-height: 1.5; }
+#funding-dialog.simple-funding .guide-details { margin: 1.25rem 0 0; padding: .8rem 0; border-top: 1px solid #78896c60; }
+#funding-dialog.simple-funding .guide-details summary { cursor: pointer; min-height: 2.75rem; display: flex; align-items: center; gap: .5rem; }
+#funding-dialog.simple-funding .guide-details summary::before { content: '+'; font-size: 1.4rem; }
+#funding-dialog.simple-funding .guide-details[open] summary::before { content: '−'; }
+#funding-dialog.simple-funding .guide-back { min-height: 2.75rem; margin-top: 1rem; background: transparent; border: 0; text-decoration: underline; color: inherit; font: inherit; cursor: pointer; }
+#funding-dialog.simple-funding .guide-feedback { padding: .8rem 1rem; border: 1px solid #819573; border-radius: .65rem; font-size: 1.05rem; line-height: 1.5; overflow-wrap: anywhere; }
+#funding-dialog.simple-funding .guide-feedback[data-tone=error] { border-color: #bd6949; }
+#funding-dialog.simple-funding [data-funding-topup] > button { width: 100%; min-height: 3rem; }
+#funding-dialog.simple-funding .wallet-readiness-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#funding-dialog.simple-funding button:disabled { cursor: wait; }
+#funding-dialog.simple-funding [data-fund-now]:disabled { cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { #funding-dialog.simple-funding * { scroll-behavior: auto; } }
+
+#funding-dialog.simple-funding .payment-dialog-head { position: static; padding: 0; margin: 0 0 1.5rem; border: 0; display: block; }
+#funding-dialog.simple-funding .guide-close { position: sticky; float: right; top: 0; z-index: 4; margin: 0 0 .5rem .5rem; }
+#funding-dialog.simple-funding h2 { padding-right: 2.5rem; }
+#funding-dialog.simple-funding .payment-dialog-head p { display: block; }
+#funding-dialog.simple-funding #funding-dialog-title:focus { outline: none; }

@@ -37,3 +37,7 @@
 .account-wallets [data-wallet-use] { grid-column: 1 / -1; justify-self: start; }
 .account-wallets .wallet-remove { min-height: 44px; font-size: .8rem; }
 @media (prefers-reduced-motion: reduce) { .wallet-choice { transition: none; } }
+
+.wallet-link-dialog h2 { font-family: system-ui, sans-serif; font-weight: 750; }
+.wallet-choice strong { font-size: 1.15rem; }
+.wallet-choice span, .wallet-link-dialog .wallet-link-note { font-size: 1rem; }

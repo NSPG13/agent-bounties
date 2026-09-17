@@ -17,11 +17,12 @@
     <link rel="stylesheet" href="bounty-composer.css?v=3">
     <link rel="stylesheet" href="bounty-composer-v2.css?v=4">
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=4">
-    <link rel="stylesheet" href="phone-wallet.css?v=4">
-    <link rel="stylesheet" href="wallet-link.css?v=4">
+    <link rel="stylesheet" href="phone-wallet.css?v=5">
+    <link rel="stylesheet" href="wallet-link.css?v=5">
     <link rel="stylesheet" href="wallet-adapters.css?v=6">
     <link rel="stylesheet" href="posting-workspace.css?v=6">
     <link rel="stylesheet" href="marketplace-theme.css?v=3">
+    <link rel="stylesheet" href="funding-guide.css?v=1">
     <link rel="stylesheet" href="site-navigation.css?v=6">
     <link rel="stylesheet" href="forest-ui.css?v=5">
     <script src="forest-theme.js?v=1"></script>
@@ -233,61 +234,68 @@
 
       </section>
 
-      <dialog id="funding-dialog" class="payment-dialog chat-wallet-dialog" aria-labelledby="funding-dialog-title">
+      <dialog id="funding-dialog" class="payment-dialog chat-wallet-dialog simple-funding" aria-labelledby="funding-dialog-title">
         <div class="payment-dialog-inner">
+          <button class="dialog-close guide-close" type="button" data-close-funding aria-label="Close wallet window">×</button>
           <div class="payment-dialog-head">
             <div>
-              <h2 id="funding-dialog-title">Connect wallet</h2>
-              <p>Connecting does not post or fund anything.</p>
+              <p class="guide-step" data-funding-step>Step 1 of 3 · Connect</p>
+              <h2 id="funding-dialog-title" tabindex="-1">Choose your wallet</h2>
+              <p class="guide-instruction" data-funding-instruction>Use the wallet you want to pay from.</p>
             </div>
-            <button class="dialog-close" type="button" data-close-funding aria-label="Close wallet window">×</button>
+
           </div>
-
+          <p class="guide-feedback" data-funding-feedback role="status" aria-live="polite" hidden></p>
           <button type="button" data-payment-method="crypto" hidden>Crypto Wallet</button>
-
           <section class="wallet-picker-panel" data-wallet-panel hidden>
             <p data-wallet-message>Looking for wallets…</p>
             <div class="wallet-options" data-wallet-options></div>
-            <p class="wallet-alternative">Need a wallet or USDC? <a href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link data-walletless-onramp-link>View setup options</a></p>
+            <p class="wallet-alternative"><a href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link data-walletless-onramp-link>Need money in your wallet?</a></p>
+            <p class="guide-note">Connecting does not spend money.</p>
           </section>
-
           <section class="wallet-readiness" data-wallet-readiness hidden aria-label="Wallet readiness">
-            <div class="wallet-readiness-grid">
-              <div><span>Wallet</span><strong data-wallet-account>—</strong></div>
-              <div><span>Required</span><strong data-wallet-required>—</strong></div>
-              <div><span>Base USDC</span><strong data-wallet-usdc>—</strong></div>
-              <div><span>Base ETH</span><strong data-wallet-eth>—</strong></div>
+            <div data-funding-topup hidden>
+              <p class="guide-amount" data-funding-shortfall></p>
+              <p data-funding-help hidden><span data-funding-gas-help>You also need a little ETH on Base for the network fee.</span><strong data-missing-usdc hidden>—</strong></p>
+              <a class="button primary guide-primary" href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
             </div>
-            <p data-wallet-state></p><p data-wallet-cost></p>
-
-            <details class="funding-help">
-              <summary>Exact funding, activation, and recovery sequence</summary>
+            <div data-funding-review hidden>
+              <p class="guide-amount" data-funding-total></p>
+              <p data-funding-split></p>
+              <p>Network: <strong>Base</strong>. A small network fee is extra.</p>
+              <p class="guide-note">The fee is paid in ETH. Your wallet shows the final fee before you pay.</p>
+              <div data-legal-consent data-consent-simple="true" data-consent-actions="post_bounty"></div>
+              <p class="guide-note" data-funding-consent-hint>Check the box above to continue.</p>
+              <button class="button primary guide-primary" type="button" data-fund-now disabled>Review and post</button>
+            </div>
+            <div data-funding-wait hidden><p class="guide-note">Your progress is saved. We check this same request.</p></div>
+            <button class="button secondary" type="button" data-recheck-balance>Check my balance</button>
+            <details class="funding-help guide-details">
+              <summary>Wallet and payment details</summary>
+              <div class="wallet-readiness-grid">
+                <div><span>Wallet</span><strong data-wallet-account>—</strong></div>
+                <div><span>Total for bounty</span><strong data-wallet-required>—</strong></div>
+                <div><span>USDC on Base</span><strong data-wallet-usdc>—</strong></div>
+                <div><span>ETH for fees</span><strong data-wallet-eth>—</strong></div>
+              </div>
+              <p data-wallet-state></p><p data-wallet-cost></p>
               <ol>
-                <li>Review the exact required Base USDC amount shown above and the immutable acceptance terms.</li>
-                <li>Approve only the prepared amount, then confirm the matching creation/funding call in your wallet.</li>
-                <li>A wallet receipt or transaction hash is still pending evidence. The bounty becomes active only after the required canonical creation and funding events are confirmed.</li>
-                <li>If a transaction fails or indexing is delayed, keep the draft and transaction hash, do not create a duplicate, and use the canonical event/status link to resume.</li>
+                <li>Check the amount, Base network, and recipient in your wallet.</li>
+                <li>Confirm only if the details match your bounty.</li>
+                <li>We wait for Base to confirm the payment before anyone can claim your bounty.</li>
+                <li>If a request is still pending, we check the same request. Do not pay again.</li>
               </ol>
-              <p>Escrowed funds follow the published settlement, cancellation, timeout, and refund rules. AgentBounties.app never asks for a recovery phrase or private key.</p>
+              <p>Escrowed funds follow the published settlement, cancellation, timeout, and refund rules.</p>
+              <div class="wallet-tools">
+                <button class="button secondary" type="button" data-watch-usdc>Show USDC in wallet</button>
+                <button class="button secondary" type="button" data-copy-usdc>Copy token address</button>
+              </div>
             </details>
-
-            <div class="funding-help" data-funding-help hidden>
-              <p>This wallet needs <strong data-missing-usdc>—</strong> and a small amount of Base ETH.</p>
-              <p>Never enter a recovery phrase or private key here.</p>
-            </div>
-
-            <div class="wallet-tools">
-              <a class="button secondary" href="onramp.html?purpose=post" target="_self" rel="noopener noreferrer" data-onramp-link>Add Base USDC</a>
-              <button class="button secondary" type="button" data-watch-usdc>Show USDC in wallet</button>
-              <button class="button secondary" type="button" data-copy-usdc>Copy token address</button>
-              <button class="button secondary" type="button" data-recheck-balance>Recheck</button>
-            </div>
-
-            <div data-legal-consent data-consent-actions="post_bounty"></div>
-            <button class="button primary" type="button" data-fund-now disabled>Review and post</button>
           </section>
-
-          <output class="payment-status" data-payment-status aria-live="polite">Approve the draft before connecting a wallet.</output>
+          <button class="guide-back" type="button" data-change-funding-wallet hidden>Change wallet</button>
+          <details class="guide-details" data-funding-status-details hidden><summary>What happened?</summary>
+            <output class="payment-status" data-payment-status aria-live="off">Approve the draft before connecting a wallet.</output>
+          </details>
         </div>
       </dialog>
 
@@ -300,23 +308,24 @@
 
     <script src="posting-auth.js?v=3"></script>
     <script src="phone-wallet-config.js?v=1"></script>
-    <script src="phone-wallet.js?v=7"></script>
+    <script src="phone-wallet.js?v=8"></script>
     <script src="marketplace-workflow.js?v=8"></script>
     <script src="posting-session.js?v=2"></script>
     <script src="funding-readiness.js?v=2"></script>
     <script src="wallet-config.js?v=3"></script>
-    <script src="wallet-link.js?v=5"></script>
+    <script src="wallet-link.js?v=6"></script>
     <script src="posting-reference.js?v=1"></script>
     <script src="analytics-config.js?v=9"></script>
     <script src="analytics.js?v=5"></script>
-    <script src="legal-consent.js?v=2"></script>
+    <script src="legal-consent.js?v=3"></script>
     <script src="evm.js"></script>
     <script src="meta-child.js?v=1"></script>
     <script src="bounty-entry.js?v=1"></script>
     <script src="posting-prompt.js?v=6"></script>
     <script src="creator-review.js?v=2"></script>
     <script src="ai-bounty-handoff.js?v=11"></script>
-    <script src="bounty-composer-v2.js?v=23"></script>
+    <script src="funding-guide.js?v=1"></script>
+    <script src="bounty-composer-v2.js?v=24"></script>
     <script src="posting-brief.js?v=1"></script>
     <script src="posting-workspace.js?v=5"></script>
     <script src="forest-posting.js?v=1"></script>

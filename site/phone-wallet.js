@@ -21,7 +21,7 @@
   const listeners = new Map();
   const doc = win.document;
   let sdk, sdkPromise, vendorPromise, attempt, generation = 0, activePrefix, accounts = [], chain = CHAIN;
-  let phase = "disconnected", message = "Connect an external phone wallet. Approve the connection in your wallet app.", dialog, qr, statusNode, retry, disconnectButton, useConnected, reconnectButton, selection;
+  let phase = "disconnected", message = "Connect an external phone wallet. Approve the connection in your wallet app.", dialog, qr, statusNode, titleNode, addressNode, retry, disconnectButton, useConnected, reconnectButton, selection;
   let pairingUri = null, countdown, mobileActions, deviceToggle, showMobile = mobile, showQr = !mobile;
   const projectId = String(win.agentBountiesPhoneWalletConfig?.projectId || "");
   const configured = PROJECT.test(projectId);
@@ -70,10 +70,14 @@
   function render() {
     const snapshot = state();
     if (statusNode) statusNode.textContent = snapshot.connected
-      ? `Wallet ${snapshot.address} is already connected. Use this wallet, or start a new connection to ${mobile ? "open your wallet app" : "scan a fresh QR code"}. No payment is requested.` : message;
+      ? `Your wallet is connected. No money will move.` : message;
+    const heading = titleNode;
+    if (heading) heading.textContent = snapshot.connected ? "Use this wallet?" : phase === "pairing" ? (showMobile ? "Open your wallet app" : "Scan with your phone") : phase === "connecting" ? "Getting your connection ready…" : ["error", "expired", "cancelled"].includes(phase) ? "Let’s try that again" : "Connect your phone wallet";
+    const address = addressNode;
+    if (address) { address.hidden = !snapshot.connected; address.textContent = snapshot.address || ""; }
     if (useConnected) useConnected.hidden = !snapshot.connected;
     if (reconnectButton) { reconnectButton.hidden = !accounts.length; reconnectButton.disabled = phase === "disconnecting" || Boolean(attempt); }
-    if (retry) { retry.hidden = !configured || phase === "connected"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your wallet…" : "Start a new connection"; }
+    if (retry) { retry.hidden = !configured || phase === "connected" || phase === "pairing"; retry.disabled = Boolean(attempt); retry.textContent = phase === "pairing" || phase === "connecting" ? "Waiting for your wallet…" : "Start a new connection"; }
     if (qr) qr.hidden = !pairingUri || !showQr;
     if (mobileActions) mobileActions.hidden = !pairingUri || !showMobile;
     if (deviceToggle) { deviceToggle.hidden = !pairingUri; deviceToggle.textContent = showMobile ? "Use a QR code on a second device" : "Use a wallet on this device"; }
@@ -96,7 +100,7 @@
     render(); current.tick = win.setTimeout(() => tick(current), 1000);
   }
   function pairingInstructions() {
-    return showMobile ? "Open your installed wallet below. Check agentbounties.app and approve the connection, then return here. No camera or second phone is needed." : "Scan this code with your wallet app on a second device. Check agentbounties.app and approve the connection. Using this page on your phone? Choose the same-device option below.";
+    return showMobile ? "Tap your wallet below. Allow the connection. Then come back here." : "Open your wallet app. Tap its scanner. Scan this code and allow the connection.";
   }
   function openMobileWallet(wallet) {
     const current = attempt;
@@ -169,7 +173,7 @@
     dialog = node("dialog", "", "ab-phone-dialog"); dialog.setAttribute("aria-labelledby", "ab-phone-title");
     const close = node("button", "Close", "ab-phone-close"); close.type = "button";
     close.addEventListener("click", () => { cancel(); dialog.close(); });
-    const title = node("h2", "Connect your phone wallet"); title.id = "ab-phone-title";
+    const title = titleNode = node("h2", "Connect your phone wallet"); title.id = "ab-phone-title";
     statusNode = node("p", message); statusNode.setAttribute("role", "status"); statusNode.setAttribute("aria-live", "polite");
     qr = node("img", "", "ab-phone-qr"); qr.alt = "Scan this QR code with your phone wallet’s scanner"; qr.hidden = true; qr.width = 290; qr.height = 290;
     mobileActions = node("div", "", "ab-phone-mobile-actions"); mobileActions.hidden = true;
@@ -180,8 +184,10 @@
     countdown = node("p", "", "ab-phone-countdown"); countdown.hidden = true;
     deviceToggle = node("button"); deviceToggle.type = "button"; deviceToggle.hidden = true;
     deviceToggle.addEventListener("click", () => { showMobile = !showMobile; showQr = !showMobile; if (phase === "pairing") setState("pairing", pairingInstructions()); else render(); });
-    const note = node("p", "This connects an external WalletConnect wallet on Base. Coinbase embedded wallets use email or social login on the wallet setup page. Keep this page open; each later signature or payment needs its own wallet confirmation.", "ab-phone-note");
-    const security = node("p", "The QR code is a temporary connection credential. Some protected browsers block screenshots; use the native wallet button or a second device instead. Never share the code or enter a recovery phrase here.", "ab-phone-note");
+    const note = node("p", "Connecting does not spend money.", "ab-phone-note");
+    const security = node("details", "", "ab-phone-details");
+    security.append(node("summary", "Connection help"), node("p", "Keep this page open. Check that your wallet shows agentbounties.app. Never share this code or your recovery phrase. To recover a Coinbase account wallet, choose email or social sign-in in the wallet chooser.", "ab-phone-note"));
+    const address = addressNode = node("p", "", "ab-phone-address"); address.hidden = true;
     const actions = node("div", "", "ab-phone-actions");
     retry = node("button", "Start a new connection"); retry.type = "button"; retry.addEventListener("click", () => { void begin().catch(() => {}); });
     disconnectButton = node("button", "Disconnect phone wallet"); disconnectButton.type = "button"; disconnectButton.hidden = true;
@@ -190,7 +196,8 @@
     useConnected.addEventListener("click", () => { if (state().connected) { finishSelection(null, accounts.slice()); dialog.close(); } });
     reconnectButton = node("button", mobile ? "Connect another phone wallet" : "Connect again with a new QR code"); reconnectButton.type = "button"; reconnectButton.hidden = true;
     reconnectButton.addEventListener("click", () => { void reconnect(); });
-    actions.append(useConnected, reconnectButton, retry, disconnectButton); dialog.append(close, title, statusNode, mobileActions, qr, countdown, deviceToggle, note, security, actions); doc.body.append(dialog);
+    security.append(disconnectButton);
+    actions.append(useConnected, reconnectButton, retry); dialog.append(close, title, statusNode, address, mobileActions, qr, countdown, actions, deviceToggle, note, security); doc.body.append(dialog);
     dialog.addEventListener("cancel", () => cancel()); dialog.addEventListener("close", () => { clearQr(); render(); });
     dialog.showModal(); render();
   }

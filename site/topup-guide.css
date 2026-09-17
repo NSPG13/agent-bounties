@@ -1,0 +1,26 @@
+.simple-topup { width: min(38rem, calc(100% - 2rem)); margin: 2rem auto 5rem; }
+.simple-topup [hidden] { display: none !important; }
+.topup-guide { margin-top: 1rem; padding: clamp(1.2rem, 4vw, 2rem); border: 1px solid #80966a70; border-radius: 1.5rem; background: var(--panel, #13261b); color: var(--text, #edf1e6); }
+.simple-topup h1 { font: 750 clamp(1.9rem, 5vw, 2.6rem)/1.15 system-ui, sans-serif; letter-spacing: -.04em; margin: .7rem 0 1rem; }
+.simple-topup p { line-height: 1.5; }
+.simple-topup .topup-instruction { font-size: 1.25rem; }
+.simple-topup .guide-step { font-size: .85rem; font-weight: 700; }
+.simple-topup .topup-amount { font-size: 1.5rem; font-weight: 700; }
+.simple-topup .button { display: flex; width: 100%; min-height: 3.3rem; margin: .8rem 0; justify-content: center; font-size: 1.1rem; align-items: center; white-space: normal; text-align: center; }
+.simple-topup input:not([type=checkbox]), .simple-topup select { width: 100%; min-height: 3rem; margin: .5rem 0 1rem; font-size: 1.1rem; }
+.simple-topup label { display: block; font-size: 1.05rem; line-height: 1.5; }
+.simple-topup .onramp-acknowledgement { display: flex; gap: .8rem; align-items: start; margin: 1rem 0; }
+.simple-topup .onramp-acknowledgement input { width: 1.3rem; height: 1.3rem; flex-shrink: 0; }
+.simple-topup code { overflow-wrap: anywhere; white-space: normal; font-size: .9rem; }
+.simple-topup .topup-address { display: block; padding: 1rem; border: 1px solid #80966a70; border-radius: .5rem; }
+.simple-topup .topup-back { border: 0; background: transparent; color: inherit; font: inherit; padding: .65rem 0; min-height: 2.75rem; cursor: pointer; text-decoration: underline; }
+.simple-topup details { border-top: 1px solid #80966a70; margin-top: 1.5rem; }
+.simple-topup summary { cursor: pointer; min-height: 3rem; padding: .75rem 0; }
+.simple-topup .topup-note, .simple-topup details { font-size: .95rem; line-height: 1.5; }
+.simple-topup .topup-feedback { display: block; border-left: 3px solid #88ac60; padding: .7rem 1rem; margin: 1rem 0; line-height: 1.5; overflow-wrap: anywhere; }
+.simple-topup .topup-feedback[data-tone=error] { border-color: #ce7958; }
+.simple-topup [aria-disabled=true] { opacity: .55; cursor: not-allowed; }
+.simple-topup [data-direct-moonpay-output] { display: block; font-size: .95rem; line-height: 1.5; }
+html[data-theme=light] .topup-guide { background: #fffef8; color: #15281c; }
+body .simple-topup .topup-guide .button { font-size: 1.15rem; min-height: 3.4rem; }
+body .simple-topup #onramp-title:focus { outline: none; }

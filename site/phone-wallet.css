@@ -13,3 +13,14 @@
 .ab-phone-mobile-actions { display: grid; gap: .65rem; margin: 1rem 0; }
 .ab-phone-mobile-actions button { min-height: 48px; background: #174d43; border-color: #174d43; color: #fff; }
 .ab-phone-countdown { font-size: .9rem; font-variant-numeric: tabular-nums; }
+
+/* Keep only the current phone instruction prominent. */
+.ab-phone-dialog h2 { font-size: clamp(1.8rem, 5vw, 2.2rem); letter-spacing: -.03em; }
+.ab-phone-dialog [role=status] { font-size: 1.2rem; line-height: 1.5; }
+.ab-phone-actions { display: grid; }
+.ab-phone-actions button { min-height: 3.2rem; font-size: 1.05rem; }
+.ab-phone-actions button:first-child { background: #174d43; color: #fff; }
+.ab-phone-address { padding: .65rem; background: #edf8ee; font: .85rem/1.5 ui-monospace, monospace; }
+.ab-phone-details { margin-top: 1rem; border-top: 1px solid #b8d2c6; }
+.ab-phone-details summary { padding: .75rem 0; cursor: pointer; min-height: 2.75rem; box-sizing: border-box; }
+.ab-phone-dialog > button:not(.ab-phone-close) { margin-top: 1rem; }
