@@ -232,7 +232,7 @@
     // cannot change what the wallet is asked to sign after this disclosure.
     const serialized = JSON.stringify(typedData);
     return { serialized, from: lower(message.from), to: lower(message.to), amountUsdcUnits: uint(message.value), nonce: lower(message.nonce), expiresAt,
-      summary: `Authorize ${formatUnits(uint(message.value))} USDC on Base mainnet (8453) from ${lower(message.from)} to bounty ${lower(message.to)}. Purpose: one-time funding of this exact bounty through the canonical factory. Expires ${expiresAt}. Token: ${BASE_USDC}. This signature costs no gas and does not itself create or fund the bounty. The following creation transaction requires Base ETH; no gas sponsorship is confirmed.` };
+      summary: `Authorize ${formatUnits(uint(message.value))} USDC on Base mainnet (8453) from ${lower(message.from)} to bounty ${lower(message.to)}. Purpose: one-time funding of this exact bounty through the canonical factory. Expires ${expiresAt}. Token: ${BASE_USDC}. This signature costs no gas and does not itself create or fund the bounty. ${context.gasPayer === "relay" ? "AgentBounties will simulate this exact authorization and pay gas if its existing limits permit; you do not need ETH for that route. If it fails, the operation stays saved and no user-paid transaction is substituted." : "The reviewed user-paid creation transaction requires Base ETH; your wallet shows its fee before sending."}` };
   }
 
   window.AgentBountiesFundingReadiness = Object.freeze({ parseUsdc, formatUnits, shortfall, readBalances, estimateFees, describeWalletCalls, validateFundingAuthorization });

@@ -39,7 +39,7 @@ function sortedJson(value) {
   return value;
 }
 async function fixtures(context, origin, options = {}) {
-  const mock = { authenticated: options.authenticated !== false, wallets: options.wallets || [], drafts: options.drafts || new Map(), rpcRequests: [], draftRequests: [], events: [], inventory: [] };
+  const mock = { authenticated: options.authenticated !== false, wallets: options.wallets || [], drafts: options.drafts || new Map(), rpcRequests: [], draftRequests: [], events: [], inventory: [], sponsorship: options.sponsorship };
   await context.route("**/*", async route => {
     const request = route.request(), url = new URL(request.url());
     const session = { authenticated: mock.authenticated, account_status: mock.authenticated ? "ready" : "signed_out", account_complete: mock.authenticated, providers: { github: true }, user: mock.authenticated ? { id: "layout-qa", name: "Posting QA", email: "posting-qa@example.test" } : null };
@@ -61,6 +61,12 @@ async function fixtures(context, origin, options = {}) {
       const saved = { operation_id: operation, draft: body.draft, draft_hash: hash, approved_draft_hash: body.approved_draft_hash, recovery_state: body.recovery_state, revision: (existing?.revision || 0) + 1, updated_at: new Date().toISOString() };
       mock.drafts.set(operation, saved);
       return route.fulfill({ json: saved });
+    }
+    if (url.pathname.endsWith("/readiness") && url.pathname.includes("/posting-funding/") && mock.sponsorship != null) {
+      const headers={"access-control-allow-origin":origin,"access-control-allow-credentials":"true","access-control-allow-methods":"GET,POST","access-control-allow-headers":"content-type"};
+      if(request.method()==="OPTIONS")return route.fulfill({status:204,headers});
+      const ready=mock.sponsorship===true, body=request.postDataJSON();
+      return route.fulfill({headers,json:{wallet:body.wallet,required_usdc_units:body.required_usdc_units,usdc_balance_units:"100000000",usdc_shortfall_units:"0",eth_balance_wei:"0",sponsored_creation_enabled:true,guided_topup_enabled:true,gas_sponsorship:{eligible:false,can_request_authorization:ready,status:ready?"awaiting_authorization":"unavailable",message:ready?"The relay checks your exact authorization and pays gas. No ETH purchase is needed.":"Sponsorship is unavailable. Wait and recheck or explicitly review user-paid gas."}}});
     }
     if (url.pathname === "/v1/base/autonomous-bounties/events") return route.fulfill({ json: mock.events });
     if (url.pathname === "/v1/opportunities") return route.fulfill({ json: { schema_version: "agent-bounties/opportunity-projection-v1", items: mock.inventory } });
@@ -272,7 +278,7 @@ async function main() {
     { width: 480, height: 360, zoomReflow: true }
   ];
   try {
-    for (const size of sizes) {
+    for (const size of process.env.POSTING_FUNDING_ONLY ? [] : sizes) {
       const context = await browser.newContext({ viewport: { width: size.width, height: size.height }, reducedMotion: "reduce" });
       const page = await context.newPage();
       const errors = [];
@@ -404,7 +410,25 @@ async function main() {
       console.log("PASS signed-out posting action opens login with the exact draft preserved and no wallet request");
       await context.close();
     }
-    await recoveryRegressions(browser, origin);
+    {
+      const context=await browser.newContext({viewport:{width:532,height:740}}),mock=await fixtures(context,origin,{sponsorship:true});
+      const page=await context.newPage();page.setDefaultTimeout(5000);await page.goto(origin+"/post.html");await awaitPosting(page);
+      await page.evaluate(draft=>window.AgentBountiesComposer.stage(draft),{...fixture,solver_reward_usdc:"2.00",verifier_reward_usdc:"0.01"});
+      await page.locator("[data-approve-card]").click();
+      await page.getByRole("button",{name:"MetaMask",exact:false}).click();await page.locator("[data-wallet-readiness]").waitFor({state:"visible"});
+      await page.waitForFunction(()=>!document.querySelector("[data-fund-now]").disabled,null,{timeout:5000}).catch(async error=>{console.error(await page.evaluate(()=>window.AgentBountiesComposer.review()));throw error;});
+      assert.equal(await page.locator("[data-wallet-eth]").textContent(),"0 ETH");
+      assert.equal(await page.locator("[data-posting-gas-choice]").isVisible(),false);
+      assert.equal(await page.evaluate(()=>window.AgentBountiesComposer.review().gas_payer),"relay");
+      mock.sponsorship=false;await page.evaluate(()=>window.AgentBountiesComposer.refreshFundingReadiness());
+      assert.equal(await page.locator("[data-fund-now]").isDisabled(),true);assert.equal(await page.getByRole("button",{name:"Review with my own ETH",exact:true}).isVisible(),true);
+      await page.getByRole("button",{name:"Review with my own ETH",exact:true}).click();
+      await page.waitForFunction(()=>window.AgentBountiesComposer.review().gas_payer==="wallet");
+      assert.equal(await page.locator("[data-fund-now]").isDisabled(),true,"The user-paid alternative still requires ETH; choosing it never signs");
+      assert.deepEqual(await page.evaluate(()=>window.__walletWrites),[]);
+      console.log("PASS eligible zero-ETH creation review, unavailable sponsorship, and explicit gas-payer choice without signing");await context.close();
+    }
+    if(!process.env.POSTING_FUNDING_ONLY)await recoveryRegressions(browser, origin);
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => server.close());

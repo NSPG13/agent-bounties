@@ -259,6 +259,36 @@
     },
   });
 
+  if (isPost) register({ name: "agent_bounties_get_posting_funding_readiness", title: "Check this bounty's wallet and gas sponsorship",
+    description: "Read balances, exact USDC shortfall and creation-specific gas sponsorship for the saved account wallet. An enabled relay is not eligibility; explain the returned blocker and next action. Does not connect, sign or pay.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, untrustedContentHint: false },
+    async execute() {
+      const composer = await waitFor(() => window.AgentBountiesComposer, 8000);
+      const readiness = await composer.refreshFundingReadiness();
+      return { operation_id: client.load()?.id, readiness, review: composer.review(), next_action: readiness?.next_action || "Open the saved funding review and choose the account wallet." };
+    },
+  });
+
+  if (isPost) register({ name: "agent_bounties_open_topup", title: "Open guided wallet top-up",
+    description: "Open the saved operation's guided wallet top-up in this browser. Preserves the selected wallet and exact budget; does not open a provider, buy crypto or fund the bounty. Reconcile any existing purchase before switching providers.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    async execute() {
+      await waitFor(() => window.AgentBountiesComposer, 8000);
+      const readiness = await window.AgentBountiesComposer.refreshFundingReadiness();
+      if (readiness?.guided_topup_enabled !== true) throw new Error("Guided top-up is unavailable. Preserve the saved review and check its current funding options.");
+      if (!readiness?.wallet || !readiness.required_usdc_units) throw new Error("Choose the account wallet in the saved funding review first.");
+      const url = new URL("onramp.html", window.location.href);
+      url.searchParams.set("operation_id", client.load().id); url.searchParams.set("guided", "1"); url.searchParams.set("wallet", readiness.wallet);
+      url.searchParams.set("amount", window.AgentBountiesFundingReadiness.formatUnits(BigInt(readiness.required_usdc_units)));
+      url.searchParams.set("return", new URL(`#bounty-preview`, window.location.href).href);
+      if (new URLSearchParams(window.location.search).get("analytics") === "off") url.searchParams.set("analytics", "off");
+      window.location.assign(url.href);
+      return { status: "opening_guided_topup", operation_id: client.load().id, url: url.href, bounty_funded: false };
+    },
+  });
+
   if (isPost) register({ name: "agent_bounties_open_account_setup", title: "Open sign-in in this browser",
     description: "Open first-party sign-in or account setup in the current browser tab and preserve the exact prepared bounty for return. Use this instead of asking the person to find an external login page. The person enters credentials and confirms wallet ownership themselves; opening setup grants no publication, legal, signing or payment consent.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },

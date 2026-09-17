@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#020b08">
     <meta name="robots" content="noindex, nofollow">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://mcp.agentbounties.app https://mainnet.base.org; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.agentbounties.app https://mcp.agentbounties.app https://mainnet.base.org https://rpc.walletconnect.org https://verify.walletconnect.com https://verify.walletconnect.org wss://relay.walletconnect.org; frame-src https://verify.walletconnect.com https://verify.walletconnect.org; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <title>Add Base USDC | AgentBounties.app</title>
     <meta name="description" content="Choose MoonPay, MetaMask, or Coinbase to add Base USDC to your own wallet, then separately approve the exact bounty action.">
@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="guild-pages.css?v=20260724-1">
     <link rel="stylesheet" href="simple-ux.css?v=3">
     <link rel="stylesheet" href="onramp.css?v=2">
+    <link rel="stylesheet" href="guided-topup.css?v=1">
     <link rel="stylesheet" href="wallet-adapters.css?v=3">
     <link rel="stylesheet" href="phone-wallet.css?v=3">
     <link rel="stylesheet" href="site-navigation.css?v=6">
@@ -36,6 +37,27 @@
 </header>
 <!-- shared-navigation:end -->
 
+    <main class="guided-topup" data-guided-topup hidden>
+      <ol class="topup-progress" aria-label="Wallet funding progress"><li data-topup-progress="1">1 · Your wallet</li><li data-topup-progress="2">2 · Add funds</li><li data-topup-progress="3">3 · Fund bounty</li></ol>
+      <h2 class="guided-main-title" role="heading" aria-level="1" data-guided-title>Add funds to your wallet</h2>
+      <p data-guided-intro hidden>We’ll use your saved bounty and check what this wallet needs.</p>
+      <section class="topup-card" aria-live="polite" aria-busy="true" data-guided-card>
+        <p class="topup-message" data-guided-message>Checking your saved operation…</p>
+        <div data-guided-wallet hidden><dl><div><dt>Your wallet · Base</dt><dd><code data-guided-address></code></dd></div><div><dt>Bounty total</dt><dd data-guided-required></dd></div><div><dt>Still needed</dt><dd data-guided-shortfall></dd></div></dl><p class="topup-note" data-guided-gas></p></div>
+        <div data-guided-choices hidden>
+          <div class="topup-region"><label>Country <input data-guided-country maxlength="2" autocomplete="country" placeholder="e.g. MX" aria-label="Country code"></label><label data-guided-state-label hidden>State <input data-guided-state maxlength="2" placeholder="e.g. CA" aria-label="State code"></label></div>
+          <details data-guided-provider-details><summary>Provider and payment options</summary><label>Provider<select data-guided-provider><option value="coinbase">Coinbase</option><option value="moonpay">MoonPay</option><option value="metamask">MetaMask / Transak</option></select></label><label>Currency<select data-guided-currency><option value="USD">USD</option></select></label><label>Payment method<select data-guided-method><option value="CARD">Card</option></select></label><p data-guided-requirements></p></details>
+        </div>
+        <div data-guided-quote hidden><h2>Review your quote</h2><dl><div><dt>You pay</dt><dd data-guided-pay></dd></div><div><dt>You receive</dt><dd data-guided-receive></dd></div><div><dt>Extra stays in your wallet</dt><dd data-guided-excess></dd></div></dl><p class="topup-note" data-guided-expiry></p><details><summary>Fees</summary><p data-guided-fees></p></details><p data-guided-signin></p></div>
+        <div data-guided-recovery hidden><a data-guided-support target="_blank" rel="noopener noreferrer">Check the existing order with provider support ↗</a><details><summary>Already resolved with the provider?</summary><label><input type="checkbox" data-guided-resolved> I checked this order: it completed or was cancelled, with no payment pending.</label><button class="button secondary" data-guided-clear type="button">Recheck after resolving</button></details></div>
+        <div data-guided-handoff hidden><p data-guided-handoff-copy></p><button class="button secondary" data-guided-copy type="button">Copy saved handoff</button><button class="button secondary" data-guided-phone type="button">Connect phone wallet</button></div>
+        <button class="button primary" data-guided-next type="button" disabled>Checking wallet…</button>
+        <a class="topup-review-link" data-guided-return href="post.html">Return to saved review</a>
+      </section>
+      <details data-guided-guide><summary>Show a short visual guide</summary><p class="topup-note">Illustrative examples; no real credentials, card details or pairing codes.</p><ol class="topup-guide" data-guided-guide-steps></ol></details>
+      <p class="topup-note">Buying USDC adds money to your wallet. You separately confirm bounty funding in the saved review.</p>
+    </main>
+    <div data-legacy-topup>
     <main class="protocol-page guild-interior-main onramp-page">
       <section class="board-hero onramp-hero" aria-labelledby="onramp-title">
         <div>
@@ -50,7 +72,7 @@
         <div>
           <p class="eyebrow">Two separate decisions</p>
           <h2 id="boundary-title">Buying USDC does not fund the bounty.</h2>
-          <!-- Stable evidence-boundary marker: Buying crypto does not fund the bounty. Existing-bounty actions may use gas sponsorship; new-bounty creation still needs Base ETH. -->
+          <!-- Stable evidence-boundary marker: Buying crypto does not fund the bounty. Gas sponsorship is checked separately for each exact operation. -->
         </div>
         <ol>
           <li><strong>1. Add money to your wallet:</strong> <span data-topup-step-status>check whether a purchase is needed.</span></li>
@@ -67,8 +89,8 @@
         </div>
         <div class="onramp-provider-grid">
           <a class="button primary" href="#moonpay-action-title" data-onramp-provider="moonpay">MoonPay checkout</a>
-          <a class="button secondary" href="https://portfolio.metamask.io/" target="_blank" rel="noopener noreferrer" data-onramp-provider="metamask">MetaMask Portfolio</a>
-          <a class="button secondary" href="https://wallet.coinbase.com/" target="_blank" rel="noopener noreferrer" data-onramp-provider="coinbase">Base App / Coinbase Wallet</a>
+          <a class="button secondary" href="post.html#bounty-preview" data-onramp-provider="metamask">MetaMask Portfolio</a>
+          <a class="button secondary" href="post.html#bounty-preview" data-onramp-provider="coinbase">Base App / Coinbase Wallet</a>
         </div>
         <p class="fine">In your wallet, choose Buy and verify USDC on Base. These are external wallet purchase routes. Coinbase embedded wallet uses email or social login on your account page. A provider completion is not bounty-funding evidence.</p>
       </section>
@@ -129,7 +151,7 @@
             <div><dt>Base ETH balance</dt><dd><strong data-eth-balance>—</strong></dd></div>
           </dl>
           <p class="fine" data-balance-observed>Balances have not been checked.</p>
-          <p class="fine" data-balance-guidance>New-bounty creation is not gas-sponsored. This wallet needs a small amount of Base ETH as well as the planned USDC; existing-bounty funding and claims may use sponsorship.</p>
+          <p class="fine" data-balance-guidance>Return to the bounty review to check sponsorship for the exact action. Buy Base ETH only after explicitly choosing a user-paid transaction.</p>
         </article>
       </section>
 
@@ -201,6 +223,7 @@
       <p class="ab-boundary-note">MoonPay top-up ≠ bounty funding. Only canonical events prove funding and payment.</p>
     </main>
 
+    </div>
     <!-- shared-footer:start -->
 <footer class="ab-footer">
   <div class="ab-footer-main">
@@ -215,12 +238,17 @@
 <!-- shared-footer:end -->
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=6"></script>
-    <script src="marketplace-workflow.js?v=8"></script>
+    <script src="marketplace-workflow.js?v=9"></script>
     <script src="analytics-config.js?v=9"></script>
     <script src="analytics.js?v=4"></script>
     <script src="guild-shell.js?v=4"></script>
-    <script src="funding-readiness.js?v=1"></script>
-    <script src="moonpay-onramp.js?v=3"></script>
-    <script src="moonpay-direct-fallback.js?v=3"></script>
+    <script src="funding-readiness.js?v=2"></script>
+    <script src="wallet-config.js?v=3"></script>
+    <script src="wallet-link.js?v=5"></script>
+    <script src="posting-auth.js?v=3"></script>
+    <script src="wallet-funding.js?v=1"></script>
+  <script src="guided-topup.js?v=3"></script>
+    <script src="moonpay-onramp.js?v=4"></script>
+    <script src="moonpay-direct-fallback.js?v=4"></script>
   </body>
 </html>

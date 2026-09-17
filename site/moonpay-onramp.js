@@ -1,5 +1,6 @@
-(() => {
+(async () => {
   "use strict";
+  if (window.AgentBountiesGuidedFundingBoot && await window.AgentBountiesGuidedFundingBoot) return;
 
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -566,6 +567,7 @@
     for (const link of selectAll("[data-onramp-provider]")) {
       link.addEventListener("click", () => {
         const provider = link.dataset.onrampProvider;
+        if (provider !== "moonpay") link.href = safeReturnUrl().href;
         if (provider === "moonpay") track("onramp_moonpay_started");
         if (provider === "metamask") track("onramp_metamask_started");
         if (provider === "coinbase") track("onramp_coinbase_started");

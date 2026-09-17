@@ -290,3 +290,5 @@ test("an uncertain checkout response cannot trigger a repeated request", async (
   assert.equal(app.element("[data-purchase-recovery]").hidden, false);
   assert.match(app.element("[data-purchase-recovery-copy]").textContent, /status is unverified/);
 });
+
+test("sponsored authorization disclosure preserves payload and does not prescribe ETH",()=>{const api=helperContext(),fixture=authorizationFixture();const normal=api.validateFundingAuthorization(fixture);fixture.context.gasPayer="relay";const sponsored=api.validateFundingAuthorization(fixture);assert.equal(normal.serialized,sponsored.serialized);assert.match(sponsored.summary,/simulate this exact authorization/);assert.match(sponsored.summary,/do not need ETH/);assert.doesNotMatch(sponsored.summary,/transaction requires Base ETH/);assert.match(normal.summary,/user-paid creation transaction requires Base ETH/);});

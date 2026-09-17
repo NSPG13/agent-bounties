@@ -158,6 +158,8 @@ jobs:
           node --check site/posting-reference.js
           node --check site/posting-session.js
           node --check site/funding-readiness.js
+          node --check site/wallet-funding.js
+          node --check site/guided-topup.js
       - name: Test leaderboard evidence and shared appearance
         run: node --test scripts/test-leaderboard.cjs
       - name: Test the marketplace evidence states
@@ -165,7 +167,7 @@ jobs:
       - name: Test assistant desktop handoff and draft preservation
         run: node scripts/test-ai-bounty-handoff.js
       - name: Test login and prepared-bounty continuity
-        run: node --test scripts/test-posting-auth.js scripts/test-account-navigation.js scripts/test-posting-brief.cjs scripts/test-posting-reference.js scripts/test-posting-session.js scripts/test-funding-readiness.js
+        run: node --test scripts/test-posting-auth.js scripts/test-account-navigation.js scripts/test-posting-brief.cjs scripts/test-posting-reference.js scripts/test-posting-session.js scripts/test-funding-readiness.js scripts/test-wallet-funding.js
       - name: Test the retained Metrics evidence engine
         run: node --test scripts/test-metrics-dashboard.js
       - name: Test unified marketplace readiness, timing, and economics
@@ -176,6 +178,7 @@ jobs:
           npm ci --ignore-scripts --no-fund
           npx playwright install --with-deps chromium
           npm test
+          node ../../scripts/test-guided-topup.cjs
       - name: Verify the privacy-safe GitHub participation aggregate
         run: |
           python scripts/test_github_audience_audit.py -v
