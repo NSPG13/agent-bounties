@@ -9,6 +9,7 @@
   const APPROVAL = "agent-bounties.posting-approval.v1";
   const OWNER = "agent-bounties.posting-owner.v1";
   const SYNC = "agent-bounties.posting-sync.v1";
+  const CONTINUATION = "agent-bounties.posting-continuation.v1";
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const sessions = new WeakMap();
   function stable(value) {
@@ -335,6 +336,43 @@
       win.dispatchEvent?.(new win.CustomEvent("agent-bounties:posting-canonical", { detail: result }));
       return result;
     }
+    function canContinue() {
+      const operation = read(JOURNAL), saved = read(CONTINUATION);
+      return Boolean(authenticated && !conflict && operation?.phase === "authorized" && operation.authorizationIssued
+        && operation.continuation_hash && !operation.submission_attempt_id && !operation.transactions?.length
+        && saved?.owner === owner && saved.operation_id === remoteId && saved.bounty_id === operation.bounty_id);
+    }
+    async function saveContinuation(request) {
+      if (!authenticated || !await approved()) throw new Error("Review and approve this saved draft before retaining its signed request.");
+      const operation = read(JOURNAL);
+      if (!operation || request.bounty_id !== operation.bounty_id || request.bounty_contract !== operation.bounty_contract)
+        throw new Error("The signed request does not match this bounty.");
+      const saved = { ...request, version: 1, owner, operation_id: remoteId, draft_hash: await digest(win, envelope(client.load())) };
+      const hash = `0x${await digest(win, saved)}`;
+      // Sensitive purpose-limited signature stays in this tab. Only its digest
+      // and submission progress are synchronized with the account service.
+      win.sessionStorage.setItem(CONTINUATION, JSON.stringify(saved));
+      flow.createPostingJournal(win).authorizeContinuation(hash);
+      await flush({ requireServer: true });
+    }
+    async function loadContinuation() {
+      if (!canContinue() || !await approved()) throw new Error("This operation cannot send another transaction. Check its saved status or return to the original signing tab.");
+      const saved = read(CONTINUATION), operation = read(JOURNAL);
+      if (lastRecovery?.continuation_hash !== operation.continuation_hash
+        || saved.draft_hash !== await digest(win, envelope(client.load()))
+        || `0x${await digest(win, saved)}` !== operation.continuation_hash
+        || saved.bounty_contract !== operation.bounty_contract)
+        throw new Error("The saved signed request failed its integrity check. Nothing was sent.");
+      return saved;
+    }
+    async function reserveSubmission() {
+      await refresh();
+      await loadContinuation();
+      flow.createPostingJournal(win).reserveContinuation(win.crypto.randomUUID());
+      // A unique attempt makes concurrent POSTs different. The database CAS
+      // permits only one; even an uncertain save response must not invoke CDP.
+      await flush({ requireServer: true });
+    }
     async function beginAfterArchive(archived, options = {}, existingJourney = null) {
       if (!authenticated) throw new Error("Sign in before starting the next posting operation.");
       if (journal(read(JOURNAL))) throw new Error("A wallet operation is still recorded. Reconcile it before starting another.");
@@ -377,7 +415,7 @@
     }
     win.addEventListener?.("agent-bounties:journey", schedule);
     win.addEventListener?.("agent-bounties:posting-journal", schedule);
-    const api = { snapshot, approved, approve, invalidate, hydrate, refresh, flush, reconcile, beginAfterArchive, reload: async () => { try { return await adopt(await request("GET", remoteId)); } catch (error) { failure(error); throw error; } } };
+    const api = { snapshot, approved, approve, invalidate, hydrate, refresh, flush, reconcile, canContinue, saveContinuation, loadContinuation, reserveSubmission, beginAfterArchive, reload: async () => { try { return await adopt(await request("GET", remoteId)); } catch (error) { failure(error); throw error; } } };
     sessions.set(win, api);
     return api;
   }

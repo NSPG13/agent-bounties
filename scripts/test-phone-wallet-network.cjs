@@ -23,6 +23,8 @@ const fundingFunction = source.slice(start, end) + "; fundApprovedBounty";
 const batchFunction = source.slice(source.indexOf("  async function sendWalletCalls("), source.indexOf("  function contractTerms("));
 const walletFunctions = source.slice(source.indexOf("  function signatureParts("), source.indexOf("  async function sendWalletCalls("));
 const bindingFunctions = source.slice(source.indexOf("  async function prepareWalletRequest("), source.indexOf("  async function watchUsdcAsset("));
+const legalFunctions = source.slice(source.indexOf("  const LEGAL_RECEIPT_KEY"), source.indexOf("  async function refreshWalletReadiness("));
+const finishFunction = source.slice(source.indexOf("  async function finishPosting("), source.indexOf("  async function continueSignedBounty("));
 const atomicError = { code: -32602, message: "Invalid params\n\n0 > atomicRequired - Expected a value of type `boolean`, but received: `undefined`" };
 const rejection = { code: 4001, message: "MetaMask Tx Signature: User denied transaction signature." };
 const syntheticSignature = "0x" + "12".repeat(64) + "1b", transactionHash = "0x" + "ab".repeat(32);
@@ -69,7 +71,10 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
     agentBountiesPhoneWalletConfig: { projectId: "0".repeat(32) },
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     addEventListener() {}, dispatchEvent() {}, setTimeout, clearTimeout,
-    AgentBountiesLegal: { requireAcceptance: async () => { if (mutateAt === "legal") mutate(); return { durable: true }; } },
+    AgentBountiesLegal: {
+      loadPolicy: async () => ({ source: "hosted", supported_actions: ["post_bounty"], terms_version: "test-terms", privacy_version: "test-privacy", statement_hash: "test-statement" }),
+      requireAcceptance: async () => { if (mutateAt === "legal") mutate(); return { durable: true, terms_version: "test-terms", privacy_version: "test-privacy", statement_hash: "test-statement" }; },
+    },
   };
   win.location.assign = () => {};
   const phone = createPhoneWallet(win, { loadVendor: async () => ({ createProvider: async () => sdk }) });
@@ -114,6 +119,9 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
   const calls = [{ to: other, data: "0x010203" }, { to: address, data: "0x040506" }];
   const plan = { bounty_id: "0x" + "56".repeat(32), predicted_bounty_contract: "0x" + "78".repeat(20), eip3009_authorization: authorization, wallet_calls: calls };
   const postingSession = {
+    // External wallets do not use the Coinbase-only retained-signature route.
+    canContinue: () => false,
+    snapshot: () => ({ operation_id: journey.id }),
     refresh: async () => { if (mutateAt === "refresh") mutate(); },
     flush: async (options = {}) => {
       checkpoints.push({ required: options.requireServer === true, phase: journal.load()?.phase });
@@ -124,8 +132,9 @@ async function fixture({ adapted = true, change = null, uncertain = false, batch
     approved: async () => state.approved,
     reconcile: async () => ({ creation_confirmed: !pending, funding_confirmed: !pending, claimable: !pending, public_inventory_verified: !pending }),
   };
-  const run = vm.runInNewContext(bindingFunctions + walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + fundingFunction, {
+  const run = vm.runInNewContext(legalFunctions + bindingFunctions + walletFunctions + (legacy ? batchFunction.replace("atomicRequired:false,", "") : batchFunction) + finishFunction + fundingFunction, {
     postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => [] }, fundNow: {}, badge: {} }, document: { querySelector: () => null },
+    sessionStorage: store,
     track() {}, setPaymentStatus: value => statuses.push(value), refreshWalletReadiness: async () => {},
     updatePostingCost() {}, updatePostingTracker() {},
     loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: "0x" + "90".repeat(20), chain_id_hex: "0x2105", native_usdc: nativeUsdc }),
@@ -207,7 +216,7 @@ test("wrapped MetaMask rejection ends one request and reopens preparation withou
   for (const batch of [false, true]) {
     const env = await fixture({ batch, wrapped: true }); await env.run();
     assert.equal(env.signing.length, 1); assert.equal(env.journal.load(), null);
-    assert.match(env.statuses.at(-1), /wallet did not approve/); assert.equal(env.network.length, 0);
+    assert.match(env.statuses.at(-1), /Wallet request cancelled/); assert.equal(env.network.length, 0);
   }
 });
 
@@ -275,7 +284,7 @@ test("the unchanged posting guard reaches one signature request through the adap
   assert.equal(env.signing[0].chainId, "eip155:8453");
   assert.equal(env.signing[0].request.method, "eth_signTypedData_v4");
   assert.deepEqual(Array.from(env.signing[0].request.params), [address, JSON.stringify(env.authorization)]);
-  assert.match(env.statuses.at(-1), /wallet did not approve/);
+  assert.match(env.statuses.at(-1), /Wallet request cancelled/);
   assert.equal(env.network.length, 0);
   assert.equal(env.journal.load(), null, "An explicit rejection authorizes no payment and leaves the review available");
 });

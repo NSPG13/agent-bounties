@@ -17,6 +17,9 @@
 .wallet-auth-overlay::backdrop { background: rgba(0, 0, 0, 0.78); backdrop-filter: blur(4px); }
 .wallet-auth-panel .wallet-auth-signin { gap: 1rem; padding: 1.25rem; border-radius: .75rem; }
 .wallet-auth-panel:focus { outline: none; }
+.wallet-auth-review { display: grid; gap: .8rem; margin: 0; min-width: 0; }
+.wallet-auth-review dt { color: #b6c2b2; font-size: .8rem; margin-bottom: .2rem; }
+.wallet-auth-review dd { margin: 0; overflow-wrap: anywhere; line-height: 1.4; }
 .wallet-auth-panel {
   width: min(100%, 36rem);
   max-height: calc(100dvh - 2rem);

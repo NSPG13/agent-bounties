@@ -86,13 +86,16 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
   const source = fs.readFileSync(require.resolve("../site/bounty-composer-v2.js"), "utf8");
   const start = source.indexOf("  async function fundApprovedBounty()"), end = source.indexOf("  function configureSpeech", start);
   const guardStart = source.indexOf("  async function assertPostingBinding()"), guardEnd = source.indexOf("  async function watchUsdcAsset", guardStart);
+  const legalStart = source.indexOf("  const LEGAL_RECEIPT_KEY"), legalEnd = source.indexOf("  async function refreshWalletReadiness", legalStart);
+  const finishStart = source.indexOf("  async function finishPosting("), finishEnd = source.indexOf("  async function continueSignedBounty", finishStart);
   const postingHelper = require("../site/posting-session.js");
   const storage = new Map(), requests = [], sent = [], consents = [], navigations = [];
-  const saved = [], refreshes = [];
+  const saved = [], refreshes = [], errors = [];
+  const policy = { source: "hosted", supported_actions: ["post_bounty"], terms_version: "test-terms", privacy_version: "test-privacy", statement_hash: "test-statement" };
   const journey = { schema: "agent-bounties/guided-journey-v1", id: "11111111-1111-4111-8111-111111111111", role: "post", goal: fixture.terms.document.goal, draft: fixture.terms.document, draft_stale: false };
   const approvedEnvelope = postingHelper.stable(postingHelper.envelope(journey));
   const win = { sessionStorage: { getItem: key => storage.get(key) || null, setItem: (key, val) => storage.set(key, val), removeItem: key => storage.delete(key) },
-    AgentBountiesLegal: { requireAcceptance: async () => { consents.push("human commitment"); return { durable: true }; } },
+    AgentBountiesLegal: { loadPolicy: async () => policy, requireAcceptance: async () => { consents.push("human commitment"); return { ...policy, durable: true }; } },
     AgentBountiesWorkflow: { createClient: () => ({ load: () => journey }) }, AgentBountiesPostingSession: postingHelper,
     AgentBountiesEvm: evm, location: { assign: url => navigations.push(url) } };
   const journal = require("../site/marketplace-workflow.js").createPostingJournal(win);
@@ -101,6 +104,9 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
   const state = { approved: true, provider: { request: async ({ method }) => method === "eth_accounts" ? [fixture.parent_solver] : "0x2105" }, account: fixture.parent_solver,
     balances: { usdc: 1000000n, required: 1000000n, eth: 1n }, draft: fixture.terms.document, metaParent: parent, fundingUsdc: 1, taskWindowDays: 3 };
   const postingSession = {
+    // This child path submits a batch; it has no retained Coinbase signature.
+    canContinue: () => false,
+    snapshot: () => ({ operation_id: journey.id }),
     refresh: async () => { refreshes.push(journey.id); },
     approved: async () => state.approved && postingHelper.stable(postingHelper.envelope(journey)) === approvedEnvelope,
     flush: async (options = {}) => { saved.push({ required: options.requireServer === true, envelope: postingHelper.envelope(journey), recovery: journal.load() }); },
@@ -110,10 +116,11 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     },
   };
   let fail = true, nonces = 0;
-  const run = vm.runInNewContext(source.slice(guardStart, guardEnd) + source.slice(start, end) + "; fundApprovedBounty", {
+  const run = vm.runInNewContext(source.slice(legalStart, legalEnd) + source.slice(guardStart, guardEnd) + source.slice(finishStart, finishEnd) + source.slice(start, end) + "; fundApprovedBounty", {
     postingBusy: false, postingBinding: null, postingJournal: journal, postingSession, state, window: win, ui: { form: { querySelectorAll: () => fields }, fundNow: {}, badge: {} },
+    sessionStorage: win.sessionStorage,
     updatePostingTracker() {},
-    track() {}, setPaymentStatus() {}, refreshWalletReadiness: async () => {}, loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: fixture.child_creation.factory_contract, chain_id: 8453 }),
+    track() {}, setPaymentStatus(message, kind) { if (kind === "error") errors.push(message); }, refreshWalletReadiness: async () => {}, loadProtocol: async () => ({ api_base_url: "https://api.agentbounties.app", factory: fixture.child_creation.factory_contract, chain_id: 8453 }),
     currentRewardSplit: () => split, randomBytes32: () => nonces++ ? "0x" + "77".repeat(32) : fixture.child_create.creation_nonce,
     metaChild: { ...helper, resolve: async () => parent, request: (_draft, _parent, _wallet, _split, _days, nonce) => ({ ...inputFor(), creation_nonce: nonce }), validatePlan: fixedHelper.validatePlan },
     requestJson: async (url, options) => {
@@ -126,8 +133,11 @@ test("the confirmed funding branch uses the bounded child plan and retries a los
     pollCreation: async () => true, fetchFeedItem: async () => ({ verification_ready: true }),
   });
   await run(); assert.equal(sent.length, 0); assert.equal(journal.load(), null); assert.ok(fields.every(field => !field.disabled));
+  assert.deepEqual(errors, ["lost response"]);
   assert.equal(navigations.length, 0);
   await run(); assert.equal(sent.length, 1); assert.deepEqual(sent[0], fixture.pre_claim_wallet_calls);
+  assert.deepEqual(errors, ["lost response"]);
+  assert.equal(consents.length, 1, "The unchanged child retains its legal receipt after lost preparation");
   assert.equal(requests[0].creation_nonce, requests[1].creation_nonce);
   assert.equal(journal.load().phase, "funding_confirmed");
   assert.deepEqual(navigations, [`funded.html?bountyContract=${fixture.child_creation.predicted_bounty_contract}&network=base-mainnet`]);

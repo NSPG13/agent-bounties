@@ -249,6 +249,31 @@
     },
   });
 
+  register({ name: "agent_bounties_get_posting_options", title: "Explain how posting and review work",
+    description: "Read the supported review choices, why a review is needed, which posting protocol this form uses, reward minimums, fees and campaign limits. Explain these briefly before proposing a review method or changing the person's reward structure. No draft, consent or payment changes.",
+    inputSchema: { type: "object", properties: { work_type: { type: "string", enum: ["outreach", "research", "creative", "software"], description: "Optional task category for an explained recommendation; this never chooses or approves it." } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, untrustedContentHint: false },
+    execute(input = {}) {
+      if (!input || Array.isArray(input) || typeof input !== "object" || Object.keys(input).some(key => key !== "work_type")) throw new Error("Provide only an optional work_type.");
+      return flow.postingOptions(input.work_type);
+    },
+  });
+
+  if (isPost) register({ name: "agent_bounties_open_account_setup", title: "Open sign-in in this browser",
+    description: "Open first-party sign-in or account setup in the current browser tab and preserve the exact prepared bounty for return. Use this instead of asking the person to find an external login page. The person enters credentials and confirms wallet ownership themselves; opening setup grants no publication, legal, signing or payment consent.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false, untrustedContentHint: false },
+    execute() {
+      const auth = window.AgentBountiesPostingAuth;
+      const resume = auth?.remember(window);
+      if (!resume) throw new Error("Could not save the return to this bounty. Keep this tab open; no sign-in or payment was started.");
+      const url = auth.loginUrl(window);
+      window.setTimeout(() => window.location.assign(url), 0);
+      return { status: "opening_account_setup", url, resume_url: resume, operation_id: client.load()?.id || null,
+        wallet_authorized: false, payment_authorized: false, next_action: "Complete sign-in here. Return to the saved bounty automatically after account setup." };
+    },
+  });
+
   if (window.AgentBountiesPhoneWallet) {
     register({ name: "agent_bounties_open_phone_wallet", title: "Connect my phone wallet by app or QR",
       description: "Open the external phone-wallet connection on this page. On the same phone, the person chooses an installed supported wallet's native app button; on desktop, they scan the QR with a second device. This is not Coinbase embedded-wallet email login. Preparation never signs, pays, publishes or approves a wallet request. Preserve the current draft and reuse an existing pairing. Never read, copy or transmit the QR or pairing URI, or suggest screenshot scanning. Check the sanitized expiry and connection state, then continue the same review after the person approves in their wallet.",
@@ -382,7 +407,9 @@
       const journey = client.load() || client.start({ role: "post" });
       if (isPost) {
         const result = await stageOnPostPage(draft);
-        client.save({ ...journey, draft, draft_stale: false, goal: draft.goal, brief: { ...journey.brief, goal: draft.goal, budget_usdc: String(Number(draft.solver_reward_usdc) + Number(draft.verifier_reward_usdc)), deadline_at: draft.delivery_deadline || journey.brief?.deadline_at || null }, meta_child: draft.meta_child, role: "post" });
+        // The composer persists the normalized review, including its actual
+        // verification policy. Overwriting it with the raw tool input would
+        // change the approval hash when the same draft is restored on reload.
         return result;
       }
       client.save({ ...journey, draft, draft_stale: false, goal: draft.goal, brief: { ...journey.brief, goal: draft.goal, budget_usdc: String(Number(draft.solver_reward_usdc) + Number(draft.verifier_reward_usdc)), deadline_at: draft.delivery_deadline || journey.brief?.deadline_at || null }, meta_child: draft.meta_child, role: "post" });

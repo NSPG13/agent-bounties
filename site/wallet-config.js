@@ -11,7 +11,7 @@
         disableAnalytics: true,
         secureIframeBasePath: "https://secure-wallet.cdp.coinbase.com",
         authMethods: ["email", "oauth:google", "oauth:apple"],
-        transactionPolicy: "agent-bounties-relay-required",
+        transactionPolicy: "reviewed-base-posting",
       },
     },
   });

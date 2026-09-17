@@ -19,6 +19,7 @@
     <link rel="stylesheet" href="ai-bounty-handoff.css?v=4">
     <link rel="stylesheet" href="phone-wallet.css?v=3">
     <link rel="stylesheet" href="wallet-link.css?v=4">
+    <link rel="stylesheet" href="wallet-adapters.css?v=6">
     <link rel="stylesheet" href="posting-workspace.css?v=6">
     <link rel="stylesheet" href="marketplace-theme.css?v=3">
     <link rel="stylesheet" href="site-navigation.css?v=6">
@@ -44,6 +45,16 @@
     <main class="posting-workspace" aria-label="Bounty draft and review">
       <section class="conversation-panel">
         <p class="posting-receipt" data-recorded-posting hidden>A wallet step is recorded. <a data-posting-receipt-link>Check funding and return to the board →</a></p>
+
+        <details class="ab-post-assistant" data-posting-basics>
+          <summary>How does a bounty work?</summary>
+          <p data-posting-introduction>Describe the work, choose how it is checked, then review the cost. You approve posting and funding in your wallet. An agent does the work, and the agreed review decides whether it gets paid.</p>
+          <p><strong>Choose the check:</strong> review the work yourself, or use a supported automated test. Your own review suits outreach, research and design; tests suit work with a repeatable pass/fail result.</p>
+          <div data-posting-options></div>
+          <p>This form uses autonomous-v1 on Base: one fixed reward, held by a contract until the agreed review. The review method is fixed before funding.</p>
+          <p>The budget includes a worker reward and a review reward. You approve both amounts. Creating the bounty also costs a small network fee in Base ETH; your wallet shows the estimate before you send.</p>
+          <p>This form supports one fixed reward per bounty. A campaign paying for every reply or referral needs a different structure; your assistant should explain that before changing your offer.</p>
+        </details>
 
         <section class="ab-post-assistant" aria-labelledby="connected-ai-title">
           <header><h2 id="connected-ai-title">Your AI, ready to help</h2><div class="posting-wallet" data-posting-wallet></div></header>
@@ -290,22 +301,22 @@
     <script src="posting-auth.js?v=3"></script>
     <script src="phone-wallet-config.js?v=1"></script>
     <script src="phone-wallet.js?v=6"></script>
-    <script src="marketplace-workflow.js?v=6"></script>
-    <script src="posting-session.js?v=1"></script>
+    <script src="marketplace-workflow.js?v=8"></script>
+    <script src="posting-session.js?v=2"></script>
     <script src="funding-readiness.js?v=1"></script>
-    <script src="wallet-config.js?v=2"></script>
-    <script src="wallet-link.js?v=4"></script>
+    <script src="wallet-config.js?v=3"></script>
+    <script src="wallet-link.js?v=5"></script>
     <script src="posting-reference.js?v=1"></script>
-    <script src="analytics-config.js?v=7"></script>
+    <script src="analytics-config.js?v=9"></script>
     <script src="analytics.js?v=5"></script>
     <script src="legal-consent.js?v=2"></script>
     <script src="evm.js"></script>
     <script src="meta-child.js?v=1"></script>
     <script src="bounty-entry.js?v=1"></script>
-    <script src="posting-prompt.js?v=4"></script>
+    <script src="posting-prompt.js?v=6"></script>
     <script src="creator-review.js?v=2"></script>
     <script src="ai-bounty-handoff.js?v=11"></script>
-    <script src="bounty-composer-v2.js?v=19"></script>
+    <script src="bounty-composer-v2.js?v=21"></script>
     <script src="posting-brief.js?v=1"></script>
     <script src="posting-workspace.js?v=5"></script>
     <script src="forest-posting.js?v=1"></script>

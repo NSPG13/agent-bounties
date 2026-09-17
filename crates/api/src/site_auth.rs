@@ -490,6 +490,8 @@ fn valid_posting_recovery(value: &Value) -> bool {
             "wallet_method",
             "wallet_error",
             "terms_hash",
+            "continuation_hash",
+            "submission_attempt_id",
             "display_context",
         ]
         .contains(&key.as_str())
@@ -506,6 +508,24 @@ fn valid_posting_recovery(value: &Value) -> bool {
     fixed_hex("bounty_contract", 20)
         && fixed_hex("bounty_id", 32)
         && (!object.contains_key("terms_hash") || fixed_hex("terms_hash", 32))
+        && (!object.contains_key("continuation_hash") || fixed_hex("continuation_hash", 32))
+        && (!object.contains_key("submission_attempt_id")
+            || value["submission_attempt_id"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .is_some()
+                && object.contains_key("continuation_hash")
+                && value["authorizationIssued"] == Value::Bool(true)
+                && matches!(
+                    value["phase"].as_str(),
+                    Some(
+                        "sending"
+                            | "submitted"
+                            | "pending"
+                            | "creation_confirmed"
+                            | "funding_confirmed"
+                    )
+                ))
         && value["phase"].as_str().is_some_and(|phase| {
             [
                 "prepared",
@@ -2020,6 +2040,33 @@ mod tests {
         assert!(!valid_posting_recovery(&recovery));
         recovery.as_object_mut().unwrap().remove("paid");
         recovery["bounty_id"] = json!("not-a-bounty-id");
+        assert!(!valid_posting_recovery(&recovery));
+    }
+
+    #[test]
+    fn posting_continuation_metadata_is_bounded_and_contains_no_signature() {
+        let mut recovery = json!({"bounty_contract":format!("0x{}", "11".repeat(20)), "bounty_id":format!("0x{}", "22".repeat(32)),
+            "phase":"authorized", "transactions":[], "authorizationIssued":true, "continuation_hash":format!("0x{}", "ab".repeat(32))});
+        assert!(valid_posting_recovery(&recovery));
+        recovery["submission_attempt_id"] = json!(Uuid::new_v4());
+        assert!(!valid_posting_recovery(&recovery));
+        recovery["phase"] = json!("sending");
+        assert!(valid_posting_recovery(&recovery));
+        for phase in ["prepared", "signing", "authorized"] {
+            recovery["phase"] = json!(phase);
+            assert!(!valid_posting_recovery(&recovery));
+        }
+        recovery["phase"] = json!("sending");
+        recovery["signature"] = json!(format!("0x{}", "11".repeat(65)));
+        assert!(!valid_posting_recovery(&recovery));
+        recovery.as_object_mut().unwrap().remove("signature");
+        recovery["submission_attempt_id"] = json!("not-a-uuid");
+        assert!(!valid_posting_recovery(&recovery));
+        recovery["submission_attempt_id"] = json!(Uuid::new_v4());
+        recovery
+            .as_object_mut()
+            .unwrap()
+            .remove("continuation_hash");
         assert!(!valid_posting_recovery(&recovery));
     }
 

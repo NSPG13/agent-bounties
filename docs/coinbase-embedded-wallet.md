@@ -123,10 +123,51 @@ Initial canonical bounty creation, submission, verification, cancellation, refun
 gasSponsoredOnSupportedRelays: true
 arbitraryTransactionsGasSponsored: false
 directTransactions: false
-transactionPolicy: agent-bounties-relay-required
+postingTransactions: true
+reviewedPostingOnly: true
+transactionPolicy: reviewed-base-posting
 ```
 
-The Coinbase adapter therefore rejects direct transaction methods for now instead of unexpectedly consuming ETH. This prevents an embedded-wallet provider from being mistaken for a blanket paymaster. Wallet selectors for submission and other direct-transaction actions deliberately filter out adapters whose `directTransactions` capability is `false`, so users are not offered a wallet that the selected action cannot safely execute.
+The posting composer accepts `postingTransactions` without treating the wallet
+as a blanket paymaster or arbitrary contract signer. It passes the exact
+validated posting context with the funding authorization and each transaction.
+The adapter checks that context again, shows the decoded amount, recipient,
+expiry and complete Base fee estimate, and waits for a real user confirmation.
+Unknown fees or an ETH balance below the estimate block the transaction. Tiny
+positive fees retain their precision instead of displaying as zero. Base ETH
+pays creation gas; buying USDC does not supply that ETH or fund the bounty.
+
+The first embedded funding-signature review records its durable signing intent
+after the user's confirmation and before invoking the SDK. Cancelling that
+review leaves the same draft available; a failed durable save stops signing.
+An already-issued authorization remains recorded if the following transaction
+is cancelled or blocked. **Continue funding** reuses that exact request after
+cancellation or a gas top-up, including reload in the original tab. Its signature
+and legal receipt stay in tab session storage, bound to account, operation,
+wallet and approved draft; only an immutable digest is saved to the account.
+Unchanged legal approval is reused within that same binding. Changed policies
+or task terms cannot reuse it.
+
+After the next human transaction confirmation, a unique server-side submission
+reservation must succeed before the SDK is invoked. Revision checks give
+concurrent tabs only one winner. Once reserved, a crash or lost reply requires
+reconciliation; an error alone never permits a resend. Another device can
+restore the draft but does not receive the signed payload. Retaining this
+bounded signature extends its exposure to the original tab's session; it is
+not a private key and is never included in agent tool output or account drafts.
+See `posting-flow-verification.md` for measured outcomes and live release gates.
+
+The locked CDP provider signs and broadcasts Base transactions but does not
+forward general read RPC methods. The adapter routes an explicit read-only
+allowlist to the configured Base RPC for balances, simulation, fees and receipts.
+Unknown signing methods stay unsupported. Batch calls return `4200` before any
+side effect so the composer can review its validated calls individually.
+
+The same posting journal survives navigation. Once a request reaches CDP, an
+ambiguous error is never relabeled as user cancellation or retried. Only a
+confirmed canonical event establishes creation, funding or payment. Other
+direct-contract workflows still require their own bounded review support;
+`directTransactions: false` keeps them from advertising unsupported actions.
 
 ## Browser CORS boundary
 
@@ -147,12 +188,12 @@ failed explicit attempts pause further checks for one minute; another wallet
 remains selectable. No browser error details, authentication data, or request
 URLs enter the diagnostic event.
 
-`AgentBountiesWalletLink.embeddedCapabilities` exposes the relay-only policy
+`AgentBountiesWalletLink.embeddedCapabilities` exposes the posting capability
 without loading or authenticating Coinbase. The adapter and its EIP-1193
 provider also expose `capabilities` and `agentBountiesCapabilities`, respectively.
-`directTransactions: false` remains unchanged: a new bounty's direct creation
-route must explain this limitation before authentication and offer a compatible
-external wallet. Only a supported relay may claim sponsorship.
+`postingTransactions: true` permits the reviewed new-bounty creation route;
+`directTransactions: false` excludes unrelated direct calls. Only a supported
+relay may claim sponsorship. Ship the new bundle and composer together.
 
 Two cross-origin boundaries are verified separately:
 

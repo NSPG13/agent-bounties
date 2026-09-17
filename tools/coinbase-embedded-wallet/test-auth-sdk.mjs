@@ -3,7 +3,8 @@ export const fakeSdk = `
 import React, { useSyncExternalStore } from 'react';
 const listeners = new Set();
 const signedIn = () => sessionStorage.getItem('test-cdp-signed-in') === 'true';
-const user = () => signedIn() ? { evmAccountObjects: [{address:'0x'+'22'.repeat(20)}], authenticationMethods: {oauth:{google:true}} } : null;
+const address = () => window.testCdpAddress || '0x'+'22'.repeat(20);
+const user = () => signedIn() ? { evmAccountObjects: [{address:address()}], authenticationMethods: {oauth:{google:true}} } : null;
 const subscribe = callback => { listeners.add(callback); return () => listeners.delete(callback); };
 const login = redirect => {
   sessionStorage.setItem('test-cdp-signed-in','true');
@@ -13,7 +14,7 @@ const login = redirect => {
 export const CDPReactProvider = ({children}) => children;
 export const useIsInitialized = () => ({isInitialized:true});
 export const useIsSignedIn = () => ({isSignedIn:useSyncExternalStore(subscribe,signedIn)});
-const testUser = { evmAccountObjects: [{address:'0x'+'22'.repeat(20)}], authenticationMethods: {oauth:{google:true}} };
+const testUser = { evmAccountObjects: [{address:address()}], authenticationMethods: {oauth:{google:true}} };
 export const useCurrentUser = () => ({currentUser:useSyncExternalStore(subscribe,()=>signedIn()?testUser:null)});
 export const getCurrentUser = async () => user();
 export const isSignedIn = async () => signedIn();
@@ -24,7 +25,9 @@ export const getProjectConfig = async () => { if(window.testCdpUnavailable) thro
 export const signOut = async () => { sessionStorage.removeItem('test-cdp-signed-in'); listeners.forEach(callback=>callback()); };
 export const createCDPEmbeddedWallet = () => ({provider:{request:async request=>{
   window.walletTestCalls.push({wallet:'embedded',...request});
-  return ['eth_accounts','eth_requestAccounts'].includes(request.method) ? (signedIn() ? ['0x'+'22'.repeat(20)] : []) : '0x'+'cd'.repeat(65);
+  if(window.testCdpRequest && ['eth_sendTransaction','eth_signTypedData_v4'].includes(request.method)) return window.testCdpRequest(request);
+  if(request.method === 'eth_sendTransaction') return '0x'+'ab'.repeat(32);
+  return ['eth_accounts','eth_requestAccounts'].includes(request.method) ? (signedIn() ? [address()] : []) : '0x'+'cd'.repeat(65);
 }}});
 export const SignIn = () => React.createElement('div',null,
   React.createElement('button',{onClick:()=>login(true)},'Continue with Google'),

@@ -1,7 +1,7 @@
 # Post a Usable Bounty
 
-A public earning bounty must be profitable to solve, fully funded, automatically
-verifiable, and claimable now. A draft or crowdfunding request is useful, but it
+A public earning bounty must be profitable to solve, fully funded, ready for its
+committed review method, and claimable now. A draft or crowdfunding request is useful, but it
 is not paid earning inventory.
 
 ## Required Order
@@ -42,10 +42,15 @@ with its exact benchmark and the exact routed-V3 parent whose profitable child
 path passes the dependency checks below. An arbitrary nonzero contract address
 is not verifier readiness.
 
-A creator review, advisory AI score, unknown verifier wallet, unavailable
-module, mutable remote endpoint, or prose-only rubric is not executable
-verification. Keep that work as a draft. Do not fund it or list it as
-claimable.
+Creator review is a separate supported path when the exact `creator_review_v1`
+policy, creator wallet, delivery deadline, evidence schema and positive review
+reserve pass the readiness checks. The creator explicitly confirms the verdict;
+it is not automated or independent verification. Explain that choice before
+funding, especially for outreach, research or creative work.
+
+An advisory AI score, unknown verifier wallet, unavailable module, mutable
+remote endpoint or prose-only rubric alone is not executable verification.
+Keep unsupported work as a draft; do not fund or list it as claimable.
 
 For a meta-bounty, rehearse the full dependency graph:
 
