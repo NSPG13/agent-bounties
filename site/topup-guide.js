@@ -47,10 +47,16 @@
     $("[data-topup-back]").hidden = !["wallet-buy", "card", "checkout"].includes(active);
     if (active !== previous) { previous = active; $("#onramp-title").focus({ preventScroll: true }); }
   }
+  function selectGasAssetIfNeeded() {
+    if (snapshot && snapshot.usdc !== null && snapshot.usdc >= snapshot.required && snapshot.eth === 0n && !snapshot.existingBounty) {
+      $("[data-onramp-asset]").value = "eth";
+      $("[data-onramp-asset]").dispatchEvent(new Event("change"));
+    }
+  }
   $("[data-topup-wallet-buy]").addEventListener("click", () => {
-    if (snapshot?.usdc >= snapshot?.required && snapshot?.eth === 0n) { $("[data-onramp-asset]").value = "eth"; $("[data-onramp-asset]").dispatchEvent(new Event("change")); }
+    selectGasAssetIfNeeded();
     view = "wallet-buy"; walletStep = 0; feedback("", ""); render(); });
-  $("[data-topup-card-buy]").addEventListener("click", () => { view = "card"; feedback("", ""); render(); });
+  $("[data-topup-card-buy]").addEventListener("click", () => { selectGasAssetIfNeeded(); view = "card"; feedback("", ""); render(); });
   $("[data-topup-next]").addEventListener("click", () => {
     if (walletStep < 3) { walletStep++; render(); $("#onramp-title").focus({ preventScroll: true }); }
     else { view = "method"; $("[data-refresh-balance]").click(); }
