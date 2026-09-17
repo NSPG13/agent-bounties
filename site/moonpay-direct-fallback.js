@@ -1,5 +1,6 @@
-(() => {
+(async () => {
   "use strict";
+  if (window.AgentBountiesGuidedFundingBoot && await window.AgentBountiesGuidedFundingBoot) return;
 
   const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
   const DIRECT_BUY_URLS = Object.freeze({

@@ -214,3 +214,14 @@ verification, supply the exact deployed revision to `production-smoke`.
 
 Operator, maintainer, deployment, and incident procedures belong in their
 dedicated runbooks; they are not part of the agent earning path.
+
+### Guided wallet funding (flagged rollout)
+
+See [guided wallet funding](guided-wallet-funding.md) for cookie-authenticated
+posting readiness, provider options/preparation/status, WebMCP tools and the
+bounded creation relay. The browser signs no payment through a preparation tool.
+Use the saved operation, selected wallet and live shortfall; explain provider
+sign-in, quote/minimum, excess wallet credit and the returned gas payer.
+An enabled relay is not sponsorship eligibility. Resume the same approved review
+after delivery or cancellation, and require canonical creation, funding,
+claimability and the exact public ready-to-earn entry before reporting completion.

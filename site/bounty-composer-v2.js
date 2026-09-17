@@ -1041,7 +1041,7 @@
       const reward = currentRewardSplit();
       ui.verifierSummary.textContent = `You review the delivered files and confirm the verdict in your wallet. You receive a ${formatUsdc(Number(reward.verifier) / 1_000_000)} USDC review payment after either confirmed verdict. A failed review pays from the solver's bond and leaves the bounty fully funded. The creator-review reserve is not an automatic refund for doing nothing. You are the reviewer.`;
       ui.verifier.replaceChildren();
-      for (const [label, value] of [["Reviewer", "You, using the wallet that funds this bounty"], ["Due", state.horizon.label], ["Evidence", "Public deliverable URL and SHA-256 digest"], ["Review window", "48 hours after submission"], ["Wallet cost", "Base gas is additional; this route does not promise sponsorship"]]) {
+      for (const [label, value] of [["Reviewer", "You, using the wallet that funds this bounty"], ["Due", state.horizon.label], ["Evidence", "Public deliverable URL and SHA-256 digest"], ["Review window", "48 hours after submission"], ["Wallet cost", "The funding review checks gas sponsorship for this exact bounty"]]) {
         const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = label; dd.textContent = value; ui.verifier.append(dt, dd);
       }
       return;
@@ -1793,11 +1793,59 @@
     return receipt;
   }
 
+  function fundingClient() {
+    const operation = window.AgentBountiesWorkflow.createClient(window).load()?.id;
+    return window.AgentBountiesWalletFunding?.create(window, operation);
+  }
+  function wantsSponsoredCreation() {
+    return !state.metaParent && state.fundingReadiness?.gas_sponsorship?.can_request_authorization === true && !state.userPaidGas;
+  }
+  function gasChoiceRequired() {
+    return !state.metaParent && state.fundingReadiness?.sponsored_creation_enabled === true && !wantsSponsoredCreation() && !state.userPaidGas;
+  }
+  function renderGasChoice() {
+    let choice = document.querySelector('[data-posting-gas-choice]');
+    if (!choice) {
+      choice = document.createElement('div'); choice.dataset.postingGasChoice = '';
+      const note = document.createElement('p'); note.textContent = 'Sponsorship is unavailable. Keep this review and recheck, or choose to pay the network fee from this wallet.';
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'button secondary'; button.textContent = 'Review with my own ETH';
+      button.addEventListener('click', event => { if (!event.isTrusted || postingJournal.load()) return; state.userPaidGas = true; void refreshWalletReadiness().catch(error => setPaymentStatus(error.message, 'error')); });
+      choice.append(note, button); ui.fundNow.before(choice);
+    }
+    choice.hidden = !gasChoiceRequired();
+  }
+  async function submitSponsoredCreation(create, signature, plan, agreement) {
+    // The person's approved gas route is retained with the purpose-limited signature.
+    if (!postingSession.canContinue()) await postingSession.saveContinuation({ create, signature, legal_acceptance: agreement,
+      bounty_id: plan.bounty_id, bounty_contract: plan.predicted_bounty_contract, gas_payer: 'relay' });
+    const saved = await postingSession.loadContinuation();
+    if (saved.gas_payer !== 'relay') throw new Error('The saved gas payer differs. Reopen the saved review.');
+    await assertPostingBinding();
+    // The server owns admission and replay protection for this exact operation.
+    // Keep the authorized continuation recoverable until durable admission is observed.
+    postingJournal.checkpoint('authorized', null, 'hosted_creation_relay');
+    await postingSession.flush({ requireServer: true });
+    setPaymentStatus('Authorizing this exact bounty with Base USDC. The relay checks simulation and pays network gas; no ETH purchase is required.', 'pending');
+    const result = await fundingClient().relay({ draft_hash: saved.draft_hash, legal_acceptance_id: agreement.acceptance_id, create, signature: signatureParts(signature) });
+    if (result.bounty_contract && result.bounty_contract.toLowerCase() !== plan.predicted_bounty_contract.toLowerCase()) throw new Error('Relay result did not match this bounty. Keep the saved operation; do not send again.');
+    postingJournal.checkpoint(result.tx_hash ? 'broadcast' : 'sending', result.tx_hash || null, 'hosted_creation_relay');
+    await postingSession.flush({ requireServer: true });
+    if (String(result.status).toLowerCase() === 'failed') throw new Error('The relay could not complete this authorization. No user-paid transaction was substituted. Keep this saved operation for recovery.');
+    return result.tx_hash || null;
+  }
+
   async function refreshWalletReadiness() {
     if (!state.account) return;
     const account = state.account, provider = state.provider, protocol = await loadProtocol();
-    const balances = await window.AgentBountiesFundingReadiness.readBalances({ wallet: account, usdcAddress: protocol.native_usdc, provider });
+    const fundingIdentity = `${account}:${window.AgentBountiesWorkflow.createClient(window).load()?.id}:${state.draft?.title}:${state.fundingUsdc}`;
+    if (state.fundingWallet !== fundingIdentity) { state.userPaidGas = false; state.fundingWallet = fundingIdentity; }
+    let serverReadiness = null;
+    try { serverReadiness = await fundingClient()?.readiness(account, usdcBaseUnits(state.fundingUsdc)); } catch (_) { serverReadiness = { sponsored_creation_enabled: true, gas_sponsorship: { status: "unavailable", can_request_authorization: false, message: "Sponsorship could not be checked. Recheck, or explicitly review user-paid gas." } }; }
+    const balances = serverReadiness?.usdc_balance_units != null
+      ? { usdc: BigInt(serverReadiness.usdc_balance_units), eth: BigInt(serverReadiness.eth_balance_wei), observedAt: new Date().toISOString(), blockNumber: serverReadiness.observed_block }
+      : await window.AgentBountiesFundingReadiness.readBalances({ wallet: account, usdcAddress: protocol.native_usdc, provider });
     if (state.account !== account || state.provider !== provider) return;
+    state.fundingReadiness = serverReadiness;
     const priorConsent = await savedLegalAcceptance();
     const legalCheckbox = ui.dialog.querySelector("[data-legal-consent-checkbox]");
     if (legalCheckbox) {
@@ -1806,7 +1854,8 @@
     }
     const required = usdcBaseUnits(state.fundingUsdc), { usdc, eth } = balances;
     state.balances = { ...balances, required };
-    const usdcReady = usdc >= required, gasAvailable = eth > 0n;
+    const usdcReady = usdc >= required, gasAvailable = wantsSponsoredCreation() || (eth > 0n && !gasChoiceRequired());
+    renderGasChoice();
     ui.account.textContent = `${account.slice(0,8)}…${account.slice(-6)}`;
     ui.usdcBalance.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(usdc)} USDC`;
     ui.ethBalance.textContent = `${window.AgentBountiesFundingReadiness.formatUnits(eth, 18, 8)} ETH`;
@@ -1817,10 +1866,12 @@
     ui.fundNow.textContent = postingSession.canContinue() ? "Continue funding" : "Review and post";
     const verified = state.linkedWallets.some((wallet) => wallet.address.toLowerCase() === account.toLowerCase());
     document.querySelector("[data-wallet-state]").textContent = `${verified ? "Verified ownership" : "Ownership not linked to this account"} · ${provider ? "Connected for this session" : "Balance checks only — connect to sign"} · ${usdcReady ? "USDC available" : "USDC shortfall"}. Gas is checked for the exact transaction before sending.`;
-    for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); link.href = url.href; link.target = "agent-bounties-topup"; }
+    for (const link of ui.onramps) { const url = new URL(link.href); url.searchParams.set("wallet", account); url.searchParams.set("operation_id", window.AgentBountiesWorkflow.createClient(window).load()?.id || ""); if(serverReadiness?.guided_topup_enabled)url.searchParams.set("guided","1"); if(new URLSearchParams(location.search).get("analytics")==="off")url.searchParams.set("analytics","off"); link.href = url.href; link.target = "agent-bounties-topup"; }
     updatePostingTracker(); updatePostingCost();
     if (!provider) setPaymentStatus("Balances checked without connecting or signing. Choose Use this wallet to restore its signing session.", "pending");
-    else if (!usdcReady || !gasAvailable) setPaymentStatus("Top up the displayed shortfall, then return here. Buying funds does not create or fund the bounty.", "pending");
+    else if (!usdcReady) setPaymentStatus("Add the displayed USDC shortfall, then return here. Buying funds does not create or fund the bounty.", "pending");
+    else if (!gasAvailable) setPaymentStatus("Sponsorship is unavailable. Recheck it or explicitly choose to review user-paid gas. Your saved bounty is unchanged.", "pending");
+    else if (wantsSponsoredCreation()) setPaymentStatus(state.fundingReadiness.gas_sponsorship.message, "success");
     else setPaymentStatus("Funds are available. Review and post prepares the exact request and its network fee; you confirm it in your wallet.", "success");
   }
 
@@ -1828,9 +1879,9 @@
     if (state.fundingUsdc == null) return;
     const cost = `Bounty budget — rewards: ${formatUsdc(state.fundingUsdc)} USDC + platform fee: 0.00 USDC.`;
     const debit = request ? ` This request transfers ${window.AgentBountiesFundingReadiness.formatUnits(request.transferUsdcUnits)} USDC.` : "";
-    const gas = fees?.estimatedTotalWei != null
+    const gas = wantsSponsoredCreation() ? " Gas payer: AgentBounties relay, subject to simulation of your exact signed request. You do not need to buy ETH for this route." : fees?.estimatedTotalWei != null
       ? ` Estimated network fee for this request: ${window.AgentBountiesFundingReadiness.formatUnits(fees.estimatedTotalWei, 18, 18)} ETH. Your wallet confirms the final network fee; this is not a guaranteed maximum.`
-      : " Network fee: not yet available for the exact transaction. Creation is not gas-sponsored. Your wallet shows the fee before you send; an unknown fee is never treated as zero.";
+      : " Network fee: not yet available for the exact transaction. User-paid route: your wallet shows the fee before you send; an unknown fee is never treated as zero.";
     for (const selector of ["[data-posting-cost]", "[data-wallet-cost]"]) { const output = document.querySelector(selector); if (output) output.textContent = cost + debit + gas; }
   }
 
@@ -1982,9 +2033,6 @@
 
   async function continueSignedBounty() {
     if (postingBusy || !state.approved || !state.provider || !state.account) return;
-    if (!state.provider.agentBountiesCapabilities?.reviewedPostingOnly) {
-      setPaymentStatus("Restore the Coinbase wallet that signed this request to continue.", "pending"); return;
-    }
     postingBusy = true; ui.fundNow.disabled = true;
     postingBinding = { provider: state.provider, account: state.account, draft: state.draft,
       envelope: window.AgentBountiesPostingSession.stable(window.AgentBountiesPostingSession.envelope(window.AgentBountiesWorkflow.createClient(window).load())) };
@@ -2000,7 +2048,9 @@
       if (saved.create.creator.toLowerCase() !== state.account.toLowerCase()) throw new Error("Restore the original signing wallet to continue this bounty.");
       if (saved.create.funding_deadline * 1000 <= Date.now()) throw new Error("This funding authorization expired. Nothing was sent; keep the saved operation for review.");
       await refreshWalletReadiness();
-      if (state.balances.usdc < state.balances.required || state.balances.eth === 0n) throw new Error("Top up the displayed shortfall, then choose Continue funding.");
+      if (state.balances.usdc < state.balances.required) throw new Error("Top up the displayed USDC shortfall, then choose Continue funding.");
+      if (saved.gas_payer === 'relay' && !wantsSponsoredCreation()) throw new Error("The saved request uses sponsored gas. Wait and recheck sponsorship; its gas payer has not changed.");
+      if (saved.gas_payer !== 'relay' && state.balances.eth === 0n) throw new Error("The saved request uses your wallet's gas. Restore the reviewed Base ETH balance before continuing.");
       const protocol = await loadProtocol(), api = String(protocol.api_base_url).replace(/\/$/, "");
       const plan = await requestJson(`${api}/v1/base/autonomous-bounties/creation-plan`, {
         method: "POST", body: JSON.stringify({ network: "base-mainnet", create: saved.create }),
@@ -2011,6 +2061,10 @@
       const rewards = currentRewardSplit();
       postingBinding.requestContext = { chainId: 8453, usdcAddress: protocol.native_usdc, factoryAddress: protocol.factory,
         bountyAddress: saved.bounty_contract, fundingUsdcUnits: rewards.total, creatorAddress: state.account, validatedCalls: [] };
+      if (saved.gas_payer === 'relay') {
+        const hash = await submitSponsoredCreation(saved.create, saved.signature, plan, consent);
+        await finishPosting(api, plan, protocol, hash); return;
+      }
       const authorized = await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`, {
         method: "POST", body: JSON.stringify({ network: "base-mainnet", create: saved.create, signature: signatureParts(saved.signature), relayer: state.account }),
       });
@@ -2058,7 +2112,7 @@
       await postingSession.flush({ requireServer: true });
       await assertPostingBinding();
       await refreshWalletReadiness();
-      if (state.balances.usdc < state.balances.required || state.balances.eth === 0n) throw new Error("The wallet is not ready to fund this bounty.");
+      if (state.balances.usdc < state.balances.required || (!wantsSponsoredCreation() && (state.balances.eth === 0n || gasChoiceRequired()))) throw new Error("The wallet is not ready to fund this bounty.");
       if (!window.AgentBountiesLegal) throw new Error("The legal agreement could not be loaded. Reload before using the wallet.");
       const agreement = await postingLegalAcceptance();
       if (!agreement.durable) throw new Error("The agreement could not be recorded. Retry when the service is available; no transaction was sent.");
@@ -2124,7 +2178,7 @@
         await sendWalletCalls(childPlan.pre_claim_wallet_calls, protocol);
       } else if (!(await isContractAccount()) && plan.eip3009_authorization) {
         const authorization = window.AgentBountiesFundingReadiness.validateFundingAuthorization({ typedData: plan.eip3009_authorization,
-          context: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline } });
+          context: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline, gasPayer: wantsSponsoredCreation() ? "relay" : "wallet" } });
         if (!deferEmbeddedCheckpoint) {
           postingJournal.checkpoint("signing");
           await postingSession.flush({ requireServer: true });
@@ -2133,7 +2187,7 @@
         setPaymentStatus(authorization.summary, "pending");
         const signature = await state.provider.request({ method: "eth_signTypedData_v4", params: [state.account, authorization.serialized],
           ...(state.provider.agentBountiesCapabilities?.reviewedPostingOnly ? {
-            agentBountiesPostingContext: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline },
+            agentBountiesPostingContext: { ...postingBinding.requestContext, creationNonce: create.creation_nonce, fundingDeadline: create.funding_deadline, gasPayer: wantsSponsoredCreation() ? "relay" : "wallet" },
             agentBountiesBeforeSubmit: async () => {
               await assertPostingBinding();
               if (postingJournal.load()) throw new Error("A wallet operation is already recorded. Check that same operation before signing.");
@@ -2143,6 +2197,10 @@
               await assertPostingBinding();
             },
           } : {}) });
+        if (wantsSponsoredCreation()) {
+          transactionHash = await submitSponsoredCreation(create, signature, plan, agreement);
+          await finishPosting(api, plan, protocol, transactionHash, childPlan); return;
+        }
         if (deferEmbeddedCheckpoint) await postingSession.saveContinuation({ create, signature, legal_acceptance: agreement, bounty_id: plan.bounty_id, bounty_contract: plan.predicted_bounty_contract });
         else { postingJournal.checkpoint("authorized"); await postingSession.flush({ requireServer: true }); }
         const authorized = await requestJson(`${api}/v1/base/autonomous-bounties/authorized-creation-plan`, {
@@ -2338,12 +2396,16 @@
       });
       return staging;
     },
+    refreshFundingReadiness: async () => { await refreshWalletReadiness(); return state.fundingReadiness; },
     review() {
       let blocker = null;
       if (state.draft) { try { supportedVerificationPolicy(); } catch (error) { blocker = error.message; } }
       return {
         status: state.bountyContract ? "created_check_canonical_funding" : state.draft ? "staged" : "no_staged_bounty",
         explicitly_approved: state.approved === true,
+        wallet_funding: state.fundingReadiness || null,
+        wallet_identity: state.account || null,
+        gas_payer: wantsSponsoredCreation() ? "relay" : state.userPaidGas ? "wallet" : "unconfirmed",
         funding_ready: Boolean(state.draft && !blocker),
         blocker,
         bounty_contract: state.bountyContract || postingJournal.load()?.bounty_contract || null,
@@ -2414,7 +2476,23 @@
     pollingPosting = true;
     try {
       await postingSession.refresh();
-      if (postingJournal.load()) { state.canonical = await postingSession.reconcile(); updatePostingTracker();
+      if (postingJournal.load()) {
+        if (postingJournal.load().wallet_method === 'hosted_creation_relay') {
+          const relay = await fundingClient().relayStatus();
+          if (relay.status === 'not_started' && postingSession.canContinue()) {
+            // Resend only the same authenticated operation after an authoritative
+            // not-started read. Server admission is idempotent; it never repeats a broadcast.
+            const saved = await postingSession.loadContinuation();
+            if(saved.gas_payer === 'relay' && saved.create.funding_deadline * 1000 > Date.now()) {
+              await fundingClient().relay({draft_hash:saved.draft_hash,legal_acceptance_id:saved.legal_acceptance.acceptance_id,create:saved.create,signature:signatureParts(saved.signature)});
+            }
+          }
+          if (relay.status === 'failed') setPaymentStatus(`Sponsorship stopped before completion (${relay.error_code || 'unavailable'}). ${relay.next_action}`, 'pending');
+          if (relay.tx_hash && !postingJournal.load().transactions.includes(relay.tx_hash)) {
+            postingJournal.checkpoint('broadcast', relay.tx_hash, 'hosted_creation_relay'); await postingSession.flush();
+          }
+        }
+        state.canonical = await postingSession.reconcile(); updatePostingTracker();
         if (postingSession.canContinue() && state.provider && state.account) await refreshWalletReadiness();
       }
       else if (state.provider && state.account) {
