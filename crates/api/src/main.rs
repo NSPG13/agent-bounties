@@ -20740,6 +20740,23 @@ mod tests {
         );
     }
 
+    // Explicit, read-only fixture regeneration aid, mirroring
+    // `print_reviewed_mcp_catalog_digests` for the MCP catalogs; it never updates the
+    // approved fixture or relaxes the contract assertion below.
+    #[tokio::test]
+    #[ignore = "prints the candidate digest for an intentional reviewed OpenAPI contract change"]
+    async fn print_reviewed_openapi_digest() {
+        let document = openapi_json().await.0;
+        let value = serde_json::to_value(document).unwrap();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "normalized_sha256": hash_artifact(&serde_json::to_string(&value).unwrap()),
+            }))
+            .unwrap()
+        );
+    }
+
     #[tokio::test]
     async fn openapi_json_endpoint_contains_agent_router_path() {
         let document = openapi_json().await.0;
@@ -20748,7 +20765,8 @@ mod tests {
             serde_json::from_str(include_str!("../fixtures/openapi-contract.json")).unwrap();
         assert_eq!(
             hash_artifact(&serde_json::to_string(&value).unwrap()),
-            fixture["normalized_sha256"]
+            fixture["normalized_sha256"],
+            "published OpenAPI contract drifted; for an intentional reviewed change run              `cargo test -p api --bin api print_reviewed_openapi_digest -- --ignored --nocapture`              and update crates/api/fixtures/openapi-contract.json together with the matching              public documentation"
         );
         let paths = value["paths"].as_object().unwrap();
 
