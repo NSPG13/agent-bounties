@@ -103,6 +103,46 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(home.bountyAssistantLinks("unknown"), null);
 });
 
+test("desktop schemes are only fired where the provider ships a desktop app", () => {
+  const linux = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141 Safari/537.36" };
+  const mac = { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15" };
+  const windows = { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" };
+  const chromeOS = { userAgent: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36" };
+  const android = { userAgent: "Mozilla/5.0 (Linux; Android 16; Pixel 9a) AppleWebKit/537.36" };
+  const iPadDesktopMode = { platform: "MacIntel", maxTouchPoints: 5, userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" };
+
+  assert.equal(home.desktopPlatform(linux), "linux");
+  assert.equal(home.desktopPlatform(mac), "mac");
+  assert.equal(home.desktopPlatform(windows), "windows");
+  assert.equal(home.desktopPlatform(chromeOS), "chromeos");
+  assert.equal(home.desktopPlatform(android), "mobile");
+  assert.equal(home.desktopPlatform({ userAgentData: { mobile: true } }), "mobile");
+  assert.equal(home.desktopPlatform(iPadDesktopMode), "mobile");
+  assert.equal(home.desktopPlatform({}), "unknown");
+  assert.equal(home.desktopPlatform({ userAgentData: { platform: "Windows" } }), "windows");
+
+  // Claude and ChatGPT ship desktop apps for macOS and Windows only.
+  for (const provider of ["claude", "gpt"]) {
+    assert.equal(home.supportsDesktopHandoff(provider, mac), true);
+    assert.equal(home.supportsDesktopHandoff(provider, windows), true);
+    assert.equal(home.supportsDesktopHandoff(provider, linux), false);
+    assert.equal(home.supportsDesktopHandoff(provider, chromeOS), false);
+    assert.equal(home.supportsDesktopHandoff(provider, android), false);
+    assert.equal(home.supportsDesktopHandoff(provider, {}), false);
+  }
+
+  // Cursor ships a Linux build, so its desktop scheme stays reachable there.
+  assert.equal(home.supportsDesktopHandoff("cursor", linux), true);
+  assert.equal(home.supportsDesktopHandoff("CURSOR", mac), true);
+  assert.equal(home.supportsDesktopHandoff("cursor", android), false);
+
+  // Providers without a desktop route never claim one.
+  assert.equal(home.supportsDesktopHandoff("custom", mac), false);
+  assert.equal(home.supportsDesktopHandoff("unknown", mac), false);
+  assert.equal(home.supportsDesktopHandoff("", mac), false);
+  assert.equal(home.supportsDesktopHandoff("claude"), false);
+});
+
 test("desktop handoff keeps arbitrary prompt text inside one prompt parameter", () => {
   const prompt = 'A & B? #launch "prototype"\nBudget: 3 USDC; deadline: mañana';
   const links = home.bountyAssistantLinks("gpt", prompt);

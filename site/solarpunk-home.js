@@ -140,6 +140,31 @@
     return Object.hasOwn(links, key) ? links[key] : null;
   }
 
+  // Desktop apps that register these schemes. Firing a scheme no installed app claims
+  // dead-ends in an operating-system "no application" dialog, so platforms without a
+  // desktop app take the same web handoff providers without a desktop route already use.
+  const DESKTOP_APP_PLATFORMS = Object.freeze({
+    gpt: Object.freeze(["mac", "windows"]),
+    claude: Object.freeze(["mac", "windows"]),
+    cursor: Object.freeze(["mac", "windows", "linux"]),
+  });
+
+  function desktopPlatform(navigatorLike = {}) {
+    const hints = `${navigatorLike.userAgentData?.platform || ""} ${navigatorLike.platform || ""} ${navigatorLike.userAgent || ""}`;
+    if (navigatorLike.userAgentData?.mobile === true || /Android|iPhone|iPad|iPod/i.test(hints)) return "mobile";
+    if (navigatorLike.platform === "MacIntel" && Number(navigatorLike.maxTouchPoints) > 1) return "mobile";
+    if (/Mac/i.test(hints)) return "mac";
+    if (/Win/i.test(hints)) return "windows";
+    if (/CrOS/i.test(hints)) return "chromeos";
+    if (/Linux|X11/i.test(hints)) return "linux";
+    return "unknown";
+  }
+
+  function supportsDesktopHandoff(provider, navigatorLike = {}) {
+    const platforms = DESKTOP_APP_PLATFORMS[String(provider || "").trim().toLowerCase()];
+    return Boolean(platforms) && platforms.includes(desktopPlatform(navigatorLike));
+  }
+
   function parseCompetitionPostingRequest(search) {
     const params = new URLSearchParams(String(search || ""));
     if (!params.has("parentCompetition")) return { requested: false, valid: false };
@@ -1384,9 +1409,9 @@ ${competitionChildBrief(item)}`;
           return copied;
         }
       };
-      const attemptDesktop = (links) => {
+      const attemptDesktop = (desktopUrl) => {
         const anchor = doc.createElement("a");
-        anchor.href = links.desktopUrl;
+        anchor.href = desktopUrl;
         anchor.hidden = true;
         doc.body.append(anchor);
         anchor.click();
@@ -1414,6 +1439,8 @@ ${competitionChildBrief(item)}`;
           const key = String(button.dataset.bountyAssistant || "").toLowerCase();
           const links = bountyAssistantLinks(key, launcherPrompt, reviewDestination());
           if (!links) return;
+          // Only an installed desktop app can receive a custom scheme; elsewhere it dead-ends.
+          const desktopUrl = supportsDesktopHandoff(key, win.navigator || {}) ? links.desktopUrl : null;
           assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
           button.setAttribute("aria-current", "true");
           if (customActions) customActions.hidden = key !== "custom" && key !== "gpt";
@@ -1435,22 +1462,24 @@ ${competitionChildBrief(item)}`;
             webFallback.textContent = links.webPrefillsPrompt
               ? `Use ${links.label} web instead`
               : `Use ${links.label} web instead — prompt copied`;
-            webFallback.hidden = !links.desktopUrl;
+            webFallback.hidden = !desktopUrl;
           }
-          if (!links.desktopUrl) {
+          if (!desktopUrl) {
             if (!links.webPrefillsPrompt) {
               const copied = await promptCopy;
               setStatus(copied
                 ? `Opening your signed-in ${links.label} session. The posting instructions are copied and ready to paste.`
                 : `Opening ${links.label}. Copy the initialization message above before continuing.`);
             } else {
-              setStatus(`Opening ${links.label} in this browser with the posting instructions prefilled…`);
+              setStatus(links.desktopUrl
+                ? `No ${links.label} desktop app is available on this system. Opening ${links.label} in this browser with the posting instructions prefilled…`
+                : `Opening ${links.label} in this browser with the posting instructions prefilled…`);
             }
             win.location.assign(links.webUrl);
             return;
           }
           setStatus(`Requesting ${links.label} desktop. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`);
-          attemptDesktop(links);
+          attemptDesktop(desktopUrl);
           void promptCopy;
         });
       });
@@ -1542,6 +1571,7 @@ ${competitionChildBrief(item)}`;
     competitionPostingItem,
     competitionPostingPrompt,
     clamp,
+    desktopPlatform,
     flameMotion,
     hashSeed,
     isLocalHost,
@@ -1555,6 +1585,7 @@ ${competitionChildBrief(item)}`;
     shortWalletAddress,
     smoothstep,
     start,
+    supportsDesktopHandoff,
     utf8Hex,
     walletLinkErrorMessage,
   };
