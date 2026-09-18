@@ -92,8 +92,12 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(desktop.searchParams.get("prompt"), gptPrompt);
   assert.equal(desktop.searchParams.has("submit"), false);
   assert.equal(gpt.webPrefillsPrompt, true);
-  assert.equal(claude.desktopUrl, `claude://claude.ai/new?q=${encodeURIComponent(prompt)}`);
+  // Claude Code's own scheme, not the Claude Desktop chat scheme.
+  assert.equal(claude.desktopUrl, `claude-cli://open?q=${encodeURIComponent(prompt)}`);
+  assert.equal(new URL(claude.desktopUrl).protocol, "claude-cli:");
+  assert.equal(claude.desktopLabel, "Claude Code");
   assert.equal(new URL(claude.webUrl).origin, "https://claude.ai");
+  assert.equal(new URL(claude.webUrl).searchParams.get("q"), prompt);
   assert.equal(cursor.desktopUrl, `cursor://anysphere.cursor-deeplink/prompt?text=${encodeURIComponent(prompt)}`);
   assert.equal(new URL(cursor.webUrl).origin, "https://cursor.com");
   assert.equal(new URL(cursor.webUrl).pathname, "/link/prompt");
@@ -103,7 +107,26 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(home.bountyAssistantLinks("unknown"), null);
 });
 
-test("desktop schemes are only fired where the provider ships a desktop app", () => {
+test("a prompt beyond the documented Claude Code limit takes the web handoff", () => {
+  const long = "x".repeat(5001);
+  const links = home.bountyAssistantLinks("claude", long);
+  assert.equal(links.desktopUrl, null);
+  assert.equal(new URL(links.webUrl).searchParams.get("q"), long);
+
+  // A message that still encodes within the limit keeps the terminal handoff.
+  const fits = "y".repeat(4000);
+  assert.equal(encodeURIComponent(fits).length <= 5000, true);
+  assert.equal(home.bountyAssistantLinks("claude", fits).desktopUrl, `claude-cli://open?q=${fits}`);
+
+  // Percent-encoding counts: 2,000 spaces encode to 6,000 characters.
+  const encodesOver = " ".repeat(2000);
+  assert.equal(home.bountyAssistantLinks("claude", encodesOver).desktopUrl, null);
+
+  // The shipped posting message, with room for a typed task, stays under the limit.
+  assert.equal(encodeURIComponent(home.BOUNTY_POSTING_PROMPT).length < 5000, true);
+});
+
+test("desktop schemes are only fired where a desktop app can register one", () => {
   const linux = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141 Safari/537.36" };
   const mac = { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15" };
   const windows = { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" };
@@ -121,21 +144,16 @@ test("desktop schemes are only fired where the provider ships a desktop app", ()
   assert.equal(home.desktopPlatform({}), "unknown");
   assert.equal(home.desktopPlatform({ userAgentData: { platform: "Windows" } }), "windows");
 
-  // The Claude desktop app is published for macOS and Windows only.
-  assert.equal(home.supportsDesktopHandoff("claude", mac), true);
-  assert.equal(home.supportsDesktopHandoff("CLAUDE", windows), true);
-  assert.equal(home.supportsDesktopHandoff("claude", linux), false);
-  assert.equal(home.supportsDesktopHandoff("claude", chromeOS), false);
-  assert.equal(home.supportsDesktopHandoff("claude", android), false);
-  assert.equal(home.supportsDesktopHandoff("claude", {}), false);
-  assert.equal(home.supportsDesktopHandoff("claude"), false);
-
-  // Only Claude is restricted: the Codex and Cursor routes keep firing as before.
-  for (const provider of ["gpt", "cursor"]) {
-    for (const platform of [mac, windows, linux, chromeOS, {}]) {
-      assert.equal(home.supportsDesktopHandoff(provider, platform), true);
-    }
+  // Claude Code, Codex and Cursor all register their schemes on every desktop platform.
+  for (const platform of [mac, windows, linux, chromeOS, {}]) {
+    assert.equal(home.supportsDesktopHandoff(platform), true);
   }
+  assert.equal(home.supportsDesktopHandoff(), true);
+
+  // A phone or tablet can register none of them.
+  assert.equal(home.supportsDesktopHandoff(android), false);
+  assert.equal(home.supportsDesktopHandoff(iPadDesktopMode), false);
+  assert.equal(home.supportsDesktopHandoff({ userAgentData: { mobile: true } }), false);
 });
 
 test("desktop handoff keeps arbitrary prompt text inside one prompt parameter", () => {
