@@ -101,6 +101,11 @@
     return messages[reason] || "Sign-in could not be completed. Please try again.";
   }
 
+  // Claude Code registers claude-cli:// on macOS, Linux and Windows the first time an
+  // interactive session sends a prompt. Its q parameter is documented at 5,000 characters;
+  // measuring the encoded value keeps the link inside that limit under either reading.
+  const CLAUDE_CODE_PROMPT_LIMIT = 5000;
+
   function bountyAssistantLinks(provider, prompt = BOUNTY_POSTING_PROMPT, returnUrl = null) {
     const key = String(provider || "").trim().toLowerCase();
     const reviewUrl = postingPrompt.reviewUrl(returnUrl);
@@ -120,7 +125,12 @@
       },
       claude: {
         label: "Claude",
-        desktopUrl: `claude://claude.ai/new?q=${encoded}`,
+        desktopLabel: "Claude Code",
+        // claude-cli:// opens a terminal session with the message pre-filled and unsent.
+        // claude:// would instead need the Claude Desktop chat app, which a Claude Code
+        // user need not have. Over the documented q limit the web handoff carries the
+        // whole message rather than a truncated session.
+        desktopUrl: encoded.length <= CLAUDE_CODE_PROMPT_LIMIT ? `claude-cli://open?q=${encoded}` : null,
         webUrl: `https://claude.ai/new?q=${encoded}`,
         webPrefillsPrompt: true,
       },
@@ -140,13 +150,6 @@
     return Object.hasOwn(links, key) ? links[key] : null;
   }
 
-  // Platforms a provider's desktop app is published for. Firing a scheme no installed app
-  // claims dead-ends in an operating-system "no application" dialog, so a listed provider
-  // falls back to the web handoff elsewhere. A provider with no entry stays unrestricted.
-  const DESKTOP_APP_PLATFORMS = Object.freeze({
-    claude: Object.freeze(["mac", "windows"]),
-  });
-
   function desktopPlatform(navigatorLike = {}) {
     const hints = `${navigatorLike.userAgentData?.platform || ""} ${navigatorLike.platform || ""} ${navigatorLike.userAgent || ""}`;
     if (navigatorLike.userAgentData?.mobile === true || /Android|iPhone|iPad|iPod/i.test(hints)) return "mobile";
@@ -158,9 +161,13 @@
     return "unknown";
   }
 
-  function supportsDesktopHandoff(provider, navigatorLike = {}) {
-    const platforms = DESKTOP_APP_PLATFORMS[String(provider || "").trim().toLowerCase()];
-    return !platforms || platforms.includes(desktopPlatform(navigatorLike));
+  // Only a desktop app can register a scheme, and Claude Code, Codex and Cursor each
+  // register theirs on macOS, Linux and Windows. A phone or tablet has none, so those
+  // visitors take the web handoff instead of an operating-system "no application" dialog.
+  // The mobile handoff in forest-home.js normally intercepts first; this keeps the promise
+  // when that script has not loaded.
+  function supportsDesktopHandoff(navigatorLike = {}) {
+    return desktopPlatform(navigatorLike) !== "mobile";
   }
 
   function parseCompetitionPostingRequest(search) {
@@ -1438,7 +1445,7 @@ ${competitionChildBrief(item)}`;
           const links = bountyAssistantLinks(key, launcherPrompt, reviewDestination());
           if (!links) return;
           // Only an installed desktop app can receive a custom scheme; elsewhere it dead-ends.
-          const desktopUrl = supportsDesktopHandoff(key, win.navigator || {}) ? links.desktopUrl : null;
+          const desktopUrl = supportsDesktopHandoff(win.navigator || {}) ? links.desktopUrl : null;
           assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
           button.setAttribute("aria-current", "true");
           if (customActions) customActions.hidden = key !== "custom" && key !== "gpt";
@@ -1469,14 +1476,12 @@ ${competitionChildBrief(item)}`;
                 ? `Opening your signed-in ${links.label} session. The posting instructions are copied and ready to paste.`
                 : `Opening ${links.label}. Copy the initialization message above before continuing.`);
             } else {
-              setStatus(links.desktopUrl
-                ? `No ${links.label} desktop app is available on this system. Opening ${links.label} in this browser with the posting instructions prefilled…`
-                : `Opening ${links.label} in this browser with the posting instructions prefilled…`);
+              setStatus(`Opening ${links.label} in this browser with the posting instructions prefilled…`);
             }
             win.location.assign(links.webUrl);
             return;
           }
-          setStatus(`Requesting ${links.label} desktop. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`);
+          setStatus(`Requesting ${links.desktopLabel || `${links.label} desktop`}. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`);
           attemptDesktop(desktopUrl);
           void promptCopy;
         });
