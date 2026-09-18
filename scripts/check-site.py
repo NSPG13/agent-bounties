@@ -668,7 +668,7 @@ def check_analytics(site_dir: Path, repo_root: Path) -> None:
         [
             'data-post-auth-start',
             'posting-auth.js?v=3',
-            'solarpunk-home.js?v=24',
+            'solarpunk-home.js?v=25',
             'bounty-composer-v2.js?v=24',
             'label: "LOG IN TO POST"',
             'credentials: "include"',
@@ -879,6 +879,7 @@ def check_homepage(site_dir: Path) -> None:
             "https://cursor.com/link/prompt?text=",
             "claude://claude.ai/new?q=",
             "cursor://anysphere.cursor-deeplink/prompt?text=",
+            "supportsDesktopHandoff(key, win.navigator || {})",
             'authApiPath("/session", win.location)',
             'authApiPath("/logout", win.location)',
             'dialog.showModal()',

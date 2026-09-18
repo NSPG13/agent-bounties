@@ -103,6 +103,41 @@ test("bounty assistant handoffs carry one bounded initialization message", () =>
   assert.equal(home.bountyAssistantLinks("unknown"), null);
 });
 
+test("desktop schemes are only fired where the provider ships a desktop app", () => {
+  const linux = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141 Safari/537.36" };
+  const mac = { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15" };
+  const windows = { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" };
+  const chromeOS = { userAgent: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36" };
+  const android = { userAgent: "Mozilla/5.0 (Linux; Android 16; Pixel 9a) AppleWebKit/537.36" };
+  const iPadDesktopMode = { platform: "MacIntel", maxTouchPoints: 5, userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" };
+
+  assert.equal(home.desktopPlatform(linux), "linux");
+  assert.equal(home.desktopPlatform(mac), "mac");
+  assert.equal(home.desktopPlatform(windows), "windows");
+  assert.equal(home.desktopPlatform(chromeOS), "chromeos");
+  assert.equal(home.desktopPlatform(android), "mobile");
+  assert.equal(home.desktopPlatform({ userAgentData: { mobile: true } }), "mobile");
+  assert.equal(home.desktopPlatform(iPadDesktopMode), "mobile");
+  assert.equal(home.desktopPlatform({}), "unknown");
+  assert.equal(home.desktopPlatform({ userAgentData: { platform: "Windows" } }), "windows");
+
+  // The Claude desktop app is published for macOS and Windows only.
+  assert.equal(home.supportsDesktopHandoff("claude", mac), true);
+  assert.equal(home.supportsDesktopHandoff("CLAUDE", windows), true);
+  assert.equal(home.supportsDesktopHandoff("claude", linux), false);
+  assert.equal(home.supportsDesktopHandoff("claude", chromeOS), false);
+  assert.equal(home.supportsDesktopHandoff("claude", android), false);
+  assert.equal(home.supportsDesktopHandoff("claude", {}), false);
+  assert.equal(home.supportsDesktopHandoff("claude"), false);
+
+  // Only Claude is restricted: the Codex and Cursor routes keep firing as before.
+  for (const provider of ["gpt", "cursor"]) {
+    for (const platform of [mac, windows, linux, chromeOS, {}]) {
+      assert.equal(home.supportsDesktopHandoff(provider, platform), true);
+    }
+  }
+});
+
 test("desktop handoff keeps arbitrary prompt text inside one prompt parameter", () => {
   const prompt = 'A & B? #launch "prototype"\nBudget: 3 USDC; deadline: mañana';
   const links = home.bountyAssistantLinks("gpt", prompt);
