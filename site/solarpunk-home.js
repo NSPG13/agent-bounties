@@ -140,13 +140,11 @@
     return Object.hasOwn(links, key) ? links[key] : null;
   }
 
-  // Desktop apps that register these schemes. Firing a scheme no installed app claims
-  // dead-ends in an operating-system "no application" dialog, so platforms without a
-  // desktop app take the same web handoff providers without a desktop route already use.
+  // Platforms a provider's desktop app is published for. Firing a scheme no installed app
+  // claims dead-ends in an operating-system "no application" dialog, so a listed provider
+  // falls back to the web handoff elsewhere. A provider with no entry stays unrestricted.
   const DESKTOP_APP_PLATFORMS = Object.freeze({
-    gpt: Object.freeze(["mac", "windows"]),
     claude: Object.freeze(["mac", "windows"]),
-    cursor: Object.freeze(["mac", "windows", "linux"]),
   });
 
   function desktopPlatform(navigatorLike = {}) {
@@ -162,7 +160,7 @@
 
   function supportsDesktopHandoff(provider, navigatorLike = {}) {
     const platforms = DESKTOP_APP_PLATFORMS[String(provider || "").trim().toLowerCase()];
-    return Boolean(platforms) && platforms.includes(desktopPlatform(navigatorLike));
+    return !platforms || platforms.includes(desktopPlatform(navigatorLike));
   }
 
   function parseCompetitionPostingRequest(search) {

@@ -121,26 +121,21 @@ test("desktop schemes are only fired where the provider ships a desktop app", ()
   assert.equal(home.desktopPlatform({}), "unknown");
   assert.equal(home.desktopPlatform({ userAgentData: { platform: "Windows" } }), "windows");
 
-  // Claude and ChatGPT ship desktop apps for macOS and Windows only.
-  for (const provider of ["claude", "gpt"]) {
-    assert.equal(home.supportsDesktopHandoff(provider, mac), true);
-    assert.equal(home.supportsDesktopHandoff(provider, windows), true);
-    assert.equal(home.supportsDesktopHandoff(provider, linux), false);
-    assert.equal(home.supportsDesktopHandoff(provider, chromeOS), false);
-    assert.equal(home.supportsDesktopHandoff(provider, android), false);
-    assert.equal(home.supportsDesktopHandoff(provider, {}), false);
-  }
-
-  // Cursor ships a Linux build, so its desktop scheme stays reachable there.
-  assert.equal(home.supportsDesktopHandoff("cursor", linux), true);
-  assert.equal(home.supportsDesktopHandoff("CURSOR", mac), true);
-  assert.equal(home.supportsDesktopHandoff("cursor", android), false);
-
-  // Providers without a desktop route never claim one.
-  assert.equal(home.supportsDesktopHandoff("custom", mac), false);
-  assert.equal(home.supportsDesktopHandoff("unknown", mac), false);
-  assert.equal(home.supportsDesktopHandoff("", mac), false);
+  // The Claude desktop app is published for macOS and Windows only.
+  assert.equal(home.supportsDesktopHandoff("claude", mac), true);
+  assert.equal(home.supportsDesktopHandoff("CLAUDE", windows), true);
+  assert.equal(home.supportsDesktopHandoff("claude", linux), false);
+  assert.equal(home.supportsDesktopHandoff("claude", chromeOS), false);
+  assert.equal(home.supportsDesktopHandoff("claude", android), false);
+  assert.equal(home.supportsDesktopHandoff("claude", {}), false);
   assert.equal(home.supportsDesktopHandoff("claude"), false);
+
+  // Only Claude is restricted: the Codex and Cursor routes keep firing as before.
+  for (const provider of ["gpt", "cursor"]) {
+    for (const platform of [mac, windows, linux, chromeOS, {}]) {
+      assert.equal(home.supportsDesktopHandoff(provider, platform), true);
+    }
+  }
 });
 
 test("desktop handoff keeps arbitrary prompt text inside one prompt parameter", () => {
