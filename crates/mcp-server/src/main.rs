@@ -17,21 +17,22 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use bounty_router::BountyRouter;
 use chain_base::{
-    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
-    build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
-    build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
-    build_autonomous_verification_jobs, decode_autonomous_bounty_logs,
-    eth_get_transaction_receipt_request, eth_send_raw_transaction_request,
-    fetch_transaction_receipt, normalize_evm_address,
+    autonomous_bounty_earning_blockers, autonomous_bounty_is_earning_ready,
+    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
+    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
+    build_autonomous_submission_preparation, build_autonomous_verification_jobs,
+    decode_autonomous_bounty_logs, eth_get_transaction_receipt_request,
+    eth_send_raw_transaction_request, fetch_transaction_receipt, normalize_evm_address,
+    parse_autonomous_bounty_status_filter,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
-    standing_meta_v2_parent_context, validate_attestation_request_against_feed,
-    validate_autonomous_cancel_authority, validate_autonomous_creation_for_public_earning,
-    AutonomousBountyAuthorizationSignature, AutonomousBountyContribution, AutonomousBountyCreate,
-    AutonomousBountyFeedItem, AutonomousBountyRecoveryReservations,
-    AutonomousBountySubmissionAuthorizationRequest, AutonomousBountyTxPlanner,
-    AutonomousSignedAttestation, AutonomousVerificationAttestationRequest, BaseRpcUrlConfig,
-    CanonicalChildBountyTermsRequest, EvmLog, PrepareAgentToEarnInput,
-    StandingMetaV2ChildPreparationRequest,
+    retain_autonomous_bounties_with_status, standing_meta_v2_parent_context,
+    validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
+    validate_autonomous_creation_for_public_earning, AutonomousBountyAuthorizationSignature,
+    AutonomousBountyContribution, AutonomousBountyCreate, AutonomousBountyFeedItem,
+    AutonomousBountyRecoveryReservations, AutonomousBountySubmissionAuthorizationRequest,
+    AutonomousBountyTxPlanner, AutonomousSignedAttestation,
+    AutonomousVerificationAttestationRequest, BaseRpcUrlConfig, CanonicalChildBountyTermsRequest,
+    EvmLog, PrepareAgentToEarnInput, StandingMetaV2ChildPreparationRequest,
 };
 use chrono::Utc;
 use competition_metric_core::{
@@ -656,11 +657,13 @@ tool_args! {
     struct AutonomousInventorySummaryArgs {
         network: Option<String>,
         claimable_only: Option<bool>,
+        status: Option<String>,
     }
     schema object_tool_schema(
         json!({
             "network": nullable_string_property("Network name; defaults to base-mainnet."),
-            "claimable_only": {"type": ["boolean", "null"], "description": "Defaults to true."},
+            "claimable_only": {"type": ["boolean", "null"], "description": "Readiness filter for `items`; defaults to true. `blocked` is reported either way."},
+            "status": nullable_string_property("Raw canonical status filter, comma separated: open, claimable, claimed, submitted, paid, cancelled. Independent of readiness."),
         }),
         &[],
     );
@@ -1549,11 +1552,16 @@ tool_args! {
 
 tool_args! {
     #[derive(Default)]
-    struct AutonomousBountyFeedArgs { network: Option<String>, claimable_only: Option<bool> }
+    struct AutonomousBountyFeedArgs {
+        network: Option<String>,
+        claimable_only: Option<bool>,
+        status: Option<String>,
+    }
     schema object_tool_schema(
         json!({
             "network": nullable_enum_property(&["base-sepolia", "base-mainnet"], "Optional Base network; defaults to base-mainnet."),
-            "claimable_only": nullable_boolean_property("When true, return only fully funded unclaimed bounties.")
+            "claimable_only": nullable_boolean_property("When true, return only rows that pass every readiness check."),
+            "status": nullable_string_property("Raw canonical status filter, comma separated: open, claimable, claimed, submitted, paid, cancelled. Independent of readiness; raw status claimable does not mean ready to earn.")
         }),
         &[],
     );
@@ -3632,7 +3640,7 @@ async fn tools() -> Json<Vec<ToolDescriptor>> {
         ),
         tool(
             "list_autonomous_bounties",
-            "List canonical bounties. Set claimable_only=true, then choose one verification-ready result.",
+            "List canonical bounties. Set claimable_only=true, then choose one verification-ready result. Raw status and readiness are different: set status=claimable to inspect rows that are claimable on-chain, and read the blocked_work note that explains why none of them are ready.",
             AutonomousBountyFeedArgs::input_schema(),
         ),
         tool(
@@ -4810,7 +4818,7 @@ async fn get_autonomous_inventory_summary(
         "{}/v1/base/autonomous-bounties/inventory-summary",
         public_base_url_from_env().trim_end_matches('/')
     );
-    proxy_hosted_json(reqwest::Client::new().get(url).query(&[
+    let mut query = vec![
         (
             "network",
             args.network.unwrap_or_else(|| "base-mainnet".to_string()),
@@ -4819,8 +4827,16 @@ async fn get_autonomous_inventory_summary(
             "claimable_only",
             args.claimable_only.unwrap_or(true).to_string(),
         ),
-    ]))
-    .await
+    ];
+    if let Some(status) = args
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+    {
+        query.push(("status", status.to_string()));
+    }
+    proxy_hosted_json(reqwest::Client::new().get(url).query(&query)).await
 }
 
 async fn get_solver_leaderboard(
@@ -7310,14 +7326,58 @@ async fn list_autonomous_bounties(
         Ok(terms) => terms,
         Err(error) => return mcp_error(error),
     };
+    let statuses = match args.status.as_deref().map(str::trim) {
+        None | Some("") => Vec::new(),
+        Some(raw) => match parse_autonomous_bounty_status_filter(raw) {
+            Ok(statuses) => statuses,
+            Err(error) => return mcp_error(error),
+        },
+    };
     let mut feed = match build_autonomous_bounty_feed(events, terms, false) {
         Ok(feed) => feed,
         Err(error) => return mcp_error(error),
     };
-    state
-        .recovery_reservations
-        .apply(&mut feed, args.claimable_only.unwrap_or(false));
-    mcp_json(feed)
+    // Recovery holds are applied first and never relaxed; `claimable_only` is then the
+    // same readiness filter `apply` would have run, kept separate so blocked work can be
+    // explained instead of disappearing.
+    state.recovery_reservations.apply(&mut feed, false);
+    retain_autonomous_bounties_with_status(&mut feed, &statuses);
+    if !args.claimable_only.unwrap_or(false) {
+        return mcp_json(feed);
+    }
+    let blocked = describe_blocked_claimable_bounties(&feed);
+    feed.retain(autonomous_bounty_is_earning_ready);
+    match blocked {
+        Some(note) if feed.is_empty() => mcp_json_with_note(feed, note),
+        _ => mcp_json(feed),
+    }
+}
+
+/// One sentence per row that is `claimable` on-chain and still fails a readiness check.
+///
+/// Without this, `claimable_only=true` answers an empty array and the caller cannot tell
+/// an empty board from a broken filter.
+fn describe_blocked_claimable_bounties(feed: &[AutonomousBountyFeedItem]) -> Option<String> {
+    let blocked = feed
+        .iter()
+        .filter(|item| item.status == "claimable" && !autonomous_bounty_is_earning_ready(item))
+        .map(|item| {
+            let reasons = autonomous_bounty_earning_blockers(item)
+                .into_iter()
+                .map(|blocker| format!("{}: {}", blocker.code, blocker.detail))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("{} ({reasons})", item.bounty_id)
+        })
+        .collect::<Vec<_>>();
+    if blocked.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "No bounty is ready to earn right now. {} row(s) carry the raw canonical status `claimable` and still fail a readiness check, so they are not ready work and a claim bond must not be posted on them: {}. Re-run with status=claimable to inspect these rows in full.",
+        blocked.len(),
+        blocked.join(" | ")
+    ))
 }
 
 async fn list_opportunities(Json(args): Json<OpportunityListArgs>) -> Json<serde_json::Value> {
@@ -9345,6 +9405,18 @@ async fn persist_all_risk_events(state: &SharedState) -> Result<(), String> {
 
 fn mcp_json(value: impl Serialize) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "content": [{ "type": "json", "json": value }] }))
+}
+
+/// The same payload, plus a text block explaining why it is empty. `content[0]` keeps the
+/// shape every existing client reads.
+fn mcp_json_with_note(value: impl Serialize, note: String) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "content": [
+            { "type": "json", "json": value },
+            { "type": "text", "text": note }
+        ],
+        "blocked_work": note
+    }))
 }
 
 fn mcp_mutation<T: Serialize>(

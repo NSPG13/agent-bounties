@@ -35,22 +35,24 @@ use bounty_router::{BountyRouter, RouteDecision};
 use chain_base::{
     attach_open_competition_commit_calls, attach_open_competition_entrant_relay_signature,
     attach_open_competition_reveal_call, attach_open_competition_withdrawal_call,
-    autonomous_bounty_is_earning_ready, base_network_descriptor, broadcast_signed_transaction,
-    build_autonomous_bounty_feed, build_autonomous_bounty_terms_record,
-    build_autonomous_submission_evidence_record, build_autonomous_submission_preparation,
-    build_autonomous_verification_jobs, built_in_open_competition_verifier_catalog,
-    decode_autonomous_bounty_logs, encode_open_competition_entrant_commit_payload,
-    encode_open_competition_entrant_reveal_payload,
+    autonomous_bounty_earning_blockers, autonomous_bounty_is_earning_ready,
+    base_network_descriptor, broadcast_signed_transaction, build_autonomous_bounty_feed,
+    build_autonomous_bounty_terms_record, build_autonomous_submission_evidence_record,
+    build_autonomous_submission_preparation, build_autonomous_verification_jobs,
+    built_in_open_competition_verifier_catalog, decode_autonomous_bounty_logs,
+    encode_open_competition_entrant_commit_payload, encode_open_competition_entrant_reveal_payload,
     encode_open_competition_entrant_withdraw_payload, eth_get_transaction_receipt_request,
     eth_send_raw_transaction_request, event_topic, fetch_block_number, fetch_exact_block_identity,
     fetch_safe_block_identity, fetch_transaction_receipt, normalize_evm_address,
     observe_erc20_balance_safe, observe_open_competition_entrant_wallet_safe_state,
     observe_open_competition_safe_state, observe_solver_leaderboard_paid_winner_safe,
     open_competition_entrant_payload_bounty, open_competition_readiness_from_state,
+    parse_autonomous_bounty_status_filter,
     plan_canonical_child_bounty_terms as build_canonical_child_bounty_terms_plan,
     plan_open_competition_action, plan_open_competition_creation,
     plan_open_competition_entrant_action, plan_standing_meta_v4_action,
-    prepare_agent_to_earn as inspect_agent_wallet_readiness, solver_leaderboard_award_id,
+    prepare_agent_to_earn as inspect_agent_wallet_readiness,
+    retain_autonomous_bounties_with_status, solver_leaderboard_award_id,
     standing_meta_v2_parent_context, standing_meta_v4_readiness,
     validate_attestation_request_against_feed, validate_autonomous_cancel_authority,
     validate_autonomous_creation_for_public_earning, validate_open_competition_commitment_envelope,
@@ -2029,6 +2031,8 @@ struct AutonomousSubmissionEvidenceQuery {
 struct AutonomousBountyFeedQuery {
     network: Option<String>,
     claimable_only: Option<bool>,
+    /// Raw canonical status filter, comma separated. Independent of readiness.
+    status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2097,14 +2101,31 @@ struct AutonomousBountyInventoryItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct AutonomousBountyEarningBlockerResponse {
+    code: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct AutonomousBountyBlockedItem {
+    bounty_id: String,
+    bounty_contract: String,
+    title: Option<String>,
+    status: String,
+    blockers: Vec<AutonomousBountyEarningBlockerResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct AutonomousBountyInventorySummary {
     schema_version: String,
     network: String,
     generated_at: String,
     canonical_source: String,
+    blocked_source: String,
     claimable_bounty_count: usize,
     verification_ready_bounty_count: usize,
     standing_meta_bounty_count: usize,
+    blocked_bounty_count: usize,
     funded_usdc_base_units: String,
     funded_usdc: String,
     solver_reward_usdc_base_units: String,
@@ -2112,6 +2133,7 @@ struct AutonomousBountyInventorySummary {
     verifier_reward_usdc_base_units: String,
     verifier_reward_usdc: String,
     items: Vec<AutonomousBountyInventoryItem>,
+    blocked: Vec<AutonomousBountyBlockedItem>,
     evidence_boundary: String,
 }
 
@@ -6038,8 +6060,12 @@ async fn platform_metrics(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let source_freshness = platform_canonical_source_freshness(&state, stats.generated_at).await;
     let autonomous_inventory = if source_freshness.autonomous {
-        match load_verified_autonomous_bounty_feed(&state, "base-mainnet", true).await {
-            Ok(feed) => build_autonomous_inventory_summary(&state, "base-mainnet", feed).ok(),
+        match load_verified_autonomous_bounty_feed(&state, "base-mainnet", false).await {
+            Ok(mut feed) => {
+                let blocked = autonomous_blocked_claimable_items(&feed);
+                feed.retain(autonomous_bounty_is_earning_ready);
+                build_autonomous_inventory_summary(&state, "base-mainnet", feed, blocked).ok()
+            }
             Err(_) => None,
         }
     } else {
@@ -14272,18 +14298,68 @@ fn autonomous_submission_evidence_record(
     .map_err(|_| StatusCode::CONFLICT)
 }
 
-#[utoipa::path(get, path = "/v1/base/autonomous-bounties/feed", responses((status = 200, description = "Canonical on-chain bounties joined to content-addressed public terms")))]
+/// Parse the optional `status=` query into canonical raw statuses.
+///
+/// An unknown status is rejected instead of ignored: a filter that is silently dropped
+/// returns rows that look filtered and are not.
+fn autonomous_bounty_status_filter(raw: Option<&str>) -> Result<Vec<String>, StatusCode> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(Vec::new()),
+        Some(raw) => {
+            parse_autonomous_bounty_status_filter(raw).map_err(|_| StatusCode::BAD_REQUEST)
+        }
+    }
+}
+
+/// Rows whose raw canonical status is `claimable` but which fail at least one readiness
+/// check. This is the set that makes an empty ready-to-earn list look like a defect.
+fn autonomous_blocked_claimable_items(
+    feed: &[AutonomousBountyFeedItem],
+) -> Vec<AutonomousBountyBlockedItem> {
+    feed.iter()
+        .filter(|item| item.status == "claimable" && !autonomous_bounty_is_earning_ready(item))
+        .map(|item| AutonomousBountyBlockedItem {
+            bounty_id: item.bounty_id.clone(),
+            bounty_contract: item.bounty_contract.clone(),
+            title: item
+                .terms
+                .as_ref()
+                .map(|terms| terms.document.title.clone()),
+            status: item.status.clone(),
+            blockers: autonomous_bounty_earning_blockers(item)
+                .into_iter()
+                .map(|blocker| AutonomousBountyEarningBlockerResponse {
+                    code: blocker.code,
+                    detail: blocker.detail,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/base/autonomous-bounties/feed",
+    params(
+        ("network" = Option<String>, Query, description = "Base network; defaults to base-mainnet"),
+        ("claimable_only" = Option<bool>, Query, description = "Readiness filter; when true only rows that pass every readiness check are returned. Defaults to false."),
+        ("status" = Option<String>, Query, description = "Raw canonical status filter, comma separated: open, claimable, claimed, submitted, paid, cancelled. Independent of readiness; an unknown status is a 400.")
+    ),
+    responses((status = 200, description = "Canonical on-chain bounties joined to content-addressed public terms"))
+)]
 async fn autonomous_bounty_feed(
     State(state): State<SharedState>,
     Query(query): Query<AutonomousBountyFeedQuery>,
 ) -> Result<Json<Vec<AutonomousBountyFeedItem>>, StatusCode> {
-    load_autonomous_bounty_feed(
+    let statuses = autonomous_bounty_status_filter(query.status.as_deref())?;
+    let mut feed = load_autonomous_bounty_feed(
         &state,
         query.network.as_deref().unwrap_or("base-mainnet"),
         query.claimable_only.unwrap_or(false),
     )
-    .await
-    .map(Json)
+    .await?;
+    retain_autonomous_bounties_with_status(&mut feed, &statuses);
+    Ok(Json(feed))
 }
 
 async fn load_autonomous_bounty_feed(
@@ -14584,6 +14660,11 @@ fn leaderboard_period_response(
 #[utoipa::path(
     get,
     path = "/v1/base/autonomous-bounties/inventory-summary",
+    params(
+        ("network" = Option<String>, Query, description = "Base network; defaults to base-mainnet"),
+        ("claimable_only" = Option<bool>, Query, description = "Readiness filter for `items`; defaults to true. `blocked` is reported either way."),
+        ("status" = Option<String>, Query, description = "Raw canonical status filter, comma separated: open, claimable, claimed, submitted, paid, cancelled. Independent of readiness; an unknown status is a 400.")
+    ),
     responses((status = 200, body = AutonomousBountyInventorySummary))
 )]
 async fn autonomous_bounty_inventory_summary(
@@ -14591,9 +14672,17 @@ async fn autonomous_bounty_inventory_summary(
     Query(query): Query<AutonomousBountyFeedQuery>,
 ) -> Result<Json<AutonomousBountyInventorySummary>, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
-    let feed =
-        load_autonomous_bounty_feed(&state, network, query.claimable_only.unwrap_or(true)).await?;
-    build_autonomous_inventory_summary(&state, network, feed).map(Json)
+    let statuses = autonomous_bounty_status_filter(query.status.as_deref())?;
+    // Load without the readiness filter so blocked work can be named even when nothing is
+    // ready. Recovery holds are still applied by `load_autonomous_bounty_feed`, and the
+    // readiness filter below is the same predicate it would have applied.
+    let mut feed = load_autonomous_bounty_feed(&state, network, false).await?;
+    retain_autonomous_bounties_with_status(&mut feed, &statuses);
+    let blocked = autonomous_blocked_claimable_items(&feed);
+    if query.claimable_only.unwrap_or(true) {
+        feed.retain(autonomous_bounty_is_earning_ready);
+    }
+    build_autonomous_inventory_summary(&state, network, feed, blocked).map(Json)
 }
 
 #[utoipa::path(
@@ -14606,8 +14695,10 @@ async fn autonomous_bounty_inventory_badge(
     Query(query): Query<AutonomousBountyFeedQuery>,
 ) -> Result<Response, StatusCode> {
     let network = query.network.as_deref().unwrap_or("base-mainnet");
-    let feed = load_autonomous_bounty_feed(&state, network, true).await?;
-    let summary = build_autonomous_inventory_summary(&state, network, feed)?;
+    let mut feed = load_autonomous_bounty_feed(&state, network, false).await?;
+    let blocked = autonomous_blocked_claimable_items(&feed);
+    feed.retain(autonomous_bounty_is_earning_ready);
+    let summary = build_autonomous_inventory_summary(&state, network, feed, blocked)?;
     let message = format!(
         "{} claimable | {} USDC",
         summary.claimable_bounty_count, summary.funded_usdc
@@ -14632,6 +14723,7 @@ fn build_autonomous_inventory_summary(
     state: &SharedState,
     network: &str,
     feed: Vec<AutonomousBountyFeedItem>,
+    blocked: Vec<AutonomousBountyBlockedItem>,
 ) -> Result<AutonomousBountyInventorySummary, StatusCode> {
     let sum = |field: fn(&AutonomousBountyFeedItem) -> &str| {
         feed.iter().try_fold(0_u128, |total, item| {
@@ -14676,9 +14768,14 @@ fn build_autonomous_inventory_summary(
             "{}/v1/base/autonomous-bounties/feed?network={network}&claimable_only=true",
             state.public_base_url.trim_end_matches('/')
         ),
+        blocked_source: format!(
+            "{}/v1/base/autonomous-bounties/feed?network={network}&status=claimable",
+            state.public_base_url.trim_end_matches('/')
+        ),
         claimable_bounty_count: feed.len(),
         verification_ready_bounty_count,
         standing_meta_bounty_count,
+        blocked_bounty_count: blocked.len(),
         funded_usdc_base_units: funded.to_string(),
         funded_usdc: format_usdc_base_units(funded),
         solver_reward_usdc_base_units: solver.to_string(),
@@ -14686,7 +14783,8 @@ fn build_autonomous_inventory_summary(
         verifier_reward_usdc_base_units: verifier.to_string(),
         verifier_reward_usdc: format_usdc_base_units(verifier),
         items,
-        evidence_boundary: "This summary is derived at request time from confirmed canonical events and validated content-addressed terms in the hosted index. It proves current indexed inventory, not a future claim, completion, or payout. Only BountySettled proves payment.".to_string(),
+        blocked,
+        evidence_boundary: "This summary is derived at request time from confirmed canonical events and validated content-addressed terms in the hosted index. It proves current indexed inventory, not a future claim, completion, or payout. Only BountySettled proves payment. Rows in `blocked` carry the raw canonical status `claimable` and fail at least one readiness check; they are not ready work and must not be bonded.".to_string(),
     })
 }
 
@@ -20604,9 +20702,13 @@ mod tests {
             network: "base-mainnet".to_string(),
             generated_at: "2026-08-12T20:00:00+00:00".to_string(),
             canonical_source: "test".to_string(),
+            blocked_source: "test".to_string(),
             claimable_bounty_count: 2,
             verification_ready_bounty_count: 1,
             standing_meta_bounty_count: 1,
+            // Blocked rows are reported, never counted as inventory: the assertions below
+            // pin the combined opportunity count and funded totals against this one.
+            blocked_bounty_count: 1,
             funded_usdc_base_units: "3000000".to_string(),
             funded_usdc: "3.00".to_string(),
             solver_reward_usdc_base_units: "2400000".to_string(),
@@ -20614,6 +20716,16 @@ mod tests {
             verifier_reward_usdc_base_units: "600000".to_string(),
             verifier_reward_usdc: "0.60".to_string(),
             items: Vec::new(),
+            blocked: vec![AutonomousBountyBlockedItem {
+                bounty_id: format!("0x{}", "ab".repeat(32)),
+                bounty_contract: "0x1111111111111111111111111111111111111111".to_string(),
+                title: Some("held row".to_string()),
+                status: "claimable".to_string(),
+                blockers: vec![AutonomousBountyEarningBlockerResponse {
+                    code: "verification_not_ready".to_string(),
+                    detail: "held".to_string(),
+                }],
+            }],
             evidence_boundary: "test".to_string(),
         };
         let competition = OpenCompetitionInventorySummary {
@@ -22788,6 +22900,7 @@ mod tests {
                 validation_errors: Vec::new(),
                 events: Vec::new(),
             }],
+            Vec::new(),
         )
         .unwrap();
 
@@ -22797,6 +22910,93 @@ mod tests {
         assert_eq!(summary.solver_reward_usdc, "0.90");
         assert_eq!(summary.verifier_reward_usdc, "0.10");
         assert!(summary.canonical_source.contains("claimable_only=true"));
+        assert_eq!(summary.blocked_bounty_count, 0);
+        assert!(summary.blocked.is_empty());
+        assert!(summary.blocked_source.contains("status=claimable"));
+    }
+
+    fn blocked_feed_fixture(status: &str, verification_ready: bool) -> AutonomousBountyFeedItem {
+        AutonomousBountyFeedItem {
+            bounty_id: format!("0x{}", "55".repeat(32)),
+            bounty_contract: format!("0x{}", "66".repeat(20)),
+            creator: format!("0x{}", "77".repeat(20)),
+            status: status.to_string(),
+            solver_reward: "900000".to_string(),
+            verifier_reward: "100000".to_string(),
+            claim_bond: "100000".to_string(),
+            timeout_bond_pool: "0".to_string(),
+            target_amount: "1000000".to_string(),
+            funded_amount: "1000000".to_string(),
+            required_external_spend: "0".to_string(),
+            gross_cash_margin: "900000".to_string(),
+            terms_hash: format!("0x{}", "88".repeat(32)),
+            terms: None,
+            terms_valid: true,
+            verification_mode: "deterministic_module".to_string(),
+            verifier_module: None,
+            verifier_set_hash: None,
+            verifier_threshold: Some(1),
+            runner_identifier: Some("test_fixture".to_string()),
+            verification_ready,
+            verification_readiness_reason: if verification_ready {
+                "deterministic verifier module is committed on-chain".to_string()
+            } else {
+                "standing-meta-v2 migration reservation is active".to_string()
+            },
+            validation_errors: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn inventory_summary_reports_blocked_claimable_work_when_nothing_is_ready() {
+        let state = test_state(BountyNetwork::default());
+        // The live base-mainnet shape on 2026-09-16: rows that are claimable
+        // on-chain, none of them ready, so the ready-to-earn list is empty and the
+        // reason is invisible without this.
+        let feed = vec![
+            blocked_feed_fixture("claimable", false),
+            blocked_feed_fixture("paid", true),
+        ];
+        let blocked = autonomous_blocked_claimable_items(&feed);
+        assert_eq!(blocked.len(), 1, "only raw-claimable rows count as blocked");
+        assert_eq!(blocked[0].status, "claimable");
+        assert_eq!(blocked[0].blockers.len(), 1);
+        assert_eq!(blocked[0].blockers[0].code, "verification_not_ready");
+        assert!(blocked[0].blockers[0]
+            .detail
+            .contains("standing-meta-v2 migration reservation"));
+
+        let ready = feed
+            .iter()
+            .filter(|item| autonomous_bounty_is_earning_ready(item))
+            .count();
+        assert_eq!(ready, 0, "readiness is unchanged by the blocked report");
+
+        let summary =
+            build_autonomous_inventory_summary(&state, "base-mainnet", Vec::new(), blocked)
+                .unwrap();
+        assert_eq!(summary.claimable_bounty_count, 0);
+        assert!(summary.items.is_empty());
+        assert_eq!(summary.blocked_bounty_count, 1);
+        assert!(summary.blocked_source.contains("status=claimable"));
+        assert!(summary.evidence_boundary.contains("must not be bonded"));
+    }
+
+    #[test]
+    fn raw_status_filter_rejects_an_unknown_status_instead_of_dropping_it() {
+        assert!(autonomous_bounty_status_filter(None).unwrap().is_empty());
+        assert!(autonomous_bounty_status_filter(Some("  "))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            autonomous_bounty_status_filter(Some("claimable, PAID")).unwrap(),
+            vec!["claimable".to_string(), "paid".to_string()]
+        );
+        assert_eq!(
+            autonomous_bounty_status_filter(Some("ready-to-earn")).unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]
