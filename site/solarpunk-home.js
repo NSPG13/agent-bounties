@@ -126,6 +126,7 @@
       claude: {
         label: "Claude",
         desktopLabel: "Claude Code",
+        terminalCommand: "claude",
         // claude-cli:// opens a terminal session with the message pre-filled and unsent.
         // claude:// would instead need the Claude Desktop chat app, which a Claude Code
         // user need not have. Over the documented q limit the web handoff carries the
@@ -168,6 +169,22 @@
   // when that script has not loaded.
   function supportsDesktopHandoff(navigatorLike = {}) {
     return desktopPlatform(navigatorLike) !== "mobile";
+  }
+
+  // A scheme no installed app claims ends in an operating-system "no application" dialog.
+  // The page cannot detect that, so the status says up front what it means and how to
+  // recover. `copied` is null while the clipboard write is still settling.
+  function desktopHandoffStatus(links, copied = null) {
+    const name = links.desktopLabel || `${links.label} desktop`;
+    if (!links.terminalCommand) {
+      return `Requesting ${name}. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`;
+    }
+    const paste = copied === true
+      ? `run ${links.terminalCommand} in a terminal and paste the message, already on your clipboard`
+      : copied === false
+        ? `copy the message above, then run ${links.terminalCommand} in a terminal and paste it`
+        : `run ${links.terminalCommand} in a terminal and paste the message`;
+    return `Requesting ${name}. If your system reports that no application can open the link, ${name} has not registered its link handler yet: ${paste}. The web link works too, and nothing is sent automatically.`;
   }
 
   function parseCompetitionPostingRequest(search) {
@@ -1481,9 +1498,9 @@ ${competitionChildBrief(item)}`;
             win.location.assign(links.webUrl);
             return;
           }
-          setStatus(`Requesting ${links.desktopLabel || `${links.label} desktop`}. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`);
+          setStatus(desktopHandoffStatus(links));
           attemptDesktop(desktopUrl);
-          void promptCopy;
+          setStatus(desktopHandoffStatus(links, await promptCopy));
         });
       });
       copyButton?.addEventListener("click", async () => {
@@ -1574,6 +1591,7 @@ ${competitionChildBrief(item)}`;
     competitionPostingItem,
     competitionPostingPrompt,
     clamp,
+    desktopHandoffStatus,
     desktopPlatform,
     flameMotion,
     hashSeed,

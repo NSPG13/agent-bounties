@@ -126,6 +126,33 @@ test("a prompt beyond the documented Claude Code limit takes the web handoff", (
   assert.equal(encodeURIComponent(home.BOUNTY_POSTING_PROMPT).length < 5000, true);
 });
 
+test("the desktop status names the recovery for an unclaimed scheme", () => {
+  const claude = home.bountyAssistantLinks("claude");
+  assert.equal(claude.terminalCommand, "claude");
+
+  // Every state says what an unclaimed link means and never guesses the clipboard result.
+  for (const [copied, expected] of [[true, /already on your clipboard/], [false, /copy the message above/], [null, /paste the message\./]]) {
+    const status = home.desktopHandoffStatus(claude, copied);
+    assert.match(status, /Requesting Claude Code\./);
+    assert.match(status, /has not registered its link handler yet/);
+    assert.match(status, /run claude in a terminal/);
+    assert.match(status, expected);
+    assert.match(status, /nothing is sent automatically/);
+  }
+  assert.doesNotMatch(home.desktopHandoffStatus(claude, false), /already on your clipboard/);
+  assert.equal(home.desktopHandoffStatus(claude), home.desktopHandoffStatus(claude, null));
+
+  // A provider with no terminal command keeps the original wording.
+  for (const provider of ["gpt", "cursor"]) {
+    const links = home.bountyAssistantLinks(provider);
+    assert.equal(links.terminalCommand, undefined);
+    const status = home.desktopHandoffStatus(links, true);
+    assert.match(status, new RegExp(`Requesting ${links.label} desktop\\.`));
+    assert.match(status, /use the web link or copy the instructions/);
+    assert.doesNotMatch(status, /link handler/);
+  }
+});
+
 test("desktop schemes are only fired where a desktop app can register one", () => {
   const linux = { userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141 Safari/537.36" };
   const mac = { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15" };
