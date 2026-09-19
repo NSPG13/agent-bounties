@@ -1043,7 +1043,9 @@ def check_transactional_handoffs(site_dir: Path) -> None:
         onramp_js,
         [
             "New-bounty creation cannot proceed",
-            'asset === "eth" ? "https://www.moonpay.com/buy/eth"',
+            'if (provider === "moonpay") throw new Error',
+            'body.environment !== "live"',
+            'body.destination_network !== "base-mainnet"',
             'if (provider === "moonpay") track("onramp_moonpay_started")',
         ],
     )

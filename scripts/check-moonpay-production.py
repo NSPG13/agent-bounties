@@ -16,15 +16,11 @@ from typing import Any
 
 DEFAULT_SITE_BASE = "https://agentbounties.app"
 DEFAULT_MCP_BASE = "https://mcp.agentbounties.app"
-SCHEMA_VERSION = "agent-bounties/moonpay-production-smoke-v2"
+SCHEMA_VERSION = "agent-bounties/moonpay-production-smoke-v3"
 CHECKOUT_SCHEMA = "agent-bounties/moonpay-onramp-checkout-v1"
 CANARY_WALLET = "0x1111111111111111111111111111111111111111"
 CANARY_BOUNTY = "0x2222222222222222222222222222222222222222"
 CHECKOUT_HOSTS = {"buy.moonpay.com", "buy-sandbox.moonpay.com"}
-DIRECT_CHECKOUT_URLS = {
-    "usdc": "https://www.moonpay.com/buy/usdc",
-    "eth": "https://www.moonpay.com/buy/eth",
-}
 RETRYABLE_ENDPOINT_STATUSES = {404, 502, 504}
 
 
@@ -102,6 +98,8 @@ def verify_static(site_base: str, timeout: float) -> tuple[list[dict[str, Any]],
                 "data-topup-connection",
                 "Open MetaMask",
                 "Sign up or sign in",
+                "Use money in MoonPay",
+                "MoonPay card checkout unavailable",
                 "cannot prefill or cryptographically bind your wallet",
                 "moonpay-onramp.js",
                 "moonpay-direct-fallback.js",
@@ -132,12 +130,9 @@ def verify_static(site_base: str, timeout: float) -> tuple[list[dict[str, Any]],
             "moonpay-direct-fallback.js",
             f"{site_base}/moonpay-direct-fallback.js",
             (
-                DIRECT_CHECKOUT_URLS["usdc"],
-                DIRECT_CHECKOUT_URLS["eth"],
-                "canOpenPurchase",
-                "openDirectCheckout",
-                'setAttribute("aria-disabled"',
-                "The person chooses amount, signs up, and pays there.",
+                "button.disabled = true",
+                'button.removeAttribute("href")',
+                'setAttribute("aria-disabled", "true")',
             ),
         ),
     ]
@@ -161,17 +156,17 @@ def verify_static(site_base: str, timeout: float) -> tuple[list[dict[str, Any]],
             }
         )
 
-    forbidden = [term for term in ("apiKey=", "walletAddress=", "signature=") if term in direct_body]
+    forbidden = [term for term in ("apiKey=", "walletAddress=", "signature=", "https://www.moonpay.com/buy/") if term in direct_body]
     if forbidden:
         raise SmokeFailure(f"direct MoonPay fallback imitates a signed or wallet-prefilled URL: {forbidden}")
     direct = {
-        "active": True,
+        "active": False,
+        "blocked": True,
         "provider": "moonpay",
-        "mode": "direct_consumer_checkout",
-        "checkout_urls": DIRECT_CHECKOUT_URLS,
+        "mode": "blocked_unbound_checkout",
         "wallet_prefilled": False,
         "context_cryptographically_bound": False,
-        "explicit_wallet_copy_required": True,
+        "existing_money_transfer_guide": True,
         "base_asset_review_required": True,
         "bounty_funded": False,
         "canonical_funding_event": None,
@@ -301,9 +296,9 @@ def main() -> int:
         endpoint = verify_endpoint(mcp_base, site_base, args.timeout)
         active_paths = {
             "direct_consumer": direct["active"],
-            "signed_partner": endpoint["activation_state"] == "configured",
+            "signed_partner": endpoint["activation_state"] == "configured" and endpoint.get("checkout", {}).get("environment") == "live",
         }
-        success = any(active_paths.values()) and endpoint["route_healthy"]
+        success = direct["blocked"] and endpoint["route_healthy"]
         if args.require_checkout:
             success = success and active_paths["signed_partner"]
         report = {
@@ -319,8 +314,8 @@ def main() -> int:
         }
         if args.require_checkout and not active_paths["signed_partner"]:
             report["failure"] = (
-                "The MoonPay on-ramp is available through the direct consumer fallback, "
-                "but the server-signed partner checkout is not active."
+                "Live wallet-prefilled MoonPay checkout is not active. "
+                "The generic checkout is blocked; use a wallet app or the existing-money transfer guide."
             )
         rendered = json.dumps(report, indent=2, sort_keys=True)
         print(rendered)
