@@ -22,6 +22,14 @@ actions, and recovery-corpus regressions.
 
 ## Current Recovery Topology
 
+When hosted services are pinned to a reviewed release, set the GitHub Actions
+repository variable `PRODUCTION_EXPECTED_REVISION` to its full commit SHA.
+Production Smoke and Operational Control Loop use a manual `expected_revision`
+input first, then this variable, then the checked-out main commit. Update the
+variable as part of each hosted release; remove it when returning to main-based
+deployment. Both services must still report the same expected revision. A
+website-only merge must not change the hosted release pin.
+
 ```text
 GitHub scheduled probe ----> API /health + revision ----+
                          +-> MCP /health + revision ----+-> recovery plan
