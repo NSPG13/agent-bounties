@@ -1372,6 +1372,174 @@ pub struct EvalRun {
     pub created_at: DateTime<Utc>,
 }
 
+pub const DIRECT_EVIDENCE_CHECKLIST_SCHEMA_VERSION: &str = "agent-bounties/direct-evidence-checklist-v1";
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DirectBountyEvidenceChecklistError {
+    #[error("schema version must be {expected}")]
+    InvalidSchemaVersion { expected: String },
+    #[error("bounty_id cannot be empty")]
+    EmptyBountyId,
+    #[error("submission commit must be a 40-hex SHA")]
+    InvalidCommitSha,
+    #[error("repository must be an https://github.com/<owner>/<repo> URL")]
+    InvalidRepository,
+    #[error("subdirectory cannot be empty")]
+    EmptySubdirectory,
+    #[error("pull request URL must be an https://github.com/.../pull/<n> URL")]
+    InvalidPullRequestUrl,
+    #[error("check run URLs list cannot be empty")]
+    EmptyCheckRunUrls,
+    #[error("check run URL must be an absolute https:// URL")]
+    InvalidCheckRunUrl,
+    #[error("artifact URL must be an absolute https:// URL")]
+    InvalidArtifactUrl,
+    #[error("artifact digest algorithm must be sha256 or sha512")]
+    InvalidArtifactDigestAlgorithm,
+    #[error("artifact digest value must match the declared algorithm")]
+    InvalidArtifactDigestValue,
+    #[error("canonical settlement transaction hash must be 0x-prefixed 64 hex")]
+    InvalidSettlementTransactionHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectSubmissionEvidence {
+    pub commit: String,
+    pub repository: String,
+    pub subdirectory: String,
+    pub pull_request_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectArtifactDigest {
+    pub algorithm: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectArtifactEvidence {
+    pub url: String,
+    pub digest: DirectArtifactDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectVerificationEvidence {
+    pub check_run_urls: Vec<String>,
+    pub artifact: DirectArtifactEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectCanonicalSettlement {
+    pub transaction_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectPaymentEvidence {
+    pub canonical_settlement: DirectCanonicalSettlement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DirectBountyEvidenceChecklist {
+    pub schema_version: String,
+    pub bounty_id: String,
+    pub submission_evidence: DirectSubmissionEvidence,
+    pub verification_evidence: DirectVerificationEvidence,
+    pub payment_evidence: DirectPaymentEvidence,
+}
+
+impl DirectBountyEvidenceChecklist {
+    pub fn validate(&self) -> Result<(), DirectBountyEvidenceChecklistError> {
+        if self.schema_version != DIRECT_EVIDENCE_CHECKLIST_SCHEMA_VERSION {
+            return Err(DirectBountyEvidenceChecklistError::InvalidSchemaVersion {
+                expected: DIRECT_EVIDENCE_CHECKLIST_SCHEMA_VERSION.to_string(),
+            });
+        }
+        if self.bounty_id.trim().is_empty() {
+            return Err(DirectBountyEvidenceChecklistError::EmptyBountyId);
+        }
+        if !is_40_hex(&self.submission_evidence.commit) {
+            return Err(DirectBountyEvidenceChecklistError::InvalidCommitSha);
+        }
+        if !is_github_repository_url(&self.submission_evidence.repository) {
+            return Err(DirectBountyEvidenceChecklistError::InvalidRepository);
+        }
+        if self.submission_evidence.subdirectory.trim().is_empty() {
+            return Err(DirectBountyEvidenceChecklistError::EmptySubdirectory);
+        }
+        if !is_github_pull_request_url(&self.submission_evidence.pull_request_url) {
+            return Err(DirectBountyEvidenceChecklistError::InvalidPullRequestUrl);
+        }
+        if self.verification_evidence.check_run_urls.is_empty() {
+            return Err(DirectBountyEvidenceChecklistError::EmptyCheckRunUrls);
+        }
+        for url in &self.verification_evidence.check_run_urls {
+            if !url.starts_with("https://") {
+                return Err(DirectBountyEvidenceChecklistError::InvalidCheckRunUrl);
+            }
+        }
+        if !self
+            .verification_evidence
+            .artifact
+            .url
+            .starts_with("https://")
+        {
+            return Err(DirectBountyEvidenceChecklistError::InvalidArtifactUrl);
+        }
+        let digest = &self.verification_evidence.artifact.digest;
+        let (_, expected_len) = match digest.algorithm.as_str() {
+            "sha256" => ("sha256", 64),
+            "sha512" => ("sha512", 128),
+            _ => return Err(DirectBountyEvidenceChecklistError::InvalidArtifactDigestAlgorithm),
+        };
+        if !is_hex_of_len(&digest.value, expected_len) {
+            return Err(DirectBountyEvidenceChecklistError::InvalidArtifactDigestValue);
+        }
+        if !is_0x_64_hex(&self.payment_evidence.canonical_settlement.transaction_hash) {
+            return Err(DirectBountyEvidenceChecklistError::InvalidSettlementTransactionHash);
+        }
+        Ok(())
+    }
+}
+
+fn is_40_hex(value: &str) -> bool {
+    value.len() == 40 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn is_hex_of_len(value: &str, len: usize) -> bool {
+    value.len() == len && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn is_0x_64_hex(value: &str) -> bool {
+    value.starts_with("0x")
+        && value.len() == 66
+        && value[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn is_github_repository_url(value: &str) -> bool {
+    let prefix = "https://github.com/";
+    if !value.starts_with(prefix) {
+        return false;
+    }
+    let rest = &value[prefix.len()..];
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty()
+}
+
+fn is_github_pull_request_url(value: &str) -> bool {
+    let prefix = "https://github.com/";
+    if !value.starts_with(prefix) {
+        return false;
+    }
+    let rest = &value[prefix.len()..];
+    let parts: Vec<&str> = rest.split('/').collect();
+    parts.len() == 4
+        && !parts[0].is_empty()
+        && !parts[1].is_empty()
+        && parts[2] == "pull"
+        && !parts[3].is_empty()
+        && parts[3].chars().all(|c| c.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1683,5 +1851,159 @@ mod tests {
 
     fn test_hash(character: char) -> String {
         format!("0x{}", character.to_string().repeat(64))
+    }
+
+    fn valid_checklist() -> DirectBountyEvidenceChecklist {
+        DirectBountyEvidenceChecklist {
+            schema_version: DIRECT_EVIDENCE_CHECKLIST_SCHEMA_VERSION.to_string(),
+            bounty_id: "bounty-686".to_string(),
+            submission_evidence: DirectSubmissionEvidence {
+                commit: "a".repeat(40),
+                repository: "https://github.com/NSPG13/agent-bounties".to_string(),
+                subdirectory: "crates/domain".to_string(),
+                pull_request_url: "https://github.com/NSPG13/agent-bounties/pull/745".to_string(),
+            },
+            verification_evidence: DirectVerificationEvidence {
+                check_run_urls: vec![
+                    "https://github.com/NSPG13/agent-bounties/actions/runs/1".to_string(),
+                ],
+                artifact: DirectArtifactEvidence {
+                    url: "https://mcp.agentbounties.app/public/artifacts/1".to_string(),
+                    digest: DirectArtifactDigest {
+                        algorithm: "sha256".to_string(),
+                        value: "b".repeat(64),
+                    },
+                },
+            },
+            payment_evidence: DirectPaymentEvidence {
+                canonical_settlement: DirectCanonicalSettlement {
+                    transaction_hash: format!("0x{}", "c".repeat(64)),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn direct_evidence_checklist_accepts_valid_canonical_evidence() {
+        assert_eq!(valid_checklist().validate(), Ok(()));
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_wrong_schema_version() {
+        let mut checklist = valid_checklist();
+        checklist.schema_version = "agent-bounties/other-v2".to_string();
+        assert_eq!(
+            checklist.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidSchemaVersion {
+                expected: DIRECT_EVIDENCE_CHECKLIST_SCHEMA_VERSION.to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_empty_bounty_id() {
+        let mut checklist = valid_checklist();
+        checklist.bounty_id = "   ".to_string();
+        assert_eq!(
+            checklist.validate(),
+            Err(DirectBountyEvidenceChecklistError::EmptyBountyId)
+        );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_malformed_submission_fields() {
+        let mut bad_commit = valid_checklist();
+        bad_commit.submission_evidence.commit = "zz".repeat(20);
+        assert_eq!(
+            bad_commit.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidCommitSha)
+        );
+
+        let mut bad_repo = valid_checklist();
+        bad_repo.submission_evidence.repository = "https://example.com/repo".to_string();
+        assert_eq!(
+            bad_repo.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidRepository)
+        );
+
+        let mut bad_pr = valid_checklist();
+        bad_pr.submission_evidence.pull_request_url = "http://insecure.com/pull/1".to_string();
+        assert_eq!(
+            bad_pr.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidPullRequestUrl)
+        );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_empty_or_insecure_verification_urls() {
+        let mut empty_runs = valid_checklist();
+        empty_runs.verification_evidence.check_run_urls = vec![];
+        assert_eq!(
+            empty_runs.validate(),
+            Err(DirectBountyEvidenceChecklistError::EmptyCheckRunUrls)
+        );
+
+        let mut insecure_run = valid_checklist();
+        insecure_run.verification_evidence.check_run_urls =
+            vec!["http://insecure.com/run".to_string()];
+        assert_eq!(
+            insecure_run.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidCheckRunUrl)
+        );
+
+        let mut insecure_artifact = valid_checklist();
+        insecure_artifact.verification_evidence.artifact.url = "http://insecure.com/a".to_string();
+        assert_eq!(
+            insecure_artifact.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidArtifactUrl)
+        );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_invalid_artifact_digest() {
+        let mut bad_algorithm = valid_checklist();
+        bad_algorithm.verification_evidence.artifact.digest.algorithm = "md5".to_string();
+        assert_eq!(
+            bad_algorithm.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidArtifactDigestAlgorithm)
+        );
+
+        let mut wrong_len = valid_checklist();
+        wrong_len.verification_evidence.artifact.digest.value = "b".repeat(63);
+        assert_eq!(
+            wrong_len.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidArtifactDigestValue)
+        );
+
+        let mut sha512_ok = valid_checklist();
+        sha512_ok.verification_evidence.artifact.digest.algorithm = "sha512".to_string();
+        sha512_ok.verification_evidence.artifact.digest.value = "b".repeat(128);
+        assert_eq!(sha512_ok.validate(), Ok(()));
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_invalid_settlement_hash() {
+        let mut bad_hash = valid_checklist();
+        bad_hash.payment_evidence.canonical_settlement.transaction_hash = "deadbeef".to_string();
+        assert_eq!(
+            bad_hash.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidSettlementTransactionHash)
+        );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_round_trips_against_canonical_json_schema_shape() {
+        let checklist = valid_checklist();
+        let json = serde_json::to_value(&checklist).unwrap();
+        assert_eq!(json["schema_version"], DIRECT_EVIDENCE_CHECKLIST_SCHEMA_VERSION);
+        assert_eq!(json["bounty_id"], "bounty-686");
+        assert_eq!(json["submission_evidence"]["commit"], "a".repeat(40));
+        assert_eq!(json["verification_evidence"]["artifact"]["digest"]["algorithm"], "sha256");
+        assert!(json["payment_evidence"]["canonical_settlement"]["transaction_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x"));
+        let parsed: DirectBountyEvidenceChecklist = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, checklist);
     }
 }
