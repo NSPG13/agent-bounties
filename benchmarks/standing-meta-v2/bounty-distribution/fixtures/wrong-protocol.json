@@ -1,0 +1,10 @@
+{
+  "schema": "https://agentbounties.org/schemas/bounty-distribution-manifest.v2.json",
+  "channels": [
+    "slack-only"
+  ],
+  "claim_instruction": "/claim #ISSUE wallet: 0xYourBaseWallet",
+  "payment_evidence": "BountySettled",
+  "reward_token": "USDC",
+  "network": "base-mainnet"
+}
