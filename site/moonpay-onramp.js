@@ -578,7 +578,7 @@
     if (!balanceFresh()) throw new Error("Check your balance before opening a purchase.");
     const asset = select("[data-onramp-asset]").value;
     const destination = provider === "metamask" ? "https://portfolio.metamask.io/"
-      : asset === "eth" ? "https://www.moonpay.com/buy/eth" : "https://www.moonpay.com/buy/usdc";
+      : moonpayUrlWithWallet(asset, state.account);
     const tab = window.open("about:blank", TOPUP_WINDOW);
     if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
     tab.opener = null;
@@ -589,6 +589,14 @@
     } catch (error) { tab.close(); throw error; }
     renderPurchaseRecovery();
     track(provider === "metamask" ? "onramp_metamask_started" : "onramp_moonpay_started");
+  }
+
+  function moonpayUrlWithWallet(asset, wallet) {
+    const base = asset === "eth" ? "https://www.moonpay.com/buy/eth" : "https://www.moonpay.com/buy/usdc";
+    if (wallet && /^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+      return `${base}?walletAddress=${wallet}&currencyCode=${asset === "eth" ? "eth" : "usdc"}&baseCurrencyCode=usd`;
+    }
+    return base;
   }
 
   function topupStatus() {
