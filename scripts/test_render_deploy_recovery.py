@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +16,80 @@ assert SPEC and SPEC.loader
 recovery = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = recovery
 SPEC.loader.exec_module(recovery)
+
+
+class PinnedDeploymentSelectionTests(unittest.TestCase):
+    """Run the real workflow selector with offline Git/GitHub stand-ins."""
+
+    def select(self, pin, *, event="workflow_run", mode="build_and_deploy", runtime=""):
+        workflow = (SCRIPT.parent.parent / ".github/workflows/render-deploy-recovery.yml").read_text()
+        step = workflow.split("      - name: Select latest successful main revision\n", 1)[1]
+        shell = step.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
+        shell = "\n".join(line[10:] for line in shell.splitlines())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for command, body in {
+                "git": 'echo git >> "$CALL_LOG"\nif [[ "$1" == "rev-parse" ]]; then echo "$TARGET_REVISION"; fi',
+                "gh": 'echo gh >> "$CALL_LOG"\necho "$TARGET_REVISION"',
+                "sleep": ":",
+            }.items():
+                executable = root / command
+                executable.write_text("#!/bin/bash\n" + body + "\n")
+                executable.chmod(0o700)
+            output, summary, calls = (root / name for name in ("output", "summary", "calls"))
+            env = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "PRODUCTION_EXPECTED_REVISION": pin, "TARGET_REVISION": "a" * 40,
+                   "REQUESTED_DEPLOY_MODE": mode, "RUNTIME_REVISION": runtime,
+                   "GITHUB_EVENT_NAME": event, "RENDER_DEPLOY_PAUSE_REASON": "",
+                   "GITHUB_REPOSITORY": "NSPG13/agent-bounties", "CALL_LOG": str(calls),
+                   "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)}
+            result = subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", shell],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            return result, output.read_text() if output.exists() else "", calls.read_text() if calls.exists() else ""
+
+    def test_new_main_and_manual_dispatch_cannot_replace_pin(self):
+        for event in ("workflow_run", "workflow_dispatch"):
+            with self.subTest(event=event):
+                result, output, calls = self.select("b" * 40, event=event)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "deploy=false\n")
+                self.assertEqual(calls, "")
+
+    def test_malformed_pin_denies_before_remote_lookup(self):
+        for pin in ("main", "abc123", "a" * 40 + "\n", "$(echo unsafe)"):
+            with self.subTest(pin=pin):
+                result, output, calls = self.select(pin)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("deploy=true", output)
+                self.assertEqual(calls, "")
+
+    def test_matching_or_absent_pin_keeps_existing_ci_gate(self):
+        for pin in ("", "a" * 40, "A" * 40):
+            with self.subTest(pin=pin):
+                result, output, calls = self.select(pin)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("deploy=true\n", output)
+                self.assertIn("gh\n", calls)
+                self.assertIn("git\n", calls)
+
+    def test_redeploy_checks_runtime_instead_of_controller_revision(self):
+        for runtime, allowed in (("b" * 40, True), ("a" * 40, False)):
+            with self.subTest(runtime=runtime):
+                result, output, calls = self.select("b" * 40, event="workflow_dispatch",
+                                                   mode="deploy_only", runtime=runtime)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("deploy=" + str(allowed).lower() + "\n", output)
+                if allowed:
+                    self.assertIn("deployment_revision=" + runtime, output)
+                    self.assertIn("gh\n", calls)
+                else:
+                    self.assertEqual(calls, "")
+
+    def test_pinned_redeploy_requires_exact_runtime_revision(self):
+        result, output, calls = self.select("b" * 40, event="workflow_dispatch", mode="deploy_only")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("deploy=true", output)
+        self.assertEqual(calls, "")
 
 
 class FakeClock:

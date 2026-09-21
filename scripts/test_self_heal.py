@@ -39,6 +39,25 @@ class SelfHealingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(self_heal.ContractError, "both automatic and prohibited"):
             self_heal.validate_policy(policy)
 
+    def test_revision_comparison_ignores_hex_case_but_detects_real_skew(self) -> None:
+        fixture = self_heal.load_json(self.fixtures)
+        for api_revision, mcp_revision, expected, mismatch in (
+            ("a" * 40, "a" * 40, "A" * 40, False),
+            ("A" * 40, "a" * 40, "a" * 40, False),
+            ("a" * 40, "b" * 40, "A" * 40, True),
+            ("b" * 40, "b" * 40, "A" * 40, True),
+        ):
+            with self.subTest(api=api_revision, mcp=mcp_revision, expected=expected):
+                snapshot = self_heal.deep_merge(fixture["base_snapshot"], {
+                    "expected_revision": expected,
+                    "components": {
+                        "api": {"revision": api_revision},
+                        "mcp": {"revision": mcp_revision},
+                    },
+                })
+                plan = self_heal.evaluate(self.policy, snapshot)
+                self.assertEqual("API/MCP deployed revision skew" in plan["reasons"], mismatch)
+
     def test_automatic_action_risk_cannot_exceed_r2(self) -> None:
         policy = copy.deepcopy(self.policy)
         policy["automatic_actions"]["retry_probe"]["risk_class"] = "R3"
