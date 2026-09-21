@@ -30,6 +30,15 @@ variable as part of each hosted release; remove it when returning to main-based
 deployment. Both services must still report the same expected revision. A
 website-only merge must not change the hosted release pin.
 
+Render Deploy Recovery also honors this variable. With a pin set, a different
+build revision (or different runtime revision for `deploy_only`) skips before
+GitHub/Render deployment lookup or any Render mutation. A malformed pin fails
+closed. An exact match still requires the existing main ancestry and successful
+CI checks; a private release pin holds this public deployment workflow and does
+not authorize it to deploy private code. To promote another reviewed release,
+explicitly update or clear the pin first. A monitor's manual input only changes
+that read-only check and cannot override the deployment hold.
+
 ```text
 GitHub scheduled probe ----> API /health + revision ----+
                          +-> MCP /health + revision ----+-> recovery plan
