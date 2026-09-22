@@ -1400,6 +1400,10 @@ pub enum DirectBountyEvidenceChecklistError {
     InvalidArtifactDigestValue,
     #[error("canonical settlement transaction hash must be 0x-prefixed 64 hex")]
     InvalidSettlementTransactionHash,
+    #[error("payment evidence requires a canonical BountySettled proof")]
+    MissingCanonicalSettlementProof,
+    #[error("payment evidence transaction hash does not match the canonical BountySettled proof")]
+    SettlementTransactionMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -1499,14 +1503,40 @@ impl DirectBountyEvidenceChecklist {
         }
         Ok(())
     }
+
+    /// Performs structural checklist validation and then binds payment evidence
+    /// to the transaction hash of a canonical bounty_settled event.
+    ///
+    /// The checklist schema remains the canonical JSON contract; this method adds
+    /// the runtime evidence-boundary check without introducing a second serialized schema.
+    pub fn validate_with_canonical_settlement_event(
+        &self,
+        event_kind: &str,
+        event_transaction_hash: &str,
+    ) -> Result<(), DirectBountyEvidenceChecklistError> {
+        self.validate()?;
+        if event_kind != "bounty_settled" {
+            return Err(DirectBountyEvidenceChecklistError::MissingCanonicalSettlementProof);
+        }
+        if self.payment_evidence.canonical_settlement.transaction_hash != event_transaction_hash {
+            return Err(DirectBountyEvidenceChecklistError::SettlementTransactionMismatch);
+        }
+        Ok(())
+    }
 }
 
 fn is_40_hex(value: &str) -> bool {
-    value.len() == 40 && value.chars().all(|c| c.is_ascii_hexdigit())
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn is_hex_of_len(value: &str, len: usize) -> bool {
-    value.len() == len && value.chars().all(|c| c.is_ascii_hexdigit())
+    value.len() == len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn is_0x_64_hex(value: &str) -> bool {
@@ -1537,7 +1567,8 @@ fn is_github_pull_request_url(value: &str) -> bool {
         && !parts[1].is_empty()
         && parts[2] == "pull"
         && !parts[3].is_empty()
-        && parts[3].chars().all(|c| c.is_ascii_digit())
+        && parts[3] != "0"
+        && parts[3].bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -1979,6 +2010,50 @@ mod tests {
         sha512_ok.verification_evidence.artifact.digest.algorithm = "sha512".to_string();
         sha512_ok.verification_evidence.artifact.digest.value = "b".repeat(128);
         assert_eq!(sha512_ok.validate(), Ok(()));
+    }
+
+    #[test]
+    fn direct_evidence_checklist_rejects_uppercase_digest_and_zero_pr_number() {
+        let mut uppercase_digest = valid_checklist();
+        uppercase_digest.verification_evidence.artifact.digest.value = "B".repeat(64);
+        assert_eq!(
+            uppercase_digest.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidArtifactDigestValue)
+        );
+
+        let mut zero_pr = valid_checklist();
+        zero_pr.submission_evidence.pull_request_url =
+            "https://github.com/NSPG13/agent-bounties/pull/0".to_string();
+        assert_eq!(
+            zero_pr.validate(),
+            Err(DirectBountyEvidenceChecklistError::InvalidPullRequestUrl)
+        );
+    }
+
+    #[test]
+    fn direct_evidence_checklist_requires_canonical_bounty_settled_proof() {
+        let checklist = valid_checklist();
+        let tx_hash = checklist
+            .payment_evidence
+            .canonical_settlement
+            .transaction_hash
+            .clone();
+
+        assert_eq!(
+            checklist.validate_with_canonical_settlement_event("funding_added", &tx_hash),
+            Err(DirectBountyEvidenceChecklistError::MissingCanonicalSettlementProof)
+        );
+        assert_eq!(
+            checklist.validate_with_canonical_settlement_event(
+                "bounty_settled",
+                &format!("0x{}", "d".repeat(64))
+            ),
+            Err(DirectBountyEvidenceChecklistError::SettlementTransactionMismatch)
+        );
+        assert_eq!(
+            checklist.validate_with_canonical_settlement_event("bounty_settled", &tx_hash),
+            Ok(())
+        );
     }
 
     #[test]
