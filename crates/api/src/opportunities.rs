@@ -1531,7 +1531,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_reconciliation_lifecycle_aware_bounty_735() {
+    fn api_projection_lifecycle_aware_bounty_735() {
         let active_statuses = ["claimable", "claimed", "submitted", "verifying"];
         for status in active_statuses {
             let raw = canonical(status, "99000000", true);
