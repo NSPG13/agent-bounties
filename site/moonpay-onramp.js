@@ -454,7 +454,7 @@
       throw new Error("Acknowledge that the purchase and bounty funding are separate actions.");
     }
     if (state.checkoutBusy || currentAttempt()) throw new Error("A purchase may already be in progress. Resume or resolve that purchase below before starting another.");
-    if (!state.bountyContract) { openDirectCheckout(); return; }
+    if (!state.bountyContract) { await openDirectCheckout(); return; }
     const amount = String(select("[data-fiat-amount]").value || "").trim();
     if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) {
       throw new Error("Enter a positive USD amount with at most two decimal places.");
@@ -571,24 +571,71 @@
     return Boolean(state.account && balanceFresh() && !state.checkoutBusy && !currentAttempt());
   }
 
-  function openDirectCheckout(provider = "moonpay") {
+  async function openDirectCheckout(provider = "moonpay") {
     if (!["moonpay", "metamask"].includes(provider)) throw new Error("Choose MoonPay or MetaMask.");
     if (!state.account) throw new Error("Choose the destination wallet first.");
     if (state.checkoutBusy || currentAttempt()) throw new Error("Resume or resolve the existing purchase before opening another checkout.");
     if (!balanceFresh()) throw new Error("Check your balance before opening a purchase.");
-    const asset = select("[data-onramp-asset]").value;
-    const destination = provider === "metamask" ? "https://portfolio.metamask.io/"
-      : moonpayUrlWithWallet(asset, state.account);
+    if (provider === "moonpay") {
+      const amount = String(select("[data-fiat-amount]")?.value || "").trim();
+      if (!/^\d+(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) {
+        throw new Error("Enter a positive USD amount with at most two decimal places before opening a MoonPay checkout.");
+      }
+      const asset = select("[data-onramp-asset]").value;
+      const protocol = await loadProtocol();
+      const endpoint = `${protocol.mcp_base_url.replace(/\/$/, "")}/v1/onramps/moonpay/checkout`;
+      setOutput("[data-onramp-output]", [
+        "Creating a device-bound MoonPay checkout URL for Base...",
+        "No bounty transaction is being signed.",
+      ], "pending");
+      state.checkoutBusy = true;
+      renderPurchaseRecovery();
+      track("onramp_moonpay_started");
+      saveAttempt({ status: "requesting" });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            wallet_address: state.account,
+            base_currency_amount: amount,
+            base_currency_code: "usd",
+            asset: asset,
+            return_url: checkoutReturnUrl().href,
+            bounty_contract: state.bountyContract || null,
+          }),
+          cache: "no-store",
+          credentials: "omit",
+          signal: controller.signal,
+        });
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          clearAttempt();
+          throw new Error(body?.error || body?.message || `MoonPay checkout creation failed (${response.status}).`);
+        }
+        validateCheckoutPlan(body, state.bountyContract);
+        saveAttempt({ status: "opened", reference: body.external_transaction_id });
+        const tab = window.open("about:blank", TOPUP_WINDOW);
+        if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
+        tab.opener = null;
+        state.providerTab = tab;
+        tab.location.replace(body.checkout_url);
+      } catch (error) { clearAttempt(); throw error; } finally { clearTimeout(timer); state.checkoutBusy = false; renderPurchaseRecovery(); }
+      return;
+    }
+    // MetaMask: portfolio URL
     const tab = window.open("about:blank", TOPUP_WINDOW);
     if (!tab) throw new Error("Allow the checkout tab, then try again. No purchase was opened.");
     tab.opener = null;
     state.providerTab = tab;
     try {
       saveAttempt({ status: "opened", provider });
-      tab.location.replace(destination);
+      tab.location.replace("https://portfolio.metamask.io/");
     } catch (error) { tab.close(); throw error; }
     renderPurchaseRecovery();
-    track(provider === "metamask" ? "onramp_metamask_started" : "onramp_moonpay_started");
+    track("onramp_metamask_started");
   }
 
   function moonpayUrlWithWallet(asset, wallet) {
@@ -738,11 +785,11 @@
       renderPurchaseRecovery();
     });
     for (const link of selectAll("[data-onramp-provider]")) {
-      link.addEventListener("click", event => {
+      link.addEventListener("click", async (event) => {
         const provider = link.dataset.onrampProvider;
         if (provider === "metamask") {
           event.preventDefault();
-          try { openDirectCheckout("metamask"); } catch (error) { window.AgentBountiesTopupGuide?.feedback(error.message, "error"); }
+          try { await openDirectCheckout("metamask"); } catch (error) { window.AgentBountiesTopupGuide?.feedback(error.message, "error"); }
           return;
         }
         if (provider === "moonpay") track("onramp_moonpay_started");

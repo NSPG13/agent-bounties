@@ -45,11 +45,13 @@ gh api repos/NSPG13/agent-bounties/actions/variables/PRODUCTION_EXPECTED_REVISIO
 3. Name: `PRODUCTION_EXPECTED_REVISION`.
 4. Value: The exact 40-character SHA currently deployed to production.
 
-## Stale pin detection
+## Verifying a pin
 
-A scheduled workflow (`check-pinned-revision.yml`) runs daily and warns if:
+Before updating the pinned revision, confirm that the promotion workflow smoke checks
+pass against the target revision. See `docs/production-smoke.md` for the smoke check
+definitions and the expected value of `PRODUCTION_EXPECTED_REVISION`.
 
-- The pinned SHA is not an ancestor of `main` (orphaned pin).
-- The pinned SHA is older than 7 days (forgotten pin).
-
-If either condition fires, open an issue to update or remove the pin.
+When a pinned revision becomes stale (the artefact it references is no longer deployed),
+update `PRODUCTION_EXPECTED_REVISION` to the new artefact SHA as part of the next
+promotion. Do not rely on a separate scheduled pin-check workflow — the pin is managed
+directly by the promotion workflow that sets the variable.
