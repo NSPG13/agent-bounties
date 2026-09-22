@@ -14,6 +14,8 @@ on:
       - "contracts/base-escrow/test/OpenCompetitionBountyV2Beta3.t.sol"
       - "Cargo.lock"
       - "Cargo.toml"
+      - ".cargo/**"
+      - "rust-toolchain*"
       - "crates/api/**"
       - "crates/chain-base/**"
       - "crates/cli/**"
@@ -37,6 +39,7 @@ on:
       - "render.yaml"
       - "scripts/*open_competition_v2*"
       - "scripts/*sp1*"
+      - "scripts/verify-open-competition-v2-metric-release.py"
       - "tools/open-competition-v2-ceremony/**"
       - "docs/open-competition-v2-beta3*"
   workflow_dispatch:
@@ -66,8 +69,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: open-competition-v2-beta3-${{ github.ref }}
-  cancel-in-progress: false
+  group: open-competition-v2-beta3-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   SP1_SAFE_CIRCUIT_COMMIT: f6a2dffc42c322d0a6d8f5b5ae06fb76986ae12d
@@ -78,6 +81,22 @@ env:
   OPEN_COMPETITION_V2_TRUSTED_SETUP_ROOT: /mnt/agent-bounties-artifacts/sp1-safe-v5-trusted
 
 jobs:
+  prover-inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.changes.outputs.run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5a
+        with:
+          # The synthetic PR merge commit and both parents include its base tree.
+          fetch-depth: 2
+      - id: changes
+        name: Check whether prover inputs changed
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/detect_open_competition_v2_prover_changes.py
+
   deterministic-release:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -165,6 +184,9 @@ jobs:
           retention-days: 90
 
   patched-sp1-source:
+    needs: prover-inputs
+    # Missing output or a failed detector must never suppress validation.
+    if: ${{ !cancelled() && needs.prover-inputs.outputs.run != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -280,6 +302,8 @@ jobs:
 
   isolated-metric-build:
     name: Isolated metric ${{ matrix.profile }} ${{ matrix.builder }}
+    needs: prover-inputs
+    if: ${{ !cancelled() && needs.prover-inputs.outputs.run != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:

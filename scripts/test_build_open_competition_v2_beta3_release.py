@@ -1,6 +1,9 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -10,6 +13,13 @@ SPEC = importlib.util.spec_from_file_location("open_competition_v2_release", SCR
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+
+CHANGES_SPEC = importlib.util.spec_from_file_location(
+    "v2_prover_changes", SCRIPT.with_name("detect_open_competition_v2_prover_changes.py")
+)
+CHANGES = importlib.util.module_from_spec(CHANGES_SPEC)
+assert CHANGES_SPEC.loader is not None
+CHANGES_SPEC.loader.exec_module(CHANGES)
 
 
 class OpenCompetitionV2ReleaseTests(unittest.TestCase):
@@ -664,6 +674,154 @@ class OpenCompetitionV2ReleaseTests(unittest.TestCase):
         self.assertEqual(bundle["compiler"]["solc"], "0.8.26+commit.8a97fa7a")
         self.assertEqual(bundle["compiler"]["image"], MODULE.SOLC_IMAGE)
         self.assertRegex(MODULE.SOLC_IMAGE, r"^docker\.io/ethereum/solc@sha256:[0-9a-f]{64}$")
+
+
+class ProverBuildSelectionTests(unittest.TestCase):
+    def decision_for(self, *paths):
+        result = subprocess.CompletedProcess([], 0, "\0".join(paths).encode() + b"\0")
+        with mock.patch.object(CHANGES.subprocess, "run", return_value=result):
+            return CHANGES.decide("pull_request", "a" * 40, Path("."))
+
+    def test_service_and_documentation_changes_keep_prover_builds_off(self):
+        decision = self.decision_for(
+            "crates/api/src/open_competition_v2_api.rs",
+            "crates/api/src/opportunities.rs",
+            "crates/chain-base/src/open_competition_v2_planner.rs",
+            "crates/worker/src/open_competition_v2.rs",
+            "crates/db/src/lib.rs",
+            "crates/payments-x402/src/lib.rs",
+            "crates/mcp-server/src/main.rs",
+            "crates/sdk-typescript/src/index.ts",
+            "crates/sdk-python/agent_bounties/client.py",
+            "site/competition-proof.js",
+            "docs/open-competition-v2-beta3.md",
+            "scripts/run_open_competition_v2_x402_rehearsal.py",
+        )
+        self.assertFalse(decision["run"])
+        self.assertEqual(decision["reason"], "prover_inputs_unchanged")
+
+    def test_build_sources_toolchains_locks_and_release_evidence_trigger_builds(self):
+        paths = [
+            ".github/workflows/open-competition-v2-beta3-release.yml",
+            ".github/actions/setup-patched-sp1/action.yml",
+            ".github/actions/setup-protoc/action.yml",
+            ".github/actions/setup-rust/action.yml",
+            "Cargo.toml", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml",
+            "crates/competition-metric-core/src/lib.rs",
+            "crates/competition-metric-core/Cargo.toml",
+            "deployments/open-competition-v2-beta3-base-mainnet.json",
+            "ops/open-competition-v2-prover.service",
+            "ops/open-competition-v2-gnark-safe.Dockerfile",
+            "ops/open-competition-v2-ceremony.Dockerfile",
+            "tools/open-competition-v2-ceremony/go.mod",
+            "scripts/verify_sp1_patched_graph.py",
+            "scripts/build_open_competition_v2_metric_elf.sh",
+            "scripts/build_open_competition_v2_circuits.sh",
+            "scripts/verify-open-competition-v2-metric-release.py",
+            "scripts/verify_open_competition_v2_wrap_template.py",
+            "scripts/verify_open_competition_v2_gnark_image.py",
+            "scripts/detect_open_competition_v2_prover_changes.py",
+        ]
+        for profile in (
+            "public-vector-metric-v1", "structured-artifact-metric-v1",
+            "forward-canonical-gmv-attribution-metric-v2",
+        ):
+            paths.extend(f"programs/{profile}/{suffix}" for suffix in (
+                "Cargo.lock", "Cargo.toml", "program/Cargo.lock", "program/Cargo.toml",
+                "program/src/main.rs", "script/src/main.rs", "fixtures/golden-v1.json",
+                "release-identity.json",
+            ))
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(self.decision_for(path)["run"])
+
+    def test_manual_dispatch_and_unknown_events_always_build_without_diff(self):
+        with mock.patch.object(CHANGES.subprocess, "run") as diff:
+            for event in ("workflow_dispatch", "", "push"):
+                self.assertTrue(CHANGES.decide(event, "", Path("."))["run"])
+            diff.assert_not_called()
+
+    def test_missing_base_and_detection_failures_run_full_validation(self):
+        for base in ("", "main", "--output=file", "a" * 39):
+            self.assertTrue(CHANGES.decide("pull_request", base, Path("."))["run"])
+        for error in (
+            FileNotFoundError("git"), subprocess.CalledProcessError(128, ["git"]),
+            subprocess.TimeoutExpired(["git"], 30),
+        ):
+            with self.subTest(error=error):
+                with mock.patch.object(CHANGES.subprocess, "run", side_effect=error):
+                    decision = CHANGES.decide("pull_request", "a" * 40, Path("."))
+                    self.assertTrue(decision["run"])
+                    self.assertEqual(decision["reason"], "change_detection_failed")
+        with mock.patch.object(CHANGES.subprocess, "run", return_value=
+                               subprocess.CompletedProcess([], 0, b"invalid-utf8-\xff\0")):
+            self.assertTrue(CHANGES.decide("pull_request", "a" * 40, Path("."))["run"])
+
+    def test_real_git_diff_includes_deleted_and_renamed_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.PIPE)
+
+            def commit():
+                git("add", "-A")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+                return git("rev-parse", "HEAD").decode().strip()
+
+            git("init", "-q")
+            source = root / "programs/public-vector-metric-v1/program/src/main.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text("fn main() {}\n")
+            base = commit()
+            self.assertFalse(CHANGES.decide("pull_request", base, root)["run"])
+            source.rename(root / "moved-out-of-program.rs")
+            commit()
+            decision = CHANGES.decide("pull_request", base, root)
+            self.assertTrue(decision["run"])
+            self.assertIn(str(source.relative_to(root)), decision["changed_inputs"])
+            git("reset", "--hard", base)
+            source.unlink()
+            commit()
+            self.assertTrue(CHANGES.decide("pull_request", base, root)["run"])
+            self.assertTrue(CHANGES.decide("pull_request", "0" * 40, root)["run"])
+
+    def test_github_output_contains_only_the_boolean(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            with mock.patch.dict(CHANGES.os.environ, {
+                "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_OUTPUT": str(output),
+            }), mock.patch("builtins.print"):
+                self.assertEqual(CHANGES.main(), 0)
+            self.assertEqual(output.read_text(), "run=true\n")
+
+    def test_workflow_preserves_expensive_release_dependencies_and_cheap_pr_gates(self):
+        workflow = (MODULE.ROOT / ".github/workflows/open-competition-v2-beta3-release.yml").read_text()
+
+        # Extract by the next two-space job heading, not nested step indentation.
+        jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)",
+                               workflow.split("\njobs:\n", 1)[1], re.M | re.S))
+        for name in ("patched-sp1-source", "isolated-metric-build"):
+            self.assertIn("needs: prover-inputs", jobs[name])
+            self.assertIn("!cancelled() && needs.prover-inputs.outputs.run != 'false'", jobs[name])
+        self.assertIn("needs: isolated-metric-build", jobs["compare-metric-builds"])
+        self.assertNotIn("always()", jobs["compare-metric-builds"])
+        self.assertIn("needs: [deterministic-release, static-analysis, patched-sp1-source, compare-metric-builds]",
+                      jobs["build-release-assets"])
+        self.assertNotIn("always()", jobs["build-release-assets"])
+        for name in ("deterministic-release", "static-analysis"):
+            self.assertNotIn("prover-inputs", jobs[name])
+        self.assertIn("builder: [a, b]", jobs["isolated-metric-build"])
+        self.assertIn("profile: [public-vector-metric-v1, structured-artifact-metric-v1, forward-canonical-gmv-attribution-metric-v2]",
+                      jobs["isolated-metric-build"])
+        self.assertIn("PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}", jobs["prover-inputs"])
+        self.assertIn("fetch-depth: 2", jobs["prover-inputs"])
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
+        self.assertIn("group: open-competition-v2-beta3-${{ github.event_name }}-${{ github.ref }}", workflow)
+        triggers = workflow.split("  workflow_dispatch:", 1)[0]
+        for path in (".cargo/**", "rust-toolchain*", "scripts/verify-open-competition-v2-metric-release.py"):
+            self.assertIn(f'      - "{path}"', triggers)
 
 
 if __name__ == "__main__":

@@ -545,10 +545,17 @@ pub(crate) async fn inventory(
     let competitions = records
         .into_iter()
         .map(|record| {
-            let estimated_net = estimated_hosted_net_prize(&record.projection);
-            let proof_fee = configured_proof_fee(&record.projection);
-            let relay_fee =
-                configured_u128_optional("OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS");
+            let hosted_proof_block = require_reviewed_broker_profile(&release, &record.projection)
+                .err().map(|(_, Json(problem))| problem);
+            let estimated_net = hosted_proof_block.is_none()
+                .then(|| estimated_hosted_net_prize(&record.projection)).flatten();
+            let proof_fee = hosted_proof_block.is_none()
+                .then(|| configured_proof_fee(&record.projection)).flatten();
+            let relay_fee = hosted_proof_block.is_none()
+                .then(|| configured_u128_optional("OPEN_COMPETITION_V2_RELAY_FEE_BASE_UNITS")).flatten();
+            let warning = hosted_proof_block.as_ref()
+                .and_then(|problem| problem["message"].as_str())
+                .unwrap_or("A positive net prize is conditional on winning and is never guaranteed profit. Request a solver-bound five-minute quote before paying.");
             let risk = if !matches!(
                 record.projection.state,
                 chain_base::OpenCompetitionV2ProjectedState::Active
@@ -563,6 +570,7 @@ pub(crate) async fn inventory(
             };
             json!({
                 "record": record,
+                "hosted_proof_block": hosted_proof_block,
                 "earning_estimate": {
                     "gross_prize": record.projection.solver_reward.to_string(),
                     "hosted_proof_fee_quote": proof_fee.map(|value| value.to_string()),
@@ -571,7 +579,7 @@ pub(crate) async fn inventory(
                     "profitable_if_win": estimated_net.map(|value| value > 0),
                     "competition_risk": risk,
                     "relay_fee_excluded": false,
-                    "warning": "A positive net prize is conditional on winning and is never guaranteed profit. Request a solver-bound five-minute quote before paying."
+                    "warning": warning
                 }
             })
         })
@@ -3011,6 +3019,33 @@ mod tests {
         );
         Arc::get_mut(&mut state).unwrap().base_rpc_urls.base_sepolia = Some(rpc_url);
         let app = router().with_state(state.clone());
+
+        let response = app.clone().oneshot(Request::get(
+            "/v1/base/open-competition-v2-beta3/inventory?network=base-sepolia&state=active"
+        ).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inventory: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let held = inventory["competitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["record"]["projection"]["competition"] == projection.competition)
+            .unwrap();
+        assert_eq!(
+            held["hosted_proof_block"]["error_code"],
+            "verification_not_ready"
+        );
+        assert!(held["earning_estimate"]["hosted_proof_fee_quote"].is_null());
+        assert!(held["earning_estimate"]["hosted_net_prize_if_win"].is_null());
+        assert!(held["earning_estimate"]["warning"]
+            .as_str()
+            .unwrap()
+            .contains("Do not fund"));
 
         let input: ForwardCanonicalGmvProgramInput = serde_json::from_str(include_str!(
             "../../../programs/forward-canonical-gmv-attribution-metric-v2/fixtures/golden-v1.json"
