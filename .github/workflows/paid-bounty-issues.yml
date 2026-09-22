@@ -15,7 +15,10 @@ concurrency:
 jobs:
   validate:
     if: >-
-      !contains(toJson(github.event.issue.labels), '"funded-live"')
+      github.event.issue.state == 'open'
+      && !contains(github.event.issue.body || '', '<!-- agent-bounties/github-discovery-v1:start -->')
+      && !contains(github.event.issue.body || '', '<!-- agent-bounties/github-discovery-archive-v1:start -->')
+      && !contains(toJson(github.event.issue.labels), '"funded-live"')
       && (
         startsWith(github.event.issue.title, '[bounty]')
         || contains(github.event.issue.body || '', '### Suggested amount')
