@@ -2,13 +2,13 @@
 (() => {
   "use strict";
   const $ = selector => document.querySelector(selector);
-  let snapshot = null, view = "method", previous = "", lastAccount = null;
+  let snapshot = null, view = "method", previous = "", lastAccount = null, selectedBrand = null;
   function text(selector, value) { const node = $(selector); if (node && node.textContent !== value) node.textContent = value; }
   function feedback(message, tone) { const output = $("[data-topup-feedback]"); output.textContent = message; output.hidden = !message; output.dataset.tone = tone; }
   function render(s = snapshot) {
     if (!s) return;
     snapshot = s;
-    if (s.account !== lastAccount) { view = "method"; lastAccount = s.account; }
+    if (s.account !== lastAccount) { view = "method"; selectedBrand = null; lastAccount = s.account; }
     const units = value => window.AgentBountiesFundingReadiness.formatUnits(value);
     const short = s.usdc === null ? null : s.required > s.usdc ? s.required - s.usdc : 0n;
     const ready = s.fresh && short === 0n && (s.existingBounty || s.eth > 0n);
@@ -19,7 +19,7 @@
     const copy = {
       wallet: ["Which wallet will receive the money?", "Use the same wallet as your bounty."],
       method: ["Add money to your wallet", "Choose how you want to add it."],
-      "wallet-buy": ["Open your wallet app", `Buy ${buying} on Base.`],
+      "wallet-buy": selectedBrand ? [selectedBrand === "coinbase" ? "Open your Base app" : selectedBrand === "metamask" ? "Open MetaMask" : "MoonPay is not ready here", selectedBrand === "moonpay" ? "Full bounty payments are not available here yet." : `Buy ${buying} on Base.`] : ["Choose your wallet app", "Keep using the same wallet."],
       card: ["Buy with a card", "Choose where to buy."],
       moonpay: ["Use money in MoonPay", "Send it to the wallet shown above."],
       pending: ["Waiting for money", "Already paid? Keep this page open."],
@@ -33,6 +33,11 @@
     text("[data-topup-needed]", s.error ? "Balance unavailable" : need);
     text("[data-topup-wallet-detail]", buying === "USDC" ? need : "ETH on Base · for the network fee");
     text("[data-topup-card-asset]", `${buying} on Base`);
+    $("[data-topup-wallet-brands]").hidden = Boolean(selectedBrand);
+    $("[data-topup-brand-instruction]").hidden = !selectedBrand;
+    text("[data-topup-brand-instruction]", selectedBrand === "moonpay"
+      ? "MoonPay wallet cannot approve this bounty here yet. Do not buy more there for this bounty."
+      : `In ${selectedBrand === "coinbase" ? "your Base app (Coinbase Wallet)" : "MetaMask"}, tap Buy. Choose ${buying} on Base. Use the address above. Return here when it arrives.`);
     text("[data-topup-transfer-amount]", !s.fresh || short === null ? "Check your balance for the amount." : short > 0n ? `Send ${units(short)} USDC on Base` : "Enough USDC · ETH needed for the fee");
     text("[data-topup-transfer-instruction]", s.fresh && short === 0n
       ? "Your bounty wallet has enough USDC. Add a little ETH on Base for its payment fee. Your wallet shows the fee before you pay."
@@ -69,10 +74,16 @@
     window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
     return { view: $(".topup-guide").dataset.view, purchase_opened: false };
   }
+  for (const button of document.querySelectorAll("[data-topup-brand]")) button.addEventListener("click", () => {
+    selectedBrand = button.dataset.topupBrand; render();
+  });
   $("[data-topup-wallet-buy]").addEventListener("click", () => show("wallet"));
   $("[data-topup-card-buy]").addEventListener("click", () => show("card"));
   for (const button of document.querySelectorAll("[data-topup-moonpay-transfer]")) button.addEventListener("click", () => show("moonpay"));
-  $("[data-topup-back]").addEventListener("click", () => show("method"));
+  $("[data-topup-back]").addEventListener("click", () => {
+    if (view === "wallet-buy" && selectedBrand) { selectedBrand = null; render(); }
+    else { selectedBrand = null; show("method"); }
+  });
   $("[data-topup-copy]").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(snapshot.account); feedback("Wallet address copied.", "success"); }
     catch (_) { feedback("Copy the wallet address shown above.", "error"); }

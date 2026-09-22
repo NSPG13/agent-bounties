@@ -164,7 +164,12 @@ Set these on the hosted MCP service to activate the prefilled, server-signed par
 | `MOONPAY_MAX_FIAT_AMOUNT` | Optional | Local upper safety bound; default `10000.00` |
 | `MOONPAY_CHECKOUTS_PER_MINUTE` | Optional | Per-device signing limit; default `10` |
 
-MoonPay's dashboard must also approve the website origin and enable the exact Base USDC and Base ETH currency codes used by the account. Do not assume another account's code casing or enabled asset set; override the defaults with the codes returned for this partner account.
+MoonPay's dashboard must also approve the website origin and enable the exact Base USDC and Base ETH currency codes used by the account. Do not assume another account's code casing or enabled asset set; override the defaults with the codes returned for this partner account. The server
+must also return that value as `destination_currency_code`, bound to the response's
+reviewed asset and Base network. The client checks an exact match in the signed URL.
+Legacy responses without this field accept only `usdc_base` / `eth_base`; the
+currently deployed legacy endpoint cannot enable account-specific codes through
+an environment override alone.
 
 ## Sandbox and live activation
 

@@ -70,7 +70,12 @@
 
         <section data-topup-panel="wallet-buy" hidden>
           <p class="topup-amount" data-topup-wallet-detail></p>
-          <p>In MetaMask or your wallet app, tap <strong>Buy</strong>. Choose the coin and network shown above.</p>
+          <div data-topup-wallet-brands>
+            <button class="button primary" type="button" data-topup-brand="coinbase">Coinbase</button>
+            <button class="button primary" type="button" data-topup-brand="metamask">MetaMask</button>
+            <button class="button secondary" type="button" data-topup-brand="moonpay">MoonPay · not ready here</button>
+          </div>
+          <p data-topup-brand-instruction hidden></p>
           <p class="topup-note">Use the wallet address above. Check the fees before you pay.</p>
         </section>
 
@@ -168,7 +173,7 @@
     <script src="analytics.js?v=4"></script>
     <script src="guild-shell.js?v=4"></script>
     <script src="funding-readiness.js?v=1"></script>
-    <script src="topup-guide.js?v=4"></script>
+    <script src="topup-guide.js?v=5"></script>
     <script src="moonpay-onramp.js?v=6"></script>
     <script src="moonpay-direct-fallback.js?v=5"></script>
   </body>

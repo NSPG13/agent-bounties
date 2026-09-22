@@ -15,7 +15,27 @@ concurrency:
 jobs:
   validate:
     if: >-
-      !contains(toJson(github.event.issue.labels), '"funded-live"')
+      github.event.issue.state == 'open'
+      && !contains(github.event.issue.labels.*.name, 'funded-live')
+      && !(
+        contains(github.event.issue.labels.*.name, 'payments')
+        && (
+          contains(github.event.issue.body || '', '<!-- agent-bounties/github-discovery-v1:start -->')
+          || contains(github.event.issue.body || '', '<!-- agent-bounties/github-discovery-archive-v1:start -->')
+        )
+        && (
+          contains(github.event.issue.labels.*.name, 'funding-needed')
+          || contains(github.event.issue.labels.*.name, 'funded-live')
+          || contains(github.event.issue.labels.*.name, 'claimed-live')
+          || contains(github.event.issue.labels.*.name, 'in-progress')
+          || contains(github.event.issue.labels.*.name, 'verification-pending')
+          || contains(github.event.issue.labels.*.name, 'verification-unavailable')
+          || contains(github.event.issue.labels.*.name, 'refund-available')
+          || contains(github.event.issue.labels.*.name, 'cancelled')
+          || contains(github.event.issue.labels.*.name, 'expired')
+          || contains(github.event.issue.labels.*.name, 'settled-paid')
+        )
+      )
       && (
         startsWith(github.event.issue.title, '[bounty]')
         || contains(github.event.issue.body || '', '### Suggested amount')

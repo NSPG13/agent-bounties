@@ -657,6 +657,10 @@
     ) {
       throw new Error("The MoonPay checkout response did not preserve the reviewed wallet and bounty boundary.");
     }
+    // Newer partner responses may bind an account-specific code to the already
+    // checked Base network and asset. Legacy responses support only known defaults.
+    const currency = body.destination_currency_code ?? (body.asset === "eth" ? "eth_base" : "usdc_base");
+    if (typeof currency !== "string" || !/^[a-zA-Z0-9_]{1,64}$/.test(currency)) throw new Error("MoonPay did not return a valid currency for the reviewed Base asset.");
     const checkout = new URL(body.checkout_url);
     if (
       checkout.protocol !== "https:"
@@ -665,7 +669,7 @@
       || checkout.searchParams.getAll("walletAddress").length !== 1
       || checkout.searchParams.has("walletAddresses")
       || checkout.searchParams.getAll("currencyCode").length !== 1
-      || checkout.searchParams.get("currencyCode") !== (body.asset === "eth" ? "eth_base" : "usdc_base")
+      || checkout.searchParams.get("currencyCode") !== currency
       || !checkout.searchParams.get("signature")
       || checkout.searchParams.get("walletAddress")?.toLowerCase() !== state.account
     ) {

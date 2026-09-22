@@ -27,7 +27,7 @@ function harness(configured = true) {
   win.ethereum = { isMetaMask: true, request: async (request) => { calls.push(request); return []; } };
   const chooser = createWalletLink(win);
   const dialog = () => win.document.body.children[0];
-  return { win, calls, chooser, dialog, create: () => dialog().querySelector("[data-wallet-create]").children[0] };
+  return { win, calls, chooser, dialog, create: () => dialog().querySelector("[data-wallet-create-button]").children[0] };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -41,7 +41,7 @@ test("phone pairing is one contextual choice even when announced and injected", 
   h.win.dispatchEvent(event);
   assert.equal(h.chooser.choices().filter(item => item.provider === phone).length, 1);
   const selected = h.chooser.select();
-  h.dialog().querySelector("[data-wallet-choices]").children[1].click();
+  h.dialog().querySelector("[data-wallet-choices]").children[3].children[1].children[0].click();
   assert.equal((await selected).provider, phone);
   assert.deepEqual(h.calls, []);
 });
@@ -68,7 +68,7 @@ test("selecting an announced wallet returns only that provider and deduplicates 
   }
   assert.equal(h.chooser.choices().length, 2);
   const selection = h.chooser.select();
-  h.dialog().querySelector("[data-wallet-choices]").children[1].click();
+  h.dialog().querySelector("[data-wallet-choices]").children[3].children[1].children[0].click();
   assert.equal((await selection).provider, another);
   assert.deepEqual(h.calls, []);
 });
@@ -126,7 +126,8 @@ test("no-wallet and unconfigured deployments do not fall through to an injected 
   const selection = h.chooser.select();
   assert.equal(h.create().disabled, true);
   assert.equal(h.chooser.choices().length, 0);
-  assert.match(h.dialog().querySelector("[role=status]").textContent, /not configured/);
+  h.dialog().querySelector("[data-wallet-choices]").children[0].click();
+  assert.match(h.dialog().querySelector("[role=status]").textContent, /unavailable/);
   h.chooser.cancel();
   await assert.rejects(selection, { code: 4001 });
 });
@@ -146,4 +147,50 @@ test("OAuth continuation retains its selected address and remains bound to the a
   const key = "agentbounties:pending-embedded-account-link";
   records.set(key, JSON.stringify({ userId: "member", startedAt: Date.now(), expectedAddress: "invalid" }));
   assert.equal(h.chooser.hasPending("member"), false);
+});
+
+const options = h => h.dialog().querySelector("[data-wallet-choices]").children;
+test("three distinct brands never connect or switch a wallet on discovery", async () => {
+  const h = harness(); const pending = h.chooser.select();
+  assert.deepEqual(options(h).slice(0, 3).map(item => item.children[0].textContent), ["Coinbase", "MetaMask", "MoonPay"]);
+  options(h)[2].click();
+  assert.match(options(h)[0].textContent, /not supported here/);
+  assert.deepEqual(h.calls, []);
+  assert.equal(h.dialog().open, true);
+  h.dialog().querySelector("[data-wallet-back]").click();
+  options(h)[1].click(); options(h)[0].click();
+  assert.equal((await pending).provider, h.win.ethereum);
+  assert.deepEqual(h.calls, []);
+});
+
+test("Coinbase compatibility flags never turn it into the MetaMask choice", async () => {
+  const h = harness(); h.win.ethereum.isCoinbaseWallet = true;
+  const pending = h.chooser.select(); options(h)[1].click();
+  assert.equal(options(h).some(item => item.children[0]?.textContent === "Connect MetaMask"), false);
+  h.dialog().querySelector("[data-wallet-back]").click(); options(h)[0].click();
+  assert.equal(options(h)[0].children[0].textContent, "Connect Coinbase"); options(h)[0].click();
+  assert.equal((await pending).provider, h.win.ethereum);
+  assert.deepEqual(h.calls, []);
+});
+
+test("phone continuation saves the existing review before copying, without wallet requests", async () => {
+  const h = harness(); const calls = [];
+  const url = "https://agentbounties.app/post.html?operation_id=11111111-1111-4111-8111-111111111111&funding_review=1#bounty-preview";
+  h.win.navigator = { clipboard: { writeText: async value => calls.push(["copy", value]) } };
+  const pending = h.chooser.select({ prepareContinuation: async () => { calls.push(["save"]); return url; } });
+  options(h)[0].click(); options(h)[1].click(); await tick();
+  assert.deepEqual(calls, [["save"], ["copy", url]]);
+  assert.match(h.dialog().querySelector("[role=status]").textContent, /Link copied/);
+  assert.deepEqual(h.calls, []); h.chooser.cancel(); await assert.rejects(pending, {code:4001});
+});
+
+
+test("a different announced brand with MetaMask compatibility stays under Other wallets", async () => {
+  const h = harness();
+  const event = new Event("eip6963:announceProvider");
+  event.detail = {provider:h.win.ethereum, info:{name:"Trust Wallet", rdns:"com.trustwallet.app"}};
+  h.win.dispatchEvent(event);
+  const pending = h.chooser.select(); options(h)[1].click();
+  assert.equal(options(h).some(item => item.children[0]?.textContent === "Connect MetaMask"), false);
+  h.chooser.cancel(); await assert.rejects(pending, {code:4001});
 });

@@ -236,3 +236,17 @@ test("the participation manifest and prefilled child brief are contract-specific
     "post.html?parentCompetition=0x1111111111111111111111111111111111111111&network=base-mainnet&from=webmcp-child",
   );
 });
+
+test("unverified competitions provide only read-only waiting guidance", () => {
+  for (const verification_ready of [false, undefined]) {
+    const item = v2Opportunity({ verification_ready });
+    const manifest = competition.participationManifest(item, marketplace.timingState(item));
+    assert.equal(competition.childPostUrl(item), null);
+    assert.doesNotMatch(competition.childTemplate(item), /Fully fund/);
+    assert.equal(manifest.verification_ready, false);
+    assert.equal(manifest.hosted_proof_quote, null);
+    assert.equal(manifest.child_bounty_template, null);
+    assert.deepEqual(manifest.browser_workflow, {});
+    assert.match(manifest.current_next_action.instructions, /Do not fund/);
+  }
+});

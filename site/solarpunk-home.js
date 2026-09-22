@@ -101,6 +101,11 @@
     return messages[reason] || "Sign-in could not be completed. Please try again.";
   }
 
+  // Claude Code registers claude-cli:// on macOS, Linux and Windows the first time an
+  // interactive session sends a prompt. Its q parameter is documented at 5,000 characters;
+  // measuring the encoded value keeps the link inside that limit under either reading.
+  const CLAUDE_CODE_PROMPT_LIMIT = 5000;
+
   function bountyAssistantLinks(provider, prompt = BOUNTY_POSTING_PROMPT, returnUrl = null) {
     const key = String(provider || "").trim().toLowerCase();
     const reviewUrl = postingPrompt.reviewUrl(returnUrl);
@@ -120,7 +125,13 @@
       },
       claude: {
         label: "Claude",
-        desktopUrl: `claude://claude.ai/new?q=${encoded}`,
+        desktopLabel: "Claude Code",
+        terminalCommand: "claude",
+        // claude-cli:// opens a terminal session with the message pre-filled and unsent.
+        // claude:// would instead need the Claude Desktop chat app, which a Claude Code
+        // user need not have. Over the documented q limit the web handoff carries the
+        // whole message rather than a truncated session.
+        desktopUrl: encoded.length <= CLAUDE_CODE_PROMPT_LIMIT ? `claude-cli://open?q=${encoded}` : null,
         webUrl: `https://claude.ai/new?q=${encoded}`,
         webPrefillsPrompt: true,
       },
@@ -138,6 +149,42 @@
       },
     };
     return Object.hasOwn(links, key) ? links[key] : null;
+  }
+
+  function desktopPlatform(navigatorLike = {}) {
+    const hints = `${navigatorLike.userAgentData?.platform || ""} ${navigatorLike.platform || ""} ${navigatorLike.userAgent || ""}`;
+    if (navigatorLike.userAgentData?.mobile === true || /Android|iPhone|iPad|iPod/i.test(hints)) return "mobile";
+    if (navigatorLike.platform === "MacIntel" && Number(navigatorLike.maxTouchPoints) > 1) return "mobile";
+    if (/Mac/i.test(hints)) return "mac";
+    if (/Win/i.test(hints)) return "windows";
+    if (/CrOS/i.test(hints)) return "chromeos";
+    if (/Linux|X11/i.test(hints)) return "linux";
+    return "unknown";
+  }
+
+  // Only a desktop app can register a scheme, and Claude Code, Codex and Cursor each
+  // register theirs on macOS, Linux and Windows. A phone or tablet has none, so those
+  // visitors take the web handoff instead of an operating-system "no application" dialog.
+  // The mobile handoff in forest-home.js normally intercepts first; this keeps the promise
+  // when that script has not loaded.
+  function supportsDesktopHandoff(navigatorLike = {}) {
+    return desktopPlatform(navigatorLike) !== "mobile";
+  }
+
+  // A scheme no installed app claims ends in an operating-system "no application" dialog.
+  // The page cannot detect that, so the status says up front what it means and how to
+  // recover. `copied` is null while the clipboard write is still settling.
+  function desktopHandoffStatus(links, copied = null) {
+    const name = links.desktopLabel || `${links.label} desktop`;
+    if (!links.terminalCommand) {
+      return `Requesting ${name}. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`;
+    }
+    const paste = copied === true
+      ? `run ${links.terminalCommand} in a terminal and paste the message, already on your clipboard`
+      : copied === false
+        ? `copy the message above, then run ${links.terminalCommand} in a terminal and paste it`
+        : `run ${links.terminalCommand} in a terminal and paste the message`;
+    return `Requesting ${name}. If your system reports that no application can open the link, ${name} has not registered its link handler yet: ${paste}. The web link works too, and nothing is sent automatically.`;
   }
 
   function parseCompetitionPostingRequest(search) {
@@ -1384,9 +1431,9 @@ ${competitionChildBrief(item)}`;
           return copied;
         }
       };
-      const attemptDesktop = (links) => {
+      const attemptDesktop = (desktopUrl) => {
         const anchor = doc.createElement("a");
-        anchor.href = links.desktopUrl;
+        anchor.href = desktopUrl;
         anchor.hidden = true;
         doc.body.append(anchor);
         anchor.click();
@@ -1414,6 +1461,8 @@ ${competitionChildBrief(item)}`;
           const key = String(button.dataset.bountyAssistant || "").toLowerCase();
           const links = bountyAssistantLinks(key, launcherPrompt, reviewDestination());
           if (!links) return;
+          // Only an installed desktop app can receive a custom scheme; elsewhere it dead-ends.
+          const desktopUrl = supportsDesktopHandoff(win.navigator || {}) ? links.desktopUrl : null;
           assistantButtons.forEach((item) => item.removeAttribute("aria-current"));
           button.setAttribute("aria-current", "true");
           if (customActions) customActions.hidden = key !== "custom" && key !== "gpt";
@@ -1435,9 +1484,9 @@ ${competitionChildBrief(item)}`;
             webFallback.textContent = links.webPrefillsPrompt
               ? `Use ${links.label} web instead`
               : `Use ${links.label} web instead — prompt copied`;
-            webFallback.hidden = !links.desktopUrl;
+            webFallback.hidden = !desktopUrl;
           }
-          if (!links.desktopUrl) {
+          if (!desktopUrl) {
             if (!links.webPrefillsPrompt) {
               const copied = await promptCopy;
               setStatus(copied
@@ -1449,9 +1498,9 @@ ${competitionChildBrief(item)}`;
             win.location.assign(links.webUrl);
             return;
           }
-          setStatus(`Requesting ${links.label} desktop. Your browser may ask to open the app. If needed, use the web link or copy the instructions. Nothing is sent automatically.`);
-          attemptDesktop(links);
-          void promptCopy;
+          setStatus(desktopHandoffStatus(links));
+          attemptDesktop(desktopUrl);
+          setStatus(desktopHandoffStatus(links, await promptCopy));
         });
       });
       copyButton?.addEventListener("click", async () => {
@@ -1542,6 +1591,8 @@ ${competitionChildBrief(item)}`;
     competitionPostingItem,
     competitionPostingPrompt,
     clamp,
+    desktopHandoffStatus,
+    desktopPlatform,
     flameMotion,
     hashSeed,
     isLocalHost,
@@ -1555,6 +1606,7 @@ ${competitionChildBrief(item)}`;
     shortWalletAddress,
     smoothstep,
     start,
+    supportsDesktopHandoff,
     utf8Hex,
     walletLinkErrorMessage,
   };

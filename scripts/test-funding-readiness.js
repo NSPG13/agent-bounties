@@ -113,7 +113,7 @@ function postingWalletFixture({ balanceFailure = false } = {}) {
   const source = fs.readFileSync(path.join(root, "site/bounty-composer-v2.js"), "utf8");
   const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end));
   const api = vm.runInContext([
-    section("  async function chooseCryptoWallet()", "  async function loadProtocol()"),
+    section("  async function prepareWalletContinuation()", "  async function loadProtocol()"),
     section("  async function connectWallet(", "  function addressWord("),
     section("  async function refreshWalletReadiness()", "  function updatePostingCost("),
     "({ chooseCryptoWallet, connectWallet, refreshWalletReadiness })",
@@ -410,11 +410,11 @@ test("handoff reads destination balance and shows the exact shortfall without a 
 test("an open purchase is reused and blocks duplicates across reloads until explicitly resolved", async () => {
   const first = await onrampContext();
   first.element("[data-onramp-ack]").checked = true;
-  first.context.window.AgentBountiesOnramp.openDirectCheckout();
+  first.context.window.AgentBountiesOnramp.openDirectCheckout("metamask");
   assert.equal(first.opened.length, 1);
   assert.equal(first.opened[0].target, "agent-bounties-wallet-topup");
   assert.equal(first.opened[0].opener, null);
-  assert.equal(first.opened[0].url, "https://www.moonpay.com/buy/usdc");
+  assert.equal(first.opened[0].url, "https://portfolio.metamask.io/");
   assert.throws(() => first.context.window.AgentBountiesOnramp.openDirectCheckout(), /existing purchase/);
   const metadata = [...first.saved.values()].join("");
   assert.match(metadata, /posting-123/);
@@ -441,4 +441,12 @@ test("an uncertain checkout response cannot trigger a repeated request", async (
   assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), true);
   assert.equal(app.element("[data-purchase-recovery]").hidden, false);
   assert.match(app.element("[data-purchase-recovery-copy]").textContent, /status is unverified/);
+});
+
+test("generic MoonPay never opens or records a new purchase", async () => {
+  const app = await onrampContext();
+  assert.throws(() => app.context.window.AgentBountiesOnramp.openDirectCheckout(), /chosen wallet/);
+  assert.equal(app.opened.length, 0);
+  assert.equal(app.context.window.AgentBountiesOnramp.hasPendingPurchase(), false);
+  assert.equal(app.requests.filter(({url}) => String(url).includes("/checkout")).length, 0);
 });

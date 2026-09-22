@@ -1736,6 +1736,21 @@
     } catch (error) { setPaymentStatus(`Could not open wallet top-up: ${error.message} Your draft remains here.`, "error"); }
   }
 
+  async function prepareWalletContinuation() {
+    if (!state.accountSession?.authenticated) throw new Error("Sign in here first to open this saved bounty on your phone.");
+    await postingSession.flush({ requireServer: true });
+    const operation = postingSession.snapshot().operation_id;
+    if (!operation) throw new Error("Your bounty is still saving. Try again in a moment.");
+    const url = new URL("post.html", window.location.href);
+    url.searchParams.set("operation_id", operation);
+    url.searchParams.set("funding_review", "1");
+    const current = new URL(window.location.href);
+    if (current.searchParams.get("analytics") === "off") url.searchParams.set("analytics", "off");
+    if (current.searchParams.get("from") === "webmcp") url.searchParams.set("from", "webmcp");
+    url.hash = "bounty-preview";
+    return url.href;
+  }
+
   async function chooseCryptoWallet() {
     if (postingBusy || walletConnecting) return;
     ui.cryptoMethod.dataset.active="true";
@@ -1754,7 +1769,7 @@
       const use = document.createElement("button"); use.type = "button"; use.className = "button primary guide-primary"; use.textContent = "Use this wallet"; use.hidden = true;
       use.addEventListener("click", async () => {
         if (postingBusy || walletConnecting) return;
-        try { const choice = await window.AgentBountiesWalletLink.select(); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); }
+        try { const choice = await window.AgentBountiesWalletLink.select({ prepareContinuation: prepareWalletContinuation }); await connectWallet({ ...choice, info: { name: choice.label } }, wallet.address); }
         catch (error) { setPaymentStatus(error.message, "error"); }
       });
       button.addEventListener("click", async () => {
@@ -1771,7 +1786,7 @@
     }
     for(const item of providers){const button=document.createElement("button");button.type="button";button.className="wallet-option";const name=document.createElement("strong");name.textContent=providerName(item);const note=document.createElement("small");note.textContent="Connect and check Base USDC";button.append(name,note);button.addEventListener("click",()=>connectWallet(item));ui.walletOptions.append(button);}
     const other = document.createElement("button"); other.type = "button"; other.className = "wallet-option"; other.textContent = "Choose or recover another wallet";
-    other.addEventListener("click", async () => { try { const choice = await window.AgentBountiesWalletLink.select(); await connectWallet({ ...choice, info: { name: choice.label } }); } catch (error) { setPaymentStatus(error.message, "error"); } });
+    other.addEventListener("click", async () => { try { const choice = await window.AgentBountiesWalletLink.select({ prepareContinuation: prepareWalletContinuation }); await connectWallet({ ...choice, info: { name: choice.label } }); } catch (error) { setPaymentStatus(error.message, "error"); } });
     ui.walletOptions.append(other);
     renderFundingGuide();
     if (state.linkedWallets.length === 1 && !state.account) {

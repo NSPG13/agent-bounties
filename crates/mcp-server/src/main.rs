@@ -6113,10 +6113,10 @@ fn open_competition_v2_mcp_guide() -> Value {
                 {"step": 5, "tool": "prepare_open_competition_v2", "operation": "validate", "purpose": "Validate the complete creation body before any signature."},
                 {"step": 6, "tool": "prepare_open_competition_v2", "operation": "create", "purpose": "Receive exact unsigned wallet calls; execute them only after explicit approval."},
                 {"step": 7, "tool": "prepare_open_competition_v2", "operation": "fund", "purpose": "Prepare any remaining pooled funding; wait for canonical activation."},
-                {"step": 8, "tool": "inspect_open_competition_v2", "operation": "inventory", "purpose": "Advertise only after the safe-block state is active."}
+                {"step": 8, "tool": "get_bounty_feed", "arguments": {"network": "base-mainnet", "source_type": "canonical_base", "limit": 300}, "purpose": "Match the returned item's network and source_id to the exact competition contract. Advertise it as ready to earn only when that item has verification_ready=true. If the item is missing or false, wait; active escrow alone is not readiness. Use the chosen network if different from base-mainnet."}
             ],
             "earn_hosted": [
-                {"step": 1, "tool": "inspect_open_competition_v2", "operation": "inventory", "arguments": {"state": "active"}, "purpose": "Select by immutable criteria, deadline, winner mode, and net prize if won."},
+                {"step": 1, "tool": "inspect_open_competition_v2", "operation": "inventory", "arguments": {"state": "active"}, "purpose": "Check hosted_proof_block first. If it is non-null, stop this hosted flow and follow its message; do not fund child work, request a quote, or sign a new payment. Otherwise select by immutable criteria, deadline, winner mode, and net prize if won."},
                 {"step": 2, "tool": "prepare_open_competition_v2", "operation": "quote_proof", "purpose": "Create one solver- and artifact-bound hosted proof job; do not duplicate a live quote."},
                 {"step": 3, "tool": "prepare_open_competition_v2", "operation": "pay_proof", "purpose": "First omit payment_signature, then obtain explicit approval, sign the exact x402 challenge, and call once with that signature."},
                 {"step": 4, "tool": "inspect_open_competition_v2", "operation": "proof_job", "purpose": "Poll the same proof_job_id; never repay payment_pending, paid, proving, proved, relaying, or confirmed."},
@@ -6137,7 +6137,7 @@ fn open_competition_v2_mcp_guide() -> Value {
         "profile_support": {
             "structured-artifact-metric-v1": "prepare_profile accepts threshold and deterministic artifact requirements.",
             "public-vector-metric-v1": "prepare_profile accepts mode, threshold, and expected/weight policy vectors; quote_proof later adds each observed value. Copy the matching reviewed profile fields from profiles into validate.",
-            "forward-canonical-gmv-attribution-metric-v2": "After the forward window closes, quote_proof accepts the exact published campaign and dual-attested safe-block snapshot. The API reconstructs the contract and solver scope and rejects unsigned, drifted, or policy-mismatched evidence."
+            "forward-canonical-gmv-attribution-metric-v2": "Verification is on hold. New quotes and payments for unpaid quotes return 409 verification_not_ready. Do not fund child work or pay for a proof. Wait for a reviewed release that verifies the exact snapshot, attester quorum and proof path. Existing accepted payments retain reconciliation and existing job IDs must not be repaid."
         },
         "side_effects": {
             "quote_proof": "Creates one hosted proof-job record.",

@@ -262,12 +262,12 @@ def evaluate(policy: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]
             ),
         )
 
-    expected_revision = (snapshot.get("expected_revision") or "").strip()
+    expected_revision = (snapshot.get("expected_revision") or "").strip().lower()
     observed_revisions: dict[str, str] = {}
     for service_name in ("api", "mcp"):
         component = _component(snapshot, service_name)
         if component and isinstance(component.get("revision"), str):
-            observed_revisions[service_name] = component["revision"]
+            observed_revisions[service_name] = component["revision"].strip().lower()
     revision_values = {value for value in observed_revisions.values() if value}
     revision_mismatch = (
         bool(expected_revision)

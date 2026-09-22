@@ -38,7 +38,10 @@
     };
   }
 
+  const HOLD = "Verification is not ready. Do not fund child work or pay for a proof. Check back for a verified update.";
+
   function childTemplate(item) {
+    if (item?.verification_ready !== true) return HOLD;
     const window = marketplace.scoringWindow(item);
     const windowText = window ? `${window.startsIso} through ${window.endsIso}` : "the committed scoring window";
     return `Qualifying Agent Bounties demand brief
@@ -79,6 +82,7 @@ Safety:
   }
 
   function childPostUrl(item) {
+    if (item?.verification_ready !== true) return null;
     const contract = String(item?.source_id || "").toLowerCase();
     const network = String(item?.network || "base-mainnet").toLowerCase();
     if (!/^0x[0-9a-f]{40}$/.test(contract) || network !== "base-mainnet") return null;
@@ -89,6 +93,14 @@ Safety:
     const base = marketplace.apiBase(typeof window !== "undefined" ? window.location : null);
     const profile = item.evidence_requirements?.program_profile;
     const forward = profile === "forward-canonical-gmv-attribution-metric-v2";
+    if (item.verification_ready !== true) return {
+      schema_version: "agent-bounties/competition-participation-manifest-v1",
+      network: item.network, competition_contract: item.source_id, opportunity_id: item.opportunity_id,
+      verification_ready: false, phase: "blocked", browser_workflow: {},
+      current_next_action: { action: "wait_for_verification", method: "GET", url: marketplace.opportunityFeedUrl(typeof window !== "undefined" ? window.location : null), instructions: HOLD },
+      hosted_proof_quote: null, child_bounty_template: null, proof_snapshot_url: null,
+      evidence_boundary: item.evidence_boundary,
+    };
     return {
       schema_version: "agent-bounties/competition-participation-manifest-v1",
       generated_at: new Date().toISOString(),
@@ -206,6 +218,17 @@ Safety:
     setText(doc, "[data-fact-entries]", Number.isInteger(item.entry_count) ? String(item.entry_count) : "—");
     setText(doc, "[data-fact-window]", window ? marketplace.windowLabel(window) : "Canonical deadline applies");
     setText(doc, "[data-fact-contract]", contract);
+    if (item.verification_ready !== true) {
+      const child = doc.querySelector("[data-child-post-started]");
+      if (child) { child.hidden = true; child.removeAttribute("href"); }
+      const workspace = doc.querySelector("[data-competition-app] .competition-workspace");
+      if (workspace) workspace.hidden = true;
+      setText(doc, "[data-competition-phase]", "Verification unavailable");
+      setText(doc, "[data-competition-status]", `${HOLD} Canonical state: ${item.source_status}; escrow: ${marketplace.formatUsdc(item.funded_amount)}.`);
+      doc.querySelector("[data-competition-facts]")?.setAttribute("aria-busy", "false");
+      doc.querySelector("[data-competition-app]").dataset.state = "unavailable";
+      return;
+    }
     setText(doc, "[data-scoring-formula]", item.evidence_requirements?.scoring_formula || "Read the immutable verification policy");
     setText(doc, "[data-entrant-binding]", item.evidence_requirements?.qualifying_action?.entrant_binding || "The solver wallet is bound by the proof.");
     setText(doc, "[data-exclusions]", (item.evidence_requirements?.qualifying_action?.excluded || []).join("; ") || "See immutable policy hashes.");

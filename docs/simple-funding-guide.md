@@ -85,3 +85,31 @@ MoonPay can send Base USDC; its app's direct bounty signing is unverified here.
 Regression coverage includes the generic-link block, no purchase side effect,
 recovery without clearing an old order, partial deposits, sufficient USDC with no
 ETH, automatic readiness, and layouts at 390, 532 and 1280 pixels.
+
+
+## Separate wallet choices (September 22)
+
+The wallet chooser starts with Coinbase, MetaMask and MoonPay. Each opens its
+own short guide; discovery and selecting a brand request no accounts or payment.
+Coinbase's Base app is separate from the optional email-created account wallet.
+An existing Base app address is never silently replaced with an embedded wallet.
+The phone continuation copies the exact account-saved posting operation only
+after a successful save; sign-in, a draft conflict or a failed save blocks copying.
+
+The Base app no longer supports cross-device QR sign-in. Use its app browser
+and sign in to the same AgentBounties account. See
+[Coinbase's current connection guide](https://help.coinbase.com/en/wallet/other-topics/mobile-app-sign-in-discontinued).
+MetaMask uses its detected provider or the existing supported phone pairing.
+The top-up page keeps the chosen destination visible, shows only the selected
+wallet's instruction, watches Base balances, and returns to the saved review.
+Purchases, quotes, fees and bounty signatures remain separate human approvals.
+
+MoonPay is a visible but **not yet supported end-to-end** choice. Its documented
+[wallet abilities](https://support.moonpay.com/en/articles/383215-managing-your-wallets)
+include buying and sending Base assets, but the platform has no verified MoonPay
+app connection/contract-signing route. No new wallet, key export, unsigned wallet
+URL or plain token transfer to escrow is substituted. Existing-funds recovery is
+optional. Release acceptance for a complete MoonPay path requires a supported
+provider connection, same-address Base signatures, live wallet-bound purchase,
+and canonical bounty creation/funding/claimability evidence; fixtures cannot
+prove those provider capabilities or a paid mobile journey.

@@ -23,7 +23,7 @@ function setup(storage = new Map(), server = {}) {
   server.projection ||= { competition: contract, bounty_id: hash("c"), state: "active", proof_deadline: Math.floor(Date.now() / 1000) + 3600,
     program_vkey: hash("1"), source_hash: hash("2"), elf_hash: hash("3"), journal_schema_hash: hash("4"), metric_program_hash: hash("5"), execution_policy_hash: hash("6"), verification_policy_hash: hash("7"), settlement_policy_hash: hash("8"), beta_risk_hash: hash("9") };
   server.events ||= [];
-  server.item ||= { opportunity_id: `open-competition-v2:base-mainnet:${contract}`, source_id: contract, network: "base-mainnet", evidence_requirements: { program_profile: "structured-artifact-metric-v1" } };
+  server.item ||= { opportunity_id: `open-competition-v2:base-mainnet:${contract}`, source_id: contract, network: "base-mainnet", verification_ready: true, evidence_requirements: { program_profile: "structured-artifact-metric-v1" } };
   const provider = { async request(req) {
     calls.push(req);
     if (req.method === "eth_accounts") return [server.account || wallet];
@@ -224,4 +224,27 @@ test("wallet funding returns only to allowed same-origin competition and partici
     const restored = vm.runInNewContext(helper + "\nsafeReturnUrl().href", { location, URL, URLSearchParams });
     assert.equal(restored, target.includes("evil.example") ? "https://agentbounties.app/post.html" : target);
   }
+});
+
+for (const readiness of [false, undefined]) test(`unverified competition (${readiness}) cannot quote or start payment`, async () => {
+  const e = setup(); e.server.item.verification_ready = readiness;
+  const api = await e.start();
+  assert.equal(api.status().next_action.action, "wait_for_verification");
+  assert.equal(e.elements.get("[data-proof-wallet-setup]").hidden, true);
+  await assert.rejects(api.prepareQuote(input()), /Verification is not ready/);
+  assert.equal(e.server.quoteCount || 0, 0);
+  assert.equal(sigs(e).length, 0);
+});
+test("a readiness hold blocks a fresh signature on an existing unpaid quote", async () => {
+  const e = setup(), api = await e.start();
+  await api.prepareQuote(input());
+  await e.click("connect");
+  e.server.item.verification_ready = false;
+  await api.refresh();
+  assert.equal(api.status().next_action.action, "wait_for_verification");
+  assert.equal(e.elements.get("[data-proof-pay]").hidden, true);
+  await e.click("pay");
+  assert.match(e.elements.get("[data-proof-status]").textContent, /Verification is not ready/);
+  assert.equal(sigs(e).length, 0);
+  assert.equal(e.server.paymentCount || 0, 0);
 });
