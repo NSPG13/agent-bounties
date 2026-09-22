@@ -30,12 +30,9 @@
     event.preventDefault();
     try {
       if (!window.AgentBountiesOnramp) throw new Error("The page is still loading. Try again in a moment.");
-      // Use the wallet-aware MoonPay URL with the selected destination address
-      const asset = select("[data-onramp-asset]").value;
-      const status = window.AgentBountiesOnramp.status();
-      const wallet = status?.wallet_address;
-      const url = buildMoonpayUrl(asset, wallet);
-      window.open(url, "_blank", "noopener,noreferrer");
+      // Route every purchase through the shared guard so duplicate-pending and stale-balance
+      // checks in openDirectCheckout() are always enforced.
+      window.AgentBountiesOnramp.openDirectCheckout("moonpay");
       select("[data-direct-moonpay-output]").textContent = "";
     } catch (error) {
       select("[data-direct-moonpay-output]").textContent = error.message;
